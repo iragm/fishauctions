@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %} {{ lot.lot_name }} {% endblock %}
+{% load static %}
+{% block content %}
+{% block extra_js %}
+<style>
+    .watched {
+        color: yellow;
+    }
+    #watch:hover {
+        color: yellow;
+        cursor: pointer;
+    }
+</style>
+<script type="text/javascript">
+    window.onload = function() {
+    var $ = window.jQuery;
+     $( "#watch" ).click(function() {
+        var data = {};
+        if ( $(this).hasClass("watched") )  {
+            data.watch = false;
+        } else {
+            data.watch = true;
+        }
+        $.ajax({
+            type: "POST",
+            beforeSend: function (request) {
+                request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+            },
+            url: "/watchitem/{{lot.pk}}/",
+            data : data,
+            success : function(result) {
+                if (data.watch) {
+                    $("#watch").addClass("watched");
+                    $("#watch").html("&#9733; Watching - you'll get an email 2 hours before bidding ends");
+                } else {
+                    $("#watch").removeClass("watched");
+                    $("#watch").html('&#9734; Watch');
+                }
+            }
+        });
+     });
+    }
+</script> {% endblock %}
+<div>
+    {% for message in messages %}
+    {% if message.message == "BidFailed" %}
+    <div class="alert alert-warning" role="alert">You've been outbid!</div>
+    {% endif %}
+    {% if message.message == "UnderbidYourself" %}
+    <div class="alert alert-warning" role="alert">You can't bid less than you've already bid</div>
+    {% endif %}
+    {% if message.message == "BidSuccess" %}
+    <div class="alert alert-primary" role="alert">Bid placed</div>
+    {% endif %}
+    {% if message.message == "LotEnded" %}
+    <div class="alert alert-error" role="alert">This auction has ended, you can't bid on it anymore</div>
+    {% endif %}
+    {% if message.message == "BidWinner" %}
+    <div class="alert alert-success" role="alert">You won this lot!</div>
+    {% endif %}
+    {% endfor %}
+</div>
+<div class="container mt-5 mb-5">
+    <div class="row">
+      <div class="col-md-6 offset-md3">
+        <h1>{{ lot.lot_number }} - {{ lot.lot_name }}</h1>
+        {% if lot.image %}
+        <div><img src="{{ lot.image.url }}" style="max-width:100%;"></img></div>
+        <span class="text-muted">{{ lot.get_image_source_display }} </span>
+        {% endif %}
+        <span>
+            <a href="https://www.google.com/search?q={{lot.lot_name}}&tbm=isch" target="_blank">Google image search</a>
+        </span>
+        <span>
+            or look for this on <a href="https://www.seriouslyfish.com/search/{{lot.lot_name}}" target="_blank">Seriously Fish</a>
+        </span>
+        <div>{% if lot.description %}{{ lot.description }}{% endif %}</div>
+        <table class="table">
+            <tr>
+                <td><b>Category:</b></td><td>{{ lot.get_category_display }}</td>
+            </tr>
+            <tr>
+                <td><b>Quantity:</b></td><td>{{ lot.quantity }}</td>
+            </tr>
+            <tr>
+                <td><b>Seller:</b></td><td>{{ lot.user }}</td>
+            </tr>
+            <tr>
+                <td><b>Minimum bid:</b></td><td>${{ lot.reserve_price }}</td>
+            </tr>
+            <tr>
+                <td><b>Current bid:</b></td><td>{% if lot.high_bidder %}${{ lot.high_bid }} {{ lot.high_bidder }}{% else %}No bids yet{% endif %}</td>
+            </tr>
+            <tr>
+                <td><b>Ends:</b></td><td>{% if lot.ended %} <span style="color:red">{{ lot.calculated_end }}</span>{% else %}{{ lot.calculated_end }}{% endif %}</td>
+            </tr>
+        </table>
+        {% if lot.banned %}
+        <span style="color:red">This lot has been removed by an administrator</span>
+        {% elif lot.user.pk == request.user.id %}
+        <span>This is your lot.</span>
+        {% elif lot.ended %}
+        <span>Bidding has ended on this lot</span>
+        {% else %}
+        {% crispy form form.helper %}
+        <span id="watch" {% if watched %} class="watched">&#9733; Watching{% else %}>&#9734; Watch{% endif %}</span>
+        {% endif %}
+    </div>
+</div>
+</div>  
+
+{% endblock %}
+
+

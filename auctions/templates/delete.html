@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}Current auction{% endblock %}
+{% load static %}
+{% block content %}
+
+<div class="container mt-5 mb-5">
+    <div class="row">
+      <div class="col-md-6 offset-md3">
+        <h1>Your watched items</h1>
+        <form method="GET">
+          {{ filter.form | crispy}}
+          <button type="submit" class="btn btn-primary">Apply Filter</button> 
+        </form>
+        <table class="table">
+          <thead>
+            <tr>
+              <th scope="col">#</th>
+              <th scope="col">Category</th>
+              <th scope="col">Lot name</th>
+              <th scope="col">Seller</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for lot in filter.qs %}
+            <tr>
+              <td>Lot {{ lot.lot_number }}</td> <td>{{ lot.get_category_display }}</td><td><a href="/lots/{{lot.lot_number}}">{{ lot.lot_name }}</a></td><td>{{ lot.user_id }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+      </table>
+    </div>
+</div>
+</div>  
+
+{% endblock %}
+
+

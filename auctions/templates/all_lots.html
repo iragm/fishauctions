@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+
+{% block title %}
+{% if view == "all" %}
+Current auction
+{% endif %}
+{% if view == "watch" %}
+Watched items
+{% endif %}
+{% if view == "mybids" %}
+Bids
+{% endif %}
+{% if view == "mylots" %}
+Your lots
+{% endif %}
+{% if view == "mywonlots" %}
+Won lots
+{% endif %}
+{% endblock %}
+{% load static %}
+{% block content %}
+
+<div class="container mt-5 mb-5">
+    <div class="row">
+      <div class="col-md-10 offset-lg-1">
+        <h1>{% if view == "all" %}
+          Current auction
+          {% endif %}
+          {% if view == "watch" %}
+          Watched lots
+          {% endif %}
+          {% if view == "mybids" %}
+          Bids
+          {% endif %}
+          {% if view == "mylots" %}
+          Your lots
+          {% endif %}
+          {% if view == "mywonlots" %}
+          Lots you've won
+          {% endif %}</h1>
+        <form method="GET">
+          {{ filter.form | crispy}}
+          <button type="submit" class="btn btn-primary">Apply Filter</button> {% if view == "mylots" %}<a href="/lots/new/" class="btn btn-info" role="button">New lot</a>{% endif %}
+        </form>
+        <table class="table">
+          <thead>
+            <tr>
+              <th scope="col">#</th>
+              <th scope="col">Seller</th>
+              <th scope="col">Category</th>
+              <th scope="col">Lot name</th>
+              <th scope="col">Price</th>
+              <th scope="col">High bidder</th>
+              <th scope="col">Ends</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for lot in filter.qs %}
+            <tr>
+              <td>Lot {{ lot.lot_number }}</td>
+              <td>{{ lot.user }}</td>
+              <td>{{ lot.get_category_display }}</td>
+              <td><a href="/lots/{{lot.lot_number}}">{{ lot.lot_name }}</a></td>
+              <td>${{ lot.high_bid }}</td>
+              <td>{% if lot.high_bidder %}{{ lot.high_bidder }}{% else %}No bids{% endif %}</td>
+              <td>{% if lot.ended %}<span style="color:red">{{ lot.calculated_end }}</span>{% else %}{{ lot.calculated_end }}{% endif %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+      </table>
+    </div>
+</div>
+</div>  
+
+{% endblock %}
+
+
