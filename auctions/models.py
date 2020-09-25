@@ -27,9 +27,11 @@ class Auction(models.Model):
 	sealed_bid = models.BooleanField(default=False)
 	lot_entry_fee = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(10)])
 	lot_entry_fee.help_text = "The amount, in dollars, that each seller will be charged for registering a lot"
+	unsold_lot_fee = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(10)])
+	unsold_lot_fee.help_text = "The amount, in dollars, that each seller will be charged if their lot doesn't sell"
 	winning_bid_percent_to_club = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(100)])
 	winning_bid_percent_to_club.help_text = "To give 70% of the final bid to the seller, enter 30 here"
-	bill_for_unsold_lots = models.BooleanField(default=False)
+	#bill_for_unsold_lots = models.BooleanField(default=False)
 	date_start = models.DateTimeField()
 	date_end = models.DateTimeField()
 	watch_warning_email_sent = models.BooleanField(default=False)
@@ -129,15 +131,63 @@ class Lot(models.Model):
 	active = models.BooleanField(default=True)
 	winning_price = models.PositiveIntegerField(null=True, blank=True)
 	banned = models.BooleanField(default=False)
+	donation = models.BooleanField(default=False)
 	watch_warning_email_sent = models.BooleanField(default=False)
 	seller_invoice = models.ForeignKey(Invoice, null=True, blank=True, on_delete=models.SET_NULL, related_name="seller_invoice")
 	buyer_invoice = models.ForeignKey(Invoice, null=True, blank=True, on_delete=models.SET_NULL, related_name="buyer_invoice")
-	
+
 	class Meta:
 		unique_together = (('user', 'active', 'lot_name', 'description'),)
 
 	def __str__(self):
 		return "" + str(self.lot_number) + " - " + self.lot_name
+
+	@property
+	def payout(self):
+		"""Used for invoicing"""
+		payout = {
+			"ended": False,
+			"sold": False,
+			"winning_price": 0,
+			"to_seller": 0,
+			"to_club": 0,
+			"to_site": 0,
+			}
+		if self.auction:
+			if not self.active:
+				# bidding has officially closed
+				payout['ended'] = True
+				auction = Auction.objects.get(id=self.auction.pk)
+				if self.winner:
+					# this lot sold
+					payout['sold'] = True
+					payout['winning_price'] = self.winning_price
+					if not self.donation:
+						clubCut = ( self.winning_price * auction.winning_bid_percent_to_club / 100 ) + auction.lot_entry_fee
+						sellerCut = self.winning_price - clubCut
+					else:
+						clubCut = self.winning_price
+						sellerCut = 0
+					payout['to_club'] = clubCut
+					payout['to_seller'] = sellerCut
+				else:
+					# did not sell
+					if not self.donation:
+						payout['to_club'] = auction.unsold_lot_fee # bill the seller even if the item didn't sell
+						payout['to_seller'] = 0 - auction.unsold_lot_fee
+					else:
+						payout['to_club'] = 0 # don't bill for donations
+						payout['to_seller'] = 0
+					
+		return payout
+
+	@property
+	def your_cut(self):
+		return self.payout['to_seller']
+
+	@property
+	def club_cut(self):
+		return self.payout['to_club']
 
 	@property
 	def number_of_watchers(self):
@@ -163,9 +213,7 @@ class Lot(models.Model):
 	@property
 	def max_bid(self):
 		"""returns the highest bid amount for this lot - this number should not be visible to the public"""
-		#allBids = Bid.objects.filter(lot_number=self.lot_number).exclude(bid_time__gt=self.calculated_end).exclude(amount__lt=self.reserve_price).order_by('-amount')[:2]
 		allBids = Bid.objects.filter(lot_number=self.lot_number, bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount')[:2]
-		# highest bid is the winner, but the second highest determines the price
 		try:
 			# $1 more than the second highest bid
 			bidPrice = allBids[0].amount

@@ -12,19 +12,18 @@ class Command(BaseCommand):
             self.stdout.write(f'Invoicing {auction}')
             activeLots = Lot.objects.filter(auction=auction, active=True)
             if activeLots:
-                self.stdout.write(self.style.ERROR(' There are still still active lots, wait for endauctions cron job to close them and declare a winner'))
+                self.stdout.write(self.style.ERROR(' There are still still active lots, wait for endauctions cron job to close them (this should happen automatically in a few minutes) and declare a winner'))
             else:
                 lots = Lot.objects.filter(auction=auction)
                 for lot in lots:
                     if not lot.winner:
                         self.stdout.write(f' +-- {lot} did not sell')
-                        if auction.bill_for_unsold_lots:
-                            clubCut = auction.lot_entry_fee # bill the seller even if the item didn't sell
-                            sellerCut = 0 - auction.lot_entry_fee
+                        if not lot.donation:
+                            clubCut = auction.unsold_lot_fee # bill the seller even if the item didn't sell
                         else:
                             clubCut = 0
-                            sellerCut = 0
-                        sellEntryString = f"{lot} for ${sellerCut} (NS)\n"
+                        sellerCut = 0 - clubCut
+                        sellEntryString = f"{lot} not sold\n"
                     else:
                         buyEntryString = f"{lot} for ${lot.winning_price}\n"
                         # Buyer (lot winner)
@@ -48,9 +47,12 @@ class Command(BaseCommand):
                             lot.buyer_invoice = newWinnerInvoice
                             lot.save()
                         # Seller - need to take club's cut
-                        clubCut = ( lot.winning_price * auction.winning_bid_percent_to_club / 100 ) + auction.lot_entry_fee
+                        if lot.donation:
+                            clubCut = lot.winning_price
+                        else:
+                            clubCut = ( lot.winning_price * auction.winning_bid_percent_to_club / 100 ) + auction.lot_entry_fee
                         sellerCut = lot.winning_price - clubCut
-                        sellEntryString = f"{lot} for ${sellerCut}\n"
+                        sellEntryString = f"{lot} for ${lot.winning_price} (${clubCut} to club)\n"
                         self.stdout.write(f' +-- {lot} sold for ${lot.winning_price}. ${clubCut} to club')
                     sellerInvoice = Invoice.objects.filter(auction=auction, user=lot.user)
                     if sellerInvoice:
