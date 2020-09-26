@@ -26,61 +26,52 @@
     </head>
 
     <body class="{% block body_class %}{% endblock %}">
-        <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
-            <a class="navbar-brand" href="/">TFCB 2020 Auctions</a>
-            <!--<button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarColor02" aria-controls="navbarColor02" aria-expanded="false" aria-label="Toggle navigation">
-              <span class="navbar-toggler-icon"></span>
-            </button>-->
-          
-            <div class=" navbar-collapse" id="navbarColor02"> <!-- collapse-->
-              <ul class="navbar-nav mr-auto">
-                <li class="nav-item active">
-                  <a class="nav-link" href="https://tfcb.org">Club homepage<span class="sr-only">(current)</span></a>
-                </li>
-                <li class="nav-item active">
-                  <a class="nav-link" href="/about/">About auction<span class="sr-only">(current)</span></a>
-                </li>
-                <!-- <li class="nav-item">
-                  <a class="nav-link" href="/lots/new/">Submit a lot</a>
-                </li> -->
-                {% if request.user.is_authenticated %}
-                <!-- <li class="nav-item" style='display: block;'>
-                  <a class="nav-link">Signed in as: {{ request.user.username }}</a>
-                </li> -->
-                <!-- <li class="nav-item">
-                  <a class="nav-link" href="/logout">Sign out</a>
-                </li> -->
-                <li class="nav-item dropdown">
-                  <a class="nav-link dropdown-toggle" data-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">{{ request.user.username }}</a>
-                  <div class="dropdown-menu">
-                    <h6 class="dropdown-header">Buying</h6>
-                    <a class="dropdown-item" href="/lots/watched">Watched lots</a>
-                    <a class="dropdown-item" href="/bids">Bids</a>
-                    <a class="dropdown-item" href="/lots/won">Won lots</a>
-                    <div class="dropdown-divider"></div>
-                    <h6 class="dropdown-header">Selling</h6>
-                    <a class="dropdown-item" href="/lots/my">My lots</a>
-                    <a class="dropdown-item" href="/lots/new/">Submit a lot</a>
-                    <div class="dropdown-divider"></div>
-                    <!-- <a class="dropdown-item" href="/invoice">Invoice</a> -->
-                    <a class="dropdown-item" href="/logout">Sign out</a>
-                  </div>
-                </li>
-              {% else %}
-                <a class="nav-link" href="/signup">Create account</a>
-                <a class="nav-link" href="/login">Sign in</a>
-              
-              {% endif %}
-              </ul>
-              <!-- <form class="form-inline my-2 my-lg-0">
+        <nav class="navbar navbar-expand-lg navbar-dark bg-dark navbar-static-top" role="navigation">
+          <a class="navbar-brand" href="/">Auctions</a>  
+          <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#site_navbar" aria-controls="navbarColor02" aria-expanded="false" aria-label="Toggle navigation">
+            <span class="navbar-toggler-icon"></span>
+          </button>
+            <div class="collapse navbar-collapse" id="site_navbar">
+                <ul class="navbar-nav mr-auto">
+                  <li class="nav-item active">
+                    <a class="nav-link" href="https://tfcb.org">TFCB homepage<span class="sr-only">(current)</span></a>
+                  </li>
+                  <li class="nav-item active">
+                    <a class="nav-link" href="/about/">About auction<span class="sr-only">(current)</span></a>
+                  </li>
+                  {% if request.user.is_authenticated %}
+                  <li class="nav-item dropdown">
+                    <a class="nav-link dropdown-toggle" data-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">{{ request.user.username }}</a>
+                    <div class="dropdown-menu">
+                      <h6 class="dropdown-header">Buying</h6>
+                      <a class="dropdown-item" href="/lots/watched">Watched lots</a>
+                      <a class="dropdown-item" href="/bids">Bids</a>
+                      <a class="dropdown-item" href="/lots/won">Won lots</a>
+                      <div class="dropdown-divider"></div>
+                      <h6 class="dropdown-header">Selling</h6>
+                      <a class="dropdown-item" href="/lots/my">My lots</a>
+                      <a class="dropdown-item" href="/lots/new/">Submit a lot</a>
+                      <div class="dropdown-divider"></div>
+                      <!-- <a class="dropdown-item" href="/invoice">Invoice</a> -->
+                      <a class="dropdown-item" href="/logout">Sign out</a>
+                    </div>
+                  </li>
+                {% else %}
+                  <a class="nav-link" href="/signup">Create account</a>
+                  <a class="nav-link" href="/login">Sign in</a>
                 
-                <input class="form-control mr-sm-2" type="text" placeholder="Search">
-                <button class="btn btn-secondary my-2 my-sm-0" type="submit">Search</button>
-                
+                {% endif %}
+                </ul>
+                <!-- <form class="form-inline my-2 my-lg-0">
+                  
+                  <input class="form-control mr-sm-2" type="text" placeholder="Search">
+                  <button class="btn btn-secondary my-2 my-sm-0" type="submit">Search</button>
+                  
 
-              </form> -->
-            </div>
-          </nav>
+                </form> -->
+              </div>
+          </div>
+        </nav>
         
         {% block content %}{% endblock %}
 

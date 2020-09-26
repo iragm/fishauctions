@@ -46,7 +46,7 @@ class CreateBid(forms.ModelForm):
 class CreateLotForm(forms.ModelForm):
     class Meta:
         model = Lot
-        fields = ('lot_name','i_bred_this_fish','image','image_source','description','quantity','reserve_price','category','auction','donation')
+        fields = ('lot_name','i_bred_this_fish','image','image_source','description','quantity','reserve_price','species_category','auction','donation')
         exclude = [ "user"]
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -54,14 +54,14 @@ class CreateLotForm(forms.ModelForm):
         self.helper.form_method = 'post'
         self.helper.layout = Layout(
             'lot_name',
-            'category',
+            'species_category',
             'image',
             'image_source',
             'description',
             'i_bred_this_fish',
+            'donation',
             'quantity',
             'reserve_price',
-            'donation',
             #'auction',
             Submit('submit', 'Create lot', css_class='btn-success'),
         )

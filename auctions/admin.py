@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Lot, Bid, Auction, Invoice
+from .models import Lot, Bid, Auction, Invoice, Category, Product
 
 class AuctionAdmin(admin.ModelAdmin):
     model = Auction 
@@ -19,8 +19,8 @@ class LotAdmin(admin.ModelAdmin):
     menu_order = 300
     add_to_settings_menu = False
     exclude_from_explorer = False
-    list_display = ("auction", "lot_number", "user", "lot_name", "description",)
-    list_filter = ("user","category")
+    list_display = ("lot_name", "auction", "lot_number", "user", "species_category",)
+    list_filter = ("active","auction",)
     search_fields = ("lot_number","lot_name","description","user")
 
 class BidAdmin(admin.ModelAdmin):
@@ -61,6 +61,22 @@ class InvoiceAdmin(admin.ModelAdmin):
     ]
 
 
+class CategoryAdmin(admin.ModelAdmin):
+    model = Category 
+    menu_label = "Categories"  
+    list_display = ("name", )
+    #list_filter = ()
+    search_fields = ("name",)
+
+class ProductAdmin(admin.ModelAdmin):
+    model = Product 
+    menu_label = "Products"  
+    list_display = ("category","common_name", "scientific_name", "breeder_points", )
+    list_filter = ("category",)
+    search_fields = ("common_name", "scientific_name", )
+
+admin.site.register(Category, CategoryAdmin)
+admin.site.register(Product, ProductAdmin)
 admin.site.register(Auction, AuctionAdmin)
 admin.site.register(Invoice, InvoiceAdmin)
 admin.site.register(Bid, BidAdmin)

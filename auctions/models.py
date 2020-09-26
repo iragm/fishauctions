@@ -6,19 +6,26 @@ from django.db import models
 from django.core.validators import *
 from django.db.models import Count
 
-# Create your models here.
-# class UserDetails(models.Model):
-# 	user_id = models.ForeignKey(User, on_delete=models.CASCADE)
-# 	balance = models.DecimalField(max_digits=6, decimal_places=2)
-# 	cellphone = models.CharField(max_length=14)
-# 	address = models.CharField(max_length=255)
-# 	town = models.CharField(max_length=45)
-# 	post_code = models.CharField(max_length=45)
-# 	country = models.CharField(max_length=45)
+class Category(models.Model):
+	"""Picklist of species.  Used for product, lot, and interest"""
+	name = models.CharField(max_length=255)
+	def __str__(self):
+		return str(self.name)
+	class Meta:
+		verbose_name_plural = "Categories"
 
-# 	def __str__(self):
-# 		user = User.objects.get(id=self.user_id)
-# 		return "id=" + str(self.pk) + " username=" + user.username + " email=" + user.email
+class Product(models.Model):
+	"""A species or item in the auction"""
+	common_name = models.CharField(max_length=255)
+	common_name.help_text = "The name usually used to describe this species"
+	scientific_name = models.CharField(max_length=255, blank=True)
+	scientific_name.help_text = "Latin name used to describe this species"
+	breeder_points = models.BooleanField(default=True)
+	category = models.ForeignKey(Category, null=True, on_delete=models.SET_NULL)
+	def __str__(self):
+		return str(self.common_name)
+	class Meta:
+		verbose_name_plural = "Products and species"
 
 class Auction(models.Model):
 	"""An auction is a collection of lots"""
@@ -26,7 +33,7 @@ class Auction(models.Model):
 	# fixme - add group ID here, create a new group model, add users to a given group?
 	sealed_bid = models.BooleanField(default=False)
 	lot_entry_fee = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(10)])
-	lot_entry_fee.help_text = "The amount, in dollars, that each seller will be charged for registering a lot"
+	lot_entry_fee.help_text = "The amount, in dollars, that each seller will be charged if a lot sells"
 	unsold_lot_fee = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(10)])
 	unsold_lot_fee.help_text = "The amount, in dollars, that each seller will be charged if their lot doesn't sell"
 	winning_bid_percent_to_club = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(100)])
@@ -74,27 +81,6 @@ class Invoice(models.Model):
 
 class Lot(models.Model):
 	"""A lot is something to bid on"""
-	LOT_CATEGORIES = (
-		('CICHLID_RIFT', 'Rift Lake Cichlids'),
-		('CICHLID_OLD', 'Old World Cichlids'),
-		('CICHLID_CENTRAL', 'Central American Cichlids'),
-		('CICHLID_SOUTH', 'South American Cichlids'),
-		('CATFISH_CORY', 'Corydoras'),
-		('CATFISH_PLECO', 'Plecostomus'),
-		('CATFISH_MISC', 'Other Catfish'),
-		('CHARACIN', 'Characins - Tetras, Pencilfish, Hatchetfish'),
-		('CYPRINID', 'Cyprinids - Barbs, Danios, Rasboras'),
-		('KILLI', 'Killifish'),
-		('GUPPY', 'Livebearers'),
-		('FISH_MISC', 'Misc and oddball fish'),
-		('GOLDFISH', 'Goldfish'),
-		('SHRIMP', 'Shrimp and inverts'),
-		('PLANTS', 'Plants'),
-		('HARDWARE', 'Hardware - Filters, tanks, substrate, etc.'),
-		('FOOD_DRY', 'Flake and pellet food'),
-		('FOOD_LIVE', 'Live food cultures'),
-		('OTHER', 'Uncategorized'),
-	)
 	PIC_CATEGORIES = (
 		('ACTUAL', 'This picture is of the exact item'),
 		('REPRESENTATIVE', "This is my picture, but it's not of this exact item.  e.x. This is the parents of these fry"),
@@ -112,17 +98,15 @@ class Lot(models.Model):
 	)
 	image_source.help_text = "Where did you get this image?"
 	i_bred_this_fish = models.BooleanField(default=False)
-	i_bred_this_fish.help_text = "Check to get BAP points for this lot"
+	i_bred_this_fish.help_text = "Check to get breeder points for this lot"
 	description = models.CharField(max_length=500, blank=True, null=True)
 	#description.help_text = "Enter a detailed description of this lot"
 	quantity = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
 	quantity.help_text = "How many of this item are in this lot?"
 	reserve_price = models.PositiveIntegerField(default=2, validators=[MinValueValidator(1), MaxValueValidator(200)])
 	quantity.help_text = "The item will not be sold unless someone bids at least this much"
-	category = models.CharField(
-		max_length=20,
-		choices=LOT_CATEGORIES
-	)
+	species = models.ForeignKey(Product, null=True, blank=True, on_delete=models.SET_NULL)
+	species_category = models.ForeignKey(Category, null=True, blank=True, on_delete=models.SET_NULL)
 	date_posted = models.DateTimeField(auto_now_add=True, blank=True)
 	user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
 	auction = models.ForeignKey(Auction, blank=True, null=True, on_delete=models.SET_NULL)
@@ -132,6 +116,7 @@ class Lot(models.Model):
 	winning_price = models.PositiveIntegerField(null=True, blank=True)
 	banned = models.BooleanField(default=False)
 	donation = models.BooleanField(default=False)
+	donation.help_text = "All proceeds from this lot should go to the auction"
 	watch_warning_email_sent = models.BooleanField(default=False)
 	seller_invoice = models.ForeignKey(Invoice, null=True, blank=True, on_delete=models.SET_NULL, related_name="seller_invoice")
 	buyer_invoice = models.ForeignKey(Invoice, null=True, blank=True, on_delete=models.SET_NULL, related_name="buyer_invoice")

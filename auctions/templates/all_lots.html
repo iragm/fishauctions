@@ -60,7 +60,7 @@ Won lots
             <tr>
               <td>Lot {{ lot.lot_number }}</td>
               <td>{{ lot.user }}</td>
-              <td>{{ lot.get_category_display }}</td>
+              <td>{{ lot.species_category }}</td>
               <td><a href="/lots/{{lot.lot_number}}">{{ lot.lot_name }}</a></td>
               <td>${{ lot.high_bid }}</td>
               <td>{% if lot.high_bidder %}{{ lot.high_bidder }}{% else %}No bids{% endif %}</td>

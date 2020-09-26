@@ -1,38 +1,20 @@
 import django_filters
-from .models import Lot
+from .models import Lot, Category, Auction
 from django.db.models import Q
 
 
 class LotFilter(django_filters.FilterSet):
-    LOT_CATEGORIES = (
-        ('CICHLID_RIFT', 'Rift Lake Cichlids'),
-        ('CICHLID_OLD', 'Old World Cichlids'),
-        ('CICHLID_CENTRAL', 'Central American Cichlids'),
-        ('CICHLID_SOUTH', 'South American Cichlids'),
-        ('CATFISH_CORY', 'Corydoras'),
-        ('CATFISH_PLECO', 'Plecostomus'),
-        ('CATFISH_MISC', 'Other Catfish'),
-        ('CHARACIN', 'Characins - Tetras, Pencilfish, Hatchetfish'),
-        ('CYPRINID', 'Cyprinids - Barbs, Danios, Rasboras'),
-        ('KILLI', 'Killifish'),
-        ('GUPPY', 'Livebearers'),
-        ('FISH_MISC', 'Misc and oddball fish'),
-        ('GOLDFISH', 'Goldfish'),
-        ('SHRIMP', 'Shrimp and inverts'),
-        ('PLANTS', 'Plants'),
-        ('HARDWARE', 'Hardware - Filters, tanks, substrate, etc.'),
-        ('FOOD_DRY', 'Flake and pellet food'),
-        ('FOOD_LIVE', 'Live food cultures'),
-        ('OTHER', 'Uncategorized'),
-        
-    )
+    categories = Category.objects.all().order_by('name')
+    filterCategories = []
+    for catagory in categories:
+        filterCategories.append((catagory.pk, catagory.name))
     STATUS = (
         ('open', 'Open'),
         ('closed', 'Ended'),
         
     )
     q = django_filters.CharFilter(label='Filter', method='textFilter')
-    category = django_filters.ChoiceFilter(label='Category', choices=LOT_CATEGORIES, method='filter_by_category', empty_label='All')
+    category = django_filters.ChoiceFilter(label='Category', choices=filterCategories, method='filter_by_category', empty_label='All')
     status = django_filters.ChoiceFilter(label='Status', choices=STATUS, method='filter_by_status', empty_label='All')
 
     class Meta:
@@ -40,7 +22,7 @@ class LotFilter(django_filters.FilterSet):
         fields = {} # nothing here so no buttons show up
     
     def filter_by_category(self, queryset, name, value):
-        return queryset.filter(category=value)
+        return queryset.filter(species_category=value)
 
     def filter_by_status(self, queryset, name, value):
         if value == "ended":
