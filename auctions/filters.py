@@ -1,7 +1,7 @@
 import django_filters
 from .models import Lot, Category, Auction
 from django.db.models import Q
-
+from django.forms.widgets import TextInput, Select
 
 class LotFilter(django_filters.FilterSet):
     categories = Category.objects.all().order_by('name')
@@ -11,11 +11,10 @@ class LotFilter(django_filters.FilterSet):
     STATUS = (
         ('open', 'Open'),
         ('closed', 'Ended'),
-        
     )
-    q = django_filters.CharFilter(label='Filter', method='textFilter')
-    category = django_filters.ChoiceFilter(label='Category', choices=filterCategories, method='filter_by_category', empty_label='All')
-    status = django_filters.ChoiceFilter(label='Status', choices=STATUS, method='filter_by_status', empty_label='All')
+    q = django_filters.CharFilter(label='', method='textFilter', widget=TextInput(attrs={'placeholder': 'Search', 'class': 'full-width'}))
+    category = django_filters.ChoiceFilter(label='', choices=filterCategories, method='filter_by_category', empty_label='All', widget=Select(attrs={'style': 'width:5vw'}))
+    status = django_filters.ChoiceFilter(label='', choices=STATUS, method='filter_by_status', empty_label='Open and ended')
 
     class Meta:
         model = Lot
@@ -52,7 +51,7 @@ class UserWatchLotFilter(LotFilter):
     def __init__(self, *args, **kwargs):
         self.request = kwargs['request']
         super().__init__(*args,**kwargs)
-    
+
 class UserBidLotFilter(LotFilter):
     """A version of the lot filter that only shows lots bid on by the current user"""
     @property
@@ -64,8 +63,6 @@ class UserBidLotFilter(LotFilter):
         self.request = kwargs['request']
         super().__init__(*args,**kwargs)
     
-    
-
 class UserOwnedLotFilter(LotFilter):
     """A version of the lot filter that only shows lots submitted by the current user"""
     @property

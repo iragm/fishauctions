@@ -4,6 +4,8 @@ from django.core.management.base import BaseCommand, CommandError
 from auctions.models import Auction, User, Lot, Invoice
 from django.core.mail import send_mass_mail, send_mail
 
+# this is a placeholder until we figure out how to handle end-of-auction invoices
+
 def notify(email, messageText):
     send_mail(
     'Complete invoice',
@@ -29,4 +31,4 @@ class Command(BaseCommand):
             #self.stdout.write(f'Emailed {user} invoice for {invoice.net}')
             #invoice.email_sent = True
             #invoice.save()
-        notify(email="ira@toxotes.org", messageText=message)
+        notify(email="enter your email here", messageText=message)

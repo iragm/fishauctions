@@ -40,7 +40,7 @@ Won lots
           Lots you've won
           {% endif %}</h1>
         <form method="GET">
-          {{ filter.form | crispy}}
+          {{ filter.form }}
           <button type="submit" class="btn btn-primary">Apply Filter</button> {% if view == "mylots" %}<a href="/lots/new/" class="btn btn-info" role="button">New lot</a>{% endif %}
         </form>
         <table class="table">
