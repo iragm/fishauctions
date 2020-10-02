@@ -3,12 +3,7 @@ from .models import Lot, Bid, Auction, Invoice, Category, Product
 
 class AuctionAdmin(admin.ModelAdmin):
     model = Auction 
-    menu_label = "Auctions"  
-    menu_icon = "plus-inverse"
-    menu_order = 200 
-    add_to_settings_menu = False
-    exclude_from_explorer = False
-    list_display = ("title",)
+    list_display = ("title",'created_by')
     list_filter = ("title",)
     search_fields = ("title",)
     

@@ -86,38 +86,6 @@ def watchOrUnwatch(request, pk):
         else:
             return HttpResponse("Failure")
 
-# @login_required
-# def bidView(request):
-#     if request.method == 'POST':
-#         form = CreateBid(request.POST, request=request, lot=1)
-#         if form.is_valid():
-#             form.save()            
-#             lot = form.save(commit=False)
-#             lot.user = User.objects.get(id=request.user.id)
-#             lot.save()            
-#             print(str(lot.user) + " has added a new lot " + lot.lot_name)
-#             messages.info(request, "Bid submitted")
-#             form = CreateBid() # no post data here to reset the form
-#     else:
-#         form = CreateBid(request=request)
-#     context = {
-#         'form':form,
-#     }
-#     return render(request,'submit_bid.html', context)
-    # class Meta:
-    #     model = Bid
-    #     fields = 'user', lot_number
-    # form = BidForm()
-    # # return render(request,'lot.html', {'form':form})
-
-    # if request.method == 'POST':
-    #      form = BidForm(request.POST)
-    #      if form.is_valid():
-    #          name = form.cleaned_data['name']
-    #          name = form.cleaned_data['text']
-    #          name = form.cleaned_data['body']
-
-
 # password protected in urls.py
 class viewAndBidOnLot(FormMixin, DetailView):
     """Show the picture and detailed information about a lot, and allow users to place bids"""
@@ -128,10 +96,7 @@ class viewAndBidOnLot(FormMixin, DetailView):
     
     def get_context_data(self, **kwargs):
         context = super(viewAndBidOnLot, self).get_context_data(**kwargs)
-        #highBid = getHighBid(self.kwargs['pk'])
         context['watched'] = Watch.objects.filter(lot_number=self.kwargs['pk'], user=self.request.user.id)
-        #context['currentPrice'] = highBid['amount']
-        #context['highBidder'] = highBid['name']
         context['form'] = CreateBid(initial={'user': self.request.user.id, 'lot_number':self.kwargs['pk'], "amount":Lot.objects.get(pk=self.kwargs['pk']).high_bid + 1}, request=self.request)
         return context
     
@@ -192,24 +157,6 @@ class viewAndBidOnLot(FormMixin, DetailView):
                 form.save() # record the bid regardless of whether or not it's the current high
         return super(viewAndBidOnLot, self).form_valid(form)
 
-# def getHighBid(lot_number):
-#     # wrong lot getting passed?
-#     """returns the high bidder name and amount"""
-#     # fixme - add an additional filter  for bid_time lt lot end time
-#     allBids = Bid.objects.filter(lot_number=lot_number).order_by('-amount')[:2]
-#     # highest bid is the winner, but the second highest determines the price
-#     try:
-#         bidPrice = allBids[1].amount + 1 # $1 more than the second highest bid
-#     except:
-#         #print("no bids for this item")
-#         bidPrice = Lot.objects.get(pk=lot_number).reserve_price
-#     try:
-#         highBidder = allBids[0].user
-#     except:
-#         highBidder = "No bids yet"
-#     #print(f"hightest bid is {highBidder}, amount is {bidPrice}")
-    #return {"name": highBidder, "amount": bidPrice}
-
 @login_required
 def createLot(request):
     #return HttpResponse("Page for new lot")
@@ -231,12 +178,54 @@ def createLot(request):
         form = CreateLotForm()
     return render(request,'new_lot.html', {'form':form})
 
-def aboutAuction(request):
-    return render(request,'current_auction.html')
 
-def toAllLots(request):
-    response = redirect('/all_lots/')
+@login_required
+def createAuction(request):
+    if request.method == 'POST':
+        form = CreateAuctionForm(request.POST)
+        if form.is_valid():
+            auction = form.save(commit=False)
+            auction.created_by = User.objects.get(id=request.user.id)
+            auction.save()            
+            print(str(auction.created_by) + " has created a new auction " + auction.title)
+            messages.info(request, "Auction created")
+            response = redirect('/')
+            # Perhaps we should redirect to the auction edit page?
+            return response
+    else:
+        form = CreateAuctionForm()
+    return render(request,'new_auction.html', {'form':form})
+
+class auction(DetailView):
+    """Main view of a single auction"""
+    template_name = 'auction.html'
+    model = Auction
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        #context['now'] = timezone.now()
+        return context
+
+def aboutSite(request):
+    return render(request,'about.html')
+
+def toDefaultLandingPage(request):
+    response = redirect('/auctions/all')
     return response
+
+class allAuctions(ListView):
+    model = Auction
+    template_name = 'all_auctions.html'
+    ordering = ['-date_end']
+
+    def get_context_data(self, **kwargs):
+        # set default values
+        # data = self.request.GET.copy()
+        # if len(data) == 0:
+        #     data['status'] = "open"
+        context = super().get_context_data(**kwargs)
+        # context['filter'] = LotFilter(data, queryset=self.get_queryset())
+        # context['view'] = 'all'
+        return context
 
 class allLots(ListView):
     model = Lot

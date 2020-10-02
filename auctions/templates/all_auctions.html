@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+
+{% block title %}Auctions
+{% endblock %}
+{% load static %}
+{% block content %}
+
+<div class="container mt-5 mb-5">
+    <div class="row">
+      <div class="col-md-10 offset-lg-1">
+        <h1>Auctions</h1>
+        <!-- <form method="GET">
+          
+          <button type="submit" class="btn btn-primary">Apply Filter</button> {% if view == "mylots" %}<a href="/lots/new/" class="btn btn-info" role="button">New lot</a>{% endif %}
+        </form> -->
+        <table class="table">
+          <thead>
+            <tr>
+              <th scope="col">Title</th>
+              <th scope="col">Rules</th>
+              <th scope="col">Area</th>
+              <th scope="col">Ends</th>
+            </tr>
+          </thead>
+          <tbody>
+            
+            {% for auction in object_list %}
+            <tr>
+              <td><a href='/lots/{{auction.pk}}'>{{ auction.title }}</a></td>
+              <td><a href='/auctions/{{auction.slug}}'>View rules</a></td>
+              <td>{{ auction.area }}</td>
+              <td>{% if auction.closed %}<span style="color:red">{{ auction.date_end }}</span>{% else %}{{ auction.date_end }}{% endif %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+      </table>
+    </div>
+</div>
+</div>  
+
+{% endblock %}
+
+

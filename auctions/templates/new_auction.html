@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{{ form.media }}
+{% load crispy_forms_tags %}
+
+{% block title %}New auction{% endblock %}
+{% block content %}
+<div>
+    {% for message in messages %}
+        <div class="alert alert-success" role="alert">{{ message.message }}</a></div>
+    {% endfor %}
+</div>
+<div class="container mt-5 mb-5">
+      <div class="col-md-10 offset-md1">
+          <div style='padding: 2vw;'>
+            {% crispy form form.helper %}
+        </div>
+    </div>
+</div>
+{% endblock %}

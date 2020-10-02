@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %} {{ auction.title }} {% endblock %}
+{% load static %}
+{% block content %}
+{% block extra_js %}{% endblock %}
+<div class="container mt-5 mb-5">
+    <div class="row">
+        <div class="col-md-10 offset-md1">
+            <h1>{{ auction.title }}</h1>
+            An auction created by {{ auction.created_by }}<br>
+            {% if auction.notes %}{{ auction.notes }} {% endif %}
+            <h3>Dates</h3>
+            This auction will run from {{ auction.date_start }} to {{ auction.date_end}}
+            <h3>Payment and pickup</h3>
+            Pickup will be at {{ auction.pickup_time }} at {{ auction.pickup_location }}.<br><br>You must be present to pay with cash before you can pick up the lots you've purchased.<br>
+            {{ auction.pickup_location_map|safe }}
+            {% if auction.alternate_pickup_time and auction.alternate_pickup_location and auction.alternate_pickup_location_map %}
+            <h3>Alternate pickup location</h3>
+            You can choose to pickup at {{ auction.alternate_pickup_time }} at {{ auction.alternate_pickup_location }}.<br><br>If you would prefer to pick up here, please communicate with the auction owner ({{ auction.created_by }})<br><br>You must be present to pay with cash before you can pick up the lots you've purchased.<br>
+            {{ auction.alternate_pickup_location_map|safe }}
+            {% endif %}
+            <h3>Selling and rules</h3>
+            <ul>
+                {% if auction.sealed_bid %}<li>This is a sealed bid auction - you won't be able to see how much others have bid on an item.</li>{% endif %}
+                {% if auction.winning_bid_percent_to_club and auction.lot_entry_fee %} <li>You will be charged ${{ auction.lot_entry_fee }} plus {{ auction.winning_bid_percent_to_club }}%  of the winning price per lot you sell</li>
+                {% else %} {% if auction.winning_bid_percent_to_club %} <li>You will be charged {{ auction.winning_bid_percent_to_club }}% of the winning price per lot you sell</li> {% endif %} 
+                {% if auction.lot_entry_fee %} <li>You will be charged a flat rate of ${{ auction.lot_entry_fee }} per item you sell</li> {% endif %}
+                {% endif %}
+                {% if auction.unsold_lot_fee %}<li>If your lot does not sell, you will be charged ${{ auction.unsold_lot_fee }}</li>{% endif %}
+            </ul>    
+        </div>
+    </div>
+</div>  
+
+{% endblock %}
+
+

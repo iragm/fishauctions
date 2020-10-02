@@ -1,10 +1,14 @@
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import Layout, Submit
+from crispy_forms.bootstrap import Div, Field
 from django import forms
-from .models import Lot, Bid
+from .models import Lot, Bid, Auction
 from django.forms import ModelForm, HiddenInput
+from bootstrap_datepicker_plus import DateTimePickerInput
 #from django.core.exceptions import ValidationError
 
+class DateInput(forms.DateInput):
+    input_type = 'datetime-local'
 
 class CreateBid(forms.ModelForm):
     #amount = forms.IntegerField()
@@ -43,11 +47,67 @@ class CreateBid(forms.ModelForm):
             'amount',
         ]
 
+class CreateAuctionForm(forms.ModelForm):
+    class Meta:
+        model = Auction
+        fields = ['title', 'notes', 'lot_entry_fee','unsold_lot_fee','winning_bid_percent_to_club', 'date_start', 'date_end', \
+            'pickup_location', 'pickup_location_map', 'pickup_time', 'alternate_pickup_location', 'alternate_pickup_location_map',\
+            'alternate_pickup_time']
+        exclude = ['slug', 'sealed_bid', 'watch_warning_email_sent', 'invoiced', 'created_by', 'code_to_add_lots']
+        widgets = {
+            'date_start': DateTimePickerInput(),
+            'date_end': DateTimePickerInput(),
+            'pickup_time': DateTimePickerInput(),
+            'alternate_pickup_time': DateTimePickerInput(),
+            'notes': forms.Textarea,
+        }
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['notes'].widget.attrs = {'rows': 3}
+        self.helper = FormHelper
+        self.helper.form_method = 'post'
+        self.helper.layout = Layout(
+            'title',
+            'notes',
+            Div(
+                Div('lot_entry_fee',css_class='col-md-4',),
+                Div('winning_bid_percent_to_club',css_class='col-md-4',),
+                Div('unsold_lot_fee',css_class='col-md-4',),
+                css_class='row',
+            ),
+            Div(
+                Div('date_start',css_class='col-md-6',),
+                Div('date_end',css_class='col-md-6',),
+                css_class='row',
+            ),
+            Div(
+                Div('pickup_location',css_class='col-md-8',),
+                Div('pickup_time',css_class='col-md-4',),
+                css_class='row',
+            ),
+            'pickup_location_map',
+            Div(
+                Div('alternate_pickup_location',css_class='col-md-8',),
+                Div('alternate_pickup_time',css_class='col-md-4',),
+                css_class='row',
+            ),
+            'alternate_pickup_location_map',
+            Submit('submit', 'Create auction', css_class='btn-success'),
+        )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        #image = cleaned_data.get("image")
+        #image_source = cleaned_data.get("image_source")
+        #if image and not image_source:
+        #    self.add_error('image_source', "Is this your picture?")
+
 class CreateLotForm(forms.ModelForm):
     class Meta:
         model = Lot
         fields = ('lot_name','i_bred_this_fish','image','image_source','description','quantity','reserve_price','species_category','auction','donation')
         exclude = [ "user"]
+    
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.helper = FormHelper

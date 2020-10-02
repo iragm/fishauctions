@@ -50,7 +50,7 @@ INSTALLED_APPS = [
     'allauth.account',
     'allauth.socialaccount',
     'django_filters',
-
+    'bootstrap_datepicker_plus',
 ]
 
 MIDDLEWARE = [
@@ -178,3 +178,6 @@ DEFAULT_FROM_EMAIL = os.environ['DEFAULT_FROM_EMAIL']
 EMAIL_SUBJECT_PREFIX = ""
 
 CRISPY_TEMPLATE_PACK = 'bootstrap4'
+BOOTSTRAP4 = {
+    'include_jquery': True,
+}

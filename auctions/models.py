@@ -5,6 +5,16 @@ from django.contrib.auth.models import *
 from django.db import models
 from django.core.validators import *
 from django.db.models import Count
+from autoslug import AutoSlugField
+from django.urls import reverse
+
+class Club(models.Model):
+	"""Clubs restrict who can enter or bid in an auction"""
+	name = models.CharField(max_length=255)
+	def __str__(self):
+		return str(self.name)
+	# fixme - create a new group model to allow adding users to a club
+	# fixme - create a new auction permission model to restrict bidding in an auction to a given club
 
 class Category(models.Model):
 	"""Picklist of species.  Used for product, lot, and interest"""
@@ -30,26 +40,55 @@ class Product(models.Model):
 class Auction(models.Model):
 	"""An auction is a collection of lots"""
 	title = models.CharField(max_length=255)
-	# fixme - add group ID here, create a new group model, add users to a given group?
+	slug = AutoSlugField(populate_from='title', unique=True)
 	sealed_bid = models.BooleanField(default=False)
 	lot_entry_fee = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(10)])
-	lot_entry_fee.help_text = "The amount, in dollars, that each seller will be charged if a lot sells"
+	lot_entry_fee.help_text = "The amount, in dollars, that the seller will be charged if a lot sells"
 	unsold_lot_fee = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(10)])
-	unsold_lot_fee.help_text = "The amount, in dollars, that each seller will be charged if their lot doesn't sell"
+	unsold_lot_fee.help_text = "The amount, in dollars, that the seller will be charged if their lot doesn't sell"
 	winning_bid_percent_to_club = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(100)])
 	winning_bid_percent_to_club.help_text = "To give 70% of the final bid to the seller, enter 30 here"
-	#bill_for_unsold_lots = models.BooleanField(default=False)
 	date_start = models.DateTimeField()
 	date_end = models.DateTimeField()
 	watch_warning_email_sent = models.BooleanField(default=False)
 	invoiced = models.BooleanField(default=False)
+	created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+	area = models.CharField(max_length=300)
+	area.help_text = "State or region of this auction"
+	pickup_location = models.CharField(max_length=300)
+	pickup_location.help_text = "Description of pickup location"
+	pickup_location_map = models.CharField(max_length=2000)
+	pickup_location_map.help_text = "Find the location on Google maps, click Menu>Share or Embed Map and paste the embed link here"
+	pickup_time = models.DateTimeField()
+	alternate_pickup_location = models.CharField(null=True, blank=True, max_length=300)
+	alternate_pickup_location.help_text = "Description of alternate pickup location"
+	alternate_pickup_location_map = models.CharField(null=True, blank=True, max_length=2000)
+	alternate_pickup_location_map.help_text = "Google Maps link to alternate pickup location"
+	alternate_pickup_time = models.DateTimeField(blank=True, null=True)
+	notes = models.CharField(max_length=500, blank=True, null=True)
+	code_to_add_lots = models.CharField(max_length=255, blank=True, null=True)
+	code_to_add_lots.help_text = "This is like a password: People in your club will enter this code to put their lots in this auction"
+
 	def __str__(self):
 		#return "ID:" + str(self.pk) + " " + str(self.title)
 		return str(self.title)
+	
+	def get_absolute_url(self):
+		return reverse('slug', kwargs={'slug': self.slug})
+
 	@property
 	def ending_soon(self):
 		"""Used to send notifications"""
 		warning_date = self.date_end - datetime.timedelta(hours=2)
+		if timezone.now() > warning_date:
+			return True
+		else:
+			return False
+	
+	@property
+	def closed(self):
+		"""For display on the main auctions list"""
+		warning_date = self.date_end
 		if timezone.now() > warning_date:
 			return True
 		else:

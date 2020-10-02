@@ -13,7 +13,7 @@ class LotFilter(django_filters.FilterSet):
         ('closed', 'Ended'),
     )
     q = django_filters.CharFilter(label='', method='textFilter', widget=TextInput(attrs={'placeholder': 'Search', 'class': 'full-width'}))
-    category = django_filters.ChoiceFilter(label='', choices=filterCategories, method='filter_by_category', empty_label='All', widget=Select(attrs={'style': 'width:5vw'}))
+    category = django_filters.ChoiceFilter(label='', choices=filterCategories, method='filter_by_category', empty_label='Any category', widget=Select(attrs={'style': 'width:10vw'}))
     status = django_filters.ChoiceFilter(label='', choices=STATUS, method='filter_by_status', empty_label='Open and ended')
 
     class Meta:
