@@ -64,7 +64,7 @@
 </div>
 <div class="container mt-5 mb-5">
     <div class="row">
-      <div class="col-md-6 offset-md3">
+      <div class="col-md-10 offset-md1">
         <h1>{{ lot.lot_number }} - {{ lot.lot_name }}</h1>
         {% if lot.image %}
         <div><img src="{{ lot.image.url }}" style="max-width:100%;"></img></div>
@@ -100,12 +100,23 @@
         {% if lot.banned %}
         <span style="color:red">This lot has been removed by an administrator</span>
         {% elif lot.user.pk == request.user.id %}
-        <span>This is your lot.</span>
+        {% if not lot.high_bidder %}
+        <span><a href="/lots/edit/{{lot.pk}}" class="btn btn-warning active">Edit this lot</a></span>
+        {% else %}
+        This is your lot.  You can't edit it because bids have already been placed.
+        {% endif %}
         {% elif lot.ended %}
         <span>Bidding has ended on this lot</span>
         {% else %}
+        {% if lot.auction %}
+        This lot is part of the <b>{{ lot.auction }}</b> auction.  Please <a href='/auctions/{{lot.auction.slug}}'>view the auction's rules</a> before bidding.<br>
+        {% endif %}
+        {% if user.is_authenticated %}
         {% crispy form form.helper %}
         <span id="watch" {% if watched %} class="watched">&#9733; Watching{% else %}>&#9734; Watch{% endif %}</span>
+        {% else %}
+        <a href='/login/?next=/lots/{{lot.pk}}/'>Sign in</a> to bid on this lot.
+        {% endif %}
         {% endif %}
     </div>
 </div>

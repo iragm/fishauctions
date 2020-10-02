@@ -5,6 +5,7 @@ from django import forms
 from .models import Lot, Bid, Auction
 from django.forms import ModelForm, HiddenInput
 from bootstrap_datepicker_plus import DateTimePickerInput
+from django.utils import timezone
 #from django.core.exceptions import ValidationError
 
 class DateInput(forms.DateInput):
@@ -52,7 +53,7 @@ class CreateAuctionForm(forms.ModelForm):
         model = Auction
         fields = ['title', 'notes', 'lot_entry_fee','unsold_lot_fee','winning_bid_percent_to_club', 'date_start', 'date_end', \
             'pickup_location', 'pickup_location_map', 'pickup_time', 'alternate_pickup_location', 'alternate_pickup_location_map',\
-            'alternate_pickup_time']
+            'alternate_pickup_time', 'area']
         exclude = ['slug', 'sealed_bid', 'watch_warning_email_sent', 'invoiced', 'created_by', 'code_to_add_lots']
         widgets = {
             'date_start': DateTimePickerInput(),
@@ -66,8 +67,11 @@ class CreateAuctionForm(forms.ModelForm):
         self.fields['notes'].widget.attrs = {'rows': 3}
         self.helper = FormHelper
         self.helper.form_method = 'post'
+        self.helper.form_id = 'auction-form'
+        self.helper.form_class = ''
         self.helper.layout = Layout(
             'title',
+            'area',
             'notes',
             Div(
                 Div('lot_entry_fee',css_class='col-md-4',),
@@ -92,7 +96,7 @@ class CreateAuctionForm(forms.ModelForm):
                 css_class='row',
             ),
             'alternate_pickup_location_map',
-            Submit('submit', 'Create auction', css_class='btn-success'),
+            Submit('submit', 'Save', css_class='btn-success'),
         )
 
     def clean(self):
@@ -107,11 +111,23 @@ class CreateLotForm(forms.ModelForm):
         model = Lot
         fields = ('lot_name','i_bred_this_fish','image','image_source','description','quantity','reserve_price','species_category','auction','donation')
         exclude = [ "user"]
-    
+        widgets = {
+            'description': forms.Textarea,
+        }
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.fields['description'].widget.attrs = {'rows': 3}
+        # Default auction should be the most recent non-ended auction
+        auctions = Auction.objects.all().filter(date_end__gte=timezone.now()).order_by('-date_end')
+        try:
+            self.fields['auction'].initial = auctions[0]
+        except:
+            # no non-ended auctions
+            pass
         self.helper = FormHelper
         self.helper.form_method = 'post'
+        self.helper.form_id = 'lot-form'
+        self.helper.form_class = ''
         self.helper.layout = Layout(
             'lot_name',
             'species_category',
@@ -122,12 +138,15 @@ class CreateLotForm(forms.ModelForm):
             'donation',
             'quantity',
             'reserve_price',
-            #'auction',
-            Submit('submit', 'Create lot', css_class='btn-success'),
+            'auction',
+            Submit('submit', "Save", css_class='btn-success'),
         )
     def clean(self):
         cleaned_data = super().clean()
         image = cleaned_data.get("image")
         image_source = cleaned_data.get("image_source")
+        auction = cleaned_data.get("auction")
         if image and not image_source:
             self.add_error('image_source', "Is this your picture?")
+        if not auction:
+            self.add_error('auction', "Select an auction")

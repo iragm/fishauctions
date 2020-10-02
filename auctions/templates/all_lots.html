@@ -25,7 +25,7 @@ Won lots
     <div class="row">
       <div class="col-md-10 offset-lg-1">
         <h1>{% if view == "all" %}
-          Current auction
+          Lots
           {% endif %}
           {% if view == "watch" %}
           Watched lots
@@ -41,7 +41,7 @@ Won lots
           {% endif %}</h1>
         <form method="GET">
           {{ filter.form }}
-          <button type="submit" class="btn btn-primary">Apply Filter</button> {% if view == "mylots" %}<a href="/lots/new/" class="btn btn-info" role="button">New lot</a>{% endif %}
+          <button type="submit" class="btn btn-primary">Apply Filter</button> {% if view == "mylots" or view == "all" %}<a href="/lots/new/" class="btn btn-info" role="button">Create lot</a>{% endif %}
         </form>
         <table class="table">
           <thead>

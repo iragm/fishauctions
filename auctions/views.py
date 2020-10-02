@@ -9,6 +9,7 @@ from django.contrib.auth.decorators import login_required
 from django.views.generic import ListView, DetailView
 from django.views.generic.edit import FormMixin
 from django.urls import reverse
+from django.views.generic.edit import UpdateView
 from .models import *
 from .filters import *
 from .forms import *
@@ -86,6 +87,20 @@ def watchOrUnwatch(request, pk):
         else:
             return HttpResponse("Failure")
 
+class AuctionUpdate(UpdateView):
+    def dispatch(self, request, *args, **kwargs):
+        if not (request.user.is_superuser or self.get_object().created_by == self.request.user):
+            raise PermissionDenied()
+        lotsAlreadyCreated = Lot.objects.filter(auction=self.get_object().pk)
+        if len(lotsAlreadyCreated):
+            messages.warning(request, "Lots have already been added to this auction.  Don't make large changes!")
+        return super().dispatch(request, *args, **kwargs)
+    def get_success_url(self):
+        return "/auctions/" + str(self.kwargs['slug'])
+    model = Auction
+    template_name = 'auction_form.html'
+    form_class = CreateAuctionForm
+
 # password protected in urls.py
 class viewAndBidOnLot(FormMixin, DetailView):
     """Show the picture and detailed information about a lot, and allow users to place bids"""
@@ -95,9 +110,14 @@ class viewAndBidOnLot(FormMixin, DetailView):
     queryset = Lot.objects.all()
     
     def get_context_data(self, **kwargs):
+        if Lot.objects.get(pk=self.kwargs['pk']).high_bidder:
+            defaultBidAmount = Lot.objects.get(pk=self.kwargs['pk']).high_bid + 1
+        else:
+            # reserve price if there are no bids
+            defaultBidAmount = Lot.objects.get(pk=self.kwargs['pk']).high_bid
         context = super(viewAndBidOnLot, self).get_context_data(**kwargs)
         context['watched'] = Watch.objects.filter(lot_number=self.kwargs['pk'], user=self.request.user.id)
-        context['form'] = CreateBid(initial={'user': self.request.user.id, 'lot_number':self.kwargs['pk'], "amount":Lot.objects.get(pk=self.kwargs['pk']).high_bid + 1}, request=self.request)
+        context['form'] = CreateBid(initial={'user': self.request.user.id, 'lot_number':self.kwargs['pk'], "amount":defaultBidAmount}, request=self.request)
         return context
     
     def get_success_url(self):
@@ -115,6 +135,9 @@ class viewAndBidOnLot(FormMixin, DetailView):
         lotNumber = form.cleaned_data['lot_number'].pk
         thisBid = form.cleaned_data['amount']
         form.user = User.objects.get(id=request.user.id)
+        if not form.user:
+            messages.info(request, "You need to be signed in to bid on a lot")
+            return False
         lot = Lot.objects.get(pk=self.kwargs['pk'])
         highBidder = lot.high_bidder
         
@@ -159,9 +182,8 @@ class viewAndBidOnLot(FormMixin, DetailView):
 
 @login_required
 def createLot(request):
-    #return HttpResponse("Page for new lot")
+    """Create a new lot"""
     if request.method == 'POST':
-        # without this check, the crispy form is rendering wrong
         if request.FILES:
             form = CreateLotForm(request.POST, request.FILES)
         else:
@@ -169,15 +191,29 @@ def createLot(request):
         if form.is_valid():
             lot = form.save(commit=False)
             lot.user = User.objects.get(id=request.user.id)
-            lot.auction = Auction.objects.get(pk=1) # this is hard coded to only allow adding things to one auction
+            #lot.auction = Auction.objects.get(pk=1) # this is hard coded to only allow adding things to one auction
             lot.save()            
             print(str(lot.user) + " has added a new lot " + lot.lot_name)
             messages.info(request, "Lot added")
             form = CreateLotForm() # no post data here to reset the form
     else:
         form = CreateLotForm()
-    return render(request,'new_lot.html', {'form':form})
+    return render(request,'lot_form.html', {'form':form})
 
+class LotUpdate(UpdateView):
+    def dispatch(self, request, *args, **kwargs):
+        if not (request.user.is_superuser or self.get_object().user == self.request.user):
+            raise PermissionDenied()
+        if self.get_object().high_bidder:
+            messages.warning(request, "Bids have already been placed on this lot")
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+    
+    def get_success_url(self):
+        return "/lots/" + str(self.kwargs['pk'])
+    model = Lot
+    template_name = 'lot_form.html'
+    form_class = CreateLotForm
 
 @login_required
 def createAuction(request):
@@ -194,7 +230,7 @@ def createAuction(request):
             return response
     else:
         form = CreateAuctionForm()
-    return render(request,'new_auction.html', {'form':form})
+    return render(request,'auction_form.html', {'form':form})
 
 class auction(DetailView):
     """Main view of a single auction"""
@@ -243,7 +279,8 @@ class allLots(ListView):
 
 # password protected in views.py
 class invoice(DetailView): #FormMixin
-    """Get you invoice by auction"""
+    """Get your invoice by auction"""
+    # fixme
     template_name = 'invoice.html'
     model = Invoice
     #form_class = ChooseAuction

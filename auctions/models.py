@@ -143,13 +143,14 @@ class Lot(models.Model):
 	quantity = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
 	quantity.help_text = "How many of this item are in this lot?"
 	reserve_price = models.PositiveIntegerField(default=2, validators=[MinValueValidator(1), MaxValueValidator(200)])
-	quantity.help_text = "The item will not be sold unless someone bids at least this much"
+	reserve_price.help_text = "The item will not be sold unless someone bids at least this much"
 	species = models.ForeignKey(Product, null=True, blank=True, on_delete=models.SET_NULL)
 	species_category = models.ForeignKey(Category, null=True, blank=True, on_delete=models.SET_NULL)
 	date_posted = models.DateTimeField(auto_now_add=True, blank=True)
 	user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
 	auction = models.ForeignKey(Auction, blank=True, null=True, on_delete=models.SET_NULL)
-	date_end = models.DateTimeField(auto_now_add=False, blank=True)
+	auction.help_text = "Select an auction to put this lot into.  This lot must be brought to the auction's pickup location"
+	date_end = models.DateTimeField(auto_now_add=False, blank=True, null=True)
 	winner = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="winner")
 	active = models.BooleanField(default=True)
 	winning_price = models.PositiveIntegerField(null=True, blank=True)

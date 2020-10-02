@@ -5,10 +5,10 @@ from . import views
 from django.contrib.auth.decorators import login_required
 
 urlpatterns = [
-    #path('admin/', admin.site.urls),
     path('watchitem/<int:pk>/', login_required(views.watchOrUnwatch)),
     path('lots/', views.allLots.as_view(), name='allLots'),
-    path('lots/<int:pk>/', login_required(views.viewAndBidOnLot.as_view())),
+    path('lots/<int:pk>/', views.viewAndBidOnLot.as_view()),
+    path('lots/edit/<int:pk>/', views.LotUpdate.as_view()),
     path('lots/new/', views.createLot, name='createLot'),
     path('lots/watched/', login_required(views.myWatched.as_view())),
     path('lots/won/', login_required(views.myWonLots.as_view())),
@@ -20,6 +20,6 @@ urlpatterns = [
     #path('invoice/', login_required(views.invoice.as_view())),
     path('auctions/all/', views.allAuctions.as_view(), name='auctions'),
     path('auctions/new/', views.createAuction, name='createAuction'),
-    path('auctions/<int:pk>/', views.auction.as_view()),
+    path('auctions/edit/<slug:slug>/', views.AuctionUpdate.as_view()),
     path('auctions/<slug:slug>/', views.auction.as_view()),
 ]

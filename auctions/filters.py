@@ -4,6 +4,10 @@ from django.db.models import Q
 from django.forms.widgets import TextInput, Select
 
 class LotFilter(django_filters.FilterSet):
+    auctions = Auction.objects.all().order_by('title')
+    filterAuctions = []
+    for auction in auctions:
+        filterAuctions.append((auction.slug, auction.title))
     categories = Category.objects.all().order_by('name')
     filterCategories = []
     for catagory in categories:
@@ -13,6 +17,7 @@ class LotFilter(django_filters.FilterSet):
         ('closed', 'Ended'),
     )
     q = django_filters.CharFilter(label='', method='textFilter', widget=TextInput(attrs={'placeholder': 'Search', 'class': 'full-width'}))
+    auction = django_filters.ChoiceFilter(label='', choices=filterAuctions, method='filter_by_auction', empty_label='Any auction', widget=Select(attrs={'style': 'width:10vw'}))
     category = django_filters.ChoiceFilter(label='', choices=filterCategories, method='filter_by_category', empty_label='Any category', widget=Select(attrs={'style': 'width:10vw'}))
     status = django_filters.ChoiceFilter(label='', choices=STATUS, method='filter_by_status', empty_label='Open and ended')
 
@@ -22,6 +27,9 @@ class LotFilter(django_filters.FilterSet):
     
     def filter_by_category(self, queryset, name, value):
         return queryset.filter(species_category=value)
+
+    def filter_by_auction(self, queryset, name, value):
+        return queryset.filter(auction=Auction.objects.get(slug=value))
 
     def filter_by_status(self, queryset, name, value):
         if value == "ended":

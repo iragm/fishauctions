@@ -17,8 +17,7 @@
         <table class="table">
           <thead>
             <tr>
-              <th scope="col">Title</th>
-              <th scope="col">Rules</th>
+              <th scope="col">Auction</th>
               <th scope="col">Area</th>
               <th scope="col">Ends</th>
             </tr>
@@ -27,8 +26,7 @@
             
             {% for auction in object_list %}
             <tr>
-              <td><a href='/lots/{{auction.pk}}'>{{ auction.title }}</a></td>
-              <td><a href='/auctions/{{auction.slug}}'>View rules</a></td>
+              <td>{{ auction.title }}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href='/lots/?auction={{auction.slug}}'>View lots</a>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href='/auctions/{{auction.slug}}'>Payment and pickup info</a></td>
               <td>{{ auction.area }}</td>
               <td>{% if auction.closed %}<span style="color:red">{{ auction.date_end }}</span>{% else %}{{ auction.date_end }}{% endif %}</td>
             </tr>
