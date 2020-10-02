@@ -9,6 +9,7 @@ urlpatterns = [
     path('lots/', views.allLots.as_view(), name='allLots'),
     path('lots/<int:pk>/', views.viewAndBidOnLot.as_view()),
     path('lots/edit/<int:pk>/', views.LotUpdate.as_view()),
+    path('lots/delete/<int:pk>/', views.LotDelete.as_view()),
     path('lots/new/', views.createLot, name='createLot'),
     path('lots/watched/', login_required(views.myWatched.as_view())),
     path('lots/won/', login_required(views.myWonLots.as_view())),

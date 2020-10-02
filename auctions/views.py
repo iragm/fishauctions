@@ -10,6 +10,8 @@ from django.views.generic import ListView, DetailView
 from django.views.generic.edit import FormMixin
 from django.urls import reverse
 from django.views.generic.edit import UpdateView
+from django.views.generic.edit import DeleteView
+
 from .models import *
 from .filters import *
 from .forms import *
@@ -205,7 +207,7 @@ class LotUpdate(UpdateView):
         if not (request.user.is_superuser or self.get_object().user == self.request.user):
             raise PermissionDenied()
         if self.get_object().high_bidder:
-            messages.warning(request, "Bids have already been placed on this lot")
+            messages.error(request, "Bids have already been placed on this lot")
             raise PermissionDenied()
         return super().dispatch(request, *args, **kwargs)
     
@@ -214,6 +216,19 @@ class LotUpdate(UpdateView):
     model = Lot
     template_name = 'lot_form.html'
     form_class = CreateLotForm
+
+class LotDelete(DeleteView):
+    model = Lot
+    def dispatch(self, request, *args, **kwargs):
+        if not (request.user.is_superuser or self.get_object().user == self.request.user):
+            raise PermissionDenied()
+        if self.get_object().high_bidder:
+            messages.error(request, "Bids have already been placed on this lot")
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_success_url(self):
+        return "/"
 
 @login_required
 def createAuction(request):
