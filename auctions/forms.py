@@ -107,16 +107,29 @@ class CreateAuctionForm(forms.ModelForm):
         #    self.add_error('image_source', "Is this your picture?")
 
 class CreateLotForm(forms.ModelForm):
+    """Form for creating or updating of lots"""
+    # Fields not included in the Lot model
+    # These are needed to add new species
+    create_new_species = forms.BooleanField(required = False)
+    create_new_species.help_text = "Check if this species/item isn't available"
+    new_species_name = forms.CharField(max_length=200, required = False)
+    new_species_name.help_text = "Enter the common name of this species"
+    new_species_scientific_name = forms.CharField(max_length=200, required = False)
+    new_species_scientific_name.help_text = "Enter the Latin name of this species"
+    #species = forms.CharField(widget = forms.HiddenInput(), required = False)
     class Meta:
         model = Lot
-        fields = ('lot_name','i_bred_this_fish','image','image_source','description','quantity','reserve_price','species_category','auction','donation')
+        fields = ('lot_name', 'species', 'create_new_species', 'new_species_name', 'new_species_scientific_name', 'i_bred_this_fish', 'image','image_source','description','quantity','reserve_price','species_category','auction','donation')
         exclude = [ "user"]
         widgets = {
             'description': forms.Textarea,
+            'species': forms.HiddenInput,
         }
+    
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields['description'].widget.attrs = {'rows': 3}
+        self.fields['species_category'].required = True
         # Default auction should be the most recent non-ended auction
         auctions = Auction.objects.all().filter(date_end__gte=timezone.now()).order_by('-date_end')
         try:
@@ -130,23 +143,51 @@ class CreateLotForm(forms.ModelForm):
         self.helper.form_class = ''
         self.helper.layout = Layout(
             'lot_name',
+            'species',
             'species_category',
-            'image',
-            'image_source',
-            'description',
-            'i_bred_this_fish',
-            'donation',
+            Div(
+                Div('i_bred_this_fish',css_class='col-md-6',),
+                Div('create_new_species',css_class='col-md-6',),
+                css_class='row',
+            ),
+            Div(
+                Div('new_species_name',css_class='col-md-6',),
+                Div('new_species_scientific_name',css_class='col-md-6',),
+                css_class='row',
+            ),
+            Div(
+                Div('image',css_class='col-md-8',),
+                Div('image_source',css_class='col-md-4',),
+                css_class='row',
+            ),
+            'description',            
+            
             'quantity',
-            'reserve_price',
+            Div(
+                Div('reserve_price',css_class='col-md-8',),
+                Div('donation',css_class='col-md-4',),
+                css_class='row',
+            ),
             'auction',
             Submit('submit', "Save", css_class='btn-success'),
         )
     def clean(self):
         cleaned_data = super().clean()
+        
+        create_new_species = cleaned_data.get("create_new_species")
+        new_species_name = cleaned_data.get("new_species_name")
+        new_species_scientific_name = cleaned_data.get("new_species_scientific_name")
+        if create_new_species:
+            if not new_species_name:
+                self.add_error('new_species_name', "Enter the common name of the new species to create")
+            if not new_species_scientific_name:
+                self.add_error('new_species_scientific_name', "Enter the scientific name of the new species to create")
+        
         image = cleaned_data.get("image")
         image_source = cleaned_data.get("image_source")
-        auction = cleaned_data.get("auction")
         if image and not image_source:
             self.add_error('image_source', "Is this your picture?")
+        
+        auction = cleaned_data.get("auction")
         if not auction:
             self.add_error('auction', "Select an auction")

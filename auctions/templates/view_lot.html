@@ -28,7 +28,7 @@
             beforeSend: function (request) {
                 request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
             },
-            url: "/watchitem/{{lot.pk}}/",
+            url: "/api/watchitem/{{lot.pk}}/",
             data : data,
             success : function(result) {
                 if (data.watch) {
@@ -101,7 +101,7 @@
         <span style="color:red">This lot has been removed by an administrator</span>
         {% elif lot.user.pk == request.user.id %}
         {% if not lot.high_bidder %}
-        <span><a href="/lots/edit/{{lot.pk}}" class="btn btn-warning active">Edit</a></span> <span><a href="/lots/delete/{{lot.pk}}" class="btn btn-danger active">Delete</a></span>
+        <span><a href="/lots/edit/{{lot.pk}}" class="btn btn-warning active">Edit</a></span> {% if lot.can_be_deleted %}<span><a href="/lots/delete/{{lot.pk}}" class="btn btn-danger active">Delete</a>{% endif %}</span>
         {% else %}
         This is your lot.  You can't edit it because bids have already been placed.
         {% endif %}

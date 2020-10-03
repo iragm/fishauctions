@@ -33,7 +33,7 @@ class Product(models.Model):
 	breeder_points = models.BooleanField(default=True)
 	category = models.ForeignKey(Category, null=True, on_delete=models.SET_NULL)
 	def __str__(self):
-		return str(self.common_name)
+		return f"{self.common_name} ({self.scientific_name})"
 	class Meta:
 		verbose_name_plural = "Products and species"
 
@@ -226,6 +226,16 @@ class Lot(models.Model):
 		else:
 			return self.date_end
 	
+	@property
+	def can_be_deleted(self):
+		"""Check to see if this lot can be deleted.
+		This is needed to prevent people deleting lots that don't sell right before the auction ends"""
+		max_delete_date = self.date_posted + datetime.timedelta(hours=2)
+		if timezone.now() > max_delete_date:
+			return False
+		else:
+			return True
+
 	@property
 	def ended(self):
 		"""Used by the view for display of whether or not the auction has ended

@@ -1,10 +1,84 @@
 {% extends "base.html" %}
 {% load crispy_forms_tags %}
+{% block extra_css %}
+<link rel="stylesheet" href="//code.jquery.com/ui/1.12.1/themes/base/jquery-ui.css">
+{% endblock %}
 {% block extra_js %}
+<script src="https://code.jquery.com/ui/1.12.1/jquery-ui.js"></script>
 <script type="text/javascript">
 $('#lot-form').submit(function(event){
     $(this).find(':input[type=submit]').prop('disabled', true);
 });
+
+$(document).ready(function() {
+    
+    if(document.getElementById('id_create_new_species').checked) { //if (!$("#id_create_new_species").is(':check')) {
+
+    } else {
+        $("#div_id_new_species_name").hide();
+        $("#div_id_new_species_scientific_name").hide();
+    }
+    var searchTimeout = null;
+    var availableTags = [];
+    $("#id_lot_name").autocomplete({
+        source: availableTags,
+        select:function(value, data) {
+            //console.log(data.item);
+            $('#id_species_category').val(data.item.category_id);
+            $('#id_species').val(data.item.id);
+            $('#id_new_species_name').val(data.item.common_name);
+            $('#id_new_species_scientific_name').val(data.item.scientific_name);
+            $('#hint_id_lot_name').html("Recorded as " + data.item.value + ". If this isn't correct, add a new species.");
+            $('#hint_id_create_new_species').html("Check if this isn't " + data.item.scientific_name );
+
+        }
+    });
+    function getSpecies(search) {
+        //console.log('search: ' + search);
+        var data = {};
+        data.search = search;
+        $.ajax({
+            type: "POST",
+            beforeSend: function (request) {
+                request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+            },
+            url: "/api/species/",
+            data : data,
+            success : function(result) {
+                console.log(result);
+                var availableTags = [];
+                for (item in result) {
+                    availableTags.push({
+                        value: result[item].common_name + " (" + result[item].scientific_name + ")",
+                        category_id: result[item].category_id,
+                        id: result[item].id,
+                        common_name: result[item].common_name,
+                        scientific_name: result[item].scientific_name,
+                        });
+                };
+                $( "#id_lot_name" ).autocomplete( "option", "source",availableTags);
+            }
+        });
+    }
+
+    $('#id_lot_name').keyup(function(e) {
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(() => getSpecies(e.target.value), 300);
+    });
+    
+    $("#id_create_new_species").change(function(data) {
+        if(this.checked) {
+            $("#div_id_new_species_name").show();
+            $("#div_id_new_species_scientific_name").show();
+        } else {
+            $("#div_id_new_species_name").hide();
+            $("#div_id_new_species_scientific_name").hide();
+        }
+        
+    });
+
+});
+
 </script>
 {% endblock %}
 {% block title %}New lot{% endblock %}

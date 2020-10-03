@@ -3,6 +3,7 @@ from itertools import chain
 from django.contrib.auth.models import User
 from django.shortcuts import render,redirect
 from django.http import HttpResponse
+from django.http import JsonResponse
 from django.utils import timezone
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -11,6 +12,7 @@ from django.views.generic.edit import FormMixin
 from django.urls import reverse
 from django.views.generic.edit import UpdateView
 from django.views.generic.edit import DeleteView
+from django.db.models import Q
 
 from .models import *
 from .filters import *
@@ -182,6 +184,23 @@ class viewAndBidOnLot(FormMixin, DetailView):
                 form.save() # record the bid regardless of whether or not it's the current high
         return super(viewAndBidOnLot, self).form_valid(form)
 
+def createSpecies(name, scientific_name, category=False):
+    """Create a new product/species"""
+    if not category:
+        # uncategorized
+        category = Category.objects.get(id=21)
+    if category.pk == 18 or category.pk == 19 or category.pk == 20 or category.pk == 21:
+        # breeder points off for some things
+        breeder_points = False
+    else:
+        breeder_points = True
+    return Product.objects.create(
+        common_name=name,
+        scientific_name=scientific_name,
+        breeder_points=breeder_points,
+        category=category,
+    )
+
 @login_required
 def createLot(request):
     """Create a new lot"""
@@ -193,7 +212,8 @@ def createLot(request):
         if form.is_valid():
             lot = form.save(commit=False)
             lot.user = User.objects.get(id=request.user.id)
-            #lot.auction = Auction.objects.get(pk=1) # this is hard coded to only allow adding things to one auction
+            if form.cleaned_data['create_new_species']:
+                lot.species = createSpecies(form.cleaned_data['new_species_name'], form.cleaned_data['new_species_scientific_name'], form.cleaned_data['species_category'])
             lot.save()            
             print(str(lot.user) + " has added a new lot " + lot.lot_name)
             messages.info(request, "Lot added")
@@ -213,13 +233,24 @@ class LotUpdate(UpdateView):
     
     def get_success_url(self):
         return "/lots/" + str(self.kwargs['pk'])
+    
+    def form_valid(self, form):
+        lot = form.save(commit=False)
+        if form.cleaned_data['create_new_species']:
+            lot.species = createSpecies(form.cleaned_data['new_species_name'], form.cleaned_data['new_species_scientific_name'], form.cleaned_data['species_category'])
+        lot.save()
+        return super(LotUpdate, self).form_valid(form)
+
     model = Lot
     template_name = 'lot_form.html'
     form_class = CreateLotForm
-
+    
 class LotDelete(DeleteView):
     model = Lot
     def dispatch(self, request, *args, **kwargs):
+        if not self.get_object().can_be_deleted:
+            messages.error(request, "Only new lots can be deleted")
+            raise PermissionDenied()
         if not (request.user.is_superuser or self.get_object().user == self.request.user):
             raise PermissionDenied()
         if self.get_object().high_bidder:
@@ -336,3 +367,14 @@ class invoice(DetailView): #FormMixin
                 messages.info(request, "BidFailed")
         form.save() # record the bid regardless of whether or not it's the current high
         return super(viewAndBidOnLot, self).form_valid(form)
+
+
+@login_required
+def getSpecies(request):
+    if request.method == 'POST':
+        species = request.POST['search']
+        result = Product.objects.filter(
+            Q(common_name__icontains=species) | Q(scientific_name__icontains=species)
+            ).values()
+        return JsonResponse(list(result), safe=False)
+        
