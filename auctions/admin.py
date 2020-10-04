@@ -1,5 +1,13 @@
 from django.contrib import admin
-from .models import Lot, Bid, Auction, Invoice, Category, Product
+from .models import Lot, Bid, Auction, Invoice, Category, Product, Club, Location
+
+class ClubAdmin(admin.ModelAdmin):
+    model = Club 
+    search_fields = ("name",)
+
+class LocationAdmin(admin.ModelAdmin):
+    model = Location 
+    search_fields = ("name",)
 
 class AuctionAdmin(admin.ModelAdmin):
     model = Auction 
@@ -76,3 +84,5 @@ admin.site.register(Auction, AuctionAdmin)
 admin.site.register(Invoice, InvoiceAdmin)
 admin.site.register(Bid, BidAdmin)
 admin.site.register(Lot, LotAdmin)
+admin.site.register(Location, LocationAdmin)
+admin.site.register(Club, ClubAdmin)

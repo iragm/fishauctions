@@ -19,9 +19,12 @@ urlpatterns = [
     path('bids/', login_required(views.myBids.as_view())),
     path('', views.toDefaultLandingPage),
     path('about/', views.aboutSite, name='about'),
+    path('account/', views.toAccount),
     #path('invoice/', login_required(views.invoice.as_view())),
     path('auctions/all/', views.allAuctions.as_view(), name='auctions'),
     path('auctions/new/', views.createAuction, name='createAuction'),
     path('auctions/edit/<slug:slug>/', views.AuctionUpdate.as_view()),
     path('auctions/<slug:slug>/', views.auction.as_view()),
+    path('users/<int:pk>/', login_required(views.UserView.as_view())),
+    path('users/edit/<int:pk>/', login_required(views.UserUpdate.as_view())),
 ]

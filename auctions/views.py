@@ -13,6 +13,8 @@ from django.urls import reverse
 from django.views.generic.edit import UpdateView
 from django.views.generic.edit import DeleteView
 from django.db.models import Q
+from django.contrib.messages.views import SuccessMessageMixin
+from allauth.account.models import EmailAddress
 
 from .models import *
 from .filters import *
@@ -211,6 +213,13 @@ def createLot(request):
             form = CreateLotForm(request.POST)
         if form.is_valid():
             lot = form.save(commit=False)
+            # If this is a tank, set it to not transportable
+            if lot.species.pk == 592:
+                lot.transportable = False
+            if "tank" in lot.lot_name:
+                lot.transportable = False
+            if "aquarium" in lot.lot_name:
+                lot.transportable = False
             lot.user = User.objects.get(id=request.user.id)
             if form.cleaned_data['create_new_species']:
                 lot.species = createSpecies(form.cleaned_data['new_species_name'], form.cleaned_data['new_species_scientific_name'], form.cleaned_data['species_category'])
@@ -292,6 +301,11 @@ def aboutSite(request):
 
 def toDefaultLandingPage(request):
     response = redirect('/auctions/all')
+    return response
+
+@login_required
+def toAccount(request):
+    response = redirect('/users/edit/' + str(request.user.id))
     return response
 
 class allAuctions(ListView):
@@ -377,4 +391,58 @@ def getSpecies(request):
             Q(common_name__icontains=species) | Q(scientific_name__icontains=species)
             ).values()
         return JsonResponse(list(result), safe=False)
-        
+     
+
+class UserView(DetailView):
+    """View information about a single user"""
+    template_name = 'user.html'
+    model = User
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        try:
+            context['preferences'] = UserPreferences.objects.get(user=self.object.pk)
+        except:
+            pass
+        return context
+
+class UserUpdate(UpdateView, SuccessMessageMixin):
+    """Make changes to a users info"""
+    template_name = 'user_form.html'
+    model = User
+    
+    success_message = 'User settings updated'
+
+    def dispatch(self, request, *args, **kwargs):
+        if not (request.user.is_superuser or self.get_object().pk == self.request.user):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_success_url(self):
+        return "/users/" + str(self.kwargs['pk'])
+    
+    def get_initial(self):
+        try:
+            prefs = UserPreferences.objects.get(user=self.get_object().pk)
+            return {'phone': prefs.phone_number, 'club': prefs.club, 'location': prefs.location, 'address': prefs.address}
+        except:
+            return
+
+    form_class = UpdateUserForm
+
+    def form_valid(self, form):
+        user = form.save(commit=False)
+        phone = form.cleaned_data['phone']
+        address = form.cleaned_data['address']
+        location = form.cleaned_data['location']
+        club = form.cleaned_data['club']
+        obj, created = UserPreferences.objects.update_or_create(
+            phone_number=phone,
+            club=club,
+            location=location,
+            address=address,
+            user=user,
+            defaults={},
+        )
+        user.save()
+        return super(UserUpdate, self).form_valid(form)

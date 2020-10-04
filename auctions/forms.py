@@ -2,7 +2,7 @@ from crispy_forms.helper import FormHelper
 from crispy_forms.layout import Layout, Submit
 from crispy_forms.bootstrap import Div, Field
 from django import forms
-from .models import Lot, Bid, Auction
+from .models import Lot, Bid, Auction, User, UserPreferences, Location, Club
 from django.forms import ModelForm, HiddenInput
 from bootstrap_datepicker_plus import DateTimePickerInput
 from django.utils import timezone
@@ -193,6 +193,7 @@ class CreateLotForm(forms.ModelForm):
             self.add_error('auction', "Select an auction")
 
 class CustomUserCreationForm(forms.Form):
+    """To require firstname and lastname when signing up"""
     first_name = forms.CharField(max_length=30, label='First name')
     last_name = forms.CharField(max_length=30, label='Last name')
 
@@ -200,3 +201,46 @@ class CustomUserCreationForm(forms.Form):
         user.first_name = self.cleaned_data['first_name']
         user.last_name = self.cleaned_data['last_name']
         user.save()
+
+class UpdateUserForm(forms.ModelForm):
+    phone = forms.CharField(max_length=30, label='Cell phone number', required=False)
+    address = forms.CharField(max_length=255, help_text='Mailing address', required=False, widget=forms.Textarea())
+    location = forms.ModelChoiceField(queryset=Location.objects.filter(), required=False)
+    club = forms.ModelChoiceField(queryset=Club.objects.filter(), required=False)
+    class Meta:
+        model = User
+        fields = ('username', 'first_name', 'last_name','phone', 'address', 'location')
+        exclude = ('last_login', 'is_superuser', 'groups', 'user_permissions', 'is_staff', 'is_active', 'date_joined', 'email',)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['address'].widget.attrs = {'rows': 3}
+        self.helper = FormHelper
+        self.helper.form_method = 'post'
+        self.helper.form_id = 'user-form'
+        self.helper.form_class = ''
+        self.helper.layout = Layout(
+            Div(
+                Div('first_name',css_class='col-md-6',),
+                Div('last_name',css_class='col-md-6',),
+                css_class='row',
+            ),
+            Div(
+                Div('username',css_class='col-md-6',),
+                Div('phone',css_class='col-md-6',),
+                css_class='row',
+            ),
+            'address',
+            Div(
+                Div('location',css_class='col-md-6',),
+                Div('club',css_class='col-md-6',),
+                css_class='row',
+            ),
+            Submit('submit', 'Save', css_class='btn-success'),
+        )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        #image = cleaned_data.get("image")
+        #image_source = cleaned_data.get("image_source")
+        #if image and not image_source:
+        #    self.add_error('image_source', "Is this your picture?")

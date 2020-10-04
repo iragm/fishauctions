@@ -13,7 +13,6 @@ class Club(models.Model):
 	name = models.CharField(max_length=255)
 	def __str__(self):
 		return str(self.name)
-	# fixme - create a new group model to allow adding users to a club
 	# fixme - create a new auction permission model to restrict bidding in an auction to a given club
 
 class Category(models.Model):
@@ -160,6 +159,7 @@ class Lot(models.Model):
 	watch_warning_email_sent = models.BooleanField(default=False)
 	seller_invoice = models.ForeignKey(Invoice, null=True, blank=True, on_delete=models.SET_NULL, related_name="seller_invoice")
 	buyer_invoice = models.ForeignKey(Invoice, null=True, blank=True, on_delete=models.SET_NULL, related_name="buyer_invoice")
+	transportable = models.BooleanField(default=True)
 
 	class Meta:
 		unique_together = (('user', 'active', 'lot_name', 'description'),)
@@ -308,3 +308,19 @@ class Watch(models.Model):
 	lot_number = models.ForeignKey(Lot, on_delete=models.CASCADE)
 	def __str__(self):
 		return "User" + str(self.user) + " watching " + str(self.lot_number)
+
+class Location(models.Model):
+	"""
+	Allows users to specify a location
+	"""
+	name = models.CharField(max_length=255)
+	def __str__(self):
+		return str(self.name)
+
+class UserPreferences(models.Model):
+	"""Extension of user model to store additional info.  At some point, we should be able to store information like email preferences here"""
+	user = models.ForeignKey(User, on_delete=models.CASCADE)
+	phone_number = models.CharField(max_length=20, blank=True, null=True)
+	address = models.CharField(max_length=500, blank=True, null=True)
+	location = models.ForeignKey(Location, null=True, on_delete=models.SET_NULL)
+	club = models.ForeignKey(Club, null=True, on_delete=models.SET_NULL)
