@@ -55,8 +55,8 @@ class BoughtLotInline(admin.TabularInline):
 
 class InvoiceAdmin(admin.ModelAdmin):
     model = Invoice 
-    list_display = ("auction", "user", "total_sold", "total_bought", "__str__", )
-    list_filter = ("auction", "user","paid",)
+    list_display = ("auction", "user", "total_sold", "total_bought", "__str__", "paid", )
+    list_filter = ("auction", "paid",)
     search_fields = ("user",)
     inlines = [
          SoldLotInline,

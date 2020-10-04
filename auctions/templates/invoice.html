@@ -10,14 +10,13 @@
             
             
             {% if auction %}
-            <h1>{{ invoice.user.first_name }} {{ invoice.user.last_name }}'s invoice for {{ invoice.auction }}</h1><br>
+            <h1>{%if invoice.user.first_name and invoice.user.last_name %}{{ invoice.user.first_name }} {{ invoice.user.last_name }}{% else %}{{ invoice.user }}{%endif%}'s invoice for {{ invoice.auction }}</h1><br>
             <b>Username:</b> {{invoice.user }}<br>
             <b>Auction:</b> {{ auction }}<br>
             {% endif %}
-            <b>Date:</b> {{ invoice.date }}
-            <br><br>
+            <b>Date:</b> {{ invoice.date }}<br>
             <b>Total:</b> {{ invoice }}<br>
-            {% if not invoice.paid %}<span style="color:red">Unpaid</span>{% else %}<span>Paid</span>{% endif %}<br>
+            <b>Status:</b> {% if not invoice.paid %}<span style="color:red">Unpaid</span>{% else %}<span>Paid</span>{% endif %}<br><br>
             {%if invoice.lots_sold %}
             <h3>Lots sold</h3>
             <table class="table">
@@ -38,14 +37,14 @@
                     <td>{{ lot.lot_number }}</td>
                     <td><a href="/lots/{{lot.pk}}/">{{ lot.lot_name }}</a></td>
                     <td>{% if lot.winning_price %} {{ lot.winner }} {% else %} Not sold {% endif %}</td>
-                    <td>{% if lot.winning_price %} ${{ lot.winning_price }} {% else %} Not sold {% endif %}</td>
-                    <td>${{ lot.club_cut }}</td>
-                    <td>${{ lot.your_cut }}</td>
+                    <td>{% if lot.winning_price %} ${{ lot.winning_price|floatformat:2 }} {% else %} Not sold {% endif %}</td>
+                    <td>${{ lot.club_cut|floatformat:2 }}</td>
+                    <td>${{ lot.your_cut|floatformat:2 }}</td>
                   </tr>
                   {% endfor %}
               </tbody>
             </table>
-            <b>Total sold:</b> ${{ invoice.total_sold }}   <br>         
+            <b>Total sold:</b> ${{ invoice.total_sold|floatformat:2 }}   <br>         
             {% endif %}
             <br>
             {%if invoice.lots_bought %}
@@ -66,12 +65,12 @@
                     <td>{{ lot.lot_number }}</td>
                     <td><a href="/lots/{{lot.pk}}/">{{ lot.lot_name }}</a></td>
                     <td>{{ lot.user }}</td>
-                    <td>${{ lot.winning_price }}</td>
+                    <td>${{ lot.winning_price|floatformat:2 }}</td>
                   </tr>
                   {% endfor %}
               </tbody>
             </table>
-            <b>Total bought:</b> ${{ invoice.total_bought }}     <br>       
+            <b>Total bought:</b> ${{ invoice.total_bought|floatformat:2 }}     <br>       
             {% endif %}
         </div>
     </div>

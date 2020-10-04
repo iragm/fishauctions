@@ -101,6 +101,15 @@ class Auction(models.Model):
 		else:
 			return False
 
+	@property
+	def club_profit(self):
+		"""Total amount made by the club in this auction"""
+		allLots = Lot.objects.filter(auction=self.pk)
+		total = 0
+		for lot in allLots:
+			total += lot.club_cut
+		return total
+
 class Invoice(models.Model):
 	"""An invoice is applied to an auction.  It's the total amount you owe"""
 	auction = models.ForeignKey(Auction, blank=True, null=True, on_delete=models.SET_NULL)
@@ -166,7 +175,7 @@ class Invoice(models.Model):
 			base += " needs to be paid"
 		else:
 			base += " owes the club"
-		return base + " $" + str(self.absolute_amount)
+		return base + " $" + "%.2f" % self.absolute_amount
 
 
 

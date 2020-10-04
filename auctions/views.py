@@ -94,6 +94,8 @@ def watchOrUnwatch(request, pk):
             return HttpResponse("Failure")
 
 class AuctionUpdate(UpdateView):
+    """For editing auctions"""
+    
     def dispatch(self, request, *args, **kwargs):
         if not (request.user.is_superuser or self.get_object().created_by == self.request.user):
             raise PermissionDenied()
@@ -101,8 +103,10 @@ class AuctionUpdate(UpdateView):
         if len(lotsAlreadyCreated):
             messages.warning(request, "Lots have already been added to this auction.  Don't make large changes!")
         return super().dispatch(request, *args, **kwargs)
+    
     def get_success_url(self):
         return "/auctions/" + str(self.kwargs['slug'])
+    
     model = Auction
     template_name = 'auction_form.html'
     form_class = CreateAuctionForm

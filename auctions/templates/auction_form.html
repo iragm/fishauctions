@@ -8,16 +8,14 @@ $('#auction-form').submit(function(event){
 });
 </script>
 {% endblock %}
-{% block title %}New auction{% endblock %}
+{% block title %}Auction{% endblock %}
 {% block content %}
-<div>
-    {% for message in messages %}
-        <div class="alert alert-success" role="alert">{{ message.message }}</a></div>
-    {% endfor %}
-</div>
 <div class="container mt-5 mb-5">
-      <div class="col-md-10 offset-md1">
+        <div class="col-md-10 offset-md1">
           <div style='padding: 2vw;'>
+            {% if auction.closed %}
+            This auction has ended.  The club made a total of ${{ auction.club_profit|floatformat:2 }}<br><br>
+            {% endif %}
             {% crispy form form.helper %}
         </div>
     </div>
