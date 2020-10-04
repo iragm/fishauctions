@@ -142,16 +142,16 @@ class viewAndBidOnLot(FormMixin, DetailView):
         thisBid = form.cleaned_data['amount']
         form.user = User.objects.get(id=request.user.id)
         if not form.user:
-            messages.info(request, "You need to be signed in to bid on a lot")
+            messages.warning(request, "You need to be signed in to bid on a lot")
             return False
         lot = Lot.objects.get(pk=self.kwargs['pk'])
         highBidder = lot.high_bidder
         
         if lot.ended:
-            messages.info(request, "LotEnded")
+            messages.error(request, "")
         else:
             if (thisBid > lot.max_bid):
-                messages.info(request, "BidSuccess")
+                messages.info(request, "")
                 # Send an email to the old high bidder
                 # @fixme, this is slow
                 if highBidder:
@@ -179,7 +179,7 @@ class viewAndBidOnLot(FormMixin, DetailView):
                     existingBid.amount = thisBid
                     existingBid.save()
                 else:
-                    messages.info(request, "UnderbidYourself")
+                    messages.warning(request, "You can't bid less than you've already bid")
             except:
                 # create a new bid model
                 print(f"{request.user} has bid on {lot}")
@@ -214,18 +214,19 @@ def createLot(request):
         if form.is_valid():
             lot = form.save(commit=False)
             # If this is a tank, set it to not transportable
-            if lot.species.pk == 592:
+            if lot.species:
+                if lot.species.pk == 592:
+                    lot.transportable = False
+            if "tank" in lot.lot_name.lower():
                 lot.transportable = False
-            if "tank" in lot.lot_name:
-                lot.transportable = False
-            if "aquarium" in lot.lot_name:
+            if "aquarium" in lot.lot_name.lower():
                 lot.transportable = False
             lot.user = User.objects.get(id=request.user.id)
             if form.cleaned_data['create_new_species']:
                 lot.species = createSpecies(form.cleaned_data['new_species_name'], form.cleaned_data['new_species_scientific_name'], form.cleaned_data['species_category'])
             lot.save()            
-            print(str(lot.user) + " has added a new lot " + lot.lot_name)
-            messages.info(request, "Lot added")
+            print(str(lot.user) + " has created a new lot " + lot.lot_name)
+            messages.info(request, "Created lot!  Fill out this form again to add another lot.  <a href='/lots/my'>All submitted lots")
             form = CreateLotForm() # no post data here to reset the form
     else:
         form = CreateLotForm()
@@ -312,8 +313,25 @@ class allAuctions(ListView):
     model = Auction
     template_name = 'all_auctions.html'
     ordering = ['-date_end']
-
+    
     def get_context_data(self, **kwargs):
+        user = User.objects.get(pk=self.request.user.pk)
+        nameSet = True
+        if not user.first_name or not user.last_name:
+            nameSet = False
+        locationSet = True
+        try:
+            prefs = UserPreferences.objects.get(user=self.request.user.pk)
+            if not UserPreferences.location:
+                locationSet = False
+        except:
+            locationSet = False
+        if not locationSet and not nameSet:
+            messages.add_message(self.request, messages.INFO, 'Set your name and location in your <a href="/account/">account</a>')
+        elif not locationSet:
+            messages.add_message(self.request, messages.INFO, 'Set your location in your <a href="/account/">account</a>')
+        elif not nameSet:
+            messages.add_message(self.request, messages.INFO, 'Set your name your <a href="/account/">account</a>')
         # set default values
         # data = self.request.GET.copy()
         # if len(data) == 0:
@@ -361,10 +379,10 @@ class invoice(DetailView): #FormMixin
         lot = Lot.objects.get(pk=self.kwargs['pk'])
         highBidder = lot.high_bidder
         if lot.ended:
-            messages.info(request, "LotEnded")
+            messages.info(request, "This auction has ended, you can't bid on it anymore")
         else:
             if (thisBid > lot.high_bid) and (request.user.id != highBidder.pk):
-                messages.info(request, "BidSuccess")
+                messages.info(request, "Bid placed")
                 # Send an email to the old high bidder
                 user = User.objects.get(pk=highBidder.pk)
                 email = user.email
@@ -378,7 +396,7 @@ class invoice(DetailView): #FormMixin
                 html_message = f'You\'ve been outbid on lot {lot}!<br><a href="{link}">Bid more here</a><br><br>Best, auctions.toxotes.org',
                 )
             else:
-                messages.info(request, "BidFailed")
+                messages.warning(request, "You've been outbid!")
         form.save() # record the bid regardless of whether or not it's the current high
         return super(viewAndBidOnLot, self).form_valid(form)
 

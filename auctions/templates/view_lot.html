@@ -43,25 +43,6 @@
      });
     }
 </script> {% endblock %}
-<div>
-    {% for message in messages %}
-    {% if message.message == "BidFailed" %}
-    <div class="alert alert-warning" role="alert">You've been outbid!</div>
-    {% endif %}
-    {% if message.message == "UnderbidYourself" %}
-    <div class="alert alert-warning" role="alert">You can't bid less than you've already bid</div>
-    {% endif %}
-    {% if message.message == "BidSuccess" %}
-    <div class="alert alert-primary" role="alert">Bid placed</div>
-    {% endif %}
-    {% if message.message == "LotEnded" %}
-    <div class="alert alert-error" role="alert">This auction has ended, you can't bid on it anymore</div>
-    {% endif %}
-    {% if message.message == "BidWinner" %}
-    <div class="alert alert-success" role="alert">You won this lot!</div>
-    {% endif %}
-    {% endfor %}
-</div>
 <div class="container mt-5 mb-5">
     <div class="row">
       <div class="col-md-10 offset-md1">

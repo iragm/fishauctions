@@ -83,13 +83,6 @@ $(document).ready(function() {
 {% endblock %}
 {% block title %}New lot{% endblock %}
 {% block content %}
-<div>
-    {% for message in messages %}
-        {% if message.message == "Lot added" %}
-        <div class="alert alert-success" role="alert">Successfully added lot!  Fill out this form again to add another lot.  <a href="/lots/my">All submitted lots</a></div>
-        {% endif %}
-    {% endfor %}
-</div>
 <div class="container mt-5 mb-5">
       <div class="col-md-10 offset-md1">
           

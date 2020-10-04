@@ -6,6 +6,7 @@ from .models import Lot, Bid, Auction, User, UserPreferences, Location, Club
 from django.forms import ModelForm, HiddenInput
 from bootstrap_datepicker_plus import DateTimePickerInput
 from django.utils import timezone
+
 #from django.core.exceptions import ValidationError
 
 class DateInput(forms.DateInput):
@@ -116,22 +117,24 @@ class CreateLotForm(forms.ModelForm):
     new_species_name.help_text = "Enter the common name of this species"
     new_species_scientific_name = forms.CharField(max_length=200, required = False)
     new_species_scientific_name.help_text = "Enter the Latin name of this species"
-    #species = forms.CharField(widget = forms.HiddenInput(), required = False)
+    
     class Meta:
         model = Lot
-        fields = ('lot_name', 'species', 'create_new_species', 'new_species_name', 'new_species_scientific_name', 'i_bred_this_fish', 'image','image_source','description','quantity','reserve_price','species_category','auction','donation')
+        fields = ('lot_name', 'species', 'create_new_species', 'new_species_name', 'new_species_scientific_name',\
+            'i_bred_this_fish', 'image','image_source','description','quantity','reserve_price','species_category',\
+            'auction','donation')
         exclude = [ "user"]
         widgets = {
             'description': forms.Textarea,
             'species': forms.HiddenInput,
         }
-    
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields['description'].widget.attrs = {'rows': 3}
         self.fields['species_category'].required = True
-        # Default auction should be the most recent non-ended auction
-        auctions = Auction.objects.all().filter(date_end__gte=timezone.now()).order_by('-date_end')
+        self.fields['auction'].queryset = Auction.objects.filter(date_end__gte=timezone.now()).filter(date_start__lte=timezone.now()).order_by('date_end')
+        # Default auction selection:
+        auctions = Auction.objects.filter(date_end__gte=timezone.now()).filter(date_start__lte=timezone.now()).order_by('date_end')
         try:
             self.fields['auction'].initial = auctions[0]
         except:
