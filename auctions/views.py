@@ -454,13 +454,16 @@ class UserUpdate(UpdateView, SuccessMessageMixin):
         address = form.cleaned_data['address']
         location = form.cleaned_data['location']
         club = form.cleaned_data['club']
-        obj, created = UserPreferences.objects.update_or_create(
-            phone_number=phone,
-            club=club,
-            location=location,
-            address=address,
-            user=user,
-            defaults={},
-        )
+        try:
+            prefs = UserPreferences.objects.get(user=user)
+        except:
+            prefs = UserPreferences.objects.create(
+                user=user
+            )
+        prefs.phone_number=phone
+        prefs.club=form.cleaned_data['club']
+        prefs.location=location
+        prefs.address=address
+        prefs.save()
         user.save()
         return super(UserUpdate, self).form_valid(form)

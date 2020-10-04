@@ -319,7 +319,7 @@ class Location(models.Model):
 
 class UserPreferences(models.Model):
 	"""Extension of user model to store additional info.  At some point, we should be able to store information like email preferences here"""
-	user = models.ForeignKey(User, on_delete=models.CASCADE)
+	user = models.OneToOneField(User, on_delete=models.CASCADE)
 	phone_number = models.CharField(max_length=20, blank=True, null=True)
 	address = models.CharField(max_length=500, blank=True, null=True)
 	location = models.ForeignKey(Location, null=True, on_delete=models.SET_NULL)
