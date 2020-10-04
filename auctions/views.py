@@ -294,7 +294,8 @@ class auction(DetailView):
     model = Auction
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        #context['now'] = timezone.now()
+        owner = self.get_object().created_by
+        context['contact_email'] = User.objects.get(pk=owner.pk).email
         return context
 
 def aboutSite(request):

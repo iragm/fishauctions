@@ -8,6 +8,14 @@ from django.db.models import Count
 from autoslug import AutoSlugField
 from django.urls import reverse
 
+class Location(models.Model):
+	"""
+	Allows users to specify a location
+	"""
+	name = models.CharField(max_length=255)
+	def __str__(self):
+		return str(self.name)
+
 class Club(models.Model):
 	"""Clubs restrict who can enter or bid in an auction"""
 	name = models.CharField(max_length=255)
@@ -52,8 +60,8 @@ class Auction(models.Model):
 	watch_warning_email_sent = models.BooleanField(default=False)
 	invoiced = models.BooleanField(default=False)
 	created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
-	area = models.CharField(max_length=300)
-	area.help_text = "State or region of this auction"
+	location = models.ForeignKey(Location, null=True, blank=True, on_delete=models.SET_NULL)
+	location.help_text = "State or region of this auction"
 	pickup_location = models.CharField(max_length=300)
 	pickup_location.help_text = "Description of pickup location"
 	pickup_location_map = models.CharField(max_length=2000)
@@ -64,10 +72,10 @@ class Auction(models.Model):
 	alternate_pickup_location_map = models.CharField(null=True, blank=True, max_length=2000)
 	alternate_pickup_location_map.help_text = "Google Maps link to alternate pickup location"
 	alternate_pickup_time = models.DateTimeField(blank=True, null=True)
-	notes = models.CharField(max_length=500, blank=True, null=True)
+	notes = models.TextField(blank=True, null=True)
 	code_to_add_lots = models.CharField(max_length=255, blank=True, null=True)
 	code_to_add_lots.help_text = "This is like a password: People in your club will enter this code to put their lots in this auction"
-
+	
 	def __str__(self):
 		#return "ID:" + str(self.pk) + " " + str(self.title)
 		return str(self.title)
@@ -308,14 +316,6 @@ class Watch(models.Model):
 	lot_number = models.ForeignKey(Lot, on_delete=models.CASCADE)
 	def __str__(self):
 		return "User" + str(self.user) + " watching " + str(self.lot_number)
-
-class Location(models.Model):
-	"""
-	Allows users to specify a location
-	"""
-	name = models.CharField(max_length=255)
-	def __str__(self):
-		return str(self.name)
 
 class UserPreferences(models.Model):
 	"""Extension of user model to store additional info.  At some point, we should be able to store information like email preferences here"""

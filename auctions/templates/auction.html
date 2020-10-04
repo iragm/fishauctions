@@ -9,7 +9,8 @@
         <div class="col-md-10 offset-md1">
             <h1>{{ auction.title }}</h1>
             An auction created by {{ auction.created_by }}<br>
-            {% if auction.notes %}{{ auction.notes }} {% endif %}
+            {% if user.is_authenticated %} <br>Questions?  Email <a href='mailto:{{ contact_email }}'>{{ contact_email }}</a>{% endif %}<br>
+            {% if auction.notes %}{{ auction.notes|safe }} {% endif %}
             <br><h3>Dates</h3>
             This auction will run from {{ auction.date_start }} to {{ auction.date_end}}
             <br><h3>Payment and pickup</h3>

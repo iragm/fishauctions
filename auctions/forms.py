@@ -54,7 +54,7 @@ class CreateAuctionForm(forms.ModelForm):
         model = Auction
         fields = ['title', 'notes', 'lot_entry_fee','unsold_lot_fee','winning_bid_percent_to_club', 'date_start', 'date_end', \
             'pickup_location', 'pickup_location_map', 'pickup_time', 'alternate_pickup_location', 'alternate_pickup_location_map',\
-            'alternate_pickup_time', 'area']
+            'alternate_pickup_time', 'location']
         exclude = ['slug', 'sealed_bid', 'watch_warning_email_sent', 'invoiced', 'created_by', 'code_to_add_lots']
         widgets = {
             'date_start': DateTimePickerInput(),
@@ -72,7 +72,7 @@ class CreateAuctionForm(forms.ModelForm):
         self.helper.form_class = ''
         self.helper.layout = Layout(
             'title',
-            'area',
+            'location',
             'notes',
             Div(
                 Div('lot_entry_fee',css_class='col-md-4',),
