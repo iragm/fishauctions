@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %} {{ invoice.auction }} {% endblock %}
+{% load static %}
+{% block content %}
+{% block extra_js %}{% endblock %}
+<div class="container mt-5 mb-5">
+    <div class="row">
+        <div class="col-md-10 offset-md1">
+            
+            
+            {% if auction %}
+            <h1>{{ invoice.user.first_name }} {{ invoice.user.last_name }}'s invoice for {{ invoice.auction }}</h1><br>
+            <b>Username:</b> {{invoice.user }}<br>
+            <b>Auction:</b> {{ auction }}<br>
+            {% endif %}
+            <b>Date:</b> {{ invoice.date }}
+            <br><br>
+            <b>Total:</b> {{ invoice }}<br>
+            {% if not invoice.paid %}<span style="color:red">Unpaid</span>{% else %}<span>Paid</span>{% endif %}<br>
+            {%if invoice.lots_sold %}
+            <h3>Lots sold</h3>
+            <table class="table">
+                <thead>
+                  <tr>
+                    <th scope="col">#</th>
+                    <th scope="col">Lot</th>
+                    <th scope="col">Buyer</th>
+                    <th scope="col">Price</th>
+                    <th scope="col">Club cut</th>
+                    <th scope="col">Net</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  
+                 {% for lot in sold%}
+                  <tr>
+                    <td>{{ lot.lot_number }}</td>
+                    <td><a href="/lots/{{lot.pk}}/">{{ lot.lot_name }}</a></td>
+                    <td>{% if lot.winning_price %} {{ lot.winner }} {% else %} Not sold {% endif %}</td>
+                    <td>{% if lot.winning_price %} ${{ lot.winning_price }} {% else %} Not sold {% endif %}</td>
+                    <td>${{ lot.club_cut }}</td>
+                    <td>${{ lot.your_cut }}</td>
+                  </tr>
+                  {% endfor %}
+              </tbody>
+            </table>
+            <b>Total sold:</b> ${{ invoice.total_sold }}   <br>         
+            {% endif %}
+            <br>
+            {%if invoice.lots_bought %}
+            <h3>Lots purchased</h3>
+            <table class="table">
+                <thead>
+                  <tr>
+                    <th scope="col">#</th>
+                    <th scope="col">Lot</th>
+                    <th scope="col">Seller</th>
+                    <th scope="col">Price</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  
+                 {% for lot in bought%}
+                  <tr>
+                    <td>{{ lot.lot_number }}</td>
+                    <td><a href="/lots/{{lot.pk}}/">{{ lot.lot_name }}</a></td>
+                    <td>{{ lot.user }}</td>
+                    <td>${{ lot.winning_price }}</td>
+                  </tr>
+                  {% endfor %}
+              </tbody>
+            </table>
+            <b>Total bought:</b> ${{ invoice.total_bought }}     <br>       
+            {% endif %}
+        </div>
+    </div>
+</div>  
+
+{% endblock %}
+
+

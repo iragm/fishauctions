@@ -106,23 +106,68 @@ class Invoice(models.Model):
 	auction = models.ForeignKey(Auction, blank=True, null=True, on_delete=models.SET_NULL)
 	user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
 	date = models.DateTimeField(auto_now_add=True, blank=True)
-	sold = models.TextField(blank=True)
-	total_sold = models.DecimalField(default=0, max_digits=10, decimal_places=2)
-	bought = models.TextField(blank=True)
-	total_bought = models.DecimalField(default=0, max_digits=10, decimal_places=2)
 	paid = models.BooleanField(default=False)
 	email_sent = models.BooleanField(default=True) # we will set to false manually in the admin console
+	
 	@property
 	def net(self):
-		return self.total_bought - self.total_sold
+		return self.total_sold - self.total_bought
+
+	@property
+	def user_should_be_paid(self):
+		"""Return true if the user owes the club money.  Most invoices will be negative unless the user is a vendor"""
+		if self.net > 0:
+			return True
+		else:
+			return False
+
+	@property
+	def absolute_amount(self):
+		"""Give the absolute value of the invoice's net amount"""
+		return abs(self.net)
+
+	@property
+	def lots_sold(self):
+		"""Return true if the user sold lots"""
+		#context['bought'] Lot.objects.filter(buyer_invoice=self.get_object())
+		if len(Lot.objects.filter(seller_invoice=self.pk)):
+			return True
+		else:
+			return False
+	
+	@property
+	def total_sold(self):
+		allSold = Lot.objects.filter(seller_invoice=self.pk)
+		total_sold = 0
+		for lot in allSold:
+			total_sold += lot.your_cut
+		return total_sold
+
+	@property
+	def lots_bought(self):
+		"""Return true if the user bought lots"""
+		if len(Lot.objects.filter(buyer_invoice=self.pk)):
+			return True
+		else:
+			return False
+
+	@property
+	def total_bought(self):
+		allSold = Lot.objects.filter(buyer_invoice=self.pk)
+		total_bought = 0
+		for lot in allSold:
+			total_bought += lot.winning_price
+		return total_bought
 
 	def __str__(self):
-		#return "ID:" + str(self.pk) + " " + str(self.title)
-		base = str(self.auction) + " - " + str(self.user)
-		if self.net < 0:
-			return base + " needs to be paid $" + str(abs(self.net))
+		#base = str(self.auction) + " - " + str(self.user)
+		base = str(self.user)
+		if self.user_should_be_paid:
+			base += " needs to be paid"
 		else:
-			return base + " owes the club $" + str(self.net)
+			base += " owes the club"
+		return base + " $" + str(self.absolute_amount)
+
 
 
 class Lot(models.Model):
@@ -195,12 +240,12 @@ class Lot(models.Model):
 					# this lot sold
 					payout['sold'] = True
 					payout['winning_price'] = self.winning_price
-					if not self.donation:
-						clubCut = ( self.winning_price * auction.winning_bid_percent_to_club / 100 ) + auction.lot_entry_fee
-						sellerCut = self.winning_price - clubCut
-					else:
+					if self.donation:
 						clubCut = self.winning_price
 						sellerCut = 0
+					else:
+						clubCut = ( self.winning_price * auction.winning_bid_percent_to_club / 100 ) + auction.lot_entry_fee
+						sellerCut = self.winning_price - clubCut
 					payout['to_club'] = clubCut
 					payout['to_seller'] = sellerCut
 				else:

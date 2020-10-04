@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block title %}Invoices{% endblock %}
+{% load static %}
+{% block content %}
+<div class="container mt-5 mb-5">
+    <div class="row">
+      <div class="col-md-10 offset-lg-1">
+        <h1>Invoices</h1>
+        <table class="table">
+          <thead>
+            <tr>
+              <th scope="col">Auction</th>
+              <th scope="col">Total</th>
+              <th scope="col">Paid</th>
+              <th scope="col">Date</th>
+            </tr>
+          </thead>
+          <tbody>
+            
+            {% for invoice in object_list %}
+            <tr>
+              <td><a href="/invoices/{{invoice.pk}}/">{{ invoice.auction }}</a></td>
+              <td><span {% if not invoice.user_should_be_paid %} style="color:red"{% endif %}>{{ invoice.absolute_amount }}</span></td>
+              <td> {% if not invoice.paid %}<span style="color:red">Unpaid</span>{% else %}<span>Paid</span>{% endif %}</td>
+              <td>{{ invoice.date }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+      </table>
+    </div>
+</div>
+</div>  
+
+{% endblock %}
+
+

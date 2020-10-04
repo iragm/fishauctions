@@ -316,23 +316,26 @@ class allAuctions(ListView):
     ordering = ['-date_end']
     
     def get_context_data(self, **kwargs):
-        user = User.objects.get(pk=self.request.user.pk)
-        nameSet = True
-        if not user.first_name or not user.last_name:
-            nameSet = False
-        locationSet = True
         try:
-            prefs = UserPreferences.objects.get(user=self.request.user.pk)
-            if not UserPreferences.location:
+            user = User.objects.get(pk=self.request.user.pk)
+            nameSet = True
+            if not user.first_name or not user.last_name:
+                nameSet = False
+            locationSet = True
+            try:
+                prefs = UserPreferences.objects.get(user=self.request.user.pk)
+                if not UserPreferences.location:
+                    locationSet = False
+            except:
                 locationSet = False
+            if not locationSet and not nameSet:
+                messages.add_message(self.request, messages.INFO, 'Set your name and location in your <a href="/account/">account</a>')
+            elif not locationSet:
+                messages.add_message(self.request, messages.INFO, 'Set your location in your <a href="/account/">account</a>')
+            elif not nameSet:
+                messages.add_message(self.request, messages.INFO, 'Set your name your <a href="/account/">account</a>')
         except:
-            locationSet = False
-        if not locationSet and not nameSet:
-            messages.add_message(self.request, messages.INFO, 'Set your name and location in your <a href="/account/">account</a>')
-        elif not locationSet:
-            messages.add_message(self.request, messages.INFO, 'Set your location in your <a href="/account/">account</a>')
-        elif not nameSet:
-            messages.add_message(self.request, messages.INFO, 'Set your name your <a href="/account/">account</a>')
+            pass
         # set default values
         # data = self.request.GET.copy()
         # if len(data) == 0:
@@ -356,50 +359,48 @@ class allLots(ListView):
         context['view'] = 'all'
         return context
 
+class invoices(ListView):
+    """Get all invoices for the current user"""
+    model = Invoice
+    template_name = 'all_invoices.html'
+    ordering = ['-date']
+    
+    def get_queryset(self):
+        new_context = Invoice.objects.filter(
+            user=self.request.user.pk,
+        )
+        return new_context
+
+    def get_context_data(self, **kwargs):
+        #user = User.objects.get(pk=self.request.user.pk)
+        context = super().get_context_data(**kwargs)
+        # context['filter'] = LotFilter(data, queryset=self.get_queryset())
+        # context['view'] = 'all'
+        return context
+
 # password protected in views.py
 class invoice(DetailView): #FormMixin
-    """Get your invoice by auction"""
-    # fixme
+    """Show a single invoice"""
     template_name = 'invoice.html'
     model = Invoice
-    #form_class = ChooseAuction
-    #queryset = Auction.objects.all()
     
+    def dispatch(self, request, *args, **kwargs):
+        auth = False
+        if self.get_object().user.pk == request.user.pk:
+            auth = True
+        if request.user.is_superuser :
+            auth = True
+        if not auth:
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
     def get_context_data(self, **kwargs):
         context = super(invoice, self).get_context_data(**kwargs)
-        #context['form'] = CreateBid(initial={'user': self.request.user.id, 'lot_number':self.kwargs['pk'], "amount":Lot.objects.get(pk=self.kwargs['pk']).high_bid + 1}, request=self.request)
+        context['sold'] = Lot.objects.filter(seller_invoice=self.get_object())
+        context['bought'] = Lot.objects.filter(buyer_invoice=self.get_object())
+        context['auction'] = Auction.objects.get(pk=self.get_object().auction.pk)
         return context
-    
-    def get_success_url(self):
-        return ""
-
-    def form_valid(self, form, request):
-        lotNumber = form.cleaned_data['lot_number'].pk
-        thisBid = form.cleaned_data['amount']
-        form.user = User.objects.get(id=request.user.id)
-        lot = Lot.objects.get(pk=self.kwargs['pk'])
-        highBidder = lot.high_bidder
-        if lot.ended:
-            messages.info(request, "This auction has ended, you can't bid on it anymore")
-        else:
-            if (thisBid > lot.high_bid) and (request.user.id != highBidder.pk):
-                messages.info(request, "Bid placed")
-                # Send an email to the old high bidder
-                user = User.objects.get(pk=highBidder.pk)
-                email = user.email
-                link = f"auctions.toxotes.org/lots/{self.kwargs['pk']}/"
-                send_mail(
-                'You\'ve been outbid!',
-                f'You\'ve been outbid on lot {lot}!\nBid more here: {link}\n\nBest, auctions.toxotes.org',
-                'TFCB notifications',
-                [email],
-                fail_silently=False,
-                html_message = f'You\'ve been outbid on lot {lot}!<br><a href="{link}">Bid more here</a><br><br>Best, auctions.toxotes.org',
-                )
-            else:
-                messages.warning(request, "You've been outbid!")
-        form.save() # record the bid regardless of whether or not it's the current high
-        return super(viewAndBidOnLot, self).form_valid(form)
+   
 
 
 @login_required
@@ -433,7 +434,12 @@ class UserUpdate(UpdateView, SuccessMessageMixin):
     success_message = 'User settings updated'
 
     def dispatch(self, request, *args, **kwargs):
-        if not (request.user.is_superuser or self.get_object().pk == self.request.user):
+        auth = False
+        if self.get_object().pk == request.user.pk:
+            auth = True
+        if request.user.is_superuser :
+            auth = True
+        if not auth:
             raise PermissionDenied()
         return super().dispatch(request, *args, **kwargs)
 
