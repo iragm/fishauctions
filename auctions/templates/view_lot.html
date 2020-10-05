@@ -16,6 +16,27 @@
 <script type="text/javascript">
     window.onload = function() {
     var $ = window.jQuery;
+    pageView();
+    setInterval(function(){ pageViewUpdate(); }, 30000);
+    function pageView() {
+        $.ajax({
+            type: "POST",
+            beforeSend: function (request) {
+                request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+            },
+            url: "/api/pageview/{{lot.pk}}/new/",
+        });
+    }
+    function pageViewUpdate() {
+        $.ajax({
+            type: "POST",
+            beforeSend: function (request) {
+                request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+            },
+            url: "/api/pageview/{{lot.pk}}/",
+        });
+    }
+     // Logic for watching lots
      $( "#watch" ).click(function() {
         var data = {};
         if ( $(this).hasClass("watched") )  {
@@ -77,10 +98,15 @@
             <tr>
                 <td><b>Ends:</b></td><td>{% if lot.ended %} <span style="color:red">{{ lot.calculated_end }}</span>{% else %}{{ lot.calculated_end }}{% endif %}</td>
             </tr>
+            {% if lot.user.pk == request.user.id or user.is_superuser %}
+            <tr>
+                <td><b>Views:</b></td><td>{{ lot.page_views }}</td>
+            </tr>
+            {% endif %}
         </table>
         {% if lot.banned %}
         <span style="color:red">This lot has been removed by an administrator</span>
-        {% elif lot.user.pk == request.user.id %}
+        {% elif lot.user.pk == request.user.id or user.is_superuser%}
         {% if not lot.high_bidder %}
         <span><a href="/lots/edit/{{lot.pk}}" class="btn btn-warning active">Edit</a></span> {% if lot.can_be_deleted %}<span><a href="/lots/delete/{{lot.pk}}" class="btn btn-danger active">Delete</a>{% endif %}</span>
         {% else %}

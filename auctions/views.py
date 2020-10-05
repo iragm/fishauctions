@@ -80,7 +80,7 @@ def watchOrUnwatch(request, pk):
     if request.method == 'POST':
         watch = request.POST['watch']
         user = request.user
-        lot_number = Lot.objects.filter(pk=pk)[0]
+        lot_number = Lot.objects.get(pk=pk)
         obj, created = Watch.objects.update_or_create(
             lot_number=lot_number,
             user=user,
@@ -92,6 +92,45 @@ def watchOrUnwatch(request, pk):
             return HttpResponse("Success")
         else:
             return HttpResponse("Failure")
+
+def newpageview(request, pk):
+    """Initail pageview to record page views to the PageView model"""
+    if request.method == 'POST':
+        user = request.user
+        lot_number = Lot.objects.get(pk=pk)
+        if not user.is_authenticated:
+            user = None
+            PageView.objects.create(
+                lot_number=lot_number,
+                user=user,
+                date_end=timezone.now(),
+            )
+        else:
+            obj, created = PageView.objects.update_or_create(
+                lot_number=lot_number,
+                user=user,
+                defaults={},
+            )
+            obj.date_end = timezone.now()
+            obj.save()
+        return HttpResponse("Success")
+
+def pageview(request, pk):
+    """Continued interest in a lot will update the time in page views to the PageView model"""
+    if request.method == 'POST':
+        user = request.user
+        if not user.is_authenticated:
+            user = None
+        lot_number = Lot.objects.get(pk=pk)
+        obj, created = PageView.objects.update_or_create(
+            lot_number=lot_number,
+            user=user,
+            defaults={},
+        )
+        obj.date_end = timezone.now()
+        obj.total_time += 30
+        obj.save()
+        return HttpResponse("Success")
 
 class AuctionUpdate(UpdateView):
     """For editing auctions"""

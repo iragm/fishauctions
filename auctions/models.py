@@ -352,6 +352,12 @@ class Lot(models.Model):
 		else:
 			return False
 
+	@property
+	def page_views(self):
+		"""Total number of page views from all users"""
+		pageViews = PageView.objects.filter(lot_number=self.lot_number)
+		return len(pageViews)
+
 class Bid(models.Model):
 	"""Bids apply to lots"""
 	user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -371,6 +377,18 @@ class Watch(models.Model):
 	lot_number = models.ForeignKey(Lot, on_delete=models.CASCADE)
 	def __str__(self):
 		return "User" + str(self.user) + " watching " + str(self.lot_number)
+
+class PageView(models.Model):
+	"""Track what lots a user views, and how long they spend looking at each one"""
+	user = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True)
+	lot_number = models.ForeignKey(Lot, on_delete=models.CASCADE)
+	date_start = models.DateTimeField(auto_now_add=True)
+	date_end = models.DateTimeField(null=True,blank=True)
+	total_time = models.PositiveIntegerField(default=0)
+	total_time.help_text = 'The total time in seconds the user has spent on the lot page'
+
+	def __str__(self):
+		return "User" + str(self.user) + " viewed " + str(self.lot_number) + " for " + str(self.total_time)
 
 class UserData(models.Model):
 	"""Extension of user model to store additional info.  At some point, we should be able to store information like email preferences here"""
