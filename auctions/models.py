@@ -285,8 +285,10 @@ class Lot(models.Model):
 		if self.auction:
 			auction = Auction.objects.get(id=self.auction.pk)
 			return auction.date_end
-		else:
+		if self.date_end:
 			return self.date_end
+		return timezone.now()
+
 	
 	@property
 	def can_be_deleted(self):
@@ -322,10 +324,9 @@ class Lot(models.Model):
 	@property
 	def high_bid(self):
 		"""returns the high bid amount for this lot"""
-		#allBids = Bid.objects.filter(lot_number=self.lot_number).exclude(bid_time__gt=self.calculated_end).exclude(amount__lt=self.reserve_price).order_by('-amount')[:2]
-		allBids = Bid.objects.filter(lot_number=self.lot_number, bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount')[:2]
-		# highest bid is the winner, but the second highest determines the price
 		try:
+			allBids = Bid.objects.filter(lot_number=self.lot_number, bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount')[:2]
+			# highest bid is the winner, but the second highest determines the price
 			# $1 more than the second highest bid
 			bidPrice = allBids[1].amount + 1
 			return bidPrice
@@ -336,8 +337,8 @@ class Lot(models.Model):
 	@property
 	def high_bidder(self):
 		""" Name of the highest bidder """
-		allBids = Bid.objects.filter(lot_number=self.lot_number, bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount')[:2]
 		try:
+			allBids = Bid.objects.filter(lot_number=self.lot_number, bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount')[:2]
 			return allBids[0].user
 		except:
 			return False
@@ -371,10 +372,44 @@ class Watch(models.Model):
 	def __str__(self):
 		return "User" + str(self.user) + " watching " + str(self.lot_number)
 
-class UserPreferences(models.Model):
+class UserData(models.Model):
 	"""Extension of user model to store additional info.  At some point, we should be able to store information like email preferences here"""
 	user = models.OneToOneField(User, on_delete=models.CASCADE)
 	phone_number = models.CharField(max_length=20, blank=True, null=True)
 	address = models.CharField(max_length=500, blank=True, null=True)
 	location = models.ForeignKey(Location, null=True, on_delete=models.SET_NULL)
 	club = models.ForeignKey(Club, null=True, on_delete=models.SET_NULL)
+	# breederboard info
+	rank_unique_species = models.PositiveIntegerField(null=True, blank=True)
+	number_unique_species = models.PositiveIntegerField(null=True, blank=True)
+	rank_total_lots = models.PositiveIntegerField(null=True, blank=True)
+	number_total_lots = models.PositiveIntegerField(null=True, blank=True)
+	rank_total_spent = models.PositiveIntegerField(null=True, blank=True)
+	number_total_spent = models.PositiveIntegerField(null=True, blank=True)
+
+	@property
+	def lots_sold(self):
+		"""All lots this user has sold"""
+		allLots = Lot.objects.filter(user=self.user,winner__isnull=False)
+		return len(allLots)
+
+	@property
+	def species_sold(self):
+		"""Total different species that this user has bred and sold in auctions"""
+		allLots = Lot.objects.filter(user=self.user,i_bred_this_fish=True,winner__isnull=False).values('species').distinct().count()
+		return allLots
+
+	@property
+	def lots_bought(self):
+		"""Total number of lots this user has purchased"""
+		allLots = Lot.objects.filter(winner=self.user)
+		return len(allLots)
+	
+	@property
+	def total_spent(self):
+		"""Total amount this user has spent on this site"""
+		allLots = Lot.objects.filter(winner=self.user)
+		total = 0
+		for lot in allLots:
+			total += lot.winning_price
+		return total

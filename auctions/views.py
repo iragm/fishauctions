@@ -219,6 +219,10 @@ def createLot(request):
             lot = form.save(commit=False)
             # If this is a tank, set it to not transportable
             if lot.species:
+                # if this is not breedable, remove the breeder points
+                # they can still be added back in by editing the lot
+                if not lot.species.breeder_points:
+                    lot.i_bred_this_fish = False
                 if lot.species.pk == 592:
                     lot.transportable = False
             if "tank" in lot.lot_name.lower():
@@ -230,7 +234,7 @@ def createLot(request):
                 lot.species = createSpecies(form.cleaned_data['new_species_name'], form.cleaned_data['new_species_scientific_name'], form.cleaned_data['species_category'])
             lot.save()            
             print(str(lot.user) + " has created a new lot " + lot.lot_name)
-            messages.info(request, "Created lot!  Fill out this form again to add another lot.  <a href='/lots/my'>All submitted lots")
+            messages.info(request, "Created lot!  Fill out this form again to add another lot.  <a href='/lots/my'>All submitted lots</a>")
             form = CreateLotForm() # no post data here to reset the form
     else:
         form = CreateLotForm()
@@ -327,8 +331,8 @@ class allAuctions(ListView):
                 nameSet = False
             locationSet = True
             try:
-                prefs = UserPreferences.objects.get(user=self.request.user.pk)
-                if not UserPreferences.location:
+                prefs = UserData.objects.get(user=self.request.user.pk)
+                if not UserData.location:
                     locationSet = False
             except:
                 locationSet = False
@@ -347,6 +351,16 @@ class allAuctions(ListView):
         context = super().get_context_data(**kwargs)
         # context['filter'] = LotFilter(data, queryset=self.get_queryset())
         # context['view'] = 'all'
+        return context
+
+class Leaderboard(ListView):
+    model = UserData
+    template_name = 'leaderboard.html'
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['total_lots'] = UserData.objects.filter(rank_total_lots__isnull=False).order_by('rank_total_lots')
+        context['unique_species'] = UserData.objects.filter(number_unique_species__isnull=False).order_by('rank_unique_species')
+        context['total_spent'] = UserData.objects.filter(rank_total_spent__isnull=False).order_by('rank_total_spent')
         return context
 
 class allLots(ListView):
@@ -425,9 +439,9 @@ class UserView(DetailView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         try:
-            context['preferences'] = UserPreferences.objects.get(user=self.object.pk)
+            context['data'] = UserData.objects.get(user=self.object.pk)
         except:
-            pass
+            context['data'] = False
         return context
 
 class UserUpdate(UpdateView, SuccessMessageMixin):
@@ -452,7 +466,7 @@ class UserUpdate(UpdateView, SuccessMessageMixin):
     
     def get_initial(self):
         try:
-            prefs = UserPreferences.objects.get(user=self.get_object().pk)
+            prefs = UserData.objects.get(user=self.get_object().pk)
             return {'phone': prefs.phone_number, 'club': prefs.club, 'location': prefs.location, 'address': prefs.address}
         except:
             return
@@ -466,9 +480,9 @@ class UserUpdate(UpdateView, SuccessMessageMixin):
         location = form.cleaned_data['location']
         club = form.cleaned_data['club']
         try:
-            prefs = UserPreferences.objects.get(user=user)
+            prefs = UserData.objects.get(user=user)
         except:
-            prefs = UserPreferences.objects.create(
+            prefs = UserData.objects.create(
                 user=user
             )
         prefs.phone_number=phone

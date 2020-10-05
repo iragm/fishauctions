@@ -7,9 +7,13 @@
     <div class="row">
         <div class="col-md-10 offset-md1">
             <h1>{{ user.username }}</h1>
-            Joined: {{ user.date_joined }}<br>
-            Last login: {{ user.last_login }}
+            <b>Joined:</b> {{ user.date_joined }}<br>
+            <b>Last login:</b> {{ user.last_login }}<br>
+            <b>Lots sold:</b> {{ data.lots_sold }}<br>
+            <b>Total species sold:</b> {{ data.species_sold}}<br>
+            <b>Lots bought:</b> {{ data.lots_bought }}<br>
             {% if user.pk == request.user.id or user.is_superuser %}
+            <b>Total spent:</b> ${{ data.total_spent|floatformat:2 }} (only visible to you)<br>
             <br><a href="/users/edit/{{user.pk}}" class="btn btn-warning active">Edit</a>
             {% endif %}
         </div>

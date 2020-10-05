@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %} Top users {% endblock %}
+{% load static %}
+{% block content %}
+{% block extra_js %}{% endblock %}
+<div class="container mt-5 mb-5">
+    <div class="row">
+        <div class="col-md-10 offset-md1">
+            <h1><s>Lead</s>Breederboards</h1><br>
+            <h3>Most unique species bred and sold</h3><br>
+            <table class="table">
+                <thead>
+                  <tr>
+                    <th scope="col">Rank</th>
+                    <th scope="col">User</th>
+                    <th scope="col">Species</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  
+                {% for data in unique_species|slice:":10" %}
+                  <tr>
+                    <td>{{ data.rank_unique_species }}</td>
+                    <td>{{ data.user }}</td>
+                    <td>{{ data.number_unique_species }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table><br>
+            <h3>Most lots sold</h3><br>
+            <table class="table">
+                <thead>
+                  <tr>
+                    <th scope="col">Rank</th>
+                    <th scope="col">User</th>
+                    <th scope="col">Lots</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  
+                {% for data in total_lots|slice:":10" %}
+                  <tr>
+                    <td>{{ data.rank_total_lots }}</td>
+                    <td>{{ data.user }}</td>
+                    <td>{{ data.number_total_lots }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table><br>
+            <h3>Most money spent</h3><br>
+            <table class="table">
+                <thead>
+                  <tr>
+                    <th scope="col">Rank</th>
+                    <th scope="col">User</th>
+                    <!--<th scope="col">Spent</th>-->
+                  </tr>
+                </thead>
+                <tbody>
+                  
+                {% for data in total_spent|slice:":10" %}
+                  <tr>
+                    <td>{{ data.rank_total_spent }}</td>
+                    <td>{{ data.user }}</td>
+                    <!--<td> data.number_total_spent </td>-->
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table><br>
+        </div>
+    </div>
+</div>  
+{% endblock %}
+
+

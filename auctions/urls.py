@@ -7,6 +7,7 @@ from django.contrib.auth.decorators import login_required
 urlpatterns = [
     path('api/watchitem/<int:pk>/', login_required(views.watchOrUnwatch)),
     path('api/species/', login_required(views.getSpecies)),
+    path('leaderboard/', views.Leaderboard.as_view()),
     path('lots/', views.allLots.as_view(), name='allLots'),
     path('lots/<int:pk>/', views.viewAndBidOnLot.as_view()),
     path('lots/edit/<int:pk>/', login_required(views.LotUpdate.as_view())),

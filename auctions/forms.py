@@ -2,7 +2,7 @@ from crispy_forms.helper import FormHelper
 from crispy_forms.layout import Layout, Submit
 from crispy_forms.bootstrap import Div, Field
 from django import forms
-from .models import Lot, Bid, Auction, User, UserPreferences, Location, Club
+from .models import Lot, Bid, Auction, User, UserData, Location, Club
 from django.forms import ModelForm, HiddenInput
 from bootstrap_datepicker_plus import DateTimePickerInput
 from django.utils import timezone
