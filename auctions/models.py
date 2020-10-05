@@ -60,7 +60,7 @@ class Auction(models.Model):
 	watch_warning_email_sent = models.BooleanField(default=False)
 	invoiced = models.BooleanField(default=False)
 	created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
-	location = models.ForeignKey(Location, null=True, blank=True, on_delete=models.SET_NULL)
+	location = models.CharField(max_length=300, null=True, blank=True)
 	location.help_text = "State or region of this auction"
 	pickup_location = models.CharField(max_length=300)
 	pickup_location.help_text = "Description of pickup location"
@@ -228,6 +228,14 @@ class Lot(models.Model):
 
 	def __str__(self):
 		return "" + str(self.lot_number) + " - " + self.lot_name
+
+	@property
+	def location(self):
+		"""Location of the user for this lot, or False"""
+		try:
+			return UserData.objects.get(user=self.user.pk).location
+		except:
+			return False
 
 	@property
 	def payout(self):

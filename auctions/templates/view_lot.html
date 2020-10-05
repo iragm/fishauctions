@@ -98,9 +98,9 @@
             <tr>
                 <td><b>Ends:</b></td><td>{% if lot.ended %} <span style="color:red">{{ lot.calculated_end }}</span>{% else %}{{ lot.calculated_end }}{% endif %}</td>
             </tr>
-            {% if user_data.location %}
+            {% if lot.location %}
             <tr>
-                <td><b>Location:</b></td><td>{% if user_location != user_data.location %} <span style="color:red">{{ user_data.location }} </span> {% else %} {{ user_data.location }} {% endif %}</td>
+                <td><b>Location:</b></td><td>{% if user_location != lot.location %} <span style="color:red">{{ lot.location }} </span> {% else %} {{ lot.location }} {% endif %}</td>
             </tr>
             {% endif %}
             {% if not lot.transportable %}

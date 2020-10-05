@@ -17,6 +17,12 @@
             <b>Date:</b> {{ invoice.date }}<br>
             <b>Total:</b> {{ invoice }}<br>
             <b>Status:</b> {% if not invoice.paid %}<span style="color:red">Unpaid</span>{% else %}<span>Paid</span>{% endif %}<br><br>
+            {% if auction %}
+            You must meet at {{ auction.pickup_location }} on {{ auction.pickup_time }} 
+            {% if auction.alternate_pickup_location %}or {{ auction.alternate_pickup_location }} on {{ auction.alternate_pickup_time }} {% endif %}
+            to exchange lots.  <a href='/auctions/{{ auction.slug }}'>View auction rules</a><br>
+            {% endif %}
+
             {%if invoice.lots_sold %}
             <h3>Lots sold</h3>
             <table class="table">
@@ -25,6 +31,9 @@
                     <th scope="col">#</th>
                     <th scope="col">Lot</th>
                     <th scope="col">Buyer</th>
+                    {% if auction.alternate_pickup_location %}
+                    <th scope="col">Location</th>
+                    {% endif %}
                     <th scope="col">Price</th>
                     <th scope="col">Club cut</th>
                     <th scope="col">Net</th>
@@ -37,6 +46,9 @@
                     <td>{{ lot.lot_number }}</td>
                     <td><a href="/lots/{{lot.pk}}/">{{ lot.lot_name }}</a></td>
                     <td>{% if lot.winning_price %} {{ lot.winner }} {% else %} Not sold {% endif %}</td>
+                    {% if auction.alternate_pickup_location %}
+                    <td>${{ lot.location }}</td>
+                    {% endif %}
                     <td>{% if lot.winning_price %} ${{ lot.winning_price|floatformat:2 }} {% else %} Not sold {% endif %}</td>
                     <td>${{ lot.club_cut|floatformat:2 }}</td>
                     <td>${{ lot.your_cut|floatformat:2 }}</td>
@@ -55,6 +67,9 @@
                     <th scope="col">#</th>
                     <th scope="col">Lot</th>
                     <th scope="col">Seller</th>
+                    {% if auction.alternate_pickup_location %}
+                    <th scope="col">Seller</th>
+                    {% endif %}
                     <th scope="col">Price</th>
                   </tr>
                 </thead>
@@ -64,6 +79,9 @@
                   <tr>
                     <td>{{ lot.lot_number }}</td>
                     <td><a href="/lots/{{lot.pk}}/">{{ lot.lot_name }}</a></td>
+                    {% if auction.alternate_pickup_location %}
+                    <td>{{ lot.location }}</td>
+                    {% endif %}
                     <td>{{ lot.user }}</td>
                     <td>${{ lot.winning_price|floatformat:2 }}</td>
                   </tr>
