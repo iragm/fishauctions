@@ -167,6 +167,11 @@ class viewAndBidOnLot(FormMixin, DetailView):
         context = super(viewAndBidOnLot, self).get_context_data(**kwargs)
         context['watched'] = Watch.objects.filter(lot_number=self.kwargs['pk'], user=self.request.user.id)
         context['form'] = CreateBid(initial={'user': self.request.user.id, 'lot_number':self.kwargs['pk'], "amount":defaultBidAmount}, request=self.request)
+        context['user_data'] = UserData.objects.get(user=self.get_object().user)
+        try:
+            context['user_location'] = UserData.objects.get(user=self.request.user.id).location
+        except:
+            pass
         return context
     
     def get_success_url(self):

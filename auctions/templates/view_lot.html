@@ -98,6 +98,16 @@
             <tr>
                 <td><b>Ends:</b></td><td>{% if lot.ended %} <span style="color:red">{{ lot.calculated_end }}</span>{% else %}{{ lot.calculated_end }}{% endif %}</td>
             </tr>
+            {% if user_data.location %}
+            <tr>
+                <td><b>Location:</b></td><td>{% if user_location != user_data.location %} <span style="color:red">{{ user_data.location }} </span> {% else %} {{ user_data.location }} {% endif %}</td>
+            </tr>
+            {% endif %}
+            {% if not lot.transportable %}
+            <tr>
+                <td><b>Not transportable</b></td><td>This lot can only be picked up at its location, we won't deliver it to the other pickup location</td>
+            </tr>
+            {% endif %}
             {% if lot.user.pk == request.user.id or user.is_superuser %}
             <tr>
                 <td><b>Views:</b></td><td>{{ lot.page_views }}</td>
