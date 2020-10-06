@@ -4,9 +4,11 @@ from django.db.models import Q
 from django.forms.widgets import TextInput, Select
 
 class LotFilter(django_filters.FilterSet):
+    print('rebuilding filter')
     auctions = Auction.objects.all().order_by('title')
     filterAuctions = []
     for auction in auctions:
+        print(auction)
         filterAuctions.append((auction.slug, auction.title))
     categories = Category.objects.all().order_by('name')
     filterCategories = []

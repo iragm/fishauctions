@@ -15,5 +15,5 @@ export EMAIL_PORT='587'
 export EMAIL_HOST_USER='mygmailuser@gmail.com'
 export EMAIL_HOST_PASSWORD='mygmailpass'
 export DEFAULT_FROM_EMAIL="Notifications"
-export TIME_ZONE='UTC'
+export TIME_ZONE='America/New York'
 export SITE_DOMAIN="mydomain.com"

@@ -56,6 +56,11 @@
                     <a class="nav-link" href="/lots/watched">Watched lots<span class="sr-only">(current)</span></a>
                   </li>  
                   {% endif %}
+                  {% if request.user.is_superuser %}
+                  <li class="nav-item active">
+                    <a class="nav-link" href="/admin/">Admin Site<span class="sr-only">(current)</span></a>
+                  </li>
+                  {% endif %}
                   <li class="nav-item active">
                     <a class="nav-link" href="/about/">About<span class="sr-only">(current)</span></a>
                   </li>
