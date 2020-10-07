@@ -189,16 +189,16 @@ class viewAndBidOnLot(FormMixin, DetailView):
         thisBid = form.cleaned_data['amount']
         form.user = User.objects.get(id=request.user.id)
         if not form.user:
-            messages.warning(request, "You need to be signed in to bid on a lot")
+            messages.error(request, "You need to be signed in to bid on a lot")
             return False
         lot = Lot.objects.get(pk=self.kwargs['pk'])
         highBidder = lot.high_bidder
         
         if lot.ended:
-            messages.error(request, "")
+            messages.error(request, "Bidding on this lot has ended.  You can no longer place bids")
         else:
             if (thisBid > lot.max_bid):
-                messages.info(request, "")
+                messages.info(request, "You're the high bidder!")
                 # Send an email to the old high bidder
                 # @fixme, this is slow
                 if highBidder:
@@ -215,7 +215,8 @@ class viewAndBidOnLot(FormMixin, DetailView):
                         html_message = f'You\'ve been outbid on lot {lot}!<br><a href="{link}">Bid more here</a><br><br>Best, auctions.toxotes.org',
                         )
             else:
-                messages.info(request, "BidFailed")
+                print(f"{thisBid} is less than {lot.max_bid}")
+                messages.warning(request, "You've been outbid!")
             
             # Create or update the bid model
             try:

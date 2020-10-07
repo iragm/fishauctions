@@ -2,14 +2,9 @@ import django_filters
 from .models import Lot, Category, Auction
 from django.db.models import Q
 from django.forms.widgets import TextInput, Select
+from django.forms import ModelChoiceField
 
 class LotFilter(django_filters.FilterSet):
-    print('rebuilding filter')
-    auctions = Auction.objects.all().order_by('title')
-    filterAuctions = []
-    for auction in auctions:
-        print(auction)
-        filterAuctions.append((auction.slug, auction.title))
     categories = Category.objects.all().order_by('name')
     filterCategories = []
     for catagory in categories:
@@ -19,7 +14,7 @@ class LotFilter(django_filters.FilterSet):
         ('closed', 'Ended'),
     )
     q = django_filters.CharFilter(label='', method='textFilter', widget=TextInput(attrs={'placeholder': 'Search', 'class': 'full-width'}))
-    auction = django_filters.ChoiceFilter(label='', choices=filterAuctions, method='filter_by_auction', empty_label='Any auction', widget=Select(attrs={'style': 'width:10vw'}))
+    auction = django_filters.ModelChoiceFilter(label='',queryset=Auction.objects.all().order_by('title'), empty_label='Any', to_field_name='slug')
     category = django_filters.ChoiceFilter(label='', choices=filterCategories, method='filter_by_category', empty_label='Any category', widget=Select(attrs={'style': 'width:10vw'}))
     status = django_filters.ChoiceFilter(label='', choices=STATUS, method='filter_by_status', empty_label='Open and ended')
 
