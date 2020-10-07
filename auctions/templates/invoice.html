@@ -51,7 +51,7 @@
                     {% endif %}
                     <td>{% if lot.winning_price %} ${{ lot.winning_price|floatformat:2 }} {% else %} Not sold {% endif %}</td>
                     <td>${{ lot.club_cut|floatformat:2 }}</td>
-                    <td>${{ lot.your_cut|floatformat:2 }}</td>
+                    <td>{% if lot.donation %}Donation{% else %}${{ lot.your_cut|floatformat:2 }}{% endif %}</td>
                   </tr>
                   {% endfor %}
               </tbody>
@@ -89,6 +89,9 @@
               </tbody>
             </table>
             <b>Total bought:</b> ${{ invoice.total_bought|floatformat:2 }}     <br>       
+            {% endif %}
+            {% if request.user.is_superuser %}
+            <a href="/admin/auctions/invoice/{{invoice.pk}}/change/" class="btn btn-danger active">Admin</a>
             {% endif %}
         </div>
     </div>

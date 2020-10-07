@@ -20,6 +20,7 @@ class BidInline(admin.TabularInline):
     list_display = ("user", "amount",)
     list_filter = ()
     search_fields = ("user",)
+    extra = 0
 
 class LotAdmin(admin.ModelAdmin):
     model = Lot 
@@ -53,6 +54,7 @@ class SoldLotInline(admin.TabularInline):
      verbose_name_plural = "Lots sold"
      fk_name = 'seller_invoice'
      model = Lot
+     extra = 0
 
 class BoughtLotInline(admin.TabularInline):
      fields = ['__str__', 'winning_price']
@@ -61,6 +63,7 @@ class BoughtLotInline(admin.TabularInline):
      verbose_name_plural = "Lots bought"
      fk_name = 'buyer_invoice'
      model = Lot
+     extra = 0
 
 class InvoiceAdmin(admin.ModelAdmin):
     model = Invoice 
