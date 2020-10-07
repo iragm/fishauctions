@@ -464,8 +464,10 @@ class invoice(DetailView): #FormMixin
         context['bought'] = Lot.objects.filter(buyer_invoice=self.get_object())
         try:
             context['auction'] = Auction.objects.get(pk=self.get_object().auction.pk)
+            context['contact_email'] = User.objects.get(pk=context['auction'].owner.pk).email
         except:
             context['auction'] = False
+            context['contact_email'] = False
         return context
    
 
