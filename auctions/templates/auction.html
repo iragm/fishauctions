@@ -35,6 +35,9 @@
             {% if auction.created_by.pk == request.user.id or user.is_superuser %}
              <a href="/auctions/edit/{{auction.slug}}" class="btn btn-warning active">Edit this auction</a>
             {% endif %}
+            {% if request.user.is_superuser %}
+            <a href="/admin/auctions/auction/{{auction.pk}}/change/" class="btn btn-danger active">Admin</a>
+            {% endif %}
         </div>
     </div>
 </div>  

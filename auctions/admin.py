@@ -14,7 +14,13 @@ class AuctionAdmin(admin.ModelAdmin):
     list_display = ("title",'created_by')
     list_filter = ("title",)
     search_fields = ("title",)
-    
+
+class BidInline(admin.TabularInline):
+    model = Bid 
+    list_display = ("user", "amount",)
+    list_filter = ()
+    search_fields = ("user",)
+
 class LotAdmin(admin.ModelAdmin):
     model = Lot 
     menu_label = "Lots"  
@@ -25,7 +31,10 @@ class LotAdmin(admin.ModelAdmin):
     list_display = ("lot_name", "auction", "lot_number", "user", "species_category",)
     list_filter = ("active","auction",)
     search_fields = ("lot_number","lot_name","description","user")
-
+    inlines = [
+         BidInline,
+    ]
+    
 class BidAdmin(admin.ModelAdmin):
     model = Bid 
     menu_label = "Bids"  
@@ -63,7 +72,6 @@ class InvoiceAdmin(admin.ModelAdmin):
          BoughtLotInline,
     ]
 
-
 class CategoryAdmin(admin.ModelAdmin):
     model = Category 
     menu_label = "Categories"  
@@ -82,7 +90,7 @@ admin.site.register(Category, CategoryAdmin)
 admin.site.register(Product, ProductAdmin)
 admin.site.register(Auction, AuctionAdmin)
 admin.site.register(Invoice, InvoiceAdmin)
-admin.site.register(Bid, BidAdmin)
+#admin.site.register(Bid, BidAdmin)
 admin.site.register(Lot, LotAdmin)
 admin.site.register(Location, LocationAdmin)
 admin.site.register(Club, ClubAdmin)
