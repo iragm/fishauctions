@@ -5,17 +5,13 @@ from django.forms.widgets import TextInput, Select
 from django.forms import ModelChoiceField
 
 class LotFilter(django_filters.FilterSet):
-    categories = Category.objects.all().order_by('name')
-    filterCategories = []
-    for catagory in categories:
-        filterCategories.append((catagory.pk, catagory.name))
     STATUS = (
         ('open', 'Open'),
         ('closed', 'Ended'),
     )
     q = django_filters.CharFilter(label='', method='textFilter', widget=TextInput(attrs={'placeholder': 'Search', 'class': 'full-width'}))
-    auction = django_filters.ModelChoiceFilter(label='',queryset=Auction.objects.all().order_by('title'), empty_label='Any', to_field_name='slug')
-    category = django_filters.ChoiceFilter(label='', choices=filterCategories, method='filter_by_category', empty_label='Any category', widget=Select(attrs={'style': 'width:10vw'}))
+    auction = django_filters.ModelChoiceFilter(label='',queryset=Auction.objects.all().order_by('title'), empty_label='Any', to_field_name='slug', widget=Select(attrs={'style': 'width:10vw'}))
+    category = django_filters.ModelChoiceFilter(label='', queryset=Category.objects.all().order_by('name'), method='filter_by_category', empty_label='Any category', widget=Select(attrs={'style': 'width:10vw'}))
     status = django_filters.ChoiceFilter(label='', choices=STATUS, method='filter_by_status', empty_label='Open and ended')
 
     class Meta:
