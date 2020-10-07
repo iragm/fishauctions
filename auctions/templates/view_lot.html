@@ -87,7 +87,7 @@
                 <td><b>Quantity:</b></td><td>{{ lot.quantity }}</td>
             </tr>
             <tr>
-                <td><b>Seller:</b></td><td>{{ lot.user }}</td>
+                <td><b>Seller:</b></td><td>{% if lot.donation %} A donation from {% endif %}{{ lot.user }}</td>
             </tr>
             <tr>
                 <td><b>Minimum bid:</b></td><td>${{ lot.reserve_price }}</td>

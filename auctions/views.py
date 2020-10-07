@@ -215,8 +215,10 @@ class viewAndBidOnLot(FormMixin, DetailView):
                         html_message = f'You\'ve been outbid on lot {lot}!<br><a href="{link}">Bid more here</a><br><br>Best, auctions.toxotes.org',
                         )
             else:
-                print(f"{thisBid} is less than {lot.max_bid}")
-                messages.warning(request, "You've been outbid!")
+                if ( (lot.max_bid == lot.reserve_price) and (thisBid >= lot.reserve_price) ):
+                    messages.info(request, "Nice!  You're the first person to bid on this lot!")
+                else:
+                    messages.warning(request, "You've been outbid!")
             
             # Create or update the bid model
             try:
