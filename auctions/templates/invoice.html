@@ -22,7 +22,7 @@
             {% if auction.alternate_pickup_location %}or {{ auction.alternate_pickup_location }} on {{ auction.alternate_pickup_time }} {% endif %}
             to exchange lots.  <a href='/auctions/{{ auction.slug }}'>View auction rules</a><br>
             {% endif %}
-            {%if contact_email %}Questions?  Email <a href='mailto:{{ contact_email }}'>{{ contact_email }}</a><br>{% endif %}
+            {%if contact_email %}Questions?  Email <a href='mailto:{{ contact_email }}'>{{ contact_email }}</a><br>{% endif %}<br>
             {%if invoice.lots_sold %}
             <h3>Lots sold</h3>
             <table class="table">

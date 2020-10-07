@@ -216,6 +216,7 @@ class Lot(models.Model):
 	active = models.BooleanField(default=True)
 	winning_price = models.PositiveIntegerField(null=True, blank=True)
 	banned = models.BooleanField(default=False)
+	banned.help_text = "This lot will be hidden from views, and users won't be able to bid on it"
 	donation = models.BooleanField(default=False)
 	donation.help_text = "All proceeds from this lot should go to the auction"
 	watch_warning_email_sent = models.BooleanField(default=False)
