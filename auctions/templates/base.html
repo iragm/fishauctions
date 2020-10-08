@@ -79,7 +79,14 @@
                       <div class="dropdown-divider"></div>
                       <a class="dropdown-item" href="/invoices">Invoices</a>
                       <a class="dropdown-item" href="/account/">Account</a>
-                      <a class="dropdown-item" href="/logout/">Sign out</a>
+                      <form method="post" action="{% url 'account_logout' %}">
+                        {% csrf_token %}
+                        {% if redirect_field_value %}
+                          <input type="hidden" name="{{ redirect_field_name }}" value="{{ redirect_field_value }}"/>
+                        {% endif %}
+                        <button class="dropdown-item" type="submit">Sign out</button>
+                      </form>
+                      <!--<a class="dropdown-item" href="/logout/">Sign out with confirmation page</a>-->
                     </div>
                   </li>
 
