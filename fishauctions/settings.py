@@ -28,7 +28,6 @@ if os.environ['DEBUG'] == "True":
     DEBUG = True
 else:
     DEBUG = False
-    
 
 ALLOWED_HOSTS = ['localhost', '127.0.0.1', os.environ['ALLOWED_HOSTS']]
 

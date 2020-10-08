@@ -218,7 +218,7 @@ class Lot(models.Model):
 	banned = models.BooleanField(default=False)
 	banned.help_text = "This lot will be hidden from views, and users won't be able to bid on it"
 	donation = models.BooleanField(default=False)
-	donation.help_text = "All proceeds from this lot should go to the auction"
+	donation.help_text = "All proceeds from this lot will go to the club"
 	watch_warning_email_sent = models.BooleanField(default=False)
 	seller_invoice = models.ForeignKey(Invoice, null=True, blank=True, on_delete=models.SET_NULL, related_name="seller_invoice")
 	buyer_invoice = models.ForeignKey(Invoice, null=True, blank=True, on_delete=models.SET_NULL, related_name="buyer_invoice")
