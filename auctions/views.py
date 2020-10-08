@@ -450,10 +450,21 @@ class invoice(DetailView): #FormMixin
     
     def dispatch(self, request, *args, **kwargs):
         auth = False
+        thisInvoice = Invoice.objects.get(pk=self.get_object().pk)
         if self.get_object().user.pk == request.user.pk:
             auth = True
-        if request.user.is_superuser :
+            thisInvoice.opened = True
+            thisInvoice.save()
+        elif request.user.is_superuser :
             auth = True
+        else:
+            # if this user create the auction, they can see the invoice
+            try:
+                thisAuction = Auction.objects.get(pk=self.get_object().auction.pk)
+                if thisAuction.created_by.pk == request.user.pk: 
+                    auth = True
+            except:
+                pass
         if not auth:
             raise PermissionDenied()
         return super().dispatch(request, *args, **kwargs)

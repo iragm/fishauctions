@@ -116,6 +116,7 @@ class Invoice(models.Model):
 	user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
 	date = models.DateTimeField(auto_now_add=True, blank=True)
 	paid = models.BooleanField(default=False)
+	opened = models.BooleanField(default=False)
 	email_sent = models.BooleanField(default=True) # we will set to false manually in the admin console
 	
 	@property

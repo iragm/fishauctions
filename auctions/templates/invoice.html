@@ -47,7 +47,7 @@
                     <td><a href="/lots/{{lot.pk}}/">{{ lot.lot_name }}</a></td>
                     <td>{% if lot.winning_price %} {{ lot.winner }} {% else %} Not sold {% endif %}</td>
                     {% if auction.alternate_pickup_location %}
-                    <td>${{ lot.location }}</td>
+                    <td>{{ lot.location }}</td>
                     {% endif %}
                     <td>{% if lot.winning_price %} ${{ lot.winning_price|floatformat:2 }} {% else %} Not sold {% endif %}</td>
                     <td>${{ lot.club_cut|floatformat:2 }}</td>
@@ -66,10 +66,10 @@
                   <tr>
                     <th scope="col">#</th>
                     <th scope="col">Lot</th>
-                    <th scope="col">Seller</th>
                     {% if auction.alternate_pickup_location %}
-                    <th scope="col">Seller</th>
+                    <th scope="col">Location</th>
                     {% endif %}
+                    <th scope="col">Seller</th>
                     <th scope="col">Price</th>
                   </tr>
                 </thead>

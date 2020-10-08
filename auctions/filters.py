@@ -39,7 +39,7 @@ class LotFilter(django_filters.FilterSet):
     @property
     def qs(self):
         primary_queryset=super(LotFilter, self).qs
-        return primary_queryset.filter(banned=False)
+        return primary_queryset.filter(banned=False).order_by("-lot_number")
 
 
 class UserWatchLotFilter(LotFilter):
