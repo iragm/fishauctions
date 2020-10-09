@@ -414,7 +414,8 @@ class UserData(models.Model):
 	number_total_lots = models.PositiveIntegerField(null=True, blank=True)
 	rank_total_spent = models.PositiveIntegerField(null=True, blank=True)
 	number_total_spent = models.PositiveIntegerField(null=True, blank=True)
-
+	email_visible = models.BooleanField(default=True)
+	
 	@property
 	def lots_sold(self):
 		"""All lots this user has sold"""

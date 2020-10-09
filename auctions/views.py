@@ -529,7 +529,8 @@ class UserUpdate(UpdateView, SuccessMessageMixin):
     def get_initial(self):
         try:
             prefs = UserData.objects.get(user=self.get_object().pk)
-            return {'phone': prefs.phone_number, 'club': prefs.club, 'location': prefs.location, 'address': prefs.address}
+            return {'phone_number': prefs.phone_number, 'club': prefs.club, 'location': prefs.location, 'address': prefs.address, 'email_visible': prefs.email_visible}
+            #return prefs
         except:
             return
 
@@ -537,9 +538,6 @@ class UserUpdate(UpdateView, SuccessMessageMixin):
 
     def form_valid(self, form):
         user = form.save(commit=False)
-        phone = form.cleaned_data['phone']
-        address = form.cleaned_data['address']
-        location = form.cleaned_data['location']
         club = form.cleaned_data['club']
         try:
             prefs = UserData.objects.get(user=user)
@@ -547,10 +545,11 @@ class UserUpdate(UpdateView, SuccessMessageMixin):
             prefs = UserData.objects.create(
                 user=user
             )
-        prefs.phone_number=phone
+        prefs.phone_number=form.cleaned_data['phone_number']
         prefs.club=form.cleaned_data['club']
-        prefs.location=location
-        prefs.address=address
+        prefs.location=form.cleaned_data['location']
+        prefs.address=form.cleaned_data['address']
+        prefs.email_visible = form.cleaned_data['email_visible']
         prefs.save()
         user.save()
         return super(UserUpdate, self).form_valid(form)

@@ -7,6 +7,11 @@
     <div class="row">
         <div class="col-md-10 offset-md1">
             <h1>{{ user.username }}</h1>
+            {% if data.email_visible %}
+            <b>Email: </b><a href='mailto://{{ user.email }}'>{{ user.email }}</a><br>
+            {% else %}
+            This user's email address is private<br>
+            {% endif %}
             <b>Joined:</b> {{ user.date_joined }}<br>
             <b>Last login:</b> {{ user.last_login }}<br>
             <b>Lots sold:</b> {{ data.lots_sold }}<br>

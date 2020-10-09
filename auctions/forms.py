@@ -207,13 +207,15 @@ class CustomSignupForm(SignupForm):
         return user
 
 class UpdateUserForm(forms.ModelForm):
-    phone = forms.CharField(max_length=30, label='Cell phone number', required=False)
+    phone_number = forms.CharField(max_length=30, label='Cell phone number', required=False)
     address = forms.CharField(max_length=255, help_text='Mailing address', required=False, widget=forms.Textarea())
     location = forms.ModelChoiceField(queryset=Location.objects.filter(), required=False)
     club = forms.ModelChoiceField(queryset=Club.objects.filter(), required=False)
+    email_visible = forms.BooleanField(required=False, help_text = "Show your email address on your user page.  This will be visible only to logged in users.")
+
     class Meta:
         model = User
-        fields = ('username', 'first_name', 'last_name','phone', 'address', 'location')
+        fields = ('username', 'first_name', 'last_name','phone_number', 'address', 'location', 'email_visible')
         exclude = ('last_login', 'is_superuser', 'groups', 'user_permissions', 'is_staff', 'is_active', 'date_joined', 'email',)
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -230,7 +232,7 @@ class UpdateUserForm(forms.ModelForm):
             ),
             Div(
                 Div('username',css_class='col-md-6',),
-                Div('phone',css_class='col-md-6',),
+                Div('phone_number',css_class='col-md-6',),
                 css_class='row',
             ),
             'address',
@@ -239,6 +241,7 @@ class UpdateUserForm(forms.ModelForm):
                 Div('club',css_class='col-md-6',),
                 css_class='row',
             ),
+            'email_visible',
             Submit('submit', 'Save', css_class='btn-success'),
         )
 
