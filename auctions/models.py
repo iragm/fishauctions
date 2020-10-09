@@ -233,11 +233,24 @@ class Lot(models.Model):
 
 	@property
 	def location(self):
-		"""Location of the user for this lot, or False"""
+		"""Model object of location of the user for this lot, or False"""
 		try:
 			return UserData.objects.get(user=self.user.pk).location
 		except:
 			return False
+
+	@property
+	def location_as_str(self):
+		"""String value of location of the user for this lot, or empty string"""
+		try:
+			return str(UserData.objects.get(user=self.user.pk).location)
+		except:
+			return ""
+
+	@property
+	def user_as_str(self):
+		"""String value of the seller of this lot"""
+		return str(self.user)
 
 	@property
 	def payout(self):
@@ -347,6 +360,8 @@ class Lot(models.Model):
 	@property
 	def high_bidder(self):
 		""" Name of the highest bidder """
+		if self.banned:
+			return False
 		try:
 			allBids = Bid.objects.filter(lot_number=self.lot_number, bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount')[:2]
 			return allBids[0].user

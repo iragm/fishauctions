@@ -471,8 +471,15 @@ class invoice(DetailView): #FormMixin
 
     def get_context_data(self, **kwargs):
         context = super(invoice, self).get_context_data(**kwargs)
-        context['sold'] = Lot.objects.filter(seller_invoice=self.get_object())
-        context['bought'] = Lot.objects.filter(buyer_invoice=self.get_object())
+        sold = Lot.objects.filter(seller_invoice=self.get_object()).order_by('winner')
+        bought = Lot.objects.filter(buyer_invoice=self.get_object()).order_by('user')
+        try:
+            sold = sorted(sold, key=lambda t: t.location_as_str ) 
+            bought = sorted(bought, key=lambda t: t.location_as_str)
+        except:
+            pass
+        context['sold'] = sold
+        context['bought'] = bought
         try:
             context['auction'] = Auction.objects.get(pk=self.get_object().auction.pk)
             context['contact_email'] = User.objects.get(pk=context['auction'].created_by.pk).email
