@@ -87,13 +87,13 @@
                 <td><b>Quantity:</b></td><td>{{ lot.quantity }}</td>
             </tr>
             <tr>
-                <td><b>Seller:</b></td><td>{% if lot.donation %} A donation from {% endif %}{{ lot.user }}</td>
+                <td><b>Seller:</b></td><td>{% if lot.donation %} A donation from {% endif %}<a href='/users/{{ lot.user.pk }}/'>{{ lot.user }}</a></td>
             </tr>
             <tr>
                 <td><b>Minimum bid:</b></td><td>${{ lot.reserve_price }}</td>
             </tr>
             <tr>
-                <td><b>Current bid:</b></td><td>{% if lot.high_bidder %}${{ lot.high_bid }} {{ lot.high_bidder }}{% else %}No bids yet{% endif %}</td>
+                <td><b>Current bid:</b></td><td>{% if lot.high_bidder %}${{ lot.high_bid }} <a href='/users/{{ lot.high_bidder.pk }}/'>{{ lot.high_bidder }}</a>{% else %}No bids yet{% endif %}</td>
             </tr>
             <tr>
                 <td><b>Ends:</b></td><td>{% if lot.ended %} <span style="color:red">{{ lot.calculated_end }}</span>{% else %}{{ lot.calculated_end }}{% endif %}</td>
@@ -138,6 +138,10 @@
         <a href='/login/?next=/lots/{{lot.pk}}/'>Sign in</a> to bid on this lot.
         {% endif %}
         {% endif %}
+        {% if lot.auction %}
+        <br><br><a href='/lots/?auction={{lot.auction.slug}}'>View all lots for {{ lot.auction }}</a><br>
+        {% endif %}
+        
     </div>
 </div>
 </div>  
