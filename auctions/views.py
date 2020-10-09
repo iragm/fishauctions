@@ -378,16 +378,17 @@ class allAuctions(ListView):
             locationSet = True
             try:
                 prefs = UserData.objects.get(user=self.request.user.pk)
-                if not UserData.location:
+                if not (prefs.location and prefs.address):
                     locationSet = False
             except:
                 locationSet = False
             if not locationSet and not nameSet:
                 messages.add_message(self.request, messages.INFO, 'Set your name and location in your <a href="/account/">account</a>')
             elif not locationSet:
-                messages.add_message(self.request, messages.INFO, 'Set your location in your <a href="/account/">account</a>')
+                messages.add_message(self.request, messages.INFO, 'Set your location and address in your <a href="/account/">account</a>')
             elif not nameSet:
                 messages.add_message(self.request, messages.INFO, 'Set your name your <a href="/account/">account</a>')
+            
         except:
             pass
         # set default values
