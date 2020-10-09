@@ -23,23 +23,8 @@ from .forms import *
 def index(request):
     return HttpResponse("this page is intentionally left blank")
 
-# password protected in urls.py
-class myWonLots(ListView):
-    model = Lot
-    template_name = 'all_lots.html'
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        # set default values
-        data = self.request.GET.copy()
-        if len(data) == 0:
-            data['status'] = "closed"
-        context['filter'] = UserWonLotFilter(data, queryset=self.get_queryset(), request=self.request)
-        context['view'] = 'mywonlots'
-        return context
-
-# password protected in urls.py
-class myBids(ListView):
+class LotListView(ListView):
+    """This is a base class that shows lots, with a filter.  The context is overridden for several other classes"""
     model = Lot
     template_name = 'all_lots.html'
 
@@ -49,26 +34,41 @@ class myBids(ListView):
         if len(data) == 0:
             data['status'] = "open"
         context = super().get_context_data(**kwargs)
+        context['filter'] = LotFilter(data, queryset=self.get_queryset())
+        #context['view'] = 'all'
+        return context
+
+class MyWonLots(LotListView):
+    """Show all lots won by the current user"""
+    def get_context_data(self, **kwargs):
+        data = self.request.GET.copy()
+        if len(data) == 0:
+            data['status'] = "closed"
+        context = super().get_context_data(**kwargs)
+        context['view'] = 'mywonlots'
+        return context
+
+class MyBids(LotListView):
+    """Show all lots the current user has bid on"""
+    def get_context_data(self, **kwargs):
+        data = self.request.GET.copy()
+        if len(data) == 0:
+            data['status'] = "open"
+        context = super().get_context_data(**kwargs)
         context['filter'] = UserBidLotFilter(data, queryset=self.get_queryset(), request=self.request)
         context['view'] = 'mybids'
         return context
 
-# password protected in urls.py
-class myLots(ListView):
-    model = Lot
-    template_name = 'all_lots.html'
-
+class MyLots(LotListView):
+    """Show all lots submitted by the current user"""
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['filter'] = UserOwnedLotFilter(self.request.GET, queryset=self.get_queryset(), request=self.request)
         context['view'] = 'mylots'
         return context
         
-# password protected in urls.py
-class myWatched(ListView):
-    model = Lot
-    template_name = 'all_lots.html'
-
+class MyWatched(LotListView):
+    """Show all lots watched by the current user"""
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['filter'] = UserWatchLotFilter(self.request.GET, queryset=self.get_queryset(), request=self.request)
@@ -410,17 +410,10 @@ class Leaderboard(ListView):
         context['total_spent'] = UserData.objects.filter(rank_total_spent__isnull=False).order_by('rank_total_spent')
         return context
 
-class allLots(ListView):
-    model = Lot
-    template_name = 'all_lots.html'
-
+class AllLots(LotListView):
+    """Show all lots"""
     def get_context_data(self, **kwargs):
-        # set default values
-        data = self.request.GET.copy()
-        if len(data) == 0:
-            data['status'] = "open"
         context = super().get_context_data(**kwargs)
-        context['filter'] = LotFilter(data, queryset=self.get_queryset())
         context['view'] = 'all'
         return context
 
