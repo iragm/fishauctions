@@ -1,3 +1,4 @@
+from allauth.account.forms import SignupForm
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import Layout, Submit
 from crispy_forms.bootstrap import Div, Field
@@ -195,15 +196,15 @@ class CreateLotForm(forms.ModelForm):
         if not auction:
             self.add_error('auction', "Select an auction")
 
-class CustomUserCreationForm(forms.Form):
+class CustomSignupForm(SignupForm):
     """To require firstname and lastname when signing up"""
-    first_name = forms.CharField(max_length=30, label='First name')
-    last_name = forms.CharField(max_length=30, label='Last name')
-
+    first_name = forms.CharField(max_length=30, label='First Name')
+    last_name = forms.CharField(max_length=30, label='Last Name')
     def signup(self, request, user):
         user.first_name = self.cleaned_data['first_name']
         user.last_name = self.cleaned_data['last_name']
         user.save()
+        return user
 
 class UpdateUserForm(forms.ModelForm):
     phone = forms.CharField(max_length=30, label='Cell phone number', required=False)

@@ -153,7 +153,9 @@ BASE_URL = os.environ['BASE_URL']
 ACCOUNT_AUTHENTICATED_LOGIN_REDIRECTS = True
 LOGIN_REDIRECT_URL = "/"
 LOGIN_URL = "/login/"
-ACCOUNT_SIGNUP_FORM_CLASS = 'auctions.forms.CustomUserCreationForm'
+ACCOUNT_FORMS = {
+'signup': 'auctions.forms.CustomSignupForm',
+}
 ACCOUNT_AUTHENTICATION_METHOD = "username_email"
 ACCOUNT_CONFIRM_EMAIL_ON_GET = True
 ACCOUNT_EMAIL_REQUIRED = True
