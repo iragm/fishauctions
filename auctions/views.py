@@ -75,6 +75,18 @@ class MyWatched(LotListView):
         context['view'] = 'watch'
         return context
 
+class LotsByUser(LotListView):
+    """Show all lots for the user specified in the filter"""
+    def get_context_data(self, **kwargs):
+        data = self.request.GET.copy()
+        context = super().get_context_data(**kwargs)
+        try:
+            context['user'] = User.objects.get(pk=data['user'])
+            context['view'] = 'user'
+        except:
+            pass
+        return context
+
 @login_required
 def watchOrUnwatch(request, pk):
     if request.method == 'POST':
@@ -167,10 +179,6 @@ class viewAndBidOnLot(FormMixin, DetailView):
         context = super(viewAndBidOnLot, self).get_context_data(**kwargs)
         context['watched'] = Watch.objects.filter(lot_number=self.kwargs['pk'], user=self.request.user.id)
         context['form'] = CreateBid(initial={'user': self.request.user.id, 'lot_number':self.kwargs['pk'], "amount":defaultBidAmount}, request=self.request)
-        try:
-            context['user_location'] = UserData.objects.get(user=self.request.user.id).location
-        except:
-            pass
         return context
     
     def get_success_url(self):
@@ -482,8 +490,6 @@ class invoice(DetailView): #FormMixin
             context['contact_email'] = False
         return context
    
-
-
 @login_required
 def getSpecies(request):
     if request.method == 'POST':

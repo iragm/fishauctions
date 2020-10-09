@@ -17,6 +17,9 @@ Your lots
 {% if view == "mywonlots" %}
 Won lots
 {% endif %}
+{% if view == "user" %}
+User: {{ user }}
+{% endif %}
 {% endblock %}
 {% load static %}
 {% block content %}
@@ -36,6 +39,9 @@ Won lots
           {% if view == "mylots" %}
           Your lots
           {% endif %}
+          {% if view == "user" %}
+          All lots created by {{ user }}
+          {% endif %}
           {% if view == "mywonlots" %}
           Lots you've won
           {% endif %}</h1>
@@ -43,6 +49,9 @@ Won lots
           {{ filter.form }}
           <button type="submit" class="btn btn-primary">Apply Filter</button> {% if view == "mylots" or view == "all" %}<br><a href="/lots/new/" class="btn btn-info" role="button">Create lot</a>{% endif %}
         </form>
+        {% if view == "user" %}
+        <br><a href='/users/{{user.pk}}'>View user info for {{ user }} </a><br>
+        {% endif %}
         <table class="table">
           <thead>
             <tr>

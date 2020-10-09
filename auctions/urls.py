@@ -19,6 +19,7 @@ urlpatterns = [
     path('lots/won/', login_required(views.MyWonLots.as_view())),
     path('lots/my/', login_required(views.MyLots.as_view())),
     path('lots/all/', views.AllLots.as_view(), name='allLots'),
+    path('lots/user/', views.LotsByUser.as_view()),
     path('bids/', login_required(views.MyBids.as_view())),
     path('', views.toDefaultLandingPage),
     path('about/', views.aboutSite, name='about'),

@@ -21,6 +21,7 @@
             <b>Total spent:</b> ${{ data.total_spent|floatformat:2 }} (only visible to you)<br>
             <br><a href="/users/edit/{{user.pk}}" class="btn btn-warning active">Edit</a>
             {% endif %}
+            <br><br><a href='/lots/user/?user={{user.pk}}&status=open'>View all lots from this user</a>
         </div>
     </div>
 </div>  
