@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Lot, Bid, Auction, Invoice, Category, Product, Club, Location
+from .models import Lot, Bid, Auction, Invoice, Category, Product, Club, Location, UserBan
 
 class ClubAdmin(admin.ModelAdmin):
     model = Club 
@@ -89,6 +89,14 @@ class ProductAdmin(admin.ModelAdmin):
     list_filter = ("category",)
     search_fields = ("common_name", "scientific_name", )
 
+class BanAdmin(admin.ModelAdmin):
+    model = UserBan
+    menu_label = "User to user bans"  
+    list_display = ("user","banned_user",)
+    list_filter = ()
+    search_fields = ("user", "banned_user", )
+
+admin.site.register(UserBan, BanAdmin)
 admin.site.register(Category, CategoryAdmin)
 admin.site.register(Product, ProductAdmin)
 admin.site.register(Auction, AuctionAdmin)

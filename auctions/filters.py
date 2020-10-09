@@ -10,7 +10,7 @@ class LotFilter(django_filters.FilterSet):
         ('closed', 'Ended'),
     )
     q = django_filters.CharFilter(label='', method='textFilter', widget=TextInput(attrs={'placeholder': 'Search', 'class': 'full-width form-control'}))
-    auction = django_filters.ModelChoiceFilter(label='',queryset=Auction.objects.all().order_by('title'), empty_label='Any', to_field_name='slug', widget=Select(attrs={'style': 'width:10vw', 'class': 'form-control custom-select'}))
+    auction = django_filters.ModelChoiceFilter(label='',queryset=Auction.objects.all().order_by('title'), empty_label='Any auction', to_field_name='slug', widget=Select(attrs={'style': 'width:10vw', 'class': 'form-control custom-select'}))
     category = django_filters.ModelChoiceFilter(label='', queryset=Category.objects.all().order_by('name'), method='filter_by_category', empty_label='Any category', widget=Select(attrs={'style': 'width:10vw', 'class': 'form-control custom-select'}))
     status = django_filters.ChoiceFilter(label='', choices=STATUS, method='filter_by_status', empty_label='Open and ended', widget=Select(attrs={'style': 'width:10vw', 'class': 'form-control custom-select'}))
     user = django_filters.ModelChoiceFilter(label='', queryset=User.objects.all(), method='filter_by_user', widget=Select(attrs={'style': 'display:none'}))

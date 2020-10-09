@@ -389,7 +389,8 @@ class Bid(models.Model):
 	lot_number = models.ForeignKey(Lot, on_delete=models.CASCADE)
 	bid_time = models.DateTimeField(auto_now_add=True, blank=True)
 	amount = models.PositiveIntegerField(validators=[MinValueValidator(1)])
-	
+	was_high_bid = models.BooleanField(default=False)
+
 	def __str__(self):
 		return "User" + str(self.user) + " bid " + str(self.amount) + " on lot " + str(self.lot_number)
 
@@ -402,6 +403,17 @@ class Watch(models.Model):
 	lot_number = models.ForeignKey(Lot, on_delete=models.CASCADE)
 	def __str__(self):
 		return "User" + str(self.user) + " watching " + str(self.lot_number)
+
+class UserBan(models.Model):
+	"""
+	Users can ban other users from bidding on their lots
+	This will prevent the banned_user from bidding on any lots or in auction auctions created by the owned user
+	"""
+	user = models.ForeignKey(User, on_delete=models.CASCADE)
+	banned_user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='banned_user')
+	def __str__(self):
+		return "User" + str(self.user) + " has banned " + str(self.banned_user)
+
 
 class PageView(models.Model):
 	"""Track what lots a user views, and how long they spend looking at each one"""

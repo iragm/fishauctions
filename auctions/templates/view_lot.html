@@ -108,15 +108,15 @@
                 <td><b>Not transportable</b></td><td>This lot can only be picked up at its location, we won't deliver it to the other pickup location</td>
             </tr>
             {% endif %}
-            {% if lot.user.pk == request.user.id or user.is_superuser %}
+            {% if lot.user.pk == request.user.id or request.user.is_superuser %}
             <tr>
                 <td><b>Views:</b></td><td>{{ lot.page_views }}</td>
             </tr>
             {% endif %}
         </table>
         {% if lot.banned %}
-        <span style="color:red">This lot has been removed by an administrator</span>
-        {% elif lot.user.pk == request.user.id or user.is_superuser%}
+        <span style="color:red">This lot has been removed by the owner of this auction</span>
+        {% elif lot.user.pk == request.user.id or request.user.is_superuser%}
         {% if not lot.high_bidder %}
         <a href="/lots/edit/{{lot.pk}}" class="btn btn-warning active">Edit</a></span> {% if lot.can_be_deleted %}<span><a href="/lots/delete/{{lot.pk}}" class="btn btn-danger active">Delete</a>{% endif %}
         {% else %}

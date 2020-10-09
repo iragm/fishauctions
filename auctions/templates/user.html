@@ -2,7 +2,6 @@
 {% block title %} {{ user.username }} {% endblock %}
 {% load static %}
 {% block content %}
-{% block extra_js %}{% endblock %}
 <div class="container mt-5 mb-5">
     <div class="row">
         <div class="col-md-10 offset-md1">
@@ -17,14 +16,42 @@
             <b>Lots sold:</b> {{ data.lots_sold }}<br>
             <b>Total species sold:</b> {{ data.species_sold}}<br>
             <b>Lots bought:</b> {{ data.lots_bought }}<br>
-            {% if user.pk == request.user.id or user.is_superuser %}
+            {% if user.pk == request.user.id or request.user.is_superuser %}
             <b>Total spent:</b> ${{ data.total_spent|floatformat:2 }} (only visible to you)<br>
-            <br><a href="/users/edit/{{user.pk}}" class="btn btn-warning active">Edit</a>
+            <br><a href="/users/edit/{{user.pk}}" class="btn btn-warning active">Edit</a><br>
             {% endif %}
-            <br><br><a href='/lots/user/?user={{user.pk}}&status=open'>View all lots from this user</a>
+            {% if user.pk != request.user.id %}
+                {% if banned %}
+                <form method="post" action="/api/users/unban/{{user.pk}}/">
+                    {% csrf_token %}
+                    This user has been banned from bidding on your lots and in auctions you've created.<br><button class="btn btn-primary"  name="action_unban" type="submit">Unban</button>
+                </form>
+                {% else %}
+                <form method="post" action="/api/users/ban/{{user.pk}}/">
+                    {% csrf_token %}
+                    <button class="btn btn-danger"  name="action_ban" type="submit">Ban</button>
+                </form>
+                {% endif %}
+            {% endif %}
+            <br><a href='/lots/user/?user={{user.pk}}&status=open'>View all lots from this user</a>
         </div>
     </div>
 </div>  
 {% endblock %}
 
 
+{% block extra_js %}
+<script type="text/javascript">
+(function() {
+  var message = "Ban this user from bidding on all your lots and auctions?";
+  var actions = document.getElementsByName('action_ban');
+  if (actions.length) {
+    actions[0].addEventListener("click", function(e) {
+      if (! confirm(message)) {
+        e.preventDefault();
+      }
+    });
+  }
+})();
+</script>
+{% endblock %}

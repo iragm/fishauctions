@@ -105,6 +105,48 @@ def watchOrUnwatch(request, pk):
         else:
             return HttpResponse("Failure")
 
+def userBan(request, pk):
+    if request.method == 'POST':
+        user = request.user
+        bannedUser = User.objects.get(pk=pk)
+        obj, created = UserBan.objects.update_or_create(
+            banned_user=bannedUser,
+            user=user,
+            defaults={},
+        )
+        auctionsList = Auction.objects.filter(created_by=user.pk)
+        # delete all bids the banned user has made on active lots or in active auctions created by the request user
+        bids = Bid.objects.filter(user=bannedUser)
+        for bid in bids:
+            lot = Lot.objects.get(pk=bid.lot_number.pk)
+            if lot.user == user or lot.auction in auctionsList:
+                if not lot.ended:
+                    print('Deleting bid ' + str(bid))
+                    bid.delete()
+        # ban all lots added by the banned user.  These are not deleted, just removed from the auction
+        for auction in auctionsList:
+            lots = Lot.objects.filter(user=bannedUser, auction=auction.pk)
+            for lot in lots:
+                if not lot.ended:
+                    print(f"User {str(user)} has banned lot {lot}")
+                    lot.banned = True
+                    lot.save()
+        return redirect('/users/' + str(pk))
+
+def userUnban(request, pk):
+    """Delete the UserBan"""
+    if request.method == 'POST':
+        user = request.user
+        bannedUser = User.objects.get(pk=pk)
+        obj, created = UserBan.objects.update_or_create(
+            banned_user=bannedUser,
+            user=user,
+            defaults={},
+        )
+        obj.delete()
+        return redirect('/users/' + str(pk))
+
+
 def newpageview(request, pk):
     """Initail pageview to record page views to the PageView model"""
     if request.method == 'POST':
@@ -201,12 +243,27 @@ class viewAndBidOnLot(FormMixin, DetailView):
             return False
         lot = Lot.objects.get(pk=self.kwargs['pk'])
         highBidder = lot.high_bidder
-        
+        checksPass = True
+        try:
+            ban = UserBan.objects.get(banned_user=request.user.id, user=lot.user.pk)
+            messages.error(request, "This user has banned you from bidding on their lots")
+            checksPass = False
+        except:
+            pass
+        try:
+            ban = UserBan.objects.get(banned_user=request.user.id, user=lot.auction.created_by.pk)
+            messages.error(request, "The owner of this auction has banned you from bidding")
+            checksPass = False
+        except:
+            pass        
         if lot.ended:
             messages.error(request, "Bidding on this lot has ended.  You can no longer place bids")
-        else:
+            checksPass = False
+        if checksPass:
+            was_high_bid = False
             if (thisBid > lot.max_bid):
                 messages.info(request, "You're the high bidder!")
+                was_high_bid = True
                 # Send an email to the old high bidder
                 # @fixme, this is slow
                 if highBidder:
@@ -224,10 +281,10 @@ class viewAndBidOnLot(FormMixin, DetailView):
                         )
             else:
                 if ( (lot.max_bid == lot.reserve_price) and (thisBid >= lot.reserve_price) ):
-                    messages.info(request, "Nice!  You're the first person to bid on this lot!")
+                    messages.info(request, "Tip: bid high!  If no one else bids on this item, you'll still get it for the reserve price.  If someone else bids against you, you'll bid against them until you reach your limit.")
+                    was_high_bid = True
                 else:
                     messages.warning(request, "You've been outbid!")
-            
             # Create or update the bid model
             try:
                 # check to see if this user has already bid, and bid more
@@ -235,12 +292,15 @@ class viewAndBidOnLot(FormMixin, DetailView):
                 if thisBid > existingBid.amount:
                     print(f"{request.user} has upped their bid on {lot} from ${existingBid.amount} to ${thisBid}")
                     existingBid.amount = thisBid
+                    if was_high_bid:
+                        existingBid.was_high_bid = was_high_bid
                     existingBid.save()
                 else:
                     messages.warning(request, "You can't bid less than you've already bid")
             except:
                 # create a new bid model
                 print(f"{request.user} has bid on {lot}")
+                form.was_high_bid = was_high_bid
                 form.save() # record the bid regardless of whether or not it's the current high
         return super(viewAndBidOnLot, self).form_valid(form)
 
@@ -271,24 +331,32 @@ def createLot(request):
             form = CreateLotForm(request.POST)
         if form.is_valid():
             lot = form.save(commit=False)
-            # If this is a tank, set it to not transportable
-            if lot.species:
-                # if this is not breedable, remove the breeder points
-                # they can still be added back in by editing the lot
-                if not lot.species.breeder_points:
-                    lot.i_bred_this_fish = False
-                if lot.species.pk == 592:
+            checksPass = True
+            try:
+                ban = UserBan.objects.get(banned_user=request.user.id, user=lot.auction.created_by.pk)
+                messages.error(request, "The owner of this auction has banned you from submitting lots")
+                checksPass = False
+            except:
+                pass   
+            if checksPass:
+                # If this is a tank, set it to not transportable
+                if lot.species:
+                    # if this is not breedable, remove the breeder points
+                    # they can still be added back in by editing the lot
+                    if not lot.species.breeder_points:
+                        lot.i_bred_this_fish = False
+                    if lot.species.pk == 592:
+                        lot.transportable = False
+                if "tank" in lot.lot_name.lower():
                     lot.transportable = False
-            if "tank" in lot.lot_name.lower():
-                lot.transportable = False
-            if "aquarium" in lot.lot_name.lower():
-                lot.transportable = False
-            lot.user = User.objects.get(id=request.user.id)
-            if form.cleaned_data['create_new_species']:
-                lot.species = createSpecies(form.cleaned_data['new_species_name'], form.cleaned_data['new_species_scientific_name'], form.cleaned_data['species_category'])
-            lot.save()            
-            print(str(lot.user) + " has created a new lot " + lot.lot_name)
-            messages.info(request, "Created lot!  Fill out this form again to add another lot.  <a href='/lots/my'>All submitted lots</a>")
+                if "aquarium" in lot.lot_name.lower():
+                    lot.transportable = False
+                lot.user = User.objects.get(id=request.user.id)
+                if form.cleaned_data['create_new_species']:
+                    lot.species = createSpecies(form.cleaned_data['new_species_name'], form.cleaned_data['new_species_scientific_name'], form.cleaned_data['species_category'])
+                lot.save()            
+                print(str(lot.user) + " has created a new lot " + lot.lot_name)
+                messages.info(request, "Created lot!  Fill out this form again to add another lot.  <a href='/lots/my'>All submitted lots</a>")
             form = CreateLotForm() # no post data here to reset the form
     else:
         form = CreateLotForm()
@@ -511,6 +579,11 @@ class UserView(DetailView):
             context['data'] = UserData.objects.get(user=self.object.pk)
         except:
             context['data'] = False
+        try:
+            context['banned'] = UserBan.objects.get(user=self.request.user.pk, banned_user=self.object.pk)
+            print(context['banned'])
+        except:
+            context['banned'] = False
         return context
 
 class UserUpdate(UpdateView, SuccessMessageMixin):

@@ -9,6 +9,8 @@ urlpatterns = [
     path('api/species/', login_required(views.getSpecies)),
     path('api/pageview/<int:pk>/', views.pageview),
     path('api/pageview/<int:pk>/new/', views.newpageview),
+    path('api/users/ban/<int:pk>/', views.userBan),
+    path('api/users/unban/<int:pk>/', views.userUnban),
     path('leaderboard/', views.Leaderboard.as_view()),
     path('lots/', views.AllLots.as_view(), name='allLots'),
     path('lots/<int:pk>/', views.viewAndBidOnLot.as_view()),
