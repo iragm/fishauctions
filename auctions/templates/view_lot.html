@@ -28,13 +28,15 @@
         });
     }
     function pageViewUpdate() {
-        $.ajax({
-            type: "POST",
-            beforeSend: function (request) {
-                request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
-            },
-            url: "/api/pageview/{{lot.pk}}/",
-        });
+        if ( !document.hidden ) {
+            $.ajax({
+                type: "POST",
+                beforeSend: function (request) {
+                    request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+                },
+                url: "/api/pageview/{{lot.pk}}/",
+            });
+        }
     }
      // Logic for watching lots
      $( "#watch" ).click(function() {
@@ -141,7 +143,40 @@
         {% if lot.auction %}
         <br><br><a href='/lots/?auction={{lot.auction.slug}}'>View all lots for {{ lot.auction }}</a><br>
         {% endif %}
-        
+        {% if request.user.is_superuser %}
+        <script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.3/dist/Chart.min.js"></script>
+        <canvas id="myChart" ></canvas>
+        <span class="text-muted">Total views: {{lot.page_views }} ({{ lot.anonymous_views }} anyonymous views not shown)</span>
+        <script>
+            $.ajax({
+                url: '/api/chart/lots/{{lot.pk}}/',
+                success: function (data) {
+                    var ctx = document.getElementById('myChart').getContext('2d');
+                    Chart.defaults.global.defaultFontColor = "#fff";
+                    new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: data.labels,
+                            datasets: [{
+                            label: 'View time',
+                            backgroundColor: 'rgba(52, 152, 219, 0.4)',
+                            data: data.data
+                            }]
+                        },
+                        options: {
+                            legend: {
+                                display: false
+                            },
+                            title: {
+                                display: true,
+                                text: 'User view durations (minutes) of this lot'
+                            }
+                        }    
+                    });
+                }
+            });
+        </script>
+        {% endif %}
     </div>
 </div>
 </div>  

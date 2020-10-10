@@ -170,7 +170,6 @@ class Invoice(models.Model):
 		return total_bought
 
 	def __str__(self):
-		#base = str(self.auction) + " - " + str(self.user)
 		base = str(self.user)
 		if self.user_should_be_paid:
 			base += " needs to be paid"
@@ -217,7 +216,7 @@ class Lot(models.Model):
 	active = models.BooleanField(default=True)
 	winning_price = models.PositiveIntegerField(null=True, blank=True)
 	banned = models.BooleanField(default=False)
-	banned.help_text = "This lot will be hidden from views, and users won't be able to bid on it"
+	banned.help_text = "This lot will be hidden from views, and users won't be able to bid on it.  Banned lots are not charged in invoices."
 	donation = models.BooleanField(default=False)
 	donation.help_text = "All proceeds from this lot will go to the club"
 	watch_warning_email_sent = models.BooleanField(default=False)
@@ -267,6 +266,8 @@ class Lot(models.Model):
 			if not self.active:
 				# bidding has officially closed
 				payout['ended'] = True
+				if self.banned:
+					return payout
 				auction = Auction.objects.get(id=self.auction.pk)
 				if self.winner:
 					# this lot sold
@@ -378,10 +379,33 @@ class Lot(models.Model):
 			return False
 
 	@property
+	def all_page_views(self):
+		"""Return a set of all users who have viewed this lot, and how long they looked at it for"""
+		return PageView.objects.filter(lot_number=self.lot_number)
+
+	@property
+	def anonymous_views(self):
+		return len(PageView.objects.filter(lot_number=self.lot_number, user_id__isnull=True))
+
+	@property
 	def page_views(self):
 		"""Total number of page views from all users"""
-		pageViews = PageView.objects.filter(lot_number=self.lot_number)
+		pageViews = self.all_page_views
 		return len(pageViews)
+
+	@property
+	def number_of_bids(self):
+		"""How many users placed bids on this lot?"""
+		bids = Bid.objects.filter(lot_number=self.lot_number, bid_time__lte=self.calculated_end, amount__gte=self.reserve_price)
+		return len(bids)
+	
+	@property
+	def view_to_bid_ratio(self):
+		"""A low number here represents something interesting but not wanted.  A high number (closer to 1) represents more interest"""
+		if self.page_views:
+			return self.number_of_bids / self.page_views
+		else:
+			return 0
 
 class Bid(models.Model):
 	"""Bids apply to lots"""
@@ -392,7 +416,7 @@ class Bid(models.Model):
 	was_high_bid = models.BooleanField(default=False)
 
 	def __str__(self):
-		return "User" + str(self.user) + " bid " + str(self.amount) + " on lot " + str(self.lot_number)
+		return str(self.user) + " bid " + str(self.amount) + " on lot " + str(self.lot_number)
 
 class Watch(models.Model):
 	"""

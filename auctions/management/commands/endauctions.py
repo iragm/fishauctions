@@ -10,7 +10,7 @@ class Command(BaseCommand):
             if lot.ended:
                 try:
                     lot.active = False
-                    if lot.high_bidder:
+                    if lot.high_bidder and not lot.banned:
                         lot.winner = lot.high_bidder
                         lot.winning_price = lot.high_bid
                         self.stdout.write(self.style.SUCCESS(f'{lot} has been won by {lot.high_bidder} for ${lot.high_bid}'))

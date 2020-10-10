@@ -7,7 +7,7 @@ from django.http import JsonResponse
 from django.utils import timezone
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.views.generic import ListView, DetailView
+from django.views.generic import ListView, DetailView, View
 from django.views.generic.edit import FormMixin
 from django.urls import reverse
 from django.views.generic.edit import UpdateView
@@ -146,7 +146,6 @@ def userUnban(request, pk):
         obj.delete()
         return redirect('/users/' + str(pk))
 
-
 def newpageview(request, pk):
     """Initail pageview to record page views to the PageView model"""
     if request.method == 'POST':
@@ -173,21 +172,21 @@ def pageview(request, pk):
     """Continued interest in a lot will update the time in page views to the PageView model"""
     if request.method == 'POST':
         user = request.user
-        if not user.is_authenticated:
-            user = None
-        lot_number = Lot.objects.get(pk=pk)
-        obj, created = PageView.objects.update_or_create(
-            lot_number=lot_number,
-            user=user,
-            defaults={},
-        )
-        obj.date_end = timezone.now()
-        obj.total_time += 30
-        obj.save()
+        if user.is_authenticated:
+            # we don't track duration for anonymous views
+            lot_number = Lot.objects.get(pk=pk)
+            obj, created = PageView.objects.update_or_create(
+                lot_number=lot_number,
+                user=user,
+                defaults={},
+            )
+            obj.date_end = timezone.now()
+            obj.total_time += 30
+            obj.save()
         return HttpResponse("Success")
 
 class AuctionUpdate(UpdateView):
-    """For editing auctions"""
+    """The form users fill out to edit or create an auction"""
     
     def dispatch(self, request, *args, **kwargs):
         if not (request.user.is_superuser or self.get_object().created_by == self.request.user):
@@ -493,7 +492,7 @@ class AllLots(LotListView):
         context['view'] = 'all'
         return context
 
-class invoices(ListView):
+class Invoices(ListView):
     """Get all invoices for the current user"""
     model = Invoice
     template_name = 'all_invoices.html'
@@ -513,7 +512,7 @@ class invoices(ListView):
         return context
 
 # password protected in views.py
-class invoice(DetailView): #FormMixin
+class InvoiceView(DetailView): #FormMixin
     """Show a single invoice"""
     template_name = 'invoice.html'
     model = Invoice
@@ -540,7 +539,7 @@ class invoice(DetailView): #FormMixin
         return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
-        context = super(invoice, self).get_context_data(**kwargs)
+        context = super(InvoiceView, self).get_context_data(**kwargs)
         sold = Lot.objects.filter(seller_invoice=self.get_object()).order_by('winner')
         bought = Lot.objects.filter(buyer_invoice=self.get_object()).order_by('user')
         try:
@@ -633,3 +632,63 @@ class UserUpdate(UpdateView, SuccessMessageMixin):
         prefs.save()
         user.save()
         return super(UserUpdate, self).form_valid(form)
+
+class UserChartView(View):
+    def get(self, request, *args, **kwargs):
+        if request.user.is_superuser:
+            user = self.kwargs.get('pk', None)
+            allBids = Bid.objects.select_related('lot_number__species_category').filter(user=user)
+            pageViews = PageView.objects.select_related('lot_number__species_category').filter(user=user)
+            # This is extremely inefficient
+            # Almost all of it could be done in SQL with a more complex join and a count
+            # However, I keep changing attributes (views, view duration, bids) and sorting here
+            # This code is also only run for admins (and async of page load), so the server load is pretty low
+
+            categories = {}
+            for item in allBids:
+                category = str(item.lot_number.species_category)
+                try:
+                    categories[category]['bids'] += 1
+                except:
+                    categories[category] = {'bids': 1, 'views': 0 }
+            for item in pageViews:
+                category = str(item.lot_number.species_category)
+                try:
+                    categories[category]['views'] += 1
+                except:
+                    # brand new category
+                    categories[category] = {'bids': 0, 'views': 1 }
+            # sort the result
+            sortedCategories = sorted(categories, key=lambda t: -categories[t]['views'] ) 
+            #sortedCategories = sorted(categories, key=lambda t: -categories[t]['bids'] ) 
+            # format for chart.js
+            labels = []
+            bids = []
+            views = []
+            for item in sortedCategories:
+                labels.append(item)
+                bids.append(categories[item]['bids'])
+                views.append(categories[item]['views'])
+            return JsonResponse(data={
+                'labels': labels,
+                'bids': bids,
+                'views': views
+            })
+        raise PermissionDenied()
+
+class LotChartView(View):
+    def get(self, request, *args, **kwargs):
+        if request.user.is_superuser:
+            lot_number = self.kwargs.get('pk', None)
+            queryset = PageView.objects.filter(lot_number=lot_number).exclude(user_id__isnull=True).order_by('-total_time').values()[:20]
+            labels = []
+            data = []    
+            for entry in queryset:
+                labels.append(str(User.objects.get(pk=entry['user_id'])))
+                data.append(int(entry['total_time']/60))
+            
+            return JsonResponse(data={
+                'labels': labels,
+                'data': data,
+            })
+        raise PermissionDenied()
