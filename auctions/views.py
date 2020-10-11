@@ -48,7 +48,7 @@ class MyWonLots(LotListView):
         context = super().get_context_data(**kwargs)
         context['filter'] = LotFilter(data, queryset=self.get_queryset(), request=self.request, ignore=False)
         context['view'] = 'mywonlots'
-        context['lotsAreHidden'] = 0
+        context['lotsAreHidden'] = -1
         return context
 
 class MyBids(LotListView):
@@ -60,7 +60,7 @@ class MyBids(LotListView):
         context = super().get_context_data(**kwargs)
         context['filter'] = LotFilter(data, queryset=self.get_queryset(), request=self.request, ignore=False)
         context['view'] = 'mybids'
-        context['lotsAreHidden'] = 0
+        context['lotsAreHidden'] = -1
         return context
 
 class MyLots(LotListView):
@@ -69,7 +69,7 @@ class MyLots(LotListView):
         context = super().get_context_data(**kwargs)
         context['filter'] = UserOwnedLotFilter(self.request.GET, queryset=self.get_queryset(), request=self.request, ignore=False)
         context['view'] = 'mylots'
-        context['lotsAreHidden'] = 0
+        context['lotsAreHidden'] = -1
         return context
         
 class MyWatched(LotListView):
@@ -78,7 +78,7 @@ class MyWatched(LotListView):
         context = super().get_context_data(**kwargs)
         context['filter'] = UserWatchLotFilter(self.request.GET, queryset=self.get_queryset(), request=self.request, ignore=False)
         context['view'] = 'watch'
-        context['lotsAreHidden'] = 0
+        context['lotsAreHidden'] = -1
         return context
 
 class LotsByUser(LotListView):

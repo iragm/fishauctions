@@ -13,19 +13,19 @@ class AuctionAdmin(admin.ModelAdmin):
     model = Auction 
     list_display = ("title",'created_by')
     list_filter = ("title",)
-    search_fields = ("title",)
+    search_fields = ("title",'created_by__first_name','created_by__last_name', )
 
 class BidInline(admin.TabularInline):
     model = Bid 
     list_display = ("user", "amount",)
     list_filter = ()
-    search_fields = ("user",)
+    search_fields = ("user__first_name",'user__last_name',)
     extra = 0
 
 class LotAdmin(admin.ModelAdmin):
     model = Lot 
     list_display = ("lot_name", "auction", "lot_number", "user", "species_category",)
-    list_filter = ("active","auction",)
+    list_filter = ("active","auction","banned")
     search_fields = ("lot_number","lot_name","description","species_category__name","user__first_name","user__last_name")
     inlines = [
          BidInline,
@@ -64,7 +64,7 @@ class InvoiceAdmin(admin.ModelAdmin):
     model = Invoice 
     list_display = ("auction", "user", "total_sold", "total_bought", "__str__", "paid", )
     list_filter = ("auction", "paid",)
-    search_fields = ("user",)
+    search_fields = ("user__first_name", "user__last_name",)
     inlines = [
          SoldLotInline,
          BoughtLotInline,
@@ -82,21 +82,20 @@ class ProductAdmin(admin.ModelAdmin):
     menu_label = "Products"  
     list_display = ("category","common_name", "scientific_name", "breeder_points", )
     list_filter = ("category",)
-    search_fields = ("common_name", "scientific_name", )
+    search_fields = ("common_name", "scientific_name", "category__name")
 
 class BanAdmin(admin.ModelAdmin):
     model = UserBan
     menu_label = "User to user bans"  
     list_display = ("user","banned_user",)
     list_filter = ()
-    search_fields = ("user", "banned_user", )
+    search_fields = ("user__first_name", "user__last_name", "banned_user__first_name","banned_user__last_name",)
 
 admin.site.register(UserBan, BanAdmin)
 admin.site.register(Category, CategoryAdmin)
 admin.site.register(Product, ProductAdmin)
 admin.site.register(Auction, AuctionAdmin)
 admin.site.register(Invoice, InvoiceAdmin)
-#admin.site.register(Bid, BidAdmin)
 admin.site.register(Lot, LotAdmin)
 admin.site.register(Location, LocationAdmin)
 admin.site.register(Club, ClubAdmin)
