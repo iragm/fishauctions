@@ -11,7 +11,6 @@ $('#lot-form').submit(function(event){
 });
 
 $(document).ready(function() {
-    
     if(document.getElementById('id_create_new_species').checked) { //if (!$("#id_create_new_species").is(':check')) {
 
     } else {
@@ -20,17 +19,21 @@ $(document).ready(function() {
     }
     var searchTimeout = null;
     var availableTags = [];
-    $("#id_lot_name").autocomplete({
+    $("#id_species_search").autocomplete({
         source: availableTags,
         select:function(value, data) {
-            //console.log(data.item);
             $('#id_species_category').val(data.item.category_id);
             $('#id_species').val(data.item.id);
             $('#id_new_species_name').val(data.item.common_name);
             $('#id_new_species_scientific_name').val(data.item.scientific_name);
-            $('#hint_id_lot_name').html("Recorded as " + data.item.value + ". If this isn't correct, add a new species.");
+            $('#hint_id_species_search').html("Recorded as " + data.item.value + ". If this isn't correct, search here or add a new species.");
             $('#hint_id_create_new_species').html("Check if this isn't " + data.item.scientific_name );
-
+            $("#id_create_new_species").prop('checked', false);
+            $("#div_id_new_species_name").hide();
+            $("#div_id_new_species_scientific_name").hide();
+            if (!$('#id_lot_name').val()) {
+                $('#id_lot_name').val(data.item.common_name);
+            }
         }
     });
     function getSpecies(search) {
@@ -45,7 +48,6 @@ $(document).ready(function() {
             url: "/api/species/",
             data : data,
             success : function(result) {
-                console.log(result);
                 var availableTags = [];
                 for (item in result) {
                     availableTags.push({
@@ -56,12 +58,12 @@ $(document).ready(function() {
                         scientific_name: result[item].scientific_name,
                         });
                 };
-                $( "#id_lot_name" ).autocomplete( "option", "source",availableTags);
+                $( "#id_species_search" ).autocomplete( "option", "source",availableTags);
             }
         });
     }
 
-    $('#id_lot_name').keyup(function(e) {
+    $('#id_species_search').keyup(function(e) {
         clearTimeout(searchTimeout);
         searchTimeout = setTimeout(() => getSpecies(e.target.value), 300);
     });

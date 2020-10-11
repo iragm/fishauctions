@@ -112,6 +112,8 @@ class CreateLotForm(forms.ModelForm):
     """Form for creating or updating of lots"""
     # Fields not included in the Lot model
     # These are needed to add new species
+    species_search = forms.CharField(max_length=200, required = False)
+    species_search.help_text = "Search here for a latin or common name"
     create_new_species = forms.BooleanField(required = False)
     create_new_species.help_text = "Check if this species/item isn't available"
     new_species_name = forms.CharField(max_length=200, required = False)
@@ -121,7 +123,7 @@ class CreateLotForm(forms.ModelForm):
     
     class Meta:
         model = Lot
-        fields = ('lot_name', 'species', 'create_new_species', 'new_species_name', 'new_species_scientific_name',\
+        fields = ('lot_name', 'species', 'species_search', 'create_new_species', 'new_species_name', 'new_species_scientific_name',\
             'i_bred_this_fish', 'image','image_source','description','quantity','reserve_price','species_category',\
             'auction','donation')
         exclude = [ "user"]
@@ -155,6 +157,7 @@ class CreateLotForm(forms.ModelForm):
         self.helper.form_id = 'lot-form'
         self.helper.form_class = ''
         self.helper.layout = Layout(
+            'species_search',
             'lot_name',
             'species',
             'species_category',
