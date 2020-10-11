@@ -24,14 +24,9 @@ class BidInline(admin.TabularInline):
 
 class LotAdmin(admin.ModelAdmin):
     model = Lot 
-    menu_label = "Lots"  
-    menu_icon = "tag"
-    menu_order = 300
-    add_to_settings_menu = False
-    exclude_from_explorer = False
     list_display = ("lot_name", "auction", "lot_number", "user", "species_category",)
     list_filter = ("active","auction",)
-    search_fields = ("lot_number","lot_name","description","user")
+    search_fields = ("lot_number","lot_name","description","species_category__name","user__first_name","user__last_name")
     inlines = [
          BidInline,
     ]
