@@ -26,7 +26,7 @@
             
             {% for auction in object_list %}
             <tr>
-              <td>{{ auction.title }}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href='/lots/?auction={{auction.slug}}'>View lots</a>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href='/auctions/{{auction.slug}}'>Payment and pickup info</a></td>
+              <td>{{ auction.title }}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{% if auction.started %}<a href='/lots/?auction={{auction.slug}}'>View lots</a>{% else %}Starts: {{auction.date_start}} {% endif %}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href='/auctions/{{auction.slug}}'>Payment and pickup info</a></td>
               <td>{{ auction.location }}</td>
               <td>{% if auction.closed %}<span style="color:red">{{ auction.date_end }}</span>{% else %}{{ auction.date_end }}{% endif %}</td>
             </tr>

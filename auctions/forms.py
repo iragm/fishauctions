@@ -130,16 +130,25 @@ class CreateLotForm(forms.ModelForm):
             'species': forms.HiddenInput,
         }
     def __init__(self, *args, **kwargs):
+        self.user = kwargs.pop('user')
         super().__init__(*args, **kwargs)
         self.fields['description'].widget.attrs = {'rows': 3}
         self.fields['species_category'].required = True
         self.fields['auction'].queryset = Auction.objects.filter(date_end__gte=timezone.now()).filter(date_start__lte=timezone.now()).order_by('date_end')
         # Default auction selection:
-        auctions = Auction.objects.filter(date_end__gte=timezone.now()).filter(date_start__lte=timezone.now()).order_by('date_end')
         try:
+            auctions = Auction.objects.filter(date_end__gte=timezone.now()).filter(date_start__lte=timezone.now()).order_by('date_end')
             self.fields['auction'].initial = auctions[0]
         except:
             # no non-ended auctions
+            pass
+        try:
+            # see if this user's last auction is still available
+            obj, created = UserData.objects.get_or_create(user=self.user)
+            lastUserAuction = obj.last_auction_used
+            if lastUserAuction.date_end > timezone.now():
+                self.fields['auction'].initial = lastUserAuction
+        except:
             pass
         self.helper = FormHelper
         self.helper.form_method = 'post'

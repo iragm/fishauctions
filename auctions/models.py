@@ -30,7 +30,8 @@ class Category(models.Model):
 		return str(self.name)
 	class Meta:
 		verbose_name_plural = "Categories"
-
+		ordering = ['name']
+		
 class Product(models.Model):
 	"""A species or item in the auction"""
 	common_name = models.CharField(max_length=255)
@@ -95,8 +96,14 @@ class Auction(models.Model):
 	@property
 	def closed(self):
 		"""For display on the main auctions list"""
-		warning_date = self.date_end
-		if timezone.now() > warning_date:
+		if timezone.now() > self.date_end:
+			return True
+		else:
+			return False
+	@property
+	def started(self):
+		"""For display on the main auctions list"""
+		if timezone.now() > self.date_start:
 			return True
 		else:
 			return False
@@ -477,6 +484,7 @@ class UserData(models.Model):
 	email_visible = models.BooleanField(default=True)
 	rank_total_bids = models.PositiveIntegerField(null=True, blank=True)
 	number_total_bids = models.PositiveIntegerField(null=True, blank=True)
+	last_auction_used = models.ForeignKey(Auction, null=True, on_delete=models.SET_NULL)
 
 	@property
 	def lots_sold(self):

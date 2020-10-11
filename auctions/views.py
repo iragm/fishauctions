@@ -332,9 +332,9 @@ def createLot(request):
     """Create a new lot"""
     if request.method == 'POST':
         if request.FILES:
-            form = CreateLotForm(request.POST, request.FILES)
+            form = CreateLotForm(request.POST, request.FILES, user=request.user)
         else:
-            form = CreateLotForm(request.POST)
+            form = CreateLotForm(request.POST, user=request.user)
         if form.is_valid():
             lot = form.save(commit=False)
             checksPass = True
@@ -360,12 +360,16 @@ def createLot(request):
                 lot.user = User.objects.get(id=request.user.id)
                 if form.cleaned_data['create_new_species']:
                     lot.species = createSpecies(form.cleaned_data['new_species_name'], form.cleaned_data['new_species_scientific_name'], form.cleaned_data['species_category'])
+                if lot.auction:
+                    userData, created = UserData.objects.get_or_create(user=request.user.id)
+                    userData.last_auction_used = lot.auction
+                    userData.save()
                 lot.save()            
                 print(str(lot.user) + " has created a new lot " + lot.lot_name)
                 messages.info(request, "Created lot!  Fill out this form again to add another lot.  <a href='/lots/my'>All submitted lots</a>")
-            form = CreateLotForm() # no post data here to reset the form
+            form = CreateLotForm(user=request.user) # no post data here to reset the form
     else:
-        form = CreateLotForm()
+        form = CreateLotForm(user=request.user)
     return render(request,'lot_form.html', {'form':form})
 
 class LotUpdate(UpdateView):
