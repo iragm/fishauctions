@@ -52,6 +52,7 @@ User: {{ user }}
         {% if view == "user" %}
         <br><a href='/users/{{user.pk}}'>View user info for {{ user }} </a><br>
         {% endif %}
+        <span class="text-muted">{{lotsAreHidden}} categories are <a href='/ignore/'>ignored</a></span>
         <table class="table">
           <thead>
             <tr>

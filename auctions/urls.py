@@ -13,6 +13,9 @@ urlpatterns = [
     path('api/users/unban/<int:pk>/', views.userUnban),
     path('api/chart/lots/<int:pk>/', views.LotChartView.as_view()),
     path('api/chart/users/<int:pk>/', views.UserChartView.as_view()),
+    path('api/userignorecategory/create/<int:pk>/', views.CreateUserIgnoreCategory.as_view()),
+    path('api/userignorecategory/delete/<int:pk>/', views.DeleteUserIgnoreCategory.as_view()),
+    path('api/userignorecategory/', views.GetUserIgnoreCategory.as_view()),
     path('leaderboard/', views.Leaderboard.as_view()),
     path('lots/', views.AllLots.as_view(), name='allLots'),
     path('lots/<int:pk>/', views.viewAndBidOnLot.as_view()),
@@ -36,4 +39,5 @@ urlpatterns = [
     path('auctions/<slug:slug>/', views.auction.as_view()),
     path('users/<int:pk>/', login_required(views.UserView.as_view())),
     path('users/edit/<int:pk>/', login_required(views.UserUpdate.as_view())),
+    path('ignore/', login_required(views.IgnoreCategoriesView.as_view())),
 ]

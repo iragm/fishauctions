@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %} Ignore categories {% endblock %}
+{% load static %}
+{% block extra_js %}
+<link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.0/css/select2.css">
+<link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/select2-bootstrap-theme/0.1.0-beta.10/select2-bootstrap.min.css">
+<script src="//cdnjs.cloudflare.com/ajax/libs/select2/4.0.0/js/select2.js"></script>
+<script>
+$(document).ready(function() {
+    $("#category-selection").select2({
+        theme:"bootstrap",
+        width: '100%',
+        placeholder: "Select categories to hide when viewing lots",
+    });
+    $('#category-selection').on('select2:unselect', function (e) {
+        // delete
+        var data = e.params.data;
+        $.ajax({url: "/api/userignorecategory/delete/" + data.id, success: function(result){}});
+    });
+    // Fetch the preselected item, and add to the control
+    var categorySelection = $('#category-selection');
+    $.ajax({
+        type: 'GET',
+        url: '/api/userignorecategory/'
+    }).then(function (data) {
+        data = data.results;
+        for (var i in data) {
+            var option = new Option(data[i].text, data[i].id, data[i].selected, data[i].selected);
+            categorySelection.append(option).trigger('change');
+            categorySelection.trigger({
+                type: 'select2:select',
+                params: {
+                    data: data[i]
+                }
+            });
+        }
+        $('#category-selection').on('select2:select', function (e) {
+            // create
+            var data = e.params.data;
+            $.ajax({url: "/api/userignorecategory/create/" + data.id, success: function(result){ }});
+        });
+    });
+});
+
+</script>
+{% endblock %}
+{% block content %}
+<div class="container mt-5 mb-5">
+    <div class="row">
+        <div class="col-md-10 offset-md1">
+            <h1>Ignore categories</h1>
+            <br>You can hide categories that you're not interested in out of most views.<br><br>
+            For example, if you don't have a saltwater tank, you might want to hide corals.  Or, if you can't read, you might hide books/magazines.
+            <br><br><br>
+            Everything listed here is hidden from most views:
+            <select id='category-selection' class="category-selection" name="categories" multiple="multiple"></select>
+            <br><br><a href="/account/" class="btn btn-primary active">Account</a>
+        </div>
+    </div>
+</div>  
+
+{% endblock %}
+
+

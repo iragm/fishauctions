@@ -5,6 +5,13 @@ from django.forms.widgets import TextInput, Select
 from django.forms import ModelChoiceField
 
 class LotFilter(django_filters.FilterSet):
+    def __init__(self, *args, **kwargs):
+        try:
+            self.ignore = kwargs.pop('ignore')
+        except:
+            self.ignore = False
+        super(LotFilter, self).__init__(*args, **kwargs)
+
     STATUS = (
         ('open', 'Open'),
         ('closed', 'Ended'),
@@ -40,11 +47,23 @@ class LotFilter(django_filters.FilterSet):
             return queryset.filter(Q(lot_number=int(value))|Q(lot_name__icontains=value))
         else:
             return queryset.filter(Q(description__icontains=value)|Q(lot_name__icontains=value))
+    
     @property
     def qs(self):
         primary_queryset=super(LotFilter, self).qs
-        return primary_queryset.filter(banned=False).order_by("-lot_number")
-
+        #result = primary_queryset.filter(banned=False).order_by("-lot_number")
+        #result.filter=Q(species_category=userignorecategory__user=self.request.user)
+        if self.ignore:
+            allowedCategories = Category.objects.exclude(userignorecategory__user=self.request.user)
+            result = primary_queryset.filter(banned=False).filter(species_category__in=allowedCategories).order_by("-lot_number").select_related('species_category')
+        else:
+            result = primary_queryset.filter(banned=False).order_by("-lot_number").select_related('species_category')
+        
+        # SELECT * FROM auctions_lot
+        # WHERE
+        # NOT EXISTS (SELECT category_id FROM auctions_userignorecategory where 
+        # auctions_lot.species_category_id = auctions_userignorecategory.category_id and auctions_userignorecategory.user_id = 2)
+        return result
 
 class UserWatchLotFilter(LotFilter):
     """A version of the lot filter that only shows lots watched by the current user"""

@@ -426,7 +426,7 @@ class Watch(models.Model):
 	user = models.ForeignKey(User, on_delete=models.CASCADE)
 	lot_number = models.ForeignKey(Lot, on_delete=models.CASCADE)
 	def __str__(self):
-		return "User" + str(self.user) + " watching " + str(self.lot_number)
+		return str(self.user) + " watching " + str(self.lot_number)
 
 class UserBan(models.Model):
 	"""
@@ -436,7 +436,16 @@ class UserBan(models.Model):
 	user = models.ForeignKey(User, on_delete=models.CASCADE)
 	banned_user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='banned_user')
 	def __str__(self):
-		return "User" + str(self.user) + " has banned " + str(self.banned_user)
+		return str(self.user) + " has banned " + str(self.banned_user)
+
+class UserIgnoreCategory(models.Model):
+	"""
+	Users can choose to hide all lots from all views
+	"""
+	user = models.ForeignKey(User, on_delete=models.CASCADE)
+	category = models.ForeignKey(Category, on_delete=models.CASCADE)
+	def __str__(self):
+		return str(self.user) + " hates " + str(self.category)
 
 
 class PageView(models.Model):

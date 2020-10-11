@@ -7,8 +7,6 @@
 <div class="container mt-5 mb-5">
     <div class="row">
         <div class="col-md-10 offset-md1">
-            
-            
             {% if auction %}
             <h1>{%if invoice.user.first_name and invoice.user.last_name %}{{ invoice.user.first_name }} {{ invoice.user.last_name }}{% else %}{{ invoice.user }}{%endif%}'s invoice for {{ invoice.auction }}</h1><br>
             <b>Username:</b> {{invoice.user }}<br>

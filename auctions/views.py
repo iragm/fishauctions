@@ -7,7 +7,7 @@ from django.http import JsonResponse
 from django.utils import timezone
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.views.generic import ListView, DetailView, View
+from django.views.generic import ListView, DetailView, View, TemplateView
 from django.views.generic.edit import FormMixin
 from django.urls import reverse
 from django.views.generic.edit import UpdateView
@@ -24,7 +24,8 @@ def index(request):
     return HttpResponse("this page is intentionally left blank")
 
 class LotListView(ListView):
-    """This is a base class that shows lots, with a filter.  The context is overridden for several other classes"""
+    """This is a base class that shows lots, with a filter.  This class is never used directly, but it's a parent for several other classes.
+    The context is overridden to set the view type"""
     model = Lot
     template_name = 'all_lots.html'
 
@@ -34,8 +35,8 @@ class LotListView(ListView):
         if len(data) == 0:
             data['status'] = "open"
         context = super().get_context_data(**kwargs)
-        context['filter'] = LotFilter(data, queryset=self.get_queryset())
-        #context['view'] = 'all'
+        context['filter'] = LotFilter(data, queryset=self.get_queryset(), request=self.request, ignore=True)
+        context['lotsAreHidden'] = len(UserIgnoreCategory.objects.filter(user=self.request.user))
         return context
 
 class MyWonLots(LotListView):
@@ -45,7 +46,9 @@ class MyWonLots(LotListView):
         if len(data) == 0:
             data['status'] = "closed"
         context = super().get_context_data(**kwargs)
+        context['filter'] = LotFilter(data, queryset=self.get_queryset(), request=self.request, ignore=False)
         context['view'] = 'mywonlots'
+        context['lotsAreHidden'] = 0
         return context
 
 class MyBids(LotListView):
@@ -55,24 +58,27 @@ class MyBids(LotListView):
         if len(data) == 0:
             data['status'] = "open"
         context = super().get_context_data(**kwargs)
-        context['filter'] = UserBidLotFilter(data, queryset=self.get_queryset(), request=self.request)
+        context['filter'] = LotFilter(data, queryset=self.get_queryset(), request=self.request, ignore=False)
         context['view'] = 'mybids'
+        context['lotsAreHidden'] = 0
         return context
 
 class MyLots(LotListView):
     """Show all lots submitted by the current user"""
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context['filter'] = UserOwnedLotFilter(self.request.GET, queryset=self.get_queryset(), request=self.request)
+        context['filter'] = UserOwnedLotFilter(self.request.GET, queryset=self.get_queryset(), request=self.request, ignore=False)
         context['view'] = 'mylots'
+        context['lotsAreHidden'] = 0
         return context
         
 class MyWatched(LotListView):
     """Show all lots watched by the current user"""
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context['filter'] = UserWatchLotFilter(self.request.GET, queryset=self.get_queryset(), request=self.request)
+        context['filter'] = UserWatchLotFilter(self.request.GET, queryset=self.get_queryset(), request=self.request, ignore=False)
         context['view'] = 'watch'
+        context['lotsAreHidden'] = 0
         return context
 
 class LotsByUser(LotListView):
@@ -80,6 +86,7 @@ class LotsByUser(LotListView):
     def get_context_data(self, **kwargs):
         data = self.request.GET.copy()
         context = super().get_context_data(**kwargs)
+        context['filter'] = LotFilter(data, queryset=self.get_queryset(), request=self.request, ignore=True)
         try:
             context['user'] = User.objects.get(pk=data['user'])
             context['view'] = 'user'
@@ -692,3 +699,84 @@ class LotChartView(View):
                 'data': data,
             })
         raise PermissionDenied()
+
+class IgnoreCategoriesView(TemplateView):
+    template_name = 'ignore_categories.html'
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        return context
+
+class CreateUserIgnoreCategory(View):
+    """Add category with given pk to ignore list"""
+    def get(self, request, *args, **kwargs):
+        if not self.request.user.is_authenticated:
+            raise PermissionDenied()
+        pk = self.kwargs.get('pk', None)
+        category = Category.objects.get(pk=pk)
+        result, created = UserIgnoreCategory.objects.update_or_create(category=category, user=self.request.user)
+        return JsonResponse(data={'pk': result.pk})
+
+class DeleteUserIgnoreCategory(View):
+    """Allow users to see lots in a given category again."""
+    def get(self, request, *args, **kwargs):
+        if not self.request.user.is_authenticated:
+            raise PermissionDenied()
+        pk = self.kwargs.get('pk', None)
+        category = Category.objects.get(pk=pk)
+        try:
+            exists = UserIgnoreCategory.objects.get(category=category, user=self.request.user)
+            exists.delete()
+            return JsonResponse(data={'result': "deleted"})
+        except Exception as e:
+            return JsonResponse(data={'error': str(e)})    
+        
+
+class GetUserIgnoreCategory(View):
+    """Get a list of all user ignore categories for the request user"""
+    def get(self, request, *args, **kwargs):
+        if not self.request.user.is_authenticated:
+            raise PermissionDenied()
+        categories = Category.objects.all().order_by('name')
+        results = []
+        for category in categories:
+            item = {
+                "id": category.pk,
+                "text": category.name,
+            }
+            try:
+                UserIgnoreCategory.objects.get(user=self.request.user, category=category.pk)
+                item['selected'] = True
+            except:
+                pass
+            results.append(item)
+        #print(results)
+            
+        return JsonResponse({'results':results},safe=False)
+	# lv0=levels0()
+	# lv0_list=[]
+	# for lv_0 in lv0:
+	# 	lv0_list.append({'id':lv_0,'name':lv_0})
+	# if request.GET.get('q'):
+	# 	q=request.GET['q']
+	# 	lv0_list=list(filter(lambda d: d['name'] in q, lv0_list))
+	#return JsonResponse({'results':lv0_list},safe=False)
+
+#     {
+#             "results": [
+#                 {
+#                 "id": 1,
+#                 "text": "Option 1"
+#                 },
+#                 {
+#                 "id": 2,
+#                 "text": "Option 2",
+#                 "selected": true
+#                 },
+#                 {
+#                 "id": 3,
+#                 "text": "Option 3",
+#                 "disabled": true
+#                 }
+#             ]
+# }
