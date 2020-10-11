@@ -475,7 +475,9 @@ class UserData(models.Model):
 	rank_total_spent = models.PositiveIntegerField(null=True, blank=True)
 	number_total_spent = models.PositiveIntegerField(null=True, blank=True)
 	email_visible = models.BooleanField(default=True)
-	
+	rank_total_bids = models.PositiveIntegerField(null=True, blank=True)
+	number_total_bids = models.PositiveIntegerField(null=True, blank=True)
+
 	@property
 	def lots_sold(self):
 		"""All lots this user has sold"""
@@ -502,3 +504,8 @@ class UserData(models.Model):
 		for lot in allLots:
 			total += lot.winning_price
 		return total
+
+	@property
+	def total_bids(self):
+		"""Total number of successful bids this user has placed (max one per lot)"""
+		return len(Bid.objects.filter(user=self.user, was_high_bid=True))

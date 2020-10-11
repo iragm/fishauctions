@@ -56,3 +56,17 @@ class Command(BaseCommand):
             data.save()
             #self.stdout.write(f"Rank {rank}: {newData.user} with ${newData.total_spent} spent")
             rank = rank + 1
+        self.stdout.write("Updating bids placed")
+        sortedList = sorted(userData, key=lambda t: -t.total_bids)
+        rank = 1
+        for newData in sortedList:
+            data = UserData.objects.get(user_id=newData.user.pk)
+            if newData.total_bids:
+                data.rank_total_bids = rank
+                data.number_total_bids = newData.total_bids
+            else:
+                data.rank_total_bids = None
+                data.number_total_bids = None
+            data.save()
+            #self.stdout.write(f"Rank {rank}: {newData.user} with ${newData.total_bids} bids")
+            rank = rank + 1
