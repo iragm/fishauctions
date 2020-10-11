@@ -36,7 +36,11 @@ class LotListView(ListView):
             data['status'] = "open"
         context = super().get_context_data(**kwargs)
         context['filter'] = LotFilter(data, queryset=self.get_queryset(), request=self.request, ignore=True)
-        context['lotsAreHidden'] = len(UserIgnoreCategory.objects.filter(user=self.request.user))
+        try:
+            context['lotsAreHidden'] = len(UserIgnoreCategory.objects.filter(user=self.request.user))
+        except:
+            # probably not signed in
+            context['lotsAreHidden'] = -1
         return context
 
 class MyWonLots(LotListView):

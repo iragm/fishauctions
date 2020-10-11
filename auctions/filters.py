@@ -53,10 +53,16 @@ class LotFilter(django_filters.FilterSet):
         primary_queryset=super(LotFilter, self).qs
         #result = primary_queryset.filter(banned=False).order_by("-lot_number")
         #result.filter=Q(species_category=userignorecategory__user=self.request.user)
-        if self.ignore:
-            allowedCategories = Category.objects.exclude(userignorecategory__user=self.request.user)
-            result = primary_queryset.filter(banned=False).filter(species_category__in=allowedCategories).order_by("-lot_number").select_related('species_category')
-        else:
+        applyIgnoreFilter = True
+        try:
+            if self.ignore:
+                allowedCategories = Category.objects.exclude(userignorecategory__user=self.request.user)
+                result = primary_queryset.filter(banned=False).filter(species_category__in=allowedCategories).order_by("-lot_number").select_related('species_category')
+            else:
+                applyIgnoreFilter = False
+        except:
+            applyIgnoreFilter = False
+        if not applyIgnoreFilter:
             result = primary_queryset.filter(banned=False).order_by("-lot_number").select_related('species_category')
         
         # SELECT * FROM auctions_lot
