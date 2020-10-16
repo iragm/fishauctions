@@ -100,6 +100,7 @@ class Auction(models.Model):
 			return True
 		else:
 			return False
+
 	@property
 	def started(self):
 		"""For display on the main auctions list"""
@@ -111,6 +112,7 @@ class Auction(models.Model):
 	@property
 	def club_profit(self):
 		"""Total amount made by the club in this auction"""
+		"""This should be changed to use the invoice model instead of the lot model"""
 		allLots = Lot.objects.filter(auction=self.pk)
 		total = 0
 		for lot in allLots:

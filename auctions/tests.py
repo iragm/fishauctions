@@ -1,3 +1,4 @@
+import time
 from django.test import TestCase
 import datetime
 from django.test import TestCase
@@ -5,7 +6,28 @@ from django.utils import timezone
 from django.db import IntegrityError
 from django.contrib.auth.models import User
 from django.test.client import Client
-from .models import Lot, Bid
+from io import StringIO
+from django.core.management import call_command
+from .models import Lot, Bid, Auction, Invoice
+
+class AuctionModelTests(TestCase):
+    """Test for the auction model, duh"""
+    def test_lots_in_auction_end_with_auction(self):
+        time = timezone.now() - datetime.timedelta(days=2)
+        timeStart = timezone.now() - datetime.timedelta(days=3)
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        auction = Auction.objects.create(title="A test auction", date_end=time, date_start=timeStart, pickup_location="None", pickup_location_map="None", pickup_time=theFuture)
+        lot = Lot.objects.create(lot_name="A test lot", date_end=theFuture, reserve_price=5, auction=auction)
+        self.assertIs(lot.ended, True)
+    
+    def test_auction_start_and_end(self):
+        timeStart = timezone.now() - datetime.timedelta(days=2)
+        timeEnd = timezone.now() + datetime.timedelta(minutes=60)
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        auction = Auction.objects.create(title="A test auction", date_end=timeEnd, date_start=timeStart, pickup_location="None", pickup_location_map="None", pickup_time=theFuture)
+        self.assertIs(auction.closed, False)
+        self.assertIs(auction.ending_soon, True)
+        self.assertIs(auction.started, True)
 
 class LotModelTests(TestCase):
     def test_calculated_end_bidding_closed(self):
@@ -83,3 +105,61 @@ class LotModelTests(TestCase):
         bidA = Bid.objects.create(user=user, lot_number=lot, amount=2)
         self.assertIs(lot.high_bidder, False)
         self.assertIs(lot.high_bid, 5)
+
+class InvoiceModelTests(TestCase):
+    """Make sure auctions/lots end and invoices get created correctly"""
+    def test_invoices(self):
+        # setting up
+        timeStart = timezone.now() - datetime.timedelta(days=2)
+        bidTime = timezone.now() - datetime.timedelta(days=1)
+        timeEnd = timezone.now() + datetime.timedelta(minutes=60)
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        auction = Auction.objects.create(title="A test auction", date_end=timeEnd, date_start=timeStart, pickup_location="None", pickup_location_map="None", pickup_time=theFuture, winning_bid_percent_to_club=25, lot_entry_fee=2, unsold_lot_fee=1)
+        seller = User.objects.create(username="Seller")
+        lot = Lot.objects.create(lot_name="A test lot", date_end=timeStart, reserve_price=5, auction=auction, user=seller)
+        unsoldLot = Lot.objects.create(lot_name="Unsold lot", date_end=timeStart, reserve_price=10, auction=auction, user=seller)
+        userA = User.objects.create(username="Winner of the lot")
+        bid = Bid.objects.create(user=userA, lot_number=lot, amount=10)
+        bid.bid_time = bidTime
+        bid.save()
+        # other tests check all these as well
+        self.assertIs(auction.ending_soon, True)
+        self.assertIs(auction.closed, False)
+        self.assertIs(lot.winner, None)
+        self.assertIs(lot.ended, False)
+        self.assertIs(lot.high_bidder.pk, userA.pk)
+        # change the time
+        timeEnd = timezone.now() - datetime.timedelta(minutes=60)
+        auction.date_end = timeEnd
+        auction.save()
+        self.assertIs(auction.closed, True)
+        self.assertIs(lot.ended, True)
+        self.assertIs(lot.high_bidder.pk, userA.pk)
+        out = StringIO()
+        call_command('endauctions', stdout=out)
+        self.assertIn(f'has been won by {userA}', out.getvalue())
+        lot.refresh_from_db()
+        self.assertIs(lot.winner.pk, userA.pk)
+        self.assertIs(lot.active, False)
+        self.assertIs(lot.winning_price, 5)
+        call_command('invoice', stdout=out)
+        auction.refresh_from_db()
+        self.assertIs(auction.invoiced, True)
+        
+        # check seller invoice
+        invoice = Invoice.objects.get(user=seller)
+        self.assertIs(invoice.user_should_be_paid, True)
+        self.assertIs(invoice.total_bought, 0)
+        self.assertAlmostEqual(lot.club_cut, 3.25)
+        self.assertAlmostEqual(lot.your_cut, 1.75)
+        self.assertAlmostEqual(invoice.total_sold, 0.75)
+        self.assertAlmostEqual(invoice.absolute_amount, 1)
+        self.assertAlmostEqual(invoice.net, 0.75)
+       
+        # check buyer invoice
+        invoice = Invoice.objects.get(user=userA)
+        self.assertIs(invoice.user_should_be_paid, False)
+        self.assertIs(invoice.total_bought, 5)
+        self.assertAlmostEqual(invoice.total_sold, 0)
+        self.assertAlmostEqual(invoice.absolute_amount, 5)
+        self.assertAlmostEqual(invoice.net, -5)

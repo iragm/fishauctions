@@ -62,6 +62,7 @@ User: {{ user }}
               <th scope="col">Lot name</th>
               {% if request.user.is_superuser %}
               <th scope="col">View/bid ratio</th>
+              <th scope="col">Views</th>
               {% endif %}
               <th scope="col">Price</th>
               <th scope="col">High bidder</th>
@@ -77,6 +78,7 @@ User: {{ user }}
               <td><a href="/lots/{{lot.lot_number}}">{{ lot.lot_name }}</a></td>
               {% if request.user.is_superuser %}
               <td>{{ lot.view_to_bid_ratio|floatformat:2 }}</td>
+              <td>{{ lot.page_views }}</td>
               {% endif %}
               <td>${{ lot.high_bid }} </td>
               <td>{% if lot.high_bidder %}{{ lot.high_bidder }}{% else %}No bids{% endif %}</td>
