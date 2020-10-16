@@ -13,7 +13,8 @@
             <b>Auction:</b> {{ auction }}<br>
             {% endif %}
             <b>Date:</b> {{ invoice.date }}<br>
-            <b>Total:</b> {{ invoice }}<br>
+            <b>Total (sold-bought):</b> ${{ invoice.rounded_net|floatformat:2 }} <br>
+            <b>Final total (rounded):</b> {{ invoice }}<br>
             <b>Status:</b> {% if not invoice.paid %}<span style="color:red">Unpaid</span>{% else %}<span>Paid</span>{% endif %}<br><br>
             {% if auction %}
             You must meet at {{ auction.pickup_location }} on {{ auction.pickup_time }} 

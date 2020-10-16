@@ -192,7 +192,7 @@ def pageview(request, pk):
                 defaults={},
             )
             obj.date_end = timezone.now()
-            obj.total_time += 30
+            obj.total_time += 10
             obj.save()
         return HttpResponse("Success")
 
@@ -701,7 +701,7 @@ class LotChartView(View):
             data = []    
             for entry in queryset:
                 labels.append(str(User.objects.get(pk=entry['user_id'])))
-                data.append(int(entry['total_time']/60))
+                data.append(int(entry['total_time']))
             
             return JsonResponse(data={
                 'labels': labels,

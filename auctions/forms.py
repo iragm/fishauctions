@@ -132,7 +132,10 @@ class CreateLotForm(forms.ModelForm):
             'species': forms.HiddenInput,
         }
     def __init__(self, *args, **kwargs):
-        self.user = kwargs.pop('user')
+        try:
+            self.user = kwargs.pop('user')
+        except:
+            pass
         super().__init__(*args, **kwargs)
         self.fields['description'].widget.attrs = {'rows': 3}
         self.fields['species_category'].required = True

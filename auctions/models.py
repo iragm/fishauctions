@@ -139,9 +139,25 @@ class Invoice(models.Model):
 			return False
 
 	@property
+	def rounded_net(self):
+		"""Always round in the customer's favor (against the club) to make sure that the club doens't need to deal with change, only whole dollar amounts"""
+		rounded = round(self.net)
+		if self.user_should_be_paid:
+			if self.net > rounded:
+				# we rounded down against the customer
+				return rounded + 1
+			else:
+				return rounded
+		else:
+			if self.net < rounded:
+				return rounded - 1
+			else:
+				return rounded
+
+	@property
 	def absolute_amount(self):
 		"""Give the absolute value of the invoice's net amount"""
-		return abs(self.net)
+		return abs(self.rounded_net)
 
 	@property
 	def lots_sold(self):

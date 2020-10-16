@@ -17,7 +17,7 @@
     window.onload = function() {
     var $ = window.jQuery;
     pageView();
-    setInterval(function(){ pageViewUpdate(); }, 30000);
+    setInterval(function(){ pageViewUpdate(); }, 10000);
     function pageView() {
         $.ajax({
             type: "POST",
@@ -169,7 +169,7 @@
                             },
                             title: {
                                 display: true,
-                                text: 'User view durations (minutes) of this lot'
+                                text: 'User view durations (seconds) of this lot'
                             }
                         }    
                     });
