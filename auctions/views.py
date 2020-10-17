@@ -214,6 +214,51 @@ class AuctionUpdate(UpdateView):
     template_name = 'auction_form.html'
     form_class = CreateAuctionForm
 
+class AuctionInvoices(DetailView):
+    """List of invoices associated with an auction"""
+    model = Auction
+    template_name = 'auction_invoices.html'
+    def dispatch(self, request, *args, **kwargs):
+        if not (request.user.is_superuser or self.get_object().created_by == self.request.user):
+            raise PermissionDenied()
+        if not self.get_object().invoiced:
+            messages.error(request, "This auction hasn't been invoiced yet.  Invoices will be created after the auction closes")
+        self.auction = self.get_object()
+        return super().dispatch(request, *args, **kwargs)
+        
+    def get_context_data(self, **kwargs):
+        #user = User.objects.get(pk=self.request.user.pk)
+        context = super().get_context_data(**kwargs)
+        invoices = Invoice.objects.filter(auction=self.auction).order_by('paid','-user__last_name')
+        invoices = sorted(invoices, key=lambda t: str(t.user.userdata.location) ) 
+        context['invoices'] = invoices
+        # also need to create email lists on a per-location basis
+        locations = {}
+        for invoice in invoices:
+            location = str(invoice.user.userdata.location)
+            try:
+                locations[location]['emails'] += f";{invoice.user.email}"
+            except:
+                locations[location] = {'emails':invoice.user.email}
+        context['locations'] = locations
+        return context
+
+class AuctionStats(DetailView):
+    """Fun facts about an auction"""
+    model = Auction
+    template_name = 'auction_stats.html'
+    
+    def dispatch(self, request, *args, **kwargs):
+        if not (request.user.is_superuser or self.get_object().created_by == self.request.user):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        #owner = self.get_object().created_by
+        #context['contact_email'] = User.objects.get(pk=owner.pk).email
+        return context
+
 # password protected in urls.py
 class viewAndBidOnLot(FormMixin, DetailView):
     """Show the picture and detailed information about a lot, and allow users to place bids"""
@@ -432,7 +477,7 @@ def createAuction(request):
         form = CreateAuctionForm()
     return render(request,'auction_form.html', {'form':form})
 
-class auction(DetailView):
+class AuctionInfo(DetailView):
     """Main view of a single auction"""
     template_name = 'auction.html'
     model = Auction

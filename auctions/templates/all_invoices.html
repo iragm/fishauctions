@@ -23,7 +23,7 @@
               <td><a href="/invoices/{{invoice.pk}}/">{{ invoice.auction }}</a></td>
               <td><span {% if not invoice.user_should_be_paid %} style="color:red"{% endif %}>${{ invoice.absolute_amount|floatformat:2 }}</span></td>
               <td> {% if not invoice.paid %}<span style="color:red">Unpaid</span>{% else %}<span>Paid</span>{% endif %}</td>
-              <td>{{ invoice.date }}</td>
+              <td>{{ invoice.location }}</td>
             </tr>
             {% endfor %}
         </tbody>

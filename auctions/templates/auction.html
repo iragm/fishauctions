@@ -33,8 +33,10 @@
             <br>
             <a href='/lots/?auction={{auction.slug}}' class="btn btn-primary active">View all lots for this auction</a>
             {% if auction.created_by.pk == request.user.id or request.user.is_superuser %}
-             <a href="/auctions/edit/{{auction.slug}}" class="btn btn-warning active">Edit this auction</a>
-            {% endif %}
+             <a href="/auctions/{{auction.slug}}/edit/" class="btn btn-warning active">Edit this auction</a>
+             <a href="/auctions/{{auction.slug}}/stats/" class="btn btn-primary active">Stats</a>
+             <a href="/auctions/{{auction.slug}}/invoices/" class="btn btn-primary active">Invoices</a>
+             {% endif %}
             {% if request.user.is_superuser %}
             <a href="/admin/auctions/auction/{{auction.pk}}/change/" class="btn btn-danger active">Admin</a>
             {% endif %}

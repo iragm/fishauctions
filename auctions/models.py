@@ -4,9 +4,14 @@ import datetime
 from django.contrib.auth.models import *
 from django.db import models
 from django.core.validators import *
-from django.db.models import Count
+from django.db.models import Count, Sum
 from autoslug import AutoSlugField
 from django.urls import reverse
+from django.db.models import Q
+
+def median_value(queryset, term):
+    count = queryset.count()
+    return queryset.values_list(term, flat=True).order_by(term)[int(round(count/2))]
 
 class Location(models.Model):
 	"""
@@ -110,15 +115,70 @@ class Auction(models.Model):
 			return False
 
 	@property
-	def club_profit(self):
-		"""Total amount made by the club in this auction"""
-		"""This should be changed to use the invoice model instead of the lot model"""
+	def club_profit_raw(self):
+		"""Total amount made by the club in this auction.  This number does not take into account rounding in the invoices"""
 		allLots = Lot.objects.filter(auction=self.pk)
 		total = 0
 		for lot in allLots:
 			total += lot.club_cut
 		return total
 
+	@property
+	def club_profit(self):
+		"""Total amount made by the club in this auction, including rounding in the customer's favor in invoices"""
+		invoices = Invoice.objects.filter(auction=self.pk)
+		total = 0
+		for invoice in invoices:
+			total -= invoice.rounded_net
+		return total
+
+	@property
+	def number_of_sellers(self):
+		users = User.objects.values('lot__user').annotate(Sum('lot')).filter(lot__auction=self.pk, lot__winner__isnull=False)
+		return len(users)
+
+	# @property
+	# def number_of_unsuccessful_sellers(self):
+	#	"""This is the number of sellers who didn't sell ALL their lots"""
+	# 	users = User.objects.values('lot__user').annotate(Sum('lot')).filter(lot__auction=self.pk, lot__winner__isnull=True)
+	# 	return len(users)
+
+	@property
+	def number_of_buyers(self):
+		users = User.objects.values('lot__winner').annotate(Sum('lot')).filter(lot__auction=self.pk)
+		return len(users)
+
+	@property
+	def users_signed_up(self):
+		"""numbers users signed up druing this auction's open period"""
+		#users = User.objects.values('').annotate(Sum('lot')).filter(lot__auction=self.pk)
+		return False #len(users)
+	# users who bought a single lot
+	# users who viewed but didn't bid
+	#% lots with a single bidder
+	#% lots with 3+ bidders
+	
+	@property
+	def median_lot_price(self):
+		lots = Lot.objects.filter(auction=self.pk, winning_price__isnull=False)
+		return median_value(lots,'winning_price')
+	
+	@property
+	def total_sold_lots(self):
+		return len(Lot.objects.filter(auction=self.pk, winning_price__isnull=False))
+
+	@property
+	def total_unsold_lots(self):
+		return len(Lot.objects.filter(auction=self.pk, winning_price__isnull=True))
+
+	@property
+	def total_lots(self):
+		return len(Lot.objects.filter(auction=self.pk))
+
+	@property
+	def percent_unsold_lots(self):
+		return self.total_unsold_lots / self.total_lots * 100
+	
 class Invoice(models.Model):
 	"""An invoice is applied to an auction.  It's the total amount you owe"""
 	auction = models.ForeignKey(Auction, blank=True, null=True, on_delete=models.SET_NULL)
@@ -163,15 +223,18 @@ class Invoice(models.Model):
 
 	@property
 	def lots_sold(self):
-		"""Return true if the user sold lots"""
-		#context['bought'] Lot.objects.filter(buyer_invoice=self.get_object())
-		if len(Lot.objects.filter(seller_invoice=self.pk)):
-			return True
-		else:
-			return False
-	
+		"""Return number of lots the user attempted to sell in this invoice (unsold lots included)"""
+		return len(Lot.objects.filter(seller_invoice=self.pk))#:
+
+	@property
+	def lots_sold_successfully(self):
+		"""Return number of lots the user sold in this invoice (unsold lots not included)"""
+		return len(Lot.objects.filter(seller_invoice=self.pk, winner__isnull=False))
+
+
 	@property
 	def total_sold(self):
+		"""Seller's cut of all lots sold"""
 		allSold = Lot.objects.filter(seller_invoice=self.pk)
 		total_sold = 0
 		for lot in allSold:
@@ -180,11 +243,8 @@ class Invoice(models.Model):
 
 	@property
 	def lots_bought(self):
-		"""Return true if the user bought lots"""
-		if len(Lot.objects.filter(buyer_invoice=self.pk)):
-			return True
-		else:
-			return False
+		"""Return number of lots the user bought in this invoice"""
+		return len(Lot.objects.filter(buyer_invoice=self.pk))
 
 	@property
 	def total_bought(self):
