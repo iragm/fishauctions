@@ -41,11 +41,17 @@
                     <td>Median lot price</td><td>${{auction.median_lot_price|floatformat:2}}</td>
                   </tr>
                   <tr>
+                    <td>Gross (value of all lots sold)</td><td>${{auction.gross|floatformat:2}}</td>
+                  </tr>
+                  <tr>
                     <td>Club profit (unrounded)</td><td>${{auction.club_profit_raw|floatformat:2}}</td>
                   </tr>
                   <tr>
-                    <td>Club profit (final)</td><td>${{auction.club_profit|floatformat:2}}</td>
+                    <td>Club profit (final)</td><td>${{auction.club_profit|floatformat:2}} ({{auction.percent_to_club|floatformat:0}}% of gross)</td>
                   </tr>
+                  <tr>
+                    <td>Seller payout</td><td>${{auction.total_to_sellers|floatformat:2}}</td>
+                  </tr>                  
               </tbody>
             </table>
             <br>

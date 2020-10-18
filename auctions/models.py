@@ -133,6 +133,25 @@ class Auction(models.Model):
 		return total
 
 	@property
+	def gross(self):
+		"""Total value of all lots sold"""
+		lots = Lot.objects.filter(auction=self.pk, winning_price__isnull=False)
+		total = 0
+		for lot in lots:
+			total += lot.winning_price
+		return total
+
+	@property
+	def total_to_sellers(self):
+		"""Total amount paid out to all sellers"""
+		return self.gross - self.club_profit
+
+	@property
+	def percent_to_club(self):
+		"""Percent of gross that went to the club"""
+		return self.club_profit/self.gross * 100
+
+	@property
 	def number_of_sellers(self):
 		users = User.objects.values('lot__user').annotate(Sum('lot')).filter(lot__auction=self.pk, lot__winner__isnull=False)
 		return len(users)
@@ -204,6 +223,7 @@ class Invoice(models.Model):
 	def rounded_net(self):
 		"""Always round in the customer's favor (against the club) to make sure that the club doens't need to deal with change, only whole dollar amounts"""
 		rounded = round(self.net)
+		#print(f"{self.net} Rounded to {rounded}")
 		if self.user_should_be_paid:
 			if self.net > rounded:
 				# we rounded down against the customer
@@ -211,10 +231,10 @@ class Invoice(models.Model):
 			else:
 				return rounded
 		else:
-			if self.net < rounded:
-				return rounded - 1
-			else:
+			if self.net <= rounded:
 				return rounded
+			else:
+				return rounded + 1
 
 	@property
 	def absolute_amount(self):
@@ -434,10 +454,13 @@ class Lot(models.Model):
 	def high_bid(self):
 		"""returns the high bid amount for this lot"""
 		try:
-			allBids = Bid.objects.filter(lot_number=self.lot_number, bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount')[:2]
+			allBids = Bid.objects.filter(lot_number=self.lot_number, bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount', '-bid_time')[:2]
 			# highest bid is the winner, but the second highest determines the price
 			# $1 more than the second highest bid
-			bidPrice = allBids[1].amount + 1
+			if allBids[0].amount == allBids[1].amount:
+				return allBids[0].amount
+			else:
+				bidPrice = allBids[1].amount + 1
 			return bidPrice
 		except:
 			#print("no bids for this item")
