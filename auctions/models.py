@@ -441,7 +441,7 @@ class Lot(models.Model):
 	@property
 	def max_bid(self):
 		"""returns the highest bid amount for this lot - this number should not be visible to the public"""
-		allBids = Bid.objects.filter(lot_number=self.lot_number, bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount')[:2]
+		allBids = Bid.objects.filter(lot_number=self.lot_number, bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount', 'bid_time')[:2]
 		try:
 			# $1 more than the second highest bid
 			bidPrice = allBids[0].amount
@@ -454,7 +454,7 @@ class Lot(models.Model):
 	def high_bid(self):
 		"""returns the high bid amount for this lot"""
 		try:
-			allBids = Bid.objects.filter(lot_number=self.lot_number, bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount', '-bid_time')[:2]
+			allBids = Bid.objects.filter(lot_number=self.lot_number, bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount', 'bid_time')[:2]
 			# highest bid is the winner, but the second highest determines the price
 			# $1 more than the second highest bid
 			if allBids[0].amount == allBids[1].amount:
@@ -472,7 +472,7 @@ class Lot(models.Model):
 		if self.banned:
 			return False
 		try:
-			allBids = Bid.objects.filter(lot_number=self.lot_number, bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount')[:2]
+			allBids = Bid.objects.filter(lot_number=self.lot_number, bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount', 'bid_time')[:2]
 			return allBids[0].user
 		except:
 			return False

@@ -50,7 +50,7 @@ class MyWonLots(LotListView):
         if len(data) == 0:
             data['status'] = "closed"
         context = super().get_context_data(**kwargs)
-        context['filter'] = LotFilter(data, queryset=self.get_queryset(), request=self.request, ignore=False)
+        context['filter'] = UserWonLotFilter(data, queryset=self.get_queryset(), request=self.request, ignore=False)
         context['view'] = 'mywonlots'
         context['lotsAreHidden'] = -1
         return context
@@ -62,7 +62,7 @@ class MyBids(LotListView):
         if len(data) == 0:
             data['status'] = "open"
         context = super().get_context_data(**kwargs)
-        context['filter'] = LotFilter(data, queryset=self.get_queryset(), request=self.request, ignore=False)
+        context['filter'] = UserBidLotFilter(data, queryset=self.get_queryset(), request=self.request, ignore=False)
         context['view'] = 'mybids'
         context['lotsAreHidden'] = -1
         return context

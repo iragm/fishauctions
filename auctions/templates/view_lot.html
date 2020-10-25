@@ -102,7 +102,7 @@
             </tr>
             {% if lot.location %}
             <tr>
-                <td><b>Location:</b></td><td>{% if user_location != lot.location %} <span style="color:red">{{ lot.location }} </span> {% else %} {{ lot.location }} {% endif %}</td>
+                <td><b>Location:</b></td><td>{% if user_location.pk != lot.location.pk %} <span style="color:red">{{ lot.location }} </span> {% else %} {{ lot.location }} {% endif %}</td>
             </tr>
             {% endif %}
             {% if not lot.transportable %}
