@@ -586,12 +586,31 @@ class UserData(models.Model):
 	rank_total_bids = models.PositiveIntegerField(null=True, blank=True)
 	number_total_bids = models.PositiveIntegerField(null=True, blank=True)
 	last_auction_used = models.ForeignKey(Auction, null=True, on_delete=models.SET_NULL)
+	number_total_sold = models.PositiveIntegerField(null=True, blank=True)
+	rank_total_sold = models.PositiveIntegerField(null=True, blank=True)
+	total_volume = models.PositiveIntegerField(null=True, blank=True)
+	rank_volume = models.PositiveIntegerField(null=True, blank=True)
+	seller_percentile = models.PositiveIntegerField(null=True, blank=True)
+	buyer_percentile = models.PositiveIntegerField(null=True, blank=True)
+	volume_percentile = models.PositiveIntegerField(null=True, blank=True)
 
 	@property
 	def lots_sold(self):
 		"""All lots this user has sold"""
 		allLots = Lot.objects.filter(user=self.user,winner__isnull=False)
 		return len(allLots)
+
+	@property
+	def total_sold(self):
+		"""Total amount this user has spent on this site"""
+		allLots = Lot.objects.filter(user=self.user.pk)
+		total = 0
+		for lot in allLots:
+			try:
+				total += lot.winning_price
+			except:
+				pass
+		return total
 
 	@property
 	def species_sold(self):
@@ -615,6 +634,55 @@ class UserData(models.Model):
 		return total
 
 	@property
+	def calc_total_volume(self):
+		"""Bought + sold"""
+		return self.total_spent + self.total_sold
+
+	@property
 	def total_bids(self):
 		"""Total number of successful bids this user has placed (max one per lot)"""
-		return len(Bid.objects.filter(user=self.user, was_high_bid=True))
+		#return len(Bid.objects.filter(user=self.user, was_high_bid=True))
+		return len(Bid.objects.filter(user=self.user))
+
+	@property
+	def lots_viewed(self):
+		"""Total lots viewed by this user"""
+		return len(PageView.objects.filter(user=self.user.pk))
+	
+	@property
+	def bought_to_sold(self):
+		"""Ratio of lots bought to lots sold"""
+		if self.lots_sold:
+			return self.lots_bought / self.lots_sold
+		else:
+			return 0
+	
+	@property
+	def bid_to_view(self):
+		"""Ratio of lots viewed to lots bought.  Lower number is indicative of tire kicking, higher number means business"""
+		if self.lots_viewed:
+			return self.total_bids / self.lots_viewed 
+		else:
+			return 0
+
+	@property
+	def viewed_to_sold(self):
+		"""Ratio of lots viewed to lots sold"""
+		if self.lots_viewed:
+			return self.lots_sold / self.lots_viewed
+		else:
+			return 0
+
+	@property
+	def dedication(self):
+		"""Ratio of bids to won lots"""
+		if self.lots_bought:
+			return self.lots_bought / self.total_bids
+		else:
+			return 0
+	
+	@property
+	def percent_success(self):
+		"""Ratio of bids to won lots, formatted"""
+		return self.dedication * 100
+	

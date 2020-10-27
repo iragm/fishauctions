@@ -15,6 +15,7 @@ from django.views.generic.edit import DeleteView
 from django.db.models import Q
 from django.contrib.messages.views import SuccessMessageMixin
 from allauth.account.models import EmailAddress
+from el_pagination.views import AjaxListView
 
 from .models import *
 from .filters import *
@@ -23,24 +24,28 @@ from .forms import *
 def index(request):
     return HttpResponse("this page is intentionally left blank")
 
-class LotListView(ListView):
+class LotListView(AjaxListView):
     """This is a base class that shows lots, with a filter.  This class is never used directly, but it's a parent for several other classes.
     The context is overridden to set the view type"""
     model = Lot
     template_name = 'all_lots.html'
-
+    page_template='lot_list_page.html'
+    #paginate_by = 50
     def get_context_data(self, **kwargs):
         # set default values
         data = self.request.GET.copy()
         if len(data) == 0:
             data['status'] = "open"
         context = super().get_context_data(**kwargs)
+        if self.request.GET.get('page'):
+            del data['page'] # required for pagination to work
         context['filter'] = LotFilter(data, queryset=self.get_queryset(), request=self.request, ignore=True)
         try:
             context['lotsAreHidden'] = len(UserIgnoreCategory.objects.filter(user=self.request.user))
         except:
             # probably not signed in
             context['lotsAreHidden'] = -1
+
         return context
 
 class MyWonLots(LotListView):
@@ -325,7 +330,7 @@ class viewAndBidOnLot(FormMixin, DetailView):
                     if request.user.id != highBidder.pk:
                         user = User.objects.get(pk=highBidder.pk)
                         email = user.email
-                        link = f"auctions.toxotes.org/lots/{self.kwargs['pk']}/"
+                        link = f"https://auctions.toxotes.org/lots/{self.kwargs['pk']}/"
                         send_mail(
                         'You\'ve been outbid!',
                         f'You\'ve been outbid on lot {lot}!\nBid more here: {link}\n\nBest, auctions.toxotes.org',

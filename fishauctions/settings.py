@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     'allauth.socialaccount',
     'django_filters',
     'bootstrap_datepicker_plus',
+    'el_pagination',
 ]
 
 MIDDLEWARE = [
@@ -186,3 +187,5 @@ BOOTSTRAP4 = {
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
+EL_PAGINATION_PER_PAGE = 40

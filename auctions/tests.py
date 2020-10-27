@@ -83,6 +83,47 @@ class LotModelTests(TestCase):
         self.assertIs(lot.high_bidder.pk, userA.pk)
         self.assertIs(lot.high_bid, 7)
 
+    def test_lot_with_tie_bids(self):
+        time = timezone.now() + datetime.timedelta(days=30)
+        tenDaysAgo = timezone.now() - datetime.timedelta(days=10)
+        fiveDaysAgo = timezone.now() - datetime.timedelta(days=5)
+        timeNow = timezone.now()
+        lot = Lot.objects.create(lot_name="A test lot", date_end=time, reserve_price=5)
+        userA = User.objects.create(username="Late user")
+        userB = User.objects.create(username="Early bird")
+        bidA = Bid.objects.create(user=userA, lot_number=lot, amount=6)
+        bidB = Bid.objects.create(user=userB, lot_number=lot, amount=6)
+        bidA.bid_time=fiveDaysAgo
+        bidA.save()
+        bidB.bid_time=tenDaysAgo
+        bidB.save()
+        self.assertIs(lot.high_bidder.pk, userB.pk)
+        self.assertIs(lot.high_bid, 6)
+        self.assertIs(lot.max_bid, 6)
+
+    def test_lot_with_three_and_two_tie_bids(self):
+        time = timezone.now() + datetime.timedelta(days=30)
+        tenDaysAgo = timezone.now() - datetime.timedelta(days=10)
+        fiveDaysAgo = timezone.now() - datetime.timedelta(days=5)
+        oneDaysAgo = timezone.now() - datetime.timedelta(days=1)
+        timeNow = timezone.now()
+        lot = Lot.objects.create(lot_name="A test lot", date_end=time, reserve_price=5)
+        userA = User.objects.create(username="Early bidder")
+        userB = User.objects.create(username="First tie")
+        userC = User.objects.create(username="Late tie")
+        bidA = Bid.objects.create(user=userA, lot_number=lot, amount=5)
+        bidB = Bid.objects.create(user=userB, lot_number=lot, amount=7)
+        bidC = Bid.objects.create(user=userC, lot_number=lot, amount=7)
+        bidA.bid_time=tenDaysAgo
+        bidA.save()
+        bidB.bid_time=fiveDaysAgo
+        bidB.save()
+        bidC.bid_time=oneDaysAgo
+        bidC.save()
+        self.assertIs(lot.high_bidder.pk, userB.pk)
+        self.assertIs(lot.high_bid, 7)
+        self.assertIs(lot.max_bid, 7)
+
     def test_lot_with_two_bids_one_after_end(self):
         time = timezone.now() + datetime.timedelta(days=30)
         timeNow = timezone.now()

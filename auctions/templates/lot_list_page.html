@@ -1,0 +1,37 @@
+{% load el_pagination_tags %}
+<table class="table">
+  <thead>
+    <tr>
+      <th scope="col">#</th>
+      <th scope="col">Seller</th>
+      <th scope="col">Category</th>
+      <th scope="col">Lot name</th>
+      {% if request.user.is_superuser %}
+      <th scope="col">View/bid ratio</th>
+      <th scope="col">Views</th>
+      {% endif %}
+      <th scope="col">Price</th>
+      <th scope="col">High bidder</th>
+      <th scope="col">Ends</th>
+    </tr>
+  </thead>
+  <tbody>
+{% paginate filter.qs as objects %}
+    {% for lot in objects %}
+    <tr>
+      <td>Lot {{ lot.lot_number }}</td>
+      <td>{% if lot.donation %}Donation{% else %}{{ lot.user }}{% endif %}</td>
+      <td>{{ lot.species_category }}</td>
+      <td><a href="/lots/{{lot.lot_number}}">{{ lot.lot_name }}</a></td>
+      {% if request.user.is_superuser %}
+      <td>{{ lot.view_to_bid_ratio|floatformat:2 }}</td>
+      <td>{{ lot.page_views }}</td>
+      {% endif %}
+      <td>${{ lot.high_bid }} </td>
+      <td>{% if lot.high_bidder %}{{ lot.high_bidder }}{% else %}No bids{% endif %}</td>
+      <td>{% if lot.ended %}<span style="color:red">{{ lot.calculated_end }}</span>{% else %}{{ lot.calculated_end }}{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% show_more %}

@@ -17,7 +17,15 @@
             <b>Total species sold:</b> {{ data.species_sold}}<br>
             <b>Lots bought:</b> {{ data.lots_bought }}<br>
             {% if user.pk == request.user.id or request.user.is_superuser %}
-            <b>Total spent:</b> ${{ data.total_spent|floatformat:2 }} (only visible to you)<br>
+            <h4>Only visible to you:</h4>
+            <b>Location:</b> {% if data.location %}{{ data.location }}{%else%} <a href='/users/edit/{{user.pk}}'>Not set</a>{% endif %}<br>
+            <b>Total bids:</b> {{ data.total_bids }}<br>
+            <b>Total views:</b> {{ data.lots_viewed }}<br>
+            <b>Total spent:</b> ${{ data.total_spent|floatformat:2 }}<br>
+            {% if data.rank_total_sold %}<b>Seller rank: </b> {{data.rank_total_sold}} (Top {{ data.seller_percentile }}%)<br>{%endif%}
+            {% if data.rank_total_spent %}<b>Buyer rank: </b> {{data.rank_total_spent}} (Top {{ data.buyer_percentile }}%)<br>{%endif%}
+            {% if data.rank_volume %}<b>Volume rank: </b> {{data.rank_volume}} (Top {{ data.volume_percentile }}%)<br>{%endif%}
+            {% if data.percent_success %}<b>How often you win when you bid:</b> {{data.percent_success|floatformat:0}}%<br>{%endif%}
             <br><a href="/users/edit/{{user.pk}}" class="btn btn-warning active">Edit</a><br>
             {% endif %}
             {% if user.pk != request.user.id %}
@@ -35,6 +43,9 @@
             {% endif %}
             <br><a href='/lots/user/?user={{user.pk}}&status=open'>View all lots from this user</a>
             {% if request.user.is_superuser %}
+            <br><b>Bought to sold ratio (higher is a seller):</b> {{ data.bought_to_sold|floatformat:2}}<br>
+            <b>Viewed to bid ratio (lower number is a tire kicker):</b> {{ data.bid_to_view|floatformat:2}}<br>
+            <b>Viewed to sold ratio (higher number indicates more selling):</b> {{ data.viewed_to_sold|floatformat:2}}<br>
             <script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.3/dist/Chart.min.js"></script>
             <canvas id="myChart" ></canvas>
             <script>
