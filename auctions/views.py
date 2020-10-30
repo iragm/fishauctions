@@ -149,6 +149,30 @@ def userBan(request, pk):
                     lot.save()
         return redirect('/users/' + str(pk))
 
+def lotBan(request, pk):
+    if request.method == 'POST':
+        lot = Lot.objects.get(pk=pk)
+        try:
+            ban_reason = request.POST['banned']
+        except:
+            return HttpResponse("specify banned in post data")
+        checksPass = False
+        if request.user.is_superuser:
+            checksPass = True
+        if lot.auction.created_by == request.user.pk:
+            checksPass = True
+        if checksPass:
+            if not ban_reason:
+                lot.banned = False
+            else:
+                lot.banned = True
+            #lot.ban_reason = ban_reason #fixme
+            lot.save()
+            #return redirect('/lots/' + str(pk))
+            return HttpResponse("success")
+        else:
+            raise PermissionDenied()
+
 def userUnban(request, pk):
     """Delete the UserBan"""
     if request.method == 'POST':

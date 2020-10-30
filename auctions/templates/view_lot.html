@@ -4,6 +4,28 @@
 {% load static %}
 {% block content %}
 {% block extra_js %}
+<script type="text/javascript">
+function ban_lot(ban) {
+  var $ = window.jQuery;
+  var data = {};
+  if (ban == 'unban') {
+    data.banned = ""
+  } else {
+      data.banned = prompt("Enter the reason for this ban", "This lot has been removed by the auction owner");
+  }
+  $.ajax({
+        type: "POST",
+        beforeSend: function (request) {
+            request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+        },
+        url: "/api/lots/ban/{{lot.pk}}/",
+        data : data,
+        success : function(result) {
+            window.location.reload(true);
+        }
+    });
+}
+</script>
 <style>
     .watched {
         color: yellow;
@@ -166,6 +188,11 @@
         {% endif %}
         {% if lot.auction %}
         <br><br><a href='/lots/?auction={{lot.auction.slug}}'>View all lots for {{ lot.auction }}</a><br>
+        {% endif %}
+        {% if lot.auction.created_by.pk == request.user.id or request.user.is_superuser %}
+        
+        <button class="btn btn-danger" name="action_unban" onclick="ban_lot('{% if lot.banned %}unban{% else %}ban{% endif %}')">{% if lot.banned %}Unban this lot{% else %}Ban this lot{% endif %}</button>
+        
         {% endif %}
         {% if request.user.is_superuser %}
         <script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.3/dist/Chart.min.js"></script>
