@@ -535,6 +535,9 @@ class Watch(models.Model):
 	lot_number = models.ForeignKey(Lot, on_delete=models.CASCADE)
 	def __str__(self):
 		return str(self.user) + " watching " + str(self.lot_number)
+	class Meta:
+		verbose_name_plural = "Users watching"
+
 
 class UserBan(models.Model):
 	"""
@@ -566,7 +569,7 @@ class PageView(models.Model):
 	total_time.help_text = 'The total time in seconds the user has spent on the lot page'
 
 	def __str__(self):
-		return "User" + str(self.user) + " viewed " + str(self.lot_number) + " for " + str(self.total_time)
+		return f"User {self.user} viewed {self.lot_number} for {self.total_time} seconds"
 
 class UserData(models.Model):
 	"""Extension of user model to store additional info.  At some point, we should be able to store information like email preferences here"""
@@ -593,6 +596,12 @@ class UserData(models.Model):
 	seller_percentile = models.PositiveIntegerField(null=True, blank=True)
 	buyer_percentile = models.PositiveIntegerField(null=True, blank=True)
 	volume_percentile = models.PositiveIntegerField(null=True, blank=True)
+
+	@property
+	def lots_submitted(self):
+		"""All lots this user has submitted, including unsold"""
+		allLots = Lot.objects.filter(user=self.user)
+		return len(allLots)
 
 	@property
 	def lots_sold(self):

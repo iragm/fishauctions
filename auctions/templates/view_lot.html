@@ -92,10 +92,36 @@
                 <td><b>Seller:</b></td><td>{% if lot.donation %} A donation from {% endif %}<a href='/users/{{ lot.user.pk }}/'>{{ lot.user }}</a></td>
             </tr>
             <tr>
-                <td><b>Minimum bid:</b></td><td>${{ lot.reserve_price }}</td>
-            </tr>
-            <tr>
-                <td><b>Current bid:</b></td><td>{% if lot.high_bidder %}${{ lot.high_bid }} <a href='/users/{{ lot.high_bidder.pk }}/'>{{ lot.high_bidder }}</a>{% else %}No bids yet{% endif %}</td>
+                <td><b>
+                    {% if lot.ended %}
+                        Won by:
+                    {% else %}
+                        {% if lot.high_bidder %}
+                            Current bid:
+                        {% else %}
+                            Reserve price:
+                        {% endif %}
+                    {% endif %}</b></td>
+                    <td>
+                    {% if lot.winner %}
+                        ${{lot.winning_price}} <a href='/users/{{ lot.winner.pk }}/'>{{ lot.winner }}</a>
+                    {% else %}
+                        {% if lot.ended %}
+                            Not sold
+                        {% else %}
+                            {% if lot.high_bidder %}
+                                ${{ lot.high_bid }}
+                                {% if lot.high_bidder.pk == request.user.id %}
+                                    - you're winning!  Your max bid is ${{ lot.max_bid }}
+                                {% else %}
+                                    <a href='/users/{{ lot.high_bidder.pk }}/'>{{ lot.high_bidder }}</a>
+                                {% endif %}
+                            {% else %}
+                                ${{ lot.reserve_price }}
+                            {% endif %}
+                        {% endif %}
+                    {% endif %}
+                    </td>
             </tr>
             <tr>
                 <td><b>Ends:</b></td><td>{% if lot.ended %} <span style="color:red">{{ lot.calculated_end }}</span>{% else %}{{ lot.calculated_end }}{% endif %}</td>
@@ -110,11 +136,9 @@
                 <td><b>Not transportable</b></td><td>This lot can only be picked up at its location, we won't deliver it to the other pickup location</td>
             </tr>
             {% endif %}
-            {% if lot.user.pk == request.user.id or request.user.is_superuser %}
             <tr>
-                <td><b>Views:</b></td><td>{{ lot.page_views }}</td>
+                <td><b>Views:</b></td><td>{{ lot.page_views }} views{% if lot.number_of_watchers %}, {{lot.number_of_watchers}} watching{%endif%}</td>
             </tr>
-            {% endif %}
         </table>
         {% if lot.banned %}
         <span style="color:red">This lot has been removed by the owner of this auction</span>

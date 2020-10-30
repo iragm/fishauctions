@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Lot, Bid, Auction, Invoice, Category, Product, Club, Location, UserBan
+from .models import Lot, Bid, Auction, Invoice, Category, Product, Club, Location, UserBan, Watch
 
 class ClubAdmin(admin.ModelAdmin):
     model = Club 
@@ -22,6 +22,13 @@ class BidInline(admin.TabularInline):
     search_fields = ("user__first_name",'user__last_name',)
     extra = 0
 
+class WatchInline(admin.TabularInline):
+    model = Watch 
+    list_display = ("user",)
+    list_filter = ()
+    search_fields = ("user__first_name",'user__last_name',)
+    extra = 0
+
 class LotAdmin(admin.ModelAdmin):
     model = Lot 
     list_display = ("lot_name", "auction", "lot_number", "user", "species_category",)
@@ -29,6 +36,7 @@ class LotAdmin(admin.ModelAdmin):
     search_fields = ("lot_number","lot_name","description","species_category__name","user__first_name","user__last_name")
     inlines = [
          BidInline,
+         WatchInline,
     ]
     
 class BidAdmin(admin.ModelAdmin):

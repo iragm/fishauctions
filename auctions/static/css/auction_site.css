@@ -10,5 +10,8 @@
     background-color: rgb(231, 76, 60, .8) !important;
 }
 
-
-
+@media (min-width: 1200px) {
+    .nowrap {
+        white-space: nowrap !important; 
+    }
+}

@@ -423,6 +423,17 @@ def createLot(request):
                 messages.info(request, "Created lot!  Fill out this form again to add another lot.  <a href='/lots/my'>All submitted lots</a>")
             form = CreateLotForm(user=request.user) # no post data here to reset the form
     else:
+        # if the user hasn't filled out their contact info, redirect:
+        userdataComplete = True
+        try:
+            userData = UserData.objects.get(user=request.user.pk)
+            if not userData.phone_number or not userData.address or not userData.location:
+                userdataComplete = False
+        except:
+            userdataComplete = False
+        if not userdataComplete:
+            messages.warning(request, "Please fill out your phone, address, and location before creating a lot")
+            return redirect(f'/users/edit/{request.user.pk}/?next=/lots/new/')
         form = CreateLotForm(user=request.user)
     return render(request,'lot_form.html', {'form':form})
 
@@ -669,7 +680,10 @@ class UserUpdate(UpdateView, SuccessMessageMixin):
         return super().dispatch(request, *args, **kwargs)
 
     def get_success_url(self):
-        return "/users/" + str(self.kwargs['pk'])
+        data = self.request.GET.copy()
+        if len(data) == 0:
+            data['next'] = "/users/" + str(self.kwargs['pk'])
+        return data['next']
     
     def get_initial(self):
         try:

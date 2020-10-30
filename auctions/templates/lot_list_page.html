@@ -18,7 +18,7 @@
   <tbody>
 {% paginate filter.qs as objects %}
     {% for lot in objects %}
-    <tr>
+    <tr class='nowrap'>
       <td>Lot {{ lot.lot_number }}</td>
       <td>{% if lot.donation %}Donation{% else %}{{ lot.user }}{% endif %}</td>
       <td>{{ lot.species_category }}</td>
@@ -29,7 +29,7 @@
       {% endif %}
       <td>${{ lot.high_bid }} </td>
       <td>{% if lot.high_bidder %}{{ lot.high_bidder }}{% else %}No bids{% endif %}</td>
-      <td>{% if lot.ended %}<span style="color:red">{{ lot.calculated_end }}</span>{% else %}{{ lot.calculated_end }}{% endif %}</td>
+      <td >{% if lot.ended %}<span style="color:red">{{ lot.calculated_end }}</span>{% else %}{{ lot.calculated_end }}{% endif %}</td>
     </tr>
     {% endfor %}
   </tbody>
