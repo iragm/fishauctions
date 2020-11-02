@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+{% extends base_template_name %}
 {% load crispy_forms_tags %}
 {% block title %} {{ invoice.auction }} {% endblock %}
 {% load static %}
@@ -7,10 +7,12 @@
 <div class="container mt-5 mb-5">
     <div class="row">
         <div class="col-md-10 offset-md1">
-            {% if auction %}
-            <h1>{%if invoice.user.first_name and invoice.user.last_name %}{{ invoice.user.first_name }} {{ invoice.user.last_name }}{% else %}{{ invoice.user }}{%endif%}'s invoice for {{ invoice.auction }}</h1><br>
+          {% if auction %}
+            <h1>{{ invoice.user.first_name }} {{ invoice.user.last_name }}</h1><br>
+            {% if show_links %}<a href="{{ request.path }}?print" class="btn btn-primary active">Printable view</a><br>{% endif %}
             <b>Username:</b> {{invoice.user }}<br>
             <b>Auction:</b> {{ auction }}<br>
+            {% if auction.alternate_pickup_location %} <b>Location:</b> {{userdata.location}} <br>{%endif%}
             {% endif %}
             <b>Date:</b> {{ invoice.date }}<br>
             <b>Total (sold-bought):</b> ${{ invoice.net|floatformat:2 }} <br>
@@ -19,9 +21,10 @@
             {% if auction %}
             You must meet at {{ auction.pickup_location }} on {{ auction.pickup_time }} 
             {% if auction.alternate_pickup_location %}or {{ auction.alternate_pickup_location }} on {{ auction.alternate_pickup_time }} {% endif %}
-            to exchange lots.  You must pay the club before you can pick up your lots.<a href='/auctions/{{ auction.slug }}'>View auction rules</a><br>
+            to exchange lots.  You must pay the club before you can pick up your lots.  <br><br><b>Please write the lot number and the name of the winner on each lot.</b><br>
+            {% if show_links %}<a href='/auctions/{{ auction.slug }}'>View auction rules</a><br>{%endif%}<br>
             {% endif %}
-            {%if contact_email %}Questions?  Email <a href='mailto:{{ contact_email }}'>{{ contact_email }}</a><br>{% endif %}<br>
+            {% if show_links %}{%if contact_email %}Questions?  Email <a href='mailto:{{ contact_email }}'>{{ contact_email }}</a><br>{% endif %}<br>{% endif %}
             {%if invoice.lots_sold %}
             <h3>Lots sold</h3>
             <table class="table">
@@ -31,7 +34,7 @@
                     <th scope="col">Lot</th>
                     <th scope="col">Buyer</th>
                     {% if auction.alternate_pickup_location %}
-                    <th scope="col">Location</th>
+                    <th scope="col">Winner Location</th>
                     {% endif %}
                     <th scope="col">Price</th>
                     <th scope="col">Club cut</th>
@@ -43,10 +46,10 @@
                  {% for lot in sold%}
                   <tr>
                     <td>{{ lot.lot_number }}</td>
-                    <td><a href="/lots/{{lot.pk}}/">{{ lot.lot_name }}</a></td>
-                    <td>{% if lot.winning_price %} {{ lot.winner }} {% else %} Not sold {% endif %}</td>
+                    <td>{% if show_links %}<a href="/lots/{{lot.pk}}/">{{ lot.lot_name }}</a>{% else %}{{ lot.lot_name }}{% endif%}</td>
+                    <td>{% if lot.winning_price %} {{ lot.winner.first_name }} {{ lot.winner.last_name }} {% else %} Not sold {% endif %}</td>
                     {% if auction.alternate_pickup_location %}
-                    <td>{{ lot.location }}</td>
+                    <td>{{ lot.winner_location }}</td>
                     {% endif %}
                     <td>{% if lot.winning_price %} ${{ lot.winning_price|floatformat:2 }} {% else %} Not sold {% endif %}</td>
                     <td>${{ lot.club_cut|floatformat:2 }}</td>
@@ -77,11 +80,11 @@
                  {% for lot in bought%}
                   <tr>
                     <td>{{ lot.lot_number }}</td>
-                    <td><a href="/lots/{{lot.pk}}/">{{ lot.lot_name }}</a></td>
+                    <td>{% if show_links %}<a href="/lots/{{lot.pk}}/">{{ lot.lot_name }}</a>{% else %}{{ lot.lot_name }}{% endif %}</td>
                     {% if auction.alternate_pickup_location %}
                     <td>{{ lot.location }}</td>
                     {% endif %}
-                    <td>{{ lot.user }}</td>
+                    <td>{{ lot.user.first_name }} {{ lot.user.last_name }}</td>
                     <td>${{ lot.winning_price|floatformat:2 }}</td>
                   </tr>
                   {% endfor %}
@@ -89,7 +92,7 @@
             </table>
             <b>Total bought:</b> ${{ invoice.total_bought|floatformat:2 }}     <br>       
             {% endif %}
-            {% if request.user.is_superuser %}
+            {% if request.user.is_superuser and links %}
             <a href="/admin/auctions/invoice/{{invoice.pk}}/change/" class="btn btn-danger active">Admin</a>
             {% endif %}
         </div>

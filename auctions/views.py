@@ -29,9 +29,22 @@ class LotListView(AjaxListView):
     The context is overridden to set the view type"""
     model = Lot
     template_name = 'all_lots.html'
-    page_template='lot_list_page.html'
+    
+    def get_page_template(self):
+        try:
+            userdata = UserData.objects.get(user=self.request.user.pk) #fixme - add userdata option
+            if userdata.use_list_view:
+                return 'lot_list_page.html'
+            else:
+                return 'lot_tile_page.html'
+        except:
+            pass
+        return 'lot_tile_page.html' # tile view as default
+        #return 'lot_list_page.html' # list view as default
+    
     #paginate_by = 50
     def get_context_data(self, **kwargs):
+        
         # set default values
         data = self.request.GET.copy()
         if len(data) == 0:
@@ -376,6 +389,7 @@ class viewAndBidOnLot(FormMixin, DetailView):
                 if thisBid > existingBid.amount:
                     print(f"{request.user} has upped their bid on {lot} from ${existingBid.amount} to ${thisBid}")
                     existingBid.amount = thisBid
+                    #existingBid.bid_time = timezone.now() #fixme - need tests for this
                     if was_high_bid:
                         existingBid.was_high_bid = was_high_bid
                     existingBid.save()
@@ -507,6 +521,7 @@ def createAuction(request):
         if form.is_valid():
             auction = form.save(commit=False)
             auction.created_by = User.objects.get(id=request.user.id)
+            #lot_submission_end_date if not set, set to auction.date_end fixme
             auction.save()            
             print(str(auction.created_by) + " has created a new auction " + auction.title)
             messages.info(request, "Auction created")
@@ -613,16 +628,18 @@ class Invoices(ListView):
         return context
 
 # password protected in views.py
-class InvoiceView(DetailView): #FormMixin
+class InvoiceView(DetailView):
     """Show a single invoice"""
     template_name = 'invoice.html'
     model = Invoice
     
     def dispatch(self, request, *args, **kwargs):
+        # check to make sure the user has permission to view this invoice
         auth = False
         thisInvoice = Invoice.objects.get(pk=self.get_object().pk)
         if self.get_object().user.pk == request.user.pk:
             auth = True
+            # mark the invoice as opened if this is the user it's intended for
             thisInvoice.opened = True
             thisInvoice.save()
         elif request.user.is_superuser :
@@ -643,13 +660,25 @@ class InvoiceView(DetailView): #FormMixin
         context = super(InvoiceView, self).get_context_data(**kwargs)
         sold = Lot.objects.filter(seller_invoice=self.get_object()).order_by('winner')
         bought = Lot.objects.filter(buyer_invoice=self.get_object()).order_by('user')
+        userdata = UserData.objects.get(user=self.request.user.pk)
+        # light theme for some invoices to allow printing
+        if 'print' in self.request.GET.copy():
+            context['base_template_name'] = "print.html"
+            context['show_links'] = False
+        else:
+            context['base_template_name'] = "base.html"
+            context['show_links'] = True
         try:
-            sold = sorted(sold, key=lambda t: t.location_as_str ) 
-            bought = sorted(bought, key=lambda t: t.location_as_str)
+            # sort sold by winner's location
+            sold = sorted(sold, key=lambda t: str(t.winner_location) ) 
+            # sort bought by lot number
+            #bought = sorted(bought, key=lambda t: str(t.location))
+            bought = sorted(bought, key=lambda t: str(t.lot_number))
         except:
             pass
         context['sold'] = sold
         context['bought'] = bought
+        context['userdata'] = userdata
         try:
             context['auction'] = Auction.objects.get(pk=self.get_object().auction.pk)
             context['contact_email'] = User.objects.get(pk=context['auction'].created_by.pk).email

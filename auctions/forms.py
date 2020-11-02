@@ -52,6 +52,7 @@ class CreateBid(forms.ModelForm):
 
 class CreateAuctionForm(forms.ModelForm):
     class Meta:
+        # fixme - lot_submission_end_date
         model = Auction
         fields = ['title', 'notes', 'lot_entry_fee','unsold_lot_fee','winning_bid_percent_to_club', 'date_start', 'date_end', \
             'pickup_location', 'pickup_location_map', 'pickup_time', 'alternate_pickup_location', 'alternate_pickup_location_map',\
@@ -139,6 +140,7 @@ class CreateLotForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.fields['description'].widget.attrs = {'rows': 3}
         self.fields['species_category'].required = True
+        # fixme - lot_submission_end_date
         self.fields['auction'].queryset = Auction.objects.filter(date_end__gte=timezone.now()).filter(date_start__lte=timezone.now()).order_by('date_end')
         # Default auction selection:
         try:

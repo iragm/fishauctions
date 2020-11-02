@@ -62,6 +62,7 @@ class Auction(models.Model):
 	winning_bid_percent_to_club = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(100)])
 	winning_bid_percent_to_club.help_text = "To give 70% of the final bid to the seller, enter 30 here"
 	date_start = models.DateTimeField()
+	#lot_submission_end_date = models.DateTimeField(null=True, blank=True) #fixme
 	date_end = models.DateTimeField()
 	watch_warning_email_sent = models.BooleanField(default=False)
 	invoiced = models.BooleanField(default=False)
@@ -331,10 +332,19 @@ class Lot(models.Model):
 	transportable = models.BooleanField(default=True)
 
 	class Meta:
-		unique_together = (('user', 'active', 'lot_name', 'description'),)
+		#unique_together = (('user', 'active', 'lot_name', 'description'),)
+		unique_together = (('user', 'lot_name', 'description'),)
 
 	def __str__(self):
 		return "" + str(self.lot_number) + " - " + self.lot_name
+
+	@property
+	def winner_location(self):
+		"""Model object of location of the winner for this lot, or False"""
+		try:
+			return UserData.objects.get(user=self.winner.pk).location
+		except:
+			return False
 
 	@property
 	def location(self):
@@ -343,14 +353,6 @@ class Lot(models.Model):
 			return UserData.objects.get(user=self.user.pk).location
 		except:
 			return False
-
-	@property
-	def location_as_str(self):
-		"""String value of location of the user for this lot, or empty string"""
-		try:
-			return str(UserData.objects.get(user=self.user.pk).location)
-		except:
-			return ""
 
 	@property
 	def user_as_str(self):
@@ -579,6 +581,8 @@ class UserData(models.Model):
 	address = models.CharField(max_length=500, blank=True, null=True)
 	location = models.ForeignKey(Location, null=True, on_delete=models.SET_NULL)
 	club = models.ForeignKey(Club, null=True, on_delete=models.SET_NULL)
+	#use_list_view = models.BooleanField(default=False) #fixme, enable
+	#use_list_view.help_text = "Show a list of all lots instead of showing tiles"
 	# breederboard info
 	rank_unique_species = models.PositiveIntegerField(null=True, blank=True)
 	number_unique_species = models.PositiveIntegerField(null=True, blank=True)

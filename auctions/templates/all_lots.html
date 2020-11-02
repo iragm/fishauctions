@@ -24,7 +24,7 @@ User: {{ user }}
 {% load static %}
 {% block content %}
 
-<div class="container mt-5 mb-5 ml-1">
+<div class="container mt-5 mb-5">
     <div class="row">
       <div class="col-md-10 offset-lg-1">
         <h1>{% if view == "all" %}
@@ -53,12 +53,11 @@ User: {{ user }}
         <br><a href='/users/{{user.pk}}'>View user info for {{ user }} </a><br>
         {% endif %}
         {% if lotsAreHidden >= 0 %}<span class="text-muted">{{lotsAreHidden}} categories are <a href='/ignore/'>ignored</a></span>{% endif %}
-        {% include page_template %}
-      
+        
     </div>
 </div>
 </div>  
-
+{% include page_template %}
 {% endblock %}
 
 {% block extra_js %}
