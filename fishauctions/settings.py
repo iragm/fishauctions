@@ -189,3 +189,4 @@ MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
 EL_PAGINATION_PER_PAGE = 40
+SITE_URL = os.environ['SITE_URL']

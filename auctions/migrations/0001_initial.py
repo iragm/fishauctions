@@ -167,8 +167,8 @@ class Migration(migrations.Migration):
                 ('user', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to=settings.AUTH_USER_MODEL)),
             ],
         ),
-        migrations.AlterUniqueTogether(
-            name='lot',
-            unique_together={('user', 'active', 'lot_name', 'description')},
-        ),
+        # migrations.AlterUniqueTogether(
+        #     name='lot',
+        #     unique_together={('user', 'active', 'lot_name', 'description')},
+        # ),
     ]

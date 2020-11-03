@@ -229,10 +229,11 @@ class UpdateUserForm(forms.ModelForm):
     location = forms.ModelChoiceField(queryset=Location.objects.filter(), required=False)
     club = forms.ModelChoiceField(queryset=Club.objects.filter(), required=False)
     email_visible = forms.BooleanField(required=False, help_text = "Show your email address on your user page.  This will be visible only to logged in users.")
+    use_list_view = forms.BooleanField(required=False, help_text = "When viewing lots, show them as a list instead of as tiles.")
 
     class Meta:
         model = User
-        fields = ('username', 'first_name', 'last_name','phone_number', 'address', 'location', 'email_visible')
+        fields = ('username', 'first_name', 'last_name','phone_number', 'address', 'location', 'email_visible', 'use_list_view')
         exclude = ('last_login', 'is_superuser', 'groups', 'user_permissions', 'is_staff', 'is_active', 'date_joined', 'email',)
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -259,6 +260,7 @@ class UpdateUserForm(forms.ModelForm):
                 css_class='row',
             ),
             'email_visible',
+            'use_list_view',
             Submit('submit', 'Save', css_class='btn-success'),
         )
 

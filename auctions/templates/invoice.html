@@ -43,13 +43,13 @@
                 </thead>
                 <tbody>
                   
-                 {% for lot in sold%}
+                 {% for lot in sold %}
                   <tr>
                     <td>{{ lot.lot_number }}</td>
                     <td>{% if show_links %}<a href="/lots/{{lot.pk}}/">{{ lot.lot_name }}</a>{% else %}{{ lot.lot_name }}{% endif%}</td>
                     <td>{% if lot.winning_price %} {{ lot.winner.first_name }} {{ lot.winner.last_name }} {% else %} Not sold {% endif %}</td>
                     {% if auction.alternate_pickup_location %}
-                    <td>{{ lot.winner_location }}</td>
+                    <td>{% if lot.winner %}{{ lot.winner_location }}{% endif %}</td>
                     {% endif %}
                     <td>{% if lot.winning_price %} ${{ lot.winning_price|floatformat:2 }} {% else %} Not sold {% endif %}</td>
                     <td>${{ lot.club_cut|floatformat:2 }}</td>

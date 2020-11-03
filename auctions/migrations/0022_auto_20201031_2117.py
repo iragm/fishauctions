@@ -16,8 +16,8 @@ class Migration(migrations.Migration):
             name='watch',
             options={'verbose_name_plural': 'Users watching'},
         ),
-        migrations.AlterUniqueTogether(
-            name='lot',
-            unique_together={('user', 'lot_name', 'description')},
-        ),
+        # migrations.AlterUniqueTogether(
+        #     name='lot',
+        #     unique_together={('user', 'lot_name', 'description')},
+        # ),
     ]

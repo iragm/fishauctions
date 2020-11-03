@@ -8,6 +8,8 @@ from django.db.models import Count, Sum
 from autoslug import AutoSlugField
 from django.urls import reverse
 from django.db.models import Q
+from markdownfield.models import MarkdownField, RenderedMarkdownField
+from markdownfield.validators import VALIDATOR_STANDARD
 
 def median_value(queryset, term):
     count = queryset.count()
@@ -305,8 +307,10 @@ class Lot(models.Model):
 	image_source.help_text = "Where did you get this image?"
 	i_bred_this_fish = models.BooleanField(default=False)
 	i_bred_this_fish.help_text = "Check to get breeder points for this lot"
-	description = models.CharField(max_length=500, blank=True, null=True)
-	#description.help_text = "Enter a detailed description of this lot"
+	description = MarkdownField(rendered_field='description_rendered', validator=VALIDATOR_STANDARD, blank=True, null=True)
+	description.help_text = "To add a link: [Link text](https://www.google.com)"
+	description_rendered = RenderedMarkdownField(blank=True, null=True)
+	
 	quantity = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
 	quantity.help_text = "How many of this item are in this lot?"
 	reserve_price = models.PositiveIntegerField(default=2, validators=[MinValueValidator(1), MaxValueValidator(200)])
@@ -331,10 +335,7 @@ class Lot(models.Model):
 	buyer_invoice = models.ForeignKey(Invoice, null=True, blank=True, on_delete=models.SET_NULL, related_name="buyer_invoice")
 	transportable = models.BooleanField(default=True)
 
-	class Meta:
-		#unique_together = (('user', 'active', 'lot_name', 'description'),)
-		unique_together = (('user', 'lot_name', 'description'),)
-
+	
 	def __str__(self):
 		return "" + str(self.lot_number) + " - " + self.lot_name
 
@@ -344,7 +345,7 @@ class Lot(models.Model):
 		try:
 			return UserData.objects.get(user=self.winner.pk).location
 		except:
-			return False
+			return ""
 
 	@property
 	def location(self):
@@ -352,7 +353,7 @@ class Lot(models.Model):
 		try:
 			return UserData.objects.get(user=self.user.pk).location
 		except:
-			return False
+			return ""
 
 	@property
 	def user_as_str(self):
@@ -421,12 +422,23 @@ class Lot(models.Model):
 			return self.date_end
 		return timezone.now()
 
+	@property
+	def can_be_edited(self):
+		"""Check to see if this lot can be edited.
+		This is needed to prevent people making lots a donation right before the auction ends"""
+		if self.high_bidder:
+			return False
+		max_delete_date = self.date_posted + datetime.timedelta(hours=24)
+		if timezone.now() > max_delete_date:
+			return False
+		else:
+			return True
 	
 	@property
 	def can_be_deleted(self):
 		"""Check to see if this lot can be deleted.
 		This is needed to prevent people deleting lots that don't sell right before the auction ends"""
-		max_delete_date = self.date_posted + datetime.timedelta(hours=2)
+		max_delete_date = self.date_posted + datetime.timedelta(hours=24)
 		if timezone.now() > max_delete_date:
 			return False
 		else:
@@ -444,7 +456,7 @@ class Lot(models.Model):
 	@property
 	def max_bid(self):
 		"""returns the highest bid amount for this lot - this number should not be visible to the public"""
-		allBids = Bid.objects.filter(lot_number=self.lot_number, bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount', 'bid_time')[:2]
+		allBids = Bid.objects.filter(lot_number=self.lot_number, last_bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount', 'last_bid_time')[:2]
 		try:
 			# $1 more than the second highest bid
 			bidPrice = allBids[0].amount
@@ -457,7 +469,7 @@ class Lot(models.Model):
 	def high_bid(self):
 		"""returns the high bid amount for this lot"""
 		try:
-			allBids = Bid.objects.filter(lot_number=self.lot_number, bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount', 'bid_time')[:2]
+			allBids = Bid.objects.filter(lot_number=self.lot_number, last_bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount', 'last_bid_time')[:2]
 			# highest bid is the winner, but the second highest determines the price
 			# $1 more than the second highest bid
 			if allBids[0].amount == allBids[1].amount:
@@ -475,7 +487,7 @@ class Lot(models.Model):
 		if self.banned:
 			return False
 		try:
-			allBids = Bid.objects.filter(lot_number=self.lot_number, bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount', 'bid_time')[:2]
+			allBids = Bid.objects.filter(lot_number=self.lot_number, last_bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount', 'last_bid_time')[:2]
 			return allBids[0].user
 		except:
 			return False
@@ -523,6 +535,7 @@ class Bid(models.Model):
 	user = models.ForeignKey(User, on_delete=models.CASCADE)
 	lot_number = models.ForeignKey(Lot, on_delete=models.CASCADE)
 	bid_time = models.DateTimeField(auto_now_add=True, blank=True)
+	last_bid_time = models.DateTimeField(auto_now_add=True, blank=True)
 	amount = models.PositiveIntegerField(validators=[MinValueValidator(1)])
 	was_high_bid = models.BooleanField(default=False)
 
@@ -581,8 +594,8 @@ class UserData(models.Model):
 	address = models.CharField(max_length=500, blank=True, null=True)
 	location = models.ForeignKey(Location, null=True, on_delete=models.SET_NULL)
 	club = models.ForeignKey(Club, null=True, on_delete=models.SET_NULL)
-	#use_list_view = models.BooleanField(default=False) #fixme, enable
-	#use_list_view.help_text = "Show a list of all lots instead of showing tiles"
+	use_list_view = models.BooleanField(default=False)
+	use_list_view.help_text = "Show a list of all lots instead of showing tiles"
 	# breederboard info
 	rank_unique_species = models.PositiveIntegerField(null=True, blank=True)
 	number_unique_species = models.PositiveIntegerField(null=True, blank=True)

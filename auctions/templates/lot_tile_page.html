@@ -15,7 +15,7 @@
           <span class="text-muted">{{ lot.species_category }}<br></span>
           ${{ lot.high_bid }} {% if lot.high_bidder %}{{ lot.high_bidder }}{% else %}No bids{% endif %}<br>
           {% if request.user.is_superuser %}
-          Views: {{ lot.page_views }} Bid rate: {{ lot.view_to_bid_ratio|floatformat:2 }}
+          Views: {{ lot.page_views }} Bid rate: {{ lot.view_to_bid_ratio|floatformat:2 }}<br>
           {% endif %}
           {% if lot.ended %}<span style="color:red">{{ lot.calculated_end }}</span>{% else %}{{ lot.calculated_end }}{% endif %}<br>
         </p>

@@ -93,9 +93,9 @@ class LotModelTests(TestCase):
         userB = User.objects.create(username="Early bird")
         bidA = Bid.objects.create(user=userA, lot_number=lot, amount=6)
         bidB = Bid.objects.create(user=userB, lot_number=lot, amount=6)
-        bidA.bid_time=fiveDaysAgo
+        bidA.last_bid_time=fiveDaysAgo
         bidA.save()
-        bidB.bid_time=tenDaysAgo
+        bidB.last_bid_time=tenDaysAgo
         bidB.save()
         self.assertIs(lot.high_bidder.pk, userB.pk)
         self.assertIs(lot.high_bid, 6)
@@ -114,11 +114,11 @@ class LotModelTests(TestCase):
         bidA = Bid.objects.create(user=userA, lot_number=lot, amount=5)
         bidB = Bid.objects.create(user=userB, lot_number=lot, amount=7)
         bidC = Bid.objects.create(user=userC, lot_number=lot, amount=7)
-        bidA.bid_time=tenDaysAgo
+        bidA.last_bid_time=tenDaysAgo
         bidA.save()
-        bidB.bid_time=fiveDaysAgo
+        bidB.last_bid_time=fiveDaysAgo
         bidB.save()
-        bidC.bid_time=oneDaysAgo
+        bidC.last_bid_time=oneDaysAgo
         bidC.save()
         self.assertIs(lot.high_bidder.pk, userB.pk)
         self.assertIs(lot.high_bid, 7)
@@ -132,7 +132,7 @@ class LotModelTests(TestCase):
         userA = User.objects.create(username="Test user")
         userB = User.objects.create(username="Test user B")
         bidA = Bid.objects.create(user=userA, lot_number=lot, amount=10)
-        bidA.bid_time = afterEndTime
+        bidA.last_bid_time = afterEndTime
         bidA.save()
         bidB = Bid.objects.create(user=userB, lot_number=lot, amount=6)
         self.assertIs(lot.high_bidder.pk, userB.pk)
@@ -161,7 +161,7 @@ class InvoiceModelTests(TestCase):
         unsoldLot = Lot.objects.create(lot_name="Unsold lot", date_end=timeStart, reserve_price=10, auction=auction, user=seller)
         userA = User.objects.create(username="Winner of the lot")
         bid = Bid.objects.create(user=userA, lot_number=lot, amount=10)
-        bid.bid_time = bidTime
+        bid.last_bid_time = bidTime
         bid.save()
         # other tests check all these as well
         self.assertIs(auction.ending_soon, True)

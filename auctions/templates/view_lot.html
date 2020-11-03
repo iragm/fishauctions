@@ -102,7 +102,7 @@ function ban_lot(ban) {
         <span>
             or look for this on <a href="https://www.seriouslyfish.com/search/{{lot.lot_name}}" target="_blank">Seriously Fish</a>
         </span>
-        <div>{% if lot.description %}{{ lot.description }}{% endif %}</div>
+        <div>{% if lot.description %}{{ lot.description_rendered | safe }}{% endif %}</div>
         <table class="table">
             <tr>
                 <td><b>Category:</b></td><td>{{ lot.species_category }}</td>
@@ -165,10 +165,10 @@ function ban_lot(ban) {
         {% if lot.banned %}
         <span style="color:red">This lot has been removed by the owner of this auction</span>
         {% elif lot.user.pk == request.user.id or request.user.is_superuser%}
-        {% if not lot.high_bidder %}
+        {% if lot.can_be_edited %}
         <a href="/lots/edit/{{lot.pk}}" class="btn btn-warning active">Edit</a></span> {% if lot.can_be_deleted %}<span><a href="/lots/delete/{{lot.pk}}" class="btn btn-danger active">Delete</a>{% endif %}
         {% else %}
-        {% if lot.user.pk == request.user.id%}This is your lot.  {% endif %}You can't edit this, because bids have already been placed.
+        {% if lot.user.pk == request.user.id%}This is your lot.  {% endif %}You can edit a lot for 24 hours after you submit it, as long as no one has bid on it.
         {% endif %}
         {% if request.user.is_superuser %}
         <a href="/admin/auctions/lot/{{lot.pk}}/change/" class="btn btn-danger active">Admin</a>

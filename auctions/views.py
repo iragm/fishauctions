@@ -32,7 +32,7 @@ class LotListView(AjaxListView):
     
     def get_page_template(self):
         try:
-            userdata = UserData.objects.get(user=self.request.user.pk) #fixme - add userdata option
+            userdata = UserData.objects.get(user=self.request.user.pk)
             if userdata.use_list_view:
                 return 'lot_list_page.html'
             else:
@@ -389,7 +389,7 @@ class viewAndBidOnLot(FormMixin, DetailView):
                 if thisBid > existingBid.amount:
                     print(f"{request.user} has upped their bid on {lot} from ${existingBid.amount} to ${thisBid}")
                     existingBid.amount = thisBid
-                    #existingBid.bid_time = timezone.now() #fixme - need tests for this
+                    existingBid.last_bid_time = timezone.now()
                     if was_high_bid:
                         existingBid.was_high_bid = was_high_bid
                     existingBid.save()
@@ -479,8 +479,8 @@ class LotUpdate(UpdateView):
     def dispatch(self, request, *args, **kwargs):
         if not (request.user.is_superuser or self.get_object().user == self.request.user):
             raise PermissionDenied()
-        if self.get_object().high_bidder:
-            messages.error(request, "Bids have already been placed on this lot")
+        if not self.get_object().can_be_deleted:
+            messages.error(request, "It's too late to edit this lot")
             raise PermissionDenied()
         return super().dispatch(request, *args, **kwargs)
     
@@ -741,7 +741,7 @@ class UserUpdate(UpdateView, SuccessMessageMixin):
     def get_initial(self):
         try:
             prefs = UserData.objects.get(user=self.get_object().pk)
-            return {'phone_number': prefs.phone_number, 'club': prefs.club, 'location': prefs.location, 'address': prefs.address, 'email_visible': prefs.email_visible}
+            return {'phone_number': prefs.phone_number, 'club': prefs.club, 'location': prefs.location, 'address': prefs.address, 'email_visible': prefs.email_visible, 'use_list_view': prefs.use_list_view}
             #return prefs
         except:
             return
@@ -762,6 +762,7 @@ class UserUpdate(UpdateView, SuccessMessageMixin):
         prefs.location=form.cleaned_data['location']
         prefs.address=form.cleaned_data['address']
         prefs.email_visible = form.cleaned_data['email_visible']
+        prefs.use_list_view = form.cleaned_data['use_list_view']
         prefs.save()
         user.save()
         return super(UserUpdate, self).form_valid(form)
