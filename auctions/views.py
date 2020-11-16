@@ -1,21 +1,20 @@
 from datetime import datetime
 from itertools import chain
-from django.contrib.auth.models import User
 from django.shortcuts import render,redirect
-from django.http import HttpResponse
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.utils import timezone
 from django.contrib import messages
+from django.contrib.auth.models import User
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth.mixins import LoginRequiredMixin
 from django.views.generic import ListView, DetailView, View, TemplateView
-from django.views.generic.edit import FormMixin
 from django.urls import reverse
-from django.views.generic.edit import UpdateView
-from django.views.generic.edit import DeleteView
+from django.views.generic.edit import UpdateView, CreateView, DeleteView, FormMixin
 from django.db.models import Q
 from django.contrib.messages.views import SuccessMessageMixin
 from allauth.account.models import EmailAddress
 from el_pagination.views import AjaxListView
+from easy_thumbnails.templatetags.thumbnail import thumbnail_url
 
 from .models import *
 from .filters import *
@@ -29,7 +28,7 @@ class LotListView(AjaxListView):
     The context is overridden to set the view type"""
     model = Lot
     template_name = 'all_lots.html'
-    
+
     def get_page_template(self):
         try:
             userdata = UserData.objects.get(user=self.request.user.pk)
@@ -238,6 +237,65 @@ def pageview(request, pk):
             obj.save()
         return HttpResponse("Success")
 
+class PickupLocations(LoginRequiredMixin, ListView):
+    """Show all pickup locations belonging to the current user"""
+    model = PickupLocation
+    template_name = 'all_pickup_locations.html'
+    ordering = ['name']
+    
+    def get_queryset(self):
+        new_context = PickupLocation.objects.filter(
+            user=self.request.user.pk,
+        )
+        return new_context
+
+class PickupLocationsUpdate(LoginRequiredMixin, UpdateView):
+    """Edit pickup locations"""
+    def get_form_kwargs(self):
+        form_kwargs = super(PickupLocationsUpdate, self).get_form_kwargs()
+        form_kwargs['user'] = self.request.user
+        return form_kwargs
+
+    def dispatch(self, request, *args, **kwargs):
+        if not (request.user.is_superuser or self.get_object().user == self.request.user):
+            raise PermissionDenied()
+        users = AuctionTOS.objects.filter(pickup_location=self.get_object().pk)
+        if len(users):
+            messages.warning(request, "Users have already selected this as a pickup location.  Don't make large changes!")
+        return super().dispatch(request, *args, **kwargs)
+    
+    def get_success_url(self):
+        return "/locations/"
+    
+    def get_form_kwargs(self):
+        form_kwargs = super(PickupLocationsUpdate, self).get_form_kwargs()
+        form_kwargs['user'] = self.request.user
+        return form_kwargs
+
+    model = PickupLocation
+    template_name = 'location_form.html'
+    form_class = PickupLocationForm
+
+class PickupLocationsCreate(LoginRequiredMixin, CreateView):
+    """Create a new pickup location"""
+    def get_form_kwargs(self):
+        form_kwargs = super(PickupLocationsCreate, self).get_form_kwargs()
+        form_kwargs['user'] = self.request.user
+        return form_kwargs
+
+    def get_success_url(self):
+        return "/locations/"
+
+    def form_valid(self, form):
+        obj = form.save(commit=False)
+        obj.user = self.request.user
+        obj.save()
+        return super(PickupLocationsCreate, self).form_valid(form)
+
+    model = PickupLocation
+    template_name = 'location_form.html'
+    form_class = PickupLocationForm
+    
 class AuctionUpdate(UpdateView):
     """The form users fill out to edit or create an auction"""
     
@@ -318,6 +376,14 @@ class viewAndBidOnLot(FormMixin, DetailView):
         context = super(viewAndBidOnLot, self).get_context_data(**kwargs)
         context['watched'] = Watch.objects.filter(lot_number=self.kwargs['pk'], user=self.request.user.id)
         context['form'] = CreateBid(initial={'user': self.request.user.id, 'lot_number':self.kwargs['pk'], "amount":defaultBidAmount}, request=self.request)
+        try:
+            if not self.get_object().auction:
+                context['user_tos'] = True
+            else:
+                AuctionTOS.objects.get(user=self.request.user.id, auction=self.get_object().auction)
+                context['user_tos'] = True
+        except:
+            context['user_tos'] = False
         return context
     
     def get_success_url(self):
@@ -458,7 +524,17 @@ def createLot(request):
                     userData.save()
                 lot.save()            
                 print(str(lot.user) + " has created a new lot " + lot.lot_name)
-                messages.info(request, "Created lot!  Fill out this form again to add another lot.  <a href='/lots/my'>All submitted lots</a>")
+                # if there's another lot in the same category already with no bids, warn about it
+                existingLot = Lot.objects.annotate(num_bids=Count('bid')).filter(num_bids=0, species_category=lot.species_category, user=request.user.pk, active=True).exclude(lot_number=lot.pk)
+                if existingLot:
+                    messages.info(request, "Tip: you've already got lots in this category with no bids.  Don't submit too many similar lots unless you're sure there's interest")
+                if lot.auction:
+                    try:
+                        AuctionTOS.objects.get(user=request.user.id, auction=lot.auction)
+                    except:
+                        messages.error(request, f"You need to <a href='/auctions/{lot.auction.slug}'>confirm your pickup location for this auction</a> before this lot will be visible.")        
+                messages.info(request, f"Created lot!  <a href='/lots/{lot.pk}'>View or edit your last lot</a> or fill out this form again to add another lot.  <a href='/lots/my'>All submitted lots</a>")
+                
             form = CreateLotForm(user=request.user) # no post data here to reset the form
     else:
         # if the user hasn't filled out their contact info, redirect:
@@ -532,15 +608,60 @@ def createAuction(request):
         form = CreateAuctionForm()
     return render(request,'auction_form.html', {'form':form})
 
-class AuctionInfo(DetailView):
+class AuctionInfo(FormMixin, DetailView):
     """Main view of a single auction"""
     template_name = 'auction.html'
     model = Auction
+    form_class = AuctionTOSForm
+    
+    def get_success_url(self):
+        data = self.request.GET.copy()
+        if len(data) == 0:
+            data['next'] = f'/lots/?auction={self.get_object().slug}'
+        return data['next']
+
+    def get_form_kwargs(self):
+        form_kwargs = super(AuctionInfo, self).get_form_kwargs()
+        form_kwargs['user'] = self.request.user
+        form_kwargs['auction'] = self.get_object()
+        return form_kwargs
+
+    def dispatch(self, request, *args, **kwargs):
+        if self.get_object().created_by.pk == request.user.pk:
+            locations = PickupLocation.objects.filter(auction=self.get_object())
+            if not locations:
+                messages.add_message(self.request, messages.ERROR, "You haven't added any pickup locations to this auction yet. <a href='/locations/new/'>Add one now</a>")
+        return super().dispatch(request, *args, **kwargs)
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         owner = self.get_object().created_by
         context['contact_email'] = User.objects.get(pk=owner.pk).email
+        context['pickup_locations'] = PickupLocation.objects.filter(auction=self.get_object())
+        try:
+            existingTos = AuctionTOS.objects.get(user=self.request.user, auction=self.get_object())
+            existingTos = existingTos.pickup_location
+        except:
+            existingTos = None
+            if self.request.user.is_authenticated:
+                messages.add_message(self.request, messages.ERROR, "Please confirm you have read these rules by selecting your pickup location at the bottom of this page.")
+        context['form'] = AuctionTOSForm(user=self.request.user, auction=self.get_object(), initial={'user': self.request.user.id, 'auction':self.get_object().pk, 'pickup_location':existingTos})
         return context
+
+    def post(self, request, *args, **kwargs):
+        self.object = self.get_object()
+        form = self.get_form()
+        if form.is_valid():
+            obj, created = AuctionTOS.objects.get_or_create(
+                user = self.request.user,
+                auction = self.get_object(),
+                defaults={'pickup_location': form.cleaned_data['pickup_location']},
+            )
+            obj.pickup_location = form.cleaned_data['pickup_location']
+            obj.save()
+            return self.form_valid(form)
+        else:
+            return self.form_invalid(form)
 
 def aboutSite(request):
     return render(request,'about.html')
@@ -658,9 +779,9 @@ class InvoiceView(DetailView):
 
     def get_context_data(self, **kwargs):
         context = super(InvoiceView, self).get_context_data(**kwargs)
-        sold = Lot.objects.filter(seller_invoice=self.get_object()).order_by('winner')
-        bought = Lot.objects.filter(buyer_invoice=self.get_object()).order_by('user')
-        userdata = UserData.objects.get(user=self.request.user.pk)
+        sold = Lot.objects.filter(seller_invoice=self.get_object()).order_by('lot_number')
+        bought = Lot.objects.filter(buyer_invoice=self.get_object()).order_by('lot_number')
+        userdata = UserData.objects.get(user=self.get_object().user.pk)
         # light theme for some invoices to allow printing
         if 'print' in self.request.GET.copy():
             context['base_template_name'] = "print.html"
@@ -682,8 +803,10 @@ class InvoiceView(DetailView):
         try:
             context['auction'] = Auction.objects.get(pk=self.get_object().auction.pk)
             context['contact_email'] = User.objects.get(pk=context['auction'].created_by.pk).email
+            context['location'] = AuctionTOS.objects.get(user=self.get_object().user.pk, auction=self.get_object().auction.pk).pickup_location
         except:
             context['auction'] = False
+            context['location'] = False
             context['contact_email'] = False
         return context
    

@@ -1,19 +1,33 @@
 from django.utils import timezone
 from django.core.management.base import BaseCommand, CommandError
-from auctions.models import Auction, User, Lot, Invoice, UserData, Bid, PageView
+from auctions.models import *
 from django.core.mail import send_mail
+from django.db.models import Count
 #import csv 
 class Command(BaseCommand):
     help = 'Just a scaratchpad to do things'
 
     def handle(self, *args, **options):
-        lots = Lot.objects.all()
-        for lot in lots:
-            if lot.description:
-                #print(lot.description)
-                lot.description_rendered = lot.description
-                lot.save()
+        #lots = Lot.objects.all()
+        # for lot in lots:
 
+        #     obj.pickup_location = form.cleaned_data['pickup_location']
+        #     obj.save()
+        #    if lot.description:
+                #print(lot.description)
+        #        lot.description_rendered = lot.description
+        #        lot.save()
+        #lots = Lot.objects.filter(user=2).annotate(num_bids=Count('bid')).filter(num_bids=0)
+        #for lot in lots:
+        #    print(lot, lot.num_bids)
+        #print(Bid.objects.filter(lot_number__species_category=30, lot_number__user=4))
+        # Lot.objects.annotate(
+        #     has_bid=FilteredRelation(
+        #         'bid', condition=Q(bid__lot_number=)
+        # ),
+        # ).filter(
+        #     has_tag__isnull=True,
+        # )
 
         # lots = Lot.objects.all()
         # noImageCount = 0

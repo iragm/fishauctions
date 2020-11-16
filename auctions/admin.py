@@ -1,5 +1,32 @@
 from django.contrib import admin
-from .models import Lot, Bid, Auction, Invoice, Category, Product, Club, Location, UserBan, Watch
+from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
+from django.contrib.auth.models import User
+from .models import Lot, Bid, Auction, Invoice, Category, Product, Club, Location, UserBan, Watch, PickupLocation, UserData, AuctionTOS
+
+class auctionTOS(admin.ModelAdmin):
+    model = AuctionTOS
+
+class AuctionTOSInline(admin.TabularInline):
+    model = AuctionTOS 
+    list_display = ("pickup_location", "user", "auction",)
+    list_filter = ()
+    search_fields = ()
+    extra = 0
+
+class UserdataInline(admin.StackedInline):
+    model = UserData
+    can_delete = False
+    verbose_name_plural = 'User data'
+    exclude = ('rank_unique_species','number_unique_species', 'rank_total_lots', 'number_total_lots', 'rank_total_spent', \
+        'number_total_spent', 'rank_total_bids', 'number_total_bids', 'last_auction_used', 'number_total_sold', \
+        'rank_total_sold', 'total_volume', 'rank_volume', 'seller_percentile', 'buyer_percentile', 'volume_percentile', )
+
+# Extend Django's base user model
+class UserAdmin(BaseUserAdmin):
+    inlines = [
+        UserdataInline,
+        AuctionTOSInline,
+    ]
 
 class ClubAdmin(admin.ModelAdmin):
     model = Club 
@@ -9,11 +36,21 @@ class LocationAdmin(admin.ModelAdmin):
     model = Location 
     search_fields = ("name",)
 
+class PickupLocationInline(admin.TabularInline):
+    model = PickupLocation 
+    list_display = ("name", "user", "auction", "description", "google_map_iframe", "pickup_time", "second_pickup_time")
+    list_filter = ()
+    search_fields = ()
+    extra = 0
+
 class AuctionAdmin(admin.ModelAdmin):
     model = Auction 
     list_display = ("title",'created_by')
     list_filter = ("title",)
     search_fields = ("title",'created_by__first_name','created_by__last_name', )
+    inlines = [
+         PickupLocationInline,
+    ]
 
 class BidInline(admin.TabularInline):
     model = Bid 
@@ -99,6 +136,10 @@ class BanAdmin(admin.ModelAdmin):
     list_filter = ()
     search_fields = ("user__first_name", "user__last_name", "banned_user__first_name","banned_user__last_name",)
 
+
+admin.site.register(AuctionTOS, auctionTOS)
+admin.site.unregister(User)
+admin.site.register(User, UserAdmin)
 admin.site.register(UserBan, BanAdmin)
 admin.site.register(Category, CategoryAdmin)
 admin.site.register(Product, ProductAdmin)

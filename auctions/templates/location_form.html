@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{{ form.media }}
+{% load crispy_forms_tags %}
+{% block extra_js %}
+<script type="text/javascript">
+$('#location-form').submit(function(event){
+    $(this).find(':input[type=submit]').prop('disabled', true);
+});
+</script>
+{% endblock %}
+{% block title %}Pickup location{% endblock %}
+{% block content %}
+<div class="container mt-5 mb-5">
+        <div class="col-md-10 offset-md1">
+          <div style='padding: 2vw;'>
+            {% crispy form form.helper %}
+        </div>
+    </div>
+</div>
+{% endblock %}

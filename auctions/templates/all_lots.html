@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% load crispy_forms_tags %}
 {% load el_pagination_tags %}
+{% load thumbnail %}
 {% block title %}
 {% if view == "all" %}
 Lots
@@ -63,5 +64,8 @@ User: {{ user }}
 {% block extra_js %}
     {{ block.super }}
     <script src="/static/js/el-pagination.js"></script>
-    <script>$.endlessPaginate({paginateOnScroll: true});</script>
+    <script>$.endlessPaginate({
+      paginateOnScroll: true,
+      paginateOnScrollMargin: 100
+      });</script>
 {% endblock %}

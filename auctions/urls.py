@@ -43,4 +43,7 @@ urlpatterns = [
     path('users/<int:pk>/', login_required(views.UserView.as_view())),
     path('users/edit/<int:pk>/', login_required(views.UserUpdate.as_view())),
     path('ignore/', login_required(views.IgnoreCategoriesView.as_view())),
+    path('locations/', views.PickupLocations.as_view(), name='PickupLocation'),
+    path('locations/new/', views.PickupLocationsCreate.as_view()),
+    path('locations/edit/<int:pk>/', views.PickupLocationsUpdate.as_view()),
 ]

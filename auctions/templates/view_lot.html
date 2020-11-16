@@ -93,7 +93,7 @@ function ban_lot(ban) {
       <div class="col-md-10 offset-md1">
         <h1>{{ lot.lot_number }} - {{ lot.lot_name }}</h1>
         {% if lot.image %}
-        <div><img src="{{ lot.image.url }}" style="max-width:100%;"></img></div>
+        <div><img src="{{ lot.image.lot_full.url }}" style="max-width:100%;"></img></div>
         <span class="text-muted">{{ lot.get_image_source_display }} </span>
         {% endif %}
         <span>
@@ -132,12 +132,14 @@ function ban_lot(ban) {
                             Not sold
                         {% else %}
                             {% if lot.high_bidder %}
+                            <span data-toggle="tooltip" data-placement="bottom" title="The high bid is derermined by the second highest bidder.  Enter the most you'd want to spend on this lot, and you'll automatically bid up to your max">
                                 ${{ lot.high_bid }}
                                 {% if lot.high_bidder.pk == request.user.id %}
                                     - you're winning!  Your max bid is ${{ lot.max_bid }}
                                 {% else %}
                                     <a href='/users/{{ lot.high_bidder.pk }}/'>{{ lot.high_bidder }}</a>
                                 {% endif %}
+                            </span>
                             {% else %}
                                 ${{ lot.reserve_price }}
                             {% endif %}
@@ -162,37 +164,44 @@ function ban_lot(ban) {
                 <td><b>Views:</b></td><td>{{ lot.page_views }} views{% if lot.number_of_watchers %}, {{lot.number_of_watchers}} watching{%endif%}</td>
             </tr>
         </table>
-        {% if lot.banned %}
-        <span style="color:red">This lot has been removed by the owner of this auction</span>
-        {% elif lot.user.pk == request.user.id or request.user.is_superuser%}
-        {% if lot.can_be_edited %}
-        <a href="/lots/edit/{{lot.pk}}" class="btn btn-warning active">Edit</a></span> {% if lot.can_be_deleted %}<span><a href="/lots/delete/{{lot.pk}}" class="btn btn-danger active">Delete</a>{% endif %}
+        {% if lot.tos_needed %}
+        <span >Bidding is not allowed on this lot until {% if lot.user.pk == request.user.id%} you have <a href="{{lot.tos_needed}}">confirmed your pickup location</a>{% else %} the submitter of this lot has confirmed their location{% endif %}</span>
         {% else %}
-        {% if lot.user.pk == request.user.id%}This is your lot.  {% endif %}You can edit a lot for 24 hours after you submit it, as long as no one has bid on it.
-        {% endif %}
-        {% if request.user.is_superuser %}
-        <a href="/admin/auctions/lot/{{lot.pk}}/change/" class="btn btn-danger active">Admin</a>
-        {% endif %}
-        {% elif lot.ended %}
-        <span>Bidding has ended on this lot</span>
-        {% else %}
-        {% if lot.auction %}
-        This lot is part of the <b>{{ lot.auction }}</b> auction.  Please <a href='/auctions/{{lot.auction.slug}}'>view the auction's rules</a> before bidding.<br>
-        {% endif %}
-        {% if user.is_authenticated %}
-        {% crispy form form.helper %}
-        <span id="watch" {% if watched %} class="watched">&#9733; Watching{% else %}>&#9734; Watch{% endif %}</span>
-        {% else %}
-        <a href='/login/?next=/lots/{{lot.pk}}/'>Sign in</a> to bid on this lot.
-        {% endif %}
-        {% endif %}
-        {% if lot.auction %}
-        <br><br><a href='/lots/?auction={{lot.auction.slug}}'>View all lots for {{ lot.auction }}</a><br>
-        {% endif %}
-        {% if lot.auction.created_by.pk == request.user.id or request.user.is_superuser %}
-        
-        <button class="btn btn-danger" name="action_unban" onclick="ban_lot('{% if lot.banned %}unban{% else %}ban{% endif %}')">{% if lot.banned %}Unban this lot{% else %}Ban this lot{% endif %}</button>
-        
+            {% if lot.banned %}
+            <span style="color:red">This lot has been removed by the owner of this auction</span>
+            {% elif lot.user.pk == request.user.id or request.user.is_superuser%}
+            {% if lot.can_be_edited %}
+            <a href="/lots/edit/{{lot.pk}}" class="btn btn-warning active">Edit</a></span> {% if lot.can_be_deleted %}<span><a href="/lots/delete/{{lot.pk}}" class="btn btn-danger active">Delete</a>{% endif %}
+            {% else %}
+            {% if lot.user.pk == request.user.id%}This is your lot.  {% endif %}You can edit a lot for 24 hours after you submit it, as long as no one has bid on it.
+            {% endif %}
+            {% if request.user.is_superuser %}
+            <a href="/admin/auctions/lot/{{lot.pk}}/change/" class="btn btn-danger active">Admin</a>
+            {% endif %}
+            {% elif lot.ended %}
+            <span>Bidding has ended on this lot<br></span>
+            {% else %}
+                {% if user.is_authenticated %}
+                {% if not user_tos %}
+                    This lot is part of the <b>{{ lot.auction }}</b> auction.  Please <a href='/auctions/{{lot.auction.slug}}/?next=/lots/{{ lot.pk }}/'>read the auction's rules and confirm your pickup location</a> to bid<br>
+                {% else %}
+                    {% crispy form form.helper %}
+                {% endif %}
+                {% else %}
+                <a href='/login/?next=/lots/{{lot.pk}}/'>Sign in</a> to bid on this lot.
+                {% endif %}
+            {% endif %}
+            {% if user.is_authenticated %}
+                <span id="watch" {% if watched %} class="watched">&#9733; Watching{% else %}>&#9734; Watch{% endif %}</span>
+            {% endif %}
+            {% if lot.auction %}
+            <br><br><a href='/lots/?auction={{lot.auction.slug}}'>View all lots for {{ lot.auction }}</a><br>
+            {% endif %}
+            {% if lot.auction.created_by.pk == request.user.id or request.user.is_superuser %}
+            
+            <button class="btn btn-danger" name="action_unban" onclick="ban_lot('{% if lot.banned %}unban{% else %}ban{% endif %}')">{% if lot.banned %}Unban this lot{% else %}Ban this lot{% endif %}</button>
+            
+            {% endif %}
         {% endif %}
         {% if request.user.is_superuser %}
         <script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.3/dist/Chart.min.js"></script>
@@ -228,6 +237,7 @@ function ban_lot(ban) {
             });
         </script>
         {% endif %}
+            
     </div>
 </div>
 </div>  

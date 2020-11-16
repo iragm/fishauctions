@@ -32,7 +32,7 @@ class Command(BaseCommand):
             #self.stdout.write(f"Rank {rank}: {newData.user} with {newData.lots_sold} lots sold")
             rank = rank + 1
         self.stdout.write("Updating total unique species sold")
-        sortedList = sorted(userData, key=lambda t: -t.lots_sold)
+        sortedList = sorted(userData, key=lambda t: -t.species_sold)
         rank = 1
         for newData in sortedList:
             data = UserData.objects.get(user_id=newData.user.pk)

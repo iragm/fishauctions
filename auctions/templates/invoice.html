@@ -10,19 +10,22 @@
           {% if auction %}
             <h1>{{ invoice.user.first_name }} {{ invoice.user.last_name }}</h1><br>
             {% if show_links %}<a href="{{ request.path }}?print" class="btn btn-primary active">Printable view</a><br>{% endif %}
-            <b>Username:</b> {{invoice.user }}<br>
+            <b>Contact info:</b> {{ invoice.user }}<br>
+            {{userdata.phone_number}}<br>{{userdata.address}}<br>
             <b>Auction:</b> {{ auction }}<br>
-            {% if auction.alternate_pickup_location %} <b>Location:</b> {{userdata.location}} <br>{%endif%}
+            {% if location %} <b>Meet at:</b> {{ location.name }} <br> {{ location.description }} on {{ location.pickup_time }} <br>
+              {% if location.second_pickup_time %}You must also come back on {{ location.second_pickup_time }} to pick up lots purchased from other locations <br><br>{%endif%}
+            {%endif%}
             {% endif %}
             <b>Date:</b> {{ invoice.date }}<br>
             <b>Total (sold-bought):</b> ${{ invoice.net|floatformat:2 }} <br>
             <b>Final total (rounded):</b> {{ invoice }}<br>
-            <b>Status:</b> {% if not invoice.paid %}<span style="color:red">Unpaid</span>{% else %}<span>Paid</span>{% endif %}<br><br>
+            <b>Status:</b> {% if not invoice.paid %}<span style="color:red">Unpaid</span>{% else %}<span>Paid</span>{% endif %}
             {% if auction %}
-            You must meet at {{ auction.pickup_location }} on {{ auction.pickup_time }} 
-            {% if auction.alternate_pickup_location %}or {{ auction.alternate_pickup_location }} on {{ auction.alternate_pickup_time }} {% endif %}
-            to exchange lots.  You must pay the club before you can pick up your lots.  <br><br><b>Please write the lot number and the name of the winner on each lot.</b><br>
-            {% if show_links %}<a href='/auctions/{{ auction.slug }}'>View auction rules</a><br>{%endif%}<br>
+            {%if invoice.lots_sold %}
+            <br><br>Please write the lot number and, if possible, the name of the winner on each lot.<br>
+            {% endif %}
+            {% if show_links %}<a href='/auctions/{{ auction.slug }}'>View auction rules and maps</a><br>{%endif%}<br>
             {% endif %}
             {% if show_links %}{%if contact_email %}Questions?  Email <a href='mailto:{{ contact_email }}'>{{ contact_email }}</a><br>{% endif %}<br>{% endif %}
             {%if invoice.lots_sold %}

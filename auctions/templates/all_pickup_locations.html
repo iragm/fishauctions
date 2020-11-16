@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}
+Pickup locations
+{% endblock %}
+{% load static %}
+{% block content %}
+<div class="container mt-5 mb-5">
+    <div class="row">
+      <div class="col-md-10 offset-lg-1">
+        <h1>Pickup locations</h1>
+        <table class="table">
+          <thead>
+            <tr>
+              <th scope="col">Name</th>
+              <th scope="col">Auction</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for location in object_list %}
+            <tr>
+              <td><a href='/locations/edit/{{location.pk}}'>{{ location.name }}</a></td>
+              <td><a href='/auctions/{{location.auction.slug}}'>{{ location.auction }}</a></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+      </table>
+      <a href="/locations/new/" class="btn btn-info" role="button">Create pickup location</a>
+    </div>
+</div>
+</div>  
+{% endblock %}
+{% block extra_js %}
+{% endblock %}

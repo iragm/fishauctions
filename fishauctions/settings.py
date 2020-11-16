@@ -51,6 +51,8 @@ INSTALLED_APPS = [
     'django_filters',
     'bootstrap_datepicker_plus',
     'el_pagination',
+    'easy_thumbnails',
+    "post_office",
 ]
 
 MIDDLEWARE = [
@@ -190,3 +192,10 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
 EL_PAGINATION_PER_PAGE = 40
 SITE_URL = os.environ['SITE_URL']
+
+THUMBNAIL_ALIASES = {
+    '': {
+        'lot_list': {'size': (200, 200), 'crop': "smart"},
+        'lot_full': {'size': (1000, 1000), 'crop': False},
+    },
+}

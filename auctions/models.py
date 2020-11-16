@@ -10,6 +10,7 @@ from django.urls import reverse
 from django.db.models import Q
 from markdownfield.models import MarkdownField, RenderedMarkdownField
 from markdownfield.validators import VALIDATOR_STANDARD
+from easy_thumbnails.fields import ThumbnailerImageField
 
 def median_value(queryset, term):
     count = queryset.count()
@@ -17,7 +18,7 @@ def median_value(queryset, term):
 
 class Location(models.Model):
 	"""
-	Allows users to specify a location
+	Allows users to specify a state
 	"""
 	name = models.CharField(max_length=255)
 	def __str__(self):
@@ -64,27 +65,31 @@ class Auction(models.Model):
 	winning_bid_percent_to_club = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(100)])
 	winning_bid_percent_to_club.help_text = "To give 70% of the final bid to the seller, enter 30 here"
 	date_start = models.DateTimeField()
-	#lot_submission_end_date = models.DateTimeField(null=True, blank=True) #fixme
+	lot_submission_end_date = models.DateTimeField(null=True, blank=True)
 	date_end = models.DateTimeField()
 	watch_warning_email_sent = models.BooleanField(default=False)
 	invoiced = models.BooleanField(default=False)
 	created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
 	location = models.CharField(max_length=300, null=True, blank=True)
 	location.help_text = "State or region of this auction"
-	pickup_location = models.CharField(max_length=300)
+	notes = MarkdownField(rendered_field='notes_rendered', validator=VALIDATOR_STANDARD, blank=True, null=True)
+	notes.help_text = "To add a link: [Link text](https://www.google.com)"
+	notes_rendered = RenderedMarkdownField(blank=True, null=True)
+	code_to_add_lots = models.CharField(max_length=255, blank=True, null=True)
+	code_to_add_lots.help_text = "This is like a password: People in your club will enter this code to put their lots in this auction"
+
+	pickup_location = models.CharField(max_length=300, null=True, blank=True)
 	pickup_location.help_text = "Description of pickup location"
-	pickup_location_map = models.CharField(max_length=2000)
+	pickup_location_map = models.CharField(max_length=2000, null=True, blank=True)
 	pickup_location_map.help_text = "Find the location on Google maps, click Menu>Share or Embed Map and paste the embed link here"
-	pickup_time = models.DateTimeField()
+	pickup_time = models.DateTimeField(null=True, blank=True)
 	alternate_pickup_location = models.CharField(null=True, blank=True, max_length=300)
 	alternate_pickup_location.help_text = "Description of alternate pickup location"
 	alternate_pickup_location_map = models.CharField(null=True, blank=True, max_length=2000)
 	alternate_pickup_location_map.help_text = "Google Maps link to alternate pickup location"
 	alternate_pickup_time = models.DateTimeField(blank=True, null=True)
-	notes = models.TextField(blank=True, null=True)
-	code_to_add_lots = models.CharField(max_length=255, blank=True, null=True)
-	code_to_add_lots.help_text = "This is like a password: People in your club will enter this code to put their lots in this auction"
-	
+
+
 	def __str__(self):
 		#return "ID:" + str(self.pk) + " " + str(self.title)
 		return str(self.title)
@@ -201,6 +206,25 @@ class Auction(models.Model):
 	def percent_unsold_lots(self):
 		return self.total_unsold_lots / self.total_lots * 100
 	
+class PickupLocation(models.Model):
+	"""
+	A pickup location associated with an auction
+	A given auction can have multiple pickup locations
+	"""
+	name = models.CharField(max_length=50, default="")
+	user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+	auction = models.ForeignKey(Auction, null=True, blank=True, on_delete=models.CASCADE)
+	description = models.CharField(max_length=300)
+	description.help_text = "e.x. First floor of parking garage near Sears entrance"
+	google_map_iframe = models.CharField(max_length=2000, blank=True, null=True)
+	google_map_iframe.help_text = "Find the location on Google maps, click Menu>Share or Embed Map and paste the embed link here.  You must embed an iframe, not a link."
+	pickup_time = models.DateTimeField()
+	second_pickup_time = models.DateTimeField(blank=True, null=True)
+	second_pickup_time.help_text = "If you'll have a dropoff for sellers in the morning and then a pickup for buyers in the afternoon at this location, this should be the pickup time."
+	
+	def __str__(self):
+		return self.name
+
 class Invoice(models.Model):
 	"""An invoice is applied to an auction.  It's the total amount you owe"""
 	auction = models.ForeignKey(Auction, blank=True, null=True, on_delete=models.SET_NULL)
@@ -285,7 +309,15 @@ class Invoice(models.Model):
 			base += " owes the club"
 		return base + " $" + "%.2f" % self.absolute_amount
 
-
+class AuctionTOS(models.Model):
+	user = models.ForeignKey(User, on_delete=models.CASCADE)
+	auction = models.ForeignKey(Auction, on_delete=models.CASCADE)
+	pickup_location = models.ForeignKey(PickupLocation, on_delete=models.CASCADE) #null=True, on_delete=models.SET_NULL)
+	def __str__(self):
+		return f"{self.user} will meet at {self.pickup_location} for {self.auction}"
+	class Meta: 
+		verbose_name = "Auction pickup location"
+		verbose_name_plural = "Auction pickup locations"
 
 class Lot(models.Model):
 	"""A lot is something to bid on"""
@@ -296,8 +328,8 @@ class Lot(models.Model):
 	)
 	lot_number = models.AutoField(primary_key=True)
 	lot_name = models.CharField(max_length=255, default="")
-	lot_name.help_text = "Species name or common name"
-	image = models.ImageField(upload_to='images/', blank=True)
+	lot_name.help_text = "Short description of this lot"
+	image = ThumbnailerImageField(upload_to='images/', blank=True)
 	image.help_text = "Add a picture of the item here"
 	image_source = models.CharField(
 		max_length=20,
@@ -305,7 +337,7 @@ class Lot(models.Model):
 		blank=True
 	)
 	image_source.help_text = "Where did you get this image?"
-	i_bred_this_fish = models.BooleanField(default=False)
+	i_bred_this_fish = models.BooleanField(default=False, verbose_name="I bred this fish/propagated this plant")
 	i_bred_this_fish.help_text = "Check to get breeder points for this lot"
 	description = MarkdownField(rendered_field='description_rendered', validator=VALIDATOR_STANDARD, blank=True, null=True)
 	description.help_text = "To add a link: [Link text](https://www.google.com)"
@@ -346,7 +378,16 @@ class Lot(models.Model):
 			return UserData.objects.get(user=self.winner.pk).location
 		except:
 			return ""
-
+	@property
+	def tos_needed(self):
+		if not self.auction:
+			return False
+		try:
+			AuctionTOS.objects.get(user=self.user, auction=self.auction)
+			return False
+		except:
+			return f'/auctions/{self.auction.slug}'
+		
 	@property
 	def location(self):
 		"""Model object of location of the user for this lot, or False"""
@@ -596,6 +637,7 @@ class UserData(models.Model):
 	club = models.ForeignKey(Club, null=True, on_delete=models.SET_NULL)
 	use_list_view = models.BooleanField(default=False)
 	use_list_view.help_text = "Show a list of all lots instead of showing tiles"
+	email_visible = models.BooleanField(default=True)
 	# breederboard info
 	rank_unique_species = models.PositiveIntegerField(null=True, blank=True)
 	number_unique_species = models.PositiveIntegerField(null=True, blank=True)
@@ -603,7 +645,6 @@ class UserData(models.Model):
 	number_total_lots = models.PositiveIntegerField(null=True, blank=True)
 	rank_total_spent = models.PositiveIntegerField(null=True, blank=True)
 	number_total_spent = models.PositiveIntegerField(null=True, blank=True)
-	email_visible = models.BooleanField(default=True)
 	rank_total_bids = models.PositiveIntegerField(null=True, blank=True)
 	number_total_bids = models.PositiveIntegerField(null=True, blank=True)
 	last_auction_used = models.ForeignKey(Auction, null=True, on_delete=models.SET_NULL)
@@ -614,6 +655,9 @@ class UserData(models.Model):
 	seller_percentile = models.PositiveIntegerField(null=True, blank=True)
 	buyer_percentile = models.PositiveIntegerField(null=True, blank=True)
 	volume_percentile = models.PositiveIntegerField(null=True, blank=True)
+
+	def __str__(self):
+		return f"{self.user.username}'s data"
 
 	@property
 	def lots_submitted(self):

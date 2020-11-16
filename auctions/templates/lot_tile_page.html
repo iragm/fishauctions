@@ -9,11 +9,11 @@
       <div class="card-body">
         <h4 class="card-title">{{ lot.lot_name }}</h4>
         {% if lot.image %}
-        <img class="card-img-top" src="{{ lot.image.url }}" style="max-width:100%;"></img>
+        <img class="card-img-top" src="{{ lot.image.lot_list.url }}" style="max-width:100%;"></img>
         {% endif %}
         <p class="card-text">
           <span class="text-muted">{{ lot.species_category }}<br></span>
-          ${{ lot.high_bid }} {% if lot.high_bidder %}{{ lot.high_bidder }}{% else %}No bids{% endif %}<br>
+          <b>${{ lot.high_bid }}</b> {% if lot.high_bidder %}{{ lot.high_bidder }}{% else %}No bids{% endif %}<br>
           {% if request.user.is_superuser %}
           Views: {{ lot.page_views }} Bid rate: {{ lot.view_to_bid_ratio|floatformat:2 }}<br>
           {% endif %}
@@ -22,7 +22,7 @@
         <div style='position: absolute; bottom: 1em; width:80%; left: 50%;
         transform: translate(-50%);'>
           
-          <a href="/lots/{{lot.lot_number}}" class="btn btn-primary" style='width:100%'>See details</a></div>
+          <a href="/lots/{{lot.lot_number}}" target="_blank" class="btn btn-primary" style='width:100%'>See details</a></div>
       </div>
     </div>
   </div>    
