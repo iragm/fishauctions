@@ -1,3 +1,4 @@
+import csv
 from datetime import datetime
 from itertools import chain
 from django.shortcuts import render,redirect
@@ -257,6 +258,47 @@ def invoicePaid(request, pk):
                     'paid': result
                 })
         raise PermissionDenied()
+
+@login_required
+def auctionReport(request, slug):
+    """Get a CSV file showing all users who are participating in this auction"""
+    auction = Auction.objects.get(slug=slug)
+    checksPass = False
+    if request.user.is_superuser:
+        checksPass = True
+    if auction.created_by == request.user.pk:
+        checksPass = True
+    if checksPass:
+        # Create the HttpResponse object with the appropriate CSV header.
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = 'attachment; filename="' + slug + "-report-" + timezone.now().strftime("%m-%d-%Y")+ '.csv"'
+        writer = csv.writer(response)
+        writer.writerow(['Name', 'Email', 'Phone', 'Address', 'Location', 'Club', 'Lots viewed', 'Lots bid', 'Lots submitted', 'Lots won', 'Total spent', 'Total paid', 'Invoice', 'Breeder points'])
+        users = AuctionTOS.objects.filter(auction=auction)
+        for data in users:
+            lotsViewed = PageView.objects.filter(lot_number__auction=auction, user=data.user)
+            lotsBid = Bid.objects.filter(lot_number__auction=auction,user=data.user)
+            lotsSumbitted = Lot.objects.filter(user=data.user, auction=auction)
+            lotsWon = Lot.objects.filter(winner=data.user)
+            breederPoints = Lot.objects.filter(user=data.user, auction=auction, i_bred_this_fish=True)
+            try:
+                invoice = Invoice.objects.get(auction=auction, user=data.user)
+                if invoice.paid:
+                    paid = "Paid"
+                else:
+                    paid = "Unpaid"
+                totalSpent = invoice.total_bought
+                totalPaid = invoice.total_sold
+            except:
+                paid = "N/A"
+                totalSpent = "0" 
+                totalPaid = "0"
+            writer.writerow([data.user.first_name + " " + data.user.last_name, data.user.email, \
+                data.user.userdata.phone_number, data.user.userdata.address, data.pickup_location, \
+                data.user.userdata.club, len(lotsViewed), len(lotsBid), len(lotsSumbitted), \
+                len(lotsWon), totalSpent, totalPaid, paid, len(breederPoints)])
+        return response    
+    raise PermissionDenied()
 
 class PickupLocations(LoginRequiredMixin, ListView):
     """Show all pickup locations belonging to the current user"""

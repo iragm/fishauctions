@@ -42,6 +42,7 @@
              <a href="/locations/" class="btn btn-primary active">All pickup locations</a>
              <a href="/auctions/{{auction.slug}}/stats/" class="btn btn-primary active">Stats</a>
              <a href="/auctions/{{auction.slug}}/invoices/" class="btn btn-primary active">Invoices</a>
+             <a href="/auctions/{{auction.slug}}/report/" class="btn btn-primary active">Download CSV Report</a>
              {% endif %}
             {% if request.user.is_superuser %}
             <a href="/admin/auctions/auction/{{auction.pk}}/change/" class="btn btn-danger active">Admin</a>

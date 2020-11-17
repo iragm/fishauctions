@@ -40,6 +40,7 @@ urlpatterns = [
     path('auctions/<slug:slug>/edit/', views.AuctionUpdate.as_view()),
     path('auctions/<slug:slug>/invoices/', views.AuctionInvoices.as_view()),
     path('auctions/<slug:slug>/stats/', views.AuctionStats.as_view()),
+    path('auctions/<slug:slug>/report/', views.auctionReport),
     path('auctions/<slug:slug>/', views.AuctionInfo.as_view()),
     path('users/<int:pk>/', login_required(views.UserView.as_view())),
     path('users/edit/<int:pk>/', login_required(views.UserUpdate.as_view())),
