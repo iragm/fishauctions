@@ -26,22 +26,41 @@
               <td>{% if not invoice.opened %}No{%endif%}</td>
               <td><a href="/invoices/{{invoice.pk}}/?print">{% if invoice.user.first_name %}{{ invoice.user.first_name }} {{ invoice.user.last_name }}{% else %}{{ invoice.user }}{% endif %}</a></td>
               <td> {% if invoice.user_should_be_paid %} To be paid {% endif %}${{ invoice.absolute_amount|floatformat:2 }}</td>
-              <td> {% if not invoice.paid %}<span style="color:red">Unpaid</span>{% else %}<span>Paid</span>{% endif %}</td>
+              <td> {% if not invoice.paid %}<a class="btn btn-info active btn-sm" onclick="payinvoice({{ invoice.pk }})" id="pay_{{ invoice.pk }}">Mark paid</a>{% else %}<span>Paid</span>{% endif %}</td>
               <td>{% if invoice.lots_bought %}{{ invoice.lots_bought }}{% endif %}</td>
               <td>{% if invoice.lots_sold_successfully %}{{ invoice.lots_sold_successfully }}{% endif %}</td>
-              <td>{{ invoice.user.userdata.location }}</td>
+              <td>{{ invoice.location }}</td>
             </tr>
             {% endfor %}
         </tbody>
       </table>
-      <h3>Email contact lists by location:</h3>
-      {% for location, emails in locations.items %}
-      <a href='mailto:?bcc={{ emails.emails }}&subject={{ object }}'>{{ location }}</a><br>
-      {% endfor %}
     </div>
 </div>
 </div>  
 
 {% endblock %}
-
-
+{% block extra_js %}
+<script type="text/javascript">
+  function payinvoice(id) {
+    var $ = window.jQuery;
+    $.ajax({
+          type: "POST",
+          beforeSend: function (request) {
+              request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+          },
+          url: "/api/payinvoice/" + id + "/",
+          success : function(result) {
+              if (result.paid) {
+                $('#pay_' + id).removeClass("btn-info");
+                $('#pay_' + id).addClass("btn-success");
+                $('#pay_' + id).html("Paid!");
+              } else {
+                $('#pay_' + id).removeClass("btn-success");
+                $('#pay_' + id).addClass("btn-info");
+                $('#pay_' + id).html("Mark paid");
+              }
+          }
+      });
+  }
+  </script>
+{% endblock %}

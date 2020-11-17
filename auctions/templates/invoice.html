@@ -17,7 +17,6 @@
               {% if location.second_pickup_time %}You must also come back on {{ location.second_pickup_time }} to pick up lots purchased from other locations <br><br>{%endif%}
             {%endif%}
             {% endif %}
-            <b>Date:</b> {{ invoice.date }}<br>
             <b>Total (sold-bought):</b> ${{ invoice.net|floatformat:2 }} <br>
             <b>Final total (rounded):</b> {{ invoice }}<br>
             <b>Status:</b> {% if not invoice.paid %}<span style="color:red">Unpaid</span>{% else %}<span>Paid</span>{% endif %}

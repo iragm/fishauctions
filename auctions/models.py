@@ -301,6 +301,11 @@ class Invoice(models.Model):
 			total_bought += lot.winning_price
 		return total_bought
 
+	@property
+	def location(self):
+		"""Pickup location selected by the user"""
+		return AuctionTOS.objects.get(user=self.user.pk, auction=self.auction.pk).pickup_location
+
 	def __str__(self):
 		base = str(self.user)
 		if self.user_should_be_paid:
@@ -374,8 +379,12 @@ class Lot(models.Model):
 	@property
 	def winner_location(self):
 		"""Model object of location of the winner for this lot, or False"""
+		# try:
+		# 	return UserData.objects.get(user=self.winner.pk).location
+		# except:
+		# 	return ""
 		try:
-			return UserData.objects.get(user=self.winner.pk).location
+			return str(AuctionTOS.objects.get(user=self.winner, auction=self.auction).pickup_location)
 		except:
 			return ""
 	@property
@@ -392,9 +401,13 @@ class Lot(models.Model):
 	def location(self):
 		"""Model object of location of the user for this lot, or False"""
 		try:
-			return UserData.objects.get(user=self.user.pk).location
+			return str(AuctionTOS.objects.get(user=self.user, auction=self.auction).pickup_location)
 		except:
 			return ""
+		# try:
+		# 	return UserData.objects.get(user=self.user.pk).location
+		# except:
+		# 	return ""
 
 	@property
 	def user_as_str(self):

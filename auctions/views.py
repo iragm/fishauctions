@@ -237,6 +237,28 @@ def pageview(request, pk):
             obj.save()
         return HttpResponse("Success")
 
+def invoicePaid(request, pk):
+    if request.method == 'POST':
+        invoice = Invoice.objects.get(pk=pk)
+        checksPass = False
+        if request.user.is_superuser:
+            checksPass = True
+        if invoice.auction.created_by == request.user.pk:
+            checksPass = True
+        if checksPass:
+            if invoice.paid:
+                invoice.paid = False
+                invoice.save()
+                result = False
+            else:
+                invoice.paid = True
+                invoice.save()
+                result = True
+            return JsonResponse(data={
+                    'paid': result
+                })
+        raise PermissionDenied()
+
 class PickupLocations(LoginRequiredMixin, ListView):
     """Show all pickup locations belonging to the current user"""
     model = PickupLocation
@@ -447,20 +469,21 @@ class viewAndBidOnLot(FormMixin, DetailView):
                     messages.info(request, "Tip: bid high!  If no one else bids on this item, you'll still get it for the reserve price.  If someone else bids against you, you'll bid against them until you reach your limit.")
                     was_high_bid = True
                 else:
-                    messages.warning(request, "You've been outbid!")
+                    if lot.high_bidder.pk != request.user.id:
+                        messages.warning(request, "You've been outbid!")
             # Create or update the bid model
             try:
                 # check to see if this user has already bid, and bid more
                 existingBid = Bid.objects.get(user=form.user, lot_number=lot)
-                if thisBid > existingBid.amount:
-                    print(f"{request.user} has upped their bid on {lot} from ${existingBid.amount} to ${thisBid}")
+                if thisBid >= lot.high_bid:
+                    print(f"{request.user} has changed their bid on {lot} from ${existingBid.amount} to ${thisBid}")
                     existingBid.amount = thisBid
                     existingBid.last_bid_time = timezone.now()
                     if was_high_bid:
                         existingBid.was_high_bid = was_high_bid
                     existingBid.save()
                 else:
-                    messages.warning(request, "You can't bid less than you've already bid")
+                    messages.warning(request, f"You can't bid less than ${lot.high_bid}")
             except:
                 # create a new bid model
                 print(f"{request.user} has bid on {lot}")

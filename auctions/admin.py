@@ -3,8 +3,8 @@ from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
 from .models import Lot, Bid, Auction, Invoice, Category, Product, Club, Location, UserBan, Watch, PickupLocation, UserData, AuctionTOS
 
-class auctionTOS(admin.ModelAdmin):
-    model = AuctionTOS
+class PickupLocationAdmin(admin.ModelAdmin):
+    model = PickupLocation
 
 class AuctionTOSInline(admin.TabularInline):
     model = AuctionTOS 
@@ -137,7 +137,7 @@ class BanAdmin(admin.ModelAdmin):
     search_fields = ("user__first_name", "user__last_name", "banned_user__first_name","banned_user__last_name",)
 
 
-admin.site.register(AuctionTOS, auctionTOS)
+admin.site.register(PickupLocation, PickupLocationAdmin)
 admin.site.unregister(User)
 admin.site.register(User, UserAdmin)
 admin.site.register(UserBan, BanAdmin)

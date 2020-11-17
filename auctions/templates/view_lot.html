@@ -173,7 +173,7 @@ function ban_lot(ban) {
             {% if lot.can_be_edited %}
             <a href="/lots/edit/{{lot.pk}}" class="btn btn-warning active">Edit</a></span> {% if lot.can_be_deleted %}<span><a href="/lots/delete/{{lot.pk}}" class="btn btn-danger active">Delete</a>{% endif %}
             {% else %}
-            {% if lot.user.pk == request.user.id%}This is your lot.  {% endif %}You can edit a lot for 24 hours after you submit it, as long as no one has bid on it.
+            {% if lot.user.pk == request.user.id%}This is your lot.  {% endif %}You can edit a lot for 24 hours after you submit it, as long as no one has bid on it.<br>
             {% endif %}
             {% if request.user.is_superuser %}
             <a href="/admin/auctions/lot/{{lot.pk}}/change/" class="btn btn-danger active">Admin</a>
