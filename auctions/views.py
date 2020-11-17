@@ -279,7 +279,7 @@ def auctionReport(request, slug):
             lotsViewed = PageView.objects.filter(lot_number__auction=auction, user=data.user)
             lotsBid = Bid.objects.filter(lot_number__auction=auction,user=data.user)
             lotsSumbitted = Lot.objects.filter(user=data.user, auction=auction)
-            lotsWon = Lot.objects.filter(winner=data.user)
+            lotsWon = Lot.objects.filter(winner=data.user, auction=auction)
             breederPoints = Lot.objects.filter(user=data.user, auction=auction, i_bred_this_fish=True)
             try:
                 invoice = Invoice.objects.get(auction=auction, user=data.user)
