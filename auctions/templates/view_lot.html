@@ -168,7 +168,7 @@ function ban_lot(ban) {
         <span >Bidding is not allowed on this lot until {% if lot.user.pk == request.user.id%} you have <a href="{{lot.tos_needed}}">confirmed your pickup location</a>{% else %} the submitter of this lot has confirmed their location{% endif %}</span>
         {% else %}
             {% if lot.banned %}
-            <span style="color:red">This lot has been removed by the owner of this auction</span>
+            <span style="color:red">Banned:</span> {{ lot.ban_reason }}<br>
             {% elif lot.user.pk == request.user.id or request.user.is_superuser%}
             {% if lot.can_be_edited %}
             <a href="/lots/edit/{{lot.pk}}" class="btn btn-warning active">Edit</a></span> {% if lot.can_be_deleted %}<span><a href="/lots/delete/{{lot.pk}}" class="btn btn-danger active">Delete</a>{% endif %}

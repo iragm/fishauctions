@@ -178,9 +178,8 @@ def lotBan(request, pk):
                 lot.banned = False
             else:
                 lot.banned = True
-            #lot.ban_reason = ban_reason #fixme
+            lot.ban_reason = ban_reason
             lot.save()
-            #return redirect('/lots/' + str(pk))
             return HttpResponse("success")
         else:
             raise PermissionDenied()

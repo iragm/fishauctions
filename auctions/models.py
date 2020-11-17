@@ -29,7 +29,6 @@ class Club(models.Model):
 	name = models.CharField(max_length=255)
 	def __str__(self):
 		return str(self.name)
-	# fixme - create a new auction permission model to restrict bidding in an auction to a given club
 
 class Category(models.Model):
 	"""Picklist of species.  Used for product, lot, and interest"""
@@ -364,7 +363,7 @@ class Lot(models.Model):
 	winning_price = models.PositiveIntegerField(null=True, blank=True)
 	banned = models.BooleanField(default=False)
 	banned.help_text = "This lot will be hidden from views, and users won't be able to bid on it.  Banned lots are not charged in invoices."
-	# ban_reason = models.CharField(max_length=50, blank=True, null=True) #fixme
+	ban_reason = models.CharField(max_length=100, blank=True, null=True)
 	donation = models.BooleanField(default=False)
 	donation.help_text = "All proceeds from this lot will go to the club"
 	watch_warning_email_sent = models.BooleanField(default=False)
