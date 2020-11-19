@@ -271,7 +271,11 @@ def auctionReport(request, slug):
     if checksPass:
         # Create the HttpResponse object with the appropriate CSV header.
         response = HttpResponse(content_type='text/csv')
-        response['Content-Disposition'] = 'attachment; filename="' + slug + "-report-" + timezone.now().strftime("%m-%d-%Y")+ '.csv"'
+        if auction.invoiced:
+            end = 'final'
+        else:
+            end = timezone.now().strftime("%m-%d-%Y")
+        response['Content-Disposition'] = 'attachment; filename="' + slug + "-report-" + end + '.csv"'
         writer = csv.writer(response)
         writer.writerow(['Name', 'Email', 'Phone', 'Address', 'Location', 'Club', 'Lots viewed', 'Lots bid', 'Lots submitted', 'Lots won', 'Total spent', 'Total paid', 'Invoice', 'Breeder points'])
         users = AuctionTOS.objects.filter(auction=auction)

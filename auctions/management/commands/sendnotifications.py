@@ -8,7 +8,7 @@ def notify(email):
     send_mail(
     'Lots you\'ve watched are ending soon',
     f'Make sure to bid on the lots you\'ve watched!\nView your watched lots: {link}\n\nBest, auctions.toxotes.org',
-    'TFCB notifications',
+    'Fish auction notifications',
     [email],
     fail_silently=False,
     html_message = f'Make sure to bid on the lots you\'ve watched!<br><a href="{link}">Click here to view your watched lots</a><br><br>Best, auctions.toxotes.org',
