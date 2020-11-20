@@ -229,8 +229,7 @@ class CreateLotForm(forms.ModelForm):
             obj, created = UserData.objects.get_or_create(user=self.user)
             lastUserAuction = obj.last_auction_used
             if lastUserAuction.lot_submission_end_date > timezone.now():
-                print(lastUserAuction)
-                #self.fields['auction'].initial = lastUserAuction
+                self.fields['auction'].initial = lastUserAuction
         except:
             pass
         self.helper = FormHelper

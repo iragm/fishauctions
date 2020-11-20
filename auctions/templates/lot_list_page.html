@@ -1,4 +1,13 @@
-{% load el_pagination_tags %}
+{% if embed == 'all_lots' %}
+  {% load el_pagination_tags %}
+{% endif %}
+{% if not object_list %}
+  {% if embed == 'all_lots' %}
+  <h5>No lots found</h5>
+  {% else %}
+  <h5>You've already seen all your recommended lots</h5>
+  {% endif %}
+{% else %}
 <div class="container mt-5 mb-5 ml-1">
   <div class="row">
     <div class="col-md-10 offset-lg-1">
@@ -19,8 +28,10 @@
     </tr>
   </thead>
   <tbody>
-{% paginate filter.qs as objects %}
-    {% for lot in objects %}
+    {% if embed == 'all_lots' %}
+    {% paginate filter.qs as object_list %}
+    {% endif %}
+    {% for lot in object_list %}
     <tr class='nowrap'>
       <td>Lot {{ lot.lot_number }}</td>
       <td>{% if lot.donation %}Donation{% else %}{{ lot.user }}{% endif %}</td>
@@ -39,5 +50,9 @@
 </table>
 </div>
 </div>
-</div>  
-{% show_more %}
+</div>
+{% endif %}
+
+{% if embed == 'all_lots' %}
+  {% show_more %}
+{% endif %}

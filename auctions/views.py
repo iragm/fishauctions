@@ -1,5 +1,6 @@
 import csv
 from datetime import datetime
+from random import randint
 from itertools import chain
 from django.shortcuts import render,redirect
 from django.http import HttpResponse, JsonResponse
@@ -17,6 +18,7 @@ from allauth.account.models import EmailAddress
 from el_pagination.views import AjaxListView
 from easy_thumbnails.templatetags.thumbnail import thumbnail_url
 
+from django.conf import settings
 from .models import *
 from .filters import *
 from .forms import *
@@ -42,7 +44,6 @@ class LotListView(AjaxListView):
         return 'lot_tile_page.html' # tile view as default
         #return 'lot_list_page.html' # list view as default
     
-    #paginate_by = 50
     def get_context_data(self, **kwargs):
         
         # set default values
@@ -53,12 +54,104 @@ class LotListView(AjaxListView):
         if self.request.GET.get('page'):
             del data['page'] # required for pagination to work
         context['filter'] = LotFilter(data, queryset=self.get_queryset(), request=self.request, ignore=True)
+        context['embed'] = 'all_lots'
         try:
             context['lotsAreHidden'] = len(UserIgnoreCategory.objects.filter(user=self.request.user))
         except:
             # probably not signed in
             context['lotsAreHidden'] = -1
 
+        return context
+
+class AllRecommendedLots(TemplateView):
+    """
+    Show all recommended lots as a standalone page
+    Lots are loaded async on the template via javascript
+    """
+    template_name = "recommended_lots.html"
+
+class RecommendedLots(ListView):
+    """
+    Return a somewhat random list of lots that have not been seen by the current user.
+    This is rendered html ready to embed in another view
+    It shouldn't really be called directly as there's no CSS in the templates
+    """
+    model = Lot
+        
+    def get_template_names(self):
+        try:
+            userdata = UserData.objects.get(user=self.request.user.pk)
+            if userdata.use_list_view:
+                return 'lot_list_page.html'
+            else:
+                return 'lot_tile_page.html'
+        except:
+            pass
+        return 'lot_tile_page.html' # tile view as default
+
+    def check_lot(self, lot):
+        # weight the chance to see a given lot based on the user's history
+        user = self.request.user
+        if not user:
+            # checks always pass if not signed in
+            return True
+        try:
+            interest = UserInterestCategory.objects.get(category=lot.species_category, user=user).as_percent
+        except:
+            interest = 10 # low chance to view lots that the user has no history for
+        try:
+            ignore = UserIgnoreCategory.objects.get(category=lot.species_category, user=user)
+            return False
+        except:
+            pass
+        rand = randint(0, 100-settings.WEIGHT_AGAINST_TOP_INTEREST)
+        #if lot.promoted:
+        if True: # temporarily, we need to collect data on all lots
+            interest = interest + lot.promotion_weight
+        if interest > rand:
+            return True
+        else:
+            return False
+
+    def get_queryset(self):
+        data = self.request.GET.copy()
+        try:
+            qs = Lot.objects.filter(auction__slug=data['auction'], active=True, banned=False)
+        except:
+            qs = Lot.objects.filter(active=True, banned=False)
+            #qs = Lot.objects.filter(banned=False) # this will show inactive lots, useful for testing
+        if self.request.user:
+            # if the user is signed in, exclude viewed lots and lots they submitted
+            qs = qs.exclude(pageview__user=self.request.user.pk).exclude(user=self.request.user.pk)
+        count = len(qs)
+        result = []
+        if not count:
+            return []
+        timeout = 0 # hard cap to prevent an infinite loop
+        try:
+            desiredResults = int(data['qty'])
+        except:
+            desiredResults = 10
+        while len(result) < desiredResults and timeout < 200:
+            # select a random lot
+            resultLot = qs[randint(0, count - 1)]
+            if resultLot in result:
+                # no duplicates
+                pass
+            else:
+                if self.check_lot(resultLot):
+                    result.append(resultLot)
+            timeout += 1
+        return result
+
+    def get_context_data(self, **kwargs):
+        data = self.request.GET.copy()
+        context = super().get_context_data(**kwargs)
+        try:
+            context['embed'] = data['embed']
+        except:
+            # if not specified in get data, assume this will be viewed by itself
+            context['embed'] = 'standalone_page'
         return context
 
 class MyWonLots(LotListView):
@@ -159,6 +252,7 @@ def userBan(request, pk):
                 if not lot.ended:
                     print(f"User {str(user)} has banned lot {lot}")
                     lot.banned = True
+                    lot.ban_reason = "This user has been banned from this auction"
                     lot.save()
         return redirect('/users/' + str(pk))
 
@@ -172,7 +266,7 @@ def lotBan(request, pk):
         checksPass = False
         if request.user.is_superuser:
             checksPass = True
-        if lot.auction.created_by == request.user.pk:
+        if lot.auction.created_by.pk == request.user.pk:
             checksPass = True
         if checksPass:
             if not ban_reason:
@@ -218,6 +312,15 @@ def newpageview(request, pk):
             )
             obj.date_end = timezone.now()
             obj.save()
+            if created:
+                # create interest in this category if this is a new view for this category
+                interest, created = UserInterestCategory.objects.get_or_create(
+                    category=lot_number.category,
+                    user=user,
+                    defaults={ 'interest': 0 }
+                    )
+                interest.interest += settings.VIEW_WEIGHT
+                interest.save()
         return HttpResponse("Success")
 
 def pageview(request, pk):
@@ -243,7 +346,7 @@ def invoicePaid(request, pk):
         checksPass = False
         if request.user.is_superuser:
             checksPass = True
-        if invoice.auction.created_by == request.user.pk:
+        if invoice.auction.created_by.pk == request.user.pk:
             checksPass = True
         if checksPass:
             if invoice.paid:
@@ -266,7 +369,7 @@ def auctionReport(request, slug):
     checksPass = False
     if request.user.is_superuser:
         checksPass = True
-    if auction.created_by == request.user.pk:
+    if auction.created_by.pk == request.user.pk:
         checksPass = True
     if checksPass:
         # Create the HttpResponse object with the appropriate CSV header.
@@ -286,6 +389,18 @@ def auctionReport(request, slug):
             lotsWon = Lot.objects.filter(winner=data.user, auction=auction)
             breederPoints = Lot.objects.filter(user=data.user, auction=auction, i_bred_this_fish=True)
             try:
+                phone = data.user.userdata.phone_number
+            except:
+                phone = ""
+            try:
+                address = data.user.userdata.address
+            except:
+                address = ""
+            try:
+                club = data.user.userdata.club
+            except:
+                club = ""
+            try:
                 invoice = Invoice.objects.get(auction=auction, user=data.user)
                 if invoice.paid:
                     paid = "Paid"
@@ -298,8 +413,8 @@ def auctionReport(request, slug):
                 totalSpent = "0" 
                 totalPaid = "0"
             writer.writerow([data.user.first_name + " " + data.user.last_name, data.user.email, \
-                data.user.userdata.phone_number, data.user.userdata.address, data.pickup_location, \
-                data.user.userdata.club, len(lotsViewed), len(lotsBid), len(lotsSumbitted), \
+                phone, address, data.pickup_location, \
+                club, len(lotsViewed), len(lotsBid), len(lotsSumbitted), \
                 len(lotsWon), totalSpent, totalPaid, paid, len(breederPoints)])
         return response    
     raise PermissionDenied()
@@ -530,10 +645,18 @@ class viewAndBidOnLot(FormMixin, DetailView):
                 else:
                     messages.warning(request, f"You can't bid less than ${lot.high_bid}")
             except:
-                # create a new bid model
+                # create a new bid object
                 print(f"{request.user} has bid on {lot}")
                 form.was_high_bid = was_high_bid
                 form.save() # record the bid regardless of whether or not it's the current high
+                # also update category interest
+                interest, created = UserInterestCategory.objects.get_or_create(
+                    category=lot.species_category,
+                    user=request.user,
+                    defaults={ 'interest': 0 }
+                    )
+                interest.interest += settings.BID_WEIGHT
+                interest.save()
         return super(viewAndBidOnLot, self).form_valid(form)
 
 def createSpecies(name, scientific_name, category=False):
@@ -590,6 +713,8 @@ def createLot(request):
                     userData, created = UserData.objects.get_or_create(user=request.user.id)
                     userData.last_auction_used = lot.auction
                     userData.save()
+                # someday we may change this to be a field on the form, but for now we need to collect data
+                lot.promotion_weight = randint(0, 20)
                 lot.save()            
                 print(str(lot.user) + " has created a new lot " + lot.lot_name)
                 # if there's another lot in the same category already with no bids, warn about it
@@ -665,7 +790,8 @@ def createAuction(request):
         if form.is_valid():
             auction = form.save(commit=False)
             auction.created_by = User.objects.get(id=request.user.id)
-            #lot_submission_end_date if not set, set to auction.date_end fixme
+            if not auction.lot_submission_end_date:
+                auction.lot_submission_end_date = auction.date_end
             auction.save()            
             print(str(auction.created_by) + " has created a new auction " + auction.title)
             messages.info(request, "Auction created")
@@ -726,6 +852,13 @@ class AuctionInfo(FormMixin, DetailView):
                 defaults={'pickup_location': form.cleaned_data['pickup_location']},
             )
             obj.pickup_location = form.cleaned_data['pickup_location']
+            obj.save()
+            # also update userdata to reflect the last auction
+            obj, created = UserData.objects.get_or_create(
+                user = self.request.user,
+                defaults={},
+            )
+            obj.last_auction_used.pk = self.get_object().pk
             obj.save()
             return self.form_valid(form)
         else:
@@ -901,7 +1034,7 @@ class UserView(DetailView):
             context['data'] = False
         try:
             context['banned'] = UserBan.objects.get(user=self.request.user.pk, banned_user=self.object.pk)
-            print(context['banned'])
+            #print(context['banned'])
         except:
             context['banned'] = False
         return context
@@ -1068,33 +1201,4 @@ class GetUserIgnoreCategory(View):
             except:
                 pass
             results.append(item)
-        #print(results)
-            
         return JsonResponse({'results':results},safe=False)
-	# lv0=levels0()
-	# lv0_list=[]
-	# for lv_0 in lv0:
-	# 	lv0_list.append({'id':lv_0,'name':lv_0})
-	# if request.GET.get('q'):
-	# 	q=request.GET['q']
-	# 	lv0_list=list(filter(lambda d: d['name'] in q, lv0_list))
-	#return JsonResponse({'results':lv0_list},safe=False)
-
-#     {
-#             "results": [
-#                 {
-#                 "id": 1,
-#                 "text": "Option 1"
-#                 },
-#                 {
-#                 "id": 2,
-#                 "text": "Option 2",
-#                 "selected": true
-#                 },
-#                 {
-#                 "id": 3,
-#                 "text": "Option 3",
-#                 "disabled": true
-#                 }
-#             ]
-# }

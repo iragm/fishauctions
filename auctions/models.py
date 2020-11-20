@@ -370,7 +370,8 @@ class Lot(models.Model):
 	seller_invoice = models.ForeignKey(Invoice, null=True, blank=True, on_delete=models.SET_NULL, related_name="seller_invoice")
 	buyer_invoice = models.ForeignKey(Invoice, null=True, blank=True, on_delete=models.SET_NULL, related_name="buyer_invoice")
 	transportable = models.BooleanField(default=True)
-
+	promoted = models.BooleanField(default=False)
+	promotion_weight = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(20)])
 	
 	def __str__(self):
 		return "" + str(self.lot_number) + " - " + self.lot_name
@@ -645,11 +646,12 @@ class UserData(models.Model):
 	user = models.OneToOneField(User, on_delete=models.CASCADE)
 	phone_number = models.CharField(max_length=20, blank=True, null=True)
 	address = models.CharField(max_length=500, blank=True, null=True)
-	location = models.ForeignKey(Location, null=True, on_delete=models.SET_NULL)
-	club = models.ForeignKey(Club, null=True, on_delete=models.SET_NULL)
+	location = models.ForeignKey(Location, blank=True, null=True, on_delete=models.SET_NULL)
+	club = models.ForeignKey(Club, blank=True, null=True, on_delete=models.SET_NULL)
 	use_list_view = models.BooleanField(default=False)
 	use_list_view.help_text = "Show a list of all lots instead of showing tiles"
 	email_visible = models.BooleanField(default=True)
+	last_auction_used = models.ForeignKey(Auction, blank=True, null=True, on_delete=models.SET_NULL)
 	# breederboard info
 	rank_unique_species = models.PositiveIntegerField(null=True, blank=True)
 	number_unique_species = models.PositiveIntegerField(null=True, blank=True)
@@ -659,7 +661,6 @@ class UserData(models.Model):
 	number_total_spent = models.PositiveIntegerField(null=True, blank=True)
 	rank_total_bids = models.PositiveIntegerField(null=True, blank=True)
 	number_total_bids = models.PositiveIntegerField(null=True, blank=True)
-	last_auction_used = models.ForeignKey(Auction, null=True, on_delete=models.SET_NULL)
 	number_total_sold = models.PositiveIntegerField(null=True, blank=True)
 	rank_total_sold = models.PositiveIntegerField(null=True, blank=True)
 	total_volume = models.PositiveIntegerField(null=True, blank=True)
@@ -769,3 +770,23 @@ class UserData(models.Model):
 		"""Ratio of bids to won lots, formatted"""
 		return self.dedication * 100
 	
+
+class UserInterestCategory(models.Model):
+	"""
+	How interested is a user in a given category
+	"""
+	user = models.ForeignKey(User, on_delete=models.CASCADE)
+	category = models.ForeignKey(Category, on_delete=models.CASCADE)
+	interest = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
+
+	def __str__(self):
+		return f"{self.user} interest level in {self.category} is {self.interest}"
+
+	@property
+	def as_percent(self):
+		"""Rank of this interest relative to all of this user's interests"""
+		try:
+			max = UserInterestCategory.objects.filter(user=self.user).order_by('-interest')[0].interest
+			return int((self.interest / max) * 100)
+		except:
+			return 100

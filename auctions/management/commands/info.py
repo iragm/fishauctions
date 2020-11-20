@@ -8,9 +8,7 @@ class Command(BaseCommand):
     help = 'Just a scaratchpad to do things'
 
     def handle(self, *args, **options):
-        #lots = Lot.objects.all()
-        # for lot in lots:
-
+        pass
         #     obj.pickup_location = form.cleaned_data['pickup_location']
         #     obj.save()
         #    if lot.description:

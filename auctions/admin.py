@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
-from .models import Lot, Bid, Auction, Invoice, Category, Product, Club, Location, UserBan, Watch, PickupLocation, UserData, AuctionTOS
+from .models import *
 
 class PickupLocationAdmin(admin.ModelAdmin):
     model = PickupLocation
@@ -9,6 +9,13 @@ class PickupLocationAdmin(admin.ModelAdmin):
 class AuctionTOSInline(admin.TabularInline):
     model = AuctionTOS 
     list_display = ("pickup_location", "user", "auction",)
+    list_filter = ()
+    search_fields = ()
+    extra = 0
+
+class InterestInline(admin.TabularInline):
+    model = UserInterestCategory 
+    list_display = ("category", "user", "interest",)
     list_filter = ()
     search_fields = ()
     extra = 0
@@ -26,6 +33,7 @@ class UserAdmin(BaseUserAdmin):
     inlines = [
         UserdataInline,
         AuctionTOSInline,
+        #InterestInline, # too much noise
     ]
 
 class ClubAdmin(admin.ModelAdmin):

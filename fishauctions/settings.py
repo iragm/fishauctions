@@ -199,3 +199,7 @@ THUMBNAIL_ALIASES = {
         'lot_full': {'size': (1000, 1000), 'crop': False},
     },
 }
+
+VIEW_WEIGHT = 1
+BID_WEIGHT = 10
+WEIGHT_AGAINST_TOP_INTEREST = 20

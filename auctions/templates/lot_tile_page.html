@@ -1,18 +1,27 @@
-{% load el_pagination_tags %}
-{% paginate filter.qs as objects %}
+{% if embed == 'all_lots' %}
+  {% load el_pagination_tags %}
+  {% paginate filter.qs as object_list %}
+{% endif %}
 <div class="container">
   <div class="row">
-{% for lot in objects %}
+{% if not object_list %}
+  {% if embed == 'all_lots' %}
+  <h5>No lots found</h5>
+  {% else %}
+  <h5>You've already seen all your recommended lots</h5>
+  {% endif %}
+{% endif %}
+{% for lot in object_list %}
 <div class="col-sm-6 col-md-4 col-lg-3 py-2">
-<div class="card border-light mb-3 h-100 mh-75" style="max-width: 22rem;">
-      <div class="card-header">Lot {{ lot.lot_number }} <div style='float: right;'>{% if lot.donation %}Donation{% else %} {{ lot.user }}{% endif %}</div></div> 
+<div class="card border-{% if lot.promoted %}success{% else %}light{% endif %} mb-3 h-100 mh-75" style="max-width: 22rem;">
+      <div class="card-header">{% if lot.promoted %}<span class="badge badge-success">Promoted</span>{% endif %} Lot {{ lot.lot_number }} <div style='float: right;'>{% if lot.donation %}Donation{% else %} {{ lot.user }}{% endif %}</div></div> 
       <div class="card-body">
         <h4 class="card-title">{{ lot.lot_name }}</h4>
         {% if lot.image %}
         <img class="card-img-top" src="{{ lot.image.lot_list.url }}" style="max-width:100%;"></img>
         {% endif %}
         <p class="card-text">
-          <span class="text-muted">{{ lot.species_category }}<br></span>
+          <span class="text-muted">{{ lot.species_category }}</span><br>
           <b>${{ lot.high_bid }}</b> {% if lot.high_bidder %}{{ lot.high_bidder }}{% else %}No bids{% endif %}<br>
           {% if request.user.is_superuser %}
           Views: {{ lot.page_views }} Bid rate: {{ lot.view_to_bid_ratio|floatformat:2 }}<br>
@@ -22,7 +31,7 @@
         <div style='position: absolute; bottom: 1em; width:80%; left: 50%;
         transform: translate(-50%);'>
           
-          <a href="/lots/{{lot.lot_number}}" target="_blank" class="btn btn-primary" style='width:100%'>See details</a></div>
+          <a href="/lots/{{lot.lot_number}}" class="btn btn-primary" style='width:100%'>See details</a></div>
       </div>
     </div>
   </div>    
@@ -30,4 +39,6 @@
 </div>
 </div>
 
-{% show_more %}
+{% if embed == 'all_lots' %}
+  {% show_more %}
+{% endif %}

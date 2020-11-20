@@ -5,6 +5,8 @@
 {% block content %}
 {% block extra_js %}
 <script type="text/javascript">
+
+
 function ban_lot(ban) {
   var $ = window.jQuery;
   var data = {};
@@ -37,7 +39,17 @@ function ban_lot(ban) {
 </style>
 <script type="text/javascript">
     window.onload = function() {
+    
     var $ = window.jQuery;
+    // recommended lots
+    $.ajax({
+        type: "GET",
+        url: "/api/lots/get_recommended/?qty=4&auction={{lot.auction.slug}}",
+        success : function(result) {
+            $("#recommendations").html(result);
+        },
+    });
+    // handle page views
     pageView();
     setInterval(function(){ pageViewUpdate(); }, 10000);
     function pageView() {
@@ -175,9 +187,6 @@ function ban_lot(ban) {
             {% else %}
             {% if lot.user.pk == request.user.id%}This is your lot.  {% endif %}You can edit a lot for 24 hours after you submit it, as long as no one has bid on it.<br>
             {% endif %}
-            {% if request.user.is_superuser %}
-            <a href="/admin/auctions/lot/{{lot.pk}}/change/" class="btn btn-danger active">Admin</a>
-            {% endif %}
             {% elif lot.ended %}
             <span>Bidding has ended on this lot<br></span>
             {% else %}
@@ -192,16 +201,18 @@ function ban_lot(ban) {
                 {% endif %}
             {% endif %}
             {% if user.is_authenticated %}
-                <span id="watch" {% if watched %} class="watched">&#9733; Watching{% else %}>&#9734; Watch{% endif %}</span>
-            {% endif %}
-            {% if lot.auction %}
-            <br><br><a href='/lots/?auction={{lot.auction.slug}}'>View all lots for {{ lot.auction }}</a><br>
+                <span id="watch" {% if watched %} class="watched">&#9733; Watching{% else %}>&#9734; Watch{% endif %}</span><br>
             {% endif %}
             {% if lot.auction.created_by.pk == request.user.id or request.user.is_superuser %}
             
             <button class="btn btn-danger" name="action_unban" onclick="ban_lot('{% if lot.banned %}unban{% else %}ban{% endif %}')">{% if lot.banned %}Unban this lot{% else %}Ban this lot{% endif %}</button>
             
             {% endif %}
+            {% if request.user.is_superuser %}
+            <a href="/admin/auctions/lot/{{lot.pk}}/change/" class="btn btn-danger active">Admin</a>
+            Promo weight: {{lot.promotion_weight}}
+            {% endif %}
+            
         {% endif %}
         {% if request.user.is_superuser %}
         <script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.3/dist/Chart.min.js"></script>
@@ -237,7 +248,11 @@ function ban_lot(ban) {
             });
         </script>
         {% endif %}
-            
+        <br><br><span class="text-info">Other lots you might be interested in:</span>
+        <span id='recommendations'>Searching for recommended lots...</span>
+        {% if lot.auction %}
+            <br><a href='/lots/?auction={{lot.auction.slug}}'>View all lots for {{ lot.auction }}</a><br>
+        {% endif %}    
     </div>
 </div>
 </div>  

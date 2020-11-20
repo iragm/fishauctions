@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %} Recommended lots {% endblock %}
+{% load static %}
+{% block content %}
+<span id='recommendations'>Searching for recommended lots...</span>
+{% endblock %}
+{% block extra_js %}
+<script type="text/javascript">
+    window.onload = function() {
+        var $ = window.jQuery;
+        $.ajax({
+            type: "GET",
+            url: "/api/lots/get_recommended/?qty=20",
+            success : function(result) {
+                $("#recommendations").html(result);
+            },
+        });
+    }
+</script>
+{% endblock %}
