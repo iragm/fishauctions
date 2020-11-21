@@ -1,6 +1,6 @@
 import django_filters
-from .models import Lot, Category, Auction, User
-from django.db.models import Q
+from .models import Lot, Category, Auction, User, PageView
+from django.db.models import Q, Prefetch
 from django.forms.widgets import TextInput, Select
 from django.forms import ModelChoiceField
 
@@ -64,7 +64,6 @@ class LotFilter(django_filters.FilterSet):
             applyIgnoreFilter = False
         if not applyIgnoreFilter:
             result = primary_queryset.filter(banned=False).order_by("-lot_number").select_related('species_category')
-        
         # SELECT * FROM auctions_lot
         # WHERE
         # NOT EXISTS (SELECT category_id FROM auctions_userignorecategory where 

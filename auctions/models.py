@@ -76,6 +76,7 @@ class Auction(models.Model):
 	notes_rendered = RenderedMarkdownField(blank=True, null=True)
 	code_to_add_lots = models.CharField(max_length=255, blank=True, null=True)
 	code_to_add_lots.help_text = "This is like a password: People in your club will enter this code to put their lots in this auction"
+	lot_promotion_cost = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
 
 	pickup_location = models.CharField(max_length=300, null=True, blank=True)
 	pickup_location.help_text = "Description of pickup location"
@@ -452,7 +453,8 @@ class Lot(models.Model):
 					else:
 						payout['to_club'] = 0 # don't bill for donations
 						payout['to_seller'] = 0
-					
+				if lot.promoted:
+					payout['to_club'] += auction.lot_promotion_cost					
 		return payout
 
 	@property

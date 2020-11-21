@@ -14,7 +14,7 @@
 {% for lot in object_list %}
 <div class="col-sm-6 col-md-4 col-lg-3 py-2">
 <div class="card border-{% if lot.promoted %}success{% else %}light{% endif %} mb-3 h-100 mh-75" style="max-width: 22rem;">
-      <div class="card-header">{% if lot.promoted %}<span class="badge badge-success">Promoted</span>{% endif %} Lot {{ lot.lot_number }} <div style='float: right;'>{% if lot.donation %}Donation{% else %} {{ lot.user }}{% endif %}</div></div> 
+      <div class="card-header">{% if lot.promoted %}<span class="badge badge-success">Promoted</span>{% endif %} Lot {{ lot.lot_number }} {% if lot.pk not in pagesViews %}<span class="badge badge-info">New</span>{%endif%}<div style='float: right;'>{% if lot.donation %}Donation{% else %} {{ lot.user }}{% endif %}</div></div> 
       <div class="card-body">
         <h4 class="card-title">{{ lot.lot_name }}</h4>
         {% if lot.image %}

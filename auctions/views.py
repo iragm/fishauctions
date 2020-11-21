@@ -60,7 +60,10 @@ class LotListView(AjaxListView):
         except:
             # probably not signed in
             context['lotsAreHidden'] = -1
-
+        try:
+            context['pagesViews'] = PageView.objects.filter(user=self.request.user).values_list('lot_number', flat=True)
+        except:
+            context['pagesViews'] = []
         return context
 
 class AllRecommendedLots(TemplateView):
