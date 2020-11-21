@@ -16,12 +16,17 @@ class LotFilter(django_filters.FilterSet):
         ('open', 'Open'),
         ('closed', 'Ended'),
     )
+    VIEWED = (
+        ('yes', 'Only viewed'),
+        ('no', 'Only unviewed'),
+    )
     q = django_filters.CharFilter(label='', method='textFilter', widget=TextInput(attrs={'placeholder': 'Search', 'class': 'full-width form-control'}))
     auction = django_filters.ModelChoiceFilter(label='',queryset=Auction.objects.all().order_by('title'), empty_label='Any auction', to_field_name='slug', widget=Select(attrs={'style': 'width:10vw', 'class': 'form-control custom-select'}))
     category = django_filters.ModelChoiceFilter(label='', queryset=Category.objects.all().order_by('name'), method='filter_by_category', empty_label='Any category', widget=Select(attrs={'style': 'width:10vw', 'class': 'form-control custom-select'}))
     status = django_filters.ChoiceFilter(label='', choices=STATUS, method='filter_by_status', empty_label='Open and ended', widget=Select(attrs={'style': 'width:10vw', 'class': 'form-control custom-select'}))
     user = django_filters.ModelChoiceFilter(label='', queryset=User.objects.all(), method='filter_by_user', widget=Select(attrs={'style': 'display:none'}))
-
+    viewed = django_filters.ChoiceFilter(label='', choices=VIEWED, method='filter_by_viewed', empty_label='All', widget=Select(attrs={'style': 'width:10vw', 'class': 'form-control custom-select'}))
+    
     class Meta:
         model = Lot
         fields = {} # nothing here so no buttons show up
@@ -30,6 +35,7 @@ class LotFilter(django_filters.FilterSet):
         return queryset.filter(user=value)
 
     def filter_by_category(self, queryset, name, value):
+        self.ignore = False
         return queryset.filter(species_category=value)
 
     def filter_by_auction(self, queryset, name, value):
@@ -40,6 +46,14 @@ class LotFilter(django_filters.FilterSet):
             return queryset.filter(active=False)
         if value == "open":
             return queryset.filter(active=True)
+        return queryset.filter()
+
+    def filter_by_viewed(self, queryset, name, value):
+        views = Lot.objects.filter(pageview__user=self.request.user)
+        if value == "yes":
+            return queryset.filter(lot_number__in=views)
+        if value == "no":
+            return queryset.exclude(lot_number__in=views)
         return queryset.filter()
 
     def textFilter(self, queryset, name, value):

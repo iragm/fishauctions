@@ -61,9 +61,9 @@ class LotListView(AjaxListView):
             # probably not signed in
             context['lotsAreHidden'] = -1
         try:
-            context['pagesViews'] = PageView.objects.filter(user=self.request.user).values_list('lot_number', flat=True)
+            context['lastView'] = PageView.objects.filter(user=self.request.user).order_by('-date_start')[0].date_start
         except:
-            context['pagesViews'] = []
+            context['lastView'] = timezone.now()
         return context
 
 class AllRecommendedLots(TemplateView):
@@ -155,6 +155,10 @@ class RecommendedLots(ListView):
         except:
             # if not specified in get data, assume this will be viewed by itself
             context['embed'] = 'standalone_page'
+        try:
+            context['lastView'] = PageView.objects.filter(user=self.request.user).order_by('-date_start')[0].date_start
+        except:
+            context['lastView'] = timezone.now()
         return context
 
 class MyWonLots(LotListView):
@@ -861,7 +865,7 @@ class AuctionInfo(FormMixin, DetailView):
                 user = self.request.user,
                 defaults={},
             )
-            obj.last_auction_used.pk = self.get_object().pk
+            obj.last_auction_used = self.get_object()
             obj.save()
             return self.form_valid(form)
         else:
