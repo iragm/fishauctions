@@ -1,6 +1,7 @@
 import django_filters
+from django.contrib import messages
 from .models import Lot, Category, Auction, User, PageView
-from django.db.models import Q, Prefetch
+from django.db.models import Q
 from django.forms.widgets import TextInput, Select
 from django.forms import ModelChoiceField
 
@@ -49,6 +50,9 @@ class LotFilter(django_filters.FilterSet):
         return queryset.filter()
 
     def filter_by_viewed(self, queryset, name, value):
+        if not self.request.user.is_authenticated:
+            messages.warning(self.request, "Sign in to use this filter")
+            return queryset
         views = Lot.objects.filter(pageview__user=self.request.user)
         if value == "yes":
             return queryset.filter(lot_number__in=views)
@@ -65,24 +69,17 @@ class LotFilter(django_filters.FilterSet):
     @property
     def qs(self):
         primary_queryset=super(LotFilter, self).qs
-        #result = primary_queryset.filter(banned=False).order_by("-lot_number")
-        #result.filter=Q(species_category=userignorecategory__user=self.request.user)
+        primary_queryset = primary_queryset.filter(banned=False).order_by("-lot_number").select_related('species_category')
         applyIgnoreFilter = True
         try:
-            if self.ignore:
+            if self.ignore and self.request.user.is_authenticated:
                 allowedCategories = Category.objects.exclude(userignorecategory__user=self.request.user)
-                result = primary_queryset.filter(banned=False).filter(species_category__in=allowedCategories).order_by("-lot_number").select_related('species_category')
+                primary_queryset = primary_queryset.filter(species_category__in=allowedCategories)
             else:
                 applyIgnoreFilter = False
         except:
             applyIgnoreFilter = False
-        if not applyIgnoreFilter:
-            result = primary_queryset.filter(banned=False).order_by("-lot_number").select_related('species_category')
-        # SELECT * FROM auctions_lot
-        # WHERE
-        # NOT EXISTS (SELECT category_id FROM auctions_userignorecategory where 
-        # auctions_lot.species_category_id = auctions_userignorecategory.category_id and auctions_userignorecategory.user_id = 2)
-        return result
+        return primary_queryset
 
 class UserWatchLotFilter(LotFilter):
     """A version of the lot filter that only shows lots watched by the current user"""
