@@ -453,7 +453,7 @@ class Lot(models.Model):
 					else:
 						payout['to_club'] = 0 # don't bill for donations
 						payout['to_seller'] = 0
-				if lot.promoted:
+				if self.promoted:
 					payout['to_club'] += auction.lot_promotion_cost					
 		return payout
 

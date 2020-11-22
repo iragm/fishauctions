@@ -42,13 +42,15 @@ function ban_lot(ban) {
     
     var $ = window.jQuery;
     // recommended lots
-    $.ajax({
+    setTimeout( function() {
+        $.ajax({
         type: "GET",
         url: "/api/lots/get_recommended/?qty=4&auction={{lot.auction.slug}}",
         success : function(result) {
             $("#recommendations").html(result);
         },
     });
+    }, 1000);
     // handle page views
     pageView();
     setInterval(function(){ pageViewUpdate(); }, 10000);

@@ -16,7 +16,7 @@
 <div class="card border-{% if lot.promoted %}success{% else %}light{% endif %} mb-3 h-100 mh-75" style="max-width: 22rem;">
       <div class="card-header">{% if lot.promoted %}<span class="badge badge-success">Promoted</span>{% endif %} Lot {{ lot.lot_number }} {% if lot.date_posted > lastView %}<span class="badge badge-info">New</span>{%endif%}<div style='float: right;'>{% if lot.donation %}Donation{% else %} {{ lot.user }}{% endif %}</div></div> 
       <div class="card-body">
-        <h4 class="card-title" data-toggle="tooltip" data-placement="bottom" data-html="true" title="{{ lot.description_rendered | safe }}">{{ lot.lot_name }}</h4>
+        <h4 class="card-title" data-toggle="tooltip" data-placement="bottom" data-html="true" title="{{ lot.description_rendered }}">{{ lot.lot_name }}</h4>
         {% if lot.image %}
         <img class="card-img-top" src="{{ lot.image.lot_list.url }}" style="max-width:100%;"></img>
         {% endif %}

@@ -8,7 +8,9 @@ class Command(BaseCommand):
     help = 'Just a scaratchpad to do things'
 
     def handle(self, *args, **options):
-        pass
+        data = UserData.objects.filter(use_list_view=True)
+        for user in data:
+            print(user.user.first_name + " " + user.user.last_name)
         #     obj.pickup_location = form.cleaned_data['pickup_location']
         #     obj.save()
         #    if lot.description:
