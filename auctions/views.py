@@ -17,11 +17,14 @@ from django.contrib.messages.views import SuccessMessageMixin
 from allauth.account.models import EmailAddress
 from el_pagination.views import AjaxListView
 from easy_thumbnails.templatetags.thumbnail import thumbnail_url
-
+from PIL import Image
+import os
 from django.conf import settings
 from .models import *
 from .filters import *
 from .forms import *
+from io import BytesIO
+from django.core.files import File
 
 def index(request):
     return HttpResponse("this page is intentionally left blank")
@@ -298,6 +301,33 @@ def userUnban(request, pk):
         )
         obj.delete()
         return redirect('/users/' + str(pk))
+
+def imageRotate(request):
+    """Rotate an image associated with a lot"""
+    if request.method == 'POST':
+        try:
+            user = request.user
+            lot_number = int(request.POST['lot_number'])
+            angle = int(request.POST['angle'])
+        except:
+            return HttpResponse("user, lot_number and angle are required")
+        try:
+            lot = Lot.objects.get(pk=lot_number)
+        except:
+            return HttpResponse(f"Lot {lot_number} not found")
+        if not (user.is_superuser or lot.user == user):
+            raise PermissionDenied()
+        if not lot.image:
+            return HttpResponse("No image")
+        thisImage = str(lot.image)
+        pilImage = Image.open(BytesIO(lot.image.read()))
+        pilImage = pilImage.rotate(angle, expand=True)
+        output = BytesIO()
+        pilImage.save(output, format='JPEG', quality=75)
+        output.seek(0)
+        lot.image = File(output, str(thisImage))
+        lot.save()
+        return HttpResponse("Success")
 
 def newpageview(request, pk):
     """Initail pageview to record page views to the PageView model"""
@@ -732,7 +762,7 @@ def createLot(request):
                     try:
                         AuctionTOS.objects.get(user=request.user.id, auction=lot.auction)
                     except:
-                        messages.error(request, f"You need to <a href='/auctions/{lot.auction.slug}'>confirm your pickup location for this auction</a> before this lot will be visible.")        
+                        messages.error(request, f"You need to <a href='/auctions/{lot.auction.slug}'>confirm your pickup location for this auction</a> before people can bid on this lot.")        
                 messages.info(request, f"Created lot!  <a href='/lots/{lot.pk}'>View or edit your last lot</a> or fill out this form again to add another lot.  <a href='/lots/my'>All submitted lots</a>")
                 
             form = CreateLotForm(user=request.user) # no post data here to reset the form
@@ -888,6 +918,10 @@ class allAuctions(ListView):
     template_name = 'all_auctions.html'
     ordering = ['-date_end']
     
+    def get_queryset(self):
+        new_context = Auction.objects.exclude(slug__icontains="-test-").order_by('-date_end')
+        return new_context
+
     def get_context_data(self, **kwargs):
         try:
             user = User.objects.get(pk=self.request.user.pk)
@@ -906,7 +940,7 @@ class allAuctions(ListView):
             elif not locationSet:
                 messages.add_message(self.request, messages.INFO, 'Set your location and address in your <a href="/account/">account</a>')
             elif not nameSet:
-                messages.add_message(self.request, messages.INFO, 'Set your name your <a href="/account/">account</a>')
+                messages.add_message(self.request, messages.INFO, 'Set your name in your <a href="/account/">account</a>')
             
         except:
             pass

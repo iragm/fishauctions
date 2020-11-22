@@ -9,6 +9,7 @@ urlpatterns = [
     path('api/watchitem/<int:pk>/', login_required(views.watchOrUnwatch)),
     path('api/species/', login_required(views.getSpecies)),
     path('api/lots/ban/<int:pk>/', views.lotBan),
+    path('api/image/rotate/', views.imageRotate),
     path('api/lots/get_recommended/', views.RecommendedLots.as_view()),
     path('api/pageview/<int:pk>/', views.pageview),
     path('api/pageview/<int:pk>/new/', views.newpageview),

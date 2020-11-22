@@ -3,14 +3,23 @@ from django.core.management.base import BaseCommand, CommandError
 from auctions.models import *
 from django.core.mail import send_mail
 from django.db.models import Count
+from PIL import Image
+from easy_thumbnails.files import get_thumbnailer
+from io import BytesIO
+from django.core.files import File
+
+import os
 #import csv 
 class Command(BaseCommand):
     help = 'Just a scaratchpad to do things'
 
     def handle(self, *args, **options):
-        data = UserData.objects.filter(use_list_view=True)
-        for user in data:
-            print(user.user.first_name + " " + user.user.last_name)
+        pass
+
+
+        #data = UserData.objects.filter(use_list_view=True)
+        #for user in data:
+        #    print(user.user.first_name + " " + user.user.last_name)
         #     obj.pickup_location = form.cleaned_data['pickup_location']
         #     obj.save()
         #    if lot.description:

@@ -101,14 +101,38 @@ function ban_lot(ban) {
         });
      });
     }
+    // image rotation
+    function rotate(angle) {
+        var data = {};
+        data.lot_number = '{{ lot.pk }}';
+        data.angle = angle;
+        $.ajax({
+            type: "POST",
+            beforeSend: function (request) {
+                request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+            },
+            url: "/api/image/rotate/",
+            data : data,
+            success : function(result) {
+                if (result == "Success") {
+                    location.reload();
+                }
+            }
+        });
+    }
 </script> {% endblock %}
 <div class="container mt-5 mb-5">
     <div class="row">
       <div class="col-md-10 offset-md1">
         <h1>{{ lot.lot_number }} - {{ lot.lot_name }}</h1>
-        {% if lot.image %}
-        <div><img src="{{ lot.image.lot_full.url }}" style="max-width:100%;"></img></div>
-        <span class="text-muted">{{ lot.get_image_source_display }} </span>
+            {% if lot.image %}
+            <div><img src="{{ lot.image.lot_full.url }}" style="max-width:100%;"></img></div>
+            <span class="text-muted">{{ lot.get_image_source_display }} </span>
+            {% if lot.can_be_edited %}
+                {% if lot.user.pk == request.user.id or request.user.is_superuser %}
+                    <br><button class="btn btn-primary" name="rotate-left" onclick="rotate(90)">Rotate ↶</button> <button class="btn btn-primary" name="rotate-left" onclick="rotate(-90)">Rotate ↷</button>
+                {% endif %}<br>
+            {% endif %}
         {% endif %}
         <span>
             <a href="https://www.google.com/search?q={{lot.lot_name}}&tbm=isch" target="_blank">Google image search</a>
