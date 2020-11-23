@@ -581,7 +581,6 @@ class AuctionStats(DetailView):
             messages.error(self.request, "This auction is still in progress, check back once it's finished for more complete stats")
         return context
 
-# password protected in urls.py
 class viewAndBidOnLot(FormMixin, DetailView):
     """Show the picture and detailed information about a lot, and allow users to place bids"""
     template_name = 'view_lot.html'
@@ -595,11 +594,18 @@ class viewAndBidOnLot(FormMixin, DetailView):
             if lot.auction.first_bid_payout and not lot.auction.invoiced:
                 if not self.request.user.is_authenticated or not Bid.objects.filter(user=self.request.user, lot_number__auction=lot.auction):
                     messages.success(self.request, f"Bid on (and win) any lot in the {lot.auction} and get ${lot.auction.first_bid_payout} back!")
-        if lot.high_bidder:
-            defaultBidAmount = lot.high_bid + 1
+        if lot.sealed_bid:
+            try:
+                defaultBidAmount = Bid.objects.get(user=self.request.user, lot_number=lot.pk).amount
+            except:
+                defaultBidAmount = None
+
         else:
-            # reserve price if there are no bids
-            defaultBidAmount = lot.high_bid
+            if lot.high_bidder:
+                defaultBidAmount = lot.high_bid + 1
+            else:
+                # reserve price if there are no bids
+                defaultBidAmount = lot.high_bid
         context = super(viewAndBidOnLot, self).get_context_data(**kwargs)
         context['watched'] = Watch.objects.filter(lot_number=self.kwargs['pk'], user=self.request.user.id)
         context['form'] = CreateBid(initial={'user': self.request.user.id, 'lot_number':self.kwargs['pk'], "amount":defaultBidAmount}, request=self.request)
@@ -650,45 +656,54 @@ class viewAndBidOnLot(FormMixin, DetailView):
             messages.error(request, "Bidding on this lot has ended.  You can no longer place bids")
             checksPass = False
         if checksPass:
-            was_high_bid = False
-            if (thisBid > lot.max_bid):
-                messages.info(request, "You're the high bidder!")
+            if lot.sealed_bid:
                 was_high_bid = True
-                # Send an email to the old high bidder
-                # @fixme, this is slow
-                if highBidder:
-                    if request.user.id != highBidder.pk:
-                        user = User.objects.get(pk=highBidder.pk)
-                        email = user.email
-                        link = f"https://auctions.toxotes.org/lots/{self.kwargs['pk']}/"
-                        send_mail(
-                        'You\'ve been outbid!',
-                        f'You\'ve been outbid on lot {lot}!\nBid more here: {link}\n\nBest, auctions.toxotes.org',
-                        'TFCB notifications',
-                        [email],
-                        fail_silently=False,
-                        html_message = f'You\'ve been outbid on lot {lot}!<br><a href="{link}">Bid more here</a><br><br>Best, auctions.toxotes.org',
-                        )
+                messages.info(request, "Bid placed!  You can change your bid at any time until the auction ends")
             else:
-                if ( (lot.max_bid == lot.reserve_price) and (thisBid >= lot.reserve_price) ):
-                    messages.info(request, "Tip: bid high!  If no one else bids on this item, you'll still get it for the reserve price.  If someone else bids against you, you'll bid against them until you reach your limit.")
+                was_high_bid = False
+                if (thisBid > lot.max_bid):
+                    messages.info(request, "You're the high bidder!")
                     was_high_bid = True
+                    # Send an email to the old high bidder
+                    # @fixme, this is slow
+                    if highBidder:
+                        if request.user.id != highBidder.pk:
+                            user = User.objects.get(pk=highBidder.pk)
+                            email = user.email
+                            link = f"https://auctions.toxotes.org/lots/{self.kwargs['pk']}/"
+                            send_mail(
+                            'You\'ve been outbid!',
+                            f'You\'ve been outbid on lot {lot}!\nBid more here: {link}\n\nBest, auctions.toxotes.org',
+                            'TFCB notifications',
+                            [email],
+                            fail_silently=False,
+                            html_message = f'You\'ve been outbid on lot {lot}!<br><a href="{link}">Bid more here</a><br><br>Best, auctions.toxotes.org',
+                            )
                 else:
-                    if lot.high_bidder.pk != request.user.id:
-                        messages.warning(request, "You've been outbid!")
+                    if ( (lot.max_bid == lot.reserve_price) and (thisBid >= lot.reserve_price) ):
+                        messages.info(request, "Tip: bid high!  If no one else bids on this item, you'll still get it for the reserve price.  If someone else bids against you, you'll bid against them until you reach your limit.")
+                        was_high_bid = True
+                    else:
+                        if lot.high_bidder.pk != request.user.id:
+                            messages.warning(request, "You've been outbid!")
             # Create or update the bid model
             try:
                 # check to see if this user has already bid, and bid more
                 existingBid = Bid.objects.get(user=form.user, lot_number=lot)
-                if thisBid >= lot.high_bid:
-                    print(f"{request.user} has changed their bid on {lot} from ${existingBid.amount} to ${thisBid}")
+                if lot.sealed_bid:
                     existingBid.amount = thisBid
                     existingBid.last_bid_time = timezone.now()
-                    if was_high_bid:
-                        existingBid.was_high_bid = was_high_bid
                     existingBid.save()
                 else:
-                    messages.warning(request, f"You can't bid less than ${lot.high_bid}")
+                    if thisBid >= lot.high_bid:
+                        print(f"{request.user} has changed their bid on {lot} from ${existingBid.amount} to ${thisBid}")
+                        existingBid.amount = thisBid
+                        existingBid.last_bid_time = timezone.now()
+                        if was_high_bid:
+                            existingBid.was_high_bid = was_high_bid
+                        existingBid.save()
+                    else:
+                        messages.warning(request, f"You can't bid less than ${lot.high_bid}")
             except:
                 # create a new bid object
                 print(f"{request.user} has bid on {lot}")

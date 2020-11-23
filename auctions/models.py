@@ -70,6 +70,7 @@ class Auction(models.Model):
 	title = models.CharField(max_length=255)
 	slug = AutoSlugField(populate_from='title', unique=True)
 	sealed_bid = models.BooleanField(default=False)
+	sealed_bid.help_text = "Users won't be able to see what the current bid is"
 	lot_entry_fee = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(10)])
 	lot_entry_fee.help_text = "The amount, in dollars, that the seller will be charged if a lot sells"
 	unsold_lot_fee = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(10)])
@@ -458,6 +459,13 @@ class Lot(models.Model):
 			return False
 
 	@property
+	def sealed_bid(self):
+		if self.auction:
+			if self.auction.sealed_bid:
+				return True
+		return False
+
+	@property
 	def max_bid(self):
 		"""returns the highest bid amount for this lot - this number should not be visible to the public"""
 		allBids = Bid.objects.filter(lot_number=self.lot_number, last_bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount', 'last_bid_time')[:2]
@@ -472,18 +480,25 @@ class Lot(models.Model):
 	@property
 	def high_bid(self):
 		"""returns the high bid amount for this lot"""
-		try:
-			allBids = Bid.objects.filter(lot_number=self.lot_number, last_bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount', 'last_bid_time')[:2]
-			# highest bid is the winner, but the second highest determines the price
-			# $1 more than the second highest bid
-			if allBids[0].amount == allBids[1].amount:
-				return allBids[0].amount
-			else:
-				bidPrice = allBids[1].amount + 1
-			return bidPrice
-		except:
-			#print("no bids for this item")
-			return self.reserve_price
+		if self.sealed_bid:
+			try:
+				bids = Bid.objects.filter(lot_number=self.lot_number, last_bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount', 'last_bid_time')
+				return bids[0].amount
+			except:
+				return 0
+		else:
+			try:
+				allBids = Bid.objects.filter(lot_number=self.lot_number, last_bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount', 'last_bid_time')[:2]
+				# highest bid is the winner, but the second highest determines the price
+				# $1 more than the second highest bid
+				if allBids[0].amount == allBids[1].amount:
+					return allBids[0].amount
+				else:
+					bidPrice = allBids[1].amount + 1
+				return bidPrice
+			except:
+				#print("no bids for this item")
+				return self.reserve_price
 
 	@property
 	def high_bidder(self):

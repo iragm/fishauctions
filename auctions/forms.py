@@ -152,8 +152,8 @@ class CreateAuctionForm(forms.ModelForm):
     class Meta:
         model = Auction
         fields = ['title', 'notes', 'lot_entry_fee','unsold_lot_fee','winning_bid_percent_to_club', 'date_start', 'date_end', \
-            'lot_submission_end_date', 'location', 'first_bid_payout',]
-        exclude = ['slug', 'sealed_bid', 'watch_warning_email_sent', 'invoiced', 'created_by', 'code_to_add_lots', \
+            'lot_submission_end_date', 'location', 'first_bid_payout', 'sealed_bid',]
+        exclude = ['slug', 'watch_warning_email_sent', 'invoiced', 'created_by', 'code_to_add_lots', \
             'pickup_location', 'pickup_location_map', 'pickup_time', 'alternate_pickup_location', 'alternate_pickup_location_map',\
             'alternate_pickup_time',]
         widgets = {
@@ -189,6 +189,7 @@ class CreateAuctionForm(forms.ModelForm):
             ),
             Div(
                 Div('first_bid_payout', css_class='col-md-4',),
+                Div('sealed_bid', css_class='col-md-4',),
                 css_class='row',
             ),
             # Div(

@@ -159,10 +159,14 @@ function ban_lot(ban) {
                     {% if lot.ended %}
                         Won by:
                     {% else %}
+                        {% if lot.sealed_bid %}
+                        Sealed bid auction
+                        {% else %}
                         {% if lot.high_bidder %}
                             Current bid:
                         {% else %}
                             Reserve price:
+                        {% endif %}
                         {% endif %}
                     {% endif %}</b></td>
                     <td>
@@ -172,28 +176,32 @@ function ban_lot(ban) {
                         {% if lot.ended %}
                             Not sold
                         {% else %}
-                            {% if lot.high_bidder %}
-                            <span data-toggle="tooltip" data-placement="bottom" title="The high bid is derermined by the second highest bidder.  Enter the most you'd want to spend on this lot, and you'll automatically bid up to your max">
-                                ${{ lot.high_bid }}
-                                {% if lot.high_bidder.pk == request.user.id %}
-                                    - you're winning!  Your max bid is ${{ lot.max_bid }}
-                                {% else %}
-                                    <a href='/users/{{ lot.high_bidder.pk }}/'>{{ lot.high_bidder }}</a>
-                                {% endif %}
-                            </span>
+                            {% if lot.sealed_bid %}
+                            You can't see how much others have bid
                             {% else %}
-                                ${{ lot.reserve_price }}
+                                {% if lot.high_bidder %}
+                                <span data-toggle="tooltip" data-placement="bottom" title="The high bid is derermined by the second highest bidder.  Enter the most you'd want to spend on this lot, and you'll automatically bid up to your max">
+                                    ${{ lot.high_bid }}
+                                    {% if lot.high_bidder.pk == request.user.id %}
+                                        - you're winning!  Your max bid is ${{ lot.max_bid }}
+                                    {% else %}
+                                        <a href='/users/{{ lot.high_bidder.pk }}/'>{{ lot.high_bidder }}</a>
+                                    {% endif %}
+                                </span>
+                                {% else %}
+                                    ${{ lot.reserve_price }}
+                                {% endif %}
                             {% endif %}
                         {% endif %}
                     {% endif %}
                     </td>
             </tr>
             <tr>
-                <td><b>Ends:</b></td><td>{% if lot.ended %} <span style="color:red">{{ lot.calculated_end }}</span>{% else %}{{ lot.calculated_end }}{% endif %}</td>
+                <td><b>Ends:</b></td><td>{% if lot.ended %} <span class="text-danger">{{ lot.calculated_end }}</span>{% else %}{{ lot.calculated_end }}{% endif %}</td>
             </tr>
             {% if lot.location %}
             <tr>
-                <td><b>Location:</b></td><td>{% if user_location.pk != lot.location.pk %} <span style="color:red">{{ lot.location }} </span> {% else %} {{ lot.location }} {% endif %}</td>
+                <td><b>Location:</b></td><td>{% if user_location.pk != lot.location.pk %} <span class="text-danger">{{ lot.location }} </span> {% else %} {{ lot.location }} {% endif %}</td>
             </tr>
             {% endif %}
             {% if not lot.transportable %}
@@ -201,15 +209,17 @@ function ban_lot(ban) {
                 <td><b>Not transportable</b></td><td>This lot can only be picked up at its location, we won't deliver it to the other pickup location</td>
             </tr>
             {% endif %}
+            {% if not lot.sealed_bid %}
             <tr>
                 <td><b>Views:</b></td><td>{{ lot.page_views }} views{% if lot.number_of_watchers %}, {{lot.number_of_watchers}} watching{%endif%}</td>
             </tr>
+            {% endif %}
         </table>
         {% if lot.tos_needed %}
         <span >Bidding is not allowed on this lot until {% if lot.user.pk == request.user.id%} you have <a href="{{lot.tos_needed}}">confirmed your pickup location</a>{% else %} the submitter of this lot has confirmed their location{% endif %}</span>
         {% else %}
             {% if lot.banned %}
-            <span style="color:red">Banned:</span> {{ lot.ban_reason }}<br>
+            <span class="text-danger">Banned:</span> {{ lot.ban_reason }}<br>
             {% elif lot.user.pk == request.user.id or request.user.is_superuser%}
             {% if lot.can_be_edited %}
             <a href="/lots/edit/{{lot.pk}}" class="btn btn-warning active">Edit</a></span> {% if lot.can_be_deleted %}<span><a href="/lots/delete/{{lot.pk}}" class="btn btn-danger active">Delete</a>{% endif %}
