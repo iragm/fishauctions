@@ -173,7 +173,10 @@ class Auction(models.Model):
 	@property
 	def percent_to_club(self):
 		"""Percent of gross that went to the club"""
-		return self.club_profit/self.gross * 100
+		if self.gross:
+			return self.club_profit/self.gross * 100
+		else:
+			return 0
 
 	@property
 	def number_of_sellers(self):
@@ -204,7 +207,10 @@ class Auction(models.Model):
 	@property
 	def median_lot_price(self):
 		lots = Lot.objects.filter(auction=self.pk, winning_price__isnull=False)
-		return median_value(lots,'winning_price')
+		if lots:
+			return median_value(lots,'winning_price')
+		else:
+			return ""
 	
 	@property
 	def total_sold_lots(self):

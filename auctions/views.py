@@ -577,8 +577,8 @@ class AuctionStats(DetailView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        #owner = self.get_object().created_by
-        #context['contact_email'] = User.objects.get(pk=owner.pk).email
+        if not self.get_object().invoiced:
+            messages.error(self.request, "This auction is still in progress, check back once it's finished for more complete stats")
         return context
 
 # password protected in urls.py
