@@ -51,4 +51,5 @@ urlpatterns = [
     path('locations/', views.PickupLocations.as_view(), name='PickupLocation'),
     path('locations/new/', views.PickupLocationsCreate.as_view()),
     path('locations/edit/<int:pk>/', views.PickupLocationsUpdate.as_view()),
+    path('blog/<slug:slug>/', views.BlogPostView.as_view()),
 ]

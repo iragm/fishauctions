@@ -1286,3 +1286,14 @@ class GetUserIgnoreCategory(View):
                 pass
             results.append(item)
         return JsonResponse({'results':results},safe=False)
+
+class BlogPostView(DetailView):
+    """Render a blog post"""
+    model = BlogPost
+    template_name = 'blog_post.html'
+    
+    # def get_context_data(self, **kwargs):
+    #     context = super().get_context_data(**kwargs)
+    #     #owner = self.get_object().created_by
+    #     #context['contact_email'] = User.objects.get(pk=owner.pk).email
+    #     return context

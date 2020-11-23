@@ -26,6 +26,9 @@ class BlogPost(models.Model):
 	body_rendered = RenderedMarkdownField(blank=True, null=True)
 	date_posted = models.DateTimeField(auto_now_add=True)
 
+	def __str__(self):
+		return self.title
+
 class Location(models.Model):
 	"""
 	Allows users to specify a state
