@@ -3,7 +3,7 @@ from crispy_forms.helper import FormHelper
 from crispy_forms.layout import Layout, Submit
 from crispy_forms.bootstrap import Div, Field
 from django import forms
-from .models import Lot, Bid, Auction, User, UserData, Location, Club, PickupLocation, AuctionTOS
+from .models import Lot, Bid, Auction, User, UserData, Location, Club, PickupLocation, AuctionTOS, Invoice
 from django.forms import ModelForm, HiddenInput
 from bootstrap_datepicker_plus import DateTimePickerInput
 from django.utils import timezone
@@ -46,6 +46,30 @@ class CreateBid(forms.ModelForm):
             'user',
             'lot_number',
             'amount',
+        ]
+
+class InvoiceUpdateForm(forms.ModelForm):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper
+        self.helper.form_method = 'post'
+        self.helper.form_class = 'form-inline'
+        self.helper.layout = Layout(
+            'adjustment_direction',
+            'adjustment',
+            'adjustment_notes',
+            Submit('submit', 'Update', css_class='btn-primary'),
+        )
+        self.fields['adjustment_direction'].label = ""
+        self.fields['adjustment'].label = " an additional $"
+        self.fields['adjustment_notes'].label = "Reason"
+        
+    class Meta:
+        model = Invoice
+        fields = [
+            'adjustment_direction',
+            'adjustment',
+            'adjustment_notes',
         ]
 
 class AuctionTOSForm(forms.ModelForm):
@@ -128,7 +152,7 @@ class CreateAuctionForm(forms.ModelForm):
     class Meta:
         model = Auction
         fields = ['title', 'notes', 'lot_entry_fee','unsold_lot_fee','winning_bid_percent_to_club', 'date_start', 'date_end', \
-            'lot_submission_end_date', 'location']
+            'lot_submission_end_date', 'location', 'first_bid_payout',]
         exclude = ['slug', 'sealed_bid', 'watch_warning_email_sent', 'invoiced', 'created_by', 'code_to_add_lots', \
             'pickup_location', 'pickup_location_map', 'pickup_time', 'alternate_pickup_location', 'alternate_pickup_location_map',\
             'alternate_pickup_time',]
@@ -161,6 +185,10 @@ class CreateAuctionForm(forms.ModelForm):
                 Div('date_start',css_class='col-md-4',),
                 Div('lot_submission_end_date',css_class='col-md-4',),
                 Div('date_end',css_class='col-md-4',),
+                css_class='row',
+            ),
+            Div(
+                Div('first_bid_payout', css_class='col-md-4',),
                 css_class='row',
             ),
             # Div(

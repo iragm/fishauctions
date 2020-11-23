@@ -126,20 +126,23 @@ function ban_lot(ban) {
       <div class="col-md-10 offset-md1">
         <h1>{{ lot.lot_number }} - {{ lot.lot_name }}</h1>
             {% if lot.image %}
-            <div><img src="{{ lot.image.lot_full.url }}" style="max-width:100%;"></img></div>
-            <span class="text-muted">{{ lot.get_image_source_display }} </span>
-            {% if lot.can_be_edited %}
-                {% if lot.user.pk == request.user.id or request.user.is_superuser %}
-                    <br><button class="btn btn-primary" name="rotate-left" onclick="rotate(90)">Rotate ↶</button> <button class="btn btn-primary" name="rotate-left" onclick="rotate(-90)">Rotate ↷</button>
-                {% endif %}<br>
+            <div> <!-- can remove class here I think-->
+                <img src="{{ lot.image.lot_full.url }}" style="max-width:100%;"></img>
+                {% if lot.can_be_edited %}
+                    {% if lot.user.pk == request.user.id or request.user.is_superuser %}
+                        <button class="btn btn-primary" name="rotate-left" style="position: absolute; top: 70px; left: 20px;" onclick="rotate(90)">Rotate ↶</button>
+                        <button class="btn btn-primary" name="rotate-right" style="position: absolute; top: 70px; left: 8em;" onclick="rotate(-90)">Rotate ↷</button>
+                    {% endif %}
+                {% endif %}
+            </div>
+            <span class="text-muted">{{ lot.get_image_source_display }} </span><br>
             {% endif %}
-        {% endif %}
         <span>
             <a href="https://www.google.com/search?q={{lot.lot_name}}&tbm=isch" target="_blank">Google image search</a>
         </span>
         <span>
             or look for this on <a href="https://www.seriouslyfish.com/search/{{lot.lot_name}}" target="_blank">Seriously Fish</a>
-        </span>
+        </span><br><br>
         <div>{% if lot.description %}{{ lot.description_rendered | safe }}{% endif %}</div>
         <table class="table">
             <tr>
@@ -226,19 +229,16 @@ function ban_lot(ban) {
                 <a href='/login/?next=/lots/{{lot.pk}}/'>Sign in</a> to bid on this lot.
                 {% endif %}
             {% endif %}
-            {% if user.is_authenticated %}
-                <span id="watch" {% if watched %} class="watched">&#9733; Watching{% else %}>&#9734; Watch{% endif %}</span><br>
-            {% endif %}
             {% if lot.auction.created_by.pk == request.user.id or request.user.is_superuser %}
-            
             <button class="btn btn-danger" name="action_unban" onclick="ban_lot('{% if lot.banned %}unban{% else %}ban{% endif %}')">{% if lot.banned %}Unban this lot{% else %}Ban this lot{% endif %}</button>
-            
             {% endif %}
             {% if request.user.is_superuser %}
             <a href="/admin/auctions/lot/{{lot.pk}}/change/" class="btn btn-danger active">Admin</a>
             Promo weight: {{lot.promotion_weight}}
             {% endif %}
-            
+            {% if user.is_authenticated %}
+            <span id="watch" {% if watched %} class="watched">&#9733; Watching{% else %}>&#9734; Watch{% endif %}</span><br>
+            {% endif %}
         {% endif %}
         {% if request.user.is_superuser %}
         <script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.3/dist/Chart.min.js"></script>

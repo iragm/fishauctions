@@ -7,27 +7,73 @@
 <div class="container mt-5 mb-5">
     <div class="row">
         <div class="col-md-10 offset-md1">
-          {% if auction %}
-            <h1>{{ invoice.user.first_name }} {{ invoice.user.last_name }}</h1><br>
-            {% if show_links %}<a href="{{ request.path }}?print" class="btn btn-primary active">Printable view</a><br>{% endif %}
-            <b>Contact info:</b> {{ invoice.user }}<br>
-            {{userdata.phone_number}}<br>{{userdata.address}}<br>
-            <b>Auction:</b> {{ auction }}<br>
-            {% if location %} <b>Meet at:</b> {{ location.name }} <br> {{ location.description }} on {{ location.pickup_time }} <br>
-              {% if location.second_pickup_time %}You must also come back on {{ location.second_pickup_time }} to pick up lots purchased from other locations <br><br>{%endif%}
+            <h1>{{ invoice.user.first_name }} {{ invoice.user.last_name }}</h1>
+            {% if location %}<h5>{{location}}</h5>{%endif%}<br>
+            {% if request.user.pk == invoice.auction.created_by.pk or request.user.is_superuser %}
+              {% if show_links %}
+              <br><h5>Adjust this invoice</h5>
+              {% crispy form form.helper %}
+              <br>
+              {%endif%}
             {%endif%}
-            {% endif %}
-            <b>Total (sold-bought):</b> ${{ invoice.net|floatformat:2 }} <br>
-            <b>Final total (rounded):</b> {{ invoice }}<br>
-            <b>Status:</b> {% if not invoice.paid %}<span style="color:red">Unpaid</span>{% else %}<span>Paid</span>{% endif %}
+            {% if show_links %}<a href="{{ request.path }}?print" class="btn btn-primary active">Printable view</a><br>{% endif %}
             {% if auction %}
-            {%if invoice.lots_sold %}
-            <br><br>Please write the lot number and, if possible, the name of the winner on each lot.<br>
-            {% endif %}
-            {% if show_links %}<a href='/auctions/{{ auction.slug }}'>View auction rules and maps</a><br>{%endif%}<br>
+              {% if invoice.lots_sold %}
+              <br>Please write the lot number and, if possible, the name of the winner on each lot.  
+              {% endif %}
             {% endif %}
             {% if show_links %}{%if contact_email %}Questions?  Email <a href='mailto:{{ contact_email }}'>{{ contact_email }}</a><br>{% endif %}<br>{% endif %}
-            {%if invoice.lots_sold %}
+            <table class="table">
+            <tr>
+              <td>Contact info:</td>
+              <td> {{ invoice.user.first_name }} {{ invoice.user.last_name }}<br>
+                {{ userdata.address }}<br>
+                {{ invoice.user.email }}<br>
+                {{ userdata.phone_number }}
+              </td>
+            </tr>
+            <tr>
+              <td>Auction</td>
+              <td>{{ auction }}{% if show_links %} <a href='/auctions/{{ auction.slug }}'>Rules and maps</a><br>{%endif%}</td>
+            </tr>
+            <tr>
+              <td>Status</td>
+              <td>{% if not invoice.paid %}<span class="text-danger">Unpaid</span>{% else %}<span>Paid</span>{% endif %}</td>
+            </tr>
+            <tr>
+            {% if location %}
+              <td>Location</td>
+              <td>{{ location.name }} <br> {{ location.description }} on {{ location.pickup_time }}
+                {% if location.second_pickup_time %}<br>You must also come back on {{ location.second_pickup_time }} to pick up lots purchased from other locations{%endif%}
+              </td>
+              </tr>
+            {%endif%}
+            <tr>
+              <td>Total sold</td>
+              <td>${{ invoice.total_sold|floatformat:2 }}</td>
+            </tr>
+            <tr>
+              <td>Total bought</td>
+              <td>${{ invoice.total_bought|floatformat:2 }}</td>
+            </tr>
+            {% if invoice.first_bid_payout %}
+            <tr>
+              <td>Auction promotion</td>
+              <td>${{ invoice.first_bid_payout|floatformat:2 }}</td>
+            </tr>
+            {% endif %}
+            {% if invoice.adjustment %}
+            <tr>
+              <td>Other</td>
+              <td>{% if invoice.adjustment_direction == 'PAY_SELLER' %}+{% else%}-{%endif%}${{ invoice.adjustment|floatformat:2 }} {{ invoice.adjustment_notes }}</td>
+            </tr>
+            {% endif %}
+            <tr>
+              <td>Final total (rounded)</td>
+              <td>{{ invoice }}</td>
+            </tr>
+          </table>
+          {%if invoice.lots_sold %}  
             <h3>Lots sold</h3>
             <table class="table">
                 <thead>
@@ -94,7 +140,7 @@
             </table>
             <b>Total bought:</b> ${{ invoice.total_bought|floatformat:2 }}     <br>       
             {% endif %}
-            {% if request.user.is_superuser and links %}
+            {% if request.user.is_superuser and show_links %}
             <a href="/admin/auctions/invoice/{{invoice.pk}}/change/" class="btn btn-danger active">Admin</a>
             {% endif %}
         </div>

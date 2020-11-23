@@ -16,6 +16,16 @@ def median_value(queryset, term):
     count = queryset.count()
     return queryset.values_list(term, flat=True).order_by(term)[int(round(count/2))]
 
+class BlogPost(models.Model):
+	"""
+	A simple markdown blog.  At the moment, I don't feel that adding a full CMS is necessary
+	"""
+	title = models.CharField(max_length=255)
+	slug = AutoSlugField(populate_from='title', unique=True)
+	body = MarkdownField(rendered_field='body_rendered', validator=VALIDATOR_STANDARD, blank=True, null=True)
+	body_rendered = RenderedMarkdownField(blank=True, null=True)
+	date_posted = models.DateTimeField(auto_now_add=True)
+
 class Location(models.Model):
 	"""
 	Allows users to specify a state
@@ -77,7 +87,10 @@ class Auction(models.Model):
 	code_to_add_lots = models.CharField(max_length=255, blank=True, null=True)
 	code_to_add_lots.help_text = "This is like a password: People in your club will enter this code to put their lots in this auction"
 	lot_promotion_cost = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
+	first_bid_payout = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
+	first_bid_payout.help_text = "The first time a user bids in this auction, give them a credit in this amount.  This will appear on their invoice"
 
+	# fixme - everything below here can be removed now
 	pickup_location = models.CharField(max_length=300, null=True, blank=True)
 	pickup_location.help_text = "Description of pickup location"
 	pickup_location_map = models.CharField(max_length=2000, null=True, blank=True)
@@ -88,7 +101,7 @@ class Auction(models.Model):
 	alternate_pickup_location_map = models.CharField(null=True, blank=True, max_length=2000)
 	alternate_pickup_location_map.help_text = "Google Maps link to alternate pickup location"
 	alternate_pickup_time = models.DateTimeField(blank=True, null=True)
-
+	# fixme - everything above here can be removed now
 
 	def __str__(self):
 		#return "ID:" + str(self.pk) + " " + str(self.title)
@@ -238,94 +251,7 @@ class PickupLocation(models.Model):
 	def __str__(self):
 		return self.name
 
-class Invoice(models.Model):
-	"""An invoice is applied to an auction.  It's the total amount you owe"""
-	auction = models.ForeignKey(Auction, blank=True, null=True, on_delete=models.SET_NULL)
-	user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
-	date = models.DateTimeField(auto_now_add=True, blank=True)
-	paid = models.BooleanField(default=False)
-	opened = models.BooleanField(default=False)
-	email_sent = models.BooleanField(default=True) # we will set to false manually in the admin console
-	
-	@property
-	def net(self):
-		return self.total_sold - self.total_bought
 
-	@property
-	def user_should_be_paid(self):
-		"""Return true if the user owes the club money.  Most invoices will be negative unless the user is a vendor"""
-		if self.net > 0:
-			return True
-		else:
-			return False
-
-	@property
-	def rounded_net(self):
-		"""Always round in the customer's favor (against the club) to make sure that the club doens't need to deal with change, only whole dollar amounts"""
-		rounded = round(self.net)
-		#print(f"{self.net} Rounded to {rounded}")
-		if self.user_should_be_paid:
-			if self.net > rounded:
-				# we rounded down against the customer
-				return rounded + 1
-			else:
-				return rounded
-		else:
-			if self.net <= rounded:
-				return rounded
-			else:
-				return rounded + 1
-
-	@property
-	def absolute_amount(self):
-		"""Give the absolute value of the invoice's net amount"""
-		return abs(self.rounded_net)
-
-	@property
-	def lots_sold(self):
-		"""Return number of lots the user attempted to sell in this invoice (unsold lots included)"""
-		return len(Lot.objects.filter(seller_invoice=self.pk))#:
-
-	@property
-	def lots_sold_successfully(self):
-		"""Return number of lots the user sold in this invoice (unsold lots not included)"""
-		return len(Lot.objects.filter(seller_invoice=self.pk, winner__isnull=False))
-
-
-	@property
-	def total_sold(self):
-		"""Seller's cut of all lots sold"""
-		allSold = Lot.objects.filter(seller_invoice=self.pk)
-		total_sold = 0
-		for lot in allSold:
-			total_sold += lot.your_cut
-		return total_sold
-
-	@property
-	def lots_bought(self):
-		"""Return number of lots the user bought in this invoice"""
-		return len(Lot.objects.filter(buyer_invoice=self.pk))
-
-	@property
-	def total_bought(self):
-		allSold = Lot.objects.filter(buyer_invoice=self.pk)
-		total_bought = 0
-		for lot in allSold:
-			total_bought += lot.winning_price
-		return total_bought
-
-	@property
-	def location(self):
-		"""Pickup location selected by the user"""
-		return AuctionTOS.objects.get(user=self.user.pk, auction=self.auction.pk).pickup_location
-
-	def __str__(self):
-		base = str(self.user)
-		if self.user_should_be_paid:
-			base += " needs to be paid"
-		else:
-			base += " owes the club"
-		return base + " $" + "%.2f" % self.absolute_amount
 
 class AuctionTOS(models.Model):
 	user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -381,8 +307,8 @@ class Lot(models.Model):
 	donation = models.BooleanField(default=False)
 	donation.help_text = "All proceeds from this lot will go to the club"
 	watch_warning_email_sent = models.BooleanField(default=False)
-	seller_invoice = models.ForeignKey(Invoice, null=True, blank=True, on_delete=models.SET_NULL, related_name="seller_invoice")
-	buyer_invoice = models.ForeignKey(Invoice, null=True, blank=True, on_delete=models.SET_NULL, related_name="buyer_invoice")
+	seller_invoice = models.ForeignKey('Invoice', null=True, blank=True, on_delete=models.SET_NULL, related_name="seller_invoice")
+	buyer_invoice = models.ForeignKey('Invoice', null=True, blank=True, on_delete=models.SET_NULL, related_name="buyer_invoice")
 	transportable = models.BooleanField(default=True)
 	promoted = models.BooleanField(default=False)
 	promotion_weight = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(20)])
@@ -598,6 +524,136 @@ class Lot(models.Model):
 			return self.number_of_bids / self.page_views
 		else:
 			return 0
+
+class Invoice(models.Model):
+	"""
+	An invoice is applied to an auction
+	or a lot (if the lot is not associated with an auction)
+	
+	It's the total amount you owe and how much you owe to the club
+	Invoices get rounded to the nearest dollar
+	"""
+	auction = models.ForeignKey(Auction, blank=True, null=True, on_delete=models.SET_NULL)
+	lot = models.ForeignKey(Lot, blank=True, null=True, on_delete=models.SET_NULL)
+	user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+	date = models.DateTimeField(auto_now_add=True, blank=True)
+	paid = models.BooleanField(default=False)
+	opened = models.BooleanField(default=False)
+	email_sent = models.BooleanField(default=True) # we will set to false manually in the admin console
+	adjustment_direction = models.CharField(
+		max_length=20,
+		choices=(
+			('PAY_SELLER', 'Pay the seller'),
+			('PAY_CLUB', "Charge the seller"),
+		),
+		default="PAY_CLUB"
+	)
+	adjustment = models.PositiveIntegerField(default = 0, validators=[MinValueValidator(0)])
+	adjustment_notes = models.CharField(max_length=150, default="Corrected")
+
+	@property
+	def first_bid_payout(self):
+		try:
+			if self.auction.first_bid_payout:
+				if self.lots_bought:
+					return self.auction.first_bid_payout
+		except:
+			pass
+		return 0
+
+	@property
+	def net(self):
+		"""Factor in:
+		Total bought
+		Total sold
+		Any auction-wide payout promotions
+		Any manual adjustments made to this invoice
+		"""
+		subtotal = self.total_sold - self.total_bought
+		# if this auction is using the first bid payout system to encourage people to bid
+		subtotal += self.first_bid_payout
+		if self.adjustment:
+			if self.adjustment_direction == 'PAY_SELLER':
+				subtotal += self.adjustment
+			else:
+				subtotal -= self.adjustment
+		return subtotal
+
+	@property
+	def user_should_be_paid(self):
+		"""Return true if the user owes the club money.  Most invoices will be negative unless the user is a vendor"""
+		if self.net > 0:
+			return True
+		else:
+			return False
+
+	@property
+	def rounded_net(self):
+		"""Always round in the customer's favor (against the club) to make sure that the club doens't need to deal with change, only whole dollar amounts"""
+		rounded = round(self.net)
+		#print(f"{self.net} Rounded to {rounded}")
+		if self.user_should_be_paid:
+			if self.net > rounded:
+				# we rounded down against the customer
+				return rounded + 1
+			else:
+				return rounded
+		else:
+			if self.net <= rounded:
+				return rounded
+			else:
+				return rounded + 1
+
+	@property
+	def absolute_amount(self):
+		"""Give the absolute value of the invoice's net amount"""
+		return abs(self.rounded_net)
+
+	@property
+	def lots_sold(self):
+		"""Return number of lots the user attempted to sell in this invoice (unsold lots included)"""
+		return len(Lot.objects.filter(seller_invoice=self.pk))#:
+
+	@property
+	def lots_sold_successfully(self):
+		"""Return number of lots the user sold in this invoice (unsold lots not included)"""
+		return len(Lot.objects.filter(seller_invoice=self.pk, winner__isnull=False))
+
+
+	@property
+	def total_sold(self):
+		"""Seller's cut of all lots sold"""
+		allSold = Lot.objects.filter(seller_invoice=self.pk)
+		total_sold = 0
+		for lot in allSold:
+			total_sold += lot.your_cut
+		return total_sold
+
+	@property
+	def lots_bought(self):
+		"""Return number of lots the user bought in this invoice"""
+		return len(Lot.objects.filter(buyer_invoice=self.pk))
+
+	@property
+	def total_bought(self):
+		allSold = Lot.objects.filter(buyer_invoice=self.pk)
+		total_bought = 0
+		for lot in allSold:
+			total_bought += lot.winning_price
+		return total_bought
+
+	@property
+	def location(self):
+		"""Pickup location selected by the user"""
+		return AuctionTOS.objects.get(user=self.user.pk, auction=self.auction.pk).pickup_location
+
+	def __str__(self):
+		base = str(self.user)
+		if self.user_should_be_paid:
+			base += " needs to be paid"
+		else:
+			base += " owes the club"
+		return base + " $" + "%.2f" % self.absolute_amount
 
 class Bid(models.Model):
 	"""Bids apply to lots"""

@@ -14,7 +14,17 @@ class Command(BaseCommand):
     help = 'Just a scaratchpad to do things'
 
     def handle(self, *args, **options):
-        pass
+        users = User.objects.all()
+        notusing = 0
+        using = 0
+        for user in users:
+            if Watch.objects.filter(user=user):
+                print(user.first_name + " " + user.last_name)
+                using += 1
+            else:
+                notusing += 1
+        print(f"Using: {using}")
+        print(f"Not Using: {notusing}")
 
 
         # lots = Lot.objects.all()

@@ -590,11 +590,16 @@ class viewAndBidOnLot(FormMixin, DetailView):
     queryset = Lot.objects.all()
     
     def get_context_data(self, **kwargs):
-        if Lot.objects.get(pk=self.kwargs['pk']).high_bidder:
-            defaultBidAmount = Lot.objects.get(pk=self.kwargs['pk']).high_bid + 1
+        lot = Lot.objects.get(pk=self.kwargs['pk'])
+        if lot.auction:
+            if lot.auction.first_bid_payout and not lot.auction.invoiced:
+                if not self.request.user.is_authenticated or not Bid.objects.filter(user=self.request.user, lot_number__auction=lot.auction):
+                    messages.success(self.request, f"Bid on (and win) any lot in the {lot.auction} and get ${lot.auction.first_bid_payout} back!")
+        if lot.high_bidder:
+            defaultBidAmount = lot.high_bid + 1
         else:
             # reserve price if there are no bids
-            defaultBidAmount = Lot.objects.get(pk=self.kwargs['pk']).high_bid
+            defaultBidAmount = lot.high_bid
         context = super(viewAndBidOnLot, self).get_context_data(**kwargs)
         context['watched'] = Watch.objects.filter(lot_number=self.kwargs['pk'], user=self.request.user.id)
         context['form'] = CreateBid(initial={'user': self.request.user.id, 'lot_number':self.kwargs['pk'], "amount":defaultBidAmount}, request=self.request)
@@ -994,10 +999,11 @@ class Invoices(ListView):
         return context
 
 # password protected in views.py
-class InvoiceView(DetailView):
+class InvoiceView(DetailView, FormMixin):
     """Show a single invoice"""
     template_name = 'invoice.html'
     model = Invoice
+    form_class = InvoiceUpdateForm
     
     def dispatch(self, request, *args, **kwargs):
         # check to make sure the user has permission to view this invoice
@@ -1053,8 +1059,42 @@ class InvoiceView(DetailView):
             context['auction'] = False
             context['location'] = False
             context['contact_email'] = False
+        context['form'] = InvoiceUpdateForm(initial={
+            'adjustment_direction': self.get_object().adjustment_direction,
+            'adjustment':self.get_object().adjustment,
+            "adjustment_notes":self.get_object().adjustment_notes
+            })
         return context
    
+    def get_success_url(self):
+        return self.request.path
+
+    def post(self, request, *args, **kwargs):
+        self.object = self.get_object()
+        form = self.get_form()
+        if form.is_valid():
+            return self.form_valid(form, request)
+        else:
+            return self.form_invalid(form)
+
+    def form_valid(self, form, request):
+        adjustment_direction = form.cleaned_data['adjustment_direction']
+        adjustment = form.cleaned_data['adjustment']
+        adjustment_notes = form.cleaned_data['adjustment_notes']
+        auth = False
+        invoice = self.get_object()
+        if invoice.auction.created_by.pk == request.user.pk:
+            auth = True
+        if request.user.is_superuser :
+            auth = True
+        if not auth:
+            raise PermissionDenied()
+        invoice.adjustment_direction = adjustment_direction
+        invoice.adjustment = adjustment
+        invoice.adjustment_notes = adjustment_notes
+        invoice.save()
+        return super(InvoiceView, self).form_valid(form)
+
 @login_required
 def getSpecies(request):
     if request.method == 'POST':
