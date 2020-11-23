@@ -206,6 +206,19 @@ class Auction(models.Model):
 	def percent_unsold_lots(self):
 		return self.total_unsold_lots / self.total_lots * 100
 	
+	@property
+	def can_submit_lots(self):
+		if timezone.now() < self.date_start:
+			return False
+		if self.lot_submission_end_date:
+			if self.lot_submission_end_date < timezone.now():
+				return False
+			else:
+				return True
+		if self.date_end > timezone.now():
+			return False
+		return True
+
 class PickupLocation(models.Model):
 	"""
 	A pickup location associated with an auction

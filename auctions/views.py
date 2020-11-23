@@ -48,7 +48,6 @@ class LotListView(AjaxListView):
         #return 'lot_list_page.html' # list view as default
     
     def get_context_data(self, **kwargs):
-        
         # set default values
         data = self.request.GET.copy()
         if len(data) == 0:
@@ -67,6 +66,10 @@ class LotListView(AjaxListView):
             context['lastView'] = PageView.objects.filter(user=self.request.user).order_by('-date_start')[0].date_start
         except:
             context['lastView'] = timezone.now()
+        try:
+            context['auction'] = Auction.objects.get(slug=data['auction'])
+        except:
+            context['auction'] = None
         return context
 
 class AllRecommendedLots(TemplateView):
@@ -323,7 +326,7 @@ def imageRotate(request):
         pilImage = Image.open(BytesIO(lot.image.read()))
         pilImage = pilImage.rotate(angle, expand=True)
         output = BytesIO()
-        pilImage.save(output, format='JPEG', quality=75)
+        pilImage.save(output, format='JPEG', quality=100)
         output.seek(0)
         lot.image = File(output, str(thisImage))
         lot.save()

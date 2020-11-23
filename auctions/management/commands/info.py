@@ -17,27 +17,6 @@ class Command(BaseCommand):
         pass
 
 
-        #data = UserData.objects.filter(use_list_view=True)
-        #for user in data:
-        #    print(user.user.first_name + " " + user.user.last_name)
-        #     obj.pickup_location = form.cleaned_data['pickup_location']
-        #     obj.save()
-        #    if lot.description:
-                #print(lot.description)
-        #        lot.description_rendered = lot.description
-        #        lot.save()
-        #lots = Lot.objects.filter(user=2).annotate(num_bids=Count('bid')).filter(num_bids=0)
-        #for lot in lots:
-        #    print(lot, lot.num_bids)
-        #print(Bid.objects.filter(lot_number__species_category=30, lot_number__user=4))
-        # Lot.objects.annotate(
-        #     has_bid=FilteredRelation(
-        #         'bid', condition=Q(bid__lot_number=)
-        # ),
-        # ).filter(
-        #     has_tag__isnull=True,
-        # )
-
         # lots = Lot.objects.all()
         # noImageCount = 0
         # internetImageCount = 0
