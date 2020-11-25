@@ -12,7 +12,7 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.views.generic import ListView, DetailView, View, TemplateView
 from django.urls import reverse
 from django.views.generic.edit import UpdateView, CreateView, DeleteView, FormMixin
-from django.db.models import Q
+from django.db.models import Count, Case, When, IntegerField, Q
 from django.contrib.messages.views import SuccessMessageMixin
 from allauth.account.models import EmailAddress
 from el_pagination.views import AjaxListView
@@ -25,6 +25,7 @@ from .filters import *
 from .forms import *
 from io import BytesIO
 from django.core.files import File
+import re
 
 def index(request):
     return HttpResponse("this page is intentionally left blank")
@@ -599,7 +600,6 @@ class viewAndBidOnLot(FormMixin, DetailView):
                 defaultBidAmount = Bid.objects.get(user=self.request.user, lot_number=lot.pk).amount
             except:
                 defaultBidAmount = None
-
         else:
             if lot.high_bidder:
                 defaultBidAmount = lot.high_bid + 1
@@ -1280,7 +1280,6 @@ class DeleteUserIgnoreCategory(View):
             return JsonResponse(data={'result': "deleted"})
         except Exception as e:
             return JsonResponse(data={'error': str(e)})    
-        
 
 class GetUserIgnoreCategory(View):
     """Get a list of all user ignore categories for the request user"""
@@ -1307,8 +1306,195 @@ class BlogPostView(DetailView):
     model = BlogPost
     template_name = 'blog_post.html'
     
-    # def get_context_data(self, **kwargs):
-    #     context = super().get_context_data(**kwargs)
-    #     #owner = self.get_object().created_by
-    #     #context['contact_email'] = User.objects.get(pk=owner.pk).email
-    #     return context
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        blogpost = self.get_object()
+        # this is to allow the chart# syntax
+        context['formatted_contents'] = re.sub(r"chart\d", "<canvas id=\g<0>></canvas>", blogpost.body_rendered)
+        return context
+
+class AuctionChartView(View):
+    """GET methods for generating auction charts"""
+    def get(self, request, *args, **kwargs):
+        data = request.GET.copy()
+        try:
+            auction = Auction.objects.get(slug=data['auction'])
+        except:
+            return HttpResponse('Invalid auction')
+        if not self.permissionCheck(request, auction):
+            raise PermissionDenied
+        try:
+            chart = data['chart']
+        except:
+            return HttpResponse('chart not specified')
+        if chart == "funnel":
+            """
+            Inverted funnel chart showing user participation
+            """
+            try:
+                allViews = Lot.objects.filter(auction=auction).annotate(num_views=Count('pageview')).order_by("-num_views")
+                maxAllViews = allViews[0].num_views
+                medianAllViews = median_value(allViews, 'num_views')
+                signedInViews = Lot.objects.filter(auction=auction).annotate(
+                        num_views=Count(Case(
+                            When(pageview__user__isnull=False, then=1),
+                            output_field=IntegerField(),
+                        ))
+                    ).order_by("-num_views")
+                maxSignedInViews = signedInViews[0].num_views
+                medianSignedInViews = median_value(signedInViews, 'num_views')
+                # this gets a little tricky
+                # We don't have a way to record the total number of unique visitors without an account for a given auction
+                # But, we can calculate the ratio of median signed in to all:
+                maxRatio = maxAllViews / maxSignedInViews
+                medianRatio = medianAllViews / medianSignedInViews
+                # then get the average of those:
+                ratio = ( maxRatio + medianRatio ) / 2
+                usersWhoViewed = len(User.objects.filter(pageview__lot_number__auction=auction).annotate(dcount=Count('id')))
+                totalUsers = int(usersWhoViewed * ratio)
+            except:
+                totalUsers = 0
+                usersWhoViewed = 0
+            try:
+                userWhoBid = len(User.objects.filter(bid__lot_number__auction=auction).annotate(dcount=Count('id')))
+                #usersWhoSold = len(User.objects.filter(lot__auction=auction).annotate(dcount=Count('id')))
+            except:
+                userWhoBid = 0
+            try:
+                usersWhoWon = len(User.objects.filter(winner__auction=auction).annotate(dcount=Count('id')))
+                # could add filtering for only sold lots here
+                #soldLots = Lot.objects.filter(auction=auction, winner__isnull=False)
+                #len(User.objects.filter(lot__in=soldLots).annotate(dcount=Count('id')))
+            except:
+                usersWhoWon = 0
+            labels = [  "Total unique views (estimated)",
+                        "Users who viewed lots",
+                        "Users who bid on at least one item",
+                        "Users who won at least one item",
+                        ]
+            data = [totalUsers,
+                    usersWhoViewed,
+                    userWhoBid,
+                    usersWhoWon,
+                    ]    
+            return JsonResponse(data={
+                'labels': labels,
+                'data': data,
+            })
+        if chart == "lotprice":
+            """
+            Lot sell price, broken out into bins
+            """
+            try:
+                binSize = int(data['bin'])
+            except:
+                binSize = 2
+            if binSize == 0:
+                binSize = 2
+            labels = ["Not sold"]
+            lots = Lot.objects.filter(auction=auction)
+            data = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+            last = 1
+            for i in range(len(data)-2):
+                nextNumber = (i*binSize)+binSize
+                labels.append(f"${last}-{nextNumber}")
+                last = nextNumber
+            labels.append(f"More than ${last}")
+            for lot in lots:
+                if not lot.winning_price:
+                    lot.winning_price = 0
+                    priceBin = 0
+                else:
+                    priceBin = int(lot.winning_price / binSize)
+                    if priceBin == 0:
+                        priceBin = 1
+                if priceBin > 21:
+                    priceBin = 21
+                data[priceBin] += 1
+            return JsonResponse(data={
+                'labels': labels,
+                'data': data,
+            })
+        if chart == "lotbids":
+            """
+            How many bidders were there per lot
+            """
+            lots = Lot.objects.filter(auction=auction)
+            labels = ['Not sold','Lots with bids from 1 user',
+                        'Lots with bids from 2 users',
+                        'Lots with bids from 3 users',
+                        'Lots with bids from 4 users',
+                        'Lots with bids from 5 users',
+                        'Lots with bids from 6 or more users']
+            data = [0,0,0,0,0,0,0]
+            for lot in lots:
+                if not lot.winning_price:
+                    data[0] += 1
+                else:
+                    bids = len(Bid.objects.filter(lot_number=lot))
+                    if bids > 6:
+                        bids = 6
+                    else:
+                        data[bids] += 1
+            return JsonResponse(data={
+                'labels': labels,
+                'data': data,
+            })
+        if chart == "categories":
+            """
+            Categories by views and lots sold
+            """
+            try:
+                top = int(data['top'])
+            except:
+                top = 20
+            labels = []
+            views = []
+            bids = []
+            lots = []
+            volumes = []
+            categories = Category.objects.filter(lot__auction=auction).annotate(num_lots=Count('lot')).order_by('-num_lots')
+            allLots = len(Lot.objects.filter(auction=auction))
+            allViews = len(PageView.objects.filter(lot_number__auction=auction))
+            allBids = len(Bid.objects.filter(lot_number__auction=auction))
+            allVolume = Lot.objects.filter(auction=auction).aggregate(Sum('winning_price'))['winning_price__sum']
+            if allLots:
+                for category in categories[:top]:
+                    labels.append(str(category))
+                    thisViews = len(PageView.objects.filter(lot_number__auction=auction, lot_number__species_category=category))
+                    thisBids = len(Bid.objects.filter(lot_number__auction=auction, lot_number__species_category=category))
+                    thisVolume = Lot.objects.filter(auction=auction, species_category=category).aggregate(Sum('winning_price'))['winning_price__sum']
+                    percentOfLots = round(((category.num_lots / allLots) * 100),2)
+                    percentOfViews = round(((thisViews / allViews) * 100),2)
+                    percentOfBids = round(((thisBids / allBids) * 100),2)
+                    if allVolume and thisVolume:
+                        percentOfVolume = round(((thisVolume / allVolume) * 100),2)
+                    else:
+                        percentOfVolume = 0
+                    lots.append(percentOfLots)
+                    views.append(percentOfViews)
+                    bids.append(percentOfBids)
+                    volumes.append(percentOfVolume)
+            return JsonResponse(data={
+                'labels': labels,
+                'lots': lots,
+                'views': views,
+                'bids': bids,
+                'volumes': volumes,
+            })                
+        return JsonResponse(data={
+                'club_profit_raw': auction.club_profit_raw,
+                'club_profit': auction.club_profit,
+                'total_to_sellers': auction.total_to_sellers,
+                'percent_to_club': auction.percent_to_club,
+                'notes': "no chart type set, here's some fun info about the auction",
+            }) 
+
+    def permissionCheck(self, request, auction):
+        if request.user.is_superuser:
+            return True
+        elif auction.created_by.pk == request.user.pk:
+            return True
+        return False
+
+

@@ -2,7 +2,7 @@ from django.utils import timezone
 from django.core.management.base import BaseCommand, CommandError
 from auctions.models import *
 from django.core.mail import send_mail
-from django.db.models import Count
+from django.db.models import Count, Case, When, IntegerField
 from PIL import Image
 from easy_thumbnails.files import get_thumbnailer
 from io import BytesIO
@@ -14,18 +14,24 @@ class Command(BaseCommand):
     help = 'Just a scaratchpad to do things'
 
     def handle(self, *args, **options):
-        users = User.objects.all()
-        notusing = 0
-        using = 0
+        auction = Auction.objects.get(title="TFCB Annual Auction")
+        users = User.objects.filter(pageview__lot_number__auction=auction).annotate(dcount=Count('id'))
         for user in users:
-            if Watch.objects.filter(user=user):
-                print(user.first_name + " " + user.last_name)
-                using += 1
-            else:
-                notusing += 1
-        print(f"Using: {using}")
-        print(f"Not Using: {notusing}")
-
+            #print(lot.num_views)
+            #print(f'https://auctions.toxotes.org/lots/{lot.lot_number}')
+            print(f"{user.first_name} {user.last_name}")
+            
+        # auction = Auction.objects.get(title="TFCB Annual Auction")
+        
+        
+            #print(f'{lot.pk}, {bids}, {}')
+        # users = User.objects.all()
+        # auction = Auction.objects.get(title="PVAS Fall Auction")
+        # for user in users:
+        #     #won = len(Lot.objects.filter(winner=user, auction=auction))
+        #     views = len(PageView.objects.filter(lot_number__auction=auction, user=user))
+        #     if views > 5:
+        #         print(f'"{user.first_name} {user.last_name}", {views}')
 
         # lots = Lot.objects.all()
         # noImageCount = 0

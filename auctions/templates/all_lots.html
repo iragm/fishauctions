@@ -48,7 +48,7 @@ User: {{ user }}
           {% endif %}{% if auction %} for {{ auction }}{% endif %}</h1>
         <form method="GET">
           {{ filter.form }}
-          <button type="submit" class="btn btn-primary">Apply Filter</button> {% if view == "mylots" or view == "all" %}<br>{% if auction %}{% if auction.can_submit_lots %}<a href="/lots/new/" class="btn btn-info" role="button">Create lot</a>{% endif %}{% endif %}{% endif %}
+          <button type="submit" class="btn btn-primary">Apply Filter</button> {% if view == "mylots" or view == "all" %}<br>{% if auction %}{% if auction.can_submit_lots %}<a href="/lots/new/" class="btn btn-info" role="button">Create lot</a> <span class="text-info">You can add lots to this auction until {{ auction.lot_submission_end_date }}</span>{% endif %}{% endif %}{% endif %}
         </form>
         {% if view == "user" %}
         <br><a href='/users/{{user.pk}}'>View user info for {{ user }} </a><br>

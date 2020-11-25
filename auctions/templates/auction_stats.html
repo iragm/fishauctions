@@ -1,13 +1,189 @@
 {% extends "base.html" %}
 {% load crispy_forms_tags %}
-{% block title %} {{ auction.title }} {% endblock %}
+{% block title %} Stats for {{ auction.title }} {% endblock %}
 {% load static %}
 {% block content %}
-{% block extra_js %}{% endblock %}
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.3/dist/Chart.min.js"></script>
+<script src="/static/js/chart.funnel.min.js"></script>
+<script>
+  window.onload = function() {
+    Chart.defaults.global.defaultFontColor = "#fff";
+    $.ajax({
+      url: '/api/chart/auction/?auction={{auction.slug}}&chart=none',
+      success: function (data) {
+        $('#club_profit_raw').html(data.club_profit_raw.toFixed(2))
+        $('#club_profit').html(data.club_profit.toFixed(2))
+        $('#total_to_sellers').html(data.total_to_sellers.toFixed(2))
+        $('#percent_to_club').html(data.percent_to_club.toFixed(2))
+      }});
+    $.ajax({
+      url: '/api/chart/auction/?auction={{auction.slug}}&chart=funnel',
+      success: function (data) {
+          var ctx = document.getElementById('funnel_chart').getContext('2d');
+          var funnelChart = {
+              type: 'funnel',
+              data: {
+                  datasets: [{
+                      data: data.data,
+                      backgroundColor: [
+                        'rgba(86, 53, 176, 0.4)', 
+                        'rgba(217, 211, 41, 0.4)',
+                        'rgba(62, 184, 64, 0.4)',
+                        'rgba(166, 33, 27, 0.4)', 
+                      ],
+                      hoverBackgroundColor: [
+                        'rgba(86, 53, 176, 0.8)',  
+                        'rgba(217, 211, 41, 0.8)',
+                        'rgba(62, 184, 64, 0.8)',
+                        'rgba(166, 33, 27, 0.8)',
+                      ]
+                  }],
+                  labels: data.labels,
+              },
+                  options: {
+                      responsive: true,
+                      sort: 'desc',
+                      topWidth: 0,
+                      legend: {
+                          position: 'bottom'
+                      },
+                      title: {
+                          display: false,
+                          text: 'Chart.js Funnel Chart'
+                      },
+                      animation: {
+                          animateScale: true,
+                          animateRotate: true
+                      }
+                  }
+          }
+          new Chart(ctx, funnelChart);
+      }
+    });
+    $.ajax({
+      url: '/api/chart/auction/?auction={{auction.slug}}&chart=lotprice&bin={{auction.bin_size}}',
+      success: function (data) {
+          var ctx = document.getElementById('lot_prices').getContext('2d');
+          var lotPrices = {
+            type: 'bar',
+            data: {
+                labels: data.labels,
+                datasets: [{
+                label: 'Number of lots',
+                backgroundColor: 'rgba(52, 152, 219, 0.4)',
+                data: data.data
+                }]
+            },
+            options: {
+                legend: {
+                    display: false
+                },
+                title: {
+                    display: false,
+                    text: 'Bar chart'
+                }
+            }
+          }
+          new Chart(ctx, lotPrices);
+     }
+    });
+    $.ajax({
+      url: '/api/chart/auction/?auction={{auction.slug}}&chart=lotbids',
+      success: function (data) {
+          var ctx = document.getElementById('lot_pie').getContext('2d');
+          var pie = {
+            type: 'pie',
+            data: {
+              datasets: [{
+                data: data.data,
+                backgroundColor: [
+                  'rgba(86, 53, 176, 0.4)',  
+                  'rgba(53, 170, 176, 0.4)',
+                  'rgba(53, 176, 106, 0.4)',
+                  'rgba(73, 199, 48, 0.4)',
+                  'rgba(186, 199, 48, 0.4)',
+                  'rgba(219, 135, 44, 0.4)',
+                  'rgba(235, 33, 33, 0.4)',
+                ],
+                hoverBackgroundColor: [
+                  'rgba(86, 53, 176, 0.8)',  
+                  'rgba(53, 170, 176, 0.8)',
+                  'rgba(53, 176, 106, 0.8)',
+                  'rgba(73, 199, 48, 0.8)',
+                  'rgba(186, 199, 48, 0.8)',
+                  'rgba(219, 135, 44, 0.8)',
+                  'rgba(235, 33, 33, 0.8)',
+                ],
+                label: 'Dataset 1'
+              }],
+              labels: data.labels
+            },
+            options: {
+              responsive: true,
+              legend: {
+                    display: false
+                },
+            }
+          };
+          new Chart(ctx, pie);
+      }
+    });
+    $.ajax({
+      url: '/api/chart/auction/?auction={{auction.slug}}&chart=categories&top=20',
+      success: function (data) {
+          var ctx = document.getElementById('categories').getContext('2d');
+          var categories = {
+            type: 'bar',
+            data: {
+                labels: data.labels,
+                datasets: [{
+                  label: 'Percent of all lots',
+                  backgroundColor: 'rgba(52, 152, 219, 0.4)',
+                  hoverBackgroundColor: 'rgba(52, 152, 219, 0.8)',
+                  data: data.lots
+                },
+                {
+                  label: 'Percent of all views',
+                  backgroundColor: 'rgba(217, 211, 41, 0.4)',
+                  hoverBackgroundColor: 'rgba(217, 211, 41, 0.8)',
+                  data: data.views
+                },
+                {
+                  label: 'Percent of all bids',
+                  backgroundColor: 'rgba(62, 184, 64, 0.4)',
+                  hoverBackgroundColor: 'rgba(62, 184, 64, 0.8)',
+                  data: data.bids
+                },
+                {
+                  label: 'Percent of total volume',
+                  backgroundColor: 'rgba(166, 33, 27, 0.4)',
+                  hoverBackgroundColor: 'rgba(166, 33, 27, 0.8)',
+                  data: data.volumes
+                }
+              ]
+            },
+            options: {
+                legend: {
+                    display: true
+                },
+                title: {
+                    display: false,
+                    text: 'Bar chart'
+                }
+            }
+          }
+          new Chart(ctx, categories);
+     }
+    });
+};
+</script>
+
+{% endblock %}
 <div class="container mt-5 mb-5">
     <div class="row">
         <div class="col-md-10 offset-md1">
-            <h1>{{ auction.title }}</h1>
+            <h1>Stats for {{ auction.title }}</h1>
             <br><h3>Users</h3>
             <table class="table">
                 <thead>
@@ -19,43 +195,74 @@
                   <tr>
                     <td>Buyers</td><td>{{auction.number_of_buyers}}</td>
                   </tr>
+                  <tr>
+                    <td>Users who bought or sold at least one item</td><td>{{auction.number_of_participants}}</td>
+                  </tr>
+                  
               </tbody>
             </table>
+            <h4>User engagement</h4>
+            Number of users who viewed lots, logged in, bid, and won lots in this auction.
+            <canvas id="funnel_chart"></canvas>
+            <span><br>In order for the auction to succeed, users must<ol><li>Visit the site</li><li>See a lot they like</li><li>Sign up for an account</li><li>Place a bid</li><li>Up their bid if they are outbid</li></ol>
+              This graph represents "friction" in this process.  At each step, some number of people will give up.  Ideally, every user who viewed a lot would win at least a lot or two, meaning there would be very little change as you move down the graph.<br><br>Remember that this graph only indicates people who visited the auction site, we can't know how many people are (for example) aware of your club but don't know about the auction, or have heard about the auction but didn't have a link for the site.</span>
             <br>
-            <br><h3>Lots</h3>
-            <table class="table">
-                <thead>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td>Total lots</td><td>{{auction.total_lots}}</td>
-                    </tr>
-                    <tr>
-                        <td>Unsold lots</td><td>{{auction.total_unsold_lots}} ({{auction.percent_unsold_lots|floatformat:0}}%)</td>
-                      </tr>
+<br><h3>Lots</h3>
+<table class="table">
+    <thead>
+    </thead>
+    <tbody>
+        <tr>
+            <td>Total lots</td><td>{{auction.total_lots}}</td>
+        </tr>
+        <tr>
+            <td>Unsold lots</td><td>{{auction.total_unsold_lots}} ({{auction.percent_unsold_lots|floatformat:0}}%)</td>
+          </tr>
 
-                    <tr>
-                    <td>Sold lots</td><td>{{auction.total_sold_lots}}</td>
-                  </tr>
-                  <tr>
-                    <td>Median lot price</td><td>${{auction.median_lot_price|floatformat:2}}</td>
-                  </tr>
-                  <tr>
-                    <td>Gross (value of all lots sold)</td><td>${{auction.gross|floatformat:2}}</td>
-                  </tr>
-                  <tr>
-                    <td>Club profit (unrounded)</td><td>${{auction.club_profit_raw|floatformat:2}}</td>
-                  </tr>
-                  <tr>
-                    <td>Club profit (final)</td><td>${{auction.club_profit|floatformat:2}} ({{auction.percent_to_club|floatformat:0}}% of gross)</td>
-                  </tr>
-                  <tr>
-                    <td>Seller payout</td><td>${{auction.total_to_sellers|floatformat:2}}</td>
-                  </tr>                  
-              </tbody>
-            </table>
+        <tr>
+        <td>Sold lots</td><td>{{auction.total_sold_lots}}</td>
+      </tr>
+      <tr>
+        <td>Median lot price</td><td>${{auction.median_lot_price|floatformat:2}}</td>
+      </tr>
+      <tr>
+        <td>Gross (value of all lots sold)</td><td>${{auction.gross|floatformat:2}}</td>
+      </tr>
+      <tr>
+        <td>Club profit (unrounded)</td><td>$<span id='club_profit_raw'> Loading </span></td>
+      </tr>
+      <tr>
+        <td>Club profit (invoices are rounded to the nearest dollar)</td><td>$<span id='club_profit'> Loading </span> (<span id='percent_to_club'> Loading </span>% of gross)</td>
+      </tr>
+      <tr>
+        <td>Seller payout</td><td>$<span id='total_to_sellers'> Loading </span></td>
+      </tr>                  
+  </tbody>
+</table>
+
+            <br><br>
+            <h4>Lot sell prices</h4>
+            How many lots sold at different price points.
             <br>
-             <a href="/auctions/{{auction.slug}}/" class="btn btn-primary active">View rules</a>
+            <canvas id="lot_prices"></canvas>
+            <br>
+              Buyer's auctions have a distribution towards the left, seller's auctions towards the right.<br><br>
+              <br><br>
+            <h4>Competition for lots</h4>
+            How many bidders were there per lot?
+            <canvas id="lot_pie"></canvas>
+            <br>Ideally, each lot would have at least 2-3 bidders -- having at least two people who "must have" a lot means that lot will sell for what it's worth.<br><br>Lots of lots with few bidders means you need to attract more buyers next time.<br>Lots of lots with lots of bidders means your auction can support more sellers.
+            <br><br>
+            <h4>Category popularity</h4>
+            Relative popularity of categories by views and by number of lots.  Click a label to change the chart.<br>
+            <canvas id="categories"></canvas>
+            <br>
+            This chart is a good way to look at the popularity of different categories in your auction.<br><br>
+            If there is equal supply, interest, and demand in a category, views/bids/number of lots should be the same height (and determined by the number of lots).  When they are different, you can get some interesting info from this graph.
+            For example, categories with more bids are likely to be in higher demand, especially if views are lower.  Categories with lots of views but no bids may be something people are curious about, but don't actually want.  To wit: <i>What's this tequila fish?  Oh, it's a gray livebearer, never mind.</i>
+            <br><br>
+
+             <a href="/auctions/{{auction.slug}}/" class="btn btn-primary active">View rules</a> <a href="/auctions/{{auction.slug}}/report" class="btn btn-primary active">Download CSV Report</a>
         </div>
     </div>
 </div>  

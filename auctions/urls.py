@@ -17,6 +17,7 @@ urlpatterns = [
     path('api/users/unban/<int:pk>/', views.userUnban),
     path('api/chart/lots/<int:pk>/', views.LotChartView.as_view()),
     path('api/chart/users/<int:pk>/', views.UserChartView.as_view()),
+    path('api/chart/auction/', views.AuctionChartView.as_view()),
     path('api/userignorecategory/create/<int:pk>/', views.CreateUserIgnoreCategory.as_view()),
     path('api/userignorecategory/delete/<int:pk>/', views.DeleteUserIgnoreCategory.as_view()),
     path('api/userignorecategory/', views.GetUserIgnoreCategory.as_view()),

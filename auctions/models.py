@@ -25,6 +25,7 @@ class BlogPost(models.Model):
 	body = MarkdownField(rendered_field='body_rendered', validator=VALIDATOR_STANDARD, blank=True, null=True)
 	body_rendered = RenderedMarkdownField(blank=True, null=True)
 	date_posted = models.DateTimeField(auto_now_add=True)
+	extra_js = models.TextField(max_length=16000, null=True, blank=True)
 
 	def __str__(self):
 		return self.title
@@ -160,11 +161,10 @@ class Auction(models.Model):
 	@property
 	def gross(self):
 		"""Total value of all lots sold"""
-		lots = Lot.objects.filter(auction=self.pk, winning_price__isnull=False)
-		total = 0
-		for lot in lots:
-			total += lot.winning_price
-		return total
+		try:
+			return Lot.objects.filter(auction=self.pk).aggregate(Sum('winning_price'))['winning_price__sum']
+		except:
+			return 0
 
 	@property
 	def total_to_sellers(self):
@@ -181,18 +181,21 @@ class Auction(models.Model):
 
 	@property
 	def number_of_sellers(self):
-		users = User.objects.values('lot__user').annotate(Sum('lot')).filter(lot__auction=self.pk, lot__winner__isnull=False)
+		#users = User.objects.values('lot__user').annotate(Sum('lot')).filter(lot__auction=self.pk, lot__winner__isnull=False)
+		users = User.objects.filter(lot__auction=self.pk, lot__winner__isnull=False).distinct()
 		return len(users)
 
 	# @property
 	# def number_of_unsuccessful_sellers(self):
 	#	"""This is the number of sellers who didn't sell ALL their lots"""
 	# 	users = User.objects.values('lot__user').annotate(Sum('lot')).filter(lot__auction=self.pk, lot__winner__isnull=True)
+	#   users = User.objects.filter(lot__auction=self.pk, lot__winner__isnull=True).distinct()
 	# 	return len(users)
 
 	@property
 	def number_of_buyers(self):
-		users = User.objects.values('lot__winner').annotate(Sum('lot')).filter(lot__auction=self.pk)
+		#users = User.objects.values('lot__winner').annotate(Sum('lot')).filter(lot__auction=self.pk)
+		users = User.objects.filter(winner__auction=self.pk).distinct()
 		return len(users)
 
 	@property
@@ -202,8 +205,6 @@ class Auction(models.Model):
 		return False #len(users)
 	# users who bought a single lot
 	# users who viewed but didn't bid
-	#% lots with a single bidder
-	#% lots with 3+ bidders
 	
 	@property
 	def median_lot_price(self):
@@ -241,6 +242,22 @@ class Auction(models.Model):
 		if self.date_end > timezone.now():
 			return False
 		return True
+	
+	@property
+	def bin_size(self):
+		"""Used for auction stats graph - on the lot sell price chart, this is the the size of each bin"""
+		try:
+			return int(self.median_lot_price/5)
+		except:
+			return 2
+	@property
+	def number_of_participants(self):
+		"""
+		Number of users who bought or sold at least one lot
+		"""
+		buyers = User.objects.filter(winner__auction=self.pk).distinct()
+		sellers = User.objects.filter(lot__auction=self.pk).exclude(id__in=buyers).distinct()
+		return len(sellers) + len(buyers)
 
 class PickupLocation(models.Model):
 	"""
