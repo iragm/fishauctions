@@ -51,9 +51,16 @@
                   <li class="nav-item active">
                     <a class="nav-link" target="_blank" href="https://tfcb.org">TFCB homepage<span class="sr-only">(current)</span></a>
                   </li>
-                  <li class="nav-item active">
-                    <a class="nav-link" href="/leaderboard/">Leaderboard<span class="sr-only">(current)</span></a>
-                  </li> 
+                  <li class="nav-item dropdown">
+                    <a class="nav-link dropdown-toggle" data-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">Nifty numbers</a>
+                    <div class="dropdown-menu">
+                      <a class="dropdown-item" href="/leaderboard/">Leaderboard</a>
+                      <a class="dropdown-item" href="/blog/encouraging-participation/">Encouraging participation</a>
+                      <a class="dropdown-item" href="/blog/whats-a-picture-worth/">What's a picture worth?</a>
+                      <a class="dropdown-item" href="/blog/category-popularity/">Category popularity</a>
+                      <a class="dropdown-item" href="/blog/how-much-should-you-bid/">How much should you bid?</a>
+                    </div>
+                  </li>
                   {% if request.user.is_authenticated %}
                   <li class="nav-item active">
                     <a class="nav-link" href="/auctions/new">Create auction<span class="sr-only">(current)</span></a>

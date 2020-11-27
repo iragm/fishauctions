@@ -152,17 +152,23 @@ class Auction(models.Model):
 	@property
 	def club_profit(self):
 		"""Total amount made by the club in this auction, including rounding in the customer's favor in invoices"""
-		invoices = Invoice.objects.filter(auction=self.pk)
-		total = 0
-		for invoice in invoices:
-			total -= invoice.rounded_net
-		return total
+		try:
+			invoices = Invoice.objects.filter(auction=self.pk)
+			total = 0
+			for invoice in invoices:
+				total -= invoice.rounded_net
+			return total
+		except:
+			return 0
 
 	@property
 	def gross(self):
 		"""Total value of all lots sold"""
 		try:
-			return Lot.objects.filter(auction=self.pk).aggregate(Sum('winning_price'))['winning_price__sum']
+			gross = Lot.objects.filter(auction=self.pk).aggregate(Sum('winning_price'))['winning_price__sum']
+			if gross is None:
+				gross = 0
+			return gross
 		except:
 			return 0
 
@@ -212,7 +218,7 @@ class Auction(models.Model):
 		if lots:
 			return median_value(lots,'winning_price')
 		else:
-			return ""
+			return 0
 	
 	@property
 	def total_sold_lots(self):
@@ -256,7 +262,7 @@ class Auction(models.Model):
 		Number of users who bought or sold at least one lot
 		"""
 		buyers = User.objects.filter(winner__auction=self.pk).distinct()
-		sellers = User.objects.filter(lot__auction=self.pk).exclude(id__in=buyers).distinct()
+		sellers = User.objects.filter(lot__auction=self.pk, lot__winner__isnull=False).exclude(id__in=buyers).distinct()
 		return len(sellers) + len(buyers)
 
 class PickupLocation(models.Model):

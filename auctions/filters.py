@@ -1,7 +1,7 @@
 import django_filters
 from django.contrib import messages
 from .models import Lot, Category, Auction, User, PageView
-from django.db.models import Q
+from django.db.models import Q, Count
 from django.forms.widgets import TextInput, Select
 from django.forms import ModelChoiceField
 
@@ -70,6 +70,13 @@ class LotFilter(django_filters.FilterSet):
     def qs(self):
         primary_queryset=super(LotFilter, self).qs
         primary_queryset = primary_queryset.filter(banned=False).order_by("-lot_number").select_related('species_category')
+        # watched lots
+        try:
+            primary_queryset = primary_queryset.annotate(
+                    is_watched_by_req_user=Count('watch', filter=Q(watch__user=self.request.user.pk))
+                )
+        except:
+            pass
         applyIgnoreFilter = True
         try:
             if self.ignore and self.request.user.is_authenticated:

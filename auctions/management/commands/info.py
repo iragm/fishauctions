@@ -14,15 +14,51 @@ class Command(BaseCommand):
     help = 'Just a scaratchpad to do things'
 
     def handle(self, *args, **options):
-        auction = Auction.objects.get(title="TFCB Annual Auction")
-        users = User.objects.filter(pageview__lot_number__auction=auction).annotate(dcount=Count('id'))
-        for user in users:
+        auction = Auction.objects.get(slug='pvas-fall-auction')
+        lots = Lot.objects.filter(auction=auction)
+        total = 0
+        club = 0
+        for lot in lots:
+        #if lot.number_of_bids:
+            total += lot.high_bid
+            if lot.high_bid > 2:
+                club += 3
+        print(f"total: {total}")
+        print(f"club: {club}")
+        
+        # this is how many bids we have binned by price
+        # labels = []
+        # bids = Bid.objects.all()
+        # data = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,]
+        # last = 0
+        # for i in range(len(data)):
+        #     labels.append(i)
+        # for bid in bids:
+        #     if bid.amount > len(data):
+        #         data[-1] += 1
+        #     else:
+        #         data[bid.amount] += 1
+        # print(labels)
+        # print(data)
+
+
+
+                # users = User.objects.filter(email__icontains='gmail')
+        # #for user in users:
+        # #    print(user.first_name + " " + user.last_name)
+        # nonGmailUsers = User.objects.all()
+        # print(len(users))
+        # print(len(nonGmailUsers))
+        
+#         
+#  auction = Auction.objects.get(title="TFCB Annual Auction")
+#        users = User.objects.filter(pageview__lot_number__auction=auction).annotate(dcount=Count('id'))
+#        for user in users:
             #print(lot.num_views)
             #print(f'https://auctions.toxotes.org/lots/{lot.lot_number}')
-            print(f"{user.first_name} {user.last_name}")
+#            print(f"{user.first_name} {user.last_name}")
             
         # auction = Auction.objects.get(title="TFCB Annual Auction")
-        
         
             #print(f'{lot.pk}, {bids}, {}')
         # users = User.objects.all()

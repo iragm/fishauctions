@@ -119,7 +119,7 @@ class RecommendedLots(ListView):
         if True: # temporarily, we need to collect data on all lots
             interest = interest + lot.promotion_weight
         if interest > rand:
-            return True
+            return interest
         else:
             return False
 
@@ -149,7 +149,9 @@ class RecommendedLots(ListView):
                 # no duplicates
                 pass
             else:
-                if self.check_lot(resultLot):
+                checkInterest = self.check_lot(resultLot)
+                if checkInterest:
+                    resultLot.your_interest = checkInterest
                     result.append(resultLot)
             timeout += 1
         return result
@@ -1318,9 +1320,16 @@ class AuctionChartView(View):
     def get(self, request, *args, **kwargs):
         data = request.GET.copy()
         try:
-            auction = Auction.objects.get(slug=data['auction'])
+            auction = slug=data['auction']
         except:
-            return HttpResponse('Invalid auction')
+            return HttpResponse('auction is required')
+        if auction == "none":
+            pass
+        else:
+            try:
+                auction = Auction.objects.get(slug=auction)
+            except:
+                return HttpResponse(f'auction {auction} not found')
         if not self.permissionCheck(request, auction):
             raise PermissionDenied
         try:
@@ -1453,17 +1462,30 @@ class AuctionChartView(View):
             bids = []
             lots = []
             volumes = []
-            categories = Category.objects.filter(lot__auction=auction).annotate(num_lots=Count('lot')).order_by('-num_lots')
-            allLots = len(Lot.objects.filter(auction=auction))
-            allViews = len(PageView.objects.filter(lot_number__auction=auction))
-            allBids = len(Bid.objects.filter(lot_number__auction=auction))
-            allVolume = Lot.objects.filter(auction=auction).aggregate(Sum('winning_price'))['winning_price__sum']
+            if auction == "none":
+                # public view to get data for all auctions
+                categories = Category.objects.all().annotate(num_lots=Count('lot')).order_by('-num_lots')
+                allLots = len(Lot.objects.all())
+                allViews = len(PageView.objects.all())
+                allBids = len(Bid.objects.all())
+                allVolume = Lot.objects.all().aggregate(Sum('winning_price'))['winning_price__sum']
+            else:
+                categories = Category.objects.filter(lot__auction=auction).annotate(num_lots=Count('lot')).order_by('-num_lots')
+                allLots = len(Lot.objects.filter(auction=auction))
+                allViews = len(PageView.objects.filter(lot_number__auction=auction))
+                allBids = len(Bid.objects.filter(lot_number__auction=auction))
+                allVolume = Lot.objects.filter(auction=auction).aggregate(Sum('winning_price'))['winning_price__sum']                
             if allLots:
                 for category in categories[:top]:
                     labels.append(str(category))
-                    thisViews = len(PageView.objects.filter(lot_number__auction=auction, lot_number__species_category=category))
-                    thisBids = len(Bid.objects.filter(lot_number__auction=auction, lot_number__species_category=category))
-                    thisVolume = Lot.objects.filter(auction=auction, species_category=category).aggregate(Sum('winning_price'))['winning_price__sum']
+                    if auction == "none":
+                        thisViews = len(PageView.objects.filter(lot_number__species_category=category))
+                        thisBids = len(Bid.objects.filter(lot_number__species_category=category))
+                        thisVolume = Lot.objects.filter(species_category=category).aggregate(Sum('winning_price'))['winning_price__sum']
+                    else:
+                        thisViews = len(PageView.objects.filter(lot_number__auction=auction, lot_number__species_category=category))
+                        thisBids = len(Bid.objects.filter(lot_number__auction=auction, lot_number__species_category=category))
+                        thisVolume = Lot.objects.filter(auction=auction, species_category=category).aggregate(Sum('winning_price'))['winning_price__sum']
                     percentOfLots = round(((category.num_lots / allLots) * 100),2)
                     percentOfViews = round(((thisViews / allViews) * 100),2)
                     percentOfBids = round(((thisBids / allBids) * 100),2)
@@ -1491,6 +1513,8 @@ class AuctionChartView(View):
             }) 
 
     def permissionCheck(self, request, auction):
+        if auction == "none":
+            return True
         if request.user.is_superuser:
             return True
         elif auction.created_by.pk == request.user.pk:

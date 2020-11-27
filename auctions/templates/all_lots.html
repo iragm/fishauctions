@@ -65,6 +65,9 @@ User: {{ user }}
     {{ block.super }}
     <script src="/static/js/el-pagination.js"></script>
     <script>$.endlessPaginate({
+      onCompleted: function(context, fragment) {
+        $('[data-toggle="tooltip"]').tooltip();
+      },
       paginateOnScroll: true,
       paginateOnScrollMargin: 100
       });</script>
