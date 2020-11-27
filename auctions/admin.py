@@ -3,9 +3,18 @@ from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
 from .models import *
 
+class BlogPostViewInline(admin.TabularInline):
+    model = PageView
+    list_display = ("user",)
+    list_filter = ()
+    search_fields = ()
+    extra = 0
+
 class BlogPostAdmin(admin.ModelAdmin):
     model = BlogPost
-
+    inlines = [
+        BlogPostViewInline,
+    ]
 class PickupLocationAdmin(admin.ModelAdmin):
     model = PickupLocation
 

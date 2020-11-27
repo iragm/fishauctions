@@ -14,17 +14,20 @@ class Command(BaseCommand):
     help = 'Just a scaratchpad to do things'
 
     def handle(self, *args, **options):
-        auction = Auction.objects.get(slug='pvas-fall-auction')
-        lots = Lot.objects.filter(auction=auction)
-        total = 0
-        club = 0
-        for lot in lots:
-        #if lot.number_of_bids:
-            total += lot.high_bid
-            if lot.high_bid > 2:
-                club += 3
-        print(f"total: {total}")
-        print(f"club: {club}")
+        pass
+    
+        # take a guess at how many lots will sell and what the club's profit will be
+        # auction = Auction.objects.get(slug='slug-for-this-auction')
+        # lots = Lot.objects.filter(auction=auction)
+        # total = 0
+        # club = 0
+        # for lot in lots:
+        # #if lot.number_of_bids:
+        #     total += lot.high_bid
+        #     if lot.high_bid > 2:
+        #         club += 3
+        # print(f"total: {total}")
+        # print(f"club: {club}")
         
         # this is how many bids we have binned by price
         # labels = []

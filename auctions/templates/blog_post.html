@@ -2,7 +2,34 @@
 {% block title %} {{ blogpost.title }} {% endblock %}
 {% load static %}
 {% block content %}
-{% block extra_js %}{{ blogpost.extra_js | safe }}{% endblock %}
+{% block extra_js %}<script type="text/javascript">
+var $ = window.jQuery;
+$(document).ready(console.log('loaded'));
+pageView();
+    setInterval(function(){ pageViewUpdate(); }, 10000);
+    function pageView() {
+        $.ajax({
+            type: "POST",
+            beforeSend: function (request) {
+                request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+            },
+            url: "/api/blogview/{{blogpost.pk}}/new/",
+        });
+    }
+    function pageViewUpdate() {
+        if ( !document.hidden ) {
+            $.ajax({
+                type: "POST",
+                beforeSend: function (request) {
+                    request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+                },
+                url: "/api/blogview/{{blogpost.pk}}/",
+            });
+        }
+    }
+
+</script>
+{{ blogpost.extra_js | safe }}{% endblock %}
 <div class="container mt-5 mb-5">
     <div class="row">
         <div class="col-md-10 offset-md1">

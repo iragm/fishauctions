@@ -335,52 +335,49 @@ def imageRotate(request):
         lot.save()
         return HttpResponse("Success")
 
-def newpageview(request, pk):
-    """Initail pageview to record page views to the PageView model"""
+def pageview(request, pk):
+    """
+    Record interest in blog posts and lots
+    Initial interest (/new/) creates product interest
+    Staying on the page will update the time in page views on the PageView model
+    """
     if request.method == 'POST':
         user = request.user
-        lot_number = Lot.objects.get(pk=pk)
-        if not user.is_authenticated:
-            user = None
-            PageView.objects.create(
-                lot_number=lot_number,
-                user=user,
-                date_end=timezone.now(),
-            )
+        if "pageview" in request.path:
+            lot_number = Lot.objects.get(pk=pk)
+            blog = None
         else:
-            obj, created = PageView.objects.update_or_create(
+            blog = BlogPost.objects.get(pk=pk)
+            lot_number = None
+        # Initial pageview to record page views to the PageView model
+        if user.is_authenticated:
+            obj, created = PageView.objects.get_or_create(
                 lot_number=lot_number,
+                blog_post=blog,
                 user=user,
                 defaults={},
             )
+            if "new" not in request.path:
+                obj.total_time += 10
             obj.date_end = timezone.now()
             obj.save()
-            if created:
+            if created and lot_number:
                 # create interest in this category if this is a new view for this category
                 interest, created = UserInterestCategory.objects.get_or_create(
-                    category=lot_number.category,
+                    category=lot_number.species_category,
                     user=user,
                     defaults={ 'interest': 0 }
                     )
                 interest.interest += settings.VIEW_WEIGHT
                 interest.save()
-        return HttpResponse("Success")
-
-def pageview(request, pk):
-    """Continued interest in a lot will update the time in page views to the PageView model"""
-    if request.method == 'POST':
-        user = request.user
-        if user.is_authenticated:
-            # we don't track duration for anonymous views
-            lot_number = Lot.objects.get(pk=pk)
-            obj, created = PageView.objects.update_or_create(
-                lot_number=lot_number,
-                user=user,
-                defaults={},
-            )
-            obj.date_end = timezone.now()
-            obj.total_time += 10
-            obj.save()
+        else:
+            # anonymous user, always create
+            if "new" not in request.path:
+                PageView.objects.create(
+                    lot_number=lot_number,
+                    blog_post=blog,
+                    user=None,
+                )
         return HttpResponse("Success")
 
 def invoicePaid(request, pk):
