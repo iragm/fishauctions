@@ -54,7 +54,7 @@
             <div class="fb-share-button" data-href="https://{{ domain }}/?{{ auction.slug }}" data-layout="button_count" data-size="small"><a target="_blank" href="https://www.facebook.com/sharer/sharer.php?u={{ domain|urlencode }}/?{{ auction.slug|urlencode }}&amp;src=sdkpreparse" class="fb-xfbml-parse-ignore">Share</a></div>
             <br>
             <br><br>
-            {% if user.is_authenticated %}
+            {% if user.is_authenticated and not ended%}
             If you want to participate in this auction, you must confirm your pickup location
             {% crispy form form.helper %}
             {% else %}

@@ -961,12 +961,17 @@ class AuctionInfo(FormMixin, DetailView):
         context['pickup_locations'] = PickupLocation.objects.filter(auction=self.get_object())
         current_site = Site.objects.get_current()
         context['domain'] = current_site.domain
+        if timezone.now() > self.get_object().date_end:
+            context['ended'] = True
+            messages.add_message(self.request, messages.ERROR, f"This auction has ended.  You can't bid on anything, but you can still <a href='/lots/?auction={self.get_object().slug}'>view lots</a>.")
+        else:
+            context['ended'] = False
         try:
             existingTos = AuctionTOS.objects.get(user=self.request.user, auction=self.get_object())
             existingTos = existingTos.pickup_location
         except:
             existingTos = None
-            if self.request.user.is_authenticated:
+            if self.request.user.is_authenticated and not context['ended']:
                 messages.add_message(self.request, messages.ERROR, "Please confirm you have read these rules by selecting your pickup location at the bottom of this page.")
         context['form'] = AuctionTOSForm(user=self.request.user, auction=self.get_object(), initial={'user': self.request.user.id, 'auction':self.get_object().pk, 'pickup_location':existingTos})
         return context
@@ -1022,12 +1027,12 @@ def toDefaultLandingPage(request):
         try:
             auction = UserData.objects.get(user=request.user).last_auction_used
             if timezone.now() > auction.date_end:
-                auction = None
                 try:
-                    invoice = invoice.objects.get(user=request.user, auction=auction)
+                    invoice = Invoice.objects.get(user=request.user, auction=auction.pk)
                     messages.add_message(request, messages.INFO, f'{auction} has ended.  <a href="/invoices/{invoice.pk}">View your invoice</a> or <a href="/lots?auction={auction.slug}">view lots</a>')
                 except:
                     pass
+                auction = None
         except:
             # probably no userdata or userdata.auction is None
             auction = None
