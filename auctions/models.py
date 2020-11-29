@@ -94,6 +94,8 @@ class Auction(models.Model):
 	lot_promotion_cost = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
 	first_bid_payout = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
 	first_bid_payout.help_text = "The first time a user bids in this auction, give them a credit in this amount.  This will appear on their invoice"
+	promote_this_auction = models.BooleanField(default=True)
+	promote_this_auction.help_text = "Show in the list of auctions on the main page and post to social media about updates to this auction.  Uncheck if this is a test auction."
 
 	# fixme - everything below here can be removed now
 	pickup_location = models.CharField(max_length=300, null=True, blank=True)
@@ -345,6 +347,10 @@ class Lot(models.Model):
 	transportable = models.BooleanField(default=True)
 	promoted = models.BooleanField(default=False)
 	promotion_weight = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(20)])
+	feedback_rating = models.IntegerField(default = 0, validators=[MinValueValidator(-1), MaxValueValidator(1)])
+	feedback_text = models.CharField(max_length=100, blank=True, null=True)
+	winner_feedback_rating = models.IntegerField(default = 0, validators=[MinValueValidator(-1), MaxValueValidator(1)])
+	winner_feedback_text = models.CharField(max_length=100, blank=True, null=True)
 	
 	def __str__(self):
 		return "" + str(self.lot_number) + " - " + self.lot_name
@@ -775,6 +781,8 @@ class UserData(models.Model):
 	use_list_view.help_text = "Show a list of all lots instead of showing tiles"
 	email_visible = models.BooleanField(default=True)
 	last_auction_used = models.ForeignKey(Auction, blank=True, null=True, on_delete=models.SET_NULL)
+	last_activity = models.DateTimeField(auto_now_add=True)
+	
 	# breederboard info
 	rank_unique_species = models.PositiveIntegerField(null=True, blank=True)
 	number_unique_species = models.PositiveIntegerField(null=True, blank=True)
@@ -893,6 +901,41 @@ class UserData(models.Model):
 		"""Ratio of bids to won lots, formatted"""
 		return self.dedication * 100
 	
+	@property
+	def positive_feedback_as_seller(self):
+		feedback = Lot.objects.filter(user=self.user.pk, feedback_rating=1).count()
+		return feedback
+
+	@property
+	def negative_feedback_as_seller(self):
+		feedback = Lot.objects.filter(user=self.user.pk, feedback_rating=-1).count()
+		return feedback
+
+	@property
+	def percent_positive_feedback_as_seller(self):
+		positive = self.positive_feedback_as_seller
+		negative = self.negative_feedback_as_seller
+		if not negative:
+			return 100
+		return int(( positive / (positive + negative) ) * 100)
+
+	@property
+	def positive_feedback_as_winner(self):
+		feedback = Lot.objects.filter(winner=self.user.pk, winner_feedback_rating=1).count()
+		return feedback
+
+	@property
+	def negative_feedback_as_winner(self):
+		feedback = Lot.objects.filter(winner=self.user.pk, winner_feedback_rating=-1).count()
+		return feedback
+
+	@property
+	def percent_positive_feedback_as_winner(self):
+		positive = self.positive_feedback_as_winner
+		negative = self.negative_feedback_as_winner
+		if not negative:
+			return 100
+		return int(( positive / (positive + negative) ) * 100)
 
 class UserInterestCategory(models.Model):
 	"""

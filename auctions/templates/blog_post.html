@@ -4,30 +4,30 @@
 {% block content %}
 {% block extra_js %}<script type="text/javascript">
 var $ = window.jQuery;
-$(document).ready(console.log('loaded'));
-pageView();
-    setInterval(function(){ pageViewUpdate(); }, 10000);
-    function pageView() {
-        $.ajax({
-            type: "POST",
-            beforeSend: function (request) {
-                request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
-            },
-            url: "/api/blogview/{{blogpost.pk}}/new/",
-        });
-    }
-    function pageViewUpdate() {
-        if ( !document.hidden ) {
+$(document).ready(function() {
+    pageView();
+        setInterval(function(){ pageViewUpdate(); }, 10000);
+        function pageView() {
             $.ajax({
                 type: "POST",
                 beforeSend: function (request) {
                     request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
                 },
-                url: "/api/blogview/{{blogpost.pk}}/",
+                url: "/api/blogview/{{blogpost.pk}}/new/",
             });
         }
-    }
-
+        function pageViewUpdate() {
+            if ( !document.hidden ) {
+                $.ajax({
+                    type: "POST",
+                    beforeSend: function (request) {
+                        request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+                    },
+                    url: "/api/blogview/{{blogpost.pk}}/",
+                });
+            }
+        }
+});
 </script>
 {{ blogpost.extra_js | safe }}{% endblock %}
 <div class="container mt-5 mb-5">

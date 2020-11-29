@@ -16,7 +16,8 @@
               <br>
               {%endif%}
             {%endif%}
-            {% if show_links %}<a href="{{ request.path }}?print" class="btn btn-primary active">Printable view</a><br>{% endif %}
+            {% if show_links %}<a href="{{ request.path }}?print" class="btn btn-primary active">Printable view</a><br>
+            <br><a href="/feedback/">Don't forget to leave feedback for lots you've bought or sold!</a><br>{% endif %}
             {% if auction %}
               {% if invoice.lots_sold %}
               <br>Please write the lot number and, if possible, the name of the winner on each lot.  

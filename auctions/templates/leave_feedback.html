@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %} Leave feedback {% endblock %}
+{% load static %}
+{% block extra_js %}<script type="text/javascript">
+var $ = window.jQuery;
+function all_positive() {
+  //console.log($(".unrated"));
+  $(".unrated").each(function() {
+      var pk = this.id.split("_")[1];
+      feedback(pk, "seller", 1, null);
+      $(this).removeClass('unrated');
+    });
+  }
+
+function feedback(pk, leave_as, rating, text) {
+  data = {};
+  if (rating !== null) {
+    data.rating = rating;
+  }
+  if (text) {
+    data.text = text;
+  }
+  $.ajax({
+      type: "POST",
+      beforeSend: function (request) {
+          request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+      },
+      url: "/api/feedback/" + pk + "/" + leave_as + "/",
+      data: data,
+      success : function(result) {
+        if (text) {
+          $("#text_" + pk + "_" + leave_as).addClass('is-valid');
+        }
+        
+        if (rating === 1){ 
+          $("#1_" + pk + "_" + leave_as).addClass('btn-success');
+          $("#-1_" + pk + "_" + leave_as).removeClass('btn-danger');
+        }
+        if (rating === -1){ 
+          $("#-1_" + pk + "_" + leave_as).addClass('btn-danger');
+          $("#1_" + pk + "_" + leave_as).removeClass('btn-success');
+        }
+        if (rating === 0){ 
+          $("#-1_" + pk + "_" + leave_as).removeClass('btn-danger');
+          $("#1_" + pk + "_" + leave_as).removeClass('btn-success');
+        }
+      }
+    });
+  };
+</script>
+{% endblock %}
+{% block content %}
+<div class="container mt-5 mb-5 ml-1">
+    <div class="row">
+      <div class="col-md-10 offset-lg-1">
+        <a href="/users/{{ request.user.pk }}">See feedback that's been left for you on your account page</a>
+        <br><br>
+        
+        {% if not won_lots and not sold_lots%}
+        <h5>Once you've bought or sold lots, you'll be able to leave feedback here</h5>
+        {% endif %}
+        {% if won_lots %}
+        <h5>Leave feedback for sellers on lots you bought</h5>
+      <table class="table">
+    <thead>
+      <tr>
+        <th scope="col">Lot</th>
+        <th scope="col">Seller</th>
+        <th scope="col">Rating</th>
+        <th scope="col">Comments</th>
+      </tr>
+    </thead>
+    <tbody>
+        {% for lot in won_lots %}
+        <tr >
+        <td><a href="/lots/{{ lot.lot_number }}" target="_blank">{{ lot.lot_name }}</a></td>
+        <td><a href="/users/{{ lot.user.pk }}" target="_blank">{{ lot.user }}</a></td>
+        <td><div class="btn-group" role="group" aria-label="Feedback selection">
+            <button type="button" id="1_{{lot.lot_number}}_winner" onclick="feedback({{ lot.lot_number }}, 'winner', 1, null);" class="btn btn-secondary {% if lot.feedback_rating == 1 %}btn-success{% endif %}">+1</button>
+            <button type="button" id="0_{{lot.lot_number}}_winner" onclick="feedback({{ lot.lot_number }}, 'winner', 0, null);" class="btn btn-secondary">None</button>
+            <button type="button" id="-1_{{lot.lot_number}}_winner" onclick="feedback({{ lot.lot_number }}, 'winner', -1, null);"class="btn btn-secondary {% if lot.feedback_rating == -1 %}btn-danger{% endif %}">-1</button>
+          </div></td>
+        <td><input type="text" placeholder="Comments" id="text_{{lot.lot_number}}_winner" onblur="feedback({{ lot.lot_number }}, 'winner', null, this.value);" value="{% if lot.feedback_text %}{{ lot.feedback_text }}{% endif %}" class="form-control" style="min-width: 20em;"></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% if sold_lots %}<h5>Leave feedback for winners of lots you sold</h5>
+   <button type='button' class='btn btn-success' onclick="all_positive();">Set all unrated to +1</button>
+   <table class="table">
+    <thead>
+      <tr>
+        <th scope="col">Lot</th>
+        <th scope="col">Winner</th>
+        <th scope="col">Rating</th>
+        <th scope="col">Comments</th>
+      </tr>
+    </thead>
+    <tbody>
+        {% for lot in sold_lots %}
+        <tr >
+        <td><a href="/lots/{{ lot.lot_number }}" target="_blank">{{ lot.lot_name }}</a></td>
+        <td><a href="/users/{{ lot.winner.pk }}" target="_blank">{{ lot.winner }}</a></td>
+        <td><div class="btn-group" role="group" aria-label="Feedback selection">
+            <button type="button" id="1_{{lot.lot_number}}_seller" onclick="feedback({{ lot.lot_number }}, 'seller', 1, null);" class="{% if lot.winner_feedback_rating == 0%}unrated{% endif %} btn btn-secondary {% if lot.winner_feedback_rating == 1 %}btn-success{% endif %}">+1</button>
+            <button type="button" id="0_{{lot.lot_number}}_seller" onclick="feedback({{ lot.lot_number }}, 'seller', 0, null);" class="btn btn-secondary">None</button>
+            <button type="button" id="-1_{{lot.lot_number}}_seller" onclick="feedback({{ lot.lot_number }}, 'seller', -1, null);"class="btn btn-secondary {% if lot.winner_feedback_rating == -1 %}btn-danger{% endif %}">-1</button>
+          </div></td>
+        <td><input type="text" placeholder="Comments" id="text_{{lot.lot_number}}_seller" onblur="feedback({{ lot.lot_number }}, 'seller', null, this.value);" value="{% if lot.winner_feedback_text %}{{ lot.winner_feedback_text }}{% endif %}" class="form-control" style="min-width: 20em;"></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  </div>
+  </div>
+  </div> 
+
+{% endblock %}
+
+

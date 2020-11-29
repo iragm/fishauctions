@@ -42,11 +42,17 @@ class UserdataInline(admin.StackedInline):
 
 # Extend Django's base user model
 class UserAdmin(BaseUserAdmin):
+    list_display = ['first_name', 'last_name', 'email', 'last_activity']
     inlines = [
         UserdataInline,
         AuctionTOSInline,
         #InterestInline, # too much noise
     ]
+
+    def last_activity(self, obj):
+        return obj.userdata.last_activity
+    last_activity.admin_order_field  = 'userdata__last_activity'
+    last_activity.short_description = 'Last activity'
 
 class ClubAdmin(admin.ModelAdmin):
     model = Club 

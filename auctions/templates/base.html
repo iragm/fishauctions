@@ -42,7 +42,7 @@
 
     <body class="{% block body_class %}{% endblock %}">
         <nav class="navbar navbar-expand-lg navbar-dark bg-dark navbar-static-top" role="navigation">
-          <a class="navbar-brand" href="/">Auctions</a>  
+          <a class="navbar-brand" href="/auctions/all/">Auctions</a>  
           <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#site_navbar" aria-controls="navbarColor02" aria-expanded="false" aria-label="Toggle navigation">
             <span class="navbar-toggler-icon"></span>
           </button>
@@ -93,8 +93,9 @@
                       <a class="dropdown-item" href="/lots/my">My lots</a>
                       <a class="dropdown-item" href="/lots/new/">Create lot</a>
                       <div class="dropdown-divider"></div>
+                      <a class="dropdown-item" href="/feedback">Feedback</a>
                       <a class="dropdown-item" href="/invoices">Invoices</a>
-                      <a class="dropdown-item" href="/account/">Account</a>
+                      <a class="dropdown-item" href="/users/{{ request.user.pk }}/">Account</a>
                       <form method="post" action="{% url 'account_logout' %}">
                         {% csrf_token %}
                         {% if redirect_field_value %}
@@ -107,7 +108,6 @@
                   </li>
 
                   {% else %}
-                  <a class="nav-link" href="/signup">Create account</a>
                   <a class="nav-link" href="/login">Sign in</a>
                 {% endif %}
                 </ul>

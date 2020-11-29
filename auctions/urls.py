@@ -13,6 +13,7 @@ urlpatterns = [
     path('api/lots/get_recommended/', views.RecommendedLots.as_view()),
     path('api/pageview/<int:pk>/', views.pageview),
     path('api/pageview/<int:pk>/new/', views.pageview),
+    path('api/feedback/<int:pk>/<str:leave_as>/', views.feedback),
     path('api/blogview/<int:pk>/', views.pageview),
     path('api/blogview/<int:pk>/new/', views.pageview),
     path('api/users/ban/<int:pk>/', views.userBan),
@@ -55,4 +56,6 @@ urlpatterns = [
     path('locations/new/', views.PickupLocationsCreate.as_view()),
     path('locations/edit/<int:pk>/', views.PickupLocationsUpdate.as_view()),
     path('blog/<slug:slug>/', views.BlogPostView.as_view()),
+    path('feedback/', views.LeaveFeedbackView.as_view()),
+    
 ]

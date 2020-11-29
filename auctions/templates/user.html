@@ -6,28 +6,96 @@
     <div class="row">
         <div class="col-md-10 offset-md1">
             <h1>{{ user.username }}</h1>
-            {% if data.email_visible %}
-            <b>Email: </b><a href='mailto://{{ user.email }}'>{{ user.email }}</a><br>
-            {% else %}
-            This user's email address is private<br>
-            {% endif %}
-            <b>Joined:</b> {{ user.date_joined }}<br>
-            <b>Last login:</b> {{ user.last_login }}<br>
-            <b>Lots sold:</b> {{ data.lots_sold }}<br>
-            <b>Total species sold:</b> {{ data.species_sold}}<br>
-            <b>Lots bought:</b> {{ data.lots_bought }}<br>
+            <h4>Account information</h4>
+            <table class="table">
+                <tr>
+                  <td>Email:</td>
+                  <td> {% if data.email_visible %}
+                    <a href='mailto://{{ user.email }}'>{{ user.email }}</a><br>
+                    {% else %}
+                    This user's email address is private<br>
+                    {% endif %}
+                  </td>
+                </tr>
+                <tr>
+                    <td>Joined:</td>
+                    <td>{{ user.date_joined }}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td>Last activity:</td>
+                    <td> {{ data.last_activity }}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td>Lots sold:<br>Feedback:</td>
+                    <td> {{ data.lots_sold }}<br>
+                        <span class='text-success'>+{{ data.positive_feedback_as_seller }}</span> <span class='text-danger'>-{{ data.negative_feedback_as_seller }}</span> ({{ data.percent_positive_feedback_as_seller }}% positive)
+                    </td>
+                  </tr>
+                  <tr>
+                    <td>Lots bought:<br>Feedback:<br></td>
+                    <td> {{ data.lots_bought }}<br>
+                        <span class='text-success'>+{{ data.positive_feedback_as_winner }}</span> <span class='text-danger'>-{{ data.negative_feedback_as_winner }}</span> ({{ data.percent_positive_feedback_as_winner }}% positive)
+                    </td>
+                  </tr>
+            </table>
             {% if user.pk == request.user.id or request.user.is_superuser %}
             <h4>Only visible to you:</h4>
-            <b>Location:</b> {% if data.location %}{{ data.location }}{%else%} <a href='/users/edit/{{user.pk}}'>Not set</a>{% endif %}<br>
-            <b>Total bids:</b> {{ data.total_bids }}<br>
-            <b>Total views:</b> {{ data.lots_viewed }}<br>
-            <b>Total spent:</b> ${{ data.total_spent|floatformat:2 }}<br>
-            {% if data.rank_total_sold %}<b>Seller rank: </b> {{data.rank_total_sold}} (Top {{ data.seller_percentile }}%)<br>{%endif%}
-            {% if data.rank_total_spent %}<b>Buyer rank: </b> {{data.rank_total_spent}} (Top {{ data.buyer_percentile }}%)<br>{%endif%}
-            {% if data.rank_volume %}<b>Volume rank: </b> {{data.rank_volume}} (Top {{ data.volume_percentile }}%)<br>{%endif%}
-            {% if data.percent_success %}<b>How often you win when you bid:</b> {{data.percent_success|floatformat:0}}%<br>{%endif%}
-            <br><a href="/users/edit/{{user.pk}}" class="btn btn-warning active">Edit</a><br>
+            <table class="table">
+                <tr>
+                    <td>Location:</td>
+                    <td>{% if data.location %}{{ data.location }}{%else%} <a href='/users/edit/{{user.pk}}'>Not set</a>{% endif %}
+                    </td>
+                </tr>
+                <tr>
+                    <td>Total bids:</td>
+                    <td>{{ data.total_bids }}
+                    </td>
+                </tr>
+                <tr>
+                    <td>Total views:</td>
+                    <td>{{ data.lots_viewed }}
+                    </td>
+                </tr>
+                {% if data.rank_total_sold %}<tr>
+                    <td>Seller rank:</td>
+                    <td>{{data.rank_total_sold}} (Top {{ data.seller_percentile }}%)
+                    </td>
+                </tr>{%endif%}
+                {% if data.rank_volume %}<tr>
+                    <td>Total volume rank:</td>
+                    <td>{{data.rank_volume}} (Top {{ data.volume_percentile }}%)
+                    </td>
+                </tr>{%endif%}
+                {% if data.percent_success %}<tr>
+                    <td>Bid success:</td>
+                    <td>When you bid, you win <b>{{data.percent_success|floatformat:0}}%</b> of the time.
+                    </td>
+                </tr>{%endif%}
+            </table>
+            
+            <br><a href="/users/edit/{{user.pk}}" class="btn btn-warning active">Edit your contact info</a> 
             {% endif %}
+            <a href='/lots/user/?user={{user.pk}}&status=open' class="btn btn-primary">View all lots from this user</a>
+            <br><br><h4>Feedback</h4>
+            {% if seller_feedback or winner_feedback %}
+                {% if seller_feedback %}
+                <h5>Comments on lots sold by this user</h5>
+                {% for lot in seller_feedback %}
+                    <a href="/lots/{{ lot.lot_number }}/">{{ lot.lot_name}}</a>: {{ lot.feedback_text }} <span class='text-muted'>left by</span> <a href="/users/{{ lot.winner.pk }}/">{{ lot.winner }}</a><br><br>
+                {% endfor %}
+                {% endif %}
+                {% if winner_feedback %}
+                <h5>Comments on lots won by this user</h5>
+                {% for lot in winner_feedback %}
+                    <a href="/lots/{{ lot.lot_number }}/">{{ lot.lot_name}}</a>: {{ lot.winner_feedback_text }} <span class='text-muted'>left by</span> <a href="/users/{{ lot.user.pk }}/">{{ lot.user }}</a><br><br>
+                {% endfor %}
+                {% endif %}
+            {% else %}
+                There's no comments in this user's feedback yet
+            {% endif %}
+            <br><br>
             {% if user.pk != request.user.id %}
                 {% if banned %}
                 <form method="post" action="/api/users/unban/{{user.pk}}/">
@@ -41,7 +109,6 @@
                 </form>
                 {% endif %}
             {% endif %}
-            <br><a href='/lots/user/?user={{user.pk}}&status=open'>View all lots from this user</a>
             {% if request.user.is_superuser %}
             <br><b>Bought to sold ratio (higher is a seller):</b> {{ data.bought_to_sold|floatformat:2}}<br>
             <b>Viewed to bid ratio (lower number is a tire kicker):</b> {{ data.bid_to_view|floatformat:2}}<br>

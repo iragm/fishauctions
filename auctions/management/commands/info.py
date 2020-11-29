@@ -15,7 +15,10 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         pass
-    
+        # users = UserData.objects.all()
+        # for user in users:
+        #     if user.use_list_view:
+        #         print(user.user.first_name)
         # take a guess at how many lots will sell and what the club's profit will be
         # auction = Auction.objects.get(slug='slug-for-this-auction')
         # lots = Lot.objects.filter(auction=auction)

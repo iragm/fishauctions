@@ -9,6 +9,7 @@ from django.contrib import messages
 from django.contrib.auth.models import User
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.contrib.sites.models import Site
 from django.views.generic import ListView, DetailView, View, TemplateView
 from django.urls import reverse
 from django.views.generic.edit import UpdateView, CreateView, DeleteView, FormMixin
@@ -335,6 +336,50 @@ def imageRotate(request):
         lot.save()
         return HttpResponse("Success")
 
+def feedback(request, pk, leave_as):
+    """Leave feedback on a lot
+    This can be done as a buyer or a seller
+    api/feedback/lot_number/buyer
+    api/feedback/lot_number/seller
+    qqq
+    """
+    if request.method == 'POST':
+        data = request.POST
+        try:
+            lot = Lot.objects.get(pk=pk)
+        except:
+            raise Http404 (f"No lot found with key {lot}") 
+        checksPass = False
+        if leave_as == "winner":
+            if lot.winner.pk == request.user.pk:
+                checksPass = True
+                try:
+                    lot.feedback_rating = data['rating']
+                    lot.save()
+                except:
+                    pass
+                try:
+                    lot.feedback_text = data['text']
+                    lot.save()
+                except:
+                    pass
+        if leave_as == "seller":
+            if lot.user.pk == request.user.pk:
+                checksPass = True
+                try:
+                    lot.winner_feedback_rating = data['rating']
+                    lot.save()
+                except:
+                    pass
+                try:
+                    lot.winner_feedback_text = data['text']
+                    lot.save()
+                except:
+                    pass
+        if not checksPass:
+            raise PermissionDenied()
+        return HttpResponse("Success")
+
 def pageview(request, pk):
     """
     Record interest in blog posts and lots
@@ -458,6 +503,20 @@ def auctionReport(request, slug):
                 len(lotsWon), totalSpent, totalPaid, paid, len(breederPoints)])
         return response    
     raise PermissionDenied()
+
+class LeaveFeedbackView(LoginRequiredMixin, ListView):
+    """Show all pickup locations belonging to the current user"""
+    model = Lot
+    template_name = 'leave_feedback.html'
+    ordering = ['-date_posted']
+    
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        cutoffDate =  timezone.now() - datetime.timedelta(days=90)
+        #new_context = super().get_context_data()
+        context['won_lots'] = Lot.objects.filter(winner=self.request.user.pk, date_posted__gte=cutoffDate)
+        context['sold_lots'] = Lot.objects.filter(user=self.request.user.pk, date_posted__gte=cutoffDate, winner__isnull=False)
+        return context
 
 class PickupLocations(LoginRequiredMixin, ListView):
     """Show all pickup locations belonging to the current user"""
@@ -616,6 +675,15 @@ class viewAndBidOnLot(FormMixin, DetailView):
                 context['user_tos'] = True
         except:
             context['user_tos'] = False
+        try:
+            obj, created = UserData.objects.get_or_create(
+                user = self.request.user,
+                defaults={},
+            )
+            obj.last_activity = timezone.now()
+            obj.save()
+        except:
+            pass
         return context
     
     def get_success_url(self):
@@ -891,6 +959,8 @@ class AuctionInfo(FormMixin, DetailView):
         owner = self.get_object().created_by
         context['contact_email'] = User.objects.get(pk=owner.pk).email
         context['pickup_locations'] = PickupLocation.objects.filter(auction=self.get_object())
+        current_site = Site.objects.get_current()
+        context['domain'] = current_site.domain
         try:
             existingTos = AuctionTOS.objects.get(user=self.request.user, auction=self.get_object())
             existingTos = existingTos.pickup_location
@@ -927,8 +997,41 @@ def aboutSite(request):
     return render(request,'about.html')
 
 def toDefaultLandingPage(request):
-    response = redirect('/auctions/all')
-    return response
+    """
+    Allow the user to pick up where they left off
+    """
+    def tos_check(request, auction):
+        if not auction:
+            return redirect('/auctions/all')
+        try:
+            # Did the user sign the tos yet?
+            AuctionTOS.objects.get(user=request.user, auction=auction)
+            # If so, redirect them to the lot view
+            return redirect(f'/lots?auction={auction.slug}')
+        except:
+            # No tos?  Take them there so they can sign
+            return redirect(f"/auctions/{auction.slug}/")
+
+    data = request.GET.copy()
+    try:
+        # if the slug was set in the URL
+        auction = Auction.objects.filter(slug=list(data.keys())[0])[0]
+        return tos_check(request, auction)
+    except:
+        # if not, check and see if the user has been participating in an auction
+        try:
+            auction = UserData.objects.get(user=request.user).last_auction_used
+            if timezone.now() > auction.date_end:
+                auction = None
+                try:
+                    invoice = invoice.objects.get(user=request.user, auction=auction)
+                    messages.add_message(request, messages.INFO, f'{auction} has ended.  <a href="/invoices/{invoice.pk}">View your invoice</a> or <a href="/lots?auction={auction.slug}">view lots</a>')
+                except:
+                    pass
+        except:
+            # probably no userdata or userdata.auction is None
+            auction = None
+    return tos_check(request, auction)
 
 @login_required
 def toAccount(request):
@@ -941,7 +1044,7 @@ class allAuctions(ListView):
     ordering = ['-date_end']
     
     def get_queryset(self):
-        new_context = Auction.objects.exclude(slug__icontains="-test-").order_by('-date_end')
+        new_context = Auction.objects.exclude(promote_this_auction=False).order_by('-date_end')
         return new_context
 
     def get_context_data(self, **kwargs):
@@ -1135,6 +1238,14 @@ class UserView(DetailView):
             #print(context['banned'])
         except:
             context['banned'] = False
+        try:
+            context['seller_feedback'] = Lot.objects.filter(user=self.object.pk).exclude(feedback_text__isnull=True).order_by("-date_posted")
+        except:
+            context['seller_feedback'] = None
+        try:
+            context['buyer_feedback'] = Lot.objects.filter(winner=self.object.pk).exclude(winner_feedback_text__isnull=True).order_by("-date_posted")
+        except:
+            context['buyer_feedback'] = None
         return context
 
 class UserUpdate(UpdateView, SuccessMessageMixin):

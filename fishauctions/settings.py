@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'allauth',
     'allauth.account',
     'allauth.socialaccount',
+    'allauth.socialaccount.providers.google',
     'django_filters',
     'bootstrap_datepicker_plus',
     'el_pagination',
@@ -198,6 +199,18 @@ THUMBNAIL_ALIASES = {
         'lot_list': {'size': (200, 200), 'crop': "smart"},
         'lot_full': {'size': (1000, 1000), 'crop': False},
     },
+}
+
+SOCIALACCOUNT_PROVIDERS = {
+    'google': {
+        'SCOPE': [
+            'profile',
+            'email',
+        ],
+        'AUTH_PARAMS': {
+            'access_type': 'offline',
+        }
+    }
 }
 
 VIEW_WEIGHT = 1
