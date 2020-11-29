@@ -514,8 +514,8 @@ class LeaveFeedbackView(LoginRequiredMixin, ListView):
         context = super().get_context_data(**kwargs)
         cutoffDate =  timezone.now() - datetime.timedelta(days=90)
         #new_context = super().get_context_data()
-        context['won_lots'] = Lot.objects.filter(winner=self.request.user.pk, date_posted__gte=cutoffDate)
-        context['sold_lots'] = Lot.objects.filter(user=self.request.user.pk, date_posted__gte=cutoffDate, winner__isnull=False)
+        context['won_lots'] = Lot.objects.filter(winner=self.request.user.pk, date_posted__gte=cutoffDate).order_by('-date_posted')
+        context['sold_lots'] = Lot.objects.filter(user=self.request.user.pk, date_posted__gte=cutoffDate, winner__isnull=False).order_by('-date_posted')
         return context
 
 class PickupLocations(LoginRequiredMixin, ListView):
@@ -610,18 +610,9 @@ class AuctionInvoices(DetailView):
     def get_context_data(self, **kwargs):
         #user = User.objects.get(pk=self.request.user.pk)
         context = super().get_context_data(**kwargs)
-        invoices = Invoice.objects.filter(auction=self.auction).order_by('paid','-user__last_name')
-        invoices = sorted(invoices, key=lambda t: str(t.user.userdata.location) ) 
+        invoices = Invoice.objects.filter(auction=self.auction).order_by('paid','user__last_name')
+        invoices = sorted(invoices, key=lambda t: str(t.location) ) 
         context['invoices'] = invoices
-        # also need to create email lists on a per-location basis
-        locations = {}
-        for invoice in invoices:
-            location = str(invoice.user.userdata.location)
-            try:
-                locations[location]['emails'] += f";{invoice.user.email}"
-            except:
-                locations[location] = {'emails':invoice.user.email}
-        context['locations'] = locations
         return context
 
 class AuctionStats(DetailView):
@@ -1029,7 +1020,7 @@ def toDefaultLandingPage(request):
             if timezone.now() > auction.date_end:
                 try:
                     invoice = Invoice.objects.get(user=request.user, auction=auction.pk)
-                    messages.add_message(request, messages.INFO, f'{auction} has ended.  <a href="/invoices/{invoice.pk}">View your invoice</a> or <a href="/lots?auction={auction.slug}">view lots</a>')
+                    messages.add_message(request, messages.INFO, f'{auction} has ended.  <a href="/invoices/{invoice.pk}">View your invoice</a>, <a href="/feedback/">leave feedback</a> on lots you bought or sold, or <a href="/lots?auction={auction.slug}">view lots</a>')
                 except:
                     pass
                 auction = None

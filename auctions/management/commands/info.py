@@ -14,7 +14,13 @@ class Command(BaseCommand):
     help = 'Just a scaratchpad to do things'
 
     def handle(self, *args, **options):
-        pass
+        
+        # feedback info
+        #print(Lot.objects.filter(feedback_rating=-1).count())
+        #print(Lot.objects.filter(winner_feedback_rating=-1).count())
+        lots = Lot.objects.filter(feedback_text__isnull=False)
+        for lot in lots:
+            print(lot.feedback_text)
         # users = UserData.objects.all()
         # for user in users:
         #     if user.use_list_view:
