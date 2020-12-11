@@ -11,7 +11,10 @@
         I decided to develop this site for clubs who need a way to run auctions.
       <br><br>This site is freely available for anyone to use, and I intend to maintain it at least until in-person meetings are possible again.<br><br>
       <h1>FAQ</h1>
-      <br><h4>How do I get started?</h4>{% if request.user.is_authenticated %} You've already signed up, so you're already well on your way!  If you want to start an auction for your club, click <a href="/auctions/new/">create auction</a>.  If you're a club member and want to add lots to an existing auction, click <a href="/lots/new/">create lot</a>.{% else %}<a href="/signup/">Sign up for an account</a>, then you'll be able to create an auction or add lots to an existing auction.{% endif %}<br>
+      <br><h4>How do I get started?</h4>{% if request.user.is_authenticated %} You've already signed up, so you're already well on your way!<br>
+      <br>
+      If you want to start an auction for your club, <a href="/auctions/new/">create an auction</a>
+      <br><br>If you're a club member and want to add lots to an existing auction, click <a href="/lots/new/">create lot</a>.{% else %}<a href="/signup/">Sign up for an account</a>, then you'll be able to create an auction or add lots to an existing auction.{% endif %}<br>
       <br><h4>How much does it cost?</h4>It's free for clubs to create and run auctions.  Clubs can choose to take a cut, but this site does not.<br>
       <br><h4>Why don't you handle payments?</h4>Taxes are a lot of work.  If this site is going to remain free, clubs need to be responsible for their own payment systems.<br>
       <br><h4>I don't belong to a club.  Can I sell just one lot?</h4>No, I'm not interested in competing with Aquabid at the moment.  But if this is something you want to see, leave a comment or thumbs up <a href='https://github.com/iragm/fishauctions/issues/4'>here</a><br>

@@ -7,20 +7,34 @@ from PIL import Image
 from easy_thumbnails.files import get_thumbnailer
 from io import BytesIO
 from django.core.files import File
+from datetime import datetime
 
 import os
 #import csv 
 class Command(BaseCommand):
-    help = 'Just a scaratchpad to do things'
+    help = 'Just a scratchpad to do things'
 
     def handle(self, *args, **options):
-        
+        #pass
+        print(PageView.objects.filter(lot_number__auction__slug__icontains='tfcb-an').count())
+        #lots = Lot.objects.filter(auction__slug__icontains='pvas')
+        # lots = Lot.objects.all()
+        # for lot in lots:
+        #     print(f"{lot.species_category};{lot.quantity};{lot.winning_price}")
+        #     # when is the best time to submit a lot
+        #     # duration = lot.auction.date_end - lot.date_posted
+        #     # seconds = duration.total_seconds()
+        #     # hours = divmod(seconds, 3600)[0]
+        #     # if lot.winner:
+        #     #     print(lot.promotion_weight, lot.winning_price, lot.page_views)
         # feedback info
-        #print(Lot.objects.filter(feedback_rating=-1).count())
-        #print(Lot.objects.filter(winner_feedback_rating=-1).count())
-        lots = Lot.objects.filter(feedback_text__isnull=False)
-        for lot in lots:
-            print(lot.feedback_text)
+        #print(Lot.objects.filter(feedback_rating=1).count())
+        #print(Lot.objects.filter(winner_feedback_rating=1).count())
+        #lots = Lot.objects.filter(winner_feedback_text__isnull=False)
+        #for lot in lots:
+        #    print(lot.winner_feedback_text)
+        
+        # users of the list view
         # users = UserData.objects.all()
         # for user in users:
         #     if user.use_list_view:

@@ -73,7 +73,7 @@ function feedback(pk, leave_as, rating, text) {
     <tbody>
         {% for lot in won_lots %}
         <tr >
-        <td><a href="/lots/{{ lot.lot_number }}" target="_blank">{{ lot.lot_name }}</a></td>
+        <td><a href="/lots/{{ lot.lot_number }}/{{lot.slug}}/" target="_blank">{{ lot.lot_name }}</a></td>
         <td><a href="/users/{{ lot.user.pk }}" target="_blank">{{ lot.user }}</a></td>
         <td><div class="btn-group" role="group" aria-label="Feedback selection">
             <button type="button" id="1_{{lot.lot_number}}_winner" onclick="feedback({{ lot.lot_number }}, 'winner', 1, null);" class="btn btn-secondary {% if lot.feedback_rating == 1 %}btn-success{% endif %}">+1</button>
@@ -100,7 +100,7 @@ function feedback(pk, leave_as, rating, text) {
     <tbody>
         {% for lot in sold_lots %}
         <tr >
-        <td><a href="/lots/{{ lot.lot_number }}" target="_blank">{{ lot.lot_name }}</a></td>
+        <td><a href="/lots/{{ lot.lot_number }}/{{lot.slug}}/" target="_blank">{{ lot.lot_name }}</a></td>
         <td><a href="/users/{{ lot.winner.pk }}" target="_blank">{{ lot.winner }}</a></td>
         <td><div class="btn-group" role="group" aria-label="Feedback selection">
             <button type="button" id="1_{{lot.lot_number}}_seller" onclick="feedback({{ lot.lot_number }}, 'seller', 1, null);" class="{% if lot.winner_feedback_rating == 0%}unrated{% endif %} btn btn-secondary {% if lot.winner_feedback_rating == 1 %}btn-success{% endif %}">+1</button>

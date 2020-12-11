@@ -5,6 +5,16 @@
 {% block content %}
 {% block extra_js %}
 <script async defer crossorigin="anonymous" src="https://connect.facebook.net/en_US/sdk.js#xfbml=1&version=v9.0" nonce="e1MMTYSx"></script>
+<script>
+function copyLink() {
+  var copyText = document.getElementById("copyShareLink");
+  copyText.select();
+  copyText.setSelectionRange(0, 99999);
+  document.execCommand("copy");
+  document.getElementById("copyShareLink").className += " is-valid";
+} 
+
+</script>
 {% endblock %}
 <div id="fb-root"></div>
 <div class="container mt-5 mb-5">
@@ -53,6 +63,16 @@
             <br>Please spread the word about this auction -- every like and share helps the club bring in new sellers and bidders!<br><a href="https://twitter.com/share?ref_src=twsrc%5Etfw" class="twitter-share-button" data-text="Check out the {{ auction.title }}" data-url="https://{{ domain }}/?{{ auction.slug }}" data-dnt="true" data-show-count="false">Tweet</a><script async src="https://platform.twitter.com/widgets.js" charset="utf-8"></script><br>
             <div class="fb-share-button" data-href="https://{{ domain }}/?{{ auction.slug }}" data-layout="button_count" data-size="small"><a target="_blank" href="https://www.facebook.com/sharer/sharer.php?u={{ domain|urlencode }}/?{{ auction.slug|urlencode }}&amp;src=sdkpreparse" class="fb-xfbml-parse-ignore">Share</a></div>
             <br>
+            <label class="col-form-label col-form-label-sm" for="copyShareLink">Shareable link for this auction</label>    
+            <div class="input-group mb-3 has-success">
+                <input class="form-control form-control-sm" id='copyShareLink' style='max-width: 35%' type="text" value="https://{{ domain }}/?{{ auction.slug }}" readonly="">
+                <div class="input-group-append">
+                    <button class='btn-sm btn-primary' onclick="copyLink()">Copy</button>
+                </div>
+                <div class="valid-feedback">Copied.  Thanks for spreading the word!</div>
+
+                </div>
+                
             <br><br>
             {% if user.is_authenticated and not ended%}
             If you want to participate in this auction, you must confirm your pickup location

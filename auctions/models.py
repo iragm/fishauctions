@@ -307,6 +307,7 @@ class Lot(models.Model):
 	)
 	lot_number = models.AutoField(primary_key=True)
 	lot_name = models.CharField(max_length=255, default="")
+	slug = AutoSlugField(populate_from='lot_name', unique=False)
 	lot_name.help_text = "Short description of this lot"
 	image = ThumbnailerImageField(upload_to='images/', blank=True)
 	image.help_text = "Add a picture of the item here"
@@ -700,13 +701,23 @@ class Invoice(models.Model):
 		"""Pickup location selected by the user"""
 		return AuctionTOS.objects.get(user=self.user.pk, auction=self.auction.pk).pickup_location
 
-	def __str__(self):
-		base = str(self.user)
+	@property
+	def invoice_summary(self):
+		base = str(self.user.first_name)
 		if self.user_should_be_paid:
 			base += " needs to be paid"
 		else:
 			base += " owes the club"
 		return base + " $" + "%.2f" % self.absolute_amount
+
+	def __str__(self):
+		return f"{self.user}'s invoice for {self.auction}"
+		#base = str(self.user)
+		#if self.user_should_be_paid:
+		#	base += " needs to be paid"
+		#else:
+		#	base += " owes the club"
+		#return base + " $" + "%.2f" % self.absolute_amount
 
 class Bid(models.Model):
 	"""Bids apply to lots"""

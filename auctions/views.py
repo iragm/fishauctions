@@ -912,8 +912,8 @@ def createAuction(request):
                 auction.lot_submission_end_date = auction.date_end
             auction.save()            
             print(str(auction.created_by) + " has created a new auction " + auction.title)
-            messages.info(request, "Auction created")
-            response = redirect('/')
+            messages.info(request, "Auction created!  Now, create a location to exchange lots.")
+            response = redirect('/locations/new/')
             # Perhaps we should redirect to the auction edit page?
             return response
     else:
@@ -1027,6 +1027,15 @@ def toDefaultLandingPage(request):
         except:
             # probably no userdata or userdata.auction is None
             auction = None
+    try:
+        obj, created = UserData.objects.get_or_create(
+            user = request.user,
+            defaults={},
+        )
+        obj.last_activity = timezone.now()
+        obj.save()
+    except:
+        pass
     return tos_check(request, auction)
 
 @login_required
@@ -1118,11 +1127,23 @@ class InvoiceView(DetailView, FormMixin):
     model = Invoice
     form_class = InvoiceUpdateForm
     
+    def get_object(self):
+        """Overridden to allow display of an example"""
+        try:
+            self.exampleMode = False
+            return Invoice.objects.get(pk=self.kwargs.get(self.pk_url_kwarg))
+        except:
+            self.exampleMode = True
+            return Invoice.objects.get(pk=152) # this is a good example
+            
     def dispatch(self, request, *args, **kwargs):
         # check to make sure the user has permission to view this invoice
         auth = False
         thisInvoice = Invoice.objects.get(pk=self.get_object().pk)
-        if self.get_object().user.pk == request.user.pk:
+        
+        if self.exampleMode:
+            auth = True
+        elif self.get_object().user.pk == request.user.pk:
             auth = True
             # mark the invoice as opened if this is the user it's intended for
             thisInvoice.opened = True
@@ -1146,6 +1167,7 @@ class InvoiceView(DetailView, FormMixin):
         sold = Lot.objects.filter(seller_invoice=self.get_object()).order_by('lot_number')
         bought = Lot.objects.filter(buyer_invoice=self.get_object()).order_by('lot_number')
         userdata = UserData.objects.get(user=self.get_object().user.pk)
+        context['exampleMode'] = self.exampleMode
         # light theme for some invoices to allow printing
         if 'print' in self.request.GET.copy():
             context['base_template_name'] = "print.html"

@@ -7,8 +7,8 @@
 <div class="container mt-5 mb-5">
     <div class="row">
         <div class="col-md-10 offset-md1">
-            <h1>{{ invoice.user.first_name }} {{ invoice.user.last_name }}</h1>
-            {% if location %}<h5>{{location}}</h5>{%endif%}<br>
+            <h1>{% if exampleMode %}Example{%else%}{{ invoice.user.first_name }} {{ invoice.user.last_name }}{% endif %}</h1>
+            {% if location %}<h5>{{location}}{% if exampleMode %}<span class='text-muted'> This is the pickup location selected by the user</span>{%endif%}</h5>{%endif%}<br>
             {% if request.user.pk == invoice.auction.created_by.pk or request.user.is_superuser %}
               {% if show_links %}
               <br><h5>Adjust this invoice</h5>
@@ -27,10 +27,15 @@
             <table class="table">
             <tr>
               <td>Contact info:</td>
-              <td> {{ invoice.user.first_name }} {{ invoice.user.last_name }}<br>
+              <td>{% if exampleMode %}David Banks<br>
+                1234 Street<br>
+                Anytown, USA 90210<br>
+                davidbanks@example.com<br>
+                123-456-7890                
+                {%else%} {{ invoice.user.first_name }} {{ invoice.user.last_name }}<br>
                 {{ userdata.address }}<br>
                 {{ invoice.user.email }}<br>
-                {{ userdata.phone_number }}
+                {{ userdata.phone_number }}{% endif %}
               </td>
             </tr>
             <tr>
@@ -39,7 +44,7 @@
             </tr>
             <tr>
               <td>Status</td>
-              <td>{% if not invoice.paid %}<span class="text-danger">Unpaid</span>{% else %}<span>Paid</span>{% endif %}</td>
+              <td>{% if not invoice.paid %}<span class="text-danger">Unpaid</span>{% else %}<span>Paid</span>{% endif %}{% if exampleMode %}<span class='text-muted'></class> Only the creator of an auction can mark invoices as paid</span>{%endif%}</td>
             </tr>
             <tr>
             {% if location %}
@@ -71,7 +76,7 @@
             {% endif %}
             <tr>
               <td>Final total (rounded)</td>
-              <td>{{ invoice }}</td>
+              <td>{{ invoice.invoice_summary }}</td>
             </tr>
           </table>
           {%if invoice.lots_sold %}  
@@ -95,8 +100,8 @@
                  {% for lot in sold %}
                   <tr>
                     <td>{{ lot.lot_number }}</td>
-                    <td>{% if show_links %}<a href="/lots/{{lot.pk}}/">{{ lot.lot_name }}</a>{% else %}{{ lot.lot_name }}{% endif%}</td>
-                    <td>{% if lot.winning_price %} {{ lot.winner.first_name }} {{ lot.winner.last_name }} {% else %} Not sold {% endif %}</td>
+                    <td>{% if show_links %}<a href="/lots/{{lot.pk}}/{{lot.slug}}/">{{ lot.lot_name }}</a>{% else %}{{ lot.lot_name }}{% endif%}</td>
+                    <td>{% if lot.winning_price %} {% if exampleMode %}Real name of buyer here{%else%}{{ lot.winner.first_name }} {{ lot.winner.last_name }}{% endif %} {% else %} Not sold {% endif %}</td>
                     {% if auction.alternate_pickup_location %}
                     <td>{% if lot.winner %}{{ lot.winner_location }}{% endif %}</td>
                     {% endif %}
@@ -129,11 +134,11 @@
                  {% for lot in bought%}
                   <tr>
                     <td>{{ lot.lot_number }}</td>
-                    <td>{% if show_links %}<a href="/lots/{{lot.pk}}/">{{ lot.lot_name }}</a>{% else %}{{ lot.lot_name }}{% endif %}</td>
+                    <td>{% if show_links %}<a href="/lots/{{lot.pk}}/{{lot.slug}}/">{{ lot.lot_name }}</a>{% else %}{{ lot.lot_name }}{% endif %}</td>
                     {% if auction.alternate_pickup_location %}
                     <td>{{ lot.location }}</td>
                     {% endif %}
-                    <td>{{ lot.user.first_name }} {{ lot.user.last_name }}</td>
+                    <td>{% if exampleMode %}Real name of seller here{%else%}{{ lot.user.first_name }} {{ lot.user.last_name }}{% endif %}</td>
                     <td>${{ lot.winning_price|floatformat:2 }}</td>
                   </tr>
                   {% endfor %}

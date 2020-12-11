@@ -36,7 +36,7 @@
       <td>Lot {{ lot.lot_number }}</td>
       <td>{% if lot.donation %}Donation{% else %}{{ lot.user }}{% endif %}</td>
       <td>{{ lot.species_category }}</td>
-      <td><a href="/lots/{{lot.lot_number}}">{{ lot.lot_name }}</a></td>
+      <td><a href="/lots/{{lot.lot_number}}/{{lot.slug}}/">{{ lot.lot_name }}</a></td>
       {% if request.user.is_superuser %}
       <td>{{ lot.view_to_bid_ratio|floatformat:2 }}</td>
       <td>{{ lot.page_views }}</td>
