@@ -17,3 +17,5 @@ export EMAIL_HOST_PASSWORD='mygmailpass'
 export DEFAULT_FROM_EMAIL="Notifications"
 export TIME_ZONE='America/New York'
 export SITE_DOMAIN="mydomain.com"
+export GOOGLE_MEASUREMENT_ID='G-1234567'
+export GOOGLE_TAG_ID='GTM-ABCDEFG'

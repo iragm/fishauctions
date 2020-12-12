@@ -13,7 +13,7 @@
 
     <h1>{% trans "Sign In" %}</h1>
 
-    <a class='btn btn-primary' href="/google/login/?process=login">Sign in with your Google account</a>
+    <a id='sign-in-google' class='btn btn-primary' href="/google/login/?process=login">Sign in with your Google account</a>
 
       <br><br><h5>Don't have a Google account?  Log in with your account on this site:</h5>
      
@@ -24,7 +24,7 @@
       <input type="hidden" name="{{ redirect_field_name }}" value="{{ redirect_field_value }}" />
       {% endif %}
       
-      <a class='btn btn-primary' href="{{ signup_url }}">Create a new account</a> <a class="btn btn-secondary" href="{% url 'account_reset_password' %}">{% trans "Forgot Password" %}</a> <button class="btn btn-success" type="submit">{% trans "Sign In" %}</button>
+      <a class='btn btn-primary' href="{{ signup_url }}">Create a new account</a> <a class="btn btn-secondary" href="{% url 'account_reset_password' %}">{% trans "Forgot Password" %}</a> <button id='sign-in-local' class="btn btn-success" type="submit">{% trans "Sign In" %}</button>
     </form>
 
     {% endblock %}

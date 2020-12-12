@@ -42,7 +42,7 @@ class UserdataInline(admin.StackedInline):
 
 # Extend Django's base user model
 class UserAdmin(BaseUserAdmin):
-    list_display = ['first_name', 'last_name', 'email', 'last_activity']
+    list_display = ['first_name', 'last_name', 'email', 'last_activity', 'date_joined']
     inlines = [
         UserdataInline,
         AuctionTOSInline,

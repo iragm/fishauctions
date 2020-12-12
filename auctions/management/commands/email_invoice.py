@@ -31,8 +31,11 @@ class Command(BaseCommand):
         for invoice in invoices:
             user = User.objects.get(pk=invoice.user.pk)
             email = user.email
-            location = AuctionTOS.objects.get(auction=invoice.auction, user=user).pickup_location
-            notify(email, invoice.auction, invoice.pk, location)
-            self.stdout.write(f'Emailed {user} invoice for {invoice.net}')
+            try:
+                location = AuctionTOS.objects.get(auction=invoice.auction, user=user).pickup_location
+                notify(email, invoice.auction, invoice.pk, location)
+                self.stdout.write(f'Emailed {user} invoice for {invoice.net}')
+            except:
+                self.stdout.write(f'{user} did not set their location, not emailing them')
             invoice.email_sent = True
             invoice.save()

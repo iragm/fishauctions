@@ -19,8 +19,9 @@ Your lots
 Won lots
 {% endif %}
 {% if view == "user" %}
-User: {{ user }}
+Lots from {{ user }}
 {% endif %}
+{% if auction %} for {{ auction }}{% endif %}
 {% endblock %}
 {% load static %}
 {% block content %}

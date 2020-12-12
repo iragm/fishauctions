@@ -215,7 +215,7 @@ function ban_lot(ban) {
             {% endif %}
         </table>
         {% if lot.tos_needed %}
-        <span >Bidding is not allowed on this lot until {% if lot.user.pk == request.user.id%} you have <a href="{{lot.tos_needed}}">confirmed your pickup location</a>{% else %} the submitter of this lot has confirmed their location{% endif %}</span>
+        <span >Bidding is not allowed on this lot until {% if lot.user.pk == request.user.id%} you have <a href="{{lot.tos_needed}}">confirmed your pickup location</a> {% if lot.can_be_deleted %}<span><a href="/lots/delete/{{lot.pk}}" class="btn btn-danger active">Delete</a>{% endif %}{% else %} the submitter of this lot has confirmed their location{% endif %}</span>
         {% else %}
             {% if lot.banned %}
             <span class="text-danger">Banned:</span> {{ lot.ban_reason }}<br>

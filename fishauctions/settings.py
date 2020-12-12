@@ -79,6 +79,7 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'auctions.context_processors.google_analytics',
             ],
         },
     },
@@ -216,3 +217,6 @@ SOCIALACCOUNT_PROVIDERS = {
 VIEW_WEIGHT = 1
 BID_WEIGHT = 10
 WEIGHT_AGAINST_TOP_INTEREST = 20
+
+GOOGLE_MEASUREMENT_ID=os.environ['GOOGLE_MEASUREMENT_ID']
+GOOGLE_TAG_ID = os.environ['GOOGLE_TAG_ID']

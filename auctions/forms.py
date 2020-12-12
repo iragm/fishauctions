@@ -26,7 +26,7 @@ class CreateBid(forms.ModelForm):
             'user',
             'lot_number',
             'amount',
-            Submit('submit', 'Place bid', css_class='btn-success'),
+            Submit('submit', 'Place bid', css_class='place-bid btn-success'),
         )
         self.fields['user'].widget = HiddenInput()
         self.fields['lot_number'].widget = HiddenInput()
@@ -84,7 +84,7 @@ class AuctionTOSForm(forms.ModelForm):
             'user',
             'auction',
             'pickup_location',
-            Submit('submit', 'Confirm pickup location and view lots', css_class='btn-success'),
+            Submit('submit', 'Confirm pickup location and view lots', css_class='agree_tos btn-success'),
         )
         self.fields['pickup_location'].queryset = PickupLocation.objects.filter(auction=self.auction).order_by('name')
         self.fields['pickup_location'].label = "Yes, I will be at&nbsp;&nbsp;&nbsp;"
@@ -204,7 +204,7 @@ class CreateAuctionForm(forms.ModelForm):
             #     css_class='row',
             # ),
             # 'alternate_pickup_location_map',
-            Submit('submit', 'Save', css_class='btn-success'),
+            Submit('submit', 'Save', css_class='create-update-auction btn-success'),
         )
 
     def clean(self):
@@ -294,7 +294,7 @@ class CreateLotForm(forms.ModelForm):
                 css_class='row',
             ),
             'auction',
-            Submit('submit', "Save", css_class='btn-success'),
+            Submit('submit', "Save", css_class='create-update-lot btn-success'),
         )
     def clean(self):
         cleaned_data = super().clean()
