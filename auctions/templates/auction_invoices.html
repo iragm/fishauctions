@@ -14,7 +14,7 @@
               <th scope="col">User</th>
               <th scope="col">Edit</th>
               <th scope="col">Total</th>
-              <th scope="col">Paid</th>
+              <th scope="col">Status</th>
               <th scope="col">Lots bought</th>
               <th scope="col">Lots sold</th>
               <th scope="col">Location</th>
@@ -36,6 +36,13 @@
             {% endfor %}
         </tbody>
       </table>
+      <h3>Send batch Paypal invoices</h3>
+      See <a href="/blog/online-payments-suck/">how to use this</a><br>
+      <br>
+      {% for chunk in object.paypal_invoice_chunks %}
+        <a href="/auctions/{{ object.slug }}/paypal/{{ chunk }}/">Download Batch Invoice File #{{chunk}}</a><br>
+      {% endfor %}
+      <br>For use with Paypal's <a href="https://www.paypal.com/invoice/batch">batch invoice system</a>.  Paypal's fees apply.<br>
     </div>
 </div>
 </div>  

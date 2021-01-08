@@ -10,7 +10,7 @@
         <table class="table">
           <thead>
             <tr>
-              <th scope="col">Auction</th>
+              <th scope="col">For</th>
               <th scope="col">Total</th>
               <th scope="col">Paid</th>
               <th scope="col">Date</th>
@@ -20,9 +20,9 @@
             
             {% for invoice in object_list %}
             <tr>
-              <td><a href="/invoices/{{invoice.pk}}/">{{ invoice.auction }}</a></td>
+              <td><a href="/invoices/{{invoice.pk}}/">{{ invoice.label }}</a></td>
               <td><span {% if not invoice.user_should_be_paid %} style="color:red"{% endif %}>${{ invoice.absolute_amount|floatformat:2 }}</span></td>
-              <td> {% if not invoice.paid %}<span style="color:red">Unpaid</span>{% else %}<span>Paid</span>{% endif %}</td>
+              <td>{{ invoice.get_status_display }}</td>
               <td>{{ invoice.date }}</td>
             </tr>
             {% endfor %}

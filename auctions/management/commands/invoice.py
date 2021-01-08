@@ -12,7 +12,8 @@ class Command(BaseCommand):
             self.stdout.write(f'Invoicing {auction}')
             activeLots = Lot.objects.filter(auction=auction, active=True)
             if activeLots:
-                self.stdout.write(self.style.ERROR(' There are still active lots, wait for endauctions cron job to close them and declare a winner (this should happen automatically in a few minutes)'))
+                pass
+                #self.stdout.write(self.style.ERROR(' There are still active lots, wait for endauctions cron job to close them and declare a winner (this should happen automatically in a few minutes)'))
             else:
                 lots = Lot.objects.filter(auction=auction)
                 for lot in lots:

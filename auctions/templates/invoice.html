@@ -1,6 +1,6 @@
 {% extends base_template_name %}
 {% load crispy_forms_tags %}
-{% block title %} {{ invoice.auction }} {% endblock %}
+{% block title %} Invoice for {{ invoice.auction }} {% endblock %}
 {% load static %}
 {% block content %}
 {% block extra_js %}{% endblock %}
@@ -28,14 +28,15 @@
             <tr>
               <td>Contact info:</td>
               <td>{% if exampleMode %}David Banks<br>
-                1234 Street<br>
-                Anytown, USA 90210<br>
-                davidbanks@example.com<br>
-                123-456-7890                
+                  1234 Street<br>
+                  Anytown, USA 90210<br>
+                  davidbanks@example.com<br>
+                  123-456-7890                
                 {%else%} {{ invoice.user.first_name }} {{ invoice.user.last_name }}<br>
-                {{ userdata.address }}<br>
-                {{ invoice.user.email }}<br>
-                {{ userdata.phone_number }}{% endif %}
+                  {{ userdata.address|linebreaksbr }}<br>
+                  {{ invoice.user.email }}<br>
+                  {% if userdata.phone_number %}{{ userdata.phone_number }}{% endif %}
+                {% endif %}
               </td>
             </tr>
             <tr>
@@ -44,10 +45,12 @@
             </tr>
             <tr>
               <td>Status</td>
-              <td>{% if not invoice.paid %}<span class="text-danger">Unpaid</span>{% else %}<span>Paid</span>{% endif %}{% if exampleMode %}<span class='text-muted'></class> Only the creator of an auction can mark invoices as paid</span>{%endif%}</td>
+              <td>{{ invoice.get_status_display }}{% if exampleMode %}<span class='text-muted'></class> Only the creator of an auction can mark invoices as paid</span>{%endif%}</td>
             </tr>
             <tr>
-            {% if location %}
+            {% if location == 'No location selected' %}
+
+            {% else %}
               <td>Location</td>
               <td>{{ location.name }} <br> {{ location.description }} on {{ location.pickup_time }}
                 {% if location.second_pickup_time %}<br>You must also come back on {{ location.second_pickup_time }} to pick up lots purchased from other locations{%endif%}
@@ -87,7 +90,7 @@
                     <th scope="col">#</th>
                     <th scope="col">Lot</th>
                     <th scope="col">Buyer</th>
-                    {% if auction.alternate_pickup_location %}
+                    {% if auction.multi_location %}
                     <th scope="col">Winner Location</th>
                     {% endif %}
                     <th scope="col">Price</th>
@@ -102,7 +105,7 @@
                     <td>{{ lot.lot_number }}</td>
                     <td>{% if show_links %}<a href="/lots/{{lot.pk}}/{{lot.slug}}/">{{ lot.lot_name }}</a>{% else %}{{ lot.lot_name }}{% endif%}</td>
                     <td>{% if lot.winning_price %} {% if exampleMode %}Real name of buyer here{%else%}{{ lot.winner.first_name }} {{ lot.winner.last_name }}{% endif %} {% else %} Not sold {% endif %}</td>
-                    {% if auction.alternate_pickup_location %}
+                    {% if auction.multi_location %}
                     <td>{% if lot.winner %}{{ lot.winner_location }}{% endif %}</td>
                     {% endif %}
                     <td>{% if lot.winning_price %} ${{ lot.winning_price|floatformat:2 }} {% else %} Not sold {% endif %}</td>
@@ -122,7 +125,7 @@
                   <tr>
                     <th scope="col">#</th>
                     <th scope="col">Lot</th>
-                    {% if auction.alternate_pickup_location %}
+                    {% if auction.multi_location %}
                     <th scope="col">Location</th>
                     {% endif %}
                     <th scope="col">Seller</th>
@@ -135,7 +138,7 @@
                   <tr>
                     <td>{{ lot.lot_number }}</td>
                     <td>{% if show_links %}<a href="/lots/{{lot.pk}}/{{lot.slug}}/">{{ lot.lot_name }}</a>{% else %}{{ lot.lot_name }}{% endif %}</td>
-                    {% if auction.alternate_pickup_location %}
+                    {% if auction.multi_location %}
                     <td>{{ lot.location }}</td>
                     {% endif %}
                     <td>{% if exampleMode %}Real name of seller here{%else%}{{ lot.user.first_name }} {{ lot.user.last_name }}{% endif %}</td>

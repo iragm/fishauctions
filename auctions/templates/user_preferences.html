@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}Preferences{% endblock %}
+{% load static %}
+
+{% block extra_js %}
+{% endblock %}
+{% block content %}
+<div class="container mt-5 mb-5">
+    <div class="row">
+        <div class="col-md-10 offset-md1">
+            <h1>Preferences</h1>
+            <br>
+            {% crispy form form.helper %}
+        </div>
+    </div>
+</div>  
+
+{% endblock %}
+
+

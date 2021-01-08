@@ -36,7 +36,7 @@ class UserdataInline(admin.StackedInline):
     model = UserData
     can_delete = False
     verbose_name_plural = 'User data'
-    exclude = ('rank_unique_species','number_unique_species', 'rank_total_lots', 'number_total_lots', 'rank_total_spent', \
+    exclude = ('unsubscribe_link','latitude', 'longitude', 'rank_unique_species','number_unique_species', 'rank_total_lots', 'number_total_lots', 'rank_total_spent', \
         'number_total_spent', 'rank_total_bids', 'number_total_bids', 'last_auction_used', 'number_total_sold', \
         'rank_total_sold', 'total_volume', 'rank_volume', 'seller_percentile', 'buyer_percentile', 'volume_percentile', )
 
@@ -45,7 +45,7 @@ class UserAdmin(BaseUserAdmin):
     list_display = ['first_name', 'last_name', 'email', 'last_activity', 'date_joined']
     inlines = [
         UserdataInline,
-        AuctionTOSInline,
+        #AuctionTOSInline, # too much noise
         #InterestInline, # too much noise
     ]
 
@@ -64,7 +64,7 @@ class LocationAdmin(admin.ModelAdmin):
 
 class PickupLocationInline(admin.TabularInline):
     model = PickupLocation 
-    list_display = ("name", "user", "auction", "description", "google_map_iframe", "pickup_time", "second_pickup_time")
+    list_display = ("name", "user", "auction", "description", "pickup_time", "second_pickup_time")
     list_filter = ()
     search_fields = ()
     extra = 0
@@ -141,6 +141,13 @@ class InvoiceAdmin(admin.ModelAdmin):
          BoughtLotInline,
     ]
 
+class ChatAdmin(admin.ModelAdmin):
+    model = LotHistory 
+    list_display = ("lot", "user", "message", 'timestamp',)
+    list_filter = ("timestamp",)
+    search_fields = ("user__first_name", "user__last_name", "message", "lot__lot_number")
+    ordering = ('-timestamp',)
+
 class CategoryAdmin(admin.ModelAdmin):
     model = Category 
     menu_label = "Categories"  
@@ -171,6 +178,7 @@ admin.site.register(Category, CategoryAdmin)
 admin.site.register(Product, ProductAdmin)
 admin.site.register(Auction, AuctionAdmin)
 admin.site.register(Invoice, InvoiceAdmin)
+admin.site.register(LotHistory, ChatAdmin)
 admin.site.register(Lot, LotAdmin)
 admin.site.register(Location, LocationAdmin)
 admin.site.register(Club, ClubAdmin)

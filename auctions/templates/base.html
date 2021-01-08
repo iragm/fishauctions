@@ -40,9 +40,26 @@
 			  integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0="
 			  crossorigin="anonymous"></script>
         <script type="text/javascript" src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
-        
-        
-        
+        {# handle the unread messages notification counter #}
+        {% if request.user.is_authenticated %}
+        <script>
+          updateMessageCounter();
+          setInterval(updateMessageCounter, 10000);
+          function updateMessageCounter() {
+            $.ajax({
+              type: "POST",
+              beforeSend: function (request) {
+                  request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+              },
+              url: "/api/users/lot_notifications/",
+              success : function(result) {
+                $("#total_unread_lot_messages").html(result.new);
+              }
+            });
+          }
+
+        </script>
+        {% endif %}
         {# Global stylesheets #}
         <link rel="stylesheet" type="text/css" href="{% static 'css/bootstrap.min.css' %}">
         <link rel="stylesheet" type="text/css" href="{% static 'css/auction_site.css' %}">
@@ -61,16 +78,16 @@
     <noscript><iframe src="https://www.googletagmanager.com/ns.html?id={{ GOOGLE_TAG_ID }}"
       height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
       <!-- End Google Tag Manager (noscript) -->
-      <nav class="navbar navbar-expand-lg navbar-dark bg-dark navbar-static-top" role="navigation">
-          <a class="navbar-brand" href="/auctions/all/">Auctions</a>  
+      <nav class="navbar navbar-expand-lg navbar-dark bg-primary navbar-static-top" role="navigation">
+          <a class="navbar-brand" href="/">auction.fish</a>  
           <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#site_navbar" aria-controls="navbarColor02" aria-expanded="false" aria-label="Toggle navigation">
             <span class="navbar-toggler-icon"></span>
           </button>
             <div class="collapse navbar-collapse" id="site_navbar">
                 <ul class="navbar-nav mr-auto">
-                  <li class="nav-item active">
-                    <a class="nav-link" target="_blank" href="https://tfcb.org">TFCB homepage<span class="sr-only">(current)</span></a>
-                  </li>
+                  <!--<li class="nav-item">
+                    <a class="nav-link" target="_blank" href="https://tfcb.org">TFCB homepage</a>
+                  </li>-->
                   <li class="nav-item dropdown">
                     <a class="nav-link dropdown-toggle" data-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">Nifty numbers</a>
                     <div class="dropdown-menu">
@@ -81,41 +98,52 @@
                       <a class="dropdown-item" href="/blog/how-much-should-you-bid/">How much should you bid?</a>
                     </div>
                   </li>
+                  <li class="nav-item">
+                    <a class="nav-link" href="/lots/">Lots</a>
+                  </li>
                   {% if request.user.is_authenticated %}
-                  <li class="nav-item active">
-                    <a class="nav-link" href="/auctions/new">Create auction<span class="sr-only">(current)</span></a>
+                  <li class="nav-item">
+                    <a class="nav-link" href="/auctions/">Auctions</a>
                   </li>  
-                  <li class="nav-item active">
-                    <a class="nav-link" href="/lots/new">Create lot<span class="sr-only">(current)</span></a>
+                  <li class="nav-item">
+                    <a class="nav-link" href="/lots/new">Create lot</a>
                   </li>  
-                  <li class="nav-item active">
-                    <a class="nav-link" href="/lots/watched">Watched lots<span class="sr-only">(current)</span></a>
+                  <li class="nav-item">
+                    <a class="nav-link" href="/lots/watched">Watched lots</a>
                   </li>  
-                  {% endif %}
-                  {% if request.user.is_superuser %}
-                  <li class="nav-item active">
-                    <a class="nav-link" href="/admin/">Admin Site<span class="sr-only">(current)</span></a>
+                  <li class="nav-item">
+                  <a class="nav-link" href="/lots/user/?user={{request.user.pk}}">My lots <span id="total_unread_lot_messages" class='badge-pill badge badge-warning' style='color:black;font-weight:900'></span></a>
                   </li>
                   {% endif %}
-                  <li class="nav-item active">
-                    <a class="nav-link" href="/about/">About<span class="sr-only">(current)</span></a>
+                  {% if request.user.is_superuser %}
+                  <li class="nav-item">
+                    <a class="nav-link" href="/admin/">Admin Site</a>
+                  </li>
+                  {% endif %}
+                  <li class="nav-item dropdown">
+                    <a class="nav-link dropdown-toggle" data-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">About</a>
+                    <div class="dropdown-menu">
+                      <a class="dropdown-item" href="/about/">About site</a>
+                      <a class="dropdown-item" href="/auctions/tfcb-annual-auction/">Example auction rules</a>
+                      <a class="dropdown-item" href="/lots/?a=tfcb-annual-auction/">Example auction lots</a>
+                      </div>
                   </li>
                   {% if request.user.is_authenticated %}
                   <li class="nav-item dropdown">
                     <a class="nav-link dropdown-toggle" data-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">{{ request.user.username }}</a>
                     <div class="dropdown-menu">
-                      <h6 class="dropdown-header">Buying</h6>
+                      <h6 class="dropdown-header">Lots</h6>
                       <a class="dropdown-item" href="/lots/watched">Watched lots</a>
-                      <a class="dropdown-item" href="/bids">Bids</a>
+                      <a class="dropdown-item" href="/bids">Your bids</a>
                       <a class="dropdown-item" href="/lots/won">Won lots</a>
                       <div class="dropdown-divider"></div>
-                      <h6 class="dropdown-header">Selling</h6>
-                      <a class="dropdown-item" href="/lots/my">My lots</a>
-                      <a class="dropdown-item" href="/lots/new/">Create lot</a>
-                      <div class="dropdown-divider"></div>
-                      <a class="dropdown-item" href="/feedback">Feedback</a>
-                      <a class="dropdown-item" href="/invoices">Invoices</a>
-                      <a class="dropdown-item" href="/users/{{ request.user.pk }}/">Account</a>
+                      <h6 class="dropdown-header">Account</h6>
+                      <a class="dropdown-item" href="/account/">Account information</a>
+                      <a class="dropdown-item" href="/feedback/">Feedback</a>
+                      <a class="dropdown-item" href="/invoices/">Invoices</a>
+                      <a class="dropdown-item" href="/users/{{ request.user.pk }}/location/">Contact info</a>
+                      <a class="dropdown-item" href="/users/{{ request.user.pk }}/preferences/">Preferences</a>
+                      <a class="dropdown-item" href="/ignore">Ignore categories</a>
                       <form method="post" action="{% url 'account_logout' %}">
                         {% csrf_token %}
                         {% if redirect_field_value %}

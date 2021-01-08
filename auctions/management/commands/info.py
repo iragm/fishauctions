@@ -2,21 +2,85 @@ from django.utils import timezone
 from django.core.management.base import BaseCommand, CommandError
 from auctions.models import *
 from django.core.mail import send_mail
-from django.db.models import Count, Case, When, IntegerField
-from PIL import Image
-from easy_thumbnails.files import get_thumbnailer
-from io import BytesIO
+from django.db.models import Count, Case, When, IntegerField, Avg
 from django.core.files import File
 from datetime import datetime
-
+from post_office import mail
+from django.template.loader import get_template
 import os
+import uuid
+from django.contrib.sites.models import Site
+
 #import csv 
 class Command(BaseCommand):
     help = 'Just a scratchpad to do things'
 
     def handle(self, *args, **options):
-        #pass
-        print(PageView.objects.filter(lot_number__auction__slug__icontains='tfcb-an').count())
+        #auctionslug = 'pvas'
+        auctionslug = 'tfcb-annual'
+        users = User.objects.all().annotate(
+            #lots_submitted=Count('lot', filter=Q(lot__auction__slug__icontains='))
+            lots_submitted=Count('lot', filter=Q(lot__auction__slug__icontains=auctionslug),\
+        )).annotate(mean_lot_value=Avg('lot__winning_price', filter=Q(lot__auction__slug__icontains=auctionslug)))
+        
+        for user in users:
+            if user.lots_submitted > 0:
+                print(user.lots_submitted, user.mean_lot_value)
+        #lot.shipping_locations.filter(pk=53).exists()
+        #for i in dir(lot.shipping_locations):
+        #    print(i)
+        
+
+
+        # # get any users who have opted into the weekly email
+        # users = User.objects.filter(\
+        #     #Q(userdata__email_me_about_new_auctions=True) | Q(userdata__email_me_about_new_local_lots=True) | | Q(userdata__email_me_about_new_lots_ship_to_location=True)\ # fixme - why is this busted?
+        #     ).filter(pk=2, userdata__latitude__isnull=False) # fixme, remove pk
+        # for user in users:
+        #     template_auctions = []
+        #     if user.userdata.email_me_about_new_auctions:
+        #         # fixme - need to filter only active auctions
+        #         locations = PickupLocation.objects.filter(auction__date_start__lte=timezone.now()).exclude(auction__date_end__gte=timezone.now().exclude(auction__promote_this_auction=False)\
+        #             .annotate(distance=distance_to(user.userdata.latitude, user.userdata.longitude))\
+        #             .order_by('distance').filter(distance__lte=user.userdata.email_me_about_new_auctions_distance)
+        #         auctions = [] # just the slugs of the auctions, to remove duplicates
+        #         distances = {}
+        #         titles = {}
+        #         for location in locations:
+        #             if location.auction.slug in auctions:
+        #                 # it's already included, see if this distance is smaller
+        #                 if location.distance < distances[location.auction.slug]:
+        #                     distances[location.auction.slug] = location.distance
+        #             else:
+        #                 auctions.append(location.auction.slug)
+        #                 distances[location.auction.slug] = location.distance
+        #                 titles[location.auction.slug] = location.auction.title
+                
+        #         for auction in auctions:
+        #             template_auctions.append({'slug':auction, 'distance': distances[auction], 'title': titles[auction]})
+        #     template_nearby_lots = []
+        #     if user.userdata.email_me_about_new_local_lots:
+        #         template_nearby_lots = get_recommended_lots(user=user.pk, local=True, location=None, latitude=user.userdata.latitude,longitude=user.userdata.longitude, distance=user.userdata.local_distance)
+        #     template_shippable_lots = []
+        #     if user.userdata.email_me_about_new_lots_ship_to_location:
+        #         template_shippable_lots = get_recommended_lots(user=user.pk, location=user.userdata.location)
+        #     current_site = Site.objects.get_current()
+        #     if template_auctions or template_nearby_lots or template_shippable_lots:
+        #         # don't send an email if there's nothing of interest
+        #         mail.send(
+        #             'ira@toxotes.org', #user.email, # fixme
+        #             template='weekly_promo_email',
+        #             context={
+        #                 'name': user.first_name,
+        #                 'domain': current_site.domain,
+        #                 'auctions': template_auctions,
+        #                 'nearby_lots': template_nearby_lots,
+        #                 'shippable_lots': template_shippable_lots,
+        #                 'unsubscribe': user.userdata.unsubscribe_link
+        #                 },
+        #         )
+
+        #print(PageView.objects.filter(lot_number__auction__slug__icontains='tfcb-an').count())
         #lots = Lot.objects.filter(auction__slug__icontains='pvas')
         # lots = Lot.objects.all()
         # for lot in lots:
@@ -81,7 +145,6 @@ class Command(BaseCommand):
 #        users = User.objects.filter(pageview__lot_number__auction=auction).annotate(dcount=Count('id'))
 #        for user in users:
             #print(lot.num_views)
-            #print(f'https://auctions.toxotes.org/lots/{lot.lot_number}')
 #            print(f"{user.first_name} {user.last_name}")
             
         # auction = Auction.objects.get(title="TFCB Annual Auction")

@@ -15,3 +15,11 @@
         white-space: nowrap !important; 
     }
 }
+
+a {
+    color: #2384c6;
+}
+
+a:hover {
+    color: #80bbe2;
+}

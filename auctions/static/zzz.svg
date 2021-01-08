@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" height="52" width="52">
+ <defs>
+  <linearGradient y2="30.76" x2="5.1" y1="44.3" x1="9" gradientUnits="userSpaceOnUse" id="linearGradient4161" xlink:href="#a"/>
+  <linearGradient y2="14.2" x2="19.36" y1="30.53" x1="22.2" gradientUnits="userSpaceOnUse" id="linearGradient4145" xlink:href="#a"/>
+  <linearGradient x1="20.27" x2="17.44" y1="30.87" gradientUnits="userSpaceOnUse" y2="14.54" id="a">
+   <stop stop-color="#a0a0a0"/>
+   <stop offset="1" stop-color="#fff"/>
+  </linearGradient>
+  <linearGradient x1="40.4" x2="46.4" gradientTransform="matrix(2.25 0 0 2.11 -56 1.76)" y1="1.91" gradientUnits="userSpaceOnUse" y2="9.29" id="b">
+   <stop stop-color="#b2b2b2"/>
+   <stop offset="1" stop-color="#6c6c6c"/>
+  </linearGradient>
+ </defs>
+ <g stroke="#fff" stroke-linejoin="round">
+  <use xlink:href="#c" width="52" height="52" stroke-width="4.5"/>
+  <path d="m 46.5 3.94 v 4.52 l -8.74 8.57 h 8.73 v 4.36 h -15.3 v -4.52 l 8.73 -8.57 h -8.71 l -0.02 -4.36 z" stroke-width="7.2"/>
+  <path d="m 18.2 21.36 h 10.9 v 2.3 l -6.99 8.61 h 6.99 v 2.18 h -10.9 v -2.3 l 7 -8.61 h -7 v -2.18 z" stroke-width="7"/>
+ </g>
+ <path d="m 6.15 35.56 v 4.36 h 4.36 l -4.36 5.45 v 3.27 h 10.9 v -4.36 h -4.36 l 4.36 -5.45 v -3.27 h -10.9 z" id="c" fill="url(#linearGradient4161)"/>
+ <g stroke-linejoin="round">
+  <use xlink:href="#c" width="52" height="52" stroke="#222" stroke-width="2.2"/>
+  <path d="m 18.2 21.36 h 10.9 v 2.3 l -6.99 8.61 h 6.99 v 2.18 h -10.9 v -2.3 l 7 -8.61 h -7 v -2.18 z" opacity="0.8" fill="#a0a0a0" stroke="#000" stroke-width="4.36"/>
+ </g>
+ <path d="m 29 21.36 v 2.3 l -6.99 8.61 h 6.99 v 2.18 h -10.9 v -2.3 l 7 -8.61 h -7 v -2.18 z" fill="url(#linearGradient4145)"/>
+ <path d="m 46.5 3.94 v 4.52 l -8.74 8.57 h 8.73 v 4.36 h -15.3 v -4.52 l 8.73 -8.57 h -8.71 l -0.02 -4.36 z" opacity="0.8" fill="#a0a0a0" stroke="#000" stroke-linejoin="round" stroke-width="4.36"/>
+ <path d="m 31.2 3.94 h 15.3 v 4.52 l -8.74 8.57 h 8.73 v 4.36 h -15.3 v -4.52 l 8.73 -8.57 h -8.71 v -4.36" fill="url(#b)"/>
+ <g opacity="0.5">
+  <path d="m 32.3 7.21 v -2.18 h 13.1" fill="none" stroke="#fff" stroke-linecap="square" stroke-width="2.18"/>
+  <path d="m 31.2 21.4 h 2.18 v -3.61 l 7.77 -7.64 c 0.35 -0.34 0.43 -0.88 0.19 -1.31 -0.24 -0.43 -0.74 -0.65 -1.22 -0.53 c -0.18 0.06 -0.36 0.16 -0.5 0.3 l -8.42 8.29 z m 5.64 -3.15 c 0.06 0.6 0.59 1.05 1.19 0.99 h 8.39 v -2.18 h -8.56 c -0.63 0.06 -1.08 0.59 -1.02 1.19 z" fill="#fff"/>
+ </g>
+</svg>

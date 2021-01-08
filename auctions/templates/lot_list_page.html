@@ -14,16 +14,13 @@
 <table class="table">
   <thead>
     <tr>
-      <th scope="col">#</th>
+      <th scope="col"></th>
       <th scope="col">Seller</th>
       <th scope="col">Category</th>
       <th scope="col">Lot name</th>
-      {% if request.user.is_superuser %}
-      <th scope="col">View/bid ratio</th>
-      <th scope="col">Views</th>
-      {% endif %}
       <th scope="col">Price</th>
       <th scope="col">High bidder</th>
+      <th scope="col">Activity</th>
       <th scope="col">Ends</th>
     </tr>
   </thead>
@@ -33,16 +30,34 @@
     {% endif %}
     {% for lot in object_list %}
     <tr class='nowrap'>
-      <td>Lot {{ lot.lot_number }}</td>
+      <td>{% if lot.auction %}
+            Lot {{ lot.lot_number }}
+          {% else %}
+            {% if lot.local_pickup %}
+            {% if lot.distance >= 0 %}{{ lot.distance|floatformat:0 }}{% else %}?{%endif%} miles
+            {% else %}
+              {% if request.user.userdata.location in lot.shipping_locations.all %}
+                Ships
+              {% else %}
+                {% if lot.other_text %}
+                {{ lot.other_text }}
+                {% else %}
+                Not available
+                {%endif%}
+              {% endif %}
+            {% endif %}
+          {% endif %}
+        {% if lot.is_watched_by_req_user %}<span class="badge" style='color:yellow; font-size:1.2em'>&#9733;</span>{% endif %}
+      </td>
       <td>{% if lot.donation %}Donation{% else %}{{ lot.user }}{% endif %}</td>
       <td>{{ lot.species_category }}</td>
       <td><a href="/lots/{{lot.lot_number}}/{{lot.slug}}/">{{ lot.lot_name }}</a></td>
-      {% if request.user.is_superuser %}
-      <td>{{ lot.view_to_bid_ratio|floatformat:2 }}</td>
-      <td>{{ lot.page_views }}</td>
-      {% endif %}
       <td>${{ lot.high_bid }} </td>
       <td>{% if lot.high_bidder %}{{ lot.high_bidder }}{% else %}No bids{% endif %}</td>
+      <td>{% if lot.user.pk == request.user.pk %}{% if lot.owner_chats %}<span class='text-warning'>{{ lot.owner_chats }}</span>{% endif %}
+        {% else %}
+        {% if lot.all_chats %}<span class='text-muted>'>{{lot.all_chats}}</span>{% endif %}
+        {% endif %}</td>
       <td >{% if lot.ended %}<span style="color:red">{{ lot.calculated_end }}</span>{% else %}{{ lot.calculated_end }}{% endif %}</td>
     </tr>
     {% endfor %}

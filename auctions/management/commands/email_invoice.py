@@ -2,40 +2,35 @@ import decimal
 from django.utils import timezone
 from django.core.management.base import BaseCommand, CommandError
 from auctions.models import Auction, User, Lot, Invoice, AuctionTOS
-from django.core.mail import send_mail
-
-def notify(email, auction, pk, location):
-    subject = "Your auction invoice"
-    if auction:
-        subject = f"Your auction invoice for {auction}"
-    msg = f'Thanks for bidding!  You can view your invoice here: https://auctions.toxotes.org/invoices/{pk}/\n\n'
-    if auction:
-        thisAuction = Auction.objects.get(pk=auction.pk)
-        creator = User.objects.get(pk=thisAuction.created_by.pk)
-        contactEmail = creator.email
-        msg += f"You must meet at {location} to pay and exchange your lots.\n\nSee you there!\n\nIf you have questions, please contact {contactEmail}\n\n"
-    msg += "Please don't reply to this email.\n\nBest,\nauctions.toxotes.org"
-    send_mail(
-        subject,
-        msg,
-        'Fish auction notifications',
-        [email],
-        fail_silently=False,
-    )
+from post_office import mail
+from django.contrib.sites.models import Site
 
 class Command(BaseCommand):
     help = 'Email the winner to pay up on all invoices'
 
     def handle(self, *args, **options):
-        invoices = Invoice.objects.filter(email_sent=False, paid=False)
+        invoices = Invoice.objects.filter(email_sent=False, status='UNPAID')
         for invoice in invoices:
             user = User.objects.get(pk=invoice.user.pk)
             email = user.email
-            try:
-                location = AuctionTOS.objects.get(auction=invoice.auction, user=user).pickup_location
-                notify(email, invoice.auction, invoice.pk, location)
-                self.stdout.write(f'Emailed {user} invoice for {invoice.net}')
-            except:
-                self.stdout.write(f'{user} did not set their location, not emailing them')
+            subject = "Your invoice"
+            location = None
+            if invoice.auction:
+                contact_email = invoice.auction.created_by.email
+                subject += f" for {invoice.auction.title}"
+                try:
+                    location = AuctionTOS.objects.get(auction=invoice.auction, user=user).pickup_location
+                except:
+                    pass
+            elif invoice.lot:
+                contact_email = invoice.lot.user.email
+                subject += f" for {invoice.lot.lot_name}"
+            current_site = Site.objects.get_current()
+            mail.send(
+                user.email,
+                template='invoice_ready',
+                context={'subject': subject, 'name': user.first_name, 'domain': current_site.domain, 'location': location, "invoice": invoice, 'contact_email': contact_email},
+            )
+            self.stdout.write(f'Emailed {user} invoice {invoice}')
             invoice.email_sent = True
             invoice.save()

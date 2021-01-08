@@ -1,0 +1,350 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}About site{% endblock %}
+{% block extra_js %}
+<style>
+  .strike {
+    position: relative;
+  }
+
+  .strike::after {
+    content: ' ';
+    position: absolute;
+    top: 58%;
+    left: -3%;
+    width: 0;
+    height: 10px;
+    opacity: 80%;
+    transform: translateY(-50%);
+    background: repeat-x url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAB0AAAAKAQMAAAByjsdvAAAABlBMVEVEs1XdMzNU8N6kAAAAAXRSTlMAQObYZgAAAAFiS0dEAIgFHUgAAAAJcEhZcwAACxMAAAsTAQCanBgAAAAHdElNRQfkDA0OHjn3QVw1AAAAH0lEQVQI12NgQAX/GxgsGP5/YPjBwPgfSDHYAwVQAQDnowlMrxaiKAAAAABJRU5ErkJggg==);
+    animation: strike .5s linear .1s 1 forwards;
+  }
+
+  @keyframes strike {
+    to {
+      width: 106%;
+    }
+  }
+
+  .appear {
+    animation: slidein 3s;
+  }
+
+  @keyframes slidein {
+    0% {
+      margin-left: -800px;
+    }
+
+    20% {
+      margin-left: -800px;
+    }
+
+    35% {
+      margin-left: 0px;
+    }
+
+    100% {
+      margin-left: 0px;
+    }
+  }
+
+  .fadein {
+    animation: fadein 3s;
+  }
+
+  @keyframes fadein {
+    0% {
+      opacity: 0;
+    }
+
+    50% {
+      opacity: 0;
+    }
+
+    100% {
+      opacity: 1;
+    }
+  }
+
+  .magic {
+    animation: magic_animation 1.5s linear infinite 2s;
+  }
+
+  @keyframes magic_animation {
+    50% {
+      text-shadow: 0 0 8px rgba(230, 201, 35, 0.907);
+    }
+    
+  }
+</style>
+<script>
+
+  $crossOut = $('#cross_out_trigger');
+  $locations = $('#locations_trigger');
+  console.log(window.innerHeight);
+  var locationsAnimationScrollDistance = window.innerHeight / 10;
+  var isCrossed = false;
+  var activeLocation = 1;
+  $(document).ready(function () {
+    $(window).bind("scroll", function () {
+      if ($(this).scrollTop() >= $crossOut.offset().top) {
+        if (!isCrossed) {
+          isCrossed = true;
+          $(".cross_out").addClass("strike");
+          $(".it_gets_easier").css('visibility', 'visible');
+          $(".free").css('visibility', 'visible');
+          $(".it_gets_easier").addClass("appear");
+          $(".free").addClass("fadein");
+        }
+      } else {
+        if (isCrossed) {
+          isCrossed = false;
+          $(".cross_out").removeClass("strike");
+          $(".it_gets_easier").css('visibility', 'hidden');
+          $(".free").css('visibility', 'hidden');
+          $(".it_gets_easier").removeClass("appear");
+          $(".free").removeClass("fadein");
+        }
+      }
+      // if ($(this).scrollTop() >= $locations.offset().top && $(this).scrollTop() < ($locations.offset().top + locationsAnimationScrollDistance)) {
+      //   if (activeLocation !== 1) {
+      //     $("#locations_animation").attr("src","{% static 'locations_1.svg' %}");
+      //     activeLocation = 1;
+      //   }
+      // } else if ($(this).scrollTop() >= ($locations.offset().top + locationsAnimationScrollDistance) && ($(this).scrollTop() < $locations.offset().top + (locationsAnimationScrollDistance * 2))) {
+      //   if (activeLocation !== 2) {
+      //     $("#locations_animation").attr("src","{% static 'locations_2.svg' %}");
+      //     activeLocation = 2;
+      //   }
+      // } else if ($(this).scrollTop() >= ($locations.offset().top + locationsAnimationScrollDistance * 2) && ($(this).scrollTop() < $locations.offset().top + (locationsAnimationScrollDistance * 4))) {
+      //   if (activeLocation !== 3) {
+      //     $("#locations_animation").attr("src","{% static 'locations_3.svg' %}");
+      //     activeLocation = 3;
+      //   }
+      // }
+    });
+  });
+</script>
+{% endblock %}
+{% block content %}
+<span id='cross_out_trigger'></span>
+<div style='background:transparent !important' class="jumbotron jumbotron-fluid bg-dark">
+  <div class="container">
+    <h1 class="display-4">Upgrade your fish club auctions. <span class='text-info'>For free.</span></h1>
+    <p class="lead">What goes into running your auctions?</p>
+    <ol>
+      <li>Pick a date and time</li>
+      <li>Choose a location</li>
+      <li><span class='cross_out'>Reserve the location</span></li>
+      <li><span class='cross_out'>Pay for the location</span></li>
+      <li><span class='cross_out'>Find and pay an auctioneer</span></li>
+      <li><span class='cross_out'>Run the auction</span></li>
+      <li><span class='cross_out'>Figure out how much people owe or need to be paid</span></li>
+      <li><span class='cross_out'>Handle payment and deal with unsold lots</span></li>
+      <li>Get paid</li>
+      <li>Give sold lots to their winners</li>
+    </ol>
+    <p class="lead"><span class="it_gets_easier" style="visibility:hidden;">It gets easier.</span> <span
+        style="visibility:hidden;" class='free text-info'>(And did we mention free?)</span></p>
+  </div>
+</div>
+<div class="jumbotron jumbotron-fluid">
+  <div class="container">
+    <h1 class="display-4">Here's how it works</h1>
+    <ol>
+      <li>Your club creates an auction on this site</li>
+      <li>Sellers add lots</li>
+      <li>Buyers select a pickup location and bid on lots</li>
+      <li><span>This site does its <span class='magic'>magic</span>.</span>
+        <ul>
+          <span id='locations_trigger'></span>
+          <li>Watch lots to keep track of what you're interested in</li>
+          <li>Get notifications when you're outbid</li>
+          <li>Ban users who cause trouble <span class='text-muted'>Sorry Mike, water hyacinth isn't legal</span></li>
+          <li>Auctions end automatically</li>
+          <li>Invoices generated automatically</li>
+        </ul>
+      </li>
+      <li>After the auction, exchange lots and money</li>
+      <li>Send invoices and get payment with Paypal (Paypal fees apply)</li>
+    </ol>
+    <!--<div><img id='locations_animation' style='max-width:100%' src="{% static 'locations_1.svg' %}" class="card-img-top" alt="Pickup locations diagram"></div>
+    <br><br><br><p><div><span class='text-muted'>Note: </span>Having multiple pickup locations is a good way to bring in new people, but it's optional.  You may want to run a single location auction first, so you club members get used to how the process works.</div></p>
+    -->
+  </div>
+</div>
+<div class="jumbotron jumbotron-fluid bg-primary">
+  <div class="container">
+    <h1 class="display-4">Better for everyone</h1>
+    <div class="row">
+      <div class="col-lg-4 col-md-6">
+        <div class="card border-secondary mb-3" style="max-width: 20rem;">
+          <div class="card-header">Buyers</div>
+          <div class="card-body">
+            <h4 class="card-title">Less pressure</h4>
+            <h3><img style='max-width:2em' src="{% static 'red_tail_cat.svg' %}" class="card-img-top" alt="Don't buy big fish"></h3>
+            <p class="card-text">Take your time and research fish before you bid. No more accidental pacu purchases!
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-4 col-md-6">
+        <div class="card border-secondary mb-3" style="max-width: 20rem;">
+          <div class="card-header">Clubs</div>
+          <div class="card-body">
+            <h4 class="card-title">Attract new members</h4>
+            <p class="card-text">Bring in new club members and new fish from other clubs with multiple pickup
+            locations<br><br><span class='text-muted'>Because everyone in your home club already has a pair of your
+            swordtails...</span></p>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-4 col-md-6">
+        <div class="card border-secondary mb-3" style="max-width: 20rem;">
+          <div class="card-header">Sellers</div>
+          <div class="card-body">
+            <h4 class="card-title">Set a reserve price</h4>
+            <p class="card-text">Make sure your carefully raised fish sell for what they're worth<br><br>No need to bag and transport unsold lots - hang on to them for next time</p>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-4 col-md-6">
+        <div class="card border-secondary mb-3" style="max-width: 20rem;">
+          <div class="card-header">Your auction, your way</div>
+          <div class="card-body">
+            <h4 class="card-title">Pants optional*</h4>
+            <p class="card-text"></p>
+            Bid from the comfort of your home<br>
+            <h3><img style='max-width:1em' src="{% static 'glass.svg' %}" class="card-img-top" alt="Don't drink and bid"></h3>
+            <span class='text-info'>Sturgeon general's warning:</span> consumption of alcohol while bidding may be
+            beneficial to your club's finances<br><br>
+            <span class='text-muted'>*Pants (and masks) required when exchanging lots</span>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-4 col-md-6">
+        <div class="card border-secondary mb-3" style="max-width: 20rem;">
+          <div class="card-header">Avoid bidding wars</div>
+          <div class="card-body">
+            <h4 class="card-title">Proxy bidding</h4>
+            <h3><img style='max-width:1em' src="{% static 'zzz.svg' %}" class="card-img-top" alt="Don't drink and bid"></h3>
+            <p class="card-text">The winning bid is determined by the second highest bid<br><br>Bid what a lot is worth to you, and we'll automatically bid on your behalf up to your chosen price
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-4 col-md-6">
+        <div class="card border-secondary mb-3" style="max-width: 20rem;">
+          <div class="card-header">Better bookkeeping</div>
+          <div class="card-body">
+            <h4 class="card-title">Automatic Invoices</h4>
+            <p class="card-text">See exactly how much you owe with invoices that are created automatically after the auction ends.
+              <br><a href='/invoices/example/' class='btn btn-info' target="_blank">See example</a>
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="jumbotron jumbotron-fluid">
+    <div class="container">
+      <div class="row">
+        <div class="col-lg-4">
+          <blockquote class="blockquote text-right">
+            <p class="mb-0">I was reluctant at first, but after buying and selling, I am convinced this is the next generation of fish auctions.  I love the fact my fish don't sit on a cold table all day long.</p>
+            <footer class="blockquote-footer">rob.vermont</footer>
+          </blockquote>
+        </div>
+        <div class="col-lg-4">
+          <blockquote class="blockquote text-right">
+            <p class="mb-0">Amazing! The new way to buy and sell fish.</p>
+            <footer class="blockquote-footer">Janine Banks</footer>
+          </blockquote>
+        </div>
+        <div class="col-lg-4">
+          <blockquote class="blockquote text-right">
+            <p class="mb-0">Yeah, it's OK, I guess...</p>
+            <footer class="blockquote-footer">Mike</footer>
+          </blockquote>
+        </div>
+      </div>
+    </div>
+</div>
+<div style="background:transparent !important" class="jumbotron jumbotron-fluid bg-primary">
+  <div class="container">
+    <h1 class="display-4">Ready to get started?</h1>
+    <ul class="nav nav-tabs">
+      <li class="nav-item">
+        <a class="nav-link" data-toggle="tab" href="#runAuction">Start your own auction</a>
+      </li>
+      <li class="nav-item">
+        <a class="nav-link active" data-toggle="tab" href="#profile">Buy or sell in an auction</a>
+      </li>
+      <li class="nav-item">
+        <a class="nav-link" data-toggle="tab" href="#nonauctionlots">Buy or sell lots without an auction</a>
+      </li>
+      <li class="nav-item">
+        <a class="nav-link" data-toggle="tab" href="#moreinfo">I want to know more about this site</a>
+      </li>
+    </ul>
+    <div id="tabs" class="tab-content">
+      <div class="tab-pane fade" id="runAuction">
+        <br>
+        <ol>
+          <li>{% if not request.user.is_authenticated %}<a href="/google/login/?process=login">Sign in with Google</a> or <a href="/signup/">create an account</a>{% else %}Thanks for signing up!{% endif %}</li>
+          <li><a href='/auctions/new'>Create an auction</a></li>
+          <li>Add one or more <a href="/locations/">pickup locations</a> to your auction</li>
+          <li>Wait for the auction to end</li>
+          <li>View invoices for all users (<a href="/invoices/example">See example</a>)</li>
+          <li>Optional: Send invoices with Paypal (<a href="/blog/online-payments-suck">here's how</a>)</li>
+          <li>Coordinate the exchange of money and fish</li>
+        </ol>
+        <br>
+        <br>See <a href="/auctions/tfcb-annual-auction/">example auction rules</a> or see <a href="/lots/?a=tfcb-annual-auction">lots for an example auction</a>
+      </div>
+      <div class="tab-pane fade active show" id="profile">
+        <ol>
+          <br>
+          <li>{% if not request.user.is_authenticated %}<a href="/google/login/?process=login">Sign in with Google</a> or <a href="/signup/">create an account</a>{% else %}Thanks for signing up!{% endif %}</li>
+          <li><a href='/auctions/all/'>Find an auction</a></li>
+          <li>Read the auction's rules and select the pickup location that works best for you</li>
+          <li><a href='/lots/new/'>Submit</a> and bid on lots</li>
+          <li>After the auction ends, you'll get an invoice listing the lots you won</li>
+          <li>Go to the pickup location</li>
+          <li>Pay</li>
+          <li>Get your lots</li>
+          <li>Enjoy your fish!</li>
+        </ol>
+      </div>
+      <div class="tab-pane fade" id="nonauctionlots">
+        <ol>
+          <br>
+          <br> For the moment, this is not possible.  You can only buy/sell lots as part of a club auction.
+          <br>
+          <br> This is something that I'm interested in adding, but not until COVID cases slow down a bit.
+          <br> 
+          <br> Check back in May 2021
+          <br>
+          <br>
+          <br>
+          <br>
+      </div>
+      <div class="tab-pane fade" id="moreinfo">
+        <br>I'm happy to provide help with running your auctions and answer any questions.
+        <br>
+        <br>{% if not request.user.is_authenticated %}<a href="/google/login/?process=login">Sign in with Google</a> or <a href="/signup/">create an account</a> and my email address will show up here{% else %}Contact me at <a href='mailto:{{ contact_email }}'>{{ contact_email }}</a>{% endif %}.
+        <br>
+        <br>I built this site because my local club, the <a href="https://www.tfcb.org/">Tropcial Fish Club of Burlington</a> hasn't been able to have in-person auctions.
+        <br>
+        <br>I plan to continue maintaining this site for the foreseeable future.  It will remain completely free for anyone to use for as long as possible.
+        <br>
+        <br>This site is open source -- if you find a problem or have a suggestion for a new feature, please <a href='https://github.com/iragm/fishauctions/'>open an issue</a> on the github repo
+        <br>
+        <br>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,11 +1,13 @@
 {% extends "base.html" %}
-{% load crispy_forms_tags %}
 {% block title %} {{ lot.lot_name }} {% endblock %}
 {% load static %}
-{% block content %}
-{% block extra_js %}
-<script type="text/javascript">
 
+{% block extra_css %}
+<link rel="stylesheet" type="text/css" href="{% static 'css/lot.css' %}">
+{% endblock %}
+{% block extra_js %}
+
+<script type="text/javascript">
 
 function ban_lot(ban) {
   var $ = window.jQuery;
@@ -38,8 +40,11 @@ function ban_lot(ban) {
     }
 </style>
 <script type="text/javascript">
+    var removeDot;
+    var originalTitle = "";
     window.onload = function() {
     var $ = window.jQuery;
+    originalTitle = $(document).prop('title');
     // recommended lots
     setTimeout( function() {
         $.ajax({
@@ -119,11 +124,16 @@ function ban_lot(ban) {
             }
         });
     }
+    (function(b){b.toast=function(a,h,g,l,k){b("#toast-container").length||(b("body").prepend('<div id="toast-container" aria-live="polite" aria-atomic="true"></div>'),b("#toast-container").append('<div id="toast-wrapper"></div>'));var c="",d="",e="text-muted",f="",m="object"===typeof a?a.title||"":a||"Notice!";h="object"===typeof a?a.subtitle||"":h||"";g="object"===typeof a?a.content||"":g||"";k="object"===typeof a?a.delay||3E3:k||3E3;switch("object"===typeof a?a.type||"":l||"info"){case "info":c="bg-info";
+f=e=d="text-white";break;case "success":c="bg-success";f=e=d="text-white";break;case "warning":case "warn":c="bg-warning";f=e=d="text-white";break;case "error":case "danger":c="bg-danger",f=e=d="text-white"}a='<div class="toast" role="alert" aria-live="assertive" aria-atomic="true" data-delay="'+k+'">'+('<div class="toast-header '+c+" "+d+'">')+('<strong class="mr-auto">'+m+"</strong>");a+='<small class="'+e+'">'+h+"</small>";a+='<button type="button" class="ml-2 mb-1 close" data-dismiss="toast" aria-label="Close">';
+a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</div>";""!==g&&(a+='<div class="toast-body">',a+=g,a+="</div>");a+="</div>";b("#toast-wrapper").append(a);b("#toast-wrapper .toast:last").toast("show")}})(jQuery);
+
 </script> {% endblock %}
+{% block content %}
 <div class="container mt-5 mb-5">
     <div class="row">
       <div class="col-md-10 offset-md1">
-        <h1>{{ lot.lot_number }} - {{ lot.lot_name }}</h1>
+        <h1>{{ lot.lot_name }}</h1>
             {% if lot.image %}
             <div> <!-- can remove class here I think-->
                 <img src="{{ lot.image.lot_full.url }}" style="max-width:100%;"></img>
@@ -155,22 +165,23 @@ function ban_lot(ban) {
             </tr>
             <tr>
                 <td><b>
-                    {% if lot.ended %}
+                    <span id="price_label">{% if lot.winner or lot.ended %}
                         Won by:
-                    {% else %}
-                        {% if lot.sealed_bid %}
-                        Sealed bid auction
                         {% else %}
-                        {% if lot.high_bidder %}
-                            Current bid:
-                        {% else %}
-                            Reserve price:
+                            {% if lot.sealed_bid %}
+                            Sealed bid auction
+                            {% else %}
+                            {% if lot.high_bidder %}
+                                Current bid:
+                            {% else %}
+                                Reserve price:
+                            {% endif %}
+                            {% endif %}
                         {% endif %}
-                        {% endif %}
-                    {% endif %}</b></td>
+                    </span></b></td>
                     <td>
                     {% if lot.winner %}
-                        ${{lot.winning_price}} <a href='/users/{{ lot.winner.pk }}/'>{{ lot.winner }}</a>
+                        $<span id="price">{{lot.winning_price}}</span> <span id="high_bidder_name"><a href='/users/{{ lot.winner.pk }}/'>{{ lot.winner }}</a></span>
                     {% else %}
                         {% if lot.ended %}
                             Not sold
@@ -180,15 +191,16 @@ function ban_lot(ban) {
                             {% else %}
                                 {% if lot.high_bidder %}
                                 <span data-toggle="tooltip" data-placement="bottom" title="The high bid is derermined by the second highest bidder.  Enter the most you'd want to spend on this lot, and you'll automatically bid up to your max">
-                                    ${{ lot.high_bid }}
+                                    $<span id="price">{{ lot.high_bid }}</span>
                                     {% if lot.high_bidder.pk == request.user.id %}
-                                        - you're winning!  Your max bid is ${{ lot.max_bid }}
+                                    <span id="high_bidder_name"> - you're winning!</span>
                                     {% else %}
-                                        <a href='/users/{{ lot.high_bidder.pk }}/'>{{ lot.high_bidder }}</a>
+                                    <span id="high_bidder_name"><a href='/users/{{ lot.high_bidder.pk }}/'>{{ lot.high_bidder }}</a></span>
                                     {% endif %}
+                                    <span id="your_bid">{% if viewer_bid %}Your max bid is $<span id='your_bid_price'>{{ viewer_bid }}</span>{% endif %}</span>
                                 </span>
                                 {% else %}
-                                    ${{ lot.reserve_price }}
+                                    $<span id="price">{{ lot.reserve_price }} {% if lot.buy_now_price %}<span class='badge badge-info'>Buy now: ${{lot.buy_now_price}}</span>{% endif %}</span> <span id="high_bidder_name"></span><span id="your_bid"></span>
                                 {% endif %}
                             {% endif %}
                         {% endif %}
@@ -196,7 +208,7 @@ function ban_lot(ban) {
                     </td>
             </tr>
             <tr>
-                <td><b>Ends:</b></td><td>{% if lot.ended %} <span class="text-danger">{{ lot.calculated_end }}</span>{% else %}{{ lot.calculated_end }}{% endif %}</td>
+                <td><b>Ends:</b></td><td>{% if lot.ended %} <span class="text-danger">{{ lot.calculated_end }}</span>{% else %}<span id="end_date">{{ lot.calculated_end }}</span>{% endif %}</td>
             </tr>
             {% if lot.location %}
             <tr>
@@ -214,41 +226,242 @@ function ban_lot(ban) {
             </tr>
             {% endif %}
         </table>
+        <span id="bid_area">
         {% if lot.tos_needed %}
         <span >Bidding is not allowed on this lot until {% if lot.user.pk == request.user.id%} you have <a href="{{lot.tos_needed}}">confirmed your pickup location</a> {% if lot.can_be_deleted %}<span><a href="/lots/delete/{{lot.pk}}" class="btn btn-danger active">Delete</a>{% endif %}{% else %} the submitter of this lot has confirmed their location{% endif %}</span>
         {% else %}
             {% if lot.banned %}
-            <span class="text-danger">Banned:</span> {{ lot.ban_reason }}<br>
+                <span class="text-danger">Banned:</span> {{ lot.ban_reason }}<br>
             {% elif lot.user.pk == request.user.id or request.user.is_superuser%}
-            {% if lot.can_be_edited %}
-            <a href="/lots/edit/{{lot.pk}}" class="btn btn-warning active">Edit</a></span> {% if lot.can_be_deleted %}<span><a href="/lots/delete/{{lot.pk}}" class="btn btn-danger active">Delete</a>{% endif %}
-            {% else %}
-            {% if lot.user.pk == request.user.id%}This is your lot.  {% endif %}You can edit a lot for 24 hours after you submit it, as long as no one has bid on it.<br>
-            {% endif %}
+                {% if lot.can_be_edited %}
+                    <a href="/lots/edit/{{lot.pk}}" class="btn btn-warning active">Edit</a></span> {% if lot.can_be_deleted %}<span><a href="/lots/delete/{{lot.pk}}" class="btn btn-danger active">Delete</a>{% endif %}
+                {% else %}
+                    {% if lot.user.pk == request.user.id%}This is your lot.  {% endif %}You can edit a lot for 24 hours after you submit it, as long as no one has bid on it.<br>
+                {% endif %}
             {% elif lot.ended %}
-            <span>Bidding has ended on this lot<br></span>
+                <span>Bidding has ended on this lot<br></span>
             {% else %}
                 {% if user.is_authenticated %}
-                {% if not user_tos %}
-                    This lot is part of the <b>{{ lot.auction }}</b> auction.  Please <a href='/auctions/{{lot.auction.slug}}/?next=/lots/{{ lot.pk }}/'>read the auction's rules and confirm your pickup location</a> to bid<br>
+                    {% if not user_tos %}
+                        This lot is part of the <b>{{ lot.auction }}</b> auction.  Please <a href='/auctions/{{lot.auction.slug}}/?next=/lots/{{ lot.pk }}/'>read the auction's rules and confirm your pickup location</a> to bid<br>
+                    {% else %}
+                        <div class="form-group">
+                        <div class="input-group mb-3">
+                            <div class="input-group-prepend">
+                            <span class="input-group-text">$</span>
+                            </div>
+                            <input type="number" id='bid_amount' min="1" value="{{ amount }}" class="form-control col-sm-3" aria-label="Amount (to the nearest dollar)">
+                            <div class="input-group-append">
+                            <span class="input-group-text mr-1">.00</span>
+                            <button class='btn-sm btn-success' id='bid_button' style='min-width: 150px;'>Place bid</button>
+                            </div>
+                        </div>
+                        </div>
+                        <script>
+                            $('#bid_amount').focus();
+                            document.querySelector('#bid_amount').onkeyup = function(e) {
+                                if (e.keyCode === 13) {
+                                    document.querySelector('#bid_button').click();
+                                }
+                            };
+                            document.querySelector('#bid_button').onclick = function(e) {
+                                var bid = Number($('#bid_amount').val());
+                                if (isNaN(bid) || bid == 0) {} else {
+                                    lotWebSocket.send(JSON.stringify({
+                                        'bid': bid
+                                    }));
+                                    //$('#bid_amount').val(Number(bid) + 1);
+                                    var your_bid = Number($('#your_bid_price').html());
+                                    var price = Number($('#price').html());
+                                    if (bid > your_bid) {
+                                        $('#your_bid').html('Your max bid is $<span id="your_bid_price">' + bid + "</span>");
+                                    }
+                                    if (bid > price) {
+                                        $('#bid_amount').val(bid + 1);
+                                    }
+                                }
+                            };
+                        </script>
+                    {% endif %}
                 {% else %}
-                    {% crispy form form.helper %}
-                {% endif %}
-                {% else %}
-                <a href='/login/?next=/lots/{{lot.pk}}/'>Sign in</a> to bid on this lot.
+                    <a href='/login/?next=/lots/{{lot.pk}}/'>Sign in</a> to bid on this lot.
                 {% endif %}
             {% endif %}
-            {% if lot.auction.created_by.pk == request.user.id or request.user.is_superuser %}
+        {% endif %} {# lot.tos_needed #}
+        </span>
+        {% if request.user.is_authenticated %}
+            {% if lot.auction.created_by.pk == request.user.pk or request.user.is_superuser %}
             <button class="btn btn-danger" name="action_unban" onclick="ban_lot('{% if lot.banned %}unban{% else %}ban{% endif %}')">{% if lot.banned %}Unban this lot{% else %}Ban this lot{% endif %}</button>
             {% endif %}
-            {% if request.user.is_superuser %}
+        {% endif %}
+        {% if request.user.is_superuser %}
             <a href="/admin/auctions/lot/{{lot.pk}}/change/" class="btn btn-danger active">Admin</a>
             Promo weight: {{lot.promotion_weight}}
-            {% endif %}
-            {% if user.is_authenticated %}
-            <span id="watch" {% if watched %} class="watched">&#9733; Watching{% else %}>&#9734; Watch{% endif %}</span><br>
-            {% endif %}
         {% endif %}
+        {% if user.is_authenticated %}
+            <span id="watch" {% if watched %} class="watched">&#9733; Watching{% else %}>&#9734; Watch{% endif %}</span><br>
+        {% endif %}
+        
+
+        <!-- Chat -->
+        <br><h4>Chat</h4>
+        <div class="panel" id="chat" style='max-height: 30vh; {# calc(100vh - 200px) #}
+        overflow-y: scroll;'></div>
+        <span id="send_chat_area" class='' >
+        {% if request.user.is_authenticated and lot.chat_allowed %}
+          <div class="input-group mt-1 mb-3 ">
+            <input class="form-control form-control-sm mr-1 " id='chat_input'  type="text">
+            <div class="input-group-append">
+                <button class='btn-sm btn-info' id="chat_send">Send</button>
+            </div>
+            </div>
+          {% endif %}
+        </span>
+        <script>
+            {% if lot.sealed_bid %}
+            var high_bidder = '';
+            var high_bidder_pk = '{{ request.user.pk }}';
+            {% else %}
+            var high_bidder = '{{ lot.high_bidder }}';
+            var high_bidder_pk = '{{ lot.high_bidder.pk }}';
+            {% endif %}
+            var viewer_bid = '{{ lot.viewer_bid }}';
+            const lotWebSocket = new WebSocket(
+                'ws{% if not debug %}s{% endif %}://'
+                + window.location.host
+                + '/ws/lots/{{ lot.lot_number }}/'
+            );
+    
+            lotWebSocket.onmessage = function(e) {
+                const data = JSON.parse(e.data);
+                if (data.current_high_bid) {
+                    $("#price").html(data.current_high_bid);
+                    $(document).prop('title', '🔴$' + data.current_high_bid + ": " + originalTitle);
+                    clearTimeout(removeDot);
+                    var removeDot = setTimeout(function(){$(document).prop('title', '$' + data.current_high_bid + ": " + originalTitle);}, 500);
+                    //$("#bid_amount").val(data.current_high_bid + 1);
+                    if (!$("#bid_amount").is(":focus")) {
+                        if (data.info !== "INFO") {
+                            if (Number($("#bid_amount").val()) <= data.current_high_bid) {
+                                $("#bid_amount").val(data.current_high_bid + 1);
+                            }
+                        }
+                    }
+                }
+                if (data.high_bidder_pk) {
+                    $('#high_bidder_name').html("<a href='/users/" + data.high_bidder_pk + "/'>" + data.high_bidder_name + "</a>");
+                }
+                var messageClass = "warning";
+                if (data.high_bidder_pk) {
+                    if (high_bidder_pk == "{{ request.user.pk }}") {
+                        if (data.high_bidder_pk != '{{ request.user.pk }}') {
+                            messageClass = 'danger';
+                        }
+                    } else {
+                        if (data.high_bidder_pk == '{{ request.user.pk }}') {
+                            messageClass = 'success';
+                        }
+                    }
+                    high_bidder_pk = data.high_bidder_pk;
+                }
+                if (data.info == "CHAT") {
+                    addChat(data.pk, data.username, data.message);
+                } else {
+                    if (data.error) {
+                        messageClass = "danger";
+                        data.message = data.error;
+                    } else if (data.info == "INFO") {
+                        messageClass = "info";
+                    } else {
+                        // non-info, non-error messages are public and added to the chat
+                        addChat(-1, "System", data.message);
+                    }
+                    if (data.info == "LOT_END_WINNER") {
+                        $('#price_label').html("Won by:");
+                        $('#end_date').html("Ended");
+                        $('#bid_area').html("Bidding has ended on this lot<br>");
+                    }
+                    $.toast({
+                        title: data.message,
+                        type: messageClass,
+                        delay: 10000
+                    });
+                }
+            };
+            function addChat(pk, username, message) {
+                var urlRegex = /(?:(?:https?|ftp|file):\/\/|www\.|ftp\.|auction\.)(?:\([-A-Z0-9+&@#\/%=~_|$?!:,.]*\)|[-A-Z0-9+&@#\/%=~_|$?!:,.])*(?:\([-A-Z0-9+&@#\/%=~_|$?!:,.]*\)|[A-Z0-9+&@#\/%=~_|$])/igm
+                message =  message.replace(urlRegex, function(url) {
+                    return '<a style="color: #555; font-weight: bold;" href="' + url + '">' + url + '</a>';
+                })
+                var lastChat = $(".message").last();
+                if (lastChat.hasClass("user_" + pk)) {
+                    lastChat.append("<br>" + message);
+                } else {
+                    var cssStyle = "";
+                    if (pk == -1) {
+                        cssStyle = "chat-system";
+                    } else if (pk == '{{ viewer_pk }}') {
+                        cssStyle = "chat-me";
+                    } else if (pk == '{{ submitter_pk }}') {
+                        cssStyle = "chat-submitter";
+                    }
+                    var chatHtml = '<div class="chat ' + cssStyle + '">\
+                                        <div class="chat-body">\
+                                            <div class="chat-content">\
+                                                <span class="chat-username">' + username + '</span>\
+                                                <span class="message user_' + pk + ' ">'+ message+ '</span>\
+                                            </div>\
+                                        </div>\
+                                    </div>';
+                    $('#chat').append(chatHtml);
+                }
+                showLatestChat();
+            }
+            lotWebSocket.onclose = function(e) {
+                var errorHtml = '<span class="mr-1 mt-1 text-danger">Connection lost</span>\
+                <input id="reconnect_button" onclick="window.location.reload(true);"\
+                type="button" class="col-md-2 mr-1 mt-1 btn-sm btn-danger" value="Reconnect"><br>';
+                $('#send_chat_area').html(errorHtml);
+                $('#bid_area').html(errorHtml);
+                $.toast({
+                    title: 'Connection lost',
+                    type: 'error',
+                    delay: 10000
+                });
+            };
+
+            function showLatestChat() {
+                var objDiv = document.getElementById("chat");
+                objDiv.scrollTop = objDiv.scrollHeight;
+            }
+            //{% if request.user.is_authenticated and lot.chat_allowed %}
+            document.querySelector('#chat_input').onkeyup = function(e) {
+                if (e.keyCode === 13) {
+                    document.querySelector('#chat_send').click();
+                }
+            };
+    
+            document.querySelector('#chat_send').onclick = function(e) {
+                const messageInputDom = document.querySelector('#chat_input');
+                const message = messageInputDom.value;
+                if (message) {
+                    lotWebSocket.send(JSON.stringify({
+                        'message': message
+                    }));
+                }
+                messageInputDom.value = '';
+            };
+            //{% endif %}
+        </script>
+
+        <!-- Recommended lots -->
+        <br><br><span class="text-info">Other lots you might be interested in:</span>
+        <span id='recommendations'>Searching for recommended lots...</span>
+        {% if lot.auction %}
+            <br><a href='/lots/?auction={{lot.auction.slug}}'>View all lots for {{ lot.auction }}</a><br>
+        {% endif %}
+
+        <!-- Chart -->
         {% if request.user.is_superuser %}
         <script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.3/dist/Chart.min.js"></script>
         <canvas id="myChart" ></canvas>
@@ -282,16 +495,9 @@ function ban_lot(ban) {
                 }
             });
         </script>
-        {% endif %}
-        <br><br><span class="text-info">Other lots you might be interested in:</span>
-        <span id='recommendations'>Searching for recommended lots...</span>
-        {% if lot.auction %}
-            <br><a href='/lots/?auction={{lot.auction.slug}}'>View all lots for {{ lot.auction }}</a><br>
-        {% endif %}    
+    {% endif %}
     </div>
 </div>
 </div>  
 
 {% endblock %}
-
-

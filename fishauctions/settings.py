@@ -13,8 +13,15 @@ https://docs.djangoproject.com/en/3.1/ref/settings/
 from pathlib import Path
 import sys
 import os
+try:
+    from . import customsettings
+except:
+    pass
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve(strict=True).parent.parent
+
+ADMINS = [('Admin', os.environ['ADMIN_EMAIL'])]
 
 
 # Quick-start development settings - unsuitable for production
@@ -29,10 +36,20 @@ if os.environ['DEBUG'] == "True":
 else:
     DEBUG = False
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', os.environ['ALLOWED_HOSTS']]
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', os.environ['ALLOWED_HOST_1'], os.environ['ALLOWED_HOST_2'], os.environ['ALLOWED_HOST_3']]
+
+# Channels
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            "hosts": [("redis://:" + os.environ['REDIS_PASS'] + "@127.0.0.1:6379/0")],
+            #"hosts": [('127.0.0.1', 6379)],
+        },
+    },
+}
 
 # Application definition
-
 INSTALLED_APPS = [
     'auctions',
     'django.contrib.admin',
@@ -54,9 +71,13 @@ INSTALLED_APPS = [
     'el_pagination',
     'easy_thumbnails',
     "post_office",
+    'location_field',
+    'channels',
+    'debug_toolbar',
 ]
-
+ASGI_APPLICATION = "fishauctions.asgi.application"
 MIDDLEWARE = [
+    'debug_toolbar.middleware.DebugToolbarMiddleware',    
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -64,6 +85,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    
 ]
 
 ROOT_URLCONF = 'fishauctions.urls'
@@ -138,6 +160,7 @@ if 'test' in sys.argv:
             'ENGINE': 'django.db.backends.sqlite3',
             'NAME': BASE_DIR / 'db.sqlite3',
         }
+       
     }
 else:
     DATABASES = {
@@ -148,6 +171,7 @@ else:
             'PASSWORD': os.environ['DATABASE_PASSWORD'],
             'HOST': os.environ['DATABASE_HOST'],
             'PORT': os.environ['DATABASE_PORT'],
+            'OPTIONS': {'charset': 'utf8mb4'},
         }
     }
 
@@ -170,6 +194,7 @@ ACCOUNT_LOGIN_ON_PASSWORD_RESET = True
 ACCOUNT_SESSION_REMEMBER = True
 ACCOUNT_EMAIL_SUBJECT_PREFIX = "TFCB - "
 
+EMAIL_BACKEND = 'post_office.EmailBackend'
 #EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend' # console
 #EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 
@@ -185,6 +210,7 @@ DEFAULT_FROM_EMAIL = os.environ['DEFAULT_FROM_EMAIL']
 EMAIL_SUBJECT_PREFIX = ""
 
 CRISPY_TEMPLATE_PACK = 'bootstrap4'
+CRISPY_FAIL_SILENTLY = False
 BOOTSTRAP4 = {
     'include_jquery': True,
 }
@@ -197,7 +223,7 @@ SITE_URL = os.environ['SITE_URL']
 
 THUMBNAIL_ALIASES = {
     '': {
-        'lot_list': {'size': (200, 200), 'crop': "smart"},
+        'lot_list': {'size': (250, 200), 'crop': "smart"},
         'lot_full': {'size': (1000, 1000), 'crop': False},
     },
 }
@@ -214,9 +240,37 @@ SOCIALACCOUNT_PROVIDERS = {
     }
 }
 
+INTERNAL_IPS = [
+#    '127.0.0.1',
+]
+
 VIEW_WEIGHT = 1
 BID_WEIGHT = 10
 WEIGHT_AGAINST_TOP_INTEREST = 20
 
 GOOGLE_MEASUREMENT_ID=os.environ['GOOGLE_MEASUREMENT_ID']
 GOOGLE_TAG_ID = os.environ['GOOGLE_TAG_ID']
+
+LOCATION_FIELD_PATH = STATIC_URL + 'location_field'
+
+LOCATION_FIELD = {
+    'map.provider': 'google',
+    'map.zoom': 13,
+
+    'search.provider': 'google',
+    'search.suffix': '',
+
+    # Google
+    'provider.google.api': '//maps.google.com/maps/api/js?sensor=false',
+    'provider.google.api_key': os.environ['GOOGLE_MAPS_API_KEY'],
+    'provider.google.api_libraries': '',
+    'provider.google.map.type': 'ROADMAP',
+
+    # misc
+    'resources.root_path': LOCATION_FIELD_PATH,
+    'resources.media': {
+        'js': (
+            LOCATION_FIELD_PATH + '/js/form.js',
+        ),
+    },
+}

@@ -18,6 +18,7 @@ from django.contrib.messages.views import SuccessMessageMixin
 from allauth.account.models import EmailAddress
 from el_pagination.views import AjaxListView
 from easy_thumbnails.templatetags.thumbnail import thumbnail_url
+from post_office import mail
 from PIL import Image
 import os
 from django.conf import settings
@@ -27,6 +28,7 @@ from .forms import *
 from io import BytesIO
 from django.core.files import File
 import re
+from django.http import Http404
 
 def index(request):
     return HttpResponse("this page is intentionally left blank")
@@ -39,8 +41,8 @@ class LotListView(AjaxListView):
 
     def get_page_template(self):
         try:
-            userdata = UserData.objects.get(user=self.request.user.pk)
-            if userdata.use_list_view:
+            userData = UserData.objects.get(user=self.request.user.pk)
+            if userData.use_list_view:
                 return 'lot_list_page.html'
             else:
                 return 'lot_tile_page.html'
@@ -52,8 +54,8 @@ class LotListView(AjaxListView):
     def get_context_data(self, **kwargs):
         # set default values
         data = self.request.GET.copy()
-        if len(data) == 0:
-            data['status'] = "open"
+        #if len(data) == 0:
+        #    data['status'] = "open" # this would show only open lots by default
         context = super().get_context_data(**kwargs)
         if self.request.GET.get('page'):
             del data['page'] # required for pagination to work
@@ -71,7 +73,10 @@ class LotListView(AjaxListView):
         try:
             context['auction'] = Auction.objects.get(slug=data['auction'])
         except:
-            context['auction'] = None
+            try:
+                context['auction'] = Auction.objects.get(slug=data['a'])
+            except:
+                context['auction'] = None
         return context
 
 class AllRecommendedLots(TemplateView):
@@ -91,8 +96,8 @@ class RecommendedLots(ListView):
         
     def get_template_names(self):
         try:
-            userdata = UserData.objects.get(user=self.request.user.pk)
-            if userdata.use_list_view:
+            userData = UserData.objects.get(user=self.request.user.pk)
+            if userData.use_list_view:
                 return 'lot_list_page.html'
             else:
                 return 'lot_tile_page.html'
@@ -100,62 +105,17 @@ class RecommendedLots(ListView):
             pass
         return 'lot_tile_page.html' # tile view as default
 
-    def check_lot(self, lot):
-        # weight the chance to see a given lot based on the user's history
-        user = self.request.user
-        if not user:
-            # checks always pass if not signed in
-            return True
-        try:
-            interest = UserInterestCategory.objects.get(category=lot.species_category, user=user).as_percent
-        except:
-            interest = 10 # low chance to view lots that the user has no history for
-        try:
-            ignore = UserIgnoreCategory.objects.get(category=lot.species_category, user=user)
-            return False
-        except:
-            pass
-        rand = randint(0, 100-settings.WEIGHT_AGAINST_TOP_INTEREST)
-        #if lot.promoted:
-        if True: # temporarily, we need to collect data on all lots
-            interest = interest + lot.promotion_weight
-        if interest > rand:
-            return interest
-        else:
-            return False
-
     def get_queryset(self):
         data = self.request.GET.copy()
         try:
-            qs = Lot.objects.filter(auction__slug=data['auction'], active=True, banned=False)
+            auction = data['auction']
         except:
-            qs = Lot.objects.filter(active=True, banned=False)
-            #qs = Lot.objects.filter(banned=False) # this will show inactive lots, useful for testing
-        if self.request.user:
-            # if the user is signed in, exclude viewed lots and lots they submitted
-            qs = qs.exclude(pageview__user=self.request.user.pk).exclude(user=self.request.user.pk)
-        count = len(qs)
-        result = []
-        if not count:
-            return []
-        timeout = 0 # hard cap to prevent an infinite loop
+            auction = None
         try:
-            desiredResults = int(data['qty'])
+            qty = int(data['qty'])
         except:
-            desiredResults = 10
-        while len(result) < desiredResults and timeout < 200:
-            # select a random lot
-            resultLot = qs[randint(0, count - 1)]
-            if resultLot in result:
-                # no duplicates
-                pass
-            else:
-                checkInterest = self.check_lot(resultLot)
-                if checkInterest:
-                    resultLot.your_interest = checkInterest
-                    result.append(resultLot)
-            timeout += 1
-        return result
+            qty = 10
+        return get_recommended_lots(user=self.request.user.pk, auction=auction, qty=qty)
 
     def get_context_data(self, **kwargs):
         data = self.request.GET.copy()
@@ -195,14 +155,14 @@ class MyBids(LotListView):
         context['lotsAreHidden'] = -1
         return context
 
-class MyLots(LotListView):
-    """Show all lots submitted by the current user"""
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context['filter'] = UserOwnedLotFilter(self.request.GET, queryset=self.get_queryset(), request=self.request, ignore=False)
-        context['view'] = 'mylots'
-        context['lotsAreHidden'] = -1
-        return context
+# class MyLots(LotListView):
+#     """Show all lots submitted by the current user"""
+#     def get_context_data(self, **kwargs):
+#         context = super().get_context_data(**kwargs)
+#         context['filter'] = UserOwnedLotFilter(self.request.GET, queryset=self.get_queryset(), request=self.request, ignore=False)
+#         context['view'] = 'mylots'
+#         context['lotsAreHidden'] = -1
+#         return context
         
 class MyWatched(LotListView):
     """Show all lots watched by the current user"""
@@ -243,6 +203,33 @@ def watchOrUnwatch(request, pk):
             return HttpResponse("Success")
         else:
             return HttpResponse("Failure")
+    raise PermissionDenied()
+
+@login_required
+def lotNotifications(request):
+    if request.method == 'POST':
+        user = request.user
+        new = LotHistory.objects.filter(lot__user=user.pk, seen=False).count()
+        if not new:
+            new = ""
+        return JsonResponse(data={
+            'new': new
+        })
+    raise PermissionDenied()
+
+@login_required
+def setCoordinates(request):
+    if request.method == 'POST':
+        user = request.user
+        userData, created = UserData.objects.get_or_create(
+            user = request.user,
+            defaults={},
+            )
+        userData.location_coordinates = f"{request.POST['latitude']},{request.POST['longitude']}"
+        userData.last_activity = timezone.now()
+        userData.save()
+        return HttpResponse("Success")
+    raise PermissionDenied()
 
 def userBan(request, pk):
     if request.method == 'POST':
@@ -272,6 +259,7 @@ def userBan(request, pk):
                     lot.ban_reason = "This user has been banned from this auction"
                     lot.save()
         return redirect('/users/' + str(pk))
+    raise PermissionDenied()
 
 def lotBan(request, pk):
     if request.method == 'POST':
@@ -293,8 +281,8 @@ def lotBan(request, pk):
             lot.ban_reason = ban_reason
             lot.save()
             return HttpResponse("success")
-        else:
-            raise PermissionDenied()
+    raise PermissionDenied()
+            
 
 def userUnban(request, pk):
     """Delete the UserBan"""
@@ -308,6 +296,7 @@ def userUnban(request, pk):
         )
         obj.delete()
         return redirect('/users/' + str(pk))
+    raise PermissionDenied()
 
 def imageRotate(request):
     """Rotate an image associated with a lot"""
@@ -335,13 +324,13 @@ def imageRotate(request):
         lot.image = File(output, str(thisImage))
         lot.save()
         return HttpResponse("Success")
+    raise PermissionDenied()
 
 def feedback(request, pk, leave_as):
     """Leave feedback on a lot
     This can be done as a buyer or a seller
     api/feedback/lot_number/buyer
     api/feedback/lot_number/seller
-    qqq
     """
     if request.method == 'POST':
         data = request.POST
@@ -379,26 +368,21 @@ def feedback(request, pk, leave_as):
         if not checksPass:
             raise PermissionDenied()
         return HttpResponse("Success")
+    raise PermissionDenied()
 
 def pageview(request, pk):
     """
-    Record interest in blog posts and lots
+    Record interest in lots
     Initial interest (/new/) creates product interest
     Staying on the page will update the time in page views on the PageView model
     """
     if request.method == 'POST':
         user = request.user
-        if "pageview" in request.path:
-            lot_number = Lot.objects.get(pk=pk)
-            blog = None
-        else:
-            blog = BlogPost.objects.get(pk=pk)
-            lot_number = None
+        lot_number = Lot.objects.get(pk=pk)
         # Initial pageview to record page views to the PageView model
         if user.is_authenticated:
             obj, created = PageView.objects.get_or_create(
                 lot_number=lot_number,
-                blog_post=blog,
                 user=user,
                 defaults={},
             )
@@ -406,7 +390,7 @@ def pageview(request, pk):
                 obj.total_time += 10
             obj.date_end = timezone.now()
             obj.save()
-            if created and lot_number:
+            if created:
                 # create interest in this category if this is a new view for this category
                 interest, created = UserInterestCategory.objects.get_or_create(
                     category=lot_number.species_category,
@@ -417,13 +401,13 @@ def pageview(request, pk):
                 interest.save()
         else:
             # anonymous user, always create
-            if "new" not in request.path:
+            if "new" in request.path:
                 PageView.objects.create(
                     lot_number=lot_number,
-                    blog_post=blog,
                     user=None,
                 )
         return HttpResponse("Success")
+    raise PermissionDenied()
 
 def invoicePaid(request, pk):
     if request.method == 'POST':
@@ -445,7 +429,8 @@ def invoicePaid(request, pk):
             return JsonResponse(data={
                     'paid': result
                 })
-        raise PermissionDenied()
+    raise PermissionDenied()
+    
 
 @login_required
 def auctionReport(request, slug):
@@ -488,7 +473,7 @@ def auctionReport(request, slug):
             try:
                 invoice = Invoice.objects.get(auction=auction, user=data.user)
                 if invoice.paid:
-                    paid = "Paid"
+                    paid = "Paid" # fixme
                 else:
                     paid = "Unpaid"
                 totalSpent = invoice.total_bought
@@ -502,6 +487,54 @@ def auctionReport(request, slug):
                 club, len(lotsViewed), len(lotsBid), len(lotsSumbitted), \
                 len(lotsWon), totalSpent, totalPaid, paid, len(breederPoints)])
         return response    
+    raise PermissionDenied()
+
+@login_required
+def auctionInvoicesPaypalCSV(request, slug, chunk):
+    """Get a CSV file showing all users who are participating in this auction"""
+    auction = Auction.objects.get(slug=slug)
+    checksPass = False
+    if request.user.is_superuser:
+        checksPass = True
+    if auction.created_by.pk == request.user.pk:
+        checksPass = True
+    if checksPass:
+        # Create the HttpResponse object with the appropriate CSV header.
+        response = HttpResponse(content_type='text/csv')
+        if auction.invoiced:
+            dueDate = timezone.now().strftime("%m/%d/%Y")
+            current_site = Site.objects.get_current()
+            response['Content-Disposition'] = f'attachment; filename="{slug}-paypal-{chunk}.csv"'
+            writer = csv.writer(response)
+            writer.writerow(['Recipient Email', 'Recipient First Name', 'Recipient Last Name', 'Invoice Number',\
+                'Due Date', 'Reference', 'Item Name', 'Description', 'Item Amount', 'Shipping Amount', 'Discount Amount',\
+                'Currency Code', 'Note to Customer', 'Terms and Conditions', 'Memo to Self'])
+            invoices = Invoice.objects.filter(auction=auction)
+            count = 0
+            chunkSize = 150 # https://www.paypal.com/invoice/batch
+            for invoice in invoices:
+                # we loop through everything regardless of which chunk
+                if not invoice.user_should_be_paid:
+                    count += 1
+                    if count <= chunkSize*chunk and count > chunkSize*(chunk-1):
+                        email = invoice.user.email
+                        firstName = invoice.user.first_name
+                        lastName = invoice.user.last_name
+                        invoiceNumber = invoice.pk
+                        reference = ""
+                        itemName = "Auction total"
+                        description = ""
+                        itemAmount = invoice.absolute_amount
+                        shippingAmount = 0
+                        discountAmount = 0
+                        currencyCode = "USD"
+                        noteToCustomer = f"https://{current_site.domain}/invoices/{invoice.pk}/"
+                        termsAndConditions = ""
+                        memoToSelf = ""
+                        if itemAmount > 0:
+                            writer.writerow([email, firstName, lastName, invoiceNumber, dueDate, reference, itemName, description, itemAmount, shippingAmount, discountAmount,\
+                                currencyCode, noteToCustomer, termsAndConditions, memoToSelf])
+            return response    
     raise PermissionDenied()
 
 class LeaveFeedbackView(LoginRequiredMixin, ListView):
@@ -532,6 +565,10 @@ class PickupLocations(LoginRequiredMixin, ListView):
 
 class PickupLocationsUpdate(LoginRequiredMixin, UpdateView):
     """Edit pickup locations"""
+    model = PickupLocation
+    template_name = 'location_form.html'
+    form_class = PickupLocationForm
+
     def get_form_kwargs(self):
         form_kwargs = super(PickupLocationsUpdate, self).get_form_kwargs()
         form_kwargs['user'] = self.request.user
@@ -544,39 +581,37 @@ class PickupLocationsUpdate(LoginRequiredMixin, UpdateView):
         if len(users):
             messages.warning(request, "Users have already selected this as a pickup location.  Don't make large changes!")
         return super().dispatch(request, *args, **kwargs)
-    
-    def get_success_url(self):
-        return "/locations/"
-    
-    def get_form_kwargs(self):
-        form_kwargs = super(PickupLocationsUpdate, self).get_form_kwargs()
-        form_kwargs['user'] = self.request.user
-        return form_kwargs
 
-    model = PickupLocation
-    template_name = 'location_form.html'
-    form_class = PickupLocationForm
+    def get_success_url(self):
+        data = self.request.GET.copy()
+        try:
+            return data['next']
+        except:
+            return "/locations/"
 
 class PickupLocationsCreate(LoginRequiredMixin, CreateView):
     """Create a new pickup location"""
+    model = PickupLocation
+    template_name = 'location_form.html'
+    form_class = PickupLocationForm
     def get_form_kwargs(self):
         form_kwargs = super(PickupLocationsCreate, self).get_form_kwargs()
         form_kwargs['user'] = self.request.user
         return form_kwargs
-
-    def get_success_url(self):
-        return "/locations/"
 
     def form_valid(self, form):
         obj = form.save(commit=False)
         obj.user = self.request.user
         obj.save()
         return super(PickupLocationsCreate, self).form_valid(form)
+   
+    def get_success_url(self):
+        data = self.request.GET.copy()
+        try:
+            return data['next']
+        except:
+            return "/locations/"
 
-    model = PickupLocation
-    template_name = 'location_form.html'
-    form_class = PickupLocationForm
-    
 class AuctionUpdate(UpdateView):
     """The form users fill out to edit or create an auction"""
     
@@ -599,6 +634,7 @@ class AuctionInvoices(DetailView):
     """List of invoices associated with an auction"""
     model = Auction
     template_name = 'auction_invoices.html'
+    
     def dispatch(self, request, *args, **kwargs):
         if not (request.user.is_superuser or self.get_object().created_by == self.request.user):
             raise PermissionDenied()
@@ -631,154 +667,163 @@ class AuctionStats(DetailView):
             messages.error(self.request, "This auction is still in progress, check back once it's finished for more complete stats")
         return context
 
-class viewAndBidOnLot(FormMixin, DetailView):
+#class viewAndBidOnLot(FormMixin, DetailView):
+class ViewLot(DetailView):
     """Show the picture and detailed information about a lot, and allow users to place bids"""
     template_name = 'view_lot.html'
-    model = Bid
-    form_class = CreateBid
-    queryset = Lot.objects.all()
+    #form_class = CreateBid
+    model = Lot
+    #queryset = Lot.objects.all()
     
     def get_context_data(self, **kwargs):
-        lot = Lot.objects.get(pk=self.kwargs['pk'])
+        lot = self.get_object()
         if lot.auction:
             if lot.auction.first_bid_payout and not lot.auction.invoiced:
                 if not self.request.user.is_authenticated or not Bid.objects.filter(user=self.request.user, lot_number__auction=lot.auction):
                     messages.success(self.request, f"Bid on (and win) any lot in the {lot.auction} and get ${lot.auction.first_bid_payout} back!")
-        if lot.sealed_bid:
-            try:
-                defaultBidAmount = Bid.objects.get(user=self.request.user, lot_number=lot.pk).amount
-            except:
-                defaultBidAmount = None
-        else:
-            if lot.high_bidder:
-                defaultBidAmount = lot.high_bid + 1
-            else:
-                # reserve price if there are no bids
-                defaultBidAmount = lot.high_bid
-        context = super(viewAndBidOnLot, self).get_context_data(**kwargs)
-        context['watched'] = Watch.objects.filter(lot_number=self.kwargs['pk'], user=self.request.user.id)
-        context['form'] = CreateBid(initial={'user': self.request.user.id, 'lot_number':self.kwargs['pk'], "amount":defaultBidAmount}, request=self.request)
+        context = super().get_context_data(**kwargs)
         try:
-            if not self.get_object().auction:
+            defaultBidAmount = Bid.objects.get(user=self.request.user, lot_number=lot.pk).amount
+            context['viewer_bid'] = defaultBidAmount
+            defaultBidAmount = defaultBidAmount + 1
+        except:
+            defaultBidAmount = 0
+            context['viewer_bid'] = None
+        if not lot.sealed_bid:
+            # reserve price if there are no bids
+            if not lot.high_bidder:
+                defaultBidAmount = lot.reserve_price 
+            else:
+                if defaultBidAmount > lot.high_bid:
+                    pass
+                else:
+                    defaultBidAmount = lot.high_bid + 1
+        context['viewer_pk'] = self.request.user.pk
+        context['submitter_pk'] = lot.user.pk
+        context['amount'] = defaultBidAmount
+        context['watched'] = Watch.objects.filter(lot_number=lot.lot_number, user=self.request.user.id)
+        #context['form'] = CreateBid(initial={'user': self.request.user.id, 'lot_number':self.kwargs['pk'], "amount":defaultBidAmount}, request=self.request)
+        try:
+            if not lot.auction:
                 context['user_tos'] = True
             else:
-                AuctionTOS.objects.get(user=self.request.user.id, auction=self.get_object().auction)
+                AuctionTOS.objects.get(user=self.request.user.id, auction=lot.auction)
                 context['user_tos'] = True
         except:
             context['user_tos'] = False
-        try:
-            obj, created = UserData.objects.get_or_create(
+        if self.request.user.is_authenticated:
+            userData, created = UserData.objects.get_or_create(
                 user = self.request.user,
                 defaults={},
             )
-            obj.last_activity = timezone.now()
-            obj.save()
-        except:
-            pass
+            userData.last_activity = timezone.now()
+            userData.save()
+        if lot.user.pk == self.request.user.pk:
+            LotHistory.objects.filter(lot=lot.pk, seen=False).update(seen=True)
+        context['debug'] = settings.DEBUG
         return context
     
-    def get_success_url(self):
-        return self.request.path
+    # def get_success_url(self):
+    #     return self.request.path
 
-    def post(self, request, *args, **kwargs):
-        self.object = self.get_object()
-        form = self.get_form()
-        if form.is_valid():
-            return self.form_valid(form, request)
-        else:
-            return self.form_invalid(form)
+    # def post(self, request, *args, **kwargs):
+    #     self.object = self.get_object()
+    #     form = self.get_form()
+    #     if form.is_valid():
+    #         return self.form_valid(form, request)
+    #     else:
+    #         return self.form_invalid(form)
 
-    def form_valid(self, form, request):
-        lotNumber = form.cleaned_data['lot_number'].pk
-        thisBid = form.cleaned_data['amount']
-        form.user = User.objects.get(id=request.user.id)
-        if not form.user:
-            messages.error(request, "You need to be signed in to bid on a lot")
-            return False
-        lot = Lot.objects.get(pk=self.kwargs['pk'])
-        highBidder = lot.high_bidder
-        checksPass = True
-        try:
-            ban = UserBan.objects.get(banned_user=request.user.id, user=lot.user.pk)
-            messages.error(request, "This user has banned you from bidding on their lots")
-            checksPass = False
-        except:
-            pass
-        try:
-            ban = UserBan.objects.get(banned_user=request.user.id, user=lot.auction.created_by.pk)
-            messages.error(request, "The owner of this auction has banned you from bidding")
-            checksPass = False
-        except:
-            pass        
-        if lot.ended:
-            messages.error(request, "Bidding on this lot has ended.  You can no longer place bids")
-            checksPass = False
-        if checksPass:
-            if lot.sealed_bid:
-                was_high_bid = True
-                messages.info(request, "Bid placed!  You can change your bid at any time until the auction ends")
-            else:
-                was_high_bid = False
-                if (thisBid > lot.max_bid):
-                    messages.info(request, "You're the high bidder!")
-                    was_high_bid = True
-                    # Send an email to the old high bidder
-                    # @fixme, this is slow
-                    if highBidder:
-                        if request.user.id != highBidder.pk:
-                            user = User.objects.get(pk=highBidder.pk)
-                            email = user.email
-                            link = f"https://auctions.toxotes.org/lots/{self.kwargs['pk']}/"
-                            send_mail(
-                            'You\'ve been outbid!',
-                            f'You\'ve been outbid on lot {lot}!\nBid more here: {link}\n\nBest, auctions.toxotes.org',
-                            'TFCB notifications',
-                            [email],
-                            fail_silently=False,
-                            html_message = f'You\'ve been outbid on lot {lot}!<br><a href="{link}">Bid more here</a><br><br>Best, auctions.toxotes.org',
-                            )
-                else:
-                    if ( (lot.max_bid == lot.reserve_price) and (thisBid >= lot.reserve_price) ):
-                        messages.info(request, "Tip: bid high!  If no one else bids on this item, you'll still get it for the reserve price.  If someone else bids against you, you'll bid against them until you reach your limit.")
-                        was_high_bid = True
-                    else:
-                        if lot.high_bidder.pk != request.user.id:
-                            messages.warning(request, "You've been outbid!")
-            # Create or update the bid model
-            try:
-                # check to see if this user has already bid, and bid more
-                existingBid = Bid.objects.get(user=form.user, lot_number=lot)
-                if lot.sealed_bid:
-                    existingBid.amount = thisBid
-                    existingBid.last_bid_time = timezone.now()
-                    existingBid.save()
-                else:
-                    if thisBid >= lot.high_bid:
-                        print(f"{request.user} has changed their bid on {lot} from ${existingBid.amount} to ${thisBid}")
-                        existingBid.amount = thisBid
-                        existingBid.last_bid_time = timezone.now()
-                        if was_high_bid:
-                            existingBid.was_high_bid = was_high_bid
-                        existingBid.save()
-                    else:
-                        messages.warning(request, f"You can't bid less than ${lot.high_bid}")
-            except:
-                # create a new bid object
-                print(f"{request.user} has bid on {lot}")
-                form.was_high_bid = was_high_bid
-                form.save() # record the bid regardless of whether or not it's the current high
-                # also update category interest
-                interest, created = UserInterestCategory.objects.get_or_create(
-                    category=lot.species_category,
-                    user=request.user,
-                    defaults={ 'interest': 0 }
-                    )
-                interest.interest += settings.BID_WEIGHT
-                interest.save()
-        return super(viewAndBidOnLot, self).form_valid(form)
+    # def form_valid(self, form, request):
+    #     lotNumber = form.cleaned_data['lot_number'].pk
+    #     thisBid = form.cleaned_data['amount']
+    #     form.user = User.objects.get(id=request.user.id)
+    #     if not form.user:
+    #         messages.error(request, "You need to be signed in to bid on a lot")
+    #         return False
+    #     lot = Lot.objects.get(pk=self.kwargs['pk'])
+    #     highBidder = lot.high_bidder
+    #     checksPass = True
+    #     try:
+    #         ban = UserBan.objects.get(banned_user=request.user.id, user=lot.user.pk)
+    #         messages.error(request, "This user has banned you from bidding on their lots")
+    #         checksPass = False
+    #     except:
+    #         pass
+    #     try:
+    #         ban = UserBan.objects.get(banned_user=request.user.id, user=lot.auction.created_by.pk)
+    #         messages.error(request, "The owner of this auction has banned you from bidding")
+    #         checksPass = False
+    #     except:
+    #         pass        
+    #     if lot.ended:
+    #         messages.error(request, "Bidding on this lot has ended.  You can no longer place bids")
+    #         checksPass = False
+    #     if checksPass:
+    #         if lot.sealed_bid:
+    #             was_high_bid = True
+    #             messages.success(request, "Bid placed!  You can change your bid at any time until the auction ends")
+    #         else:
+    #             was_high_bid = False
+    #             if (thisBid > lot.max_bid):
+    #                 messages.success(request, "You're the high bidder!")
+    #                 was_high_bid = True
+    #                 # Send an email to the old high bidder
+    #                 # @fixme, this is slow
+    #                 if highBidder:
+    #                     if request.user.id != highBidder.pk:
+    #                         user = User.objects.get(pk=highBidder.pk)
+    #                         current_site = Site.objects.get_current()
+    #                         mail.send(
+    #                             user.email,
+    #                             template='outbid_notification',
+    #                             context={'name': user.first_name, 'domain': current_site.domain, 'lot': lot},
+    #                         )
+    #             else:
+    #                 if ( (lot.max_bid == lot.reserve_price) and (thisBid >= lot.reserve_price) ):
+    #                     messages.success(request, "Tip: bid high!  If no one else bids on this item, you'll still get it for the reserve price.  If someone else bids against you, you'll bid against them until you reach your limit.")
+    #                     was_high_bid = True
+    #                 else:
+    #                     if lot.high_bidder.pk != request.user.id:
+    #                         messages.warning(request, "You've been outbid!")
+    #         # Create or update the bid model
+    #         try:
+    #             # check to see if this user has already bid, and bid more
+    #             existingBid = Bid.objects.get(user=form.user, lot_number=lot)
+    #             if lot.sealed_bid:
+    #                 existingBid.amount = thisBid
+    #                 existingBid.last_bid_time = timezone.now()
+    #                 existingBid.save()
+    #             else:
+    #                 if thisBid >= lot.high_bid:
+    #                     print(f"{request.user} has changed their bid on {lot} from ${existingBid.amount} to ${thisBid}")
+    #                     existingBid.amount = thisBid
+    #                     existingBid.last_bid_time = timezone.now()
+    #                     if was_high_bid:
+    #                         existingBid.was_high_bid = was_high_bid
+    #                     existingBid.save()
+    #                 else:
+    #                     messages.warning(request, f"You can't bid less than ${lot.high_bid}")
+    #         except:
+    #             # create a new bid object
+    #             print(f"{request.user} has bid on {lot}")
+    #             form.was_high_bid = was_high_bid
+    #             form.save() # record the bid regardless of whether or not it's the current high
+    #             # also update category interest
+    #             interest, created = UserInterestCategory.objects.get_or_create(
+    #                 category=lot.species_category,
+    #                 user=request.user,
+    #                 defaults={ 'interest': 0 }
+    #                 )
+    #             interest.interest += settings.BID_WEIGHT
+    #             interest.save()
+    #     return super().form_valid(form)
 
 def createSpecies(name, scientific_name, category=False):
-    """Create a new product/species"""
+    """
+    Create a new product/species
+    This is really only called by the LotValidation class
+    """
     if not category:
         # uncategorized
         category = Category.objects.get(id=21)
@@ -794,75 +839,120 @@ def createSpecies(name, scientific_name, category=False):
         category=category,
     )
 
-@login_required
-def createLot(request):
-    """Create a new lot"""
-    if request.method == 'POST':
-        if request.FILES:
-            form = CreateLotForm(request.POST, request.FILES, user=request.user)
-        else:
-            form = CreateLotForm(request.POST, user=request.user)
-        if form.is_valid():
-            lot = form.save(commit=False)
-            checksPass = True
-            try:
-                ban = UserBan.objects.get(banned_user=request.user.id, user=lot.auction.created_by.pk)
-                messages.error(request, "The owner of this auction has banned you from submitting lots")
-                checksPass = False
-            except:
-                pass   
-            if checksPass:
-                # If this is a tank, set it to not transportable
-                if lot.species:
-                    # if this is not breedable, remove the breeder points
-                    # they can still be added back in by editing the lot
-                    if not lot.species.breeder_points:
-                        lot.i_bred_this_fish = False
-                    if lot.species.pk == 592:
-                        lot.transportable = False
-                if "tank" in lot.lot_name.lower():
-                    lot.transportable = False
-                if "aquarium" in lot.lot_name.lower():
-                    lot.transportable = False
-                lot.user = User.objects.get(id=request.user.id)
-                if form.cleaned_data['create_new_species']:
-                    lot.species = createSpecies(form.cleaned_data['new_species_name'], form.cleaned_data['new_species_scientific_name'], form.cleaned_data['species_category'])
-                if lot.auction:
-                    userData, created = UserData.objects.get_or_create(user=request.user.id)
-                    userData.last_auction_used = lot.auction
-                    userData.save()
-                # someday we may change this to be a field on the form, but for now we need to collect data
-                lot.promotion_weight = randint(0, 20)
-                lot.save()            
-                print(str(lot.user) + " has created a new lot " + lot.lot_name)
-                # if there's another lot in the same category already with no bids, warn about it
-                existingLot = Lot.objects.annotate(num_bids=Count('bid')).filter(num_bids=0, species_category=lot.species_category, user=request.user.pk, active=True).exclude(lot_number=lot.pk)
-                if existingLot:
-                    messages.info(request, "Tip: you've already got lots in this category with no bids.  Don't submit too many similar lots unless you're sure there's interest")
-                if lot.auction:
-                    try:
-                        AuctionTOS.objects.get(user=request.user.id, auction=lot.auction)
-                    except:
-                        messages.error(request, f"You need to <a href='/auctions/{lot.auction.slug}'>confirm your pickup location for this auction</a> before people can bid on this lot.")        
-                messages.info(request, f"Created lot!  <a href='/lots/{lot.pk}'>View or edit your last lot</a> or fill out this form again to add another lot.  <a href='/lots/my'>All submitted lots</a>")
-                
-            form = CreateLotForm(user=request.user) # no post data here to reset the form
-    else:
-        # if the user hasn't filled out their contact info, redirect:
-        userdataComplete = True
-        try:
-            userData = UserData.objects.get(user=request.user.pk)
-            if not userData.phone_number or not userData.address or not userData.location:
-                userdataComplete = False
-        except:
-            userdataComplete = False
-        if not userdataComplete:
-            messages.warning(request, "Please fill out your phone, address, and location before creating a lot")
-            return redirect(f'/users/edit/{request.user.pk}/?next=/lots/new/')
-        form = CreateLotForm(user=request.user)
-    return render(request,'lot_form.html', {'form':form})
+class LotValidation(LoginRequiredMixin):
+    """
+    Base class for adding a lot.  This defines the rules for validating a lot
+    """
+    def dispatch(self, request, *args, **kwargs):
+        print("validation dispatch")
+        # if the user hasn't filled out their address, redirect:
+        userData, created = UserData.objects.get_or_create(
+            user = request.user.pk,
+            defaults={},
+        )
+        if not userData.address:
+            messages.warning(request, "Please fill out your contact info before creating a lot")
+            return redirect(f'/users/{request.user.pk}/location?next=/lots/new/')
+        return super().dispatch(request, *args, **kwargs)
 
-class LotUpdate(UpdateView):
+    def clean(self):
+        print("clean lot validation")
+        cleaned_data = super().clean()
+
+    def form_valid(self, form, **kwargs):
+        """
+        There is quite a lot that needs to be done before the lot is saved
+        Some messages should get added
+        """
+        
+        lot = form.save(commit=False)
+        lot.user = User.objects.get(id=self.request.user.pk)
+        lot.date_of_last_user_edit = timezone.now()
+        # just in case someone is messing with the hidden fields
+        if form.cleaned_data['create_new_species']:
+            lot.species = createSpecies(
+                form.cleaned_data['new_species_name'],
+                form.cleaned_data['new_species_scientific_name'],
+                form.cleaned_data['new_species_category'])
+        if lot.species:
+            lot.species_category = lot.species.category
+            # if this is not breedable, remove the breeder points
+            # they can still be added back in by editing the lot
+            if not lot.species.breeder_points:
+                lot.i_bred_this_fish = False
+        if lot.image and not lot.image_source:
+            lot.image_source = 'RANDOM' # default to this pic is from the internet
+        if lot.auction:
+            lot.date_end = lot.auction.date_end
+            userData, created = UserData.objects.get_or_create(
+                user = self.request.user.pk,
+                defaults={},
+            )
+            userData.last_auction_used = lot.auction
+            userData.last_activity = timezone.now()
+            userData.save()
+            # I don't know if this is a good way to handle this or not - it may be better to filter the list of auctions on the lot form to be only those 
+            try:
+                AuctionTOS.objects.get(user=self.request.user.pk, auction=lot.auction)
+            except:
+                messages.error(self.request, f"You need to <a href='/auctions/{lot.auction.slug}'>confirm your pickup location for this auction</a> before people can bid on this lot.")        
+        else:
+            # this lot is NOT part of an auction
+            try:
+                run_duration = int(form.cleaned_data['run_duration'])
+            except:
+                run_duration = 10
+            if not lot.date_posted:
+                lot.date_posted = timezone.now()
+            lot.date_end = lot.date_posted + datetime.timedelta(days=run_duration)
+            lot.donation = False
+        # someday we may change this to be a field on the form, but for now we need to collect data
+        lot.promotion_weight = randint(0, 20)
+        if lot.pk:
+            # this is an existing lot
+            lot.save()
+        else:
+            # this is a new lot
+            lot.save()
+            # if there's another lot in the same category already with no bids, warn about it
+            existingLot = Lot.objects.annotate(num_bids=Count('bid'))\
+                .filter(num_bids=0, species_category=lot.species_category, user=self.request.user.pk, active=True)\
+                .exclude(lot_number=lot.pk)
+            if existingLot:
+                messages.info(self.request, "Tip: you've already got lots in this category with no bids.  Don't submit too many similar lots unless you're sure there's interest")
+            messages.success(self.request, f"Created lot!  <a href='/lots/{lot.pk}'>View or edit your last lot</a> or fill out this form again to add another lot.  <a href='/lots/user/?user={self.request.user.pk}'>All submitted lots</a>")
+        return super().form_valid(form)
+
+    def get_form_kwargs(self, *args, **kwargs):
+        kwargs = super().get_form_kwargs(*args, **kwargs)
+        kwargs['user'] = self.request.user
+        return kwargs
+
+class LotCreateView(LotValidation, CreateView):
+    """
+    Creating a new lot
+    """    
+    model = Lot
+    template_name = 'lot_form.html'
+    form_class = CreateLotForm 
+
+    def get_success_url(self):
+        return "/lots/new/"
+    
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['title'] = "New lot"
+        return context
+
+class LotUpdate(LotValidation, UpdateView):
+    """
+    Changing an existing lot
+    This is almost identical to the create view, but needs to verify permissions to edit the lot
+    """
+    model = Lot
+    template_name = 'lot_form.html'
+    form_class = CreateLotForm
+
     def dispatch(self, request, *args, **kwargs):
         if not (request.user.is_superuser or self.get_object().user == self.request.user):
             raise PermissionDenied()
@@ -872,20 +962,14 @@ class LotUpdate(UpdateView):
         return super().dispatch(request, *args, **kwargs)
     
     def get_success_url(self):
-        return "/lots/" + str(self.kwargs['pk'])
-    
-    def form_valid(self, form):
-        lot = form.save(commit=False)
-        if form.cleaned_data['create_new_species']:
-            lot.species = createSpecies(form.cleaned_data['new_species_name'], form.cleaned_data['new_species_scientific_name'], form.cleaned_data['species_category'])
-        lot.save()
-        return super(LotUpdate, self).form_valid(form)
+        return f"/lots/{self.kwargs['pk']}"
 
-    model = Lot
-    template_name = 'lot_form.html'
-    form_class = CreateLotForm
-    
-class LotDelete(DeleteView):
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['title'] = f"Edit {self.get_object().lot_name}"
+        return context
+
+class LotDelete(LoginRequiredMixin, DeleteView):
     model = Lot
     def dispatch(self, request, *args, **kwargs):
         if not self.get_object().can_be_deleted:
@@ -899,7 +983,7 @@ class LotDelete(DeleteView):
         return super().dispatch(request, *args, **kwargs)
 
     def get_success_url(self):
-        return "/"
+        return f"/lots/user/?user={self.request.user.pk}"
 
 @login_required
 def createAuction(request):
@@ -912,8 +996,8 @@ def createAuction(request):
                 auction.lot_submission_end_date = auction.date_end
             auction.save()            
             print(str(auction.created_by) + " has created a new auction " + auction.title)
-            messages.info(request, "Auction created!  Now, create a location to exchange lots.")
-            response = redirect('/locations/new/')
+            messages.success(request, "Auction created!  Now, create a location to exchange lots.")
+            response = redirect(f'/locations/new/?next=/auctions/{auction.slug}')
             # Perhaps we should redirect to the auction edit page?
             return response
     else:
@@ -952,6 +1036,7 @@ class AuctionInfo(FormMixin, DetailView):
         context['pickup_locations'] = PickupLocation.objects.filter(auction=self.get_object())
         current_site = Site.objects.get_current()
         context['domain'] = current_site.domain
+        context['google_maps_api_key'] = settings.LOCATION_FIELD['provider.google.api_key']
         if timezone.now() > self.get_object().date_end:
             context['ended'] = True
             messages.add_message(self.request, messages.ERROR, f"This auction has ended.  You can't bid on anything, but you can still <a href='/lots/?auction={self.get_object().slug}'>view lots</a>.")
@@ -979,12 +1064,13 @@ class AuctionInfo(FormMixin, DetailView):
             obj.pickup_location = form.cleaned_data['pickup_location']
             obj.save()
             # also update userdata to reflect the last auction
-            obj, created = UserData.objects.get_or_create(
+            userData, created = UserData.objects.get_or_create(
                 user = self.request.user,
                 defaults={},
             )
-            obj.last_auction_used = self.get_object()
-            obj.save()
+            userData.last_auction_used = self.get_object()
+            userData.last_activity = timezone.now()
+            userData.save()
             return self.form_valid(form)
         else:
             return self.form_invalid(form)
@@ -992,18 +1078,28 @@ class AuctionInfo(FormMixin, DetailView):
 def aboutSite(request):
     return render(request,'about.html')
 
+def promoSite(request):
+    context = {
+        'contact_email': User.objects.get(pk=1).email,
+    }
+    return render(request,'promo.html', context=context)
+
 def toDefaultLandingPage(request):
     """
     Allow the user to pick up where they left off
     """
     def tos_check(request, auction):
         if not auction:
-            return redirect('/auctions/all')
+            if request.user.is_authenticated:
+                return redirect('/lots/')
+            else:
+                # promo page for non-logged in users
+                return redirect('/about/')
         try:
             # Did the user sign the tos yet?
             AuctionTOS.objects.get(user=request.user, auction=auction)
             # If so, redirect them to the lot view
-            return redirect(f'/lots?auction={auction.slug}')
+            return redirect(f'/lots?a={auction.slug}')
         except:
             # No tos?  Take them there so they can sign
             return redirect(f"/auctions/{auction.slug}/")
@@ -1020,7 +1116,7 @@ def toDefaultLandingPage(request):
             if timezone.now() > auction.date_end:
                 try:
                     invoice = Invoice.objects.get(user=request.user, auction=auction.pk)
-                    messages.add_message(request, messages.INFO, f'{auction} has ended.  <a href="/invoices/{invoice.pk}">View your invoice</a>, <a href="/feedback/">leave feedback</a> on lots you bought or sold, or <a href="/lots?auction={auction.slug}">view lots</a>')
+                    messages.add_message(request, messages.INFO, f'{auction} has ended.  <a href="/invoices/{invoice.pk}">View your invoice</a>, <a href="/feedback/">leave feedback</a> on lots you bought or sold, or <a href="/lots?a={auction.slug}">view lots</a>')
                 except:
                     pass
                 auction = None
@@ -1028,19 +1124,19 @@ def toDefaultLandingPage(request):
             # probably no userdata or userdata.auction is None
             auction = None
     try:
-        obj, created = UserData.objects.get_or_create(
+        userData, created = UserData.objects.get_or_create(
             user = request.user,
             defaults={},
         )
-        obj.last_activity = timezone.now()
-        obj.save()
+        userData.last_activity = timezone.now()
+        userData.save()
     except:
         pass
     return tos_check(request, auction)
 
 @login_required
 def toAccount(request):
-    response = redirect('/users/edit/' + str(request.user.id))
+    response = redirect(f'/users/{request.user.id}/')
     return response
 
 class allAuctions(ListView):
@@ -1049,38 +1145,39 @@ class allAuctions(ListView):
     ordering = ['-date_end']
     
     def get_queryset(self):
-        new_context = Auction.objects.exclude(promote_this_auction=False).order_by('-date_end')
-        return new_context
+        qs = Auction.objects.all().order_by('-date_end')
+        if self.request.user.is_superuser:
+            return qs
+        if not self.request.user.is_authenticated:
+            raise PermissionDenied()
+        else:
+            return qs.filter(Q(auctiontos__user=self.request.user)|Q(created_by=self.request.user))
+        #return qs.exclude(promote_this_auction=False)
 
     def get_context_data(self, **kwargs):
         try:
             user = User.objects.get(pk=self.request.user.pk)
-            nameSet = True
-            if not user.first_name or not user.last_name:
-                nameSet = False
-            locationSet = True
-            try:
-                prefs = UserData.objects.get(user=self.request.user.pk)
-                if not (prefs.location and prefs.address):
-                    locationSet = False
-            except:
-                locationSet = False
-            if not locationSet and not nameSet:
-                messages.add_message(self.request, messages.INFO, 'Set your name and location in your <a href="/account/">account</a>')
-            elif not locationSet:
-                messages.add_message(self.request, messages.INFO, 'Set your location and address in your <a href="/account/">account</a>')
-            elif not nameSet:
-                messages.add_message(self.request, messages.INFO, 'Set your name in your <a href="/account/">account</a>')
+            # fixme - some day, this should come back
+            # nameSet = True
+            # if not user.first_name or not user.last_name:
+            #     nameSet = False
+            # locationSet = True
+            # try:
+            #     prefs = UserData.objects.get(user=self.request.user.pk)
+            #     if not (prefs.location and prefs.address):
+            #         locationSet = False
+            # except:
+            #     locationSet = False
+            # if not locationSet and not nameSet:
+            #     messages.add_message(self.request, messages.INFO, 'Set your name and location in your <a href="/account/">account</a>')
+            # elif not locationSet:
+            #     messages.add_message(self.request, messages.INFO, 'Set your location and address in your <a href="/account/">account</a>')
+            # elif not nameSet:
+            #     messages.add_message(self.request, messages.INFO, 'Set your name in your <a href="/account/">account</a>')
             
         except:
             pass
-        # set default values
-        # data = self.request.GET.copy()
-        # if len(data) == 0:
-        #     data['status'] = "open"
         context = super().get_context_data(**kwargs)
-        # context['filter'] = LotFilter(data, queryset=self.get_queryset())
-        # context['view'] = 'all'
         return context
 
 class Leaderboard(ListView):
@@ -1166,7 +1263,10 @@ class InvoiceView(DetailView, FormMixin):
         context = super(InvoiceView, self).get_context_data(**kwargs)
         sold = Lot.objects.filter(seller_invoice=self.get_object()).order_by('lot_number')
         bought = Lot.objects.filter(buyer_invoice=self.get_object()).order_by('lot_number')
-        userdata = UserData.objects.get(user=self.get_object().user.pk)
+        userData, created = UserData.objects.get_or_create(
+            user = self.get_object().user.pk,
+            defaults={},
+            )
         context['exampleMode'] = self.exampleMode
         # light theme for some invoices to allow printing
         if 'print' in self.request.GET.copy():
@@ -1185,15 +1285,19 @@ class InvoiceView(DetailView, FormMixin):
             pass
         context['sold'] = sold
         context['bought'] = bought
-        context['userdata'] = userdata
+        context['userdata'] = userData
         try:
             context['auction'] = Auction.objects.get(pk=self.get_object().auction.pk)
+        except:
+            context['auction'] = ""
+        try:
             context['contact_email'] = User.objects.get(pk=context['auction'].created_by.pk).email
+        except:
+            context['contact_email'] = False
+        try:
             context['location'] = AuctionTOS.objects.get(user=self.get_object().user.pk, auction=self.get_object().auction.pk).pickup_location
         except:
-            context['auction'] = False
-            context['location'] = False
-            context['contact_email'] = False
+            context['location'] = 'No location selected'
         context['form'] = InvoiceUpdateForm(initial={
             'adjustment_direction': self.get_object().adjustment_direction,
             'adjustment':self.get_object().adjustment,
@@ -1266,13 +1370,13 @@ class UserView(DetailView):
             context['buyer_feedback'] = None
         return context
 
-class UserUpdate(UpdateView, SuccessMessageMixin):
-    """Make changes to a users info"""
-    template_name = 'user_form.html'
-    model = User
-    
-    success_message = 'User settings updated'
 
+class UsernameUpdate(UpdateView, SuccessMessageMixin):
+    template_name = 'user_username.html'
+    model = User
+    success_message = 'Username updated'
+    form_class = ChangeUsernameForm
+    
     def dispatch(self, request, *args, **kwargs):
         auth = False
         if self.get_object().pk == request.user.pk:
@@ -1288,35 +1392,77 @@ class UserUpdate(UpdateView, SuccessMessageMixin):
         if len(data) == 0:
             data['next'] = "/users/" + str(self.kwargs['pk'])
         return data['next']
-    
-    def get_initial(self):
-        try:
-            prefs = UserData.objects.get(user=self.get_object().pk)
-            return {'phone_number': prefs.phone_number, 'club': prefs.club, 'location': prefs.location, 'address': prefs.address, 'email_visible': prefs.email_visible, 'use_list_view': prefs.use_list_view}
-            #return prefs
-        except:
-            return
 
-    form_class = UpdateUserForm
+class UserPreferencesUpdate(UpdateView, SuccessMessageMixin):
+    template_name = 'user_preferences.html'
+    model = UserData
+    success_message = 'User preferences updated'
+    form_class = ChangeUserPreferencesForm
+    user_pk = None
+
+    def dispatch(self, request, *args, **kwargs):
+        self.user_pk = kwargs['pk'] # set the hack
+        auth = False
+        if self.get_object().user.pk == request.user.pk:
+            auth = True
+        if request.user.is_superuser :
+            auth = True
+        if not auth:
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_success_url(self):
+        data = self.request.GET.copy()
+        if len(data) == 0:
+            data['next'] = "/users/" + str(self.kwargs['pk'])
+        return data['next']
+    
+    def get_object(self, *args, **kwargs):
+        return UserData.objects.get(user__pk=self.user_pk) # get the hack
+
+class UserLocationUpdate(UpdateView, SuccessMessageMixin):
+    template_name = 'user_location.html'
+    model = UserData
+    success_message = 'Contact info updated'
+    form_class = UserLocation
+    # such a hack...UserData and User do not have the same pks.
+    # This means that if we go to /users/1/edit, we'll get the wrong UserData
+    # The fix is to have a self.user_pk, which is set in dispatch and called in get_object
+    user_pk = None
+    
+    def dispatch(self, request, *args, **kwargs):
+        self.user_pk = kwargs['pk'] # set the hack
+        auth = False
+        if self.get_object().user.pk == request.user.pk:
+            auth = True
+        if request.user.is_superuser:
+            auth = True
+        if not auth:
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_success_url(self):
+        data = self.request.GET.copy()
+        if len(data) == 0:
+            data['next'] = "/users/" + str(self.kwargs['pk'])
+        return data['next']
+    
+    def get_object(self, *args, **kwargs):
+        return UserData.objects.get(user__pk=self.user_pk) # get the hack
+
+    def get_initial(self):
+        user = User.objects.get(pk=self.get_object().user.pk)
+        return {'first_name': user.first_name, 'last_name': user.last_name}
 
     def form_valid(self, form):
-        user = form.save(commit=False)
-        club = form.cleaned_data['club']
-        try:
-            prefs = UserData.objects.get(user=user)
-        except:
-            prefs = UserData.objects.create(
-                user=user
-            )
-        prefs.phone_number=form.cleaned_data['phone_number']
-        prefs.club=form.cleaned_data['club']
-        prefs.location=form.cleaned_data['location']
-        prefs.address=form.cleaned_data['address']
-        prefs.email_visible = form.cleaned_data['email_visible']
-        prefs.use_list_view = form.cleaned_data['use_list_view']
-        prefs.save()
+        userData = form.save(commit=False)
+        user = User.objects.get(pk=self.get_object().user.pk)
+        user.first_name = form.cleaned_data['first_name']
+        user.last_name = form.cleaned_data['last_name']
         user.save()
-        return super(UserUpdate, self).form_valid(form)
+        userData.last_activity = timezone.now()
+        userData.save()
+        return super(UserLocationUpdate, self).form_valid(form)
 
 class UserChartView(View):
     def get(self, request, *args, **kwargs):
@@ -1439,6 +1585,26 @@ class BlogPostView(DetailView):
         blogpost = self.get_object()
         # this is to allow the chart# syntax
         context['formatted_contents'] = re.sub(r"chart\d", "<canvas id=\g<0>></canvas>", blogpost.body_rendered)
+        return context
+
+class UnsubscribeView(TemplateView):
+    """
+    Match a UUID in the URL to a UserData, and unsubscribe that user
+    """
+    template_name = "unsubscribe.html"
+
+    def get_context_data(self, **kwargs):
+        try:
+            userData = UserData.objects.get(unsubscribe_link=kwargs['slug'])
+            userData.email_me_about_new_auctions = False
+            userData.email_me_about_new_local_lots = False
+            userData.email_me_about_new_lots_ship_to_location = False
+            userData.has_unsubscribed = True
+            userData.last_activity = timezone.now()
+            userData.save()
+        except:
+            raise Http404
+        context = super().get_context_data(**kwargs)
         return context
 
 class AuctionChartView(View):
@@ -1612,9 +1778,18 @@ class AuctionChartView(View):
                         thisViews = len(PageView.objects.filter(lot_number__auction=auction, lot_number__species_category=category))
                         thisBids = len(Bid.objects.filter(lot_number__auction=auction, lot_number__species_category=category))
                         thisVolume = Lot.objects.filter(auction=auction, species_category=category).aggregate(Sum('winning_price'))['winning_price__sum']
-                    percentOfLots = round(((category.num_lots / allLots) * 100),2)
-                    percentOfViews = round(((thisViews / allViews) * 100),2)
-                    percentOfBids = round(((thisBids / allBids) * 100),2)
+                    try:
+                        percentOfLots = round(((category.num_lots / allLots) * 100),2)
+                    except:
+                        percentOfLots = 0
+                    try:
+                        percentOfViews = round(((thisViews / allViews) * 100),2)
+                    except:
+                        percentOfViews = 0
+                    try:
+                        percentOfBids = round(((thisBids / allBids) * 100),2)
+                    except:
+                        percentOfBids = 0
                     if allVolume and thisVolume:
                         percentOfVolume = round(((thisVolume / allVolume) * 100),2)
                     else:

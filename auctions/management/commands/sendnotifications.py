@@ -1,24 +1,13 @@
 from django.core.management.base import BaseCommand, CommandError
 from auctions.models import Lot, Auction, Watch, User
-from django.core.mail import send_mass_mail, send_mail
-
-def notify(email):
-    #link = BASE_URL + "/lots/watched/"
-    link = "auctions.toxotes.org/lots/watched/"
-    send_mail(
-    'Lots you\'ve watched are ending soon',
-    f'Make sure to bid on the lots you\'ve watched!\nView your watched lots: {link}\n\nBest, auctions.toxotes.org',
-    'Fish auction notifications',
-    [email],
-    fail_silently=False,
-    html_message = f'Make sure to bid on the lots you\'ve watched!<br><a href="{link}">Click here to view your watched lots</a><br><br>Best, auctions.toxotes.org',
-    )
-
+from post_office import mail
+from django.contrib.sites.models import Site
 
 class Command(BaseCommand):
     help = 'Send notifications about watched items'
 
     def handle(self, *args, **options):
+        current_site = Site.objects.get_current()
         notificationEmails = []
         auctions = Auction.objects.filter(watch_warning_email_sent=False)
         for auction in auctions:
@@ -41,18 +30,22 @@ class Command(BaseCommand):
         # Handle lots that aren't attached to an auction
         lots = Lot.objects.filter(watch_warning_email_sent=False, auction=None)
         for lot in lots:
-            self.stdout.write(f'{lot}')
-            watched = Watch.objects.filter(lot_number=lot.lot_number)
-            for watch in watched:
-                self.stdout.write(f'+-- {watch}')
-                user = User.objects.get(pk=watch.user.pk)
-                email = user.email
-                if email not in notificationEmails:
-                    notificationEmails.append(email)
-            lot.watch_warning_email_sent = True
-            lot.save()
+            if lot.ending_soon:
+                self.stdout.write(f'{lot}')
+                watched = Watch.objects.filter(lot_number=lot.lot_number)
+                for watch in watched:
+                    self.stdout.write(f'+-- {watch}')
+                    user = User.objects.get(pk=watch.user.pk)
+                    email = user.email
+                    if email not in notificationEmails:
+                        notificationEmails.append(email)
+                lot.watch_warning_email_sent = True
+                lot.save()
         # Collected all emails, time to send message
         for email in notificationEmails:
-            notify(email)
-
-
+            mail.send(
+                email,
+                template='watched_items_ending',
+                context={'domain': current_site.domain},
+            )
+            self.stdout.write(f'Emailed {email} about their watched items')

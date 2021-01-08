@@ -1,11 +1,16 @@
 {% extends "base.html" %}
 {{ form.media }}
+
+{% load i18n %}
 {% load crispy_forms_tags %}
 {% block extra_js %}
 <script type="text/javascript">
-$('#location-form').submit(function(event){
-    $(this).find(':input[type=submit]').prop('disabled', true);
-});
+    $( document ).ready(function() {
+        document.getElementById('id_location_coordinates').style.display = "none";
+    });
+    $('#location-form').submit(function(event){
+        $(this).find(':input[type=submit]').prop('disabled', true);
+    });
 </script>
 {% endblock %}
 {% block title %}Pickup location{% endblock %}

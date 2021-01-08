@@ -14,11 +14,17 @@
           
           <button type="submit" class="btn btn-primary">Apply Filter</button> {% if view == "mylots" %}<a href="/lots/new/" class="btn btn-info" role="button">New lot</a>{% endif %}
         </form> -->
+        Only auctions that you have created -- or that you have joined by selecting a pickup location -- are shown here.<br><br>
+      
+
+        <a href="/auctions/new/" class='btn btn-info'>Create a new auction</a><br>
+        
         <table class="table">
           <thead>
             <tr>
               <th scope="col">Auction</th>
-              <th scope="col">Area</th>
+              <th scope="col">Lots</th>
+              <th scope="col">Rules</th>
               <th scope="col">Ends</th>
             </tr>
           </thead>
@@ -26,11 +32,12 @@
             
             {% for auction in object_list %}
             <tr>
-              <td>{{ auction.title }}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{% if auction.started %}<a href='/lots/?auction={{auction.slug}}'>View lots</a>{% else %}Starts: 
-                {{auction.date_start}} {% endif %}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href='/auctions/{{auction.slug}}'>Payment and pickup info</a>
-                {% if request.user.is_superuser %}&nbsp;<a href='/auctions/{{auction.slug}}/invoices/'>View invoices</a>{% endif %}
+              <td>{{ auction.title }}
+                {% if request.user.is_superuser or auction.created_by == request.user %}&nbsp;<a href='/auctions/{{auction.slug}}/invoices/'>Invoices</a>{% endif %}
               </td>
-              <td>{{ auction.location }}</td>
+              <td>{% if auction.started %}<a href='/lots/?a={{auction.slug}}'>View lots</a>{% else %}Starts: 
+                {{auction.date_start}} {% endif %}</td>
+              <td><a href='/auctions/{{auction.slug}}'>Payment and pickup info</a></td>
               <td>{% if auction.closed %}<span style="color:red">{{ auction.date_end }}</span>{% else %}{{ auction.date_end }}{% endif %}</td>
             </tr>
             {% endfor %}
