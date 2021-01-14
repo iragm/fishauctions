@@ -271,8 +271,9 @@ def lotBan(request, pk):
         checksPass = False
         if request.user.is_superuser:
             checksPass = True
-        if lot.auction.created_by.pk == request.user.pk:
-            checksPass = True
+        if lot.auction:
+            if lot.auction.created_by.pk == request.user.pk:
+                checksPass = True
         if checksPass:
             if not ban_reason:
                 lot.banned = False
@@ -411,24 +412,35 @@ def pageview(request, pk):
 
 def invoicePaid(request, pk):
     if request.method == 'POST':
-        invoice = Invoice.objects.get(pk=pk)
+        try:
+            invoice = Invoice.objects.get(pk=pk)
+        except:
+            raise Http404 (f"No invoice found with key {pk}")  
         checksPass = False
         if request.user.is_superuser:
             checksPass = True
-        if invoice.auction.created_by.pk == request.user.pk:
-            checksPass = True
+        if invoice.auction:
+            if invoice.auction.created_by.pk == request.user.pk:
+                checksPass = True
+        if invoice.seller:
+            if invoice.seller.pk == request.user.pk:
+                checksPass = True
         if checksPass:
-            if invoice.paid:
-                invoice.paid = False
-                invoice.save()
-                result = False
-            else:
-                invoice.paid = True
-                invoice.save()
-                result = True
-            return JsonResponse(data={
-                    'paid': result
-                })
+            data = request.POST
+            invoice.status = data['status']
+            invoice.save()
+            return HttpResponse("Success")
+            # if invoice.paid:
+            #     invoice.paid = False
+            #     invoice.save()
+            #     result = False
+            # else:
+            #     invoice.paid = True
+            #     invoice.save()
+            #     result = True
+            # return JsonResponse(data={
+            #         'paid': result
+            #     })
     raise PermissionDenied()
     
 
@@ -472,20 +484,17 @@ def auctionReport(request, slug):
                 club = ""
             try:
                 invoice = Invoice.objects.get(auction=auction, user=data.user)
-                if invoice.paid:
-                    paid = "Paid" # fixme
-                else:
-                    paid = "Unpaid"
+                invoiceStatus = invoice.get_status_display()
                 totalSpent = invoice.total_bought
                 totalPaid = invoice.total_sold
             except:
-                paid = "N/A"
+                invoiceStatus = "N/A"
                 totalSpent = "0" 
                 totalPaid = "0"
             writer.writerow([data.user.first_name + " " + data.user.last_name, data.user.email, \
                 phone, address, data.pickup_location, \
                 club, len(lotsViewed), len(lotsBid), len(lotsSumbitted), \
-                len(lotsWon), totalSpent, totalPaid, paid, len(breederPoints)])
+                len(lotsWon), totalSpent, totalPaid, invoiceStatus, len(breederPoints)])
         return response    
     raise PermissionDenied()
 
@@ -671,9 +680,7 @@ class AuctionStats(DetailView):
 class ViewLot(DetailView):
     """Show the picture and detailed information about a lot, and allow users to place bids"""
     template_name = 'view_lot.html'
-    #form_class = CreateBid
     model = Lot
-    #queryset = Lot.objects.all()
     
     def get_context_data(self, **kwargs):
         lot = self.get_object()
@@ -720,105 +727,14 @@ class ViewLot(DetailView):
             userData.save()
         if lot.user.pk == self.request.user.pk:
             LotHistory.objects.filter(lot=lot.pk, seen=False).update(seen=True)
+        context['bids'] = []
+        if lot.auction:
+            if lot.auction.created_by.pk == self.request.user.pk:
+                bids = Bid.objects.filter(lot_number=lot.pk)
+                context['bids'] = bids
         context['debug'] = settings.DEBUG
         return context
     
-    # def get_success_url(self):
-    #     return self.request.path
-
-    # def post(self, request, *args, **kwargs):
-    #     self.object = self.get_object()
-    #     form = self.get_form()
-    #     if form.is_valid():
-    #         return self.form_valid(form, request)
-    #     else:
-    #         return self.form_invalid(form)
-
-    # def form_valid(self, form, request):
-    #     lotNumber = form.cleaned_data['lot_number'].pk
-    #     thisBid = form.cleaned_data['amount']
-    #     form.user = User.objects.get(id=request.user.id)
-    #     if not form.user:
-    #         messages.error(request, "You need to be signed in to bid on a lot")
-    #         return False
-    #     lot = Lot.objects.get(pk=self.kwargs['pk'])
-    #     highBidder = lot.high_bidder
-    #     checksPass = True
-    #     try:
-    #         ban = UserBan.objects.get(banned_user=request.user.id, user=lot.user.pk)
-    #         messages.error(request, "This user has banned you from bidding on their lots")
-    #         checksPass = False
-    #     except:
-    #         pass
-    #     try:
-    #         ban = UserBan.objects.get(banned_user=request.user.id, user=lot.auction.created_by.pk)
-    #         messages.error(request, "The owner of this auction has banned you from bidding")
-    #         checksPass = False
-    #     except:
-    #         pass        
-    #     if lot.ended:
-    #         messages.error(request, "Bidding on this lot has ended.  You can no longer place bids")
-    #         checksPass = False
-    #     if checksPass:
-    #         if lot.sealed_bid:
-    #             was_high_bid = True
-    #             messages.success(request, "Bid placed!  You can change your bid at any time until the auction ends")
-    #         else:
-    #             was_high_bid = False
-    #             if (thisBid > lot.max_bid):
-    #                 messages.success(request, "You're the high bidder!")
-    #                 was_high_bid = True
-    #                 # Send an email to the old high bidder
-    #                 # @fixme, this is slow
-    #                 if highBidder:
-    #                     if request.user.id != highBidder.pk:
-    #                         user = User.objects.get(pk=highBidder.pk)
-    #                         current_site = Site.objects.get_current()
-    #                         mail.send(
-    #                             user.email,
-    #                             template='outbid_notification',
-    #                             context={'name': user.first_name, 'domain': current_site.domain, 'lot': lot},
-    #                         )
-    #             else:
-    #                 if ( (lot.max_bid == lot.reserve_price) and (thisBid >= lot.reserve_price) ):
-    #                     messages.success(request, "Tip: bid high!  If no one else bids on this item, you'll still get it for the reserve price.  If someone else bids against you, you'll bid against them until you reach your limit.")
-    #                     was_high_bid = True
-    #                 else:
-    #                     if lot.high_bidder.pk != request.user.id:
-    #                         messages.warning(request, "You've been outbid!")
-    #         # Create or update the bid model
-    #         try:
-    #             # check to see if this user has already bid, and bid more
-    #             existingBid = Bid.objects.get(user=form.user, lot_number=lot)
-    #             if lot.sealed_bid:
-    #                 existingBid.amount = thisBid
-    #                 existingBid.last_bid_time = timezone.now()
-    #                 existingBid.save()
-    #             else:
-    #                 if thisBid >= lot.high_bid:
-    #                     print(f"{request.user} has changed their bid on {lot} from ${existingBid.amount} to ${thisBid}")
-    #                     existingBid.amount = thisBid
-    #                     existingBid.last_bid_time = timezone.now()
-    #                     if was_high_bid:
-    #                         existingBid.was_high_bid = was_high_bid
-    #                     existingBid.save()
-    #                 else:
-    #                     messages.warning(request, f"You can't bid less than ${lot.high_bid}")
-    #         except:
-    #             # create a new bid object
-    #             print(f"{request.user} has bid on {lot}")
-    #             form.was_high_bid = was_high_bid
-    #             form.save() # record the bid regardless of whether or not it's the current high
-    #             # also update category interest
-    #             interest, created = UserInterestCategory.objects.get_or_create(
-    #                 category=lot.species_category,
-    #                 user=request.user,
-    #                 defaults={ 'interest': 0 }
-    #                 )
-    #             interest.interest += settings.BID_WEIGHT
-    #             interest.save()
-    #     return super().form_valid(form)
-
 def createSpecies(name, scientific_name, category=False):
     """
     Create a new product/species
@@ -985,6 +901,24 @@ class LotDelete(LoginRequiredMixin, DeleteView):
     def get_success_url(self):
         return f"/lots/user/?user={self.request.user.pk}"
 
+class BidDelete(LoginRequiredMixin, DeleteView):
+    model = Bid
+    
+    def dispatch(self, request, *args, **kwargs):
+        auth = False
+        #if self.get_object().lot_number.ended:qqq
+        #    raise PermissionDenied() # fixme remove comment
+        if request.user.is_superuser:
+            auth = True
+        if self.get_object().lot_number.auction.created_by.pk == self.request.user.pk:
+            auth = True
+        if not auth:
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_success_url(self):
+        return f"/lots/{self.get_object().lot_number.pk}/{self.get_object().lot_number.slug}/"
+
 @login_required
 def createAuction(request):
     if request.method == 'POST':
@@ -1039,7 +973,7 @@ class AuctionInfo(FormMixin, DetailView):
         context['google_maps_api_key'] = settings.LOCATION_FIELD['provider.google.api_key']
         if timezone.now() > self.get_object().date_end:
             context['ended'] = True
-            messages.add_message(self.request, messages.ERROR, f"This auction has ended.  You can't bid on anything, but you can still <a href='/lots/?auction={self.get_object().slug}'>view lots</a>.")
+            messages.add_message(self.request, messages.ERROR, f"This auction has ended.  You can't bid on anything, but you can still <a href='/lots/?a={self.get_object().slug}'>view lots</a>.")
         else:
             context['ended'] = False
         try:
@@ -1205,10 +1139,10 @@ class Invoices(ListView):
     ordering = ['-date']
     
     def get_queryset(self):
-        new_context = Invoice.objects.filter(
+        qs = Invoice.objects.filter(
             user=self.request.user.pk,
         )
-        return new_context
+        return qs
 
     def get_context_data(self, **kwargs):
         #user = User.objects.get(pk=self.request.user.pk)
@@ -1237,7 +1171,6 @@ class InvoiceView(DetailView, FormMixin):
         # check to make sure the user has permission to view this invoice
         auth = False
         thisInvoice = Invoice.objects.get(pk=self.get_object().pk)
-        
         if self.exampleMode:
             auth = True
         elif self.get_object().user.pk == request.user.pk:
@@ -1255,6 +1188,9 @@ class InvoiceView(DetailView, FormMixin):
                     auth = True
             except:
                 pass
+        if thisInvoice.seller:
+            if thisInvoice.seller.pk == request.user.pk:
+                auth = True
         if not auth:
             raise PermissionDenied()
         return super().dispatch(request, *args, **kwargs)

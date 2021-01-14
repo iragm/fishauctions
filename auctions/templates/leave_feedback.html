@@ -4,7 +4,6 @@
 {% block extra_js %}<script type="text/javascript">
 var $ = window.jQuery;
 function all_positive() {
-  //console.log($(".unrated"));
   $(".unrated").each(function() {
       var pk = this.id.split("_")[1];
       feedback(pk, "seller", 1, null);

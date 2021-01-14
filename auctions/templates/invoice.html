@@ -1,6 +1,6 @@
 {% extends base_template_name %}
 {% load crispy_forms_tags %}
-{% block title %} Invoice for {{ invoice.auction }} {% endblock %}
+{% block title %} Invoice for {{ invoice.label }} {% endblock %}
 {% load static %}
 {% block content %}
 {% block extra_js %}{% endblock %}
@@ -8,9 +8,9 @@
     <div class="row">
         <div class="col-md-10 offset-md1">
             <h1>{% if exampleMode %}Example{%else%}{{ invoice.user.first_name }} {{ invoice.user.last_name }}{% endif %}</h1>
-            {% if location %}<h5>{{location}}{% if exampleMode %}<span class='text-muted'> This is the pickup location selected by the user</span>{%endif%}</h5>{%endif%}<br>
-            {% if request.user.pk == invoice.auction.created_by.pk or request.user.is_superuser %}
-              {% if show_links %}
+            {% if location == 'No location selected' %}{% else %}<h5>{{location}}{% if exampleMode %}<span class='text-muted'> This is the pickup location selected by the user</span>{%endif%}</h5>{%endif%}<br>
+            {% if request.user.pk == invoice.auction.created_by.pk or request.user.is_superuser or request.user.pk == invoice.seller.pk %}
+              {% if show_links and invoice.status == "DRAFT" %}
               <br><h5>Adjust this invoice</h5>
               {% crispy form form.helper %}
               <br>

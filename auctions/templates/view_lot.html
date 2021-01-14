@@ -236,7 +236,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                 {% if lot.can_be_edited %}
                     <a href="/lots/edit/{{lot.pk}}" class="btn btn-warning active">Edit</a></span> {% if lot.can_be_deleted %}<span><a href="/lots/delete/{{lot.pk}}" class="btn btn-danger active">Delete</a>{% endif %}
                 {% else %}
-                    {% if lot.user.pk == request.user.id%}This is your lot.  {% endif %}You can edit a lot for 24 hours after you submit it, as long as no one has bid on it.<br>
+                    <span class='text-muted'>{% if lot.user.pk == request.user.id%}This is your lot.  {% endif %}You can edit a lot for 24 hours after you submit it, as long as no one has bid on it.<br></span>
                 {% endif %}
             {% elif lot.ended %}
                 <span>Bidding has ended on this lot<br></span>
@@ -458,7 +458,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
         <br><br><span class="text-info">Other lots you might be interested in:</span>
         <span id='recommendations'>Searching for recommended lots...</span>
         {% if lot.auction %}
-            <br><a href='/lots/?auction={{lot.auction.slug}}'>View all lots for {{ lot.auction }}</a><br>
+            <br><a href='/lots/?a={{lot.auction.slug}}'>View all lots for {{ lot.auction }}</a><br>
         {% endif %}
 
         <!-- Chart -->
@@ -496,8 +496,15 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
             });
         </script>
     {% endif %}
+    {% if bids %}
+        <h5>Remove bids</h5>
+        {% for bid in bids %}
+        <a href="/bids/delete/{{ bid.pk }}/" class='btn btn-danger mt-1 mr-1'>Remove {{ bid.user }}'s bid</a><br>
+        {% endfor %}
+    {% endif %}
+
     </div>
-</div>
+  </div>
 </div>  
 
 {% endblock %}

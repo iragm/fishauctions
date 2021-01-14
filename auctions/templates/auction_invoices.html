@@ -7,6 +7,12 @@
     <div class="row">
       <div class="col-md-10 offset-lg-1">
         <h1>Invoices for {{ object }}</h1>
+        <br>
+        <button type='button' class='btn btn-info mr-1 mt-1' onclick="all_unpaid();">Set all drafts to ready</button>
+        <button type='button' class='btn btn-success mr-1 mt-1' onclick="mark_all_paid();">Mark all ready as paid</button>
+          <span class='text-muted'>
+        <br>Marking an invoice ready will send an email noficiation to the user telling them that their invoice is ready.
+      </span>
         <table class="table">
           <thead>
             <tr>
@@ -28,7 +34,12 @@
               <td><a href="/invoices/{{invoice.pk}}/">{% if invoice.user.first_name %}{{ invoice.user.first_name }} {{ invoice.user.last_name }}{% else %}{{ invoice.user }}{% endif %}</a></td>
               <td><a href="/invoices/{{invoice.pk}}/?print">Print</a></td>
               <td> {% if invoice.user_should_be_paid %} To be paid {% endif %}${{ invoice.absolute_amount|floatformat:2 }}</td>
-              <td> {% if not invoice.paid %}<a class="btn btn-info active btn-sm" onclick="payinvoice({{ invoice.pk }})" id="pay_{{ invoice.pk }}">Mark paid</a>{% else %}<span>Paid</span>{% endif %}</td>
+              <td><div class="btn-group" role="group" aria-label="Invoice status selection">
+                <button type="button" id="{{invoice.pk}}_DRAFT" onclick="payinvoice({{ invoice.pk }}, 'DRAFT');" class="btn {% if invoice.status == 'DRAFT'%}draft btn-primary{% else %}btn-secondary{% endif %}">Draft</button>
+                <button type="button" id="{{invoice.pk}}_UNPAID" onclick="payinvoice({{ invoice.pk }}, 'UNPAID');" class="btn {% if invoice.status == 'UNPAID'%}btn-primary unpaid{% else %}btn-secondary{% endif %}">Ready</button>
+                <button type="button" id="{{invoice.pk}}_PAID" onclick="payinvoice({{ invoice.pk }}, 'PAID');" class="btn {% if invoice.status == 'PAID'%}btn-success{% else %}btn-secondary{% endif %}">Paid</button>
+              </div></td>
+              <!--<td> {% if not invoice.paid %}<a class="btn btn-info active btn-sm" onclick="payinvoice({{ invoice.pk }})" id="pay_{{ invoice.pk }}">Mark paid</a>{% else %}<span>Paid</span>{% endif %}</td>-->
               <td>{% if invoice.lots_bought %}{{ invoice.lots_bought }}{% endif %}</td>
               <td>{% if invoice.lots_sold_successfully %}{{ invoice.lots_sold_successfully }}{% endif %}</td>
               <td>{{ invoice.location }}</td>
@@ -50,23 +61,54 @@
 {% endblock %}
 {% block extra_js %}
 <script type="text/javascript">
-  function payinvoice(id) {
+  function all_unpaid() {
+    $(".draft").each(function() {
+      var pk = this.id.split("_")[0];
+      payinvoice(pk, "UNPAID");
+    });
+  }
+
+  function mark_all_paid() {
+    $(".unpaid").each(function() {
+      var pk = this.id.split("_")[0];
+      payinvoice(pk, "PAID");
+    });
+  }
+  
+  function payinvoice(id, status) {
     var $ = window.jQuery;
+    data = {'status': status};
     $.ajax({
           type: "POST",
           beforeSend: function (request) {
               request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
           },
+          data:data,
           url: "/api/payinvoice/" + id + "/",
           success : function(result) {
-              if (result.paid) {
-                $('#pay_' + id).removeClass("btn-info");
-                $('#pay_' + id).addClass("btn-success");
-                $('#pay_' + id).html("Paid!");
-              } else {
-                $('#pay_' + id).removeClass("btn-success");
-                $('#pay_' + id).addClass("btn-info");
-                $('#pay_' + id).html("Mark paid");
+              if (status == "DRAFT") {
+                $('#' + id + "_PAID").removeClass("btn-success");
+                $('#' + id + "_UNPAID").removeClass("btn-info unpaid");
+                $('#' + id + "_DRAFT").removeClass("btn-secondary");
+                $('#' + id + "_PAID").addClass("btn-secondary");
+                $('#' + id + "_UNPAID").addClass("btn-secondary");
+                $('#' + id + "_DRAFT").addClass("btn-info draft");
+              }
+              if (status == "UNPAID") {
+                $('#' + id + "_PAID").removeClass("btn-success");
+                $('#' + id + "_UNPAID").removeClass("btn-info");
+                $('#' + id + "_DRAFT").removeClass("btn-info draft");
+                $('#' + id + "_PAID").addClass("btn-secondary");
+                $('#' + id + "_UNPAID").addClass("btn-info unpaid");
+                $('#' + id + "_DRAFT").addClass("btn-secondary");
+              }
+              if (status == "PAID") {
+                $('#' + id + "_PAID").removeClass("btn-secondary");
+                $('#' + id + "_UNPAID").removeClass("btn-info unpaid");
+                $('#' + id + "_DRAFT").removeClass("btn-info draft");
+                $('#' + id + "_PAID").addClass("btn-success");
+                $('#' + id + "_UNPAID").addClass("btn-secondary");
+                $('#' + id + "_DRAFT").addClass("btn-secondary");
               }
           }
       });

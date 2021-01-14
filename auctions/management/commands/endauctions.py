@@ -10,7 +10,7 @@ def sendWarning(lot_number, result):
     )
 
 class Command(BaseCommand):
-    help = 'Sets the winner, active, and winning price on all ended auctions'
+    help = 'Sets the winner, and winning price on all ended lots.  Send lot ending soon and lot ended messages to websocket connected users.  Sets active to false'
 
     def handle(self, *args, **options):
         lots = Lot.objects.filter(active=True)
@@ -60,8 +60,6 @@ class Command(BaseCommand):
                     self.stdout.write(self.style.ERROR('Unable to set winner on "%s"' % lot))
                     self.stdout.write(e)
             else:
-                print(lot.lot_number)
-
                 if lot.ending_very_soon and not lot.winner:
                     result = {
                         'type': 'chat_message',

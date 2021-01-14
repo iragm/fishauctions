@@ -44,7 +44,7 @@
         {% if request.user.is_authenticated %}
         <script>
           updateMessageCounter();
-          setInterval(updateMessageCounter, 10000);
+          setInterval(updateMessageCounter, 60000);
           function updateMessageCounter() {
             $.ajax({
               type: "POST",
@@ -125,7 +125,7 @@
                     <div class="dropdown-menu">
                       <a class="dropdown-item" href="/about/">About site</a>
                       <a class="dropdown-item" href="/auctions/tfcb-annual-auction/">Example auction rules</a>
-                      <a class="dropdown-item" href="/lots/?a=tfcb-annual-auction/">Example auction lots</a>
+                      <a class="dropdown-item" href="/lots/?a=tfcb-annual-auction">Example auction lots</a>
                       </div>
                   </li>
                   {% if request.user.is_authenticated %}

@@ -79,8 +79,9 @@ function saveLocation(data) {
         <form method="GET" id='lot_filter_form' class='form-inline d-none d-sm-none d-md-flex'>
           {{ filter.form | crispy }}
           <button type="submit" class="btn btn-primary mr-1 mt-1">Apply Filter</button> {% if view == "mylots" or view == "all" %}<br>{% if auction %}<a href="/auctions/{{auction.slug}}/" class="btn btn-info mr-1 mt-1" role="button">View rules</a> {% if auction.can_submit_lots %}<a href="/lots/new/" class="btn btn-info mr-1 mt-1" role="button">Create lot</a> <span class="text-info">You can add lots to this auction until {{ auction.lot_submission_end_date }}</span>{% endif %}{% endif %}{% endif %}
-          {% if lotsAreHidden >= 0 %}<br> <span class="text-muted">{{lotsAreHidden}} categories are <a href='/ignore/'>ignored</a></span>{% endif %}
+          
         </form>
+        {% if lotsAreHidden >= 0 %}<span class="text-muted">{{lotsAreHidden}} categories are <a href='/ignore/'>ignored</a></span>{% endif %}
         {% if view == "user" %}
           <a href='/users/{{user.pk}}'>View user info for {{ user }} </a><p>
         {% endif %}

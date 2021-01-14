@@ -222,49 +222,51 @@ def bid_on_lot(lot, user, amount):
 
 class LotConsumer(WebsocketConsumer):
     def connect(self):
-        self.lot_number = self.scope['url_route']['kwargs']['lot_number']
-        self.user = self.scope["user"]
-        self.room_group_name = f'lot_{self.lot_number}'
-        self.user_room_name = f"private_user_{self.user.pk}_lot_{self.lot_number}"
-        self.lot = Lot.objects.get(pk=self.lot_number)
+        try:
+            self.lot_number = self.scope['url_route']['kwargs']['lot_number']
+            self.user = self.scope["user"]
+            self.room_group_name = f'lot_{self.lot_number}'
+            self.user_room_name = f"private_user_{self.user.pk}_lot_{self.lot_number}"
+            self.lot = Lot.objects.get(pk=self.lot_number)
 
-        # Join room group
-        async_to_sync(self.channel_layer.group_add)(
-            self.room_group_name,
-            self.channel_name
-        )
+            # Join room group
+            async_to_sync(self.channel_layer.group_add)(
+                self.room_group_name,
+                self.channel_name
+            )
 
-        # Join private room for notifications only to this user
-        async_to_sync(self.channel_layer.group_add)(
-            self.user_room_name,
-            self.channel_name
-        )
-        self.accept()
-        # send the most recent history
-        allHistory = LotHistory.objects.filter(lot = self.lot).order_by('-timestamp')[:200]
-        # send oldest first
-        for history in reversed(allHistory):
-            try:
-                if history.changed_price:
-                    pk = -1
-                    username = "System"
-                else:
-                    pk = history.user.pk
-                    username = str(history.user)
+            # Join private room for notifications only to this user
+            async_to_sync(self.channel_layer.group_add)(
+                self.user_room_name,
+                self.channel_name
+            )
+            self.accept()
+            # send the most recent history
+            allHistory = LotHistory.objects.filter(lot = self.lot).order_by('-timestamp')[:200]
+            # send oldest first
+            for history in reversed(allHistory):
+                try:
+                    if history.changed_price:
+                        pk = -1
+                        username = "System"
+                    else:
+                        pk = history.user.pk
+                        username = str(history.user)
 
-                async_to_sync(self.channel_layer.group_send)(
-                    self.user_room_name,
-                    {
-                        'type': 'chat_message',
-                        'pk': pk,
-                        'info': "CHAT",
-                        'message': history.message,
-                        'username': username
-                    }
-                )
-            except Exception as e:
-                print(e)
-
+                    async_to_sync(self.channel_layer.group_send)(
+                        self.user_room_name,
+                        {
+                            'type': 'chat_message',
+                            'pk': pk,
+                            'info': "CHAT",
+                            'message': history.message,
+                            'username': username
+                        }
+                    )
+                except Exception as e:
+                    print(e)
+        except Exception as e:
+            print(e)
     def disconnect(self, close_code):
         # Leave room group
         async_to_sync(self.channel_layer.group_discard)(

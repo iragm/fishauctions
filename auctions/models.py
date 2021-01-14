@@ -137,8 +137,12 @@ class Auction(models.Model):
 	is_chat_allowed = models.BooleanField(default=True)
 	max_lots_per_user = models.PositiveIntegerField(null=True, blank=True)
 	max_lots_per_user.help_text = "A user won't be able to add more than this many lots to this auction"
-
-
+	email_first_sent = models.BooleanField(default=False)
+	email_second_sent = models.BooleanField(default=False)
+	email_third_sent = models.BooleanField(default=False)
+	email_fourth_sent = models.BooleanField(default=False)
+	email_fifth_sent = models.BooleanField(default=False)
+	
 	# fixme - everything below here can be removed now
 	pickup_location = models.CharField(max_length=300, null=True, blank=True)
 	pickup_location.help_text = "Description of pickup location"
@@ -278,7 +282,10 @@ class Auction(models.Model):
 
 	@property
 	def percent_unsold_lots(self):
-		return self.total_unsold_lots / self.total_lots * 100
+		try:
+			return self.total_unsold_lots / self.total_lots * 100
+		except:
+			return 100
 	
 	@property
 	def can_submit_lots(self):
@@ -733,6 +740,7 @@ class Invoice(models.Model):
 	"""
 	auction = models.ForeignKey(Auction, blank=True, null=True, on_delete=models.SET_NULL)
 	lot = models.ForeignKey(Lot, blank=True, null=True, on_delete=models.SET_NULL)
+	lot.help_text = "not used"
 	user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
 	seller = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="seller")
 	date = models.DateTimeField(auto_now_add=True, blank=True)
@@ -748,6 +756,7 @@ class Invoice(models.Model):
 	paid = models.BooleanField(default=False) # fixme - remove this eventually
 	opened = models.BooleanField(default=False)
 	email_sent = models.BooleanField(default=False)
+	seller_email_sent = models.BooleanField(default=False)
 	adjustment_direction = models.CharField(
 		max_length=20,
 		choices=(
@@ -785,6 +794,8 @@ class Invoice(models.Model):
 				subtotal += self.adjustment
 			else:
 				subtotal -= self.adjustment
+		if not subtotal:
+			subtotal = 0
 		return subtotal
 
 	@property
@@ -847,7 +858,8 @@ class Invoice(models.Model):
 		allSold = Lot.objects.filter(buyer_invoice=self.pk)
 		total_bought = 0
 		for lot in allSold:
-			total_bought += lot.winning_price
+			if lot.winning_price:
+				total_bought += lot.winning_price
 		return total_bought
 
 	@property
@@ -871,12 +883,16 @@ class Invoice(models.Model):
 	def label(self):
 		if self.auction:
 			return self.auction
-		if self.lot:
-			return self.lot
+		if self.seller:
+			dateString = self.date.strftime("%b %Y")
+			return f"{self.seller} {dateString}"
 		return "Unknown"
 
 	def __str__(self):
-		return f"{self.user}'s invoice for {self.auction}"
+		if self.auction:
+			return f"{self.user}'s invoice for {self.auction}"
+		else:
+			return f"{self.user}'s invoice from {self.seller}"
 		#base = str(self.user)
 		#if self.user_should_be_paid:
 		#	base += " needs to be paid"
