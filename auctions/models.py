@@ -116,6 +116,7 @@ class Auction(models.Model):
 	unsold_lot_fee.help_text = "The amount, in dollars, that the seller will be charged if their lot doesn't sell"
 	winning_bid_percent_to_club = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(100)])
 	winning_bid_percent_to_club.help_text = "To give 70% of the final bid to the seller, enter 30 here"
+	date_posted = models.DateTimeField(auto_now_add=True)
 	date_start = models.DateTimeField()
 	lot_submission_end_date = models.DateTimeField(null=True, blank=True)
 	date_end = models.DateTimeField()
@@ -157,8 +158,9 @@ class Auction(models.Model):
 	# fixme - everything above here can be removed now
 
 	def __str__(self):
-		#return "ID:" + str(self.pk) + " " + str(self.title)
-		return str(self.title)
+		if "auction" not in self.title.lower():
+			return f"{self.title} auction"
+		return self.title
 	
 	def get_absolute_url(self):
 		return reverse('slug', kwargs={'slug': self.slug})
@@ -232,6 +234,11 @@ class Auction(models.Model):
 			return self.club_profit/self.gross * 100
 		else:
 			return 0
+
+	@property
+	def number_of_confirmed_tos(self):
+		"""How many people selected a pickup location in this auction"""
+		return AuctionTOS.objects.filter(auction=self.pk).count()
 
 	@property
 	def number_of_sellers(self):
@@ -325,6 +332,17 @@ class Auction(models.Model):
 		if locations > 1:
 			return True
 		return False
+
+	@property
+	def no_location(self):
+		"""
+		True if there's no pickup location at all for this auction
+		"""
+		locations = PickupLocation.objects.filter(auction=self.pk)
+		if not locations:
+			return True
+		return False
+	
 	@property
 	def paypal_invoice_chunks(self):
 		"""
@@ -975,7 +993,7 @@ class UserData(models.Model):
 	use_list_view = models.BooleanField(default=False)
 	use_list_view.help_text = "Show a list of all lots instead of showing pictures"
 	email_visible = models.BooleanField(default=True)
-	email_visible.help_text = "Show your email address on your user page.  This will be visible only to logged in users."
+	email_visible.help_text = "Show your email address on your user page.  This will be visible only to logged in users.  <a href='/blog/privacy/' target='_blank'>Privacy information</a>"
 	last_auction_used = models.ForeignKey(Auction, blank=True, null=True, on_delete=models.SET_NULL)
 	last_activity = models.DateTimeField(auto_now_add=True)
 	latitude = models.FloatField(blank=True, null=True)

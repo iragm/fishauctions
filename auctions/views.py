@@ -906,8 +906,8 @@ class BidDelete(LoginRequiredMixin, DeleteView):
     
     def dispatch(self, request, *args, **kwargs):
         auth = False
-        #if self.get_object().lot_number.ended:qqq
-        #    raise PermissionDenied() # fixme remove comment
+        if self.get_object().lot_number.ended:
+            raise PermissionDenied()
         if request.user.is_superuser:
             auth = True
         if self.get_object().lot_number.auction.created_by.pk == self.request.user.pk:
@@ -951,7 +951,7 @@ class AuctionInfo(FormMixin, DetailView):
         return data['next']
 
     def get_form_kwargs(self):
-        form_kwargs = super(AuctionInfo, self).get_form_kwargs()
+        form_kwargs = super().get_form_kwargs()
         form_kwargs['user'] = self.request.user
         form_kwargs['auction'] = self.get_object()
         return form_kwargs
@@ -979,11 +979,16 @@ class AuctionInfo(FormMixin, DetailView):
         try:
             existingTos = AuctionTOS.objects.get(user=self.request.user, auction=self.get_object())
             existingTos = existingTos.pickup_location
+            i_agree = True
         except:
             existingTos = None
+            if self.get_object().multi_location:
+                i_agree = True
+            else:
+                i_agree = False
             if self.request.user.is_authenticated and not context['ended']:
                 messages.add_message(self.request, messages.ERROR, "Please confirm you have read these rules by selecting your pickup location at the bottom of this page.")
-        context['form'] = AuctionTOSForm(user=self.request.user, auction=self.get_object(), initial={'user': self.request.user.id, 'auction':self.get_object().pk, 'pickup_location':existingTos})
+        context['form'] = AuctionTOSForm(user=self.request.user, auction=self.get_object(), initial={'user': self.request.user.id, 'auction':self.get_object().pk, 'pickup_location':existingTos, "i_agree": i_agree})
         return context
 
     def post(self, request, *args, **kwargs):

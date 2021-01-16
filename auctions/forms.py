@@ -75,6 +75,8 @@ class InvoiceUpdateForm(forms.ModelForm):
         ]
 
 class AuctionTOSForm(forms.ModelForm):
+    i_agree = forms.BooleanField(required = True)
+
     def __init__(self, user, auction, *args, **kwargs):
         self.user = user
         self.auction = auction
@@ -84,15 +86,24 @@ class AuctionTOSForm(forms.ModelForm):
         self.helper.form_class = 'form-inline'
         self.helper.form_tag = True        
         self.helper.layout = Layout(
-            'user',
-            'auction',
+            'i_agree',
+            #'auction',
             'pickup_location',
             Submit('submit', 'Confirm pickup location and view lots', css_class='agree_tos btn-success'),
         )
+        if self.auction.multi_location:
+            self.fields['i_agree'].initial = True
+            self.fields['i_agree'].widget = HiddenInput()
+            self.fields['pickup_location'].label = "Yes, I will be at &nbsp;&nbsp;&nbsp;"
+        else:
+            # single location auction
+            self.fields['pickup_location'].widget = HiddenInput()
+            self.fields['pickup_location'].initial = PickupLocation.objects.filter(auction=self.auction)[0]
+            self.fields['i_agree'].label = f"Yes, I will be at {PickupLocation.objects.filter(auction=self.auction)[0]}"
         self.fields['pickup_location'].queryset = PickupLocation.objects.filter(auction=self.auction).order_by('name')
-        self.fields['pickup_location'].label = "Yes, I will be at&nbsp;&nbsp;&nbsp;"
-        self.fields['user'].widget = HiddenInput()
-        self.fields['auction'].widget = HiddenInput()
+        
+        #self.fields['user'].widget = HiddenInput()
+        #self.fields['auction'].widget = HiddenInput()
         
     # def save(self, *args, **kwargs):
     #     kwargs['commit']=False
@@ -105,10 +116,10 @@ class AuctionTOSForm(forms.ModelForm):
     class Meta:
         model = AuctionTOS
         fields = [
-            'user',
-            'auction',
             'pickup_location',
         ]
+        exclude = ['user', 'auction',]
+
 
 class PickupLocationForm(forms.ModelForm):
     class Meta:
