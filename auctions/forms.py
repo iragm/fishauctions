@@ -98,8 +98,9 @@ class AuctionTOSForm(forms.ModelForm):
         else:
             # single location auction
             self.fields['pickup_location'].widget = HiddenInput()
-            self.fields['pickup_location'].initial = PickupLocation.objects.filter(auction=self.auction)[0]
-            self.fields['i_agree'].label = f"Yes, I will be at {PickupLocation.objects.filter(auction=self.auction)[0]}"
+            if not self.auction.no_location:
+                self.fields['pickup_location'].initial = PickupLocation.objects.filter(auction=self.auction)[0]
+                self.fields['i_agree'].label = f"Yes, I will be at {PickupLocation.objects.filter(auction=self.auction)[0]}"
         self.fields['pickup_location'].queryset = PickupLocation.objects.filter(auction=self.auction).order_by('name')
         
         #self.fields['user'].widget = HiddenInput()

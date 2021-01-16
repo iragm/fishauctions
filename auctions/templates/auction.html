@@ -70,8 +70,11 @@ function copyLink() {
             </div>
             {% if user.is_authenticated and not ended %}
             <br><br>
+            {% if not auction.no_location %}
             If you want to participate in this auction, you must confirm your pickup location
             {% crispy form form.helper %}
+            {% else %}The creator of this auction has not yet added a pickup location.  Check back soon!
+            {%endif%}
             {% else %}
             <a href='/lots/?a={{auction.slug}}' class="btn btn-primary active">View all lots for this auction</a>
             {% endif %}
