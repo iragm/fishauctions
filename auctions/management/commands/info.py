@@ -16,16 +16,17 @@ class Command(BaseCommand):
     help = 'Just a scratchpad to do things'
 
     def handle(self, *args, **options):
-        #auctionslug = 'pvas'
-        auctionslug = 'tfcb-annual'
-        users = User.objects.all().annotate(
-            #lots_submitted=Count('lot', filter=Q(lot__auction__slug__icontains='))
-            lots_submitted=Count('lot', filter=Q(lot__auction__slug__icontains=auctionslug),\
-        )).annotate(mean_lot_value=Avg('lot__winning_price', filter=Q(lot__auction__slug__icontains=auctionslug)))
+        pass
+        # #auctionslug = 'pvas'
+        # auctionslug = 'tfcb-annual'
+        # users = User.objects.all().annotate(
+        #     #lots_submitted=Count('lot', filter=Q(lot__auction__slug__icontains='))
+        #     lots_submitted=Count('lot', filter=Q(lot__auction__slug__icontains=auctionslug),\
+        # )).annotate(mean_lot_value=Avg('lot__winning_price', filter=Q(lot__auction__slug__icontains=auctionslug)))
         
-        for user in users:
-            if user.lots_submitted > 0:
-                print(user.lots_submitted, user.mean_lot_value)
+        # for user in users:
+        #     if user.lots_submitted > 0:
+        #         print(user.lots_submitted, user.mean_lot_value)
         #lot.shipping_locations.filter(pk=53).exists()
         #for i in dir(lot.shipping_locations):
         #    print(i)

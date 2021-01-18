@@ -37,7 +37,7 @@
               </td>
               <td>{% if auction.started %}<a href='/lots/?a={{auction.slug}}'>View lots</a>{% else %}Starts: 
                 {{auction.date_start}} {% endif %}</td>
-              <td><a href='/auctions/{{auction.slug}}'>Payment and pickup info</a></td>
+              <td><a href='/auctions/{{auction.slug}}'>{% if auction.created_by == request.user %}View or edit auction{%else%}Payment and pickup info{%endif%}</a></td>
               <td>{% if auction.closed %}<span style="color:red">{{ auction.date_end }}</span>{% else %}{{ auction.date_end }}{% endif %}</td>
             </tr>
             {% endfor %}

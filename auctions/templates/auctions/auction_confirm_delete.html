@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %} Delete auction {% endblock %}
+{% load static %}
+{% block content %}
+<div class="container mt-5 mb-5">
+    <div class="row">
+        <div class="col-md-10 offset-md1">
+            <form method="post">{% csrf_token %}
+                <p>Are you sure you want to delete {{ object }}?</p>
+                <input type="submit" class='btn btn-danger' value="Delete">
+                <a href="/auctions/{{object.slug}}/" class='btn btn-primary'>Cancel</a>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

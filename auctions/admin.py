@@ -3,20 +3,8 @@ from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
 from .models import *
 
-class BlogPostViewInline(admin.TabularInline):
-    model = PageView
-    list_display = ("user",)
-    list_filter = ()
-    search_fields = ()
-    extra = 0
-
 class BlogPostAdmin(admin.ModelAdmin):
     model = BlogPost
-    inlines = [
-        BlogPostViewInline,
-    ]
-class PickupLocationAdmin(admin.ModelAdmin):
-    model = PickupLocation
 
 class AuctionTOSInline(admin.TabularInline):
     model = AuctionTOS 
@@ -24,6 +12,12 @@ class AuctionTOSInline(admin.TabularInline):
     list_filter = ()
     search_fields = ()
     extra = 0
+
+class PickupLocationAdmin(admin.ModelAdmin):
+    model = PickupLocation
+    inlines = [
+        AuctionTOSInline,
+    ]
 
 class InterestInline(admin.TabularInline):
     model = UserInterestCategory 
@@ -68,6 +62,7 @@ class PickupLocationInline(admin.TabularInline):
     list_filter = ()
     search_fields = ()
     extra = 0
+
 
 class AuctionAdmin(admin.ModelAdmin):
     model = Auction 
@@ -133,8 +128,8 @@ class BoughtLotInline(admin.TabularInline):
 
 class InvoiceAdmin(admin.ModelAdmin):
     model = Invoice 
-    list_display = ("auction", "user", "total_sold", "total_bought", "__str__", "paid", )
-    list_filter = ("auction", "paid",)
+    list_display = ("user", "__str__", 'rounded_net', "status", )
+    list_filter = ("auction", "status",)
     search_fields = ("user__first_name", "user__last_name",)
     inlines = [
          SoldLotInline,

@@ -293,7 +293,7 @@
       <div class="tab-pane fade" id="runAuction">
         <br>
         <ol>
-          <li>{% if not request.user.is_authenticated %}<a href="/google/login/?process=login">Sign in with Google</a> or <a href="/signup/">create an account</a>{% else %}Thanks for signing up!{% endif %}</li>
+          <li>{% if not request.user.is_authenticated %}<a href="/google/login/?process=login&next={% firstof request.path '/' %}">Sign in with Google</a> or <a href="/signup/">create an account</a>{% else %}Thanks for signing up!{% endif %}</li>
           <li><a href='/auctions/new'>Create an auction</a></li>
           <li>Add one or more <a href="/locations/">pickup locations</a> to your auction</li>
           <li>Wait for the auction to end</li>
@@ -307,8 +307,8 @@
       <div class="tab-pane fade active show" id="profile">
         <ol>
           <br>
-          <li>{% if not request.user.is_authenticated %}<a href="/google/login/?process=login">Sign in with Google</a> or <a href="/signup/">create an account</a>{% else %}Thanks for signing up!{% endif %}</li>
-          <li><a href='/auctions/all/'>Find an auction</a></li>
+          <li>{% if not request.user.is_authenticated %}<a href="/google/login/?process=login&next={% firstof request.path '/' %}">Sign in with Google</a> or <a href="/signup/">create an account</a>{% else %}Thanks for signing up!{% endif %}</li>
+          <li>Find an auction</li>
           <li>Read the auction's rules and select the pickup location that works best for you</li>
           <li><a href='/lots/new/'>Submit</a> and bid on lots</li>
           <li>After the auction ends, you'll get an invoice listing the lots you won</li>
@@ -334,7 +334,7 @@
       <div class="tab-pane fade" id="moreinfo">
         <br>I'm happy to provide help with running your auctions and answer any questions.
         <br>
-        <br>{% if not request.user.is_authenticated %}<a href="/google/login/?process=login">Sign in with Google</a> or <a href="/signup/">create an account</a> and my email address will show up here{% else %}Contact me at <a href='mailto:{{ contact_email }}'>{{ contact_email }}</a>{% endif %}.
+        <br>{% if not request.user.is_authenticated %}<a href="/google/login/?process=login&next={% firstof request.path '/' %}">Sign in with Google</a> or <a href="/signup/">create an account</a> and my email address will show up here{% else %}Contact me at <a href='mailto:{{ contact_email }}'>{{ contact_email }}</a>{% endif %}.
         <br>
         <br>I built this site because my local club, the <a href="https://www.tfcb.org/">Tropcial Fish Club of Burlington</a> hasn't been able to have in-person auctions.
         <br>

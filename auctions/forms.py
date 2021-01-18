@@ -91,6 +91,7 @@ class AuctionTOSForm(forms.ModelForm):
             'pickup_location',
             Submit('submit', 'Confirm pickup location and view lots', css_class='agree_tos btn-success'),
         )
+        self.fields['pickup_location'].queryset = PickupLocation.objects.filter(auction=self.auction).order_by('name')
         if self.auction.multi_location:
             self.fields['i_agree'].initial = True
             self.fields['i_agree'].widget = HiddenInput()
@@ -101,18 +102,6 @@ class AuctionTOSForm(forms.ModelForm):
             if not self.auction.no_location:
                 self.fields['pickup_location'].initial = PickupLocation.objects.filter(auction=self.auction)[0]
                 self.fields['i_agree'].label = f"Yes, I will be at {PickupLocation.objects.filter(auction=self.auction)[0]}"
-        self.fields['pickup_location'].queryset = PickupLocation.objects.filter(auction=self.auction).order_by('name')
-        
-        #self.fields['user'].widget = HiddenInput()
-        #self.fields['auction'].widget = HiddenInput()
-        
-    # def save(self, *args, **kwargs):
-    #     kwargs['commit']=False
-    #     obj = super().save(*args, **kwargs)
-    #     obj.user = self.user
-    #     obj.auction = self.auction
-    #     obj.save()
-    #     return obj
 
     class Meta:
         model = AuctionTOS
@@ -544,7 +533,7 @@ class ChangeUsernameForm(forms.ModelForm):
 class ChangeUserPreferencesForm(forms.ModelForm):
     class Meta:
         model = UserData
-        fields = ('email_visible', 'use_list_view','email_me_about_new_auctions','email_me_about_new_auctions_distance',\
+        fields = ('email_visible', 'use_dark_theme', 'use_list_view','email_me_about_new_auctions','email_me_about_new_auctions_distance',\
             'email_me_about_new_local_lots','local_distance', 'email_me_about_new_lots_ship_to_location'
             )
         exclude = (
@@ -565,8 +554,9 @@ class ChangeUserPreferencesForm(forms.ModelForm):
         self.helper.form_tag = True
         self.helper.layout = Layout(
             Div(
-                Div('email_visible',css_class='col-md-6',),
-                Div('use_list_view',css_class='col-md-6',),
+                Div('email_visible',css_class='col-md-4',),
+                Div('use_list_view',css_class='col-md-4',),
+                Div('use_dark_theme',css_class='col-md-4',),
                 css_class='row',
             ),
             HTML("<h4>Notifications</h4>You'll get one email per week that contains an update on everything you've checked here<br><br>"),

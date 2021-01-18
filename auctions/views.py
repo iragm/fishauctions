@@ -462,8 +462,13 @@ def auctionReport(request, slug):
             end = timezone.now().strftime("%m-%d-%Y")
         response['Content-Disposition'] = 'attachment; filename="' + slug + "-report-" + end + '.csv"'
         writer = csv.writer(response)
-        writer.writerow(['Name', 'Email', 'Phone', 'Address', 'Location', 'Club', 'Lots viewed', 'Lots bid', 'Lots submitted', 'Lots won', 'Total spent', 'Total paid', 'Invoice', 'Breeder points'])
-        users = AuctionTOS.objects.filter(auction=auction)
+        writer.writerow(['Name', 'Email', 'Phone', 'Address', 'Location', 'Miles to pickup location', 'Club', 'Lots viewed', 'Lots bid', 'Lots submitted', 'Lots won', 'Total spent', 'Total paid', 'Invoice', 'Breeder points'])
+        users = AuctionTOS.objects.filter(auction=auction).annotate(distance_traveled=distance_to(\
+                '`auctions_userdata`.`latitude`', '`auctions_userdata`.`longitude`', \
+                lat_field_name='`auctions_pickuplocation`.`latitude`',\
+                lng_field_name="`auctions_pickuplocation`.`longitude`",\
+                approximate_distance_to=1)\
+                ).select_related('user__userdata').select_related('pickup_location')
         for data in users:
             lotsViewed = PageView.objects.filter(lot_number__auction=auction, user=data.user)
             lotsBid = Bid.objects.filter(lot_number__auction=auction,user=data.user)
@@ -478,6 +483,10 @@ def auctionReport(request, slug):
                 address = data.user.userdata.address
             except:
                 address = ""
+            if data.distance_traveled:
+                distance = data.distance_traveled
+            else:
+                distance = "User's location not set"
             try:
                 club = data.user.userdata.club
             except:
@@ -492,7 +501,7 @@ def auctionReport(request, slug):
                 totalSpent = "0" 
                 totalPaid = "0"
             writer.writerow([data.user.first_name + " " + data.user.last_name, data.user.email, \
-                phone, address, data.pickup_location, \
+                phone, address, data.pickup_location, distance,\
                 club, len(lotsViewed), len(lotsBid), len(lotsSumbitted), \
                 len(lotsWon), totalSpent, totalPaid, invoiceStatus, len(breederPoints)])
         return response    
@@ -682,6 +691,21 @@ class ViewLot(DetailView):
     template_name = 'view_lot.html'
     model = Lot
     
+    def get_queryset(self):
+        pk = self.kwargs.get(self.pk_url_kwarg)
+        qs = Lot.objects.filter(pk=pk)
+        if self.request.user.is_authenticated:
+            userData, created = UserData.objects.get_or_create(
+                user = self.request.user,
+                defaults={},
+            )
+            # fixme - cookies if possible
+            latitude = userData.latitude
+            longitude = userData.longitude
+            if latitude and longitude:
+                qs = Lot.objects.annotate(distance=distance_to(latitude, longitude)).filter(pk=pk)
+        return qs
+
     def get_context_data(self, **kwargs):
         lot = self.get_object()
         if lot.auction:
@@ -733,6 +757,19 @@ class ViewLot(DetailView):
                 bids = Bid.objects.filter(lot_number=lot.pk)
                 context['bids'] = bids
         context['debug'] = settings.DEBUG
+        try:
+            if lot.local_pickup:
+                context['distance'] = f"{int(lot.distance)} miles away"
+            else:
+                distances = [100, 200, 300, 500, 1000, 2000, 3000]
+                for distance in distances:
+                    if lot.distance < distance:
+                        context['distance'] = f"less than {distance} miles away"
+                        break
+                if lot.distance > 3000:
+                    context['distance'] = f"over 3000 miles away"
+        except:
+            context['distance'] = 0
         return context
     
 def createSpecies(name, scientific_name, category=False):
@@ -885,6 +922,20 @@ class LotUpdate(LotValidation, UpdateView):
         context['title'] = f"Edit {self.get_object().lot_name}"
         return context
 
+class AuctionDelete(LoginRequiredMixin, DeleteView):
+    model = Auction
+    
+    def dispatch(self, request, *args, **kwargs):
+        if not self.get_object().can_be_deleted:
+            messages.error(request, "There are already lots in this auction, it can't be deleted")
+            raise PermissionDenied()
+        if not (request.user.is_superuser or self.get_object().created_by == self.request.user):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_success_url(self):
+        return f"/auctions/"
+
 class LotDelete(LoginRequiredMixin, DeleteView):
     model = Lot
     def dispatch(self, request, *args, **kwargs):
@@ -966,7 +1017,7 @@ class AuctionInfo(FormMixin, DetailView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         owner = self.get_object().created_by
-        context['contact_email'] = User.objects.get(pk=owner.pk).email
+        context['contact_email'] = self.get_object().created_by.email
         context['pickup_locations'] = PickupLocation.objects.filter(auction=self.get_object())
         current_site = Site.objects.get_current()
         context['domain'] = current_site.domain
@@ -981,7 +1032,10 @@ class AuctionInfo(FormMixin, DetailView):
             existingTos = existingTos.pickup_location
             i_agree = True
         except:
-            existingTos = None
+            if not self.get_object().no_location:
+                existingTos = PickupLocation.objects.filter(auction=self.get_object().pk)[0]
+            else:
+                existingTos = None
             if self.get_object().multi_location:
                 i_agree = True
             else:
@@ -1152,7 +1206,7 @@ class Invoices(ListView):
     def get_context_data(self, **kwargs):
         #user = User.objects.get(pk=self.request.user.pk)
         context = super().get_context_data(**kwargs)
-        # context['filter'] = LotFilter(data, queryset=self.get_queryset())
+        context['seller_invoices'] = Invoice.objects.filter(seller=self.request.user.pk)
         # context['view'] = 'all'
         return context
 
@@ -1263,8 +1317,12 @@ class InvoiceView(DetailView, FormMixin):
         adjustment_notes = form.cleaned_data['adjustment_notes']
         auth = False
         invoice = self.get_object()
-        if invoice.auction.created_by.pk == request.user.pk:
-            auth = True
+        if invoice.seller:
+            if invoice.seller.pk == request.user.pk:
+                auth = True
+        if invoice.auction:
+            if invoice.auction.created_by.pk == request.user.pk:
+                auth = True
         if request.user.is_superuser :
             auth = True
         if not auth:

@@ -22,8 +22,15 @@ class Command(BaseCommand):
                 headers={'Reply-to': invoice.user.email},
                 context={'subject': subject, 'name': seller.first_name, 'domain': current_site.domain, "invoice": invoice},
             )
-            self.stdout.write(f"Emailed {seller} their seller's copy of {invoice}")
-            # fixme - we should email the buyer and tell them that their invoice is in draft now
+            # email the buyer and tell them that their invoice is in draft now
+            subject = f"Your draft invoice for {invoice.seller}"
+            mail.send(
+                invoice.user.email,
+                template='invoice_draft_buyer',
+                headers={'Reply-to': invoice.seller.email},
+                context={'subject': subject, 'name': invoice.user.first_name, 'domain': current_site.domain, "invoice": invoice},
+            )
+            self.stdout.write(f"Emailed {seller} and {invoice.user} that their invoice {invoice} has been created")
 
         invoices = Invoice.objects.filter(email_sent=False, status='UNPAID')
         for invoice in invoices:
@@ -46,6 +53,6 @@ class Command(BaseCommand):
                 template='invoice_ready',
                 context={'subject': subject, 'name': user.first_name, 'domain': current_site.domain, 'location': location, "invoice": invoice},
             )
-            self.stdout.write(f'Emailed {user} invoice {invoice}')
+            self.stdout.write(f'Emailed {user} that their invoice {invoice} is ready for payment')
             invoice.email_sent = True
             invoice.save()

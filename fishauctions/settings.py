@@ -102,6 +102,7 @@ TEMPLATES = [
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
                 'auctions.context_processors.google_analytics',
+                'auctions.context_processors.theme',
             ],
         },
     },
@@ -192,7 +193,7 @@ ACCOUNT_EMAIL_VERIFICATION = "mandatory"
 ACCOUNT_LOGIN_ON_EMAIL_CONFIRMATION = True
 ACCOUNT_LOGIN_ON_PASSWORD_RESET = True
 ACCOUNT_SESSION_REMEMBER = True
-ACCOUNT_EMAIL_SUBJECT_PREFIX = "TFCB - "
+ACCOUNT_EMAIL_SUBJECT_PREFIX = "auction.fish - "
 
 EMAIL_BACKEND = 'post_office.EmailBackend'
 #EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend' # console

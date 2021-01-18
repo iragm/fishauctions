@@ -30,13 +30,13 @@
                   <tr>
                     <td>Lots sold:<br>Feedback:</td>
                     <td> {{ data.lots_sold }}<br>
-                        <span class='text-success'>+{{ data.positive_feedback_as_seller }}</span> <span class='text-danger'>-{{ data.negative_feedback_as_seller }}</span> ({{ data.percent_positive_feedback_as_seller }}% positive)
+                        <span class='badge badge-success'>+{{ data.positive_feedback_as_seller }}</span> <span class='badge badge-danger'>-{{ data.negative_feedback_as_seller }}</span> ({{ data.percent_positive_feedback_as_seller }}% positive)
                     </td>
                   </tr>
                   <tr>
                     <td>Lots bought:<br>Feedback:<br></td>
                     <td> {{ data.lots_bought }}<br>
-                        <span class='text-success'>+{{ data.positive_feedback_as_winner }}</span> <span class='text-danger'>-{{ data.negative_feedback_as_winner }}</span> ({{ data.percent_positive_feedback_as_winner }}% positive)
+                        <span class='badge badge-success'>+{{ data.positive_feedback_as_winner }}</span> <span class='badge badge-danger'>-{{ data.negative_feedback_as_winner }}</span> ({{ data.percent_positive_feedback_as_winner }}% positive)
                     </td>
                   </tr>
             </table>
@@ -129,7 +129,6 @@
                     url: '/api/chart/users/{{user.pk}}/',
                     success: function (data) {
                         var ctx = document.getElementById('myChart').getContext('2d');
-                        Chart.defaults.global.defaultFontColor = "#fff";
                         new Chart(ctx, {
                             type: 'bar',
                             data: {

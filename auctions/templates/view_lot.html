@@ -15,7 +15,7 @@ function ban_lot(ban) {
   if (ban == 'unban') {
     data.banned = ""
   } else {
-      data.banned = prompt("Enter the reason for this ban", "This lot has been removed by the auction owner");
+      data.banned = prompt("Enter the reason for this ban", "This lot has been removed by {% if request.user.is_superuser %}an admin {%else%}auction owner{%endif%}");
   }
   $.ajax({
         type: "POST",
@@ -130,10 +130,14 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
 
 </script> {% endblock %}
 {% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-md-offset-1 col-xl-8">
 <div class="container mt-5 mb-5">
     <div class="row">
       <div class="col-md-10 offset-md1">
-        <h1>{{ lot.lot_name }}</h1>
+        <h3>{{ lot.lot_name }}</h3>
+            {% if lot.species %}<span class='text-muted'>{% if lot.species.scientific_name %}<i>{{ lot.species.scientific_name }}</i>{% else %}{{lot.species.common_name}}{%endif%}</span>{%endif%} {% if lot.i_bred_this_fish %}<span class="badge badge-light">Bred by {{ lot.user }}</span>{%endif%}
             {% if lot.image %}
             <div> <!-- can remove class here I think-->
                 <img src="{{ lot.image.lot_full.url }}" style="max-width:100%;"></img>
@@ -161,7 +165,9 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                 <td><b>Quantity:</b></td><td>{{ lot.quantity }}</td>
             </tr>
             <tr>
-                <td><b>Seller:</b></td><td>{% if lot.donation %} A donation from {% endif %}<a href='/users/{{ lot.user.pk }}/'>{{ lot.user }}</a></td>
+                <td><b>Seller:</b></td><td>{% if lot.donation %} A donation from {% endif %}<a href='/users/{{ lot.user.pk }}/'>{{ lot.user }}</a> {% if not lot.auction %}
+                    <span class='badge badge-light'>Lots sold: {{ lot.user.userdata.lots_sold }}</span> <span class='badge badge-success'>+{{ lot.user.userdata.positive_feedback_as_seller }}</span> <span class='badge badge-danger'>-{{ lot.user.userdata.negative_feedback_as_seller }}</span>
+                    {% endif %}</td>
             </tr>
             <tr>
                 <td><b>
@@ -207,10 +213,33 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                     {% endif %}
                     </td>
             </tr>
+            {% if not lot.auction %}
+            <tr>
+                <td><b>Distance from you:</b></td><td>{{ distance }} {% if lot.local_pickup %}<span class="badge badge-light">Local pickup available</span>{% endif %}
+                    {% if request.user.userdata.location in lot.shipping_locations.all %}
+                    <span class="badge badge-light">Ships to {{ request.user.userdata.location }}</span>
+                    {% endif %}
+                </td>
+            </tr>
+            <tr>
+                <td><b>Payment:</b></td><td>
+                    {% if lot.payment_other_method %}{{ lot.payment_other_method }}{% endif %} 
+                    {% if lot.payment_paypal %}<span class="badge badge-light">Paypal OK</span>{% endif %} 
+                    {% if lot.payment_cash %}<span class="badge badge-light">Cash OK</span>{% endif %}
+                </td>
+            </tr>
+            {% if lot.other_text %}
+            <tr>
+                <td><b>Shipping notes:</b></td><td>{{ lot.other_text }} </td>
+            </tr>
+            {% endif %}
+            {% endif %}
+
             <tr>
                 <td><b>Ends:</b></td><td>{% if lot.ended %} <span class="text-danger">{{ lot.calculated_end }}</span>{% else %}<span id="end_date">{{ lot.calculated_end }}</span>{% endif %}</td>
             </tr>
-            {% if lot.location %}
+            
+            {% if lot.auction and lot.location %}
             <tr>
                 <td><b>Location:</b></td><td>{% if user_location.pk != lot.location.pk %} <span class="text-danger">{{ lot.location }} </span> {% else %} {{ lot.location }} {% endif %}</td>
             </tr>
@@ -245,6 +274,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                     {% if not user_tos %}
                         This lot is part of the <b>{{ lot.auction }}</b> auction.  Please <a href='/auctions/{{lot.auction.slug}}/?next=/lots/{{ lot.pk }}/'>read the auction's rules and confirm your pickup location</a> to bid<br>
                     {% else %}
+                        {% if not lot.auction %}Remember to check the seller's feedback before bidding.  This site will not get involved in disputes.<br><br>{%endif%}
                         <div class="form-group">
                         <div class="input-group mb-3">
                             <div class="input-group-prepend">
@@ -302,158 +332,6 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
             <span id="watch" {% if watched %} class="watched">&#9733; Watching{% else %}>&#9734; Watch{% endif %}</span><br>
         {% endif %}
         
-
-        <!-- Chat -->
-        <br><h4>Chat</h4>
-        <div class="panel" id="chat" style='max-height: 30vh; {# calc(100vh - 200px) #}
-        overflow-y: scroll;'></div>
-        <span id="send_chat_area" class='' >
-        {% if request.user.is_authenticated and lot.chat_allowed %}
-          <div class="input-group mt-1 mb-3 ">
-            <input class="form-control form-control-sm mr-1 " id='chat_input'  type="text">
-            <div class="input-group-append">
-                <button class='btn-sm btn-info' id="chat_send">Send</button>
-            </div>
-            </div>
-          {% endif %}
-        </span>
-        <script>
-            {% if lot.sealed_bid %}
-            var high_bidder = '';
-            var high_bidder_pk = '{{ request.user.pk }}';
-            {% else %}
-            var high_bidder = '{{ lot.high_bidder }}';
-            var high_bidder_pk = '{{ lot.high_bidder.pk }}';
-            {% endif %}
-            var viewer_bid = '{{ lot.viewer_bid }}';
-            const lotWebSocket = new WebSocket(
-                'ws{% if not debug %}s{% endif %}://'
-                + window.location.host
-                + '/ws/lots/{{ lot.lot_number }}/'
-            );
-    
-            lotWebSocket.onmessage = function(e) {
-                const data = JSON.parse(e.data);
-                if (data.current_high_bid) {
-                    $("#price").html(data.current_high_bid);
-                    $(document).prop('title', '🔴$' + data.current_high_bid + ": " + originalTitle);
-                    clearTimeout(removeDot);
-                    var removeDot = setTimeout(function(){$(document).prop('title', '$' + data.current_high_bid + ": " + originalTitle);}, 500);
-                    //$("#bid_amount").val(data.current_high_bid + 1);
-                    if (!$("#bid_amount").is(":focus")) {
-                        if (data.info !== "INFO") {
-                            if (Number($("#bid_amount").val()) <= data.current_high_bid) {
-                                $("#bid_amount").val(data.current_high_bid + 1);
-                            }
-                        }
-                    }
-                }
-                if (data.high_bidder_pk) {
-                    $('#high_bidder_name').html("<a href='/users/" + data.high_bidder_pk + "/'>" + data.high_bidder_name + "</a>");
-                }
-                var messageClass = "warning";
-                if (data.high_bidder_pk) {
-                    if (high_bidder_pk == "{{ request.user.pk }}") {
-                        if (data.high_bidder_pk != '{{ request.user.pk }}') {
-                            messageClass = 'danger';
-                        }
-                    } else {
-                        if (data.high_bidder_pk == '{{ request.user.pk }}') {
-                            messageClass = 'success';
-                        }
-                    }
-                    high_bidder_pk = data.high_bidder_pk;
-                }
-                if (data.info == "CHAT") {
-                    addChat(data.pk, data.username, data.message);
-                } else {
-                    if (data.error) {
-                        messageClass = "danger";
-                        data.message = data.error;
-                    } else if (data.info == "INFO") {
-                        messageClass = "info";
-                    } else {
-                        // non-info, non-error messages are public and added to the chat
-                        addChat(-1, "System", data.message);
-                    }
-                    if (data.info == "LOT_END_WINNER") {
-                        $('#price_label').html("Won by:");
-                        $('#end_date').html("Ended");
-                        $('#bid_area').html("Bidding has ended on this lot<br>");
-                    }
-                    $.toast({
-                        title: data.message,
-                        type: messageClass,
-                        delay: 10000
-                    });
-                }
-            };
-            function addChat(pk, username, message) {
-                var urlRegex = /(?:(?:https?|ftp|file):\/\/|www\.|ftp\.|auction\.)(?:\([-A-Z0-9+&@#\/%=~_|$?!:,.]*\)|[-A-Z0-9+&@#\/%=~_|$?!:,.])*(?:\([-A-Z0-9+&@#\/%=~_|$?!:,.]*\)|[A-Z0-9+&@#\/%=~_|$])/igm
-                message =  message.replace(urlRegex, function(url) {
-                    return '<a style="color: #555; font-weight: bold;" href="' + url + '">' + url + '</a>';
-                })
-                var lastChat = $(".message").last();
-                if (lastChat.hasClass("user_" + pk)) {
-                    lastChat.append("<br>" + message);
-                } else {
-                    var cssStyle = "";
-                    if (pk == -1) {
-                        cssStyle = "chat-system";
-                    } else if (pk == '{{ viewer_pk }}') {
-                        cssStyle = "chat-me";
-                    } else if (pk == '{{ submitter_pk }}') {
-                        cssStyle = "chat-submitter";
-                    }
-                    var chatHtml = '<div class="chat ' + cssStyle + '">\
-                                        <div class="chat-body">\
-                                            <div class="chat-content">\
-                                                <span class="chat-username">' + username + '</span>\
-                                                <span class="message user_' + pk + ' ">'+ message+ '</span>\
-                                            </div>\
-                                        </div>\
-                                    </div>';
-                    $('#chat').append(chatHtml);
-                }
-                showLatestChat();
-            }
-            lotWebSocket.onclose = function(e) {
-                var errorHtml = '<span class="mr-1 mt-1 text-danger">Connection lost</span>\
-                <input id="reconnect_button" onclick="window.location.reload(true);"\
-                type="button" class="col-md-2 mr-1 mt-1 btn-sm btn-danger" value="Reconnect"><br>';
-                $('#send_chat_area').html(errorHtml);
-                $('#bid_area').html(errorHtml);
-                $.toast({
-                    title: 'Connection lost',
-                    type: 'error',
-                    delay: 10000
-                });
-            };
-
-            function showLatestChat() {
-                var objDiv = document.getElementById("chat");
-                objDiv.scrollTop = objDiv.scrollHeight;
-            }
-            //{% if request.user.is_authenticated and lot.chat_allowed %}
-            document.querySelector('#chat_input').onkeyup = function(e) {
-                if (e.keyCode === 13) {
-                    document.querySelector('#chat_send').click();
-                }
-            };
-    
-            document.querySelector('#chat_send').onclick = function(e) {
-                const messageInputDom = document.querySelector('#chat_input');
-                const message = messageInputDom.value;
-                if (message) {
-                    lotWebSocket.send(JSON.stringify({
-                        'message': message
-                    }));
-                }
-                messageInputDom.value = '';
-            };
-            //{% endif %}
-        </script>
-
         <!-- Recommended lots -->
         <br><br><span class="text-info">Other lots you might be interested in:</span>
         <span id='recommendations'>Searching for recommended lots...</span>
@@ -471,7 +349,6 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                 url: '/api/chart/lots/{{lot.pk}}/',
                 success: function (data) {
                     var ctx = document.getElementById('myChart').getContext('2d');
-                    Chart.defaults.global.defaultFontColor = "#fff";
                     new Chart(ctx, {
                         type: 'bar',
                         data: {
@@ -506,5 +383,163 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
     </div>
   </div>
 </div>  
+</div>
+<!-- Chat -->
+<div class="container-fluid col-md-offset-1 col-xl-4 mt-1 mb-1 mt-xl-5">
+    <div class="mt-xl-5 col-md-11 bg-primary rounded pb-1" style="box-shadow: 5px 5px 8px 2px rgba(121, 121, 121, 0.2);"> 
+    <br><h4>Chat</h4>
+    <div class="panel" id="chat" style='min-height: 100px; max-height: 30vh; {# calc(100vh - 200px) #}
+    overflow-y: scroll;'></div>
+    <span id="send_chat_area" class='' >
+    {% if request.user.is_authenticated and lot.chat_allowed %}
+    <div class="input-group mt-1 mb-3 ">
+        <input class="form-control form-control-sm mr-1 " id='chat_input' placeholder="Ask questions or comment on this lot.  Be respectful." type="text">
+        <div class="input-group-append">
+            <button class='btn-sm btn-info' id="chat_send" >Send</button>
+        </div>
+        </div>
+    {% endif %}
+    </span>
+    <script>
+        {% if lot.sealed_bid %}
+        var high_bidder = '';
+        var high_bidder_pk = '{{ request.user.pk }}';
+        {% else %}
+        var high_bidder = '{{ lot.high_bidder }}';
+        var high_bidder_pk = '{{ lot.high_bidder.pk }}';
+        {% endif %}
+        var viewer_bid = '{{ lot.viewer_bid }}';
+        const lotWebSocket = new WebSocket(
+            'ws{% if not debug %}s{% endif %}://'
+            + window.location.host
+            + '/ws/lots/{{ lot.lot_number }}/'
+        );
 
+        lotWebSocket.onmessage = function(e) {
+            const data = JSON.parse(e.data);
+            if (data.current_high_bid) {
+                $("#price").html(data.current_high_bid);
+                $(document).prop('title', '🔴$' + data.current_high_bid + ": " + originalTitle);
+                clearTimeout(removeDot);
+                var removeDot = setTimeout(function(){$(document).prop('title', '$' + data.current_high_bid + ": " + originalTitle);}, 500);
+                //$("#bid_amount").val(data.current_high_bid + 1);
+                if (!$("#bid_amount").is(":focus")) {
+                    if (data.info !== "INFO") {
+                        if (Number($("#bid_amount").val()) <= data.current_high_bid) {
+                            $("#bid_amount").val(data.current_high_bid + 1);
+                        }
+                    }
+                }
+            }
+            if (data.high_bidder_pk) {
+                $('#high_bidder_name').html("<a href='/users/" + data.high_bidder_pk + "/'>" + data.high_bidder_name + "</a>");
+                $('#price_label').html("Current bid:");
+            }
+            var messageClass = "warning";
+            if (data.high_bidder_pk) {
+                if (high_bidder_pk == "{{ request.user.pk }}") {
+                    if (data.high_bidder_pk != '{{ request.user.pk }}') {
+                        messageClass = 'danger';
+                    }
+                } else {
+                    if (data.high_bidder_pk == '{{ request.user.pk }}') {
+                        messageClass = 'success';
+                    }
+                }
+                high_bidder_pk = data.high_bidder_pk;
+            }
+            if (data.info == "CHAT") {
+                addChat(data.pk, data.username, data.message);
+            } else {
+                if (data.error) {
+                    messageClass = "danger";
+                    data.message = data.error;
+                } else if (data.info == "INFO") {
+                    messageClass = "info";
+                } else {
+                    // non-info, non-error messages are public and added to the chat
+                    addChat(-1, "System", data.message);
+                }
+                if (data.info == "LOT_END_WINNER") {
+                    $('#price_label').html("Won by:");
+                    $('#end_date').html("Ended");
+                    $('#bid_area').html("Bidding has ended on this lot<br>");
+                }
+                $.toast({
+                    title: data.message,
+                    type: messageClass,
+                    delay: 10000
+                });
+            }
+        };
+        function addChat(pk, username, message) {
+            var urlRegex = /(?:(?:https?|ftp|file):\/\/|www\.|ftp\.|auction\.)(?:\([-A-Z0-9+&@#\/%=~_|$?!:,.]*\)|[-A-Z0-9+&@#\/%=~_|$?!:,.])*(?:\([-A-Z0-9+&@#\/%=~_|$?!:,.]*\)|[A-Z0-9+&@#\/%=~_|$])/igm
+            message =  message.replace(urlRegex, function(url) {
+                return '<a style="color: #555; font-weight: bold;" href="' + url + '">' + url + '</a>';
+            })
+            message = message.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+            var lastChat = $(".message").last();
+            if (lastChat.hasClass("user_" + pk)) {
+                lastChat.append("<br>" + message);
+            } else {
+                var cssStyle = "";
+                if (pk == -1) {
+                    cssStyle = "chat-system";
+                } else if (pk == '{{ viewer_pk }}') {
+                    cssStyle = "chat-me";
+                } else if (pk == '{{ submitter_pk }}') {
+                    cssStyle = "chat-submitter";
+                }
+                var chatHtml = '<div class="chat ' + cssStyle + '">\
+                                    <div class="chat-body">\
+                                        <div class="chat-content">\
+                                            <span class="chat-username">' + username + '</span>\
+                                            <span class="message user_' + pk + ' ">'+ message+ '</span>\
+                                        </div>\
+                                    </div>\
+                                </div>';
+                $('#chat').append(chatHtml);
+            }
+            showLatestChat();
+        }
+        lotWebSocket.onclose = function(e) {
+            var errorHtml = '<span class="mr-1 mt-1 text-danger">Connection lost</span>\
+            <input id="reconnect_button" onclick="window.location.reload(true);"\
+            type="button" class="col-md-2 mr-1 mt-1 btn-sm btn-danger" value="Reconnect"><br>';
+            $('#send_chat_area').html(errorHtml);
+            $('#bid_area').html(errorHtml);
+            $.toast({
+                title: 'Connection lost',
+                type: 'error',
+                delay: 10000
+            });
+        };
+
+        function showLatestChat() {
+            var objDiv = document.getElementById("chat");
+            objDiv.scrollTop = objDiv.scrollHeight;
+        }
+        //{% if request.user.is_authenticated and lot.chat_allowed %}
+        document.querySelector('#chat_input').onkeyup = function(e) {
+            if (e.keyCode === 13) {
+                document.querySelector('#chat_send').click();
+            }
+        };
+
+        document.querySelector('#chat_send').onclick = function(e) {
+            const messageInputDom = document.querySelector('#chat_input');
+            const message = messageInputDom.value;
+            if (message) {
+                lotWebSocket.send(JSON.stringify({
+                    'message': message
+                }));
+            }
+            messageInputDom.value = '';
+        };
+        //{% endif %}
+    </script>
+    </div>
+</div>
+</div>
+</div>
 {% endblock %}

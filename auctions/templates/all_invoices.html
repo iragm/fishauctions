@@ -6,7 +6,8 @@
 <div class="container mt-5 mb-5">
     <div class="row">
       <div class="col-md-10 offset-lg-1">
-        <h1>Invoices</h1>
+        {% if seller_invoices %}
+        <h3>Your invoices as a seller</h3>
         <table class="table">
           <thead>
             <tr>
@@ -17,7 +18,28 @@
             </tr>
           </thead>
           <tbody>
-            
+          {% for invoice in seller_invoices %}
+          <tr>
+            <td><a href="/invoices/{{invoice.pk}}/">{{ invoice.user }}</a></td>
+            <td><span {% if invoice.user_should_be_paid %} style="color:red"{% endif %}>${{ invoice.absolute_amount|floatformat:2 }}</span></td>
+            <td>{{ invoice.get_status_display }}</td>
+            <td>{{ invoice.date }}</td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+        <h3>Your invoices as a buyer</h3>
+        <table class="table">
+          <thead>
+            <tr>
+              <th scope="col">For</th>
+              <th scope="col">Total</th>
+              <th scope="col">Status</th>
+              <th scope="col">Date</th>
+            </tr>
+          </thead>
+          <tbody>
             {% for invoice in object_list %}
             <tr>
               <td><a href="/invoices/{{invoice.pk}}/">{{ invoice.label }}</a></td>

@@ -3,20 +3,60 @@
 {% block title %} Invoice for {{ invoice.label }} {% endblock %}
 {% load static %}
 {% block content %}
-{% block extra_js %}{% endblock %}
+{% block extra_js %}
+<script>
+
+function payinvoice(id, status) {
+    var $ = window.jQuery;
+    data = {'status': status};
+    $.ajax({
+          type: "POST",
+          beforeSend: function (request) {
+              request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+          },
+          data:data,
+          url: "/api/payinvoice/" + id + "/",
+          success : function(result) {
+            window.location.reload();
+          }
+      });
+  }
+  </script>
+  {% endblock %}
 <div class="container mt-5 mb-5">
     <div class="row">
         <div class="col-md-10 offset-md1">
             <h1>{% if exampleMode %}Example{%else%}{{ invoice.user.first_name }} {{ invoice.user.last_name }}{% endif %}</h1>
             {% if location == 'No location selected' %}{% else %}<h5>{{location}}{% if exampleMode %}<span class='text-muted'> This is the pickup location selected by the user</span>{%endif%}</h5>{%endif%}<br>
             {% if request.user.pk == invoice.auction.created_by.pk or request.user.is_superuser or request.user.pk == invoice.seller.pk %}
-              {% if show_links and invoice.status == "DRAFT" %}
+            {% if show_links %}
+              <div class="btn-group" role="group" aria-label="Invoice status selection">
+                <button type="button" id="{{invoice.pk}}_DRAFT" onclick="payinvoice({{ invoice.pk }}, 'DRAFT');" class="btn {% if invoice.status == 'DRAFT'%}draft btn-primary{% else %}btn-secondary{% endif %}">Draft</button>
+                <button type="button" id="{{invoice.pk}}_UNPAID" onclick="payinvoice({{ invoice.pk }}, 'UNPAID');" class="btn {% if invoice.status == 'UNPAID'%}btn-primary unpaid{% else %}btn-secondary{% endif %}">Ready</button>
+                <button type="button" id="{{invoice.pk}}_PAID" onclick="payinvoice({{ invoice.pk }}, 'PAID');" class="btn {% if invoice.status == 'PAID'%}btn-success{% else %}btn-secondary{% endif %}">Paid</button>
+              </div>
+            {%endif%}
+            {% if show_links %}<a href="{{ request.path }}?print" class="btn btn-primary ml-1">Printable view</a><br>
+            {% if request.user.pk == invoice.auction.created_by.pk or request.user.is_superuser or request.user.pk == invoice.seller.pk %}
+            {% if invoice.status == "DRAFT" and not invoice.email_sent %}
+            <br><span class='text-muted'>Marking this invoice ready for payment will send a notification email to {{ invoice.user }}</span><br>
+            {%endif%}
+            {%endif%}
+
+            {% if show_links and invoice.status == "DRAFT" %}
               <br><h5>Adjust this invoice</h5>
               {% crispy form form.helper %}
               <br>
               {%endif%}
             {%endif%}
-            {% if show_links %}<a href="{{ request.path }}?print" class="btn btn-primary active">Printable view</a><br>
+            
+            {% if invoice.status == "DRAFT" and not invoice.auction %}
+            <br><span class='text-muted'>This invoice is not finalized.  Any additional lots you purchase from {{ invoice.seller }} will be added to it.</span>
+            {% endif %}
+            {% if invoice.status != "PAID" and not invoice.auction %}
+            <br><br><span class=''>This site does not handle payments or shipping.  Coordinate exchange of payment and lots directly with {{ invoice.seller }}.</span>
+            {% endif %}
+            <br>
             <br><a href="/feedback/">Don't forget to leave feedback for lots you've bought or sold!</a><br>{% endif %}
             {% if auction %}
               {% if invoice.lots_sold %}
@@ -25,8 +65,18 @@
             {% endif %}
             {% if show_links %}{%if contact_email %}Questions?  Email <a href='mailto:{{ contact_email }}'>{{ contact_email }}</a><br>{% endif %}<br>{% endif %}
             <table class="table">
+              {% if invoice.seller %}
+              <tr>
+                <td>Seller contact info:</td>
+                <td>{{ invoice.seller.first_name }} {{ invoice.seller.last_name }}<br>
+                  {{ invoice.seller.userdata.address|linebreaksbr }}<br>
+                  {{ invoice.seller.email }}<br>
+                  {% if invoice.seller.userdata.phone_number %}{{ invoice.seller.userdata.phone_number }}{% endif %}
+                </td>
+              </tr>
+              {%endif%}
             <tr>
-              <td>Contact info:</td>
+              <td>{% if not invoice.auction %}Buyer contact info:{% else %}Contact info:{% endif %}</td>
               <td>{% if exampleMode %}David Banks<br>
                   1234 Street<br>
                   Anytown, USA 90210<br>
@@ -39,10 +89,12 @@
                 {% endif %}
               </td>
             </tr>
+            {% if invoice.auction %}
             <tr>
               <td>Auction</td>
               <td>{{ auction }}{% if show_links %} <a href='/auctions/{{ auction.slug }}'>Rules and maps</a><br>{%endif%}</td>
             </tr>
+            {%endif%}
             <tr>
               <td>Status</td>
               <td>{{ invoice.get_status_display }}{% if exampleMode %}<span class='text-muted'></class> Only the creator of an auction can mark invoices as paid</span>{%endif%}</td>
@@ -57,10 +109,12 @@
               </td>
               </tr>
             {%endif%}
+            {% if invoice.auction %}
             <tr>
               <td>Total sold</td>
               <td>${{ invoice.total_sold|floatformat:2 }}</td>
             </tr>
+            {%endif%}
             <tr>
               <td>Total bought</td>
               <td>${{ invoice.total_bought|floatformat:2 }}</td>
@@ -74,11 +128,11 @@
             {% if invoice.adjustment %}
             <tr>
               <td>Other</td>
-              <td>{% if invoice.adjustment_direction == 'PAY_SELLER' %}+{% else%}-{%endif%}${{ invoice.adjustment|floatformat:2 }} {{ invoice.adjustment_notes }}</td>
+              <td>{% if invoice.adjustment_direction == 'PAY_SELLER' %}-{% else%}+{%endif%}${{ invoice.adjustment|floatformat:2 }} {{ invoice.adjustment_notes }}</td>
             </tr>
             {% endif %}
             <tr>
-              <td>Final total (rounded)</td>
+              <td>Final total {%if invoice.auction %}(rounded){%endif%}</td>
               <td>{{ invoice.invoice_summary }}</td>
             </tr>
           </table>

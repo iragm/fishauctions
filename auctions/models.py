@@ -22,7 +22,7 @@ def median_value(queryset, term):
     count = queryset.count()
     return queryset.values_list(term, flat=True).order_by(term)[int(round(count/2))]
 
-def distance_to(latitude, longitude, unit='miles'):
+def distance_to(latitude, longitude, unit='miles', lat_field_name="latitude", lng_field_name="longitude", approximate_distance_to=10):
     """
     GeoDjango has been fustrating with MySQL and Point objects.
     This function is a workaound done using raw SQL.
@@ -41,18 +41,28 @@ def distance_to(latitude, longitude, unit='miles'):
         correction = 0.6213712 # close enough
     else:
         correction = 1 # km
-    # Great circle distance formula
-    gcd_formula = "ROUND( 6371 * acos(least(greatest( \
-        cos(radians(%s)) * cos(radians(latitude)) \
-        * cos(radians(longitude) - radians(%s)) + \
-        sin(radians(%s)) * sin(radians(latitude)) \
-        , -1), 1)) * %s, 0)"
+    # Great circle distance formula, CEILING is used to keep people from triangulating locations
+    gcd_formula = f"CEILING( 6371 * acos(least(greatest( \
+        cos(radians({latitude})) * cos(radians({lat_field_name})) \
+        * cos(radians({lng_field_name}) - radians({longitude})) + \
+        sin(radians({latitude})) * sin(radians({lat_field_name})) \
+        , -1), 1)) * {correction} / {approximate_distance_to}) * {approximate_distance_to}"
     distance_raw_sql = RawSQL(
-        gcd_formula,
-        (latitude, longitude, latitude, correction)
+        gcd_formula, ()
     )
+	# This one works fine when I print qs.query and run the output in SQL but does not work when Django runs the qs
+	# Seems to be an issue with annotating on related entities
+	# Injection attacks don't seem possible here because latitude and longitude can only contain a float as set in update_user_location()
+	# gcd_formula = f"CEILING( 6371 * acos(least(greatest( \
+    #     cos(radians(%s)) * cos(radians({lat_field_name})) \
+    #     * cos(radians({lng_field_name}) - radians(%s)) + \
+    #     sin(radians(%s)) * sin(radians({lat_field_name})) \
+    #     , -1), 1)) * %s / {approximate_distance_to}) * {approximate_distance_to}"
+    # distance_raw_sql = RawSQL(
+    #     gcd_formula,
+    #     (latitude, longitude, latitude, correction)
+    # )
     return distance_raw_sql
-
 
 class BlogPost(models.Model):
 	"""
@@ -79,6 +89,10 @@ class Location(models.Model):
 class Club(models.Model):
 	"""Clubs restrict who can enter or bid in an auction"""
 	name = models.CharField(max_length=255)
+	
+	class Meta:
+		ordering = ['name']
+
 	def __str__(self):
 		return str(self.name)
 
@@ -144,19 +158,6 @@ class Auction(models.Model):
 	email_fourth_sent = models.BooleanField(default=False)
 	email_fifth_sent = models.BooleanField(default=False)
 	
-	# fixme - everything below here can be removed now
-	pickup_location = models.CharField(max_length=300, null=True, blank=True)
-	pickup_location.help_text = "Description of pickup location"
-	pickup_location_map = models.CharField(max_length=2000, null=True, blank=True)
-	pickup_location_map.help_text = "Find the location on Google maps, click Menu>Share or Embed Map and paste the embed link here"
-	pickup_time = models.DateTimeField(null=True, blank=True)
-	alternate_pickup_location = models.CharField(null=True, blank=True, max_length=300)
-	alternate_pickup_location.help_text = "Description of alternate pickup location"
-	alternate_pickup_location_map = models.CharField(null=True, blank=True, max_length=2000)
-	alternate_pickup_location_map.help_text = "Google Maps link to alternate pickup location"
-	alternate_pickup_time = models.DateTimeField(blank=True, null=True)
-	# fixme - everything above here can be removed now
-
 	def __str__(self):
 		if "auction" not in self.title.lower():
 			return f"{self.title} auction"
@@ -342,7 +343,13 @@ class Auction(models.Model):
 		if not locations:
 			return True
 		return False
-	
+	@property
+	def can_be_deleted(self):
+		if self.total_lots:
+			return False
+		else:
+			return True
+
 	@property
 	def paypal_invoice_chunks(self):
 		"""
@@ -377,19 +384,12 @@ class PickupLocation(models.Model):
 	auction.help_text = "If your auction isn't listed here, it may not exist or has already ended"
 	description = models.CharField(max_length=300)
 	description.help_text = "e.x. First floor of parking garage near Sears entrance"
-	
-	# fixme - this can be removed now
-	#google_map_iframe = models.CharField(max_length=2000, blank=True, null=True)
-	#google_map_iframe.help_text = "Find the location on Google maps, click Menu>Share or Embed Map and paste the embed link here.  You must embed an iframe, not a link."
-		
 	users_must_coordinate_pickup = models.BooleanField(default=False)
 	users_must_coordinate_pickup.help_text = "The pickup time fields will not be used"
-
 	pickup_location_contact_name = models.CharField(max_length=200, blank=True, null=True, verbose_name="Contact person's name")
 	pickup_location_contact_name.help_text = "Name of the person coordinating this pickup location.  Contact info is only shown to logged in users."
 	pickup_location_contact_phone = models.CharField(max_length=200, blank=True, null=True, verbose_name="Contact person's phone")
 	pickup_location_contact_email = models.CharField(max_length=200, blank=True, null=True, verbose_name="Contact person's email")
-
 	pickup_time = models.DateTimeField()
 	second_pickup_time = models.DateTimeField(blank=True, null=True)
 	second_pickup_time.help_text = "If you'll have a dropoff for sellers in the morning and then a pickup for buyers in the afternoon at this location, this should be the pickup time."
@@ -467,6 +467,8 @@ class Lot(models.Model):
 	transportable = models.BooleanField(default=True)
 	promoted = models.BooleanField(default=False, verbose_name="Promote this lot")
 	promoted.help_text = "This does nothing right now lol"
+	promotion_budget = models.PositiveIntegerField(default=2, validators=[MinValueValidator(0), MaxValueValidator(5)])
+	promotion_budget.help_text = "The most money you're willing to spend on ads for this lot."
 	promotion_weight = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(20)])
 	feedback_rating = models.IntegerField(default = 0, validators=[MinValueValidator(-1), MaxValueValidator(1)])
 	feedback_text = models.CharField(max_length=100, blank=True, null=True)
@@ -492,9 +494,7 @@ class Lot(models.Model):
 	# shipping options
 	local_pickup = models.BooleanField(default=False)
 	local_pickup.help_text = "Check if you'll meet people in person to exchange this lot"
-	#other = models.BooleanField(default=False) # fixme - this can be removed
-
-	other_text = models.CharField(max_length=200, blank=True, null=True, verbose_name="Shipping notes") # fixme - require this if other location is selected
+	other_text = models.CharField(max_length=200, blank=True, null=True, verbose_name="Shipping notes")
 	other_text.help_text = "Shipping methods, temperature restrictions, etc."
 	shipping_locations = models.ManyToManyField(Location, blank=True, verbose_name="I will ship to")
 	shipping_locations.help_text = "Check all locations you're willing to ship to"
@@ -772,7 +772,6 @@ class Invoice(models.Model):
 		),
 		default="DRAFT"
 	)
-	paid = models.BooleanField(default=False) # fixme - remove this eventually
 	opened = models.BooleanField(default=False)
 	email_sent = models.BooleanField(default=False)
 	seller_email_sent = models.BooleanField(default=False)
@@ -850,7 +849,7 @@ class Invoice(models.Model):
 	@property
 	def lots_sold(self):
 		"""Return number of lots the user attempted to sell in this invoice (unsold lots included)"""
-		return len(Lot.objects.filter(seller_invoice=self.pk))#:
+		return len(Lot.objects.filter(seller_invoice=self.pk))
 
 	@property
 	def lots_sold_successfully(self):
@@ -895,7 +894,11 @@ class Invoice(models.Model):
 		if self.user_should_be_paid:
 			base += " needs to be paid"
 		else:
-			base += " owes the club"
+			base += " owes "
+			if self.auction:
+				base += "the club"
+			elif self.seller:
+				base += str(self.seller)
 		return base + " $" + "%.2f" % self.absolute_amount
 
 	@property
@@ -968,7 +971,6 @@ class PageView(models.Model):
 	"""Track what lots a user views, and how long they spend looking at each one"""
 	user = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True)
 	lot_number = models.ForeignKey(Lot, null=True, blank=True, on_delete=models.CASCADE)
-	blog_post = models.ForeignKey(BlogPost, null=True,blank=True, on_delete=models.CASCADE) # fixme remove this
 	date_start = models.DateTimeField(auto_now_add=True)
 	date_end = models.DateTimeField(null=True,blank=True)
 	total_time = models.PositiveIntegerField(default=0)
@@ -991,14 +993,16 @@ class UserData(models.Model):
 	address.help_text="Your complete mailing address.  If you sell lots in an auction, your check will be mailed here."
 	location = models.ForeignKey(Location, blank=True, null=True, on_delete=models.SET_NULL)
 	club = models.ForeignKey(Club, blank=True, null=True, on_delete=models.SET_NULL)
+	use_dark_theme = models.BooleanField(default=True)
+	use_dark_theme.help_text = "Uncheck to use the blindingly bright light theme"
 	use_list_view = models.BooleanField(default=False)
 	use_list_view.help_text = "Show a list of all lots instead of showing pictures"
 	email_visible = models.BooleanField(default=True)
 	email_visible.help_text = "Show your email address on your user page.  This will be visible only to logged in users.  <a href='/blog/privacy/' target='_blank'>Privacy information</a>"
 	last_auction_used = models.ForeignKey(Auction, blank=True, null=True, on_delete=models.SET_NULL)
 	last_activity = models.DateTimeField(auto_now_add=True)
-	latitude = models.FloatField(blank=True, null=True)
-	longitude = models.FloatField(blank=True, null=True)
+	latitude = models.FloatField(default=0)
+	longitude = models.FloatField(default=0)
 	location_coordinates = PlainLocationField(based_fields=['address'], zoom=11, blank=True, null=True, verbose_name="Map")
 	location_coordinates.help_text = "Make sure your map marker is correctly placed - you will get notifications about nearby auctions"
 	email_me_about_new_auctions = models.BooleanField(default=True, blank=True)
@@ -1017,6 +1021,7 @@ class UserData(models.Model):
 	has_unsubscribed = models.BooleanField(default=False, blank=True)
 	banned_from_chat_until = models.DateTimeField(null=True, blank=True)
 	banned_from_chat_until.help_text = "After this date, the user can post chats again.  Being banned from chatting does not block bidding"
+	can_submit_standalone_lots = models.BooleanField(default=False)
 
 	# breederboard info
 	rank_unique_species = models.PositiveIntegerField(null=True, blank=True)
