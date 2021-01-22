@@ -10,11 +10,7 @@
     <div class="row">
       <div class="col-md-10 offset-lg-1">
         <h1>Auctions</h1>
-        <!-- <form method="GET">
-          
-          <button type="submit" class="btn btn-primary">Apply Filter</button> {% if view == "mylots" %}<a href="/lots/new/" class="btn btn-info" role="button">New lot</a>{% endif %}
-        </form> -->
-        Only auctions that you have created -- or that you have joined by selecting a pickup location -- are shown here.<br><br>
+        <span class='text-muted'>Auctions which are set to "do not promote" are not listed on this page, unless you have confirmed you pickup location for them.</span><br><br>
       
 
         <a href="/auctions/new/" class='btn btn-info'>Create a new auction</a><br>
@@ -33,7 +29,7 @@
             {% for auction in object_list %}
             <tr>
               <td>{{ auction.title }}
-                {% if request.user.is_superuser or auction.created_by == request.user %}&nbsp;<a href='/auctions/{{auction.slug}}/invoices/'>Invoices</a>{% endif %}
+                {% if request.user.is_superuser or auction.created_by == request.user %}&nbsp;<a href='/auctions/{{auction.slug}}/invoices/'>Invoices</a>{% endif %} {% if not auction.promote_this_auction %}<span class='text-muted'>(Not promoted)</span>{% endif %}
               </td>
               <td>{% if auction.started %}<a href='/lots/?a={{auction.slug}}'>View lots</a>{% else %}Starts: 
                 {{auction.date_start}} {% endif %}</td>

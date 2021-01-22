@@ -77,6 +77,11 @@ class LotListView(AjaxListView):
                 context['auction'] = Auction.objects.get(slug=data['a'])
             except:
                 context['auction'] = None
+        if context['auction']:
+            try:
+                context['auction_tos'] = AuctionTOS.objects.get(auction=context['auction'].pk, user=self.request.user.pk)
+            except:
+                messages.error(self.request, f"Please <a href='/auctions/{context['auction'].slug}/'>read the auction's rules and confirm your pickup location</a> to bid")
         return context
 
 class AllRecommendedLots(TemplateView):
@@ -209,7 +214,7 @@ def watchOrUnwatch(request, pk):
 def lotNotifications(request):
     if request.method == 'POST':
         user = request.user
-        new = LotHistory.objects.filter(lot__user=user.pk, seen=False).count()
+        new = LotHistory.objects.filter(lot__user=user.pk, seen=False, changed_price=False).count()
         if not new:
             new = ""
         return JsonResponse(data={
@@ -664,7 +669,7 @@ class AuctionInvoices(DetailView):
     def get_context_data(self, **kwargs):
         #user = User.objects.get(pk=self.request.user.pk)
         context = super().get_context_data(**kwargs)
-        invoices = Invoice.objects.filter(auction=self.auction).order_by('paid','user__last_name')
+        invoices = Invoice.objects.filter(auction=self.auction).order_by('status','user__last_name')
         invoices = sorted(invoices, key=lambda t: str(t.location) ) 
         context['invoices'] = invoices
         return context
@@ -742,6 +747,8 @@ class ViewLot(DetailView):
                 context['user_tos'] = True
         except:
             context['user_tos'] = False
+        if not context['user_tos']:
+            messages.error(self.request, f"Please <a href='/auctions/{lot.auction.slug}/?next=/lots/{ lot.pk }/'>read the auction's rules and confirm your pickup location</a> to bid")
         if self.request.user.is_authenticated:
             userData, created = UserData.objects.get_or_create(
                 user = self.request.user,
@@ -797,14 +804,13 @@ class LotValidation(LoginRequiredMixin):
     Base class for adding a lot.  This defines the rules for validating a lot
     """
     def dispatch(self, request, *args, **kwargs):
-        print("validation dispatch")
         # if the user hasn't filled out their address, redirect:
         userData, created = UserData.objects.get_or_create(
             user = request.user.pk,
             defaults={},
         )
         if not userData.address:
-            messages.warning(request, "Please fill out your contact info before creating a lot")
+            messages.warning(self.request, "Please fill out your contact info before creating a lot")
             return redirect(f'/users/{request.user.pk}/location?next=/lots/new/')
         return super().dispatch(request, *args, **kwargs)
 
@@ -848,7 +854,7 @@ class LotValidation(LoginRequiredMixin):
             try:
                 AuctionTOS.objects.get(user=self.request.user.pk, auction=lot.auction)
             except:
-                messages.error(self.request, f"You need to <a href='/auctions/{lot.auction.slug}'>confirm your pickup location for this auction</a> before people can bid on this lot.")        
+                messages.error(self.request, f"You need to <a href='/auctions/{lot.auction.slug}'>confirm your pickup location for this auction</a> before people can bid on this lot.")
         else:
             # this lot is NOT part of an auction
             try:
@@ -1142,10 +1148,11 @@ class allAuctions(ListView):
         if self.request.user.is_superuser:
             return qs
         if not self.request.user.is_authenticated:
-            raise PermissionDenied()
-        else:
-            return qs.filter(Q(auctiontos__user=self.request.user)|Q(created_by=self.request.user))
-        #return qs.exclude(promote_this_auction=False)
+            return qs.filter(promote_this_auction=True)
+        return qs.filter(Q(auctiontos__user=self.request.user)|\
+            Q(created_by=self.request.user)|\
+            Q(promote_this_auction=True)
+            ).distinct()
 
     def get_context_data(self, **kwargs):
         try:
@@ -1598,6 +1605,7 @@ class UnsubscribeView(TemplateView):
             userData.email_me_about_new_auctions = False
             userData.email_me_about_new_local_lots = False
             userData.email_me_about_new_lots_ship_to_location = False
+            userData.email_me_when_people_comment_on_my_lots = False
             userData.has_unsubscribed = True
             userData.last_activity = timezone.now()
             userData.save()

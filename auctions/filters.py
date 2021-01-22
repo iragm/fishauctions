@@ -62,13 +62,13 @@ class LotFilter(django_filters.FilterSet):
                 )
         except:
             pass
-        # messages for admin
+        # messages for owner of lot
         primary_queryset = primary_queryset.annotate(
-            owner_chats=Count('lothistory', filter=Q(lothistory__seen=False))
+            owner_chats=Count('lothistory', filter=Q(lothistory__seen=False, lothistory__changed_price=False))
         )
         # messages for other user
         primary_queryset = primary_queryset.annotate(
-            all_chats=Count('lothistory')
+            all_chats=Count('lothistory', filter=Q(lothistory__changed_price=False))
         )
         try:
             # distance away

@@ -109,10 +109,10 @@
                   <li class="nav-item">
                     <a class="nav-link" href="/lots/">Lots</a>
                   </li>
-                  {% if request.user.is_authenticated %}
                   <li class="nav-item">
                     <a class="nav-link" href="/auctions/">Auctions</a>
                   </li>  
+                  {% if request.user.is_authenticated %}
                   <li class="nav-item">
                     <a class="nav-link" href="/lots/new">Create lot</a>
                   </li>  
@@ -125,7 +125,7 @@
                   {% endif %}
                   {% if request.user.is_superuser %}
                   <li class="nav-item">
-                    <a class="nav-link" href="/admin/">Admin Site</a>
+                    <a class="nav-link" href="/admin/auth/user/?o=-4">Admin Site</a>
                   </li>
                   {% endif %}
                   <li class="nav-item dropdown">

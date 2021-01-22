@@ -393,7 +393,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
     <span id="send_chat_area" class='' >
     {% if request.user.is_authenticated and lot.chat_allowed %}
     <div class="input-group mt-1 mb-3 ">
-        <input class="form-control form-control-sm mr-1 " id='chat_input' placeholder="Ask questions or comment on this lot.  Be respectful." type="text">
+        <input class="form-control form-control-sm mr-1 " id='chat_input' spellcheck="true" placeholder="Ask questions or comment on this lot.  Be respectful." type="text">
         <div class="input-group-append">
             <button class='btn-sm btn-info' id="chat_send" >Send</button>
         </div>
@@ -473,11 +473,11 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
             }
         };
         function addChat(pk, username, message) {
+            message = message.replace(/</g, "&lt;").replace(/>/g, "&gt;");
             var urlRegex = /(?:(?:https?|ftp|file):\/\/|www\.|ftp\.|auction\.)(?:\([-A-Z0-9+&@#\/%=~_|$?!:,.]*\)|[-A-Z0-9+&@#\/%=~_|$?!:,.])*(?:\([-A-Z0-9+&@#\/%=~_|$?!:,.]*\)|[A-Z0-9+&@#\/%=~_|$])/igm
             message =  message.replace(urlRegex, function(url) {
                 return '<a style="color: #555; font-weight: bold;" href="' + url + '">' + url + '</a>';
             })
-            message = message.replace(/</g, "&lt;").replace(/>/g, "&gt;");
             var lastChat = $(".message").last();
             if (lastChat.hasClass("user_" + pk)) {
                 lastChat.append("<br>" + message);

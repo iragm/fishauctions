@@ -1005,6 +1005,8 @@ class UserData(models.Model):
 	longitude = models.FloatField(default=0)
 	location_coordinates = PlainLocationField(based_fields=['address'], zoom=11, blank=True, null=True, verbose_name="Map")
 	location_coordinates.help_text = "Make sure your map marker is correctly placed - you will get notifications about nearby auctions"
+	email_me_when_people_comment_on_my_lots = models.BooleanField(default=True, blank=True)
+	email_me_when_people_comment_on_my_lots.help_text = "Notifications will be sent once a day, only for messages you haven't seen"
 	email_me_about_new_auctions = models.BooleanField(default=True, blank=True)
 	email_me_about_new_auctions.help_text = "When new auctions are created with pickup locations near my location, notify me"
 	email_me_about_new_auctions_distance = models.PositiveIntegerField(null=True, blank=True, default=100, verbose_name="New auction distance")
