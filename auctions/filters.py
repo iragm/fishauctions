@@ -64,17 +64,20 @@ class LotFilter(django_filters.FilterSet):
             pass
         # messages for owner of lot
         primary_queryset = primary_queryset.annotate(
-            owner_chats=Count('lothistory', filter=Q(lothistory__seen=False, lothistory__changed_price=False))
+            owner_chats=Count('lothistory', filter=Q(lothistory__seen=False, lothistory__changed_price=False), distinct=True)
         )
         # messages for other user
         primary_queryset = primary_queryset.annotate(
-            all_chats=Count('lothistory', filter=Q(lothistory__changed_price=False))
+            all_chats=Count('lothistory', filter=Q(lothistory__changed_price=False), distinct=True)
         )
+        # distance away
         try:
-            # distance away
-            primary_queryset = primary_queryset.annotate(distance=distance_to(self.request.user.userdata.latitude, self.request.user.userdata.longitude))
+            latitude = self.request.COOKIES['latitude']
+            longitude = self.request.COOKIES['longitude']
         except:
-            pass
+            latitude = 0
+            longitude = 0
+        primary_queryset = primary_queryset.annotate(distance=distance_to(latitude, longitude))
         #applyIgnoreFilter = True
         try:
             if self.ignore and self.request.user.is_authenticated:

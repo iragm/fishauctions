@@ -72,11 +72,6 @@ function setAuction(setting) {
     }
 }
 
-function showSpecies() {
-    console.log('species_selection show');
-    console.log('details_selection hide');
-}
-
 function newSpeciesRequired(setting) {
     $("#id_create_new_species").prop('checked', setting);
     $("#id_new_species_name").prop('required',setting);
@@ -97,12 +92,9 @@ isDirty = true;
 
 window.addEventListener('beforeunload', function(e) {
   if(isDirty) {
-    //following two lines will cause the browser to ask the user if they
-    //want to leave. The text of this dialog is controlled by the browser.
     e.preventDefault(); //per the standard
     e.returnValue = ''; //required for Chrome
   }
-  //else: user is allowed to leave without a warning dialog
 });
 
 $(document).ready(function() {

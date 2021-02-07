@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %} Find a fish club near you {% endblock %}
+{% load static %}
+
+{% block extra_js %}
+<script
+src="https://maps.googleapis.com/maps/api/js?key={{google_maps_api_key}}&callback=initMap&libraries=&v=weekly"
+async
+></script>
+<script>
+//     let map;
+// function initMap() {
+//   map = new google.maps.Map(document.getElementById("map_canvas"), {
+//     center: { lat: -34.397, lng: 150.644 },
+//     zoom: 8,
+//   });
+// }
+
+function initMap() {
+    var map;
+    var bounds = new google.maps.LatLngBounds();
+    map = new google.maps.Map(document.getElementById("map_canvas"));
+    {% if has_user_location %}
+    map.setZoom(8);
+    map.setCenter({lat:{{ latitude }}, lng:{{ longitude }}});
+    {% else %}
+    map.setZoom(4);
+    map.setCenter({lat:39, lng:-97});
+    {% endif %}
+    // Multiple Markers
+    var markers = [
+        {% for club in clubs %}
+        ["{{ club.name }}", {{ club.latitude }}, {{ club.longitude }}],
+        {% endfor %}
+    ];
+
+    var infoWindowContent = [
+        {% for club in clubs %}
+        ['<div class="info_content" style="color:black;">' +
+        '<h5>{{ club.name }}</h5>' +
+        '<p>{% if request.user.is_superuser %}<a href="/admin/auctions/club/{{ club.pk }}/change/" target="_blank">Admin</a><br>{% endif%}' +
+        '{% if club.homepage %}<a href="{{club.homepage}}" target="_blank">Website</a><br>{% endif%}' +
+        '{% if club.facebook_page %}<a href="{{club.facebook_page}}" target="_blank">Facebook page</a><br>{% endif%}' +
+        '<br><b>Interests:</b><br>{% for interest in club.interests.all %}{{interest}}<br>{%endfor%}</p>' +
+        '</div>'],
+        {% endfor %}
+    ];
+    var infoWindow = new google.maps.InfoWindow(), marker, i; 
+    for( i = 0; i < markers.length; i++ ) {
+        var position = new google.maps.LatLng(markers[i][1], markers[i][2]);
+        bounds.extend(position);
+        marker = new google.maps.Marker({
+            position: position,
+            map: map,
+            title: markers[i][0]
+        });
+        google.maps.event.addListener(marker, 'click', (function(marker, i) {
+            return function() {
+                infoWindow.setContent(infoWindowContent[i][0]);
+                infoWindow.open(map, marker);
+            }
+        })(marker, i));       
+    }
+}
+</script>
+{% endblock %}
+{% block content %}
+<div class="container mt-5 mb-5">
+    <div class="row">
+        <div class="col-xl-10 offset-md1">
+            <h1>Find a fish club near you</h1>
+            <div id="map_wrapper" style='height: 400px;'>
+                <div id="map_canvas" class="mapping" style='width: 100%; height: 100%;'></div>
+            </div>
+            {% if not has_user_location %}
+            <span><a href="#" onclick="setLocation()">{{ location_message }}</a></span>
+            {% endif %}
+            <div>Something missing? {% if not request.user.is_authenticated %}<a href="/login/?next={% firstof request.path '/' %}">Sign in</a> to report an issue{% else %}Contact me at <a href='mailto:{{ contact_email }}'>{{ contact_email }}</a>{% endif %}.</div>
+        </div>
+    </div>
+</div>  
+
+{% endblock %}
+
+

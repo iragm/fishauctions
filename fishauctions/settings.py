@@ -103,6 +103,8 @@ TEMPLATES = [
                 'django.contrib.messages.context_processors.messages',
                 'auctions.context_processors.google_analytics',
                 'auctions.context_processors.theme',
+                'auctions.context_processors.add_location',
+                'auctions.context_processors.dismissed_cookies_tos',
             ],
         },
     },
@@ -224,7 +226,7 @@ SITE_URL = os.environ['SITE_URL']
 
 THUMBNAIL_ALIASES = {
     '': {
-        'lot_list': {'size': (250, 200), 'crop': "smart"},
+        'lot_list': {'size': (250, 150), 'crop': "smart"},
         'lot_full': {'size': (1000, 1000), 'crop': False},
     },
 }

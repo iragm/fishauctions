@@ -3,11 +3,13 @@ from django.urls import include, path
 from django.contrib import admin
 from . import views
 from django.contrib.auth.decorators import login_required
+from django.views.generic.base import TemplateView
 
 urlpatterns = [
     path('api/payinvoice/<int:pk>/', login_required(views.invoicePaid)),
     path('api/watchitem/<int:pk>/', login_required(views.watchOrUnwatch)),
     path('api/species/', login_required(views.getSpecies)),
+    path('api/clubs/', login_required(views.getClubs)),
     path('api/lots/ban/<int:pk>/', views.lotBan),
     path('api/image/rotate/', views.imageRotate),
     path('api/lots/get_recommended/', views.RecommendedLots.as_view()),
@@ -25,6 +27,9 @@ urlpatterns = [
     path('api/userignorecategory/delete/<int:pk>/', views.DeleteUserIgnoreCategory.as_view()),
     path('api/userignorecategory/', views.GetUserIgnoreCategory.as_view()),
     path('leaderboard/', views.Leaderboard.as_view()),
+    path('clubs/', views.ClubMap.as_view(), name='clubs'),
+    path('tos/', views.UserAgreement.as_view(), name='tos'),
+    path("robots.txt", TemplateView.as_view(template_name="robots.txt", content_type="text/plain"),),
     path('lots/recommended/', views.AllRecommendedLots.as_view()),
     path('lots/', views.AllLots.as_view(), name='allLots'),
     path('lots/<int:pk>/', views.ViewLot.as_view()),
@@ -67,4 +72,5 @@ urlpatterns = [
     path('blog/<slug:slug>/', views.BlogPostView.as_view()),
     path('feedback/', views.LeaveFeedbackView.as_view()),
     path('unsubscribe/<slug:slug>/', views.UnsubscribeView.as_view()),
+
 ]

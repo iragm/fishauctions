@@ -1,17 +1,58 @@
 {% extends "base.html" %}
-
-{% load i18n %}
 {% load crispy_forms_tags %}
+{% load i18n %}
 
 {% block title %}Location{% endblock %}
 
+{% block extra_css %}
+<link rel="stylesheet" href="//code.jquery.com/ui/1.12.1/themes/base/jquery-ui.css">
+{% endblock %}
 {% block extra_js %}
-<script>
-    $( document ).ready(function() {
+<script src="https://code.jquery.com/ui/1.12.1/jquery-ui.js"></script>
+<script type="text/javascript">
+    $(document).ready(function() {
         document.getElementById('id_location_coordinates').style.display = "none";
+        var searchTimeout = null;
+        var availableTags = [];
+        $("#id_club_affiliation").autocomplete({
+            source: availableTags,
+            select:function(value, data) {
+                $('#id_club').val(data.item.id);
+                $('#id_club_affiliation').addClass('is-valid');
+            }
+        });
+        function getClub(search) {
+            //console.log('search: ' + search);
+            var data = {};
+            data.search = search;
+            $.ajax({
+                type: "POST",
+                beforeSend: function (request) {
+                    request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+                },
+                url: "/api/clubs/",
+                data : data,
+                success : function(result) {
+                    var availableTags = [];
+                    availableTags.push(result);
+                    for (item in result) {
+                        availableTags.push({
+                            id: result[item].id,
+                            value: result[item].name + " (" + result[item].abbreviation + ")",
+                            });
+                    };
+                    $( "#id_club_affiliation" ).autocomplete( "option", "source", availableTags);
+                }
+            });
+        }
+
+        $('#id_club_affiliation').keyup(function(e) {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => getClub(e.target.value), 300);
+        });
     });
 </script>
-<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
     {{form.media}}
 {% endblock %}
 {% block content %}

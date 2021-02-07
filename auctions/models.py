@@ -86,10 +86,30 @@ class Location(models.Model):
 	def __str__(self):
 		return str(self.name)
 
-class Club(models.Model):
-	"""Clubs restrict who can enter or bid in an auction"""
+class GeneralInterest(models.Model):
+	"""Clubs and products belong to a general interest"""
 	name = models.CharField(max_length=255)
-	
+	def __str__(self):
+		return str(self.name)
+
+class Club(models.Model):
+	"""Users can self-select which club they belong to"""
+	name = models.CharField(max_length=255)
+	abbreviation = models.CharField(max_length=255, blank=True, null=True)
+	homepage = models.CharField(max_length=255, blank=True, null=True)
+	facebook_page = models.CharField(max_length=255, blank=True, null=True)
+	contact_email = models.CharField(max_length=255, blank=True, null=True)
+	date_contacted = models.DateTimeField(blank=True, null=True)
+	notes = models.CharField(max_length=300, blank=True, null=True)
+	notes.help_text = "Only visible in the admin site, never made public"
+	interests = models.ManyToManyField(GeneralInterest, blank=True)
+	active = models.BooleanField(default=True)
+	latitude = models.FloatField(blank=True, null=True)
+	longitude = models.FloatField(blank=True, null=True)
+	location = models.CharField(max_length=500, blank=True, null=True)
+	location.help_text = "Search Google maps with this address"
+	location_coordinates = PlainLocationField(based_fields=['location'], blank=True, null=True, verbose_name="Map")
+
 	class Meta:
 		ordering = ['name']
 
@@ -139,7 +159,7 @@ class Auction(models.Model):
 	created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
 	location = models.CharField(max_length=300, null=True, blank=True)
 	location.help_text = "State or region of this auction"
-	notes = MarkdownField(rendered_field='notes_rendered', validator=VALIDATOR_STANDARD, blank=True, null=True, verbose_name="Rules")
+	notes = MarkdownField(rendered_field='notes_rendered', validator=VALIDATOR_STANDARD, blank=True, null=True, verbose_name="Rules", default="## General information\n\nYou should edit this section to suit your auction\n\n## Prohibited items\n- You cannot sell any fish or plants banned by state law.\n- You cannot sell large hardware items such as tanks.\n\n## Rules\n- All lots must be properly bagged.  No leaking bags!\n- You do not need to be a club member to buy or sell lots.")
 	notes.help_text = "To add a link: [Link text](https://www.google.com)"
 	notes_rendered = RenderedMarkdownField(blank=True, null=True)
 	code_to_add_lots = models.CharField(max_length=255, blank=True, null=True)
@@ -148,10 +168,12 @@ class Auction(models.Model):
 	first_bid_payout = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
 	first_bid_payout.help_text = "This is a feature to encourage bidding.  Give each bidder this amount, for free.  <a href='/blog/encouraging-participation/' target='_blank'>More information</a>"
 	promote_this_auction = models.BooleanField(default=True)
-	promote_this_auction.help_text = "Notify users and post on social media about this auction.  Uncheck if this is a test or private auction."
+	promote_this_auction.help_text = "Show this to everyone in the list of auctions. <span class='text-warning'>Uncheck if this is a test or private auction</span>."
 	is_chat_allowed = models.BooleanField(default=True)
 	max_lots_per_user = models.PositiveIntegerField(null=True, blank=True)
 	max_lots_per_user.help_text = "A user won't be able to add more than this many lots to this auction"
+	allow_additional_lots_as_donation = models.BooleanField(default=True)
+	allow_additional_lots_as_donation.help_text = "If you don't max lots per user, this has no effect"
 	email_first_sent = models.BooleanField(default=False)
 	email_second_sent = models.BooleanField(default=False)
 	email_third_sent = models.BooleanField(default=False)
@@ -407,7 +429,8 @@ class PickupLocation(models.Model):
 class AuctionTOS(models.Model):
 	user = models.ForeignKey(User, on_delete=models.CASCADE)
 	auction = models.ForeignKey(Auction, on_delete=models.CASCADE)
-	pickup_location = models.ForeignKey(PickupLocation, on_delete=models.CASCADE) #null=True, on_delete=models.SET_NULL)
+	pickup_location = models.ForeignKey(PickupLocation, on_delete=models.CASCADE)
+	createdon = models.DateTimeField(auto_now_add=True, blank=True)
 	def __str__(self):
 		return f"{self.user} will meet at {self.pickup_location} for {self.auction}"
 	class Meta: 
@@ -439,7 +462,7 @@ class Lot(models.Model):
 	description.help_text = "To add a link: [Link text](https://www.google.com)"
 	description_rendered = RenderedMarkdownField(blank=True, null=True)
 	
-	quantity = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
+	quantity = models.PositiveIntegerField(validators=[MinValueValidator(1)])
 	quantity.help_text = "How many of this item are in this lot?"
 	reserve_price = models.PositiveIntegerField(default=2, validators=[MinValueValidator(1), MaxValueValidator(200)])
 	reserve_price.help_text = "The minimum bid for this lot. Lot will not be sold unless someone bids at least this much"
@@ -677,6 +700,8 @@ class Lot(models.Model):
 	@property
 	def high_bid(self):
 		"""returns the high bid amount for this lot"""
+		if self.winning_price:
+			return self.winning_price
 		if self.sealed_bid:
 			try:
 				bids = Bid.objects.filter(lot_number=self.lot_number, last_bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount', 'last_bid_time')
@@ -977,10 +1002,7 @@ class PageView(models.Model):
 	total_time.help_text = 'The total time in seconds the user has spent on the lot page'
 
 	def __str__(self):
-		if self.blog_post:
-			thing = self.blog_post.title
-		else:
-			thing = self.lot_number
+		thing = self.lot_number
 		return f"User {self.user} viewed {thing} for {self.total_time} seconds"
 
 class UserData(models.Model):
@@ -1024,6 +1046,7 @@ class UserData(models.Model):
 	banned_from_chat_until = models.DateTimeField(null=True, blank=True)
 	banned_from_chat_until.help_text = "After this date, the user can post chats again.  Being banned from chatting does not block bidding"
 	can_submit_standalone_lots = models.BooleanField(default=False)
+	dismissed_cookies_tos = models.BooleanField(default=False)
 
 	# breederboard info
 	rank_unique_species = models.PositiveIntegerField(null=True, blank=True)
@@ -1211,7 +1234,9 @@ class LotHistory(models.Model):
 	current_price.help_text = "Price of the lot immediately AFTER this message"
 	changed_price = models.BooleanField(default=False)
 	changed_price.help_text = "Was this a bid that changed the price?"
-	
+	notification_sent = models.BooleanField(default=False)
+	notification_sent.help_text = "Set to true automatically when the notification email is sent"
+
 	def __str__(self):
 		if self.message:
 			return f"{self.message}"
@@ -1226,6 +1251,7 @@ class LotHistory(models.Model):
 
 @receiver(pre_save, sender=UserData)
 @receiver(pre_save, sender=PickupLocation)
+@receiver(pre_save, sender=Club)
 def update_user_location(sender, instance, **kwargs):
 	"""
 	GeoDjango does not appear to support MySQL and Point objects well at the moment (2020)

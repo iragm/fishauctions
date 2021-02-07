@@ -47,9 +47,33 @@ class UserAdmin(BaseUserAdmin):
     last_activity.admin_order_field  = 'userdata__last_activity' # this doesn't seem to work, but you can use this url: admin/auth/user/?o=-4
     last_activity.short_description = 'Last activity'
 
+class GeneralInterestAdmin(admin.ModelAdmin):
+    model = GeneralInterest
+
+class UserInline(admin.TabularInline):
+     fields = ['__str__',]
+     readonly_fields = ['__str__',]
+     verbose_name = "Club member"
+     verbose_name_plural = "Club members"
+     #fk_name = 'userdata'
+     model = UserData
+     extra = 0
+
 class ClubAdmin(admin.ModelAdmin):
     model = Club 
-    search_fields = ("name",)
+    list_display = ("name", "contact_email", "date_contacted")
+    search_fields = ("name",'abbreviation', 'contact_email', 'homepage',)
+    list_filter =  (
+        "active",
+        ("date_contacted", admin.EmptyFieldListFilter),
+        ("contact_email", admin.EmptyFieldListFilter),
+        ("notes", admin.EmptyFieldListFilter),
+        ("latitude", admin.EmptyFieldListFilter),
+        "interests",
+    )
+    inlines = [
+         UserInline,
+    ]
 
 class LocationAdmin(admin.ModelAdmin):
     model = Location 
@@ -176,4 +200,5 @@ admin.site.register(LotHistory, ChatAdmin)
 admin.site.register(Lot, LotAdmin)
 admin.site.register(Location, LocationAdmin)
 admin.site.register(Club, ClubAdmin)
+admin.site.register(GeneralInterest, GeneralInterestAdmin)
 admin.site.register(BlogPost, BlogPostAdmin)

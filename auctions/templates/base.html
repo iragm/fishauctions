@@ -1,20 +1,20 @@
 {% load static %}
 <!DOCTYPE html>
 <!-- Global site tag (gtag.js) - Google Analytics -->
-<script async src="https://www.googletagmanager.com/gtag/js?id={{ GOOGLE_MEASUREMENT_ID }}"></script>
+{% if GOOGLE_MEASUREMENT_ID != "None" %}<script async src="https://www.googletagmanager.com/gtag/js?id={{ GOOGLE_MEASUREMENT_ID }}"></script>
 <script>
   window.dataLayer = window.dataLayer || [];
   function gtag(){dataLayer.push(arguments);}
   gtag('js', new Date());
 
   gtag('config', '{{ GOOGLE_MEASUREMENT_ID }}');
-</script>
+</script>{% endif %}
 <!-- Google Tag Manager -->
-<script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+{% if GOOGLE_TAG_ID != "None" %}<script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
   new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
   j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
   'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
-  })(window,document,'script','dataLayer','{{ GOOGLE_TAG_ID }}');</script>
+  })(window,document,'script','dataLayer','{{ GOOGLE_TAG_ID }}');</script>{% endif %}
   <!-- End Google Tag Manager -->
 <html class="no-js" lang="en">
     <head>
@@ -41,7 +41,7 @@
         {% if request.user.is_authenticated %}
         <script>
           updateMessageCounter();
-          setInterval(updateMessageCounter, 60000);
+          setInterval(updateMessageCounter, 120000);
           function updateMessageCounter() {
             $.ajax({
               type: "POST",
@@ -134,8 +134,12 @@
                       <a class="dropdown-item" href="/about/">About site</a>
                       <a class="dropdown-item" href="/auctions/tfcb-annual-auction/">Example auction rules</a>
                       <a class="dropdown-item" href="/lots/?a=tfcb-annual-auction">Example auction lots</a>
+                      <a class="dropdown-item" href="/tos/">Terms and Conditions</a>
                       </div>
                   </li>
+                  <li class="nav-item">
+                    <a class="nav-link" href="/clubs/">Clubs</a>
+                  </li>  
                   {% if request.user.is_authenticated %}
                   <li class="nav-item dropdown">
                     <a class="nav-link dropdown-toggle" data-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">{{ request.user.username }}</a>
@@ -177,7 +181,39 @@
               </div>
           </div>
         </nav>
-        
+        {% if not hide_tos_banner %}
+        <div class="alert alert-primary mb-0" role="alert" style="position:fixed; bottom: 0px; width: 100%; z-index:9999;">By using this site, you accept our <a href="/tos/">use of cookies and our terms and conditions</a> <button class="btn-sm btn-light" type="button" onclick="agreeTos()">Don't show again</button></button></div>
+        <script>
+          function agreeTos() {
+            document.cookie = "hide_tos_banner=true; SameSite=Strict; path=/";
+            window.location.reload();
+          }
+        </script>
+        {% endif %}
+        {# if the location is not set, we can ask for it with a simple location_message, or use custom logic on any element that calls the function setLocation #}
+        {% if not has_user_location and location_message %}
+        <div class="alert alert-secondary mb-0" role="alert"><a href="#" onclick="setLocation()">{{ location_message }}</a></div>
+        {% endif %}
+        <script>
+        function setLocation(){ 
+          if (navigator.geolocation) {
+            console.log('pre');
+            navigator.geolocation.getCurrentPosition(function(data){
+              console.log(data);
+              document.cookie = "latitude=" + data.coords['latitude'] + "; SameSite=Strict; path=/";
+              document.cookie = "longitude=" + data.coords['longitude'] + "; SameSite=Strict; path=/";
+              window.location.reload();
+            });
+          } else { 
+            {% if request.user.is_authenticated %}
+            window.location = "/users/{{ request.user.pk }}/location/";
+            {% endif %}
+          }
+        }
+        function saveLocation(data) {
+
+        }
+        </script>
         {% if messages %}
             {% for message in messages %}
             {% if "error" in message.tags %}
@@ -190,7 +226,6 @@
 
         {% block content %}{% endblock %}
 
-        
         {% block extra_js %}
             {# Override this in templates to add extra javascript #}
         {% endblock %}

@@ -10,13 +10,28 @@ from django.template.loader import get_template
 import os
 import uuid
 from django.contrib.sites.models import Site
+import csv
 
-#import csv 
 class Command(BaseCommand):
     help = 'Just a scratchpad to do things'
 
     def handle(self, *args, **options):
-        pass
+        #invoices = Invoice.objects.filter(pk__in=[259, 286, 272, 288, 258, 250])
+        #total = 0
+        # for invoice in invoices:
+        #     total += invoice.total_bought
+        #     total += invoice.total_sold
+        #     # total += invoice.lots_bought * 3
+        #     # total += invoice.lots_sold_successfully * 3
+        #     # unsold = invoice.lots_sold_successfully - invoice.lots_sold
+        #     # if unsold > 0:
+        #     #     total += unsold
+        # print(total)
+            #clubs = Club.objects.filter(name__startswith="The")
+        #for club in clubs:
+        #    print(club.name)
+            #club.name = club.name.replace("The ", "")
+            #club.save()
         # #auctionslug = 'pvas'
         # auctionslug = 'tfcb-annual'
         # users = User.objects.all().annotate(

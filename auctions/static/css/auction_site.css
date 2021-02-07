@@ -40,3 +40,7 @@ a:hover {
   .carousel-indicators .active {
     background-color: #2fa4e7;
   }
+  
+  .ui-autocomplete {
+    z-index: 9999;
+  }

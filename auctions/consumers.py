@@ -150,7 +150,7 @@ def bid_on_lot(lot, user, amount):
             if (not originalHighBidder) and (lot.high_bidder.pk == user.pk):
                 result['send_to'] = 'everyone'
                 result['type'] = "NEW_HIGH_BIDDER"
-                result['message'] = f"{user} has placed the first bid on this lot!"
+                result['message'] = f"{user} has placed the first bid on this lot"
                 result["current_high_bid"] = lot.reserve_price
                 result['high_bidder_pk'] = user.pk   
                 result['high_bidder_name'] = str(user)
@@ -184,7 +184,7 @@ def bid_on_lot(lot, user, amount):
                 
                 # bidder has changed!!
                 result['type'] = "NEW_HIGH_BIDDER"
-                result['message'] = f"{lot.high_bidder} is now the high bidder at ${lot.high_bid}!"
+                result['message'] = f"{lot.high_bidder} is now the high bidder at ${lot.high_bid}"
                 result['high_bidder_pk'] = lot.high_bidder.pk
                 result['high_bidder_name'] = str(lot.high_bidder)
                 result["current_high_bid"] = lot.high_bid
@@ -207,7 +207,7 @@ def bid_on_lot(lot, user, amount):
                 return result
             result['type'] = "NEW_HIGH_BID"
             result["current_high_bid"] = lot.high_bid
-            result['message'] = f"{user} bumped the price up to ${lot.high_bid}!"
+            result['message'] = f"{user} bumped the price up to ${lot.high_bid}.  {lot.high_bidder} is still the high bidder."
             result['send_to'] = 'everyone'
             LotHistory.objects.create(
                 lot = lot,

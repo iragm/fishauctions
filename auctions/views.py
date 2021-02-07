@@ -82,6 +82,10 @@ class LotListView(AjaxListView):
                 context['auction_tos'] = AuctionTOS.objects.get(auction=context['auction'].pk, user=self.request.user.pk)
             except:
                 messages.error(self.request, f"Please <a href='/auctions/{context['auction'].slug}/'>read the auction's rules and confirm your pickup location</a> to bid")
+        else:
+            # this will be a mix of auction and non-auction lots
+            context['display_auction_on_lots'] = True
+            context['location_message'] = "Set your location to see lots near you"
         return context
 
 class AllRecommendedLots(TemplateView):
@@ -488,8 +492,8 @@ def auctionReport(request, slug):
                 address = data.user.userdata.address
             except:
                 address = ""
-            if data.distance_traveled:
-                distance = data.distance_traveled
+            if data.user.userdata.latitude:
+                distance = data.distance_traveled # fixme, this is wrong
             else:
                 distance = "User's location not set"
             try:
@@ -699,16 +703,20 @@ class ViewLot(DetailView):
     def get_queryset(self):
         pk = self.kwargs.get(self.pk_url_kwarg)
         qs = Lot.objects.filter(pk=pk)
-        if self.request.user.is_authenticated:
-            userData, created = UserData.objects.get_or_create(
-                user = self.request.user,
-                defaults={},
-            )
-            # fixme - cookies if possible
-            latitude = userData.latitude
-            longitude = userData.longitude
-            if latitude and longitude:
-                qs = Lot.objects.annotate(distance=distance_to(latitude, longitude)).filter(pk=pk)
+        try:
+            latitude = self.request.COOKIES['latitude']
+            longitude = self.request.COOKIES['longitude']
+            qs = Lot.objects.annotate(distance=distance_to(latitude, longitude)).filter(pk=pk)
+        except:
+            if self.request.user.is_authenticated:
+                userData, created = UserData.objects.get_or_create(
+                    user = self.request.user,
+                    defaults={},
+                )
+                latitude = userData.latitude
+                longitude = userData.longitude
+                if latitude and longitude:
+                    qs = Lot.objects.annotate(distance=distance_to(latitude, longitude)).filter(pk=pk)
         return qs
 
     def get_context_data(self, **kwargs):
@@ -815,7 +823,6 @@ class LotValidation(LoginRequiredMixin):
         return super().dispatch(request, *args, **kwargs)
 
     def clean(self):
-        print("clean lot validation")
         cleaned_data = super().clean()
 
     def form_valid(self, form, **kwargs):
@@ -1104,6 +1111,7 @@ def toDefaultLandingPage(request):
             return redirect(f"/auctions/{auction.slug}/")
 
     data = request.GET.copy()
+    print(request.META.get('HTTP_REFERER'))
     try:
         # if the slug was set in the URL
         auction = Auction.objects.filter(slug=list(data.keys())[0])[0]
@@ -1341,6 +1349,15 @@ class InvoiceView(DetailView, FormMixin):
         return super(InvoiceView, self).form_valid(form)
 
 @login_required
+def getClubs(request):
+    if request.method == 'POST':
+        species = request.POST['search']
+        result = Club.objects.filter(
+            Q(name__icontains=species) | Q(abbreviation__icontains=species)
+            ).values('id','name', 'abbreviation')
+        return JsonResponse(list(result), safe=False)
+
+@login_required
 def getSpecies(request):
     if request.method == 'POST':
         species = request.POST['search']
@@ -1529,6 +1546,25 @@ class LotChartView(View):
                 'data': data,
             })
         raise PermissionDenied()
+
+class ClubMap(TemplateView):
+    template_name = 'clubs.html'
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['google_maps_api_key'] = settings.LOCATION_FIELD['provider.google.api_key']
+        context['clubs'] = Club.objects.filter(active=True, latitude__isnull=False)
+        context['location_message'] = "Set your location to see clubs near you"
+        try:
+            context['latitude'] = self.request.COOKIES['latitude']
+            context['longitude'] = self.request.COOKIES['longitude']
+        except:
+            pass
+        context['contact_email'] = User.objects.get(pk=1).email
+        return context
+
+class UserAgreement(TemplateView):
+    template_name = 'tos.html'
 
 class IgnoreCategoriesView(TemplateView):
     template_name = 'ignore_categories.html'
@@ -1764,10 +1800,10 @@ class AuctionChartView(View):
             if auction == "none":
                 # public view to get data for all auctions
                 categories = Category.objects.all().annotate(num_lots=Count('lot')).order_by('-num_lots')
-                allLots = len(Lot.objects.all())
+                allLots = len(Lot.objects.exclude(auction__promote_this_auction=False))
                 allViews = len(PageView.objects.all())
                 allBids = len(Bid.objects.all())
-                allVolume = Lot.objects.all().aggregate(Sum('winning_price'))['winning_price__sum']
+                allVolume = Lot.objects.exclude(auction__promote_this_auction=False).aggregate(Sum('winning_price'))['winning_price__sum']
             else:
                 categories = Category.objects.filter(lot__auction=auction).annotate(num_lots=Count('lot')).order_by('-num_lots')
                 allLots = len(Lot.objects.filter(auction=auction))
@@ -1780,7 +1816,7 @@ class AuctionChartView(View):
                     if auction == "none":
                         thisViews = len(PageView.objects.filter(lot_number__species_category=category))
                         thisBids = len(Bid.objects.filter(lot_number__species_category=category))
-                        thisVolume = Lot.objects.filter(species_category=category).aggregate(Sum('winning_price'))['winning_price__sum']
+                        thisVolume = Lot.objects.exclude(auction__promote_this_auction=False).filter(species_category=category).aggregate(Sum('winning_price'))['winning_price__sum']
                     else:
                         thisViews = len(PageView.objects.filter(lot_number__auction=auction, lot_number__species_category=category))
                         thisBids = len(Bid.objects.filter(lot_number__auction=auction, lot_number__species_category=category))

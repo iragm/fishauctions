@@ -168,7 +168,7 @@ class CreateAuctionForm(forms.ModelForm):
     class Meta:
         model = Auction
         fields = ['title', 'notes', 'lot_entry_fee','unsold_lot_fee','winning_bid_percent_to_club', 'date_start', 'date_end', \
-            'lot_submission_end_date', 'first_bid_payout', 'sealed_bid','promote_this_auction']
+            'lot_submission_end_date', 'first_bid_payout', 'sealed_bid','promote_this_auction', 'max_lots_per_user', 'allow_additional_lots_as_donation']
         exclude = ['slug', 'watch_warning_email_sent', 'invoiced', 'created_by', 'code_to_add_lots', \
             'pickup_location', 'pickup_location_map', 'pickup_time', 'alternate_pickup_location', 'alternate_pickup_location_map',\
             'alternate_pickup_time','location', ]
@@ -180,13 +180,16 @@ class CreateAuctionForm(forms.ModelForm):
         }
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields['notes'].widget.attrs = {'rows': 3}
+        self.fields['notes'].widget.attrs = {'rows': 10}
         self.helper = FormHelper
         self.helper.form_method = 'post'
         self.helper.form_id = 'auction-form'
         self.helper.form_class = 'form'
         self.helper.form_tag = True
         self.helper.layout = Layout(
+            HTML("<h4>Create new club auction</h4><br><span class='text-muted'>\
+                This will create a group auction that other people can add lots to.\
+                If you are trying to sell a single lot, you should <a href='/lots/new'>create a new lot</a> instead.</span><br><br>"),
             'title',
             'notes',
             Div(
@@ -202,23 +205,17 @@ class CreateAuctionForm(forms.ModelForm):
                 css_class='row',
             ),
             Div(
+                Div('max_lots_per_user', css_class='col-md-4',),
+                Div('allow_additional_lots_as_donation', css_class='col-md-4',),
+                css_class='row',
+            ),
+            Div(
                 Div('first_bid_payout', css_class='col-md-4',),
                 Div('sealed_bid', css_class='col-md-4',),
                 Div('promote_this_auction', css_class='col-md-4',),
                 css_class='row',
             ),
-            # Div(
-            #     Div('pickup_location',css_class='col-md-8',),
-            #     Div('pickup_time',css_class='col-md-4',),
-            #     css_class='row',
-            # ),
-            # 'pickup_location_map',
-            # Div(
-            #     Div('alternate_pickup_location',css_class='col-md-8',),
-            #     Div('alternate_pickup_time',css_class='col-md-4',),
-            #     css_class='row',
-            # ),
-            # 'alternate_pickup_location_map',
+
             Submit('submit', 'Save', css_class='create-update-auction btn-success'),
         )
 
@@ -418,10 +415,8 @@ class CreateLotForm(forms.ModelForm):
             # set auction to empty
             self.cleaned_data['auction'] = None
             auction = None
-            # fixme
-            #if not self.user.is_superuser:
-            #    self.add_error('part_of_auction', "This feature will be available starting in April 2021")
-            # end fixme
+            if not self.user.userdata.can_submit_standalone_lots:
+                self.add_error('part_of_auction', "This feature will be available starting in April 2021")
             if not cleaned_data.get("shipping_locations") and not cleaned_data.get("local_pickup"):
                 self.add_error('show_payment_pickup_info', "Select local pickup and/or a location to ship to")
             if not cleaned_data.get("payment_cash") and not cleaned_data.get("payment_paypal") and not cleaned_data.get("payment_other"):
@@ -439,7 +434,11 @@ class CreateLotForm(forms.ModelForm):
             if auction.max_lots_per_user:
                 numberOfLots = Lot.objects.filter(user=self.user, auction=auction).count()
                 if numberOfLots >= auction.max_lots_per_user:
-                    self.add_error('auction', f"You can't add more lots to this auction (Limit: {auction.max_lots_per_user})")
+                    if auction.allow_additional_lots_as_donation:
+                        if not cleaned_data.get("donation"):
+                            self.add_error('donation', f"You've already added {auction.max_lots_per_user} lots to this auction.  You can add more lots as a donation.")
+                    else:
+                        self.add_error('auction', f"You can't add more lots to this auction (Limit: {auction.max_lots_per_user})")
 
             
         # check to see if this lot exists already
@@ -469,6 +468,8 @@ class UserLocation(forms.ModelForm):
     """
     first_name = forms.CharField(max_length=30, label='First name', required=True)
     last_name = forms.CharField(max_length=150, label='Last name', required=True)
+    club_affiliation = forms.CharField(max_length=100, label='Club', required=False)
+    club_affiliation.help_text = "Optional.  If you belong to a club, enter the name here."
     class Meta:
         model = UserData
         fields = (
@@ -490,7 +491,11 @@ class UserLocation(forms.ModelForm):
         self.helper.form_id = 'user-form'
         self.helper.form_class = 'form'
         self.helper.form_tag = True
+        self.fields['club'].widget = HiddenInput()
+        if self.instance.club:
+                self.fields['club_affiliation'].initial = self.instance.club.name
         self.helper.layout = Layout(
+            'club',
             Div(
                 Div('first_name',css_class='col-md-6',),
                 Div('last_name',css_class='col-md-6',),
@@ -498,8 +503,8 @@ class UserLocation(forms.ModelForm):
             ),
             Div(
                 Div('phone_number',css_class='col-md-4',),
-                Div('location',css_class='col-md-4',),
-                Div('club',css_class='col-md-4',),
+                Div('location',css_class='col-md-3',),
+                Div('club_affiliation',css_class='col-md-5',),
                 css_class='row',
             ),
             Div(

@@ -2,7 +2,6 @@
 {% load crispy_forms_tags %}
 {% block title %} {{ auction.title }} {% endblock %}
 {% load static %}
-{% block content %}
 {% block extra_js %}
 <script async defer crossorigin="anonymous" src="https://connect.facebook.net/en_US/sdk.js#xfbml=1&version=v9.0" nonce="e1MMTYSx"></script>
 <script>
@@ -13,9 +12,67 @@ function copyLink() {
   document.execCommand("copy");
   document.getElementById("copyShareLink").className += " is-valid";
 } 
-
 </script>
+{% if not auction.no_location %}
+<script
+src="https://maps.googleapis.com/maps/api/js?key={{google_maps_api_key}}&callback=initMap&libraries=&v=weekly"
+async
+></script>
+<script>
+
+function initMap() {
+    var map;
+    var bounds = new google.maps.LatLngBounds();
+    var mapOptions = {};
+    map = new google.maps.Map(document.getElementById("map_canvas"), mapOptions);
+    var markers = [
+        {% for location in pickup_locations %}
+        ['{{ location.name }}', {{ location.latitude }},{{ location.longitude }}],
+        {% endfor %}
+    ];
+    var infoWindowContent = [
+        {% for location in pickup_locations %}
+        ['<div class="info_content" style="color:black;">' +
+        '<h5>{{ location.name }}</h5>' +
+        '<p><a href="https://www.google.com/maps/search/?api=1&query={{ location.latitude }},{{ location.longitude }}">Get directions</a>'+
+        '<p>{{ location.description }}<br>' +
+        '{% if location.users_must_coordinate_pickup %}You must schedule your pickup time in advance.{% else %}{{ location.pickup_time }} {% if location.second_pickup_time %}<br><br> You must return at {{ location.second_pickup_time }} to pick up lots from other locations.{% endif %}{%endif%}</p>' +        '</div>'],
+        {% endfor %}
+    ];
+       
+    var infoWindow = new google.maps.InfoWindow(), marker, i;
+    
+    for( i = 0; i < markers.length; i++ ) {
+        var position = new google.maps.LatLng(markers[i][1], markers[i][2]);
+        bounds.extend(position);
+        marker = new google.maps.Marker({
+            position: position,
+            map: map,
+            title: markers[i][0]
+        });
+        
+        // Allow each marker to have an info window
+        google.maps.event.addListener(marker, 'click', (function(marker, i) {
+            return function() {
+                infoWindow.setContent(infoWindowContent[i][0]);
+                infoWindow.open(map, marker);
+            }
+        })(marker, i));
+        map.fitBounds(bounds);
+    }
+    {% if not auction.multi_location %}
+    var boundsListener = google.maps.event.addListener((map), 'bounds_changed', function(event) {
+        this.setZoom(9);
+        google.maps.event.removeListener(boundsListener);
+    });
+    {%endif%}
+
+    
+}
+</script>
+{%endif%}
 {% endblock %}
+{% block content %}
 <div id="fb-root"></div>
 <div class="container mt-5 mb-5">
     <div class="row">
@@ -24,49 +81,59 @@ function copyLink() {
             An auction created by {{ auction.created_by }}<br>
             {% if request.user.is_authenticated %} <br>Questions?  Email <a href='mailto:{{ contact_email }}'>{{ contact_email }}</a>{% endif %}<br>
             {% if auction.notes_rendered %}{{ auction.notes_rendered|safe }} {% else %} {% if auction.notes %} {{ auction.notes|safe }}{% endif %}{% endif %}
-            <br>{% if not auction.no_location %}<h3>Pickup location{% if auction.multi_location %}s{%endif%}</h3>
-                {% for location in pickup_locations %}
-                <br>
-                <h5>{{ location.name }}</h5>
-                {% if auction.created_by.pk == request.user.id or request.user.is_superuser %}
-                <a href="/locations/edit/{{ location.pk }}/?next=/auctions/{{auction.slug}}" class="btn btn-warning active">Edit this location</a>
-                {% endif %}
-                <br>
-                {{ location.description }} {% if location.users_must_coordinate_pickup %}You must schedule your pickup time in advance.{% else %}at {{ location.pickup_time }} {% if location.second_pickup_time %} (you must be present and pay at this time) <br><br> You must return at {{ location.second_pickup_time }} to pick up lots from other locations.{% endif %}{%endif%}<br><br>
-                {% if location.pickup_location_contact_name and request.user.is_authenticated %}
-                Contact for this location: <b>{{location.pickup_location_contact_name}}</b><br>
-                {% if location.pickup_location_contact_phone %}{{location.pickup_location_contact_phone}}<br>{%endif%}
-                {% if location.pickup_location_contact_email %}{{location.pickup_location_contact_email}}<br>{%endif%}
-                <br>
-                {% endif %}
-                <iframe width="600" height="250" frameborder="0" style="border:0"
-                    src="https://www.google.com/maps/embed/v1/place?q={{ location.latitude }}%2C{{ location.longitude }}&key={{google_maps_api_key}}&zoom=9" allowfullscreen
-                    >
-                </iframe> 
-                <br><br>
-                {% endfor %}
-            {% else %}The creator of this auction has not yet added a pickup location.  Check back soon!<br>{% endif %}
-            <br><h3>Other information</h3>
             <ul>
                 <li>Bidding will be open from {{ auction.date_start }} to {{ auction.date_end}}</li>
                 {% if auction.lot_submission_end_date != auction.date_end %}<li>You can submit lots until {{ auction.lot_submission_end_date }}</li>{% endif %}
                 {% if auction.sealed_bid %}<li>This is a sealed bid auction - you won't be able to see how much others have bid on an item.</li>{% endif %}
+                {% if auction.max_lots_per_user %}<li>You can submit up to {{ auction.max_lots_per_user }} lots.{% if auction.allow_additional_lots_as_donation %} Additional lots accepted only as a donation.{% endif %}</li>{% endif %}
                 {% if auction.winning_bid_percent_to_club and auction.lot_entry_fee %} <li>You will be charged ${{ auction.lot_entry_fee }} plus {{ auction.winning_bid_percent_to_club }}%  of the winning price per lot you sell</li>
                 {% else %} {% if auction.winning_bid_percent_to_club %} <li>You will be charged {{ auction.winning_bid_percent_to_club }}% of the winning price per lot you sell</li> {% endif %} 
                 {% if auction.lot_entry_fee %} <li>You will be charged a flat rate of ${{ auction.lot_entry_fee }} per item you sell</li> {% endif %}
                 {% endif %}
                 {% if auction.unsold_lot_fee %}<li>If your lot does not sell, you will be charged ${{ auction.unsold_lot_fee }}</li>{% endif %}
             </ul> 
-            <br>Please spread the word about this auction -- every like and share helps the club bring in new sellers and bidders!<br><a href="https://twitter.com/share?ref_src=twsrc%5Etfw" class="twitter-share-button" data-text="Check out the {{ auction.title }}" data-url="https://{{ domain }}/?{{ auction.slug }}" data-dnt="true" data-show-count="false">Tweet</a><script async src="https://platform.twitter.com/widgets.js" charset="utf-8"></script><br>
-            <div class="fb-share-button" data-href="https://{{ domain }}/?{{ auction.slug }}" data-layout="button_count" data-size="small"><a target="_blank" href="https://www.facebook.com/sharer/sharer.php?u={{ domain|urlencode }}/?{{ auction.slug|urlencode }}&amp;src=sdkpreparse" class="fb-xfbml-parse-ignore">Share</a></div>
-            <br>
-            <label class="col-form-label col-form-label-sm" for="copyShareLink">Shareable link for this auction</label>    
-            <div class="input-group mb-3 has-success">
-                <input class="form-control form-control-sm" id='copyShareLink' style='max-width: 35%' type="text" value="https://{{ domain }}/?{{ auction.slug }}" readonly="">
-                <div class="input-group-append">
-                    <button class='btn-sm btn-primary' onclick="copyLink()">Copy</button>
+            {% if not auction.no_location %}<br>
+                {% if auction.multi_location %}<h3>Pickup locations</h3>{%endif%}
+                {% for location in pickup_locations %}
+                <br>
+                <h5>{% if not auction.multi_location %}Location: {%endif%}{{ location.name }}</h5>
+                {% if auction.created_by.pk == request.user.id or request.user.is_superuser %}
+                <a href="/locations/edit/{{ location.pk }}/?next=/auctions/{{auction.slug}}" class="btn btn-warning">Edit this location</a>
+                {% endif %}
+                <br>
+                {{ location.description }} {% if location.users_must_coordinate_pickup %}You must schedule your pickup time in advance.{% else %}at {{ location.pickup_time }} {% if location.second_pickup_time %}<br><br> You must return at {{ location.second_pickup_time }} to pick up lots from other locations.{% endif %}{%endif%}<br><br>
+                {% if location.pickup_location_contact_name and request.user.is_authenticated %}
+                Contact for this location: <b>{{location.pickup_location_contact_name}}</b><br>
+                {% if location.pickup_location_contact_phone %}{{location.pickup_location_contact_phone}}<br>{%endif%}
+                {% if location.pickup_location_contact_email %}<a href='mailto:{{ location.pickup_location_contact_email }}'>{{location.pickup_location_contact_email}}</a><br>{%endif%}
+                <br>
+                {% endif %}
+                {% endfor %}
+                <div id="map_wrapper" style='height: 400px;'>
+                    <div id="map_canvas" class="mapping" style='width: 100%; height: 100%;'></div>
                 </div>
-                <div class="valid-feedback">Copied.  Thanks for spreading the word!</div>
+            {% endif %}
+
+            <br><span class='text-muted'><small>Please spread the word about this auction -- every like and share helps the club bring in new sellers and bidders!</small></span>
+            <div class="share-links" style='line-height: 11px;'>
+            
+                <div class="input-group mb-3 mr-3 has-success" style="float:left !important;">
+                    <input class="form-control form-control-sm" id='copyShareLink' style='max-width: 35%' type="text" value="https://{{ domain }}/?{{ auction.slug }}" readonly="">
+                    <div class="input-group-append">
+                        <button class='btn-sm btn-primary' onclick="copyLink()">Copy</button>
+                    </div>
+                    <span class='input-group-append ml-1 mr-1'>
+                    <a href="https://twitter.com/share?ref_src=twsrc%5Etfw" class="twitter-share-button" data-text="Check out the {{ auction.title }}" data-url="https://{{ domain }}/?{{ auction.slug }}" data-dnt="true" data-show-count="false">Tweet</a><script async src="https://platform.twitter.com/widgets.js" charset="utf-8"></script>
+                    </span>
+                    <span class='input-group-append mr-1'>
+                        <div class="fb-share-button" data-href="https://{{ domain }}/?{{ auction.slug }}" data-layout="button_count" data-size="small"><a target="_blank" href="https://www.facebook.com/sharer/sharer.php?u={{ domain|urlencode }}/?{{ auction.slug|urlencode }}&amp;src=sdkpreparse" class="fb-xfbml-parse-ignore">Share</a></div>
+                    </span>
+            
+                    <div class="valid-feedback">Copied.  Thanks for spreading the word!</div>
+                </div>
+
+                
+
             </div>
             {% if not ended %}
                 <br><br>
