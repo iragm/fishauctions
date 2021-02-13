@@ -16,6 +16,24 @@ def theme(request):
         theme = userData.use_dark_theme
     return {'theme': theme}
 
+def add_tz(request):
+    """
+    Add timezone cookie - example: 'America/New_York'
+    This is set via js with Intl.DateTimeFormat().resolvedOptions().timeZone
+    """
+    user_timezone = ""
+    user_timezone_set = False
+    try:
+        if request.COOKIES['user_timezone']:
+            user_timezone = request.COOKIES['user_timezone']
+            user_timezone_set = True
+    except:
+        pass
+    if not user_timezone:
+        user_timezone = "America/Chicago"
+        user_timezone_set = False
+    return {'user_timezone': user_timezone, 'user_timezone_set': user_timezone_set}
+
 def add_location(request):
     """request location if not set"""
     has_user_location = False

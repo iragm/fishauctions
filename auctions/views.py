@@ -601,9 +601,13 @@ class PickupLocationsUpdate(LoginRequiredMixin, UpdateView):
     form_class = PickupLocationForm
 
     def get_form_kwargs(self):
-        form_kwargs = super(PickupLocationsUpdate, self).get_form_kwargs()
-        form_kwargs['user'] = self.request.user
-        return form_kwargs
+        kwargs = super(PickupLocationsUpdate, self).get_form_kwargs()
+        kwargs['user'] = self.request.user
+        try:
+            kwargs['user_timezone'] = self.request.COOKIES['user_timezone']
+        except:
+            kwargs['user_timezone'] = settings.TIME_ZONE
+        return kwargs
 
     def dispatch(self, request, *args, **kwargs):
         if not (request.user.is_superuser or self.get_object().user == self.request.user):
@@ -625,10 +629,15 @@ class PickupLocationsCreate(LoginRequiredMixin, CreateView):
     model = PickupLocation
     template_name = 'location_form.html'
     form_class = PickupLocationForm
+
     def get_form_kwargs(self):
-        form_kwargs = super(PickupLocationsCreate, self).get_form_kwargs()
-        form_kwargs['user'] = self.request.user
-        return form_kwargs
+        kwargs = super(PickupLocationsCreate, self).get_form_kwargs()
+        kwargs['user'] = self.request.user
+        try:
+            kwargs['user_timezone'] = self.request.COOKIES['user_timezone']
+        except:
+            kwargs['user_timezone'] = settings.TIME_ZONE
+        return kwargs
 
     def form_valid(self, form):
         obj = form.save(commit=False)
@@ -666,6 +675,10 @@ class AuctionUpdate(UpdateView):
     def get_form_kwargs(self, *args, **kwargs):
         kwargs = super().get_form_kwargs(*args, **kwargs)
         kwargs['user'] = self.request.user
+        try:
+            kwargs['user_timezone'] = self.request.COOKIES['user_timezone']
+        except:
+            kwargs['user_timezone'] = settings.TIME_ZONE
         return kwargs
 
     def get_context_data(self, **kwargs):
@@ -1018,6 +1031,10 @@ class AuctionCreateView(LoginRequiredMixin, CreateView):
     def get_form_kwargs(self, *args, **kwargs):
         kwargs = super().get_form_kwargs(*args, **kwargs)
         kwargs['user'] = self.request.user
+        try:
+            kwargs['user_timezone'] = self.request.COOKIES['user_timezone']
+        except:
+            kwargs['user_timezone'] = settings.TIME_ZONE
         return kwargs
 
     def form_valid(self, form, **kwargs):

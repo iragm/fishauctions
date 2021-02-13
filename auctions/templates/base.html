@@ -1,3 +1,6 @@
+{% load tz %}
+{% load l10n %}
+{% timezone user_timezone %}
 {% load static %}
 <!DOCTYPE html>
 <!-- Global site tag (gtag.js) - Google Analytics -->
@@ -198,6 +201,23 @@ window.onload = function() {
           }
         </script>
         {% endif %}
+        {# set timezone via js #}
+        {% if not user_timezone_set %}
+          <div class="alert alert-warning d-none" id='nolocation' role="alert">Unable to determine your time zone, defaulting to Eastern Time.  Using a different browser may fix this.</a></div>
+          <script>
+            $(document).ready(function(){
+              try {
+                let tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                if (!tz) {
+                  throw "Unable to set time zone";
+                }
+                document.cookie = "user_timezone=" + tz + "; SameSite=Strict; path=/";
+              } catch(e) {
+                $("#nolocation").removeClass("d-none");
+              }
+            });
+          </script>
+        {% endif %}
         {# if the location is not set, we can ask for it with a simple location_message, or use custom logic on any element that calls the function setLocation #}
         {% if not has_user_location and location_message %}
         <div class="alert alert-secondary mb-0" role="alert"><a href="#" onclick="setLocation()">{{ location_message }}</a></div>
@@ -207,7 +227,6 @@ window.onload = function() {
           if (navigator.geolocation) {
             console.log('pre');
             navigator.geolocation.getCurrentPosition(function(data){
-              console.log(data);
               document.cookie = "latitude=" + data.coords['latitude'] + "; SameSite=Strict; path=/";
               document.cookie = "longitude=" + data.coords['longitude'] + "; SameSite=Strict; path=/";
               window.location.reload();
@@ -239,3 +258,4 @@ window.onload = function() {
         {% endblock %}
     </body>
 </html>
+{% endtimezone %}

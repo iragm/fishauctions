@@ -106,6 +106,7 @@ TEMPLATES = [
                 'auctions.context_processors.theme',
                 'auctions.context_processors.add_location',
                 'auctions.context_processors.dismissed_cookies_tos',
+                'auctions.context_processors.add_tz',
             ],
         },
     },

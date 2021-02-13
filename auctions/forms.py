@@ -9,9 +9,11 @@ from bootstrap_datepicker_plus import DateTimePickerInput
 from django.utils import timezone
 from location_field.models.plain import PlainLocationField
 #from django.core.exceptions import ValidationError
+import datetime
+import pytz
 
-class DateInput(forms.DateInput):
-    input_type = 'datetime-local'
+# class DateInput(forms.DateInput):
+#     input_type = 'datetime-local'
 
 class CreateBid(forms.ModelForm):
     #amount = forms.IntegerField()
@@ -124,6 +126,7 @@ class PickupLocationForm(forms.ModelForm):
             'description': forms.Textarea,
         }
     def __init__(self, user, *args, **kwargs):
+        timezone.activate(kwargs.pop('user_timezone'))
         super().__init__(*args, **kwargs)
         self.user = user
         self.fields['description'].widget.attrs = {'rows': 3}
@@ -183,6 +186,7 @@ class CreateAuctionForm(forms.ModelForm):
         }
     def __init__(self, *args, **kwargs):
         self.user = kwargs.pop('user')
+        timezone.activate(kwargs.pop('user_timezone'))
         super().__init__(*args, **kwargs)
         self.fields['notes'].widget.attrs = {'rows': 10}
         # set the initial value of
