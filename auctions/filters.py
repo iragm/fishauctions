@@ -11,6 +11,10 @@ class LotFilter(django_filters.FilterSet):
             self.ignore = kwargs.pop('ignore')
         except:
             self.ignore = False
+        try:
+            self.regardingAuction = kwargs.pop('regardingAuction')
+        except:
+            self.regardingAuction = None
         super(LotFilter, self).__init__(*args, **kwargs)
         # this would require the keyword recommended in the url to show recommended lots. e.g.
         # /lots/?recommended
@@ -33,6 +37,7 @@ class LotFilter(django_filters.FilterSet):
         ('yes', 'Only viewed'),
         ('no', 'Only unviewed'),
     )
+    
     q = django_filters.CharFilter(label='', method='text_filter', widget=TextInput(attrs={'placeholder': 'Search'}))
     auction = django_filters.ModelChoiceFilter(label='',queryset=None, empty_label='Any auction', to_field_name='slug', method='filter_by_auction_model',)
     category = django_filters.ModelChoiceFilter(label='', queryset=Category.objects.all().order_by('name'), method='filter_by_category', empty_label='Any category', )
@@ -47,6 +52,9 @@ class LotFilter(django_filters.FilterSet):
     a = django_filters.CharFilter(label='', method='filter_by_auction', widget=TextInput(attrs={'style': 'display:none'}))
     viewed = django_filters.ChoiceFilter(label='', choices=VIEWED, method='filter_by_viewed', empty_label='All',)
     
+
+
+
     class Meta:
         model = Lot
         fields = {} # nothing here so no buttons show up
@@ -54,6 +62,9 @@ class LotFilter(django_filters.FilterSet):
     @property
     def qs(self):
         primary_queryset=super(LotFilter, self).qs
+        
+        if self.regardingAuction:
+            primary_queryset = primary_queryset.filter(auction=self.regardingAuction)
         primary_queryset = primary_queryset.filter(banned=False).order_by("-lot_number").select_related('species_category', 'user')
         try:
             # watched lots
@@ -143,6 +154,8 @@ class LotFilter(django_filters.FilterSet):
         except:
             pass
         try:
+            # fixme - this should use request cookie
+            
             if self.request.user.userdata.latitude:
                 # seems like we need to annotate twice here
                 return queryset.annotate(distance=distance_to(self.request.user.userdata.latitude, self.request.user.userdata.longitude))\
@@ -162,6 +175,7 @@ class LotFilter(django_filters.FilterSet):
 
     def filter_by_auction(self, queryset, name, value):
         self.allRecommended = False
+        self.regardingAuction = None
         try:
             if self.request.GET['auction']:
                 # if both this and auction are specified, auction wins and this does nothing
@@ -172,6 +186,7 @@ class LotFilter(django_filters.FilterSet):
 
     def filter_by_auction_model(self, queryset, name, value):
         self.allRecommended = False
+        self.regardingAuction = None
         return queryset.filter(auction=value)
 
     def filter_by_status(self, queryset, name, value):

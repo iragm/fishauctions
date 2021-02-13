@@ -8,14 +8,14 @@ $('#auction-form').submit(function(event){
 });
 </script>
 {% endblock %}
-{% block title %}Auction{% endblock %}
+{% block title %}{{ title }}{% endblock %}
 {% block content %}
 <div class="container mt-5 mb-5">
         <div class="col-md-10 offset-md1">
           <div style='padding: 2vw;'>
-            {% if auction.closed %}
-            This auction has ended.  The club made a total of ${{ auction.club_profit|floatformat:2 }}<br><br>
-            {% endif %}
+            <h4>{{ title }}</h4>{% if new %}<br><span class='text-muted'>
+                This will create a group auction that other people can add lots to.
+                If you are trying to sell a single lot, you should <a href='/lots/new'>create a new lot</a> instead.</span><br><br>{% endif %}
             {% crispy form form.helper %}
         </div>
     </div>

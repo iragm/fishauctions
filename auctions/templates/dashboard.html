@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %} Admin Dashboard {% endblock %}
+{% load static %}
+{% block content %}
+<div class="container mt-5 mb-5">
+    <div class="row">
+        <div class="col-md-10 offset-md1">
+            <h1>Admin Dashboard</h1>
+            <table class="table">
+                <tr>
+                  <td>total_users:</td>
+                  <td> {{ total_users }}
+                  </td>
+                </tr>
+                <tr>
+                <tr>
+                  <td>unsubscribes:</td>
+                  <td> {{ unsubscribes }}
+                  </td>
+                </tr>
+                <tr>
+                <tr>
+                  <td>using_list_view:</td>
+                  <td> {{ using_list_view }}
+                  </td>
+                </tr>
+                <tr>
+                <tr>
+                  <td>light_theme:</td>
+                  <td> {{ light_theme }}
+                  </td>
+                </tr>
+                <tr>
+                  <td>has_location:</td>
+                  <td> {{ has_location }}
+                  </td>
+                </tr>
+                <tr>
+                <tr>
+                  <td>new_lots_last_7_days:</td>
+                  <td> {{ new_lots_last_7_days }}
+                  </td>
+                </tr>
+                <tr>
+                <tr>
+                  <td>new_lots_last_30_days:</td>
+                  <td> {{ new_lots_last_30_days }}
+                  </td>
+                </tr>
+                <tr>
+                <tr>
+                  <td>bidders_last_30_days:</td>
+                  <td> {{ bidders_last_30_days }}
+                  </td>
+                </tr>
+                <tr>
+            </table>
+            
+            <script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.3/dist/Chart.min.js"></script>
+            <canvas id="myChart" ></canvas>
+            <script>
+                var ctx = document.getElementById('myChart').getContext('2d');
+                new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: [{% for day in last_activity_days %}'{{day}} days ago',{%endfor%}],
+                        datasets: [{
+                            label: 'Number of users',
+                            backgroundColor: 'rgba(52, 152, 219, 0.4)',
+                            data: [{% for data in last_activity_count %}{{data}},{%endfor%}],
+                        },
+                    ]
+                    },
+                    options: {
+                        legend: {
+                            display: true
+                        },
+                        title: {
+                            display: true,
+                            text: 'Last user activity'
+                        }
+                    }    
+                });
+            </script> 
+        </div>
+    </div>
+</div>  
+{% endblock %}
+
+
+{% block extra_js %}
+
+{% endblock %}

@@ -16,7 +16,14 @@
   'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
   })(window,document,'script','dataLayer','{{ GOOGLE_TAG_ID }}');</script>{% endif %}
   <!-- End Google Tag Manager -->
-<html class="no-js" lang="en">
+{% if rewrite_url %}
+<script>
+window.onload = function() {
+    history.pushState("{{ rewrite_url }}", "", "{{ rewrite_url }}");
+}
+</script>
+{% endif %}
+  <html class="no-js" lang="en">
     <head>
         <meta charset="utf-8" />
         <title>
@@ -127,6 +134,7 @@
                   <li class="nav-item">
                     <a class="nav-link" href="/admin/auth/user/?o=-4">Admin Site</a>
                   </li>
+                  <li class="nav-item"><a class="nav-link" href="/dashboard">Dashboard</a></li>
                   {% endif %}
                   <li class="nav-item dropdown">
                     <a class="nav-link dropdown-toggle" data-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">About</a>

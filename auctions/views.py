@@ -14,6 +14,7 @@ from django.views.generic import ListView, DetailView, View, TemplateView
 from django.urls import reverse
 from django.views.generic.edit import UpdateView, CreateView, DeleteView, FormMixin
 from django.db.models import Count, Case, When, IntegerField, Q
+from django.db.models.functions import TruncDay
 from django.contrib.messages.views import SuccessMessageMixin
 from allauth.account.models import EmailAddress
 from el_pagination.views import AjaxListView
@@ -38,6 +39,7 @@ class LotListView(AjaxListView):
     The context is overridden to set the view type"""
     model = Lot
     template_name = 'all_lots.html'
+    auction = None
 
     def get_page_template(self):
         try:
@@ -59,7 +61,7 @@ class LotListView(AjaxListView):
         context = super().get_context_data(**kwargs)
         if self.request.GET.get('page'):
             del data['page'] # required for pagination to work
-        context['filter'] = LotFilter(data, queryset=self.get_queryset(), request=self.request, ignore=True)
+        context['filter'] = LotFilter(data, queryset=self.get_queryset(), request=self.request, ignore=True, regardingAuction = self.auction)
         context['embed'] = 'all_lots'
         try:
             context['lotsAreHidden'] = len(UserIgnoreCategory.objects.filter(user=self.request.user))
@@ -76,12 +78,14 @@ class LotListView(AjaxListView):
             try:
                 context['auction'] = Auction.objects.get(slug=data['a'])
             except:
-                context['auction'] = None
+                context['auction'] = self.auction
         if context['auction']:
-            try:
-                context['auction_tos'] = AuctionTOS.objects.get(auction=context['auction'].pk, user=self.request.user.pk)
-            except:
-                messages.error(self.request, f"Please <a href='/auctions/{context['auction'].slug}/'>read the auction's rules and confirm your pickup location</a> to bid")
+            pass
+            # try:
+            #     context['auction_tos'] = AuctionTOS.objects.get(auction=context['auction'].pk, user=self.request.user.pk)
+            # except:
+            #     # this message gets added to every scroll event.  Also, it's just noise
+            #     messages.error(self.request, f"Please <a href='/auctions/{context['auction'].slug}/'>read the auction's rules and confirm your pickup location</a> to bid")
         else:
             # this will be a mix of auction and non-auction lots
             context['display_auction_on_lots'] = True
@@ -641,21 +645,33 @@ class PickupLocationsCreate(LoginRequiredMixin, CreateView):
 
 class AuctionUpdate(UpdateView):
     """The form users fill out to edit or create an auction"""
-    
+    model = Auction
+    template_name = 'auction_form.html'
+    form_class = CreateAuctionForm    
+
     def dispatch(self, request, *args, **kwargs):
         if not (request.user.is_superuser or self.get_object().created_by == self.request.user):
             raise PermissionDenied()
-        lotsAlreadyCreated = Lot.objects.filter(auction=self.get_object().pk)
-        if len(lotsAlreadyCreated):
-            messages.warning(request, "Lots have already been added to this auction.  Don't make large changes!")
+        if self.get_object().invoiced:
+            raise PermissionDenied()
+        else:
+            lotsAlreadyCreated = Lot.objects.filter(auction=self.get_object().pk)
+            if len(lotsAlreadyCreated):
+                messages.warning(request, "Lots have already been added to this auction.  Don't make large changes!")
         return super().dispatch(request, *args, **kwargs)
     
     def get_success_url(self):
         return "/auctions/" + str(self.kwargs['slug'])
     
-    model = Auction
-    template_name = 'auction_form.html'
-    form_class = CreateAuctionForm
+    def get_form_kwargs(self, *args, **kwargs):
+        kwargs = super().get_form_kwargs(*args, **kwargs)
+        kwargs['user'] = self.request.user
+        return kwargs
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['title'] = f"Edit {self.get_object()}"
+        return context
 
 class AuctionInvoices(DetailView):
     """List of invoices associated with an auction"""
@@ -755,7 +771,7 @@ class ViewLot(DetailView):
                 context['user_tos'] = True
         except:
             context['user_tos'] = False
-        if not context['user_tos']:
+        if not context['user_tos'] and not lot.ended:
             messages.error(self.request, f"Please <a href='/auctions/{lot.auction.slug}/?next=/lots/{ lot.pk }/'>read the auction's rules and confirm your pickup location</a> to bid")
         if self.request.user.is_authenticated:
             userData, created = UserData.objects.get_or_create(
@@ -828,9 +844,7 @@ class LotValidation(LoginRequiredMixin):
     def form_valid(self, form, **kwargs):
         """
         There is quite a lot that needs to be done before the lot is saved
-        Some messages should get added
         """
-        
         lot = form.save(commit=False)
         lot.user = User.objects.get(id=self.request.user.pk)
         lot.date_of_last_user_edit = timezone.now()
@@ -983,36 +997,80 @@ class BidDelete(LoginRequiredMixin, DeleteView):
     def get_success_url(self):
         return f"/lots/{self.get_object().lot_number.pk}/{self.get_object().lot_number.slug}/"
 
-@login_required
-def createAuction(request):
-    if request.method == 'POST':
-        form = CreateAuctionForm(request.POST)
-        if form.is_valid():
-            auction = form.save(commit=False)
-            auction.created_by = User.objects.get(id=request.user.id)
-            if not auction.lot_submission_end_date:
-                auction.lot_submission_end_date = auction.date_end
-            auction.save()            
-            print(str(auction.created_by) + " has created a new auction " + auction.title)
-            messages.success(request, "Auction created!  Now, create a location to exchange lots.")
-            response = redirect(f'/locations/new/?next=/auctions/{auction.slug}')
-            # Perhaps we should redirect to the auction edit page?
-            return response
-    else:
-        form = CreateAuctionForm()
-    return render(request,'auction_form.html', {'form':form})
+class AuctionCreateView(LoginRequiredMixin, CreateView):
+    """
+    Creating a new auction
+    """    
+    model = Auction
+    template_name = 'auction_form.html'
+    form_class = CreateAuctionForm
+    
+    def get_success_url(self):
+        messages.success(self.request, "Auction created!  Now, create a location to exchange lots.")
+        return f'/locations/new/?next=/auctions/{self.object.slug}'
+    
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['title'] = "New auction"
+        context['new'] = True
+        return context
+
+    def get_form_kwargs(self, *args, **kwargs):
+        kwargs = super().get_form_kwargs(*args, **kwargs)
+        kwargs['user'] = self.request.user
+        return kwargs
+
+    def form_valid(self, form, **kwargs):
+        """Set created by to the user"""
+        auction = form.save(commit=False)
+        auction.created_by = User.objects.get(id=self.request.user.pk)
+        auction.save()
+        return super().form_valid(form)
+
+# @login_required
+# def createAuction(request):
+#     if request.method == 'POST':
+#         form = CreateAuctionForm(request.POST)
+#         if form.is_valid():
+#             auction = form.save(commit=False)
+#             auction.created_by = User.objects.get(id=request.user.id)
+#             if not auction.lot_submission_end_date:
+#                 auction.lot_submission_end_date = auction.date_end
+#             auction.save()            
+#             print(str(auction.created_by) + " has created a new auction " + auction.title)
+#             messages.success(request, "Auction created!  Now, create a location to exchange lots.")
+#             response = redirect(f'/locations/new/?next=/auctions/{auction.slug}')
+#             # Perhaps we should redirect to the auction edit page?
+#             return response
+#     else:
+#         form = CreateAuctionForm()
+#     return render(request,'auction_form.html', {'form':form})
 
 class AuctionInfo(FormMixin, DetailView):
     """Main view of a single auction"""
     template_name = 'auction.html'
     model = Auction
     form_class = AuctionTOSForm
-    
+    rewrite_url = None
+    auction = None
+
+    def get_object(self, *args, **kwargs):
+        if self.auction:
+            return self.auction
+        else:
+            try:
+                return Auction.objects.get(slug=self.kwargs.get(self.slug_url_kwarg))
+            except:
+                raise Http404("No auctions found matching the query")
+
     def get_success_url(self):
         data = self.request.GET.copy()
-        if len(data) == 0:
-            data['next'] = f'/lots/?auction={self.get_object().slug}'
-        return data['next']
+        try:
+            if not data['next']:
+                data['next'] = f'/lots/?auction={self.get_object().slug}'
+            return data['next']
+        except Exception as e:
+            return f'/lots/?auction={self.get_object().slug}'
 
     def get_form_kwargs(self):
         form_kwargs = super().get_form_kwargs()
@@ -1054,8 +1112,10 @@ class AuctionInfo(FormMixin, DetailView):
             else:
                 i_agree = False
             if self.request.user.is_authenticated and not context['ended']:
-                messages.add_message(self.request, messages.ERROR, "Please confirm you have read these rules by selecting your pickup location at the bottom of this page.")
+                if not self.get_object().no_location:
+                    messages.add_message(self.request, messages.ERROR, "Please confirm you have read these rules by selecting your pickup location at the bottom of this page.")
         context['form'] = AuctionTOSForm(user=self.request.user, auction=self.get_object(), initial={'user': self.request.user.id, 'auction':self.get_object().pk, 'pickup_location':existingTos, "i_agree": i_agree})
+        context['rewrite_url'] = self.rewrite_url
         return context
 
     def post(self, request, *args, **kwargs):
@@ -1097,26 +1157,31 @@ def toDefaultLandingPage(request):
     def tos_check(request, auction):
         if not auction:
             if request.user.is_authenticated:
-                return redirect('/lots/')
+                return AllLots.as_view()(request)
+                #return redirect('/lots/')
             else:
                 # promo page for non-logged in users
-                return redirect('/about/')
+                #return redirect('/about/')
+                return promoSite(request)
         try:
             # Did the user sign the tos yet?
             AuctionTOS.objects.get(user=request.user, auction=auction)
             # If so, redirect them to the lot view
-            return redirect(f'/lots?a={auction.slug}')
-        except:
+            #return redirect(f'/lots?a={auction.slug}')
+            #request.path = f'/lots?a={auction.slug}'
+            return AllLots.as_view(rewrite_url=f'/?{auction.slug}', auction=auction)(request)
+        except Exception as e:
             # No tos?  Take them there so they can sign
-            return redirect(f"/auctions/{auction.slug}/")
+            #return redirect(f"/auctions/{auction.slug}/")
+            return AuctionInfo.as_view(rewrite_url=f'/?{auction.slug}', auction=auction)(request)
 
     data = request.GET.copy()
-    print(request.META.get('HTTP_REFERER'))
+    #print(request.META.get('HTTP_REFERER'))
     try:
         # if the slug was set in the URL
         auction = Auction.objects.filter(slug=list(data.keys())[0])[0]
         return tos_check(request, auction)
-    except:
+    except Exception as e:
         # if not, check and see if the user has been participating in an auction
         try:
             auction = UserData.objects.get(user=request.user).last_auction_used
@@ -1201,8 +1266,16 @@ class Leaderboard(ListView):
 
 class AllLots(LotListView):
     """Show all lots"""
+    rewrite_url = None # use JS to rewrite the shown URL.  This is used only for auctions.
+    auction = None
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        if not context['auction']:
+            context['auction'] = self.auction
+        if self.rewrite_url:
+            if 'auction' not in self.request.GET.copy() and 'q' not in self.request.GET.copy():
+                context['rewrite_url'] = self.rewrite_url
         context['view'] = 'all'
         return context
 
@@ -1546,6 +1619,39 @@ class LotChartView(View):
                 'data': data,
             })
         raise PermissionDenied()
+
+class AdminDashboard(TemplateView):
+    """Provides an at-a-glance view of some interesting stats"""
+    template_name = 'dashboard.html'
+
+    def dispatch(self, request, *args, **kwargs):
+        if not (request.user.is_superuser):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        qs = UserData.objects.filter(user__is_active=True)
+        context['total_users'] = qs.count()
+        context['unsubscribes'] = qs.filter(has_unsubscribed=True).count()
+        context['using_list_view'] = qs.filter(use_list_view=True).count()
+        context['light_theme'] = qs.filter(use_dark_theme=False).count()
+        context['has_location'] = qs.exclude(latitude=0).count()
+        context['new_lots_last_7_days'] = Lot.objects.filter(date_posted__gte=timezone.now() - datetime.timedelta(days=7)).count()
+        context['new_lots_last_30_days'] = Lot.objects.filter(date_posted__gte=timezone.now() - datetime.timedelta(days=30)).count()
+        context['bidders_last_30_days'] = qs.filter(user__bid__last_bid_time__gte=timezone.now() - datetime.timedelta(days=30)).values('user').distinct().count()
+        #source of lot images?
+        activity = qs.filter(last_activity__gte=timezone.now() - datetime.timedelta(days=60))\
+            .annotate(day=TruncDay('last_activity')).order_by('-day')\
+            .values('day')\
+            .annotate(c=Count('pk'))\
+            .values('day', 'c')
+        context['last_activity_days'] = []
+        context['last_activity_count'] = []
+        for day in activity:
+            context['last_activity_days'].append((timezone.now()-day['day']).days)
+            context['last_activity_count'].append(day['c'])
+        return context
 
 class ClubMap(TemplateView):
     template_name = 'clubs.html'

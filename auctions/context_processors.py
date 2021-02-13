@@ -48,8 +48,6 @@ def dismissed_cookies_tos(request):
             hide_tos_banner = True
     except:
         pass
-    else:
-        print(request.COOKIES['hide_tos_banner'])
     if request.user.is_authenticated:
         userData, created = UserData.objects.get_or_create(
             user = request.user,

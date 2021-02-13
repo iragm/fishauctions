@@ -151,8 +151,8 @@ function initMap() {
             <a href='/lots/?a={{auction.slug}}' class="btn btn-primary active">View all lots for this auction</a>
             <br><br>
             {% if auction.created_by.pk == request.user.id or request.user.is_superuser %}
-                <a href="/auctions/{{auction.slug}}/edit/" class="btn btn-warning mr-1 mt-1">Edit this auction</a>
-                <a href="/locations/new/?next=/auctions/{{auction.slug}}" class="btn btn-primary mr-1 mt-1">Add pickup location</a>
+                {% if not auction.invoiced %}<a href="/auctions/{{auction.slug}}/edit/" class="btn btn-warning mr-1 mt-1">Edit this auction</a>
+                <a href="/locations/new/?next=/auctions/{{auction.slug}}" class="btn btn-primary mr-1 mt-1">Add pickup location</a>{% endif %}
                 <a href="/locations/" class="btn btn-primary mr-1 mt-1">All pickup locations</a>
                 <a href="/auctions/{{auction.slug}}/stats/" class="btn btn-primary mr-1 mt-1">Stats</a>
                 <a href="/auctions/{{auction.slug}}/invoices/" class="btn btn-primary mr-1 mt-1">Invoices</a>

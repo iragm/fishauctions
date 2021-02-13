@@ -159,7 +159,7 @@ class Auction(models.Model):
 	created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
 	location = models.CharField(max_length=300, null=True, blank=True)
 	location.help_text = "State or region of this auction"
-	notes = MarkdownField(rendered_field='notes_rendered', validator=VALIDATOR_STANDARD, blank=True, null=True, verbose_name="Rules", default="## General information\n\nYou should edit this section to suit your auction\n\n## Prohibited items\n- You cannot sell any fish or plants banned by state law.\n- You cannot sell large hardware items such as tanks.\n\n## Rules\n- All lots must be properly bagged.  No leaking bags!\n- You do not need to be a club member to buy or sell lots.")
+	notes = MarkdownField(rendered_field='notes_rendered', validator=VALIDATOR_STANDARD, blank=True, null=True, verbose_name="Rules", default="")
 	notes.help_text = "To add a link: [Link text](https://www.google.com)"
 	notes_rendered = RenderedMarkdownField(blank=True, null=True)
 	code_to_add_lots = models.CharField(max_length=255, blank=True, null=True)
@@ -173,7 +173,7 @@ class Auction(models.Model):
 	max_lots_per_user = models.PositiveIntegerField(null=True, blank=True)
 	max_lots_per_user.help_text = "A user won't be able to add more than this many lots to this auction"
 	allow_additional_lots_as_donation = models.BooleanField(default=True)
-	allow_additional_lots_as_donation.help_text = "If you don't max lots per user, this has no effect"
+	allow_additional_lots_as_donation.help_text = "If you don't set max lots per user, this has no effect"
 	email_first_sent = models.BooleanField(default=False)
 	email_second_sent = models.BooleanField(default=False)
 	email_third_sent = models.BooleanField(default=False)

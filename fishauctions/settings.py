@@ -74,6 +74,7 @@ INSTALLED_APPS = [
     'location_field',
     'channels',
     'debug_toolbar',
+    'markdownfield',
 ]
 ASGI_APPLICATION = "fishauctions.asgi.application"
 MIDDLEWARE = [
@@ -277,3 +278,8 @@ LOCATION_FIELD = {
         ),
     },
 }
+
+STATICFILES_FINDERS = [
+    'django.contrib.staticfiles.finders.FileSystemFinder',
+    'django.contrib.staticfiles.finders.AppDirectoriesFinder',
+]

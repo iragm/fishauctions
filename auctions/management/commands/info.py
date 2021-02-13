@@ -16,38 +16,7 @@ class Command(BaseCommand):
     help = 'Just a scratchpad to do things'
 
     def handle(self, *args, **options):
-        #invoices = Invoice.objects.filter(pk__in=[259, 286, 272, 288, 258, 250])
-        #total = 0
-        # for invoice in invoices:
-        #     total += invoice.total_bought
-        #     total += invoice.total_sold
-        #     # total += invoice.lots_bought * 3
-        #     # total += invoice.lots_sold_successfully * 3
-        #     # unsold = invoice.lots_sold_successfully - invoice.lots_sold
-        #     # if unsold > 0:
-        #     #     total += unsold
-        # print(total)
-            #clubs = Club.objects.filter(name__startswith="The")
-        #for club in clubs:
-        #    print(club.name)
-            #club.name = club.name.replace("The ", "")
-            #club.save()
-        # #auctionslug = 'pvas'
-        # auctionslug = 'tfcb-annual'
-        # users = User.objects.all().annotate(
-        #     #lots_submitted=Count('lot', filter=Q(lot__auction__slug__icontains='))
-        #     lots_submitted=Count('lot', filter=Q(lot__auction__slug__icontains=auctionslug),\
-        # )).annotate(mean_lot_value=Avg('lot__winning_price', filter=Q(lot__auction__slug__icontains=auctionslug)))
         
-        # for user in users:
-        #     if user.lots_submitted > 0:
-        #         print(user.lots_submitted, user.mean_lot_value)
-        #lot.shipping_locations.filter(pk=53).exists()
-        #for i in dir(lot.shipping_locations):
-        #    print(i)
-        
-
-
         # # get any users who have opted into the weekly email
         # users = User.objects.filter(\
         #     #Q(userdata__email_me_about_new_auctions=True) | Q(userdata__email_me_about_new_local_lots=True) | | Q(userdata__email_me_about_new_lots_ship_to_location=True)\ # fixme - why is this busted?

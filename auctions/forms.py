@@ -127,7 +127,10 @@ class PickupLocationForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.user = user
         self.fields['description'].widget.attrs = {'rows': 3}
-        self.fields['auction'].queryset = Auction.objects.filter(created_by=self.user).filter(date_end__gte=timezone.now()).order_by('date_end')
+        if self.user.is_superuser:
+            self.fields['auction'].queryset = Auction.objects.filter(date_end__gte=timezone.now()).order_by('date_end')
+        else:
+            self.fields['auction'].queryset = Auction.objects.filter(created_by=self.user).filter(date_end__gte=timezone.now()).order_by('date_end')
         self.helper = FormHelper
         self.helper.form_method = 'post'
         self.helper.form_id = 'location-form'
@@ -179,17 +182,23 @@ class CreateAuctionForm(forms.ModelForm):
             'notes': forms.Textarea,
         }
     def __init__(self, *args, **kwargs):
+        self.user = kwargs.pop('user')
         super().__init__(*args, **kwargs)
         self.fields['notes'].widget.attrs = {'rows': 10}
+        # set the initial value of
+        if not self.instance.pk:
+            try:
+                lastAuction = Auction.objects.filter(created_by=self.user).order_by('-date_end')[0]
+                self.fields['notes'].initial = "These rules are unchanged from the last auction\n\n" + lastAuction.notes
+            except Exception as e:
+                # no old auction
+                self.fields['notes'].initial = "## General information\n\nYou should remove this line and edit this section to suit your auction.  Use the formatting here as an example.\n\n## Prohibited items\n- You cannot sell any fish or plants banned by state law.\n- You cannot sell large hardware items such as tanks.\n\n## Rules\n- All lots must be properly bagged.  No leaking bags!\n- You do not need to be a club member to buy or sell lots."
         self.helper = FormHelper
         self.helper.form_method = 'post'
         self.helper.form_id = 'auction-form'
         self.helper.form_class = 'form'
         self.helper.form_tag = True
         self.helper.layout = Layout(
-            HTML("<h4>Create new club auction</h4><br><span class='text-muted'>\
-                This will create a group auction that other people can add lots to.\
-                If you are trying to sell a single lot, you should <a href='/lots/new'>create a new lot</a> instead.</span><br><br>"),
             'title',
             'notes',
             Div(
@@ -221,10 +230,17 @@ class CreateAuctionForm(forms.ModelForm):
 
     def clean(self):
         cleaned_data = super().clean()
-        #image = cleaned_data.get("image")
-        #image_source = cleaned_data.get("image_source")
-        #if image and not image_source:
-        #    self.add_error('image_source', "Is this your picture?")
+        date_end = cleaned_data.get("date_end")
+        date_start = cleaned_data.get("date_start")
+        lot_submission_end_date = cleaned_data.get("lot_submission_end_date")
+        if date_end < timezone.now() + datetime.timedelta(hours=24):
+            self.add_error('date_end', "The end date can't be in the past")
+        if date_end < date_start:
+            self.add_error('date_end', "The end date can't be before the start date")
+        if lot_submission_end_date:
+            if lot_submission_end_date > date_end:
+                self.add_error('lot_submission_end_date', "Submission should end before the auction ends")
+        return cleaned_data
 
 class CreateLotForm(forms.ModelForm):
     """Form for creating or updating of lots"""
