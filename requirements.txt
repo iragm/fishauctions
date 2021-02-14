@@ -8,7 +8,7 @@ cffi==1.14.4
 channels==3.0.3
 chardet
 constantly==15.1.0
-cryptography==3.3.1
+cryptography==3.3.2
 daphne==3.0.1
 defusedxml==0.6.0
 Django==3.1.4
