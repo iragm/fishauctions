@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %} User map {% endblock %}
+{% load static %}
+
+{% block extra_js %}
+<script
+src="https://maps.googleapis.com/maps/api/js?key={{google_maps_api_key}}&callback=initMap&libraries=&v=weekly"
+async
+></script>
+<script>
+
+function initMap() {
+    var map;
+    var bounds = new google.maps.LatLngBounds();
+    map = new google.maps.Map(document.getElementById("map_canvas"));
+    map.setZoom(4);
+    map.setCenter({lat:39, lng:-97});
+    // Multiple Markers
+    var markers = [
+        {% for user in users %}
+        ["{{ user.username }}", {{ user.userdata.latitude }}, {{ user.userdata.longitude }}],
+        {% endfor %}
+    ];
+
+    var infoWindowContent = [
+        {% for user in users %}
+        ['<div class="info_content" style="color:black;">' +
+        '<h5>{{ user.first_name }} {{ user.last_name }}</h5>' +
+        '<p>{{ user.username }}<br>{{ user.email }}<br> Volume top: {{user.userdata.volume_percentile}}%<br>' +
+        'Last active {{user.userdata.last_activity}}%<br>' +
+        '<a href="/user/{{ user.username }}" target="_blank">Userpage</a><br>' +
+        '<a href="/admin/auth/user/{{ user.pk }}/change/" target="_blank">Admin</a><br>' +
+        '</div></p>'],
+        {% endfor %}
+    ];
+    var infoWindow = new google.maps.InfoWindow(), marker, i; 
+    for( i = 0; i < markers.length; i++ ) {
+        var position = new google.maps.LatLng(markers[i][1], markers[i][2]);
+        bounds.extend(position);
+        marker = new google.maps.Marker({
+            position: position,
+            map: map,
+            title: markers[i][0]
+        });
+        google.maps.event.addListener(marker, 'click', (function(marker, i) {
+            return function() {
+                infoWindow.setContent(infoWindowContent[i][0]);
+                infoWindow.open(map, marker);
+            }
+        })(marker, i));       
+    }
+}
+</script>
+{% endblock %}
+{% block content %}
+<div class="container mt-5 mb-5">
+    <div class="row">
+        <div class="col-xl-10 offset-md1">
+            <h1>User map</h1>
+            <div id="map_wrapper" style='height: 600px;'>
+                <div id="map_canvas" class="mapping" style='width: 100%; height: 100%;'></div>
+            </div>
+            {% if not has_user_location %}
+            <span><a href="#" onclick="setLocation()">{{ location_message }}</a></span>
+            {% endif %}
+        </div>
+    </div>
+</div>  
+{% endblock %}

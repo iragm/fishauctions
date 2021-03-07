@@ -130,7 +130,7 @@ window.onload = function() {
                     <a class="nav-link" href="/lots/watched">Watched lots</a>
                   </li>  
                   <li class="nav-item">
-                  <a class="nav-link" href="/lots/user/?user={{request.user.pk}}">My lots <span id="total_unread_lot_messages" class='badge-pill badge badge-warning' style='color:black;font-weight:900'></span></a>
+                  <a class="nav-link" href="/lots/user/?user={{request.user.username}}">My lots <span id="total_unread_lot_messages" class='badge-pill badge badge-warning' style='color:black;font-weight:900'></span></a>
                   </li>
                   {% endif %}
                   {% if request.user.is_superuser %}
@@ -138,13 +138,15 @@ window.onload = function() {
                     <a class="nav-link" href="/admin/auth/user/?o=-4">Admin Site</a>
                   </li>
                   <li class="nav-item"><a class="nav-link" href="/dashboard">Dashboard</a></li>
+                  <li class="nav-item"><a class="nav-link" href="{% url 'admin_user_map' %}?view=recent&filter=24">User Map</a></li>
+                   
                   {% endif %}
                   <li class="nav-item dropdown">
                     <a class="nav-link dropdown-toggle" data-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">About</a>
                     <div class="dropdown-menu">
                       <a class="dropdown-item" href="/about/">About site</a>
                       <a class="dropdown-item" href="/auctions/tfcb-annual-auction/">Example auction rules</a>
-                      <a class="dropdown-item" href="/lots/?a=tfcb-annual-auction">Example auction lots</a>
+                      <a class="dropdown-item" href="/lots/?auction=tfcb-annual-auction">Example auction lots</a>
                       <a class="dropdown-item" href="/tos/">Terms and Conditions</a>
                       </div>
                   </li>
@@ -161,12 +163,12 @@ window.onload = function() {
                       <a class="dropdown-item" href="/lots/won">Won lots</a>
                       <div class="dropdown-divider"></div>
                       <h6 class="dropdown-header">Account</h6>
-                      <a class="dropdown-item" href="/account/">Account information</a>
-                      <a class="dropdown-item" href="/feedback/">Feedback</a>
-                      <a class="dropdown-item" href="/invoices/">Invoices</a>
-                      <a class="dropdown-item" href="/users/{{ request.user.pk }}/location/">Contact info</a>
-                      <a class="dropdown-item" href="/users/{{ request.user.pk }}/preferences/">Preferences</a>
-                      <a class="dropdown-item" href="/ignore">Ignore categories</a>
+                      <a class="dropdown-item" href="{% url 'account' %}">Account information</a>
+                      <a class="dropdown-item" href="{% url 'feedback' %}">Feedback</a>
+                      <a class="dropdown-item" href="{% url 'my_invoices' %}">Invoices</a>
+                      <a class="dropdown-item" href="{% url 'contact_info' %}">Contact info</a>
+                      <a class="dropdown-item" href="{% url 'preferences' %}">Preferences</a>
+                      <a class="dropdown-item" href="{% url 'ignore_categories' %}">Ignore categories</a>
                       <form method="post" action="{% url 'account_logout' %}">
                         {% csrf_token %}
                         {% if redirect_field_value %}
@@ -220,7 +222,9 @@ window.onload = function() {
         {% endif %}
         {# if the location is not set, we can ask for it with a simple location_message, or use custom logic on any element that calls the function setLocation #}
         {% if not has_user_location and location_message %}
-        <div class="alert alert-secondary mb-0" role="alert"><a href="#" onclick="setLocation()">{{ location_message }}</a></div>
+        <div class="alert alert-secondary mb-0 alert-dismissible fade show" role="alert"><a href="#" onclick="setLocation()">{{ location_message }}</a> <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+          <span aria-hidden="true">&times;</span>
+        </button></div>
         {% endif %}
         <script>
         function setLocation(){ 
@@ -243,11 +247,17 @@ window.onload = function() {
         </script>
         {% if messages %}
             {% for message in messages %}
+            <div class="alert 
             {% if "error" in message.tags %}
-            <div class="alert alert-danger" role="alert">{{ message|safe }} </div>
+            alert-danger
             {% else %}
-            <div class="alert alert-{{ message.tags }}" role="alert">{{ message|safe }} </div>
+            alert-{{ message.tags }}
             {% endif %}
+            alert-dismissible fade show" role="alert">{{ message|safe }} 
+            <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+              <span aria-hidden="true">&times;</span>
+            </button>
+            </div>
             {% endfor %}
         {% endif %}
 

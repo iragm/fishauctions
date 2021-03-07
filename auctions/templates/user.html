@@ -8,6 +8,7 @@
             <h1>{{ user.username }}</h1>
             <h4>Account information</h4>
             <table class="table">
+                {% if request.user.is_authenticated %}
                 <tr>
                   <td>Email:</td>
                   <td> {% if data.email_visible %}
@@ -27,6 +28,9 @@
                     <td> {{ data.last_activity }}
                     </td>
                   </tr>
+                  {% else %}
+                  <a href="/login/?next={% firstof request.path '/' %}">Sign in to see this user's info</a>
+                  {% endif %}
                   <tr>
                     <td>Lots sold:<br>Feedback:</td>
                     <td> {{ data.lots_sold }}<br>
@@ -45,7 +49,7 @@
             <table class="table">
                 <tr>
                     <td>Location:</td>
-                    <td>{% if data.location %}{{ data.location }}{%else%} <a href='/users/edit/{{user.pk}}'>Not set</a>{% endif %}
+                    <td>{% if data.location %}{{ data.location }}{%else%} <a href="{% url 'contact_info' %}">Not set</a>{% endif %}
                     </td>
                 </tr>
                 <tr>
@@ -77,35 +81,35 @@
             
             <br>
             <br>
-            <a href="/users/{{user.pk}}/location/" class="btn btn-primary mr-1 mt-1">Contact info</a> 
-            <a href="/users/{{user.pk}}/preferences/" class="btn btn-primary mr-1 mt-1">Preferences</a> 
-            <a href="/users/{{user.pk}}/username/" class="btn btn-primary mr-1 mt-1">Change username</a> 
+            <a href="{% url 'contact_info' %}" class="btn btn-primary mr-1 mt-1">Contact info</a> 
+            <a href="{% url 'preferences' %}" class="btn btn-primary mr-1 mt-1">Preferences</a> 
+            <a href="{% url 'change_username' %}" class="btn btn-primary mr-1 mt-1">Change username</a> 
             <a href="/password/change/" class="btn btn-primary mr-1 mt-1">Change password</a>
             <a href="/email/" class="btn btn-primary mr-1 mt-1">Change email</a>
             <a href="/social/connections/" class="btn btn-primary mr-1 mt-1">Sign in with Google</a>
-            <a href="/ignore/" class="btn btn-primary mr-1 mt-1">Ignore categories</a>
+            <a href="{% url 'ignore_categories' %}/" class="btn btn-primary mr-1 mt-1">Ignore categories</a>
             
             {% endif %}
-            <a href='/lots/user/?user={{user.pk}}' class="btn btn-primary mr-1 mt-1">View all lots from this user</a>
+            <a href='/lots/user/?user={{user.username}}' class="btn btn-primary mr-1 mt-1">View all lots from this user</a>
             <br><br><h4>Feedback</h4>
             {% if seller_feedback or winner_feedback %}
                 {% if seller_feedback %}
                 <h5>Comments on lots sold by this user</h5>
                 {% for lot in seller_feedback %}
-                    <a href="/lots/{{ lot.lot_number }}/">{{ lot.lot_name}}</a>: {{ lot.feedback_text }} <span class='text-muted'>left by</span> <a href="/users/{{ lot.winner.pk }}/">{{ lot.winner }}</a><br><br>
+                    <a href="/lots/{{ lot.lot_number }}/{{ lot.slug }}/">{{ lot.lot_name}}</a>: {{ lot.feedback_text }} <span class='text-muted'>left by</span> <a href="{% url 'userpage' slug=lot.winner %}">{{ lot.winner }}</a><br><br>
                 {% endfor %}
                 {% endif %}
                 {% if winner_feedback %}
                 <h5>Comments on lots won by this user</h5>
                 {% for lot in winner_feedback %}
-                    <a href="/lots/{{ lot.lot_number }}/">{{ lot.lot_name}}</a>: {{ lot.winner_feedback_text }} <span class='text-muted'>left by</span> <a href="/users/{{ lot.user.pk }}/">{{ lot.user }}</a><br><br>
+                    <a href="/lots/{{ lot.lot_number }}//{{ lot.slug }}/">{{ lot.lot_name}}</a>: {{ lot.winner_feedback_text }} <span class='text-muted'>left by</span> <a href="{% url 'userpage' slug=lot.user %}">{{ lot.user }}</a><br><br>
                 {% endfor %}
                 {% endif %}
             {% else %}
                 There's no comments in this user's feedback yet
             {% endif %}
             <br><br>
-            {% if user.pk != request.user.id %}
+            {% if user.pk != request.user.id and request.user.is_authenticated %}
                 {% if banned %}
                 <form method="post" action="/api/users/unban/{{user.pk}}/">
                     {% csrf_token %}
@@ -119,6 +123,7 @@
                 {% endif %}
             {% endif %}
             {% if request.user.is_superuser %}
+            <a href='/admin/auth/user/{{user.pk}}/change/' class='btn btn-danger'>Admin</a>
             <br><b>Bought to sold ratio (higher is a seller):</b> {{ data.bought_to_sold|floatformat:2}}<br>
             <b>Viewed to bid ratio (lower number is a tire kicker):</b> {{ data.bid_to_view|floatformat:2}}<br>
             <b>Viewed to sold ratio (higher number indicates more selling):</b> {{ data.viewed_to_sold|floatformat:2}}<br>

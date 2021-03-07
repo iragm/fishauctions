@@ -6,7 +6,15 @@
   <div class="row">
 {% if not object_list %}
   {% if embed == 'all_lots' %}
-  <h5>No lots found</h5>
+    {% if auction %}
+      {% if not auction.started and not auction.closed %}
+        <h5>This auction hasn't started yet.  Check back {{ auction.date_start }}.</h5>
+      {% else %}
+      <h5>No lots found</h5>{#No lots have been added to the {{ auction }} yet.#}
+      {% endif %}
+    {% else %}
+    <h5>No lots found</h5>
+    {% endif %}
   {% else %}
   <h5>You've already seen all your recommended lots</h5>
   {% endif %}
@@ -18,7 +26,7 @@ box-shadow: 0px 0px 1px 2px rgba(238, 59, 59, 0.281),
 0px 0px 2px 3px rgba(255, 50, 50, .5),
 0px 0px 5px 4px rgba(255, 20, 20, 0.336);{%endif%}">
       <div class="card-header">
-        {% if lot.auction and display_auction_on_lots %}<span class='text-muted'><small>{{ lot.auction }}</small></span><br>{%endif%}
+        {% if lot.auction and display_auction_on_lots %}<span class='text-info'><small>{{ lot.auction }}</small></span><br>{%endif%}
         {% if lot.promoted %}<span class="badge badge-success">Promoted</span>{% endif %}{% if lot.is_watched_by_req_user %}<span class="badge" style='color:yellow; font-size:1.2em; text-shadow: 0px 0px 10px #000000;'>&#9733;</span>{% endif %}
         Lot {{ lot.lot_number }}
         {% if lot.auction %}
@@ -37,6 +45,9 @@ box-shadow: 0px 0px 1px 2px rgba(238, 59, 59, 0.281),
               {%endif%}
               {% endif %}
             {% endif %}
+          {% endif %}
+          {% if lot.banned %}
+                <span class="badge badge-danger">Banned</span>
           {% endif %}
           {% if lot.date_posted > lastView %}<span class="badge badge-info">New</span>{%endif%}
 

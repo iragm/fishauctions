@@ -21,4 +21,8 @@ You should now be looking at the cron tab editing screen.  Paste the following a
 # send auction notifications
 */3 * * * * cd /home/user/auction_site_production/ && /home/user/auction_site_production/venv/bin/python /home/user/auction_site_production/fishauctions/manage.py auction_emails
 
+# weekly promo email sent on Friday
+00 11 * * 5 cd /home/user/auction_site_production/ && /home/user/auction_site_production/venv/bin/python /home/user/auction_site_production/fishauctions/manage.py weekly_promo     
+
+
 ```

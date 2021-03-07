@@ -48,6 +48,9 @@
             {% endif %}
           {% endif %}
         {% if lot.is_watched_by_req_user %}<span class="badge" style='color:yellow; font-size:1.2em; text-shadow: 0px 0px 10px #000000;'>&#9733;</span>{% endif %}
+        {% if lot.banned %}
+        <span class="text-danger">Banned</span>
+        {% endif %}
       </td>
       <td>{% if lot.donation %}Donation{% else %}{{ lot.user }}{% endif %}</td>
       <td>{{ lot.species_category }}</td>

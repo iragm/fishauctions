@@ -165,7 +165,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                 <td><b>Quantity:</b></td><td>{{ lot.quantity }}</td>
             </tr>
             <tr>
-                <td><b>Seller:</b></td><td>{% if lot.donation %} A donation from {% endif %}<a href='/users/{{ lot.user.pk }}/'>{{ lot.user }}</a> {% if not lot.auction %}
+                <td><b>Seller:</b></td><td>{% if lot.donation %} A donation from {% endif %}<a href="{% url 'userpage' slug=lot.user %}">{{ lot.user }}</a> {% if not lot.auction %}
                     <span class='badge badge-light'>Lots sold: {{ lot.user.userdata.lots_sold }}</span> <span class='badge badge-success'>+{{ lot.user.userdata.positive_feedback_as_seller }}</span> <span class='badge badge-danger'>-{{ lot.user.userdata.negative_feedback_as_seller }}</span>
                     {% endif %}</td>
             </tr>
@@ -187,7 +187,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                     </span></b></td>
                     <td>
                     {% if lot.winner %}
-                        $<span id="price">{{lot.winning_price}}</span> <span id="high_bidder_name"><a href='/users/{{ lot.winner.pk }}/'>{{ lot.winner }}</a></span>
+                        $<span id="price">{{lot.winning_price}}</span> <span id="high_bidder_name"><a href="{% url 'userpage' slug=lot.winner %}">{{ lot.winner }}</a></span>
                     {% else %}
                         {% if lot.ended %}
                             Not sold
@@ -201,7 +201,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                                     {% if lot.high_bidder.pk == request.user.id %}
                                     <span id="high_bidder_name"> - you're winning!</span>
                                     {% else %}
-                                    <span id="high_bidder_name"><a href='/users/{{ lot.high_bidder.pk }}/'>{{ lot.high_bidder }}</a></span>
+                                    <span id="high_bidder_name"><a href="{% url 'userpage' slug=lot.high_bidder %}">{{ lot.high_bidder }}</a></span>
                                     {% endif %}
                                     <span id="your_bid">{% if viewer_bid %}Your max bid is $<span id='your_bid_price'>{{ viewer_bid }}</span>{% endif %}</span>
                                 </span>
@@ -257,13 +257,13 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
         </table>
         <span id="bid_area">
         {% if lot.tos_needed %}
-        <span >Bidding is not allowed on this lot until {% if lot.user.pk == request.user.id%} you have <a href="{{lot.tos_needed}}">confirmed your pickup location</a> {% if lot.can_be_deleted %}<span><a href="/lots/delete/{{lot.pk}}" class="btn btn-danger active">Delete</a>{% endif %}{% else %} the submitter of this lot has confirmed their location{% endif %}</span>
+        <span >Bidding is not allowed on this lot until {% if lot.user.pk == request.user.id%} you have <a href="{{lot.tos_needed}}">confirmed your pickup location</a> {% if lot.can_be_deleted %}<span><a href="/lots/delete/{{lot.pk}}" class="btn btn-danger">Delete</a>{% endif %}{% else %} the submitter of this lot has confirmed their location{% endif %}</span>
         {% else %}
             {% if lot.banned %}
                 <span class="text-danger">Banned:</span> {{ lot.ban_reason }}<br>
             {% elif lot.user.pk == request.user.id or request.user.is_superuser%}
                 {% if lot.can_be_edited %}
-                    <a href="/lots/edit/{{lot.pk}}" class="btn btn-warning active">Edit</a></span> {% if lot.can_be_deleted %}<span><a href="/lots/delete/{{lot.pk}}" class="btn btn-danger active">Delete</a>{% endif %}
+                    <a href="/lots/edit/{{lot.pk}}" class="btn btn-warning">Edit</a></span> {% if lot.can_be_deleted %}<span><a href="/lots/delete/{{lot.pk}}" class="btn btn-danger">Delete</a>{% endif %}
                 {% else %}
                     <span class='text-muted'>{% if lot.user.pk == request.user.id%}This is your lot.  {% endif %}You can edit a lot for 24 hours after you submit it, as long as no one has bid on it.<br></span>
                 {% endif %}
@@ -325,7 +325,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
             {% endif %}
         {% endif %}
         {% if request.user.is_superuser %}
-            <a href="/admin/auctions/lot/{{lot.pk}}/change/" class="btn btn-danger active">Admin</a>
+            <a href="/admin/auctions/lot/{{lot.pk}}/change/" class="btn btn-danger">Admin</a>
             Promo weight: {{lot.promotion_weight}}
         {% endif %}
         {% if user.is_authenticated %}
@@ -336,7 +336,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
         <br><br><span class="text-info">Other lots you might be interested in:</span>
         <span id='recommendations'>Searching for recommended lots...</span>
         {% if lot.auction %}
-            <br><a href='/lots/?a={{lot.auction.slug}}'>View all lots for {{ lot.auction }}</a><br>
+            <br><a href='/lots/?auction={{lot.auction.slug}}'>View all lots for {{ lot.auction }}</a><br>
         {% endif %}
 
         <!-- Chart -->

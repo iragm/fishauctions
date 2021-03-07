@@ -165,7 +165,7 @@ class PickupLocationForm(forms.ModelForm):
         cleaned_data = super().clean()
         auction = cleaned_data.get("auction")
         if auction:
-            if self.user.pk == auction.created_by.pk:
+            if (self.user.pk == auction.created_by.pk) or self.user.is_superuser:
                 pass
             else:
                 self.add_error('auction', "You can only add pickup locations to your own auctions")
@@ -589,7 +589,7 @@ class ChangeUserPreferencesForm(forms.ModelForm):
                 Div('email_me_when_people_comment_on_my_lots',css_class='col-md-6',),
                 css_class='row',
             ),
-            HTML("You'll get one email per week that contains an update on everything you've checked below<br><br>"),
+            HTML("You'll get one email per week that contains an update on everything you've checked below<span class='text-muted'><small><br>And you'll only get that if you haven't visited the site in the last 6 days.</small></span><br><br>"),
             Div(
                 Div('email_me_about_new_auctions',css_class='col-md-5',),
                 Div('email_me_about_new_auctions_distance',css_class='col-md-3',),

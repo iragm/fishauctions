@@ -191,7 +191,7 @@ def bid_on_lot(lot, user, amount):
                 result['send_to'] = 'everyone'
                 # email the old one
                 current_site = Site.objects.get_current()
-                print('sending emialk')
+                #print(f'{originalHighBidder.username} has been outbid!')
                 mail.send(
                     originalHighBidder.email,
                     template='outbid_notification',

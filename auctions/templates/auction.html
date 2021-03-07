@@ -35,8 +35,8 @@ function initMap() {
         ['<div class="info_content" style="color:black;">' +
         '<h5>{{ location.name }}</h5>' +
         '<p><a href="https://www.google.com/maps/search/?api=1&query={{ location.latitude }},{{ location.longitude }}">Get directions</a>'+
-        '<p>{{ location.description }}<br>' +
-        '{% if location.users_must_coordinate_pickup %}You must schedule your pickup time in advance.{% else %}{{ location.pickup_time }} {% if location.second_pickup_time %}<br><br> You must return at {{ location.second_pickup_time }} to pick up lots from other locations.{% endif %}{%endif%}</p>' +        '</div>'],
+        '<p>{{ location.description|linebreaksbr }}<br>' +
+        '{% if location.users_must_coordinate_pickup %}You must schedule your pickup time in advance.{% else %}{{ location.pickup_time }} {% if location.second_pickup_time %}<br>You must return at {{ location.second_pickup_time }} to pick up lots from other locations.{% endif %}{%endif%}</p>' +        '</div>'],
         {% endfor %}
     ];
        
@@ -81,6 +81,7 @@ function initMap() {
             An auction created by {{ auction.created_by }}<br>
             {% if request.user.is_authenticated %} <br>Questions?  Email <a href='mailto:{{ contact_email }}'>{{ contact_email }}</a>{% endif %}<br>
             {% if auction.notes_rendered %}{{ auction.notes_rendered|safe }} {% else %} {% if auction.notes %} {{ auction.notes|safe }}{% endif %}{% endif %}
+            <h5>The following rules will be automatically enforced by this site:</h5>
             <ul>
                 <li>Bidding will be open from {{ auction.date_start }} to {{ auction.date_end}}</li>
                 {% if auction.lot_submission_end_date != auction.date_end %}<li>You can submit lots until {{ auction.lot_submission_end_date }}</li>{% endif %}
@@ -99,9 +100,9 @@ function initMap() {
                 <h5>{% if not auction.multi_location %}Location: {%endif%}{{ location.name }}</h5>
                 {% if auction.created_by.pk == request.user.id or request.user.is_superuser %}
                 <a href="/locations/edit/{{ location.pk }}/?next=/auctions/{{auction.slug}}" class="btn btn-warning">Edit this location</a>
-                {% endif %}
                 <br>
-                {{ location.description }} {% if location.users_must_coordinate_pickup %}You must schedule your pickup time in advance.{% else %}at {{ location.pickup_time }} {% if location.second_pickup_time %}<br><br> You must return at {{ location.second_pickup_time }} to pick up lots from other locations.{% endif %}{%endif%}<br><br>
+                {% endif %}
+                {{ location.description }} {% if location.users_must_coordinate_pickup %}You must schedule your pickup time in advance.{% else %}at {{ location.pickup_time }} {% if location.second_pickup_time %}<br>You must return at {{ location.second_pickup_time }} to pick up lots from other locations.{% endif %}{%endif%}<br><br>
                 {% if location.pickup_location_contact_name and request.user.is_authenticated %}
                 Contact for this location: <b>{{location.pickup_location_contact_name}}</b><br>
                 {% if location.pickup_location_contact_phone %}{{location.pickup_location_contact_phone}}<br>{%endif%}
@@ -148,7 +149,7 @@ function initMap() {
                     The creator of this auction has not yet added a pickup location.  Check back soon!
                 {% endif %}
             {% endif %}
-            <a href='/lots/?a={{auction.slug}}' class="btn btn-primary active">View all lots for this auction</a>
+            <a href='/lots/?auction={{auction.slug}}' class="btn btn-primary active">View all lots for this auction</a>
             <br><br>
             {% if auction.created_by.pk == request.user.id or request.user.is_superuser %}
                 {% if not auction.invoiced %}<a href="/auctions/{{auction.slug}}/edit/" class="btn btn-warning mr-1 mt-1">Edit this auction</a>

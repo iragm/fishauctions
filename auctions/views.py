@@ -3,7 +3,7 @@ from datetime import datetime
 from random import randint
 from itertools import chain
 from django.shortcuts import render,redirect
-from django.http import HttpResponse, JsonResponse
+from django.http import HttpResponse, JsonResponse, HttpResponseRedirect, Http404
 from django.utils import timezone
 from django.contrib import messages
 from django.contrib.auth.models import User
@@ -29,7 +29,7 @@ from .forms import *
 from io import BytesIO
 from django.core.files import File
 import re
-from django.http import Http404
+from urllib.parse import unquote
 
 def index(request):
     return HttpResponse("this page is intentionally left blank")
@@ -40,6 +40,7 @@ class LotListView(AjaxListView):
     model = Lot
     template_name = 'all_lots.html'
     auction = None
+    routeByLastAuction = False # to display the banner telling users why they are not seeing lots for all auctions
 
     def get_page_template(self):
         try:
@@ -61,6 +62,14 @@ class LotListView(AjaxListView):
         context = super().get_context_data(**kwargs)
         if self.request.GET.get('page'):
             del data['page'] # required for pagination to work
+        # gotta check to make sure we're not trying to filter by an auction, or no auction
+        try:
+            if 'auction' in data.keys():
+                # now we have tried to search for something, so we should not override the auction
+                self.auction = None
+        except Exception as e:
+            pass
+        context['routeByLastAuction'] = self.routeByLastAuction
         context['filter'] = LotFilter(data, queryset=self.get_queryset(), request=self.request, ignore=True, regardingAuction = self.auction)
         context['embed'] = 'all_lots'
         try:
@@ -79,11 +88,12 @@ class LotListView(AjaxListView):
                 context['auction'] = Auction.objects.get(slug=data['a'])
             except:
                 context['auction'] = self.auction
+                context['no_filters'] = True
         if context['auction']:
-            pass
-            # try:
-            #     context['auction_tos'] = AuctionTOS.objects.get(auction=context['auction'].pk, user=self.request.user.pk)
-            # except:
+            try:
+                context['auction_tos'] = AuctionTOS.objects.get(auction=context['auction'].pk, user=self.request.user.pk)
+            except:
+                pass
             #     # this message gets added to every scroll event.  Also, it's just noise
             #     messages.error(self.request, f"Please <a href='/auctions/{context['auction'].slug}/'>read the auction's rules and confirm your pickup location</a> to bid")
         else:
@@ -193,7 +203,7 @@ class LotsByUser(LotListView):
         context = super().get_context_data(**kwargs)
         context['filter'] = LotFilter(data, queryset=self.get_queryset(), request=self.request, ignore=True)
         try:
-            context['user'] = User.objects.get(pk=data['user'])
+            context['user'] = User.objects.get(username=data['user'])
             context['view'] = 'user'
         except:
             pass
@@ -264,6 +274,11 @@ def userBan(request, pk):
                     bid.delete()
         # ban all lots added by the banned user.  These are not deleted, just removed from the auction
         for auction in auctionsList:
+            buy_now_lots = Lot.objects.filter(winner=bannedUser, auction=auction.pk)
+            for lot in buy_now_lots:
+                lot.winner=None
+                lot.winning_price = None
+                lot.save()
             lots = Lot.objects.filter(user=bannedUser, auction=auction.pk)
             for lot in lots:
                 if not lot.ended:
@@ -271,7 +286,8 @@ def userBan(request, pk):
                     lot.banned = True
                     lot.ban_reason = "This user has been banned from this auction"
                     lot.save()
-        return redirect('/users/' + str(pk))
+        #return #redirect('/users/' + str(pk))
+        return redirect(reverse("userpage", kwargs={'slug': bannedUser.username}))
     raise PermissionDenied()
 
 def lotBan(request, pk):
@@ -309,7 +325,8 @@ def userUnban(request, pk):
             defaults={},
         )
         obj.delete()
-        return redirect('/users/' + str(pk))
+        #return redirect('/users/' + str(pk))
+        return redirect(reverse("userpage", kwargs={'slug': bannedUser.username}))
     raise PermissionDenied()
 
 def imageRotate(request):
@@ -475,13 +492,13 @@ def auctionReport(request, slug):
             end = timezone.now().strftime("%m-%d-%Y")
         response['Content-Disposition'] = 'attachment; filename="' + slug + "-report-" + end + '.csv"'
         writer = csv.writer(response)
-        writer.writerow(['Name', 'Email', 'Phone', 'Address', 'Location', 'Miles to pickup location', 'Club', 'Lots viewed', 'Lots bid', 'Lots submitted', 'Lots won', 'Total spent', 'Total paid', 'Invoice', 'Breeder points'])
+        writer.writerow(['Join date', 'Name', 'Email', 'Phone', 'Address', 'Location', 'Miles to pickup location', 'Club', 'Lots viewed', 'Lots bid', 'Lots submitted', 'Lots won', 'Invoice', 'Total bought', 'Total sold', 'Invoice total due', 'Breeder points'])
         users = AuctionTOS.objects.filter(auction=auction).annotate(distance_traveled=distance_to(\
                 '`auctions_userdata`.`latitude`', '`auctions_userdata`.`longitude`', \
                 lat_field_name='`auctions_pickuplocation`.`latitude`',\
                 lng_field_name="`auctions_pickuplocation`.`longitude`",\
                 approximate_distance_to=1)\
-                ).select_related('user__userdata').select_related('pickup_location')
+                ).select_related('user__userdata').select_related('pickup_location').order_by('createdon')
         for data in users:
             lotsViewed = PageView.objects.filter(lot_number__auction=auction, user=data.user)
             lotsBid = Bid.objects.filter(lot_number__auction=auction,user=data.user)
@@ -497,7 +514,7 @@ def auctionReport(request, slug):
             except:
                 address = ""
             if data.user.userdata.latitude:
-                distance = data.distance_traveled # fixme, this is wrong
+                distance = data.distance_traveled
             else:
                 distance = "User's location not set"
             try:
@@ -509,14 +526,16 @@ def auctionReport(request, slug):
                 invoiceStatus = invoice.get_status_display()
                 totalSpent = invoice.total_bought
                 totalPaid = invoice.total_sold
+                invoiceTotal = invoice.rounded_net
             except:
                 invoiceStatus = "N/A"
                 totalSpent = "0" 
                 totalPaid = "0"
-            writer.writerow([data.user.first_name + " " + data.user.last_name, data.user.email, \
+                invoiceTotal = "N/A"
+            writer.writerow([data.createdon.strftime("%m-%d-%Y"), data.user.first_name + " " + data.user.last_name, data.user.email, \
                 phone, address, data.pickup_location, distance,\
                 club, len(lotsViewed), len(lotsBid), len(lotsSumbitted), \
-                len(lotsWon), totalSpent, totalPaid, invoiceStatus, len(breederPoints)])
+                len(lotsWon), invoiceStatus, totalSpent, totalPaid, invoiceTotal, len(breederPoints)])
         return response    
     raise PermissionDenied()
 
@@ -848,7 +867,8 @@ class LotValidation(LoginRequiredMixin):
         )
         if not userData.address:
             messages.warning(self.request, "Please fill out your contact info before creating a lot")
-            return redirect(f'/users/{request.user.pk}/location?next=/lots/new/')
+            return redirect(f'/contact_info?next=/lots/new/')
+            #return redirect(reverse("contact_info"))
         return super().dispatch(request, *args, **kwargs)
 
     def clean(self):
@@ -1007,6 +1027,24 @@ class BidDelete(LoginRequiredMixin, DeleteView):
             raise PermissionDenied()
         return super().dispatch(request, *args, **kwargs)
 
+    def delete(self, request, *args, **kwargs):
+        lot = self.get_object().lot_number
+        success_url = self.get_success_url()
+        historyMessage = f"{request.user} has removed {self.get_object().user}'s bid"
+        if lot.winner:
+            
+            lot = Lot.objects.get(lot_number=lot.pk)
+            lot.winner = None
+            lot.winning_price = None
+            lot.save()
+            bids = Bid.objects.filter(lot_number=lot.pk)
+            for bid in bids:
+                bid.delete()
+        else:
+            self.get_object().delete()
+        LotHistory.objects.create(lot=lot, user=request.user, message=historyMessage, changed_price=True)
+        return HttpResponseRedirect(success_url)
+
     def get_success_url(self):
         return f"/lots/{self.get_object().lot_number.pk}/{self.get_object().lot_number.slug}/"
 
@@ -1106,13 +1144,13 @@ class AuctionInfo(FormMixin, DetailView):
         context = super().get_context_data(**kwargs)
         owner = self.get_object().created_by
         context['contact_email'] = self.get_object().created_by.email
-        context['pickup_locations'] = PickupLocation.objects.filter(auction=self.get_object())
+        context['pickup_locations'] = PickupLocation.objects.filter(auction=self.get_object()).order_by('name')
         current_site = Site.objects.get_current()
         context['domain'] = current_site.domain
         context['google_maps_api_key'] = settings.LOCATION_FIELD['provider.google.api_key']
         if timezone.now() > self.get_object().date_end:
             context['ended'] = True
-            messages.add_message(self.request, messages.ERROR, f"This auction has ended.  You can't bid on anything, but you can still <a href='/lots/?a={self.get_object().slug}'>view lots</a>.")
+            messages.add_message(self.request, messages.ERROR, f"This auction has ended.  You can't bid on anything, but you can still <a href='/lots/?auction={self.get_object().slug}'>view lots</a>.")
         else:
             context['ended'] = False
         try:
@@ -1171,47 +1209,24 @@ def toDefaultLandingPage(request):
     """
     Allow the user to pick up where they left off
     """
-    def tos_check(request, auction):
+    def tos_check(request, auction, routeByLastAuction):
         if not auction:
             if request.user.is_authenticated:
                 return AllLots.as_view()(request)
-                #return redirect('/lots/')
             else:
                 # promo page for non-logged in users
-                #return redirect('/about/')
                 return promoSite(request)
         try:
             # Did the user sign the tos yet?
             AuctionTOS.objects.get(user=request.user, auction=auction)
             # If so, redirect them to the lot view
-            #return redirect(f'/lots?a={auction.slug}')
-            #request.path = f'/lots?a={auction.slug}'
-            return AllLots.as_view(rewrite_url=f'/?{auction.slug}', auction=auction)(request)
+            return AllLots.as_view(rewrite_url=f'/?{auction.slug}', auction=auction, routeByLastAuction=routeByLastAuction)(request)
         except Exception as e:
             # No tos?  Take them there so they can sign
-            #return redirect(f"/auctions/{auction.slug}/")
             return AuctionInfo.as_view(rewrite_url=f'/?{auction.slug}', auction=auction)(request)
 
     data = request.GET.copy()
-    #print(request.META.get('HTTP_REFERER'))
-    try:
-        # if the slug was set in the URL
-        auction = Auction.objects.filter(slug=list(data.keys())[0])[0]
-        return tos_check(request, auction)
-    except Exception as e:
-        # if not, check and see if the user has been participating in an auction
-        try:
-            auction = UserData.objects.get(user=request.user).last_auction_used
-            if timezone.now() > auction.date_end:
-                try:
-                    invoice = Invoice.objects.get(user=request.user, auction=auction.pk)
-                    messages.add_message(request, messages.INFO, f'{auction} has ended.  <a href="/invoices/{invoice.pk}">View your invoice</a>, <a href="/feedback/">leave feedback</a> on lots you bought or sold, or <a href="/lots?a={auction.slug}">view lots</a>')
-                except:
-                    pass
-                auction = None
-        except:
-            # probably no userdata or userdata.auction is None
-            auction = None
+    routeByLastAuction = False
     try:
         userData, created = UserData.objects.get_or_create(
             user = request.user,
@@ -1220,13 +1235,40 @@ def toDefaultLandingPage(request):
         userData.last_activity = timezone.now()
         userData.save()
     except:
+        # probably not signed in
         pass
-    return tos_check(request, auction)
+    try:
+        # if the slug was set in the URL
+        auction = Auction.objects.filter(slug=list(data.keys())[0])[0]
+        #return tos_check(request, auction, routeByLastAuction)
+    except Exception as e:
+        # if not, check and see if the user has been participating in an auction
+        try:
+            auction = UserData.objects.get(user=request.user).last_auction_used
+            if timezone.now() > auction.date_end:
+                try:
+                    invoice = Invoice.objects.get(user=request.user, auction=auction.pk)
+                    messages.add_message(request, messages.INFO, f'{auction} has ended.  <a href="/invoices/{invoice.pk}">View your invoice</a>, <a href="/feedback/">leave feedback</a> on lots you bought or sold, or <a href="/lots?auction={auction.slug}">view lots</a>')
+                except:
+                    pass
+                auction = None
+            else:
+                try:
+                    AuctionTOS.objects.get(user=request.user, auction=auction)
+                    # only show the banner if the TOS is signed
+                    #messages.add_message(request, messages.INFO, f'{auction} is the last auction you joined.  <a href="/lots/">View all lots instead</a>')
+                    routeByLastAuction = True
+                except:
+                    pass
+        except:
+            # probably no userdata or userdata.auction is None
+            auction = None
+    return tos_check(request, auction, routeByLastAuction)
 
 @login_required
 def toAccount(request):
-    response = redirect(f'/users/{request.user.id}/')
-    return response
+    #response = redirect(f'/users/{request.user.username}/')
+    return redirect(reverse("userpage", kwargs={'slug': request.user.username}))
 
 class allAuctions(ListView):
     model = Auction
@@ -1483,6 +1525,23 @@ class UserView(DetailView):
             context['buyer_feedback'] = None
         return context
 
+class UserByName(UserView):
+    """/user/username storefront view"""
+    
+    def dispatch(self, request, *args, **kwargs):
+        self.username = kwargs['slug']
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_object(self, *args, **kwargs):
+        try:
+            return User.objects.get(username=unquote(self.username))
+        except:
+            pass
+        try:
+            return User.objects.get(pk=self.username)
+        except:
+            pass
+        raise Http404
 
 class UsernameUpdate(UpdateView, SuccessMessageMixin):
     template_name = 'user_username.html'
@@ -1490,6 +1549,12 @@ class UsernameUpdate(UpdateView, SuccessMessageMixin):
     success_message = 'Username updated'
     form_class = ChangeUsernameForm
     
+    def get_object(self, *args, **kwargs):
+        try:
+            return User.objects.get(pk=self.request.user.pk)
+        except:
+            raise Http404
+
     def dispatch(self, request, *args, **kwargs):
         auth = False
         if self.get_object().pk == request.user.pk:
@@ -1503,7 +1568,7 @@ class UsernameUpdate(UpdateView, SuccessMessageMixin):
     def get_success_url(self):
         data = self.request.GET.copy()
         if len(data) == 0:
-            data['next'] = "/users/" + str(self.kwargs['pk'])
+            data['next'] = reverse('account')#"/users/" + str(self.kwargs['pk'])
         return data['next']
 
 class UserPreferencesUpdate(UpdateView, SuccessMessageMixin):
@@ -1514,7 +1579,8 @@ class UserPreferencesUpdate(UpdateView, SuccessMessageMixin):
     user_pk = None
 
     def dispatch(self, request, *args, **kwargs):
-        self.user_pk = kwargs['pk'] # set the hack
+        #self.user_pk = kwargs['pk'] # set the hack
+        self.user_pk = request.user.pk
         auth = False
         if self.get_object().user.pk == request.user.pk:
             auth = True
@@ -1527,7 +1593,8 @@ class UserPreferencesUpdate(UpdateView, SuccessMessageMixin):
     def get_success_url(self):
         data = self.request.GET.copy()
         if len(data) == 0:
-            data['next'] = "/users/" + str(self.kwargs['pk'])
+            data['next'] = reverse("userpage", kwargs={'slug': self.request.user.username})
+            #data['next'] = "/users/" + str(self.kwargs['pk'])
         return data['next']
     
     def get_object(self, *args, **kwargs):
@@ -1544,7 +1611,8 @@ class UserLocationUpdate(UpdateView, SuccessMessageMixin):
     user_pk = None
     
     def dispatch(self, request, *args, **kwargs):
-        self.user_pk = kwargs['pk'] # set the hack
+        #self.user_pk = kwargs['pk'] # set the hack
+        self.user_pk = request.user.pk
         auth = False
         if self.get_object().user.pk == request.user.pk:
             auth = True
@@ -1557,7 +1625,8 @@ class UserLocationUpdate(UpdateView, SuccessMessageMixin):
     def get_success_url(self):
         data = self.request.GET.copy()
         if len(data) == 0:
-            data['next'] = "/users/" + str(self.kwargs['pk'])
+            data['next'] = reverse("userpage", kwargs={'slug': self.request.user.username})
+            #"/users/" + str(self.kwargs['pk'])
         return data['next']
     
     def get_object(self, *args, **kwargs):
@@ -1657,6 +1726,7 @@ class AdminDashboard(TemplateView):
         context['new_lots_last_7_days'] = Lot.objects.filter(date_posted__gte=timezone.now() - datetime.timedelta(days=7)).count()
         context['new_lots_last_30_days'] = Lot.objects.filter(date_posted__gte=timezone.now() - datetime.timedelta(days=30)).count()
         context['bidders_last_30_days'] = qs.filter(user__bid__last_bid_time__gte=timezone.now() - datetime.timedelta(days=30)).values('user').distinct().count()
+        context['feedback_last_30_days'] = Lot.objects.exclude(feedback_rating=0).filter(date_posted__gte=timezone.now() - datetime.timedelta(days=30)).count()
         #source of lot images?
         activity = qs.filter(last_activity__gte=timezone.now() - datetime.timedelta(days=60))\
             .annotate(day=TruncDay('last_activity')).order_by('-day')\
@@ -1668,6 +1738,39 @@ class AdminDashboard(TemplateView):
         for day in activity:
             context['last_activity_days'].append((timezone.now()-day['day']).days)
             context['last_activity_count'].append(day['c'])
+        return context
+
+
+class UserMap(TemplateView):
+    template_name = 'user_map.html'
+
+    def get_context_data(self, **kwargs):
+        if not self.request.user.is_superuser:
+            raise PermissionDenied()
+        context = super().get_context_data(**kwargs)
+        context['google_maps_api_key'] = settings.LOCATION_FIELD['provider.google.api_key']
+        data = self.request.GET.copy()
+        try:
+            view = data['view']
+        except:
+            view = None
+        try:
+            filter1 = data['filter']
+        except:
+            filter1 = None
+        qs = User.objects.filter(userdata__latitude__isnull=False, is_active=True).annotate(lots_sold=Count('lot'), lots_bought=Count('winner'))
+        if view == "club" and filter1:
+            # Users from a club
+            qs = qs.filter(userdata__club__name=filter1)
+        elif view == "buyers_and_sellers" and filter1:
+            # Users who sold and bought
+            qs = qs.filter(lots_sold__gte=filter1, lots_bought__gte=filter1)
+        elif view == "volume" and filter1:
+            # users by top volume_percentile
+            qs = qs.filter(userdata__volume_percentile__lte=filter1)
+        elif view == "recent" and filter1:
+            qs = qs.filter(userdata__last_activity__gte=timezone.now() - datetime.timedelta(hours=int(filter1)))
+        context['users'] = qs
         return context
 
 class ClubMap(TemplateView):

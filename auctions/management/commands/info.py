@@ -16,7 +16,10 @@ class Command(BaseCommand):
     help = 'Just a scratchpad to do things'
 
     def handle(self, *args, **options):
-        
+        allUsers = User.objects.all().count()
+        mikes = User.objects.filter(Q(first_name="mike")| Q(first_name="michael")).count()
+        print(allUsers)
+        print(mikes)
         # # get any users who have opted into the weekly email
         # users = User.objects.filter(\
         #     #Q(userdata__email_me_about_new_auctions=True) | Q(userdata__email_me_about_new_local_lots=True) | | Q(userdata__email_me_about_new_lots_ship_to_location=True)\ # fixme - why is this busted?

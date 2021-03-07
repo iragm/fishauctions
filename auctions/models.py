@@ -80,7 +80,7 @@ class BlogPost(models.Model):
 
 class Location(models.Model):
 	"""
-	Allows users to specify a state
+	Allows users to specify a region -- USA, Canada, South America, etc.
 	"""
 	name = models.CharField(max_length=255)
 	def __str__(self):
@@ -1249,6 +1249,13 @@ class LotHistory(models.Model):
 		ordering = ['timestamp']
 
 
+@receiver(pre_save, sender=Auction)
+def on_save_auction(sender, instance, **kwargs):
+	"""This is run when an auction is saved"""
+	if not instance.lot_submission_end_date:
+		instance.lot_submission_end_date = instance.date_end
+	# perhaps we should refactor the lot.active code and update the end date for all lots in the auction here?
+
 @receiver(pre_save, sender=UserData)
 @receiver(pre_save, sender=PickupLocation)
 @receiver(pre_save, sender=Club)
@@ -1263,6 +1270,10 @@ def update_user_location(sender, instance, **kwargs):
 	however with just a couple signals it makes more sense to have them here than to add a whole separate file for it
 	"""
 	try:
+		#if not instance.latitude and not instance.longitude:
+		# some things to change here:
+		# if sender has coords and they do not equal the instance coords, update instance lat/lng from sender
+		# if sender has lat/lng and they do not equal the instance lat/lng, update instance coords
 		cutLocation = instance.location_coordinates.split(',')
 		instance.latitude = float(cutLocation[0])
 		instance.longitude = float(cutLocation[1])
@@ -1294,7 +1305,7 @@ def get_recommended_lots(
 		longitude=None,
 		distance=None, 
 		onlyUnseen=False,
-		onlyActive=False,
+		onlyActive=True,
 		qty=10):
 	"""
 	This is the core of the recommendation system - it's very expensive to run since it loops over almost all lots.

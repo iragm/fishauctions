@@ -30,10 +30,10 @@ class UserdataInline(admin.StackedInline):
     model = UserData
     can_delete = False
     verbose_name_plural = 'User data'
-    exclude = ('unsubscribe_link','latitude', 'longitude', 'rank_unique_species','number_unique_species', 'rank_total_lots', 'number_total_lots', 'rank_total_spent', \
+    exclude = ('unsubscribe_link', 'rank_unique_species','number_unique_species', 'rank_total_lots', 'number_total_lots', 'rank_total_spent', \
         'number_total_spent', 'rank_total_bids', 'number_total_bids', 'last_auction_used', 'number_total_sold', \
         'rank_total_sold', 'total_volume', 'rank_volume', 'seller_percentile', 'buyer_percentile', 'volume_percentile', )
-
+    readonly_fields = ('last_activity', 'dismissed_cookies_tos', )
 # Extend Django's base user model
 class UserAdmin(BaseUserAdmin):
     list_display = ['first_name', 'last_name', 'email', 'last_activity', 'date_joined']
@@ -42,6 +42,7 @@ class UserAdmin(BaseUserAdmin):
         #AuctionTOSInline, # too much noise
         #InterestInline, # too much noise
     ]
+    search_fields = ("first_name",'last_name', 'userdata__club__abbreviation', 'email',)
     def last_activity(self, obj):
         return obj.userdata.last_activity
     last_activity.admin_order_field  = 'userdata__last_activity' # this doesn't seem to work, but you can use this url: admin/auth/user/?o=-4

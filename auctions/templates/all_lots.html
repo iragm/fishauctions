@@ -25,6 +25,11 @@ Lots from {{ user }}
 {% endblock %}
 {% load static %}
 {% block content %}
+{% if routeByLastAuction and auction %}
+<div class="alert alert-secondary alert-dismissible fade show" role="alert">{{ auction }} is the last auction you joined.  <a href="/lots/">View all lots instead</a>  <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+  <span aria-hidden="true">&times;</span>
+</button></div>
+{% endif %}
 <div class="container mt-5 mb-5">
     <div class="row">
       <div class="col-md-10 offset-lg-1">
@@ -45,18 +50,32 @@ Lots from {{ user }}
           {% endif %}
           {% if view == "mywonlots" %}
           Lots you've won
-          {% endif %}{% if auction %} for {{ auction }}{% endif %}</h1>
-        <span class="d-sm-block d-md-none"><button onclick="$('#lot_filter_form').toggleClass('d-none d-sm-none d-sm-block');" class="btn btn-primary mr-1 mt-1">Filters</button></span> 
-        <form method="GET" id='lot_filter_form' class='form-inline d-none d-sm-none d-md-flex'>
+          {% endif %}{% if auction %} {% if view != "all"%} Lots{%endif%} for {{ auction }}{% endif %}</h1>
+          <span class="d-sm-block d-md-none"><button onclick="$('#lot_filter_form').toggleClass('d-none d-sm-none d-sm-block');" class="btn btn-primary mr-1 mt-1">Filters</button></span> 
+          <form method="GET" id='lot_filter_form' class='form-inline d-none d-sm-none d-md-flex'>
           {{ filter.form | crispy }}
           <button type="submit" class="btn btn-primary mr-1 mt-1">Apply Filter</button> {% if view == "mylots" or view == "all" %}<br>
           {% if auction %}<a href="/auctions/{{auction.slug}}/" class="btn btn-info mr-1 mt-1" role="button">View rules</a> 
-          {% if auction.can_submit_lots %}{% if auction_tos %}<a href="/lots/new/" class="btn btn-info mr-1 mt-1" role="button">Create lot</a> <span class="text-info">You can add lots to this auction until {{ auction.lot_submission_end_date }}</span>{% else %}{% if not request.user.is_authenticated %}<a href="/login/?next=/auctions/{{auction.slug}}">Login and confirm your pickup location for this auction</a>{% else %} <a href="/auctions/{{auction.slug}}/"><span class='text-warning'>Confirm your pickup location</span> at the bottom of this page to add lots to this auction</a>{%endif%}{%endif%}{% endif %}{% endif %}{% endif %}
+            {% if auction.can_submit_lots %}
+              {% if auction_tos %}<a href="/lots/new/" class="btn btn-info mr-1 mt-1" role="button">Create lot</a>
+                <span class="">You can add lots to this auction until {{ auction.lot_submission_end_date }}</span>
+              {% else %}
+                {% if not request.user.is_authenticated %}
+                  <a href="/login/?next=/auctions/{{auction.slug}}">Login and confirm your pickup location for this auction</a>
+                {% else %}
+                  <a href="/auctions/{{auction.slug}}/"><span class='text-warning'>Confirm your pickup location</span> at the bottom of this page to add lots to this auction</a>
+                {%endif%}
+              {%endif%}
+            {% else %} 
+              {# {% if not auction.started and not auction.closed %}This auction hasn't started yet.  You can add lots starting {{ auction.date_start }} {%endif%} #}
+            {% endif %}
+          {% endif %}
+          {% endif %}
           
         </form>
         {% if lotsAreHidden >= 0 %}<span class="text-muted">{{lotsAreHidden}} categories are <a href='/ignore/'>ignored</a></span>{% endif %}
         {% if view == "user" %}
-          <a href='/users/{{user.pk}}'>View user info for {{ user }} </a><p>
+          <a href="{% url 'userpage' slug=user %}">View user info for {{ user }} </a><p>
         {% endif %}
     </div>
 </div>
@@ -73,5 +92,10 @@ Lots from {{ user }}
       },
       paginateOnScroll: true,
       paginateOnScrollMargin: 100
-      });</script>
+      });
+      // {% if rewrite_url %}
+      // console.log('{{rewrite_url}}');
+      // $("#id_auction").val('{{rewrite_url}}'.replace("/?auction=", "")).change();
+      // {% endif %}
+      </script>
 {% endblock %}

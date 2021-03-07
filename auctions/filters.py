@@ -19,16 +19,38 @@ class LotFilter(django_filters.FilterSet):
         # this would require the keyword recommended in the url to show recommended lots. e.g.
         # /lots/?recommended
         # it's turned off so that not specifying any filter will show you just the lots that are recommended for you
-        # try:
-        #     self.request.GET['recommended']
-        #     self.allRecommended = True
-        # except:
-        #     self.allRecommended = False
-        self.allRecommended = True
         try:
-            self.filters['auction'].queryset = Auction.objects.filter(auctiontos__user=self.request.user).order_by('title')
+            self.request.GET['recommended']
+            self.allRecommended = True
         except:
-            self.filters['auction'].queryset = Auction.objects.none()
+            self.allRecommended = False
+        #self.allRecommended = True
+        self.showBanned = False
+        try:
+            forceAuction = self.request.GET['auction']
+            self.allRecommended = False
+        except:
+            forceAuction = None
+        if self.regardingAuction:
+            regardingAuctionSlug = self.regardingAuction.slug
+            self.allRecommended = False
+        else:
+            regardingAuctionSlug = None
+        # an extra filter
+        specialAuctions = Q(slug=forceAuction)|Q(slug=regardingAuctionSlug)
+        auctionqs = Auction.objects.all().order_by('title')
+        if self.request.user.is_authenticated:
+            auctionqs = auctionqs.filter(Q(auctiontos__user=self.request.user)|specialAuctions)
+        else:
+            auctionqs = auctionqs.filter(specialAuctions)
+        #auction_choices = auctionqs.values_list('slug', 'title').distinct()
+        auction_choices = list((o.slug, o.title) for o in auctionqs.distinct())
+        self.filters['auction'].extra['choices'] = [{"no_auction":"noAuction", "No auction":"title"}] + auction_choices
+        self.filters['ships'].extra['choices'] = self.ships_choices()
+        # if self.regardingAuction:
+        #     print('setting')
+        #     self.filters['auction'].initial=self.regardingAuction.title
+            
     STATUS = (
         ('open', 'Open'),
         ('closed', 'Ended'),
@@ -38,23 +60,34 @@ class LotFilter(django_filters.FilterSet):
         ('no', 'Only unviewed'),
     )
     
-    q = django_filters.CharFilter(label='', method='text_filter', widget=TextInput(attrs={'placeholder': 'Search'}))
-    auction = django_filters.ModelChoiceFilter(label='',queryset=None, empty_label='Any auction', to_field_name='slug', method='filter_by_auction_model',)
-    category = django_filters.ModelChoiceFilter(label='', queryset=Category.objects.all().order_by('name'), method='filter_by_category', empty_label='Any category', )
-    status = django_filters.ChoiceFilter(label='', choices=STATUS, method='filter_by_status', empty_label='Open and ended',)
-    distance = django_filters.NumberFilter(label='', method='filter_by_distance', widget=NumberInput(attrs={'placeholder': 'Distance (miles)'}))
-    ships = django_filters.ModelChoiceFilter(label='', queryset=Location.objects.all().order_by('name'), method='filter_by_shipping_location', empty_label='Ships to', )
-    # this creates a list of every single user and it may get out of hand once we get into the thousands of users
-    #user = django_filters.ModelChoiceFilter(label='', queryset=User.objects.all(), method='filter_by_user', widget=Select(attrs={'style': 'display:none'}))
-    # better: just use pk of user
-    user = django_filters.NumberFilter(label='', method='filter_by_user', widget=NumberInput(attrs={'style': 'display:none'}))
+    def ships_choices(self):
+        choices = list((o.pk, o.name) for o in Location.objects.all().order_by('name'))
+        return [{"local_only":"local", "Local pickup":"title"}] + choices
+
+    def generate_attrs(placeholder="", tooltip=""):
+        return {'placeholder': placeholder, 'data-toggle':"tooltip", 'data-placement':"right", 'title':tooltip}
+
+    q = django_filters.CharFilter(label='', method='text_filter', widget=TextInput(attrs=generate_attrs("Search","Search by title, description, username or lot number")))
+    auction = django_filters.ChoiceFilter(label='', empty_label='Any auction', method='filter_by_auction',
+        widget=Select(attrs=generate_attrs(None,"Auctions you've confirmed your pickup location for appear here")))
+    #auction = django_filters.ModelChoiceFilter(label='', queryset=None, empty_label='Any auction', to_field_name='slug', method='filter_by_auction_model',)
+    category = django_filters.ModelChoiceFilter(label='',\
+        queryset=Category.objects.all().order_by('name'), method='filter_by_category', empty_label='Any category',\
+        widget=Select(attrs=generate_attrs(None,"Picking something here overrides your ignored categories")))
+    status = django_filters.ChoiceFilter(label='', choices=STATUS,\
+        method='filter_by_status', empty_label='Open and ended',)
+    distance = django_filters.NumberFilter(label='', method='filter_by_distance', widget=NumberInput(attrs=generate_attrs('Distance (miles)',"This only works on lots that aren't in an auction")))
+    ships = django_filters.ChoiceFilter(label='',\
+        method='filter_by_shipping_location',
+        empty_label='Ships to',\
+        widget=Select(attrs=generate_attrs(None,"This only works on lots that aren't in an auction")))
+    #ships = django_filters.ModelChoiceFilter(label='', queryset=Location.objects.all().order_by('name'), method='filter_by_shipping_location', empty_label='Ships to', )
+    user = django_filters.CharFilter(label='', method='filter_by_user', widget=NumberInput(attrs={'style': 'display:none'}))
     # this is a bit of a hack to allow filtering by auctions show up even if you haven't selected a pickup location
-    a = django_filters.CharFilter(label='', method='filter_by_auction', widget=TextInput(attrs={'style': 'display:none'}))
+    # update: no more hack.  Yay!
+    #a = django_filters.CharFilter(label='', method='filter_by_auction', widget=TextInput(attrs={'style': 'display:none'}))
     viewed = django_filters.ChoiceFilter(label='', choices=VIEWED, method='filter_by_viewed', empty_label='All',)
     
-
-
-
     class Meta:
         model = Lot
         fields = {} # nothing here so no buttons show up
@@ -62,10 +95,20 @@ class LotFilter(django_filters.FilterSet):
     @property
     def qs(self):
         primary_queryset=super(LotFilter, self).qs
-        
+        #if not self.regardingAuction and not self.request.user.is_authenticated:
+            # no auction selected in the filter and we are not signed in
+        #    primary_queryset = primary_queryset.filter(auction__promote_this_auction=True)
+        if not self.regardingAuction:
+            # no auction selected in the filter, but we are signed in
+            # this would show all lots from promoted auctions or from auctions you have picked a location for.  But it is insanely slow...
+            #primary_queryset = primary_queryset.filter(Q(auction__promote_this_auction=True)|Q(auction__auctiontos__user=self.request.user)).distinct()
+            primary_queryset = primary_queryset.exclude(auction__promote_this_auction=False)
+
+        if not self.showBanned:
+            primary_queryset = primary_queryset.filter(banned=False)
         if self.regardingAuction:
             primary_queryset = primary_queryset.filter(auction=self.regardingAuction)
-        primary_queryset = primary_queryset.filter(banned=False).order_by("-lot_number").select_related('species_category', 'user')
+        primary_queryset = primary_queryset.order_by("-lot_number").select_related('species_category', 'user')
         try:
             # watched lots
             primary_queryset = primary_queryset.annotate(
@@ -138,11 +181,11 @@ class LotFilter(django_filters.FilterSet):
                 primary_queryset = primary_queryset.filter(\
                     Q(shipping_locations=self.request.user.userdata.location, auction__isnull=True)|\
                     Q(auction__auctiontos__user=self.request.user))
-            if not local and not shipping:
-                try:
-                    primary_queryset = primary_queryset.filter(auction__auctiontos__user=self.request.user)
-                except:
-                    pass
+            # if not local and not shipping:
+            #     try:
+            #         primary_queryset = primary_queryset.filter(auction__auctiontos__user=self.request.user)
+            #     except:
+            #         pass
         return primary_queryset
 
     def filter_by_distance(self, queryset, name, value):
@@ -155,7 +198,6 @@ class LotFilter(django_filters.FilterSet):
             pass
         try:
             # fixme - this should use request cookie
-            
             if self.request.user.userdata.latitude:
                 # seems like we need to annotate twice here
                 return queryset.annotate(distance=distance_to(self.request.user.userdata.latitude, self.request.user.userdata.longitude))\
@@ -166,7 +208,10 @@ class LotFilter(django_filters.FilterSet):
 
     def filter_by_user(self, queryset, name, value):
         self.allRecommended = False
-        return queryset.filter(user__pk=value)
+        # probably should only show banned if request user matches the user filter
+        if self.request.user.username == value:
+            self.showBanned = True
+        return queryset.filter(user__username=value)
 
     def filter_by_category(self, queryset, name, value):
         self.ignore = False
@@ -175,19 +220,33 @@ class LotFilter(django_filters.FilterSet):
 
     def filter_by_auction(self, queryset, name, value):
         self.allRecommended = False
-        self.regardingAuction = None
+        if value == "no_auction":
+            return queryset.filter(auction__isnull=True)
         try:
-            if self.request.GET['auction']:
-                # if both this and auction are specified, auction wins and this does nothing
-                return queryset
-        except:
-            pass
-        return queryset.filter(auction=Auction.objects.get(slug=value))
+            self.regardingAuction = Auction.objects.get(slug=value)
+            return queryset.filter(auction__slug=value)
+        except Exception as e:
+            return queryset
+
+    # def filter_by_auction(self, queryset, name, value):
+    #     self.allRecommended = False
+    #     #self.regardingAuction = None
+    #     try:
+    #         if self.request.GET['auction']:
+    #             # if both this and auction are specified, auction wins and this does nothing
+    #             return queryset
+    #     except:
+    #         pass
+    #     return queryset.filter(auction=Auction.objects.get(slug=value))
 
     def filter_by_auction_model(self, queryset, name, value):
         self.allRecommended = False
-        self.regardingAuction = None
-        return queryset.filter(auction=value)
+        #try:
+        self.regardingAuction = value
+        #     return queryset.filter(auction=value)
+        # except Exception as e:
+        #     print(e)
+        
 
     def filter_by_status(self, queryset, name, value):
         self.allRecommended = False
@@ -213,7 +272,7 @@ class LotFilter(django_filters.FilterSet):
         if value.isnumeric():
             return queryset.filter(Q(lot_number=int(value))|Q(lot_name__icontains=value))
         else:
-            return queryset.filter(Q(description__icontains=value)|Q(lot_name__icontains=value))
+            return queryset.filter(Q(description__icontains=value)|Q(lot_name__icontains=value)|Q(user__username=value))
     
     def filter_by_shipping_location(self, queryset, name, value):
         self.allRecommended = False
@@ -223,6 +282,8 @@ class LotFilter(django_filters.FilterSet):
                 return queryset
         except:
             pass
+        if value == "local_only":
+            return queryset.filter(Q(local_pickup=True)|Q(auction__isnull=False))
         return queryset.filter(shipping_locations=value, auction__isnull=True)
 
 class UserWatchLotFilter(LotFilter):
@@ -248,7 +309,7 @@ class UserBidLotFilter(LotFilter):
         super().__init__(*args,**kwargs)
     
 # class UserOwnedLotFilter(LotFilter):
-#     """A version of the lot filter that only shows lots submitted by the current user  I have removed this in favor of just using the lots/user/?user=pk view"""
+#     """A version of the lot filter that only shows lots submitted by the current user  I have removed this in favor of just using the lots/user/?user= view"""
 #     @property
 #     def qs(self):
 #         primary_queryset=super(UserOwnedLotFilter, self).qs
