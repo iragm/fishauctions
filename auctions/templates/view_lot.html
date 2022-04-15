@@ -31,11 +31,7 @@ function ban_lot(ban) {
 }
 </script>
 <style>
-    .watched {
-        color: yellow;
-    }
     #watch:hover {
-        color: yellow;
         cursor: pointer;
     }
 </style>
@@ -46,6 +42,7 @@ function ban_lot(ban) {
     var $ = window.jQuery;
     originalTitle = $(document).prop('title');
     // recommended lots
+    // fixme -- lot ending very soon qqq
     setTimeout( function() {
         $.ajax({
         type: "GET",
@@ -95,10 +92,10 @@ function ban_lot(ban) {
             data : data,
             success : function(result) {
                 if (data.watch) {
-                    $("#watch").addClass("watched");
+                    $("#watch").addClass("watched text-warning");
                     $("#watch").html("&#9733; Watching - you'll get an email 2 hours before bidding ends");
                 } else {
-                    $("#watch").removeClass("watched");
+                    $("#watch").removeClass("watched text-warning");
                     $("#watch").html('&#9734; Watch');
                 }
             }
@@ -135,8 +132,9 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
         <div class="col-md-offset-1 col-xl-8">
 <div class="container mt-5 mb-5">
     <div class="row">
-      <div class="col-md-10 offset-md1">
+    <div class="col-md-10 offset-md1">
         <h3>{{ lot.lot_name }}</h3>
+            {{ lot.species_category }}, lot number {{lot.lot_number}}, Time: {{ lot.minutes_to_end }}<br>
             {% if lot.species %}<span class='text-muted'>{% if lot.species.scientific_name %}<i>{{ lot.species.scientific_name }}</i>{% else %}{{lot.species.common_name}}{%endif%}</span>{%endif%} {% if lot.i_bred_this_fish %}<span class="badge badge-light">Bred by {{ lot.user }}</span>{%endif%}
             {% if lot.image %}
             <div> <!-- can remove class here I think-->
@@ -148,24 +146,21 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                     {% endif %}
                 {% endif %}
             </div>
-            <span class="text-muted">{{ lot.get_image_source_display }} </span><br>
+            <span class="text-muted"><small>{{ lot.get_image_source_display }}</small></span><br>
             {% endif %}
         <span>
             <a href="https://www.google.com/search?q={{lot.lot_name}}&tbm=isch" target="_blank">Google image search</a>
         </span>
         <span>
-            or look for this on <a href="https://www.seriouslyfish.com/search/{{lot.lot_name}}" target="_blank">Seriously Fish</a>
+            or look for this on <a href="https://www.seriouslyfish.com/species/search/{% if lot.species and lot.species.scientific_name %}{{ lot.species.scientific_name }}{% else %}{{lot.lot_name}}{%endif%}" target="_blank">Seriously Fish</a>
         </span><br><br>
-        <div>{% if lot.description %}{{ lot.description_rendered | safe }}{% endif %}</div>
+        <div class="jumbotron">{% if lot.description %}{{ lot.description_rendered | safe }}{% endif %}</div>
         <table class="table">
-            <tr>
-                <td><b>Category:</b></td><td>{{ lot.species_category }}</td>
-            </tr>
             <tr>
                 <td><b>Quantity:</b></td><td>{{ lot.quantity }}</td>
             </tr>
             <tr>
-                <td><b>Seller:</b></td><td>{% if lot.donation %} A donation from {% endif %}<a href="{% url 'userpage' slug=lot.user %}">{{ lot.user }}</a> {% if not lot.auction %}
+                <td><b>Seller:</b></td><td>{% if lot.donation %} A donation from {% endif %}<a href="{% url 'userpage' slug=lot.user %}">{{ lot.user }}</a> (<a href="/lots/user/?user={{lot.user}}">All lots from {{ lot.user }}</a>){% if not lot.auction %}
                     <span class='badge badge-light'>Lots sold: {{ lot.user.userdata.lots_sold }}</span> <span class='badge badge-success'>+{{ lot.user.userdata.positive_feedback_as_seller }}</span> <span class='badge badge-danger'>-{{ lot.user.userdata.negative_feedback_as_seller }}</span>
                     {% endif %}</td>
             </tr>
@@ -196,7 +191,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                             You can't see how much others have bid
                             {% else %}
                                 {% if lot.high_bidder %}
-                                <span data-toggle="tooltip" data-placement="bottom" title="The high bid is derermined by the second highest bidder.  Enter the most you'd want to spend on this lot, and you'll automatically bid up to your max">
+                                <span>
                                     $<span id="price">{{ lot.high_bid }}</span>
                                     {% if lot.high_bidder.pk == request.user.id %}
                                     <span id="high_bidder_name"> - you're winning!</span>
@@ -265,9 +260,9 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                 {% if lot.can_be_edited %}
                     <a href="/lots/edit/{{lot.pk}}" class="btn btn-warning">Edit</a></span> {% if lot.can_be_deleted %}<span><a href="/lots/delete/{{lot.pk}}" class="btn btn-danger">Delete</a>{% endif %}
                 {% else %}
-                    <span class='text-muted'>{% if lot.user.pk == request.user.id%}This is your lot.  {% endif %}You can edit a lot for 24 hours after you submit it, as long as no one has bid on it.<br></span>
+                    <span class='text-muted'>{% if lot.user.pk == request.user.id%}This is your lot.  {% endif %}You can edit a lot as long as no one has bid on it.<br></span>
                 {% endif %}
-            {% elif lot.ended %}
+            {% elif lot.ended or lot.winner %}
                 <span>Bidding has ended on this lot<br></span>
             {% else %}
                 {% if user.is_authenticated %}
@@ -276,19 +271,20 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                     {% else %}
                         {% if not lot.auction %}Remember to check the seller's feedback before bidding.  This site will not get involved in disputes.<br><br>{%endif%}
                         <div class="form-group">
-                        <div class="input-group mb-3">
-                            <div class="input-group-prepend">
-                            <span class="input-group-text">$</span>
+                            <div class="input-group mb-3">
+                                <div class="input-group-prepend">
+                                    <span class="input-group-text">$</span>
+                                </div>
+                                    <input type="number" id='bid_amount' min="1" value="{{ amount }}" class="form-control col-sm-3" aria-label="Amount (to the nearest dollar)">
+                                <div class="input-group-append">
+                                    <span class="input-group-text mr-1">.00</span>
+                                    <button class='btn-sm btn-success' id='bid_button' style='min-width: 150px;' >Place bid</button>
+                                </div>
+                            <div class="invalid-feedback">Enter a number</div>
                             </div>
-                            <input type="number" id='bid_amount' min="1" value="{{ amount }}" class="form-control col-sm-3" aria-label="Amount (to the nearest dollar)">
-                            <div class="input-group-append">
-                            <span class="input-group-text mr-1">.00</span>
-                            <button class='btn-sm btn-success' id='bid_button' style='min-width: 150px;'>Place bid</button>
-                            </div>
-                        </div>
                         </div>
                         <script>
-                            $('#bid_amount').focus();
+                            //$('#bid_amount').focus(); // scrolls page down
                             document.querySelector('#bid_amount').onkeyup = function(e) {
                                 if (e.keyCode === 13) {
                                     document.querySelector('#bid_button').click();
@@ -296,18 +292,27 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                             };
                             document.querySelector('#bid_button').onclick = function(e) {
                                 var bid = Number($('#bid_amount').val());
-                                if (isNaN(bid) || bid == 0) {} else {
-                                    lotWebSocket.send(JSON.stringify({
-                                        'bid': bid
-                                    }));
-                                    //$('#bid_amount').val(Number(bid) + 1);
-                                    var your_bid = Number($('#your_bid_price').html());
-                                    var price = Number($('#price').html());
-                                    if (bid > your_bid) {
-                                        $('#your_bid').html('Your max bid is $<span id="your_bid_price">' + bid + "</span>");
-                                    }
-                                    if (bid > price) {
-                                        $('#bid_amount').val(bid + 1);
+                                if (isNaN(bid) || bid == 0) {
+                                    $('#bid_amount').addClass('is-invalid');
+                                } else {
+                                    $('#bid_amount').removeClass('is-invalid');
+                                    $('#confirmBid').modal('show');
+                                    $('#confirmDialgoText').html("Bid $" + bid + " on {{ lot.lot_name }}<br><small>All bids are final</small>");
+                                    document.querySelector('#finalize-bid').onclick = function(e) {
+                                        lotWebSocket.send(JSON.stringify({
+                                            'bid': bid
+                                        }));
+                                        //$('#bid_amount').val(Number(bid) + 1);
+                                        var your_bid = Number($('#your_bid_price').html());
+                                        var price = Number($('#price').html());
+                                        if (bid > your_bid) {
+                                            $('#your_bid').html('Your max bid is $<span id="your_bid_price">' + bid + "</span>");
+                                        }
+                                        if (bid > price) {
+                                            $('#bid_amount').val(bid + 1);
+                                        }
+                                        $('#confirmBid').modal('hide');
+                                        $('#confirmDialgoText').html("Enter an amount");
                                     }
                                 }
                             };
@@ -329,50 +334,10 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
             Promo weight: {{lot.promotion_weight}}
         {% endif %}
         {% if user.is_authenticated %}
-            <span id="watch" {% if watched %} class="watched">&#9733; Watching{% else %}>&#9734; Watch{% endif %}</span><br>
+            <span id="watch" {% if watched %} class="watched text-warning">&#9733; Watching{% else %}>&#9734; Watch{% endif %}</span><br>
         {% endif %}
         
-        <!-- Recommended lots -->
-        <br><br><span class="text-info">Other lots you might be interested in:</span>
-        <span id='recommendations'>Searching for recommended lots...</span>
-        {% if lot.auction %}
-            <br><a href='/lots/?auction={{lot.auction.slug}}'>View all lots for {{ lot.auction }}</a><br>
-        {% endif %}
-
-        <!-- Chart -->
-        {% if request.user.is_superuser %}
-        <script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.3/dist/Chart.min.js"></script>
-        <canvas id="myChart" ></canvas>
-        <span class="text-muted">Total views: {{lot.page_views }} ({{ lot.anonymous_views }} anyonymous views not shown)</span>
-        <script>
-            $.ajax({
-                url: '/api/chart/lots/{{lot.pk}}/',
-                success: function (data) {
-                    var ctx = document.getElementById('myChart').getContext('2d');
-                    new Chart(ctx, {
-                        type: 'bar',
-                        data: {
-                            labels: data.labels,
-                            datasets: [{
-                            label: 'View time',
-                            backgroundColor: 'rgba(52, 152, 219, 0.4)',
-                            data: data.data
-                            }]
-                        },
-                        options: {
-                            legend: {
-                                display: false
-                            },
-                            title: {
-                                display: true,
-                                text: 'User view durations (seconds) of this lot'
-                            }
-                        }    
-                    });
-                }
-            });
-        </script>
-    {% endif %}
+        
     {% if bids %}
         <h5>Remove bids</h5>
         {% for bid in bids %}
@@ -384,6 +349,26 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
   </div>
 </div>  
 </div>
+
+<!-- confirm bid dialog -->
+<div class="modal fade" id="confirmBid" tabindex="-1" role="dialog" aria-labelledby="label" aria-hidden="true">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+        <div class="modal-header">
+            <h5 class="modal-title" id="label">Confirm bid</h5>
+            <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+            <span aria-hidden="true">&times;</span>
+            </button>
+        </div>
+        <div id='confirmDialgoText' class="modal-body">Enter an amount</div>
+        <div class="modal-footer">
+            <button type="button" id='finalize-bid' class="btn btn-success">Place bid</button>
+            <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+        </div>
+        </div>
+    </div>
+</div>
+
 <!-- Chat -->
 <div class="container-fluid col-md-offset-1 col-xl-4 mt-1 mb-1 mt-xl-5">
     <div class="mt-xl-5 col-md-11 bg-primary rounded pb-1" style="box-shadow: 5px 5px 8px 2px rgba(121, 121, 121, 0.2);"> 
@@ -539,7 +524,51 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
         //{% endif %}
     </script>
     </div>
+
+<!-- Chart -->
+{% if request.user.is_superuser %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.3/dist/Chart.min.js"></script>
+<canvas id="myChart" ></canvas>
+<span class="text-muted">Total views: {{lot.page_views }} ({{ lot.anonymous_views }} anyonymous views not shown)</span>
+<script>
+    $.ajax({
+        url: '/api/chart/lots/{{lot.pk}}/',
+        success: function (data) {
+            var ctx = document.getElementById('myChart').getContext('2d');
+            new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: data.labels,
+                    datasets: [{
+                    label: 'View time',
+                    backgroundColor: 'rgba(52, 152, 219, 0.4)',
+                    data: data.data
+                    }]
+                },
+                options: {
+                    legend: {
+                        display: false
+                    },
+                    title: {
+                        display: true,
+                        text: 'User view durations (seconds) of this lot'
+                    }
+                }    
+            });
+        }
+    });
+</script>
+{% endif %}
+    {% include "ad.html" %}
 </div>
+
+</div>
+<!-- Recommended lots -->
+<div class="mt-1"><span class="text-muted">Other lots you mi might be interested in:</span>
+<span id='recommendations'>Searching for recommended lots...</span>
+{% if lot.auction %}
+    <br><a href='/lots/?auction={{lot.auction.slug}}'>View all lots for {{ lot.auction }}</a><br>
+{% endif %}
 </div>
 </div>
 {% endblock %}

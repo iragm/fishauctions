@@ -1,2 +1,6 @@
+*.pyc
 db.sqlite3
 set_env.sh
+fishauctions/customsettings.py
+media/
+auctions/templates/ads.txt

@@ -29,6 +29,10 @@ window.onload = function() {
   <html class="no-js" lang="en">
     <head>
         <meta charset="utf-8" />
+        {% if GOOGLE_ADSENSE_ID != 'None' %}
+        <script data-ad-client="{{GOOGLE_ADSENSE_ID}}" async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script>
+        {% endif %}
+        {% if show_ads %}<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script>{% endif %}     
         <title>
             {% block title %}
                 {% if self.seo_title %}{{ self.seo_title }}{% else %}{{ self.title }}{% endif %}
@@ -47,7 +51,23 @@ window.onload = function() {
         <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.11.0/umd/popper.min.js"></script>
         <script type="text/javascript" src="{% static 'js/auction_site.js' %}"></script>
         <script type="text/javascript" src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
-        {# handle the unread messages notification counter #}
+        {# handle the unread messages and auctions notification counter #}
+        <script>
+          updateMessageCounter();
+          function updateMessageCounter() {
+            $.ajax({
+              type: "POST",
+              beforeSend: function (request) {
+                  request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+              },
+              url: "/api/users/auction_notifications/",
+              success : function(result) {
+                $("#new_auctions").html(result.new);
+              }
+            });
+          }
+
+        </script>
         {% if request.user.is_authenticated %}
         <script>
           updateMessageCounter();
@@ -120,7 +140,7 @@ window.onload = function() {
                     <a class="nav-link" href="/lots/">Lots</a>
                   </li>
                   <li class="nav-item">
-                    <a class="nav-link" href="/auctions/">Auctions</a>
+                    <a class="nav-link" href="/auctions/">Auctions <span id="new_auctions" class='badge-pill badge badge-warning' style='color:black;font-weight:900'></span></a>
                   </li>  
                   {% if request.user.is_authenticated %}
                   <li class="nav-item">
@@ -135,7 +155,7 @@ window.onload = function() {
                   {% endif %}
                   {% if request.user.is_superuser %}
                   <li class="nav-item">
-                    <a class="nav-link" href="/admin/auth/user/?o=-4">Admin Site</a>
+                    <a class="nav-link" href="/admin/auth/user/?o=-5">Admin Site</a>
                   </li>
                   <li class="nav-item"><a class="nav-link" href="/dashboard">Dashboard</a></li>
                   <li class="nav-item"><a class="nav-link" href="{% url 'admin_user_map' %}?view=recent&filter=24">User Map</a></li>
@@ -145,8 +165,9 @@ window.onload = function() {
                     <a class="nav-link dropdown-toggle" data-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">About</a>
                     <div class="dropdown-menu">
                       <a class="dropdown-item" href="/about/">About site</a>
-                      <a class="dropdown-item" href="/auctions/tfcb-annual-auction/">Example auction rules</a>
-                      <a class="dropdown-item" href="/lots/?auction=tfcb-annual-auction">Example auction lots</a>
+                      <a class="dropdown-item" href="/faq/">FAQ</a>
+                      <!-- <a class="dropdown-item" href="/auctions/tfcb-annual-auction/">Example auction rules</a>
+                      <a class="dropdown-item" href="/lots/?auction=tfcb-annual-auction">Example auction lots</a> -->
                       <a class="dropdown-item" href="/tos/">Terms and Conditions</a>
                       </div>
                   </li>
@@ -159,7 +180,7 @@ window.onload = function() {
                     <div class="dropdown-menu">
                       <h6 class="dropdown-header">Lots</h6>
                       <a class="dropdown-item" href="/lots/watched">Watched lots</a>
-                      <a class="dropdown-item" href="/bids">Your bids</a>
+                      <a class="dropdown-item" href="/bids">Bids</a>
                       <a class="dropdown-item" href="/lots/won">Won lots</a>
                       <div class="dropdown-divider"></div>
                       <h6 class="dropdown-header">Account</h6>
@@ -205,7 +226,6 @@ window.onload = function() {
         {% endif %}
         {# set timezone via js #}
         {% if not user_timezone_set %}
-          <div class="alert alert-warning d-none" id='nolocation' role="alert">Unable to determine your time zone, defaulting to Eastern Time.  Using a different browser may fix this.</a></div>
           <script>
             $(document).ready(function(){
               try {
@@ -214,9 +234,7 @@ window.onload = function() {
                   throw "Unable to set time zone";
                 }
                 document.cookie = "user_timezone=" + tz + "; SameSite=Strict; path=/";
-              } catch(e) {
-                $("#nolocation").removeClass("d-none");
-              }
+              } catch(e) {}
             });
           </script>
         {% endif %}

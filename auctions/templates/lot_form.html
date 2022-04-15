@@ -11,82 +11,26 @@ $('#lot-form').submit(function(event){
     $(this).find(':input[type=submit]').prop('disabled', true);
 });
 
-function useExistingSpecies() {
-    $('#useExistingSpeciesButton').removeClass('btn-secondary');
-    $('#useExistingSpeciesButton').addClass('btn-info');
-    $('#createNewSpeciesButton').addClass('btn-secondary');
-    $('#createNewSpeciesButton').removeClass('btn-info');
-    $('#skipSpeciesButton').addClass('btn-secondary');
-    $('#skipSpeciesButton').removeClass('btn-info');    
-    $('#div_id_species_search').show();
-    $('#div_id_species_category').hide();
-    newSpeciesRequired(false);
-    if (!$("#id_species_search").hasClass("is-valid")) {
-        $("#id_species_search").addClass("is-invalid");
-    }
-
-}
-
-function createNewSpecies() {
-    $('#createNewSpeciesButton').removeClass('btn-secondary');
-    $('#createNewSpeciesButton').addClass('btn-info');
-    $('#skipSpeciesButton').addClass('btn-secondary');
-    $('#skipSpeciesButton').removeClass('btn-info');
-    $('#useExistingSpeciesButton').addClass('btn-secondary');
-    $('#useExistingSpeciesButton').removeClass('btn-info');
-    $('#div_id_species_category').hide(); 
-    newSpeciesRequired(true);
-    $('#div_id_species_search').hide();
-    $("#id_species_search").removeClass("is-invalid");
-}
-
-function skipSpecies () {
-    $('#skipSpeciesButton').removeClass('btn-secondary');
-    $('#skipSpeciesButton').addClass('btn-info');
-    $('#createNewSpeciesButton').addClass('btn-secondary');
-    $('#createNewSpeciesButton').removeClass('btn-info');
-    $('#useExistingSpeciesButton').addClass('btn-secondary');
-    $('#useExistingSpeciesButton').removeClass('btn-info');        
-    $('#div_id_species_search').hide();
-    $('#div_id_species_category').show();
-    newSpeciesRequired(false);    
-    $("#id_species_search").removeClass("is-invalid");
-}
-
 function setAuction(setting) {
     if (setting) {
         $('#div_id_auction').show();
         $('#div_id_donation').show();
+        $('#div_id_relist_if_not_sold').hide();
+        $('#div_id_relist_if_sold').hide();
         $('#div_id_promoted').hide();
         $('#div_id_run_duration').hide();
         $('#div_id_show_payment_pickup_info').hide();
         $("#id_show_payment_pickup_info").prop('checked', false);
         $('#payment_pickup_info').hide();        
     } else {
-
         $('#div_id_auction').hide();
         $('#div_id_donation').hide();
         $('#div_id_promoted').show();
+        $('#div_id_relist_if_not_sold').show();
+        $('#div_id_relist_if_sold').show();
         $('#div_id_run_duration').show();
         $('#div_id_show_payment_pickup_info').show();
     }
-}
-
-function newSpeciesRequired(setting) {
-    $("#id_create_new_species").prop('checked', setting);
-    $("#id_new_species_name").prop('required',setting);
-	$("#id_new_species_scientific_name").prop('required',setting);
-    $("#id_new_species_category").prop('required',setting);
-    if (setting) {
-        $("#div_id_new_species_name").show();
-        $("#div_id_new_species_scientific_name").show();
-        $("#div_id_new_species_category").show();
-    } else {
-        $("#div_id_new_species_name").hide();
-        $("#div_id_new_species_scientific_name").hide();
-        $("#div_id_new_species_category").hide();
-    }
-    $("#id_species_category").prop('required',!setting);
 }
 isDirty = true;
 
@@ -98,20 +42,7 @@ window.addEventListener('beforeunload', function(e) {
 });
 
 $(document).ready(function() {
-    // select active species selection
-    if ($('#id_species_category').val() && !$('#id_species').val()) {
-        skipSpecies();
-    } else {
-        if ($('#id_species').val()) {
-            $("#id_species_search").addClass("is-valid");
-        }
-        useExistingSpecies();
-    }
-    $("#div_id_new_species_name").hide();
-    $("#div_id_new_species_scientific_name").hide();
-    $("#div_id_new_species_category").hide();
-
-    if(document.getElementById('id_part_of_auction_1').checked) {
+    if(document.getElementById('id_part_of_auction_0').checked) {
         setAuction(true);    
     } else {
         setAuction(false);
@@ -121,58 +52,10 @@ $(document).ready(function() {
     } else {
         $('#payment_pickup_info').hide(); 
     }
-    var searchTimeout = null;
-    var availableTags = [];
-    $("#id_species_search").autocomplete({
-        source: availableTags,
-        select:function(value, data) {
-            $('#id_species_category').val(data.item.category_id);
-            $('#id_species').val(data.item.id);
-            $('#id_new_species_name').val(data.item.common_name);
-            $('#id_new_species_scientific_name').val(data.item.scientific_name);
-            $('#hint_id_species_search').html("Selected <span class='text-success'>" + data.item.value + "</span>");
-            $('#id_species_search').removeClass('is-invalid');
-            $('#id_species_search').addClass('is-valid');
-            if (!$('#id_lot_name').val()) {
-                $('#id_lot_name').val(data.item.common_name.split(',')[0]);
-            }
-        }
-    });
-    function getSpecies(search) {
-        //console.log('search: ' + search);
-        var data = {};
-        data.search = search;
-        $.ajax({
-            type: "POST",
-            beforeSend: function (request) {
-                request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
-            },
-            url: "/api/species/",
-            data : data,
-            success : function(result) {
-                var availableTags = [];
-                for (item in result) {
-                    availableTags.push({
-                        value: result[item].common_name + " (" + result[item].scientific_name + ")",
-                        category_id: result[item].category_id,
-                        id: result[item].id,
-                        common_name: result[item].common_name,
-                        scientific_name: result[item].scientific_name,
-                        });
-                };
-                $( "#id_species_search" ).autocomplete( "option", "source",availableTags);
-            }
-        });
-    }
-
-    $('#id_species_search').keyup(function(e) {
-        clearTimeout(searchTimeout);
-        searchTimeout = setTimeout(() => getSpecies(e.target.value), 300);
-    });
-    $('#id_part_of_auction_1').change(function(data) {
+    $('#id_part_of_auction_0').change(function(data) {
         setAuction(true);
     });
-    $('#id_part_of_auction_2').change(function(data) {
+    $('#id_part_of_auction_1').change(function(data) {
         setAuction(false);
     });
     $('#id_show_payment_pickup_info').change(function(data) {
@@ -183,14 +66,83 @@ $(document).ready(function() {
         }
     });
 });
-
 </script>
+{% if new %}
+<script>
+var redirectLink = "/";
+var ignoreAuction = null;
+$(document).ready(function() {
+    $.ajax({
+        type: "POST",
+        beforeSend: function (request) {
+            request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+        },
+        url: "/api/lots/new_lot_last_auction/",
+        success : function(result) {
+            $('#last-auction-special').html(result.result);
+        }
+    });
+    $.ajax({
+        type: "POST",
+        beforeSend: function (request) {
+            request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+        },
+        url: "/api/users/auction_notifications/",
+        success : function(result) {
+        if (result.new) {
+            redirectLink = result.link + "?next={% firstof request.path '/' %}";
+            $('#auctionText').html("The " + result.name + " is happening now<br><small>" + result.distance + " miles from you</small>");
+            $('#joinAuction').modal('show');
+            ignoreAuction = result.slug;
+        }
+        }
+    });
+    document.querySelector('#join-auction').onclick = function(e) {
+        isDirty = false;
+        window.location = redirectLink;
+        $('#joinAuction').modal('hide');
+    }
+    document.querySelector('#ignore-auction').onclick = function(e) {
+        $('#joinAuction').modal('hide');
+        $.ajax({
+            type: "POST",
+            beforeSend: function (request) {
+                request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+            },
+            url: "/api/ignore_auction/",
+            data: { 'auction': ignoreAuction },
+            success : function(result) {
+                console.log(result);
+            }
+        });
+    }
+});
+</script>
+{% endif %}
 {% endblock %}
 {% block title %}{{ title }}{% endblock %}
 {% block content %}
 <div class="container mt-5 mb-5">
       <div class="col-md-10 offset-md1">
             {% crispy form form.helper %}
+    </div>
+</div>
+<!-- confirm bid dialog -->
+<div class="modal fade" id="joinAuction" tabindex="-1" role="dialog" aria-labelledby="label" aria-hidden="true">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+        <div class="modal-header">
+            <h5 class="modal-title" id="label">Join club auction?</h5>
+            <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+            <span aria-hidden="true">&times;</span>
+            </button>
+        </div>
+        <div id='auctionText' class="modal-body"></div>
+        <div class="modal-footer">
+            <button type="button" id='join-auction' class="btn btn-success">View rules</button>
+            <button type="button" id='ignore-auction' class="btn btn-danger" data-dismiss="modal">Not interested</button>
+        </div>
+        </div>
     </div>
 </div>
 {% endblock %}

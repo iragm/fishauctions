@@ -19,7 +19,10 @@ Your lots
 Won lots
 {% endif %}
 {% if view == "user" %}
-Lots from {{ user }}
+{% if user == request.user %}
+Your lots{% else %}
+{% if user %}Lots from {{ user }}{%else%}Lots{%endif%}
+{% endif %}
 {% endif %}
 {% if auction %} for {{ auction }}{% endif %}
 {% endblock %}
@@ -33,7 +36,7 @@ Lots from {{ user }}
 <div class="container mt-5 mb-5">
     <div class="row">
       <div class="col-md-10 offset-lg-1">
-        <h1>{% if view == "all" %}
+        <h3>{% if view == "all" %}
           Lots
           {% endif %}
           {% if view == "watch" %}
@@ -50,7 +53,7 @@ Lots from {{ user }}
           {% endif %}
           {% if view == "mywonlots" %}
           Lots you've won
-          {% endif %}{% if auction %} {% if view != "all"%} Lots{%endif%} for {{ auction }}{% endif %}</h1>
+          {% endif %}{% if auction %} {% if view != "all"%} Lots{%endif%} for {{ auction }}{% endif %}</h3>
           <span class="d-sm-block d-md-none"><button onclick="$('#lot_filter_form').toggleClass('d-none d-sm-none d-sm-block');" class="btn btn-primary mr-1 mt-1">Filters</button></span> 
           <form method="GET" id='lot_filter_form' class='form-inline d-none d-sm-none d-md-flex'>
           {{ filter.form | crispy }}
@@ -73,7 +76,7 @@ Lots from {{ user }}
           {% endif %}
           
         </form>
-        {% if lotsAreHidden >= 0 %}<span class="text-muted">{{lotsAreHidden}} categories are <a href='/ignore/'>ignored</a></span>{% endif %}
+        {% if lotsAreHidden >= 0 %}<span class="text-muted">{{lotsAreHidden}} categories are <a href="{% url 'ignore_categories' %}">ignored</a></span>{% endif %}
         {% if view == "user" %}
           <a href="{% url 'userpage' slug=user %}">View user info for {{ user }} </a><p>
         {% endif %}
@@ -89,9 +92,16 @@ Lots from {{ user }}
     <script>$.endlessPaginate({
       onCompleted: function(context, fragment) {
         $('[data-toggle="tooltip"]').tooltip();
+        {% if show_ads %} 
+        function displayGoogleAds(){
+            // $('ins').each(function(){
+            //     (adsbygoogle = window.adsbygoogle || []).push({});
+            // });
+        }
+        {% endif %}
       },
       paginateOnScroll: true,
-      paginateOnScrollMargin: 100
+      paginateOnScrollMargin: 2000
       });
       // {% if rewrite_url %}
       // console.log('{{rewrite_url}}');

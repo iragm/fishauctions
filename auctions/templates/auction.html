@@ -13,6 +13,52 @@ function copyLink() {
   document.getElementById("copyShareLink").className += " is-valid";
 } 
 </script>
+{% if not hasChosenLocation and not ended %}
+<script>
+  function elementInViewport(el) {
+    var top = el.offsetTop;
+    var left = el.offsetLeft;
+    var width = el.offsetWidth;
+    var height = el.offsetHeight;
+
+    while(el.offsetParent) {
+        el = el.offsetParent;
+        top += el.offsetTop;
+        left += el.offsetLeft;
+  }
+
+  return (
+    top >= window.pageYOffset &&
+    left >= window.pageXOffset &&
+    (top + height) <= (window.pageYOffset + window.innerHeight) &&
+    (left + width) <= (window.pageXOffset + window.innerWidth)
+  );
+}
+  var joinButton = document.querySelector('#submit-id-submit');
+  var message;
+  var messageCheck;
+  document.onscroll = function(event) {
+    clearTimeout(messageCheck);
+    messageCheck = setTimeout(function(){ 
+        if (joinButton) {
+            if (elementInViewport(joinButton)) {
+                $('#join-message').tooltip('hide');
+                clearTimeout(message);
+                $('#submit-id-submit').attr('data-original-title', "Join this auction and you'll be able to bid").tooltip('show');
+                message = setTimeout(function(){ $('#submit-id-submit').tooltip('hide'); }, 3000);
+            } else {
+                clearTimeout(message);
+                $('#join-message').tooltip('show'); 
+                message = setTimeout(function(){ $('#join-message').tooltip('hide'); }, 3000);
+            }
+        }
+    }, 100);
+
+}
+
+</script>
+{% endif %}
+
 {% if not auction.no_location %}
 <script
 src="https://maps.googleapis.com/maps/api/js?key={{google_maps_api_key}}&callback=initMap&libraries=&v=weekly"
@@ -84,6 +130,7 @@ function initMap() {
             <h5>The following rules will be automatically enforced by this site:</h5>
             <ul>
                 <li>Bidding will be open from {{ auction.date_start }} to {{ auction.date_end}}</li>
+                {% if auction.lot_submission_start_date != auction.date_start %}<li>You can submit lots starting {{ auction.lot_submission_start_date }}</li>{% endif %}
                 {% if auction.lot_submission_end_date != auction.date_end %}<li>You can submit lots until {{ auction.lot_submission_end_date }}</li>{% endif %}
                 {% if auction.sealed_bid %}<li>This is a sealed bid auction - you won't be able to see how much others have bid on an item.</li>{% endif %}
                 {% if auction.max_lots_per_user %}<li>You can submit up to {{ auction.max_lots_per_user }} lots.{% if auction.allow_additional_lots_as_donation %} Additional lots accepted only as a donation.{% endif %}</li>{% endif %}
@@ -136,6 +183,7 @@ function initMap() {
                 
 
             </div>
+            <a name="join"></a>
             {% if not ended %}
                 <br><br>
                 {% if not auction.no_location %}
@@ -152,12 +200,16 @@ function initMap() {
             <a href='/lots/?auction={{auction.slug}}' class="btn btn-primary active">View all lots for this auction</a>
             <br><br>
             {% if auction.created_by.pk == request.user.id or request.user.is_superuser %}
+                <a href="/auctions/new/?copy={{auction.slug}}" class="btn btn-info mr-1 mt-1">Copy to new auction</a>
                 {% if not auction.invoiced %}<a href="/auctions/{{auction.slug}}/edit/" class="btn btn-warning mr-1 mt-1">Edit this auction</a>
                 <a href="/locations/new/?next=/auctions/{{auction.slug}}" class="btn btn-primary mr-1 mt-1">Add pickup location</a>{% endif %}
                 <a href="/locations/" class="btn btn-primary mr-1 mt-1">All pickup locations</a>
                 <a href="/auctions/{{auction.slug}}/stats/" class="btn btn-primary mr-1 mt-1">Stats</a>
                 <a href="/auctions/{{auction.slug}}/invoices/" class="btn btn-primary mr-1 mt-1">Invoices</a>
                 <a href="/auctions/{{auction.slug}}/report/" class="btn btn-primary mr-1 mt-1">Download CSV Report</a>
+                {% if ended %}
+                <a href="/auctions/{{auction.slug}}/lotlist/" class="btn btn-primary mr-1 mt-1">Download Lot List CSV</a>
+                {% endif %}
                 {% if auction.can_be_deleted %}
                     <a href="/auctions/{{auction.slug}}/delete/" class="btn btn-danger mr-1 mt-1">Delete</a>
                 {% endif %}
@@ -165,9 +217,10 @@ function initMap() {
             {% if request.user.is_superuser %}
                 <a href="/admin/auctions/auction/{{auction.pk}}/change/" class="btn btn-danger mr-1 mt-1">Admin</a>
             {% endif %}
+            <div id="join-message" style="position:fixed; bottom:0; right:30%; visibility: hidden; opacity: 0;" data-toggle="tooltip" data-placement="top" title="Keep scrolling to join this auction"></div>
         </div>
     </div>
-</div>  
+</div>
 
 {% endblock %}
 

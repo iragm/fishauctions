@@ -3,18 +3,20 @@ from auctions.models import UserData
 
 def google_analytics(request):
     """Return google tracking codes from settings"""
-    return {'GOOGLE_MEASUREMENT_ID': settings.GOOGLE_MEASUREMENT_ID, 'GOOGLE_TAG_ID': settings.GOOGLE_TAG_ID}
+    return {'GOOGLE_MEASUREMENT_ID': settings.GOOGLE_MEASUREMENT_ID, 'GOOGLE_TAG_ID': settings.GOOGLE_TAG_ID, 'GOOGLE_ADSENSE_ID': settings.GOOGLE_ADSENSE_ID}
 
 def theme(request):
     """return the theme from userdata"""
     theme = True # dark
+    show_ads = True
     if request.user.is_authenticated:
         userData, created = UserData.objects.get_or_create(
             user = request.user,
             defaults={},
         )
         theme = userData.use_dark_theme
-    return {'theme': theme}
+        show_ads = userData.show_ads
+    return {'theme': theme, 'show_ads': show_ads}
 
 def add_tz(request):
     """

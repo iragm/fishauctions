@@ -11,6 +11,7 @@ import os
 import uuid
 from django.contrib.sites.models import Site
 import csv
+from auctions.filters import get_recommended_lots
 
 class Command(BaseCommand):
     help = 'Send a promotional email advertising auctions and lots near you'
@@ -18,8 +19,9 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         # get any users who have opted into the weekly email
         users = User.objects.filter(\
-            Q(userdata__email_me_about_new_auctions=True) | Q(userdata__email_me_about_new_local_lots=True) | Q(userdata__email_me_about_new_lots_ship_to_location=True)\
-            ).exclude(userdata__latitude=0, userdata__longitude=0).exclude(userdata__last_activity__gte=(timezone.now() - datetime.timedelta(days=6)))
+           Q(userdata__email_me_about_new_auctions=True) | Q(userdata__email_me_about_new_local_lots=True) | Q(userdata__email_me_about_new_lots_ship_to_location=True)\
+           ).exclude(userdata__latitude=0, userdata__longitude=0).exclude(userdata__last_activity__gte=(timezone.now() - datetime.timedelta(days=6)))
+        #users = User.objects.filter(pk=1)
         for user in users:
             template_auctions = []
             if user.userdata.email_me_about_new_auctions:
@@ -43,10 +45,10 @@ class Command(BaseCommand):
                     template_auctions.append({'slug':auction, 'distance': distances[auction], 'title': titles[auction]})
             template_nearby_lots = []
             if user.userdata.email_me_about_new_local_lots:
-                template_nearby_lots = get_recommended_lots(user=user.pk, local=True, location=None, latitude=user.userdata.latitude, longitude=user.userdata.longitude, distance=user.userdata.local_distance)
+                template_nearby_lots = get_recommended_lots(user=user, listType="local")
             template_shippable_lots = []
             if user.userdata.email_me_about_new_lots_ship_to_location and user.userdata.location:
-                template_shippable_lots = get_recommended_lots(user=user.pk, location=user.userdata.location.pk)
+                template_shippable_lots = get_recommended_lots(user=user, listType="shipping")
             current_site = Site.objects.get_current()
             if template_auctions or template_nearby_lots or template_shippable_lots:
                 # don't send an email if there's nothing of interest
@@ -60,5 +62,6 @@ class Command(BaseCommand):
                         'nearby_lots': template_nearby_lots,
                         'shippable_lots': template_shippable_lots,
                         'unsubscribe': user.userdata.unsubscribe_link
+                        'special_message': ""
                         },
                 )

@@ -1,0 +1,16 @@
+{% if show_ads %}
+<span>
+<span class='load_ad'></span>
+</span>
+<script>
+     setTimeout( function() {
+          $.ajax({
+          type: "GET",
+          url: "{% url 'get_ad' %}?auction={{auction.slug}}&category={{category.pk}}",
+          success : function(result) {
+          $('.load_ad').parent().html(result);
+          },
+     });
+     }, 100);
+</script>
+{% endif %}

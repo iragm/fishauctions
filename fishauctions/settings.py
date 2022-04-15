@@ -17,6 +17,7 @@ try:
     from . import customsettings
 except:
     pass
+import datetime
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve(strict=True).parent.parent
@@ -45,6 +46,8 @@ CHANNEL_LAYERS = {
         'CONFIG': {
             "hosts": [("redis://:" + os.environ['REDIS_PASS'] + "@127.0.0.1:6379/0")],
             #"hosts": [('127.0.0.1', 6379)],
+            "capacity": 2000,  # default 100
+            "expiry": 20,  # default 60
         },
     },
 }
@@ -73,8 +76,9 @@ INSTALLED_APPS = [
     "post_office",
     'location_field',
     'channels',
-    'debug_toolbar',
+    #'debug_toolbar', # having this enabled is handy for sql queries but silences errors in channels
     'markdownfield',
+    'qr_code',
 ]
 ASGI_APPLICATION = "fishauctions.asgi.application"
 MIDDLEWARE = [
@@ -118,11 +122,13 @@ LANGUAGE_CODE = 'en-us'
 
 TIME_ZONE = os.environ['TIME_ZONE']
 
-USE_I18N = True
+USE_I18N = False
 
-USE_L10N = True
+USE_L10N = False
 
 USE_TZ = True
+
+DATETIME_FORMAT = 'M j, Y P e'
 
 AUTH_PASSWORD_VALIDATORS = [
     {
@@ -198,10 +204,18 @@ ACCOUNT_LOGIN_ON_EMAIL_CONFIRMATION = True
 ACCOUNT_LOGIN_ON_PASSWORD_RESET = True
 ACCOUNT_SESSION_REMEMBER = True
 ACCOUNT_EMAIL_SUBJECT_PREFIX = "auction.fish - "
+ACCOUNT_DEFAULT_HTTP_PROTOCOL='https'
+
+SESSION_COOKIE_AGE = 1209600*100
 
 EMAIL_BACKEND = 'post_office.EmailBackend'
 #EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend' # console
 #EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+
+POST_OFFICE = {
+    'MAX_RETRIES': 4,
+    'RETRY_INTERVAL': datetime.timedelta(minutes=15),  # Schedule to be retried 15 minutes later
+}
 
 if os.environ['EMAIL_USE_TLS'] == "True":
     EMAIL_USE_TLS = True
@@ -223,13 +237,14 @@ BOOTSTRAP4 = {
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
-EL_PAGINATION_PER_PAGE = 40
+EL_PAGINATION_PER_PAGE = 20
 SITE_URL = os.environ['SITE_URL']
 
 THUMBNAIL_ALIASES = {
     '': {
+        'ad': {'size': (250, 150), 'crop': False},
         'lot_list': {'size': (250, 150), 'crop': "smart"},
-        'lot_full': {'size': (1000, 1000), 'crop': False},
+        'lot_full': {'size': (600, 600), 'crop': False},
     },
 }
 
@@ -246,7 +261,7 @@ SOCIALACCOUNT_PROVIDERS = {
 }
 
 INTERNAL_IPS = [
-#    '127.0.0.1',
+#    '127.0.0.1', # uncomment this to enable the django debug toolbar
 ]
 
 VIEW_WEIGHT = 1
@@ -255,6 +270,7 @@ WEIGHT_AGAINST_TOP_INTEREST = 20
 
 GOOGLE_MEASUREMENT_ID=os.environ['GOOGLE_MEASUREMENT_ID']
 GOOGLE_TAG_ID = os.environ['GOOGLE_TAG_ID']
+GOOGLE_ADSENSE_ID = os.environ['GOOGLE_ADSENSE_ID']
 
 LOCATION_FIELD_PATH = STATIC_URL + 'location_field'
 
@@ -284,3 +300,5 @@ STATICFILES_FINDERS = [
     'django.contrib.staticfiles.finders.FileSystemFinder',
     'django.contrib.staticfiles.finders.AppDirectoriesFinder',
 ]
+
+DEFAULT_AUTO_FIELD = 'django.db.models.AutoField'

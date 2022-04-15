@@ -1,5 +1,5 @@
 import decimal
-from django.utils import timezone
+from django.utils import timezone, dateformat
 import datetime
 from django.contrib.auth.models import *
 from django.db import models
@@ -17,6 +17,35 @@ from django.dispatch import receiver
 import uuid
 from random import randint
 from django.conf import settings
+from django.utils.formats import date_format
+from django.contrib.sites.models import Site
+
+
+def nearby_auctions(latitude, longitude, distance=100, include_already_joined=False, user=None, return_slugs=False):
+	"""Return a list of auctions or auction slugs that are within a specified distance of the given location"""
+	auctions = []
+	slugs = []
+	distances = []
+	locations = PickupLocation.objects.annotate(distance=distance_to(latitude, longitude))\
+		.exclude(distance__gt=distance)\
+		.filter(auction__date_end__gte=timezone.now(), auction__date_start__lte=timezone.now())\
+		.exclude(auction__promote_this_auction=False)\
+		.exclude(auction__isnull=True)
+	if user:
+		if user.is_authenticated and not include_already_joined:
+			locations = locations.exclude(auction__auctiontos__user=user)
+		locations = locations.exclude(auction__auctionignore__user=user)	
+	elif user and not include_already_joined:
+		locations = locations.exclude(auction__auctiontos__user=user)
+	for location in locations:
+		if location.auction.slug not in slugs:
+			auctions.append(location.auction)
+			slugs.append(location.auction.slug)
+			distances.append(location.distance)
+	if return_slugs:
+		return slugs
+	else:
+		return auctions, distances
 
 def median_value(queryset, term):
     count = queryset.count()
@@ -152,8 +181,12 @@ class Auction(models.Model):
 	winning_bid_percent_to_club.help_text = "To give 70% of the final bid to the seller, enter 30 here"
 	date_posted = models.DateTimeField(auto_now_add=True)
 	date_start = models.DateTimeField()
+	date_start.help_text = "Bidding will be open on this date"
+	lot_submission_start_date = models.DateTimeField(null=True, blank=True)
+	lot_submission_start_date.help_text = "Users can submit (but not bid on) lots on this date"
 	lot_submission_end_date = models.DateTimeField(null=True, blank=True)
 	date_end = models.DateTimeField()
+	date_end.help_text = "Bidding will end on this date"
 	watch_warning_email_sent = models.BooleanField(default=False)
 	invoiced = models.BooleanField(default=False)
 	created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
@@ -179,14 +212,33 @@ class Auction(models.Model):
 	email_third_sent = models.BooleanField(default=False)
 	email_fourth_sent = models.BooleanField(default=False)
 	email_fifth_sent = models.BooleanField(default=False)
-	
+	make_stats_public = models.BooleanField(default=True)
+	make_stats_public.help_text = "Allow any user who has a link to this auction's stats to see them.  Uncheck to only allow the auction creator to view stats"
+	bump_cost = models.PositiveIntegerField(blank=True, default=1, validators=[MinValueValidator(1)])
+	bump_cost.help_text = "The amount a user will be charged each time they move a lot to the top of the list"
+
 	def __str__(self):
 		if "auction" not in self.title.lower():
 			return f"{self.title} auction"
 		return self.title
 	
 	def get_absolute_url(self):
-		return reverse('slug', kwargs={'slug': self.slug})
+		return f'/auctions/{self.slug}/'
+
+	@property
+	def pickup_locations_before_end(self):
+		"""True if there's a problem with the pickup location times, all of them need to be after the end date of the auction"""
+		locations = PickupLocation.objects.filter(auction=self.pk)
+		for location in locations:
+			error = False
+			if location.pickup_time < self.date_end:
+				error = True
+			if location.second_pickup_time:
+				if location.second_pickup_time < self.date_end:
+					error = True
+			if error:
+				return reverse("edit_pickup", kwargs={'pk': location.pk}) 
+		return False
 
 	@property
 	def ending_soon(self):
@@ -319,7 +371,7 @@ class Auction(models.Model):
 	
 	@property
 	def can_submit_lots(self):
-		if timezone.now() < self.date_start:
+		if timezone.now() < self.lot_submission_start_date:
 			return False
 		if self.lot_submission_end_date:
 			if self.lot_submission_end_date < timezone.now():
@@ -337,6 +389,7 @@ class Auction(models.Model):
 			return int(self.median_lot_price/5)
 		except:
 			return 2
+
 	@property
 	def number_of_participants(self):
 		"""
@@ -345,6 +398,10 @@ class Auction(models.Model):
 		buyers = User.objects.filter(winner__auction=self.pk).distinct()
 		sellers = User.objects.filter(lot__auction=self.pk, lot__winner__isnull=False).exclude(id__in=buyers).distinct()
 		return len(sellers) + len(buyers)
+
+	@property
+	def number_of_tos(self):
+		return User.objects.filter(auctiontos__auction=self.pk).count()
 
 	@property
 	def multi_location(self):
@@ -391,7 +448,7 @@ class Auction(models.Model):
 					chunks += 1
 					returnList.append(chunks)
 					count = 0
-		print(returnList)
+		#print(returnList)
 		return returnList
 
 class PickupLocation(models.Model):
@@ -424,7 +481,16 @@ class PickupLocation(models.Model):
 	def __str__(self):
 		return self.name
 
-
+class AuctionIgnore(models.Model):
+	"""If a user does not want to participate in an auction, create one of these"""
+	user = models.ForeignKey(User, on_delete=models.CASCADE)
+	auction = models.ForeignKey(Auction, on_delete=models.CASCADE)
+	createdon = models.DateTimeField(auto_now_add=True, blank=True)
+	def __str__(self):
+		return f"{self.user} ignoring {self.auction}"
+	class Meta: 
+		verbose_name = "User ignoring auction"
+		verbose_name_plural = "User ignoring auction"
 
 class AuctionTOS(models.Model):
 	user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -445,7 +511,7 @@ class Lot(models.Model):
 		('RANDOM', 'This picture is from the internet'),
 	)
 	lot_number = models.AutoField(primary_key=True)
-	lot_name = models.CharField(max_length=40, default="")
+	lot_name = models.CharField(max_length=40)
 	slug = AutoSlugField(populate_from='lot_name', unique=False)
 	lot_name.help_text = "Short description of this lot"
 	image = ThumbnailerImageField(upload_to='images/', blank=True)
@@ -464,17 +530,19 @@ class Lot(models.Model):
 	
 	quantity = models.PositiveIntegerField(validators=[MinValueValidator(1)])
 	quantity.help_text = "How many of this item are in this lot?"
-	reserve_price = models.PositiveIntegerField(default=2, validators=[MinValueValidator(1), MaxValueValidator(200)])
+	reserve_price = models.PositiveIntegerField(default=2, validators=[MinValueValidator(1), MaxValueValidator(2000)])
 	reserve_price.help_text = "The minimum bid for this lot. Lot will not be sold unless someone bids at least this much"
-	buy_now_price = models.PositiveIntegerField(default=None, validators=[MinValueValidator(1), MaxValueValidator(200)], blank=True, null=True)
-	buy_now_price.help_text = "This lot will be sold instantly for this price if someone is willing to pay this much"
+	buy_now_price = models.PositiveIntegerField(default=None, validators=[MinValueValidator(1), MaxValueValidator(1000)], blank=True, null=True)
+	buy_now_price.help_text = "This lot will be sold instantly for this price if someone is willing to pay this much.  Leave blank unless you know exactly what you're doing"
 	species = models.ForeignKey(Product, null=True, blank=True, on_delete=models.SET_NULL)
 	species_category = models.ForeignKey(Category, null=True, blank=True, on_delete=models.SET_NULL, verbose_name="Category")
-	species_category.help_text = "If you don't want to pick a species/product, pick the category this lot belongs to"
+	species_category.help_text = "An accurate category will help people find this lot more easily"
 	date_posted = models.DateTimeField(auto_now_add=True, blank=True)
+	last_bump_date = models.DateTimeField(null=True, blank=True)
+	last_bump_date.help_text = "Any time a lot is bumped, this date gets changed.  It's used for sorting by newest lots."
 	user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
 	auction = models.ForeignKey(Auction, blank=True, null=True, on_delete=models.SET_NULL)
-	auction.help_text = "Only auctions that you have <span class='text-warning'>selected a pickup location for</span> will be shown here. This lot must be brought to that location"
+	auction.help_text = "<span class='text-warning' id='last-auction-special'></span>Only auctions that you have <span class='text-warning'>selected a pickup location for</span> will be shown here. This lot must be brought to that location"
 	date_end = models.DateTimeField(auto_now_add=False, blank=True, null=True)
 	winner = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="winner")
 	active = models.BooleanField(default=True)
@@ -482,6 +550,16 @@ class Lot(models.Model):
 	banned = models.BooleanField(default=False)
 	banned.help_text = "This lot will be hidden from views, and users won't be able to bid on it.  Banned lots are not charged in invoices."
 	ban_reason = models.CharField(max_length=100, blank=True, null=True)
+	deactivated = models.BooleanField(default=False)
+	deactivated.help_text = "You can deactivate your own lots to remove all bids and stop bidding.  Lots can be reactivated at any time, but existing bids won't be kept"
+	lot_run_duration = models.PositiveIntegerField(default=10, validators=[MinValueValidator(1), MaxValueValidator(30)])
+	lot_run_duration.help_text = "Days to run this lot for"
+	relist_if_sold = models.BooleanField(default=False)
+	relist_if_sold.help_text = "When this lot sells, create a new copy of it.  Useful if you have many copies of something but only want to sell one at a time."
+	relist_if_not_sold = models.BooleanField(default=False)
+	relist_if_not_sold.help_text = "When this lot ends without being sold, reopen bidding on it.  Lots can be automatically relisted up to 5 times."
+	relist_countdown = models.PositiveIntegerField(default=4, validators=[MinValueValidator(0), MaxValueValidator(10)])
+	number_of_bumps = models.PositiveIntegerField(blank=True, default=0, validators=[MinValueValidator(0)])
 	donation = models.BooleanField(default=False)
 	donation.help_text = "All proceeds from this lot will go to the club"
 	watch_warning_email_sent = models.BooleanField(default=False)
@@ -492,6 +570,8 @@ class Lot(models.Model):
 	promoted.help_text = "This does nothing right now lol"
 	promotion_budget = models.PositiveIntegerField(default=2, validators=[MinValueValidator(0), MaxValueValidator(5)])
 	promotion_budget.help_text = "The most money you're willing to spend on ads for this lot."
+	# promotion weight started out as a way to test how heavily a lot should get promoted, but it's now used as a random number generator
+	# to allow some stuff that's not in your favorite cateogy to show up in the recommended list
 	promotion_weight = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(20)])
 	feedback_rating = models.IntegerField(default = 0, validators=[MinValueValidator(-1), MaxValueValidator(1)])
 	feedback_text = models.CharField(max_length=100, blank=True, null=True)
@@ -500,6 +580,7 @@ class Lot(models.Model):
 	date_of_last_user_edit = models.DateTimeField(auto_now_add=True, blank=True)
 	is_chat_allowed = models.BooleanField(default=True)
 	is_chat_allowed.help_text = "Uncheck to prevent chatting on this lot.  This will not remove any existing chat messages"
+	buy_now_used = models.BooleanField(default=False)
 
 	# Location, populated from userdata.  This is needed to prevent users from changing their address after posting a lot
 	latitude = models.FloatField(blank=True, null=True)
@@ -524,6 +605,24 @@ class Lot(models.Model):
 
 	def __str__(self):
 		return "" + str(self.lot_number) + " - " + self.lot_name
+
+	@property
+	def seller_invoice_link(self):
+		"""/invoices/123 for the auction/user of this lot"""
+		try:
+			invoice = Invoice.objects.get(user=self.user, auction=self.auction)
+			return f'/invoices/{invoice.pk}'
+		except:
+			return ""
+	
+	@property
+	def winner_invoice_link(self):
+		"""/invoices/123 for the auction/winner of this lot"""
+		try:
+			invoice = Invoice.objects.get(user=self.winner, auction=self.auction)
+			return f'/invoices/{invoice.pk}'
+		except:
+			return ""
 
 	@property
 	def winner_location(self):
@@ -616,38 +715,78 @@ class Lot(models.Model):
 
 	@property
 	def calculated_end(self):
+		# fixme - rolling auction ends here
 		if self.auction:
 			auction = Auction.objects.get(pk=self.auction.pk)
 			if auction.date_end > timezone.now():
+				# fixme - this should be top level, I think, confirm and unindent
 				# if this lot was won by buy now
 				if self.winner:
 					return self.date_end
 			return auction.date_end
 		if self.date_end:
 			return self.date_end
+		# I would hope we never get here...
 		return timezone.now()
 
 	@property
 	def can_be_edited(self):
 		"""Check to see if this lot can be edited.
 		This is needed to prevent people making lots a donation right before the auction ends"""
-		if self.high_bidder:
-			return False
-		max_delete_date = self.date_posted + datetime.timedelta(hours=24)
-		if timezone.now() > max_delete_date:
-			return False
-		else:
-			return True
+		return self.can_be_deleted
 	
 	@property
 	def can_be_deleted(self):
 		"""Check to see if this lot can be deleted.
 		This is needed to prevent people deleting lots that don't sell right before the auction ends"""
-		max_delete_date = self.date_posted + datetime.timedelta(hours=24)
-		if timezone.now() > max_delete_date:
+		if self.high_bidder:
 			return False
-		else:
-			return True
+		if self.winner:
+			return False
+		if self.auction:
+			# if this lot is part of an auction, allow changes right up until lot submission ends
+			if timezone.now() > self.auction.lot_submission_end_date:
+				return False
+		# if we are getting here, there are no bids or this lot is not part of an auction
+		# lots that are not part of an auction can always be edited as long as there are now bids
+		return True
+
+	@property
+	def bidding_allowed_on(self):
+		"""bidding is not allowed on very new lots"""
+		first_bid_date = self.date_posted + datetime.timedelta(minutes=20)
+		if self.auction:
+			if self.auction.date_start > first_bid_date:
+				return self.auction.date_start
+		return first_bid_date
+
+	@property
+	def bidding_error(self):
+		"""Return false if bidding is allowed, or an error message.  Used when trying to bid on lots.
+		"""
+		if self.banned:
+			if self.ban_reason:
+				return f"This lot has been banned: {self.ban_reason}"
+			return "This lot has been banned"
+		if self.deactivated:
+			return "This lot has been deactivated by its owner"
+		if self.bidding_allowed_on > timezone.now():
+			difference = self.bidding_allowed_on - timezone.now()
+			delta = difference.seconds
+			unit = "second"
+			if delta > 60:
+				delta = delta // 60
+				unit = "minute"
+			if delta > 60:
+				delta = delta // 60
+				unit = "hour"
+			if delta > 24:
+				delta = delta // 24
+				unit = "day"
+			if delta != 1:
+				unit += "s"
+			return f"You can't bid on this lot for {delta} {unit}"
+		return False
 
 	@property
 	def ended(self):
@@ -657,6 +796,16 @@ class Lot(models.Model):
 			return True
 		else:
 			return False
+
+	@property
+	def minutes_to_end(self):
+		"""Number of minutes until bidding ends, as an int.  Returns 0 if bidding has ended"""
+		timedelta = self.calculated_end - timezone.now()
+		seconds = timedelta.total_seconds()
+		if seconds < 0:
+			return 0
+		minutes = seconds // 60
+		return minutes
 
 	@property
 	def ending_soon(self):
@@ -774,6 +923,34 @@ class Lot(models.Model):
 			return False
 		return True
 
+	@property
+	def image_count(self):
+		"""Count the number of images associated with this lot"""
+		return LotImage.objects.filter(lot_number=self.lot_number).count()
+
+	@property
+	def images(self):
+		"""All images associated with this lot"""
+		return LotImage.objects.filter(lot_number=self.lot_number).order_by('-is_primary', 'createdon')
+
+	@property
+	def thumbnail(self):
+		try:
+			return LotImage.objects.get(lot_number=self.lot_number, is_primary=True)
+		except:
+			pass
+		return None
+
+	def get_absolute_url(self):
+		return f'/lots/{self.lot_number}/{self.slug}/'
+
+	@property
+	def qr_code(self):
+		"""Full domain name URL used to for QR codes"""
+		current_site = Site.objects.get_current()
+		return f"{current_site.domain}/lots/{self.lot_number}/{self.slug}/?src=qr"
+		
+
 class Invoice(models.Model):
 	"""
 	An invoice is applied to an auction
@@ -798,6 +975,7 @@ class Invoice(models.Model):
 		default="DRAFT"
 	)
 	opened = models.BooleanField(default=False)
+	printed = models.BooleanField(default=False)
 	email_sent = models.BooleanField(default=False)
 	seller_email_sent = models.BooleanField(default=False)
 	adjustment_direction = models.CharField(
@@ -851,7 +1029,7 @@ class Invoice(models.Model):
 
 	@property
 	def rounded_net(self):
-		"""Always round in the customer's favor (against the club) to make sure that the club doens't need to deal with change, only whole dollar amounts"""
+		"""Always round in the customer's favor (against the club) to make sure that the club doesn't need to deal with change, only whole dollar amounts"""
 		rounded = round(self.net)
 		#print(f"{self.net} Rounded to {rounded}")
 		if self.user_should_be_paid:
@@ -1045,9 +1223,14 @@ class UserData(models.Model):
 	has_unsubscribed = models.BooleanField(default=False, blank=True)
 	banned_from_chat_until = models.DateTimeField(null=True, blank=True)
 	banned_from_chat_until.help_text = "After this date, the user can post chats again.  Being banned from chatting does not block bidding"
-	can_submit_standalone_lots = models.BooleanField(default=False)
+	can_submit_standalone_lots = models.BooleanField(default=True)
 	dismissed_cookies_tos = models.BooleanField(default=False)
-
+	show_ad_controls = models.BooleanField(default=False, blank=True)
+	show_ad_controls.help_text = "Show a tab for ads on all pages"
+	credit = models.DecimalField(max_digits=6, decimal_places=2, default=0)
+	credit.help_text = "The total balance in your account"
+	show_ads = models.BooleanField(default=True, blank=True)
+	show_ads.help_text = "100% of ad profits support the Tropical Fish Club of Burlington"
 	# breederboard info
 	rank_unique_species = models.PositiveIntegerField(null=True, blank=True)
 	number_unique_species = models.PositiveIntegerField(null=True, blank=True)
@@ -1064,6 +1247,8 @@ class UserData(models.Model):
 	seller_percentile = models.PositiveIntegerField(null=True, blank=True)
 	buyer_percentile = models.PositiveIntegerField(null=True, blank=True)
 	volume_percentile = models.PositiveIntegerField(null=True, blank=True)
+	has_bid = models.BooleanField(default=False)
+	has_used_proxy_bidding = models.BooleanField(default=False)
 
 	def __str__(self):
 		return f"{self.user.username}'s data"
@@ -1209,18 +1394,23 @@ class UserInterestCategory(models.Model):
 	user = models.ForeignKey(User, on_delete=models.CASCADE)
 	category = models.ForeignKey(Category, on_delete=models.CASCADE)
 	interest = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
+	as_percent = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(100)])
 
 	def __str__(self):
-		return f"{self.user} interest level in {self.category} is {self.interest}"
+		return f"{self.user} interest level in {self.category} is {self.as_percent}"
 
-	@property
-	def as_percent(self):
-		"""Rank of this interest relative to all of this user's interests"""
+	def save(self, *args, **kwargs):
+		"""
+		Normalize the user's interest in a category relative to all of this user's interests
+		"""
 		try:
-			max = UserInterestCategory.objects.filter(user=self.user).order_by('-interest')[0].interest
-			return int((self.interest / max) * 100)
-		except:
-			return 100
+			maxInterest = UserInterestCategory.objects.filter(user=self.user).order_by('-interest')[0].interest
+			self.as_percent = int(((self.interest + 1) / maxInterest) * 100) # + 1 for the times maxInterest is 0
+			if self.as_percent > 100:
+				self.as_percent = 100
+		except Exception as e:
+			self.as_percent = 100
+		super().save(*args, **kwargs) 
 
 class LotHistory(models.Model):
 	lot = models.ForeignKey(Lot, blank=True, null=True, on_delete=models.CASCADE)
@@ -1236,6 +1426,9 @@ class LotHistory(models.Model):
 	changed_price.help_text = "Was this a bid that changed the price?"
 	notification_sent = models.BooleanField(default=False)
 	notification_sent.help_text = "Set to true automatically when the notification email is sent"
+	bid_amount = models.PositiveIntegerField(null=True, blank=True)
+	bid_amount.help_text = "For any kind of debugging"
+	removed = models.BooleanField(default=False)
 
 	def __str__(self):
 		if self.message:
@@ -1249,13 +1442,133 @@ class LotHistory(models.Model):
 		ordering = ['timestamp']
 
 
+class AdCampaignGroup(models.Model):
+	title = models.CharField(max_length=100, default="Untitled campaign")
+	contact_user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+	paid = models.BooleanField(default=False)
+	total_cost = models.FloatField(default = 0)
+	
+	def __str__(self):
+		return f"{self.title}"
+
+	@property
+	def number_of_clicks(self):
+		"""..."""
+		return AdCampaignResponse.objects.filter(campaign__campaign_group=self.pk, clicked=True).count()
+
+	@property
+	def number_of_impressions(self):
+		"""How many times ads in this campaign group have been viewed"""
+		return AdCampaignResponse.objects.filter(campaign__campaign_group=self.pk).count()
+
+	@property
+	def click_rate(self):
+		"""What percent of views result in a click"""
+		return (self.number_of_clicks/(self.number_of_impressions+1))*100
+	
+	@property
+	def number_of_campaigns(self):
+		"""How many campaigns are there in this group"""
+		return AdCampaign.objects.filter(campaign_group=self.pk).count()
+
+class AdCampaign(models.Model):
+	image = ThumbnailerImageField(upload_to='images/', blank=True)
+	campaign_group = models.ForeignKey(AdCampaignGroup, null=True, blank=True, on_delete=models.SET_NULL)
+	title = models.CharField(max_length=50, default="Click here")
+	text = models.CharField(max_length=40, blank=True, null=True)
+	body_html = models.CharField(max_length=300, default="")
+	external_url = models.URLField(max_length = 300)
+	begin_date = models.DateTimeField(blank=True, null=True)
+	end_date = models.DateTimeField(blank=True, null=True)
+	max_ads = models.PositiveIntegerField(default=10000000, validators=[MinValueValidator(0), MaxValueValidator(10000000)])
+	max_clicks = models.PositiveIntegerField(default=10000000, validators=[MinValueValidator(0), MaxValueValidator(10000000)])
+	category = models.ForeignKey(Category, null=True, blank=True, on_delete=models.SET_NULL, verbose_name="Category")
+	category.help_text = "If set, this ad will only be shown to users interested in this particular category"
+	auction = models.ForeignKey(Auction, blank=True, null=True, on_delete=models.SET_NULL)
+	auction.help_text = "If set, this campaign will only be run on a particular auction (leave blank for site-wide)"
+	bid = models.FloatField(default = 1)
+	bid.help_text = "At the moment, this is not actually the cost per click, it's the percent chance of showing this ad.  If the top ad fails, the next one will be selected.  If there are none left, google ads will be loaded.  Expects 0-1"
+	
+	def __str__(self):
+		if self.campaign_group:
+			return f"{self.campaign_group.title} - {self.title} ({self.click_rate:.2f}% clicked)"
+		return f"{self.title}"
+
+	@property
+	def number_of_clicks(self):
+		"""..."""
+		return AdCampaignResponse.objects.filter(campaign=self.pk, clicked=True).count()
+
+	@property
+	def number_of_impressions(self):
+		"""How many times this ad has been viewed"""
+		return AdCampaignResponse.objects.filter(campaign=self.pk).count()
+
+	@property
+	def click_rate(self):
+		"""What percent of views result in a click"""
+		return (self.number_of_clicks/(self.number_of_impressions+1))*100
+
+class AdCampaignResponse(models.Model):
+	campaign = models.ForeignKey(AdCampaign, on_delete=models.CASCADE)
+	responseid = models.CharField(max_length=255, default=uuid.uuid4, blank=True)
+	user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+	session = models.CharField(max_length=250, blank=True, null=True)
+	text = models.CharField(max_length=250, blank=True, null=True)
+	timestamp = models.DateTimeField(auto_now_add=True)
+	clicked = models.BooleanField(default=False)
+
+	def __str__(self):
+		if self.user:
+			user = self.user
+		else:
+			user = "Anonymous"
+		if self.clicked:
+			action = "clicked"
+		else:
+			action = "viewed"
+		return f"{user} {action}"
+
+class LotImage(models.Model):
+	"""An image that belongs to a lot.  Each lot can have multiple images"""
+	PIC_CATEGORIES = (
+		('ACTUAL', 'This picture is of the exact item'),
+		('REPRESENTATIVE', "This is my picture, but it's not of this exact item.  e.x. This is the parents of these fry"),
+		('RANDOM', 'This picture is from the internet'),
+	)
+	lot_number = models.ForeignKey(Lot, on_delete=models.CASCADE)
+	caption = models.CharField(max_length=60, blank=True, null=True)
+	caption.help_text = "Optional"
+	image = ThumbnailerImageField(upload_to='images/', blank=False, null=False)
+	image.help_text = "Select an image to upload"
+	image_source = models.CharField(
+		max_length=20,
+		choices=PIC_CATEGORIES,
+		blank=True
+	)
+	is_primary = models.BooleanField(default=False, blank=True)
+	createdon = models.DateTimeField(auto_now_add=True)
+
+class FAQ(models.Model):
+	"""Questions...constantly questions.  Maintained in the admin site, and used only on the FAQ page"""
+	category_text = models.CharField(max_length=100)
+	question = models.CharField(max_length=200)
+	answer = MarkdownField(rendered_field='answer_rendered', validator=VALIDATOR_STANDARD, blank=True, null=True)
+	answer.help_text = "To add a link: [Link text](https://www.google.com)"
+	answer_rendered = RenderedMarkdownField(blank=True, null=True)
+	slug = AutoSlugField(populate_from='question', unique=True)
+	createdon = models.DateTimeField(auto_now_add=True)
+
 @receiver(pre_save, sender=Auction)
 def on_save_auction(sender, instance, **kwargs):
 	"""This is run when an auction is saved"""
 	if not instance.lot_submission_end_date:
 		instance.lot_submission_end_date = instance.date_end
+	if not instance.lot_submission_start_date:
+		instance.lot_submission_start_date = instance.date_start
 	# perhaps we should refactor the lot.active code and update the end date for all lots in the auction here?
-
+	# fixme - yes, we should for rolling ends of auctions
+	
 @receiver(pre_save, sender=UserData)
 @receiver(pre_save, sender=PickupLocation)
 @receiver(pre_save, sender=Club)
@@ -1295,86 +1608,3 @@ def update_lot_info(sender, instance, **kwargs):
 	instance.latitude = userData.latitude
 	instance.longitude = userData.longitude
 	instance.address = userData.address
-
-def get_recommended_lots(
-		user=None,
-		local=False,
-		location=None,
-		auction=None,
-		latitude=None,
-		longitude=None,
-		distance=None, 
-		onlyUnseen=False,
-		onlyActive=True,
-		qty=10):
-	"""
-	This is the core of the recommendation system - it's very expensive to run since it loops over almost all lots.
-	Returns a queryset of lot objects ready for use in a template.
-	"""
-	# start with everything
-	qs = Lot.objects.filter(banned=False)
-	# if an auction is specified, only show stuff from that auction
-	if auction:
-		qs = qs.filter(auction__slug=auction)
-	else:
-		qs = qs.filter(auction__isnull=True)
-	if local:
-		if latitude and longitude and distance:
-			qs = qs.annotate(distance=distance_to(latitude, longitude)).filter(local_pickup=True, auction__isnull=True, distance__lte=distance)
-		else:
-			print('error in get_recommended_lots - local requires latitude, longitude, and distance to be set')
-			return []
-	if location:
-		# show only lots that are shippable to the specified location
-		location = Location.objects.get(pk=location)
-		qs = qs.filter(shipping_locations=location, auction__isnull=True)
-	if onlyActive:
-		qs = qs.filter(active=True)
-	if user:
-		try:
-			user = User.objects.get(pk=user)
-			# don't show users their own lots
-			qs = qs.exclude(user=user.pk)
-			# and exclude any ignored categories
-			allowedCategories = Category.objects.exclude(userignorecategory__user=user.pk)
-			qs = qs.filter(species_category__in=allowedCategories)
-		except:
-			print("error in get_recommended_lots - user must be the pk of a user")
-			user = None
-	if user and onlyUnseen:
-		# exclude viewed lots
-		qs = qs.exclude(pageview__user=user.pk)
-	# all parameters accounted for, here's the actual logic
-	count = len(qs)
-	result = []
-	if not count:
-		return []
-	timeout = 0 # hard cap to prevent an infinite loop
-	if count <= qty:
-		# if there's only a few lots, just return them all
-		return qs
-	while len(result) < qty and timeout < qty*4:
-		# select a random lot
-		resultLot = qs[randint(0, count - 1)]
-		if resultLot not in result: # no duplicates
-			shouldAdd = False
-			if user:
-				# weight the chance to see a given lot based on the user's history
-				try:
-					interest = UserInterestCategory.objects.get(category=resultLot.species_category, user=user.pk).as_percent
-				except:
-					interest = 10 # low chance to view lots that the user has no history for
-				rand = randint(0, 100-settings.WEIGHT_AGAINST_TOP_INTEREST)
-				#if resultLot.promoted:
-				if True: # temporarily, we need to collect data on all lots
-					interest = interest + resultLot.promotion_weight
-				if interest > rand:
-					shouldAdd = True
-					resultLot.your_interest = interest
-			else:
-				# just show random lots to non-authenticated users
-				shouldAdd = True
-			if shouldAdd:
-				result.append(resultLot)
-		timeout += 1
-	return result

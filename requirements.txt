@@ -1,3 +1,4 @@
+django-qr-code
 asgiref==3.3.1
 attrs==20.3.0
 autobahn==20.12.3

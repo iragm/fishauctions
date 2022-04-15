@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}
+FAQ
+{% endblock %}
+{% load static %}
+{% block content %}
+<div class="container mt-5 mb-5">
+    <div class="row">
+      <div class="col-md-10 offset-lg-1">
+        {% for q in object_list %}
+          {% ifchanged %}<br><br><h3>{{ q.category_text }}</h3><br>{% endifchanged %}
+          <div><a name="{{q.slug}}"></a>
+          <h4>{{q.question}}</h4>
+          {{q.answer_rendered | safe }}
+          {% if request.user.is_superuser %}<small><button class="btn btn-sm btn-primary" onclick="copyLink('https://{{domain}}/faq#{{q.slug}}')">Copy link</button>
+          <a class="btn btn-sm btn-danger" href="/admin/auctions/faq/{{q.pk}}/change/">Admin</a></small> {% endif %}
+          </div>
+          <br><br>
+        {% endfor %}
+        Still got questions? Email me: {{ contact | safe }}<br>
+    </div>
+</div>
+</div>  
+{% endblock %}
+{% block extra_js %}
+<script>
+  function copyLink(link) {
+    navigator.clipboard.writeText(link).then(function() {
+      /* success */
+    }, function() {
+      console.error("copying is not supported on this browser");
+    });
+  } 
+</script>
+{% endblock %}

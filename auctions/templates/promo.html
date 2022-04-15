@@ -164,8 +164,9 @@
           <li>Invoices generated automatically</li>
         </ul>
       </li>
-      <li>After the auction, exchange lots and money</li>
       <li>Send invoices and get payment with Paypal (Paypal fees apply)</li>
+      <li>Exchange lots</li>
+      <li>Enjoy your new fish!</li>
     </ol>
     <!--<div><img id='locations_animation' style='max-width:100%' src="{% static 'locations_1.svg' %}" class="card-img-top" alt="Pickup locations diagram"></div>
     <br><br><br><p><div><span class='text-muted'>Note: </span>Having multiple pickup locations is a good way to bring in new people, but it's optional.  You may want to run a single location auction first, so you club members get used to how the process works.</div></p>
@@ -276,20 +277,34 @@
     <h1 class="display-4">Ready to get started?</h1>
     <ul class="nav nav-tabs">
       <li class="nav-item">
-        <a class="nav-link" data-toggle="tab" href="#runAuction">Start your own auction</a>
+        <a class="nav-link active" data-toggle="tab" href="#moreinfo">I want to know more about this site</a>
       </li>
       <li class="nav-item">
-        <a class="nav-link active" data-toggle="tab" href="#profile">Buy or sell in an auction</a>
+        <a class="nav-link" data-toggle="tab" href="#runAuction">Start your own club auction</a>
       </li>
+      <!-- <li class="nav-item">
+        <a class="nav-link" data-toggle="tab" href="#profile">Buy or sell in an auction</a>
+      </li> -->
       <li class="nav-item">
         <a class="nav-link" data-toggle="tab" href="#nonauctionlots">Buy or sell lots without an auction</a>
       </li>
-      <li class="nav-item">
-        <a class="nav-link" data-toggle="tab" href="#moreinfo">I want to know more about this site</a>
-      </li>
+
     </ul>
     <div id="tabs" class="tab-content">
-      <div class="tab-pane fade" id="runAuction">
+      <div class="tab-pane fade active show" id="moreinfo">
+        <br>I'm happy to provide help with running your auctions and answer any questions.
+        <br>
+        <br>{% if not request.user.is_authenticated %}<a href="/google/login/?process=login&next={% firstof request.path '/' %}">Sign in with Google</a> or <a href="/signup/">create an account</a> and my email address will show up here{% else %}Contact me at <a href='mailto:{{ contact_email }}'>{{ contact_email }}</a>{% endif %}.
+        <br>
+        <br>For more information, <a href="/faq">check out the FAQ here</a>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+      </div>
+      <div class="tab-pane fade " id="runAuction">
         <br>
         <ol>
           <li>{% if not request.user.is_authenticated %}<a href="/google/login/?process=login&next={% firstof request.path '/' %}">Sign in with Google</a> or <a href="/signup/">create an account</a>{% else %}Thanks for signing up!{% endif %}</li>
@@ -303,7 +318,7 @@
         <br>
         <br>See <a href="/auctions/tfcb-annual-auction/">example auction rules</a> or see <a href="/lots/?auction=tfcb-annual-auction">lots for an example auction</a>
       </div>
-      <div class="tab-pane fade active show" id="profile">
+      <!-- <div class="tab-pane fade" id="profile">
         <ol>
           <br>
           <li>{% if not request.user.is_authenticated %}<a href="/google/login/?process=login&next={% firstof request.path '/' %}">Sign in with Google</a> or <a href="/signup/">create an account</a>{% else %}Thanks for signing up!{% endif %}</li>
@@ -316,33 +331,21 @@
           <li>Get your lots</li>
           <li>Enjoy your fish!</li>
         </ol>
-      </div>
+      </div> -->
       <div class="tab-pane fade" id="nonauctionlots">
         <ol>
           <br>
-          <br> For the moment, this is not possible.  You can only buy/sell lots as part of a club auction.
+          <br> Click <a href="/lots/new">Create lot</a> to sell an item, or click on <a href="/lots/">Lots</a> to see stuff for sale near you.
           <br>
-          <br> This is something that I'm interested in adding, but not until COVID cases slow down a bit.
           <br> 
-          <br> Check back in May 2021
+          <br> If you're selling, remember to set a reserve price so that you don't sell a one-of-a-kind fish for $1!
+          <br> 
+          <br> If you're buying, make sure to check out the seller's feedback before you bid.
           <br>
-          <br>
-          <br>
+          <br> I do recommend joining a club <a href="/auctions/">auction</a> if one is running near you, since clubs <a href="/faq#can-i-sell-stuff-without-joining-a-club-auction">are fantastic</a>!
           <br>
       </div>
-      <div class="tab-pane fade" id="moreinfo">
-        <br>I'm happy to provide help with running your auctions and answer any questions.
-        <br>
-        <br>{% if not request.user.is_authenticated %}<a href="/google/login/?process=login&next={% firstof request.path '/' %}">Sign in with Google</a> or <a href="/signup/">create an account</a> and my email address will show up here{% else %}Contact me at <a href='mailto:{{ contact_email }}'>{{ contact_email }}</a>{% endif %}.
-        <br>
-        <br>I built this site because my local club, the <a href="https://www.tfcb.org/">Tropcial Fish Club of Burlington</a> hasn't been able to have in-person auctions.
-        <br>
-        <br>I plan to continue maintaining this site for the foreseeable future.  It will remain completely free for anyone to use for as long as possible.
-        <br>
-        <br>This site is open source -- if you find a problem or have a suggestion for a new feature, please <a href='https://github.com/iragm/fishauctions/'>open an issue</a> on the github repo
-        <br>
-        <br>
-      </div>
+
     </div>
   </div>
 </div>

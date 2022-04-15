@@ -3,9 +3,10 @@ from crispy_forms.helper import FormHelper
 from crispy_forms.layout import Layout, Submit, HTML
 from crispy_forms.bootstrap import Div, Field
 from django import forms
-from .models import Lot, Bid, Auction, User, UserData, Location, Club, PickupLocation, AuctionTOS, Invoice, Category
+from .models import Lot, Bid, Auction, User, UserData, Location, Club, PickupLocation, AuctionTOS, Invoice, Category, LotImage
 from django.forms import ModelForm, HiddenInput, RadioSelect, ModelChoiceField
-from bootstrap_datepicker_plus import DateTimePickerInput
+# from bootstrap_datepicker_plus import DateTimePickerInput
+from bootstrap_datepicker_plus.widgets import DateTimePickerInput # https://github.com/monim67/django-bootstrap-datepicker-plus/issues/66
 from django.utils import timezone
 from location_field.models.plain import PlainLocationField
 #from django.core.exceptions import ValidationError
@@ -91,7 +92,7 @@ class AuctionTOSForm(forms.ModelForm):
             'i_agree',
             #'auction',
             'pickup_location',
-            Submit('submit', 'Confirm pickup location and view lots', css_class='agree_tos btn-success'),
+            Submit('submit', 'Confirm pickup location', css_class='agree_tos btn-success'),
         )
         self.fields['pickup_location'].queryset = PickupLocation.objects.filter(auction=self.auction).order_by('name')
         if self.auction.multi_location:
@@ -158,6 +159,9 @@ class PickupLocationForm(forms.ModelForm):
             ),
             'address',
             'location_coordinates',
+            Div(
+                HTML("The pin on the map must be at the <span class='text-warning'>exact location of the pickup location!</span><br><small>People will get directions based on this pin, and will get lost if it's not in the right place</small>"),
+            ),
             Submit('submit', 'Save', css_class='btn-success'),
         )
     
@@ -170,32 +174,77 @@ class PickupLocationForm(forms.ModelForm):
             else:
                 self.add_error('auction', "You can only add pickup locations to your own auctions")
 
+class CreateImageForm(forms.ModelForm):
+    class Meta:
+        model = LotImage
+        fields = ['image', 'image_source', 'caption',]
+        exclude = ['is_primary', 'lot_number',]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper
+        self.helper.form_method = 'post'
+        self.helper.form_id = 'auction-form'
+        self.helper.form_class = 'form'
+        self.helper.form_tag = True
+        self.helper.layout = Layout(
+            'image',
+            Div(
+                Div('image_source',css_class='col-md-4',),
+                Div('caption',css_class='col-md-8',),
+                css_class='row',
+            ),
+            Submit('submit', 'Save', css_class='create-update-image btn-success'),
+        )
+
 class CreateAuctionForm(forms.ModelForm):
+    """Create or edit an auction"""
+    
+    cloned_from = forms.CharField(required=False, widget=forms.HiddenInput())
+
     class Meta:
         model = Auction
-        fields = ['title', 'notes', 'lot_entry_fee','unsold_lot_fee','winning_bid_percent_to_club', 'date_start', 'date_end', \
-            'lot_submission_end_date', 'first_bid_payout', 'sealed_bid','promote_this_auction', 'max_lots_per_user', 'allow_additional_lots_as_donation']
+        fields = ['title', 'notes', 'lot_entry_fee','unsold_lot_fee','winning_bid_percent_to_club', 'date_start', 'date_end', 'lot_submission_start_date',\
+            'lot_submission_end_date', 'first_bid_payout', 'sealed_bid','promote_this_auction', 'max_lots_per_user', 'allow_additional_lots_as_donation','make_stats_public']
         exclude = ['slug', 'watch_warning_email_sent', 'invoiced', 'created_by', 'code_to_add_lots', \
             'pickup_location', 'pickup_location_map', 'pickup_time', 'alternate_pickup_location', 'alternate_pickup_location_map',\
             'alternate_pickup_time','location', ]
         widgets = {
+            'cloned_from': forms.HiddenInput(),
             'date_start': DateTimePickerInput(),
             'date_end': DateTimePickerInput(),
+            'lot_submission_start_date': DateTimePickerInput(),
             'lot_submission_end_date': DateTimePickerInput(),
-            'notes': forms.Textarea,
+            'notes': forms.Textarea(),
         }
     def __init__(self, *args, **kwargs):
         self.user = kwargs.pop('user')
+        self.cloned_from = kwargs.pop('cloned_from')
         timezone.activate(kwargs.pop('user_timezone'))
         super().__init__(*args, **kwargs)
         self.fields['notes'].widget.attrs = {'rows': 10}
-        # set the initial value of
-        if not self.instance.pk:
-            try:
-                lastAuction = Auction.objects.filter(created_by=self.user).order_by('-date_end')[0]
-                self.fields['notes'].initial = "These rules are unchanged from the last auction\n\n" + lastAuction.notes
-            except Exception as e:
+        if self.instance.pk:
+            # editing existing auction
+            pass
+        else:
+            # this is a new auction
+            if self.cloned_from:
+                try:
+                    originalAuction = Auction.objects.get(slug=self.cloned_from)
+                    if (originalAuction.created_by.pk == self.user.pk) or self.user.is_superuser:
+                        # you can only clone your own auctions
+                        cloneFields = ['title', 'notes', 'lot_entry_fee','unsold_lot_fee','winning_bid_percent_to_club', 'first_bid_payout', 'sealed_bid','promote_this_auction', 'max_lots_per_user', 'allow_additional_lots_as_donation','make_stats_public']
+                        for field in cloneFields:
+                            self.fields[field].initial = getattr(originalAuction, field)
+                        self.fields['cloned_from'].initial = self.cloned_from
+                except Exception as e:
+                    pass
+            #try:
+            #    lastAuction = Auction.objects.filter(created_by=self.user).order_by('-date_end')[0]
+            #    self.fields['notes'].initial = "These rules are unchanged from the last auction\n\n" + lastAuction.notes
+            #except Exception as e:
                 # no old auction
+            else:
                 self.fields['notes'].initial = "## General information\n\nYou should remove this line and edit this section to suit your auction.  Use the formatting here as an example.\n\n## Prohibited items\n- You cannot sell any fish or plants banned by state law.\n- You cannot sell large hardware items such as tanks.\n\n## Rules\n- All lots must be properly bagged.  No leaking bags!\n- You do not need to be a club member to buy or sell lots."
         self.helper = FormHelper
         self.helper.form_method = 'post'
@@ -203,6 +252,7 @@ class CreateAuctionForm(forms.ModelForm):
         self.helper.form_class = 'form'
         self.helper.form_tag = True
         self.helper.layout = Layout(
+            'cloned_from',
             'title',
             'notes',
             Div(
@@ -213,6 +263,7 @@ class CreateAuctionForm(forms.ModelForm):
             ),
             Div(
                 Div('date_start',css_class='col-md-4',),
+                Div('lot_submission_start_date',css_class='col-md-4',),
                 Div('lot_submission_end_date',css_class='col-md-4',),
                 Div('date_end',css_class='col-md-4',),
                 css_class='row',
@@ -220,15 +271,15 @@ class CreateAuctionForm(forms.ModelForm):
             Div(
                 Div('max_lots_per_user', css_class='col-md-4',),
                 Div('allow_additional_lots_as_donation', css_class='col-md-4',),
+                Div('first_bid_payout',css_class='col-md-4',),
                 css_class='row',
             ),
             Div(
-                Div('first_bid_payout', css_class='col-md-4',),
+                Div('make_stats_public', css_class='col-md-4',),
                 Div('sealed_bid', css_class='col-md-4',),
                 Div('promote_this_auction', css_class='col-md-4',),
                 css_class='row',
             ),
-
             Submit('submit', 'Save', css_class='create-update-auction btn-success'),
         )
 
@@ -237,7 +288,7 @@ class CreateAuctionForm(forms.ModelForm):
         date_end = cleaned_data.get("date_end")
         date_start = cleaned_data.get("date_start")
         lot_submission_end_date = cleaned_data.get("lot_submission_end_date")
-        if date_end < timezone.now() + datetime.timedelta(hours=24):
+        if date_end < timezone.now() + datetime.timedelta(hours=2):
             self.add_error('date_end', "The end date can't be in the past")
         if date_end < date_start:
             self.add_error('date_end', "The end date can't be before the start date")
@@ -249,15 +300,16 @@ class CreateAuctionForm(forms.ModelForm):
 class CreateLotForm(forms.ModelForm):
     """Form for creating or updating of lots"""
     # Fields needed to add new species
-    species_search = forms.CharField(max_length=200, required = False)
-    species_search.help_text = "Search here for a latin or common name, or the name of a product"
-    create_new_species = forms.BooleanField(required = False)
-    new_species_name = forms.CharField(max_length=200, required = False, label="Common name")
-    new_species_name.help_text = "You can enter synonyms here, separate by commas"
-    new_species_scientific_name = forms.CharField(max_length=200, required = False, label="Scientific name")
-    new_species_scientific_name.help_text = "Enter the Latin name of this species"
-    new_species_category = ModelChoiceField(queryset=Category.objects.all().order_by('name'), required=False,label="Category")
-    
+    #species_search = forms.CharField(max_length=200, required = False)
+    #species_search.help_text = "Search here for a latin or common name, or the name of a product"
+    #create_new_species = forms.BooleanField(required = False)
+    #new_species_name = forms.CharField(max_length=200, required = False, label="Common name")
+    #new_species_name.help_text = "You can enter synonyms here, separate by commas"
+    #new_species_scientific_name = forms.CharField(max_length=200, required = False, label="Scientific name")
+    #new_species_scientific_name.help_text = "Enter the Latin name of this species"
+    #new_species_category = ModelChoiceField(queryset=Category.objects.all().order_by('name'), required=False,label="Category")
+    cloned_from = forms.IntegerField(required=False, widget=forms.HiddenInput())
+
     show_payment_pickup_info = forms.BooleanField(required = False, label="Show payment/pickup info")
     AUCTION_CHOICES=[(True,'Yes, this lot is part of a club auction'),
          (False,"No, I'm selling this lot independently")]
@@ -268,23 +320,24 @@ class CreateLotForm(forms.ModelForm):
 
     class Meta:
         model = Lot
-        fields = ('lot_name', 'species', 'species_search', 'create_new_species', 'new_species_name', 'new_species_scientific_name',\
-            'i_bred_this_fish', 'image','image_source','description','quantity','reserve_price','species_category',\
+        fields = ('relist_if_sold', 'relist_if_not_sold', 'lot_name', 'i_bred_this_fish','description','quantity','reserve_price','species_category',\
             'auction','donation', 'shipping_locations', 'buy_now_price', 'show_payment_pickup_info', 'promoted', 'part_of_auction',\
-            'other_text', 'local_pickup', 'payment_paypal', 'payment_cash', 'payment_other', 'payment_other_method', 'payment_other_address', 'run_duration','new_species_category')
-        exclude = ["user", ]
+            'other_text', 'local_pickup', 'payment_paypal', 'payment_cash', 'payment_other', 'payment_other_method', 'payment_other_address', 'run_duration',)
+        exclude = ["user", 'image', 'image_source']
         widgets = {
-            'description': forms.Textarea,
-            'species': forms.HiddenInput,
-            'shipping_locations':forms.CheckboxSelectMultiple,
+            'description': forms.Textarea(),
+            #'species': forms.HiddenInput(),
+            #'cloned_from': forms.HiddenInput(),
+            'shipping_locations':forms.CheckboxSelectMultiple(),
         }
     def __init__(self, *args, **kwargs):
         self.user = kwargs.pop('user')
+        self.cloned_from = kwargs.pop('cloned_from')
         super().__init__(*args, **kwargs)
         self.fields['description'].widget.attrs = {'rows': 3}
-        #self.fields['species_category'].required = True
+        self.fields['species_category'].required = True
         self.fields['auction'].queryset = Auction.objects.filter(lot_submission_end_date__gte=timezone.now())\
-            .filter(date_start__lte=timezone.now())\
+            .filter(lot_submission_start_date__lte=timezone.now())\
             .filter(auctiontos__user=self.user).order_by('date_end')
         # Default auction selection:
         # try:
@@ -305,9 +358,20 @@ class CreateLotForm(forms.ModelForm):
                 self.fields['part_of_auction'].initial = "True"
             else:
                 self.fields['part_of_auction'].initial = "False"
-            if self.instance.species:
-                self.fields['species_search'].initial = self.instance.species.common_name.split(",")[0]
+            #if self.instance.species:
+            #    self.fields['species_search'].initial = self.instance.species.common_name.split(",")[0]
         else:
+            if self.cloned_from:
+                try:
+                    cloneLot = Lot.objects.get(pk=self.cloned_from)
+                    if (cloneLot.user.pk == self.user.pk) or self.user.is_superuser:
+                        # you can only clone your lots
+                        cloneFields = ['lot_name', 'quantity', 'species_category', 'description', 'i_bred_this_fish', 'reserve_price', 'buy_now_price',]
+                        for field in cloneFields:
+                            self.fields[field].initial = getattr(cloneLot, field)
+                        self.fields['cloned_from'].initial = int(self.cloned_from)
+                except:
+                    pass
             # default to making new lots part of a club auction
             self.fields['part_of_auction'].initial = "True"
             self.fields['run_duration'].initial = 10
@@ -342,37 +406,38 @@ class CreateLotForm(forms.ModelForm):
         self.helper.form_class = 'form'
         self.helper.form_tag = True
         self.helper.layout = Layout(
+            # Div(
+            #     'species',
+            #     'create_new_species',
+            #     css_class='d-none',
+            # ),
+            # HTML("<span id='species_selection'>"),
+            # HTML("<h4>Species</h4>"),
+            # HTML('<div class="btn-group" role="group" aria-label="Species Selection">\
+            #     <button id="useExistingSpeciesButton" type="button" onclick="useExistingSpecies();" class="btn btn-secondary selected">Use existing species</button>\
+            #     <button id="createNewSpeciesButton" type="button" onclick="createNewSpecies();" class="btn btn-secondary">Create new species</button>\
+            #     <button id="skipSpeciesButton" type="button" onclick="skipSpecies();" class="btn btn-secondary mr-3">Skip choosing a species</button></div><br>\
+            #     <span class="text-muted">You can search for products as well as species.  If you can\'t find your exact species/morph/collection location, create a new one.<br><br></span>'),
+            # Div(
+            #     Div('species_search',css_class='col-md-12',),
+            #     css_class='row',
+            # ),
+            # Div(
+            #     # Div('new_species_name',css_class='col-md-4',),
+            #     # Div('new_species_scientific_name',css_class='col-md-4',),
+            #     # Div('new_species_category',css_class='col-md-4',),
+            #     css_class='row',
+            # ),
+            #HTML("</span><span id='details_selection'><h4>Details</h4><br>"),
+            'cloned_from',
             Div(
-                'species',
-                'create_new_species',
-                css_class='d-none',
-            ),
-            HTML("<span id='species_selection'>"),
-            HTML("<h4>Species</h4>"),
-            HTML('<div class="btn-group" role="group" aria-label="Species Selection">\
-                <button id="useExistingSpeciesButton" type="button" onclick="useExistingSpecies();" class="btn btn-secondary selected">Use existing species</button>\
-                <button id="createNewSpeciesButton" type="button" onclick="createNewSpecies();" class="btn btn-secondary">Create new species</button>\
-                <button id="skipSpeciesButton" type="button" onclick="skipSpecies();" class="btn btn-secondary mr-3">Skip choosing a species</button></div><br>\
-                <span class="text-muted">You can search for products as well as species.  If you can\'t find your exact species/morph/collection location, create a new one.<br><br></span>'),
-            Div(
-                Div('species_search',css_class='col-md-12',),
-                css_class='row',
-            ),
-            Div(
-                Div('new_species_name',css_class='col-md-4',),
-                Div('new_species_scientific_name',css_class='col-md-4',),
-                Div('new_species_category',css_class='col-md-4',),
+                Div('lot_name',css_class='col-md-12',),
                 Div('species_category',css_class='col-md-12',),
                 css_class='row',
             ),
-            HTML("</span><span id='details_selection'><h4>Details</h4><br>"),
             Div(
-                Div('lot_name',css_class='col-md-12',),
-                css_class='row details',
-            ),
-            Div(
-                Div('image',css_class='col-md-8',),
-                Div('image_source',css_class='col-md-4',),
+                #Div('image',css_class='col-md-8',),
+                #Div('image_source',css_class='col-md-4',),
                 Div('description',css_class='col-md-12',),
                 Div('quantity',css_class='col-md-4',),
                 Div('i_bred_this_fish',css_class='col-md-5',),
@@ -384,6 +449,8 @@ class CreateLotForm(forms.ModelForm):
                 #HTML("<br><span class='text-danger col-xl-12'>You must select a pickup location before you can submit lots in an auction</span><br>"),
                 Div('donation',css_class='col-md-4',),
                 Div('run_duration',css_class='col-md-4',),
+                Div('relist_if_not_sold',css_class='col-md-4',),
+                Div('relist_if_sold',css_class='col-md-4',),
                 Div('promoted',css_class='col-md-4',),
                 Div('show_payment_pickup_info',css_class='col-md-12',),
                 css_class='row',
@@ -407,17 +474,17 @@ class CreateLotForm(forms.ModelForm):
 
     def clean(self):
         cleaned_data = super().clean()
-        create_new_species = cleaned_data.get("create_new_species")
-        new_species_name = cleaned_data.get("new_species_name")
-        new_species_scientific_name = cleaned_data.get("new_species_scientific_name")
-        new_species_category = cleaned_data.get("new_species_category")
-        if create_new_species:
-            if not new_species_name:
-                self.add_error('new_species_name', "Enter the common name of the new species to create")
-            if not new_species_scientific_name:
-                self.add_error('new_species_scientific_name', "Enter the scientific name of the new species to create")
-            if not new_species_category:
-                self.add_error("new_species_category", "Pick a category")
+        #create_new_species = cleaned_data.get("create_new_species")
+        #new_species_name = cleaned_data.get("new_species_name")
+        #new_species_scientific_name = cleaned_data.get("new_species_scientific_name")
+        #new_species_category = cleaned_data.get("new_species_category")
+        # if create_new_species:
+        #     if not new_species_name:
+        #         self.add_error('new_species_name', "Enter the common name of the new species to create")
+        #     if not new_species_scientific_name:
+        #         self.add_error('new_species_scientific_name', "Enter the scientific name of the new species to create")
+        #     if not new_species_category:
+        #         self.add_error("new_species_category", "Pick a category")
         
         # this is now handled more seamlessly in LotValidation.form_valid -- the user can always edit it later
         #image = cleaned_data.get("image")
@@ -451,16 +518,19 @@ class CreateLotForm(forms.ModelForm):
             except:
                 pass
             #thisAuction = Auction.objects.get(pk=auction)
-            if auction.max_lots_per_user:
-                numberOfLots = Lot.objects.filter(user=self.user, auction=auction).count()
-                if numberOfLots >= auction.max_lots_per_user:
+            if not self.instance.pk: # only run this check when creating a lot, not when editing
+                if auction.max_lots_per_user:
                     if auction.allow_additional_lots_as_donation:
-                        if not cleaned_data.get("donation"):
-                            self.add_error('donation', f"You've already added {auction.max_lots_per_user} lots to this auction.  You can add more lots as a donation.")
+                        numberOfLots = Lot.objects.filter(user=self.user, auction=auction, donation=False, banned=False).count()
                     else:
-                        self.add_error('auction', f"You can't add more lots to this auction (Limit: {auction.max_lots_per_user})")
-
-            
+                        numberOfLots = Lot.objects.filter(user=self.user, auction=auction, banned=False).count()
+                    if numberOfLots >= auction.max_lots_per_user:
+                        if auction.allow_additional_lots_as_donation:
+                            if not cleaned_data.get("donation"):
+                                self.add_error('donation', f"You've already added {auction.max_lots_per_user} lots to this auction.  You can add more lots as a donation.")
+                        else:
+                            self.add_error('auction', f"You can't add more lots to this auction (Limit: {auction.max_lots_per_user})")
+           
         # check to see if this lot exists already
         try:
             existingLot = Lot.objects.filter(user=self.user, lot_name=cleaned_data.get("lot_name"), description=cleaned_data.get("description"), active = True).exclude(pk=self.instance.pk)
@@ -558,7 +628,7 @@ class ChangeUsernameForm(forms.ModelForm):
 class ChangeUserPreferencesForm(forms.ModelForm):
     class Meta:
         model = UserData
-        fields = ('email_visible', 'use_dark_theme', 'use_list_view','email_me_about_new_auctions','email_me_about_new_auctions_distance',\
+        fields = ('email_visible', 'use_dark_theme', 'use_list_view', 'show_ads', 'email_me_about_new_auctions','email_me_about_new_auctions_distance',\
             'email_me_about_new_local_lots','local_distance', 'email_me_about_new_lots_ship_to_location', 'email_me_when_people_comment_on_my_lots',\
             )
         exclude = (
@@ -579,9 +649,13 @@ class ChangeUserPreferencesForm(forms.ModelForm):
         self.helper.form_tag = True
         self.helper.layout = Layout(
             Div(
-                Div('email_visible',css_class='col-md-4',),
-                Div('use_list_view',css_class='col-md-4',),
-                Div('use_dark_theme',css_class='col-md-4',),
+                Div('email_visible',css_class='col-md-6',),
+                Div('use_list_view',css_class='col-md-6',),
+                css_class='row',
+            ),
+            Div(
+                Div('use_dark_theme',css_class='col-md-6',),
+                Div('show_ads',css_class='col-md-6',),
                 css_class='row',
             ),
             HTML("<h4>Notifications</h4><br>"),

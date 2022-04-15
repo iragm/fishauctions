@@ -1,0 +1,22 @@
+{% if show_ads %}
+<div class="mt-1 {% if request.user.is_superuser %} border border-danger{% endif %}">
+{% if object %}
+<a href="{% url 'click_ad' uuid=object.responseid %}" class='ad'>
+     <div class="row">
+          <div class='col-sm-5 text-center align-middle'><img class="" src="{{ object.campaign.image.ad.url }}" style="max-width:100%;"></img></div>
+          <div class='col-sm-7 text-center align-middle mt-3'><h5>{{ object.campaign.title }}</h5>{{object.campaign.body_html|safe}}</div>
+     </div>
+</a>
+{% else %}
+<ins class="adsbygoogle"
+          style="display:block; text-align:center; min-width: 250px;"
+          data-ad-layout="in-article"
+          data-ad-format="fluid"
+          data-ad-client="{{GOOGLE_ADSENSE_ID}}"
+          data-ad-slot="8551971301"></ins>
+     <script>
+          (adsbygoogle = window.adsbygoogle || []).push({});
+     </script>
+{% endif %}
+</div>
+{% endif %}

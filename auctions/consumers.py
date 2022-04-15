@@ -2,7 +2,7 @@
 import json
 from asgiref.sync import async_to_sync
 from channels.generic.websocket import WebsocketConsumer
-from .models import Lot, Bid, UserInterestCategory, LotHistory
+from .models import Lot, Bid, UserInterestCategory, LotHistory, UserData
 from post_office import mail
 from django.contrib.sites.models import Site
 from django.conf import settings
@@ -82,6 +82,9 @@ def bid_on_lot(lot, user, amount):
         if lot.ended:
             result['message'] = "Bidding has ended"
             return result
+        if lot.bidding_error:
+            result['message'] = lot.bidding_error
+            return result
         if lot.winner:
             result['message'] = "This lot has already been sold"
             return result
@@ -93,19 +96,25 @@ def bid_on_lot(lot, user, amount):
                     lot_number = lot,
                     defaults={'amount': amount},
             )
-        bid.last_bid_time = timezone.now()
         # also update category interest, max one per bid
         interest, interestCreated = UserInterestCategory.objects.get_or_create(
             category=lot.species_category,
             user=user,
             defaults={ 'interest': settings.BID_WEIGHT }
             )
+        userData, userdataCreated = UserData.objects.get_or_create(
+            user = user,
+            defaults={},
+        )
+        userData.has_bid = True
+        userData.save()
         if not interestCreated:
             interest.interest += settings.BID_WEIGHT
             interest.save()
         if lot.sealed_bid:
             bid.was_high_bid = True
             bid.amount = amount
+            bid.last_bid_time = timezone.now()
             bid.save()
             result['type'] = "INFO"
             result['message'] = "Bid placed!  You can change your bid at any time until the auction ends"
@@ -118,8 +127,10 @@ def bid_on_lot(lot, user, amount):
             if not created:
                 if amount <= bid.amount:
                     result['message'] = f"Bid more than your proxy bid (${bid.amount})"
+                    print(f"{user} tried to bid on {lot} less than their original bid of ${originalBid}")
                     return result
                 else:
+                    bid.last_bid_time = timezone.now()
                     bid.amount = amount
                     # bid.amount now contains the actual bid, regardless of whether it was new or not
                     bid.save()
@@ -128,6 +139,7 @@ def bid_on_lot(lot, user, amount):
                 if bid.amount >= lot.buy_now_price:
                     lot.winner = user
                     lot.winning_price = lot.buy_now_price
+                    lot.buy_now_used = True
                     lot.date_end = timezone.now()
                     lot.watch_warning_email_sent = True
                     lot.save()
@@ -138,6 +150,7 @@ def bid_on_lot(lot, user, amount):
                     result['message'] = f"{user} bought this lot now!!"
                     result["current_high_bid"] = lot.buy_now_price
                     bid.was_high_bid = True
+                    bid.last_bid_time = timezone.now()
                     bid.save()
                     LotHistory.objects.create(
                         lot = lot,
@@ -145,6 +158,7 @@ def bid_on_lot(lot, user, amount):
                         message = result['message'],
                         changed_price = True,
                         current_price=result["current_high_bid"],
+                        bid_amount = amount,
                     )
                     return result
             if (not originalHighBidder) and (lot.high_bidder.pk == user.pk):
@@ -161,16 +175,20 @@ def bid_on_lot(lot, user, amount):
                     message = result['message'],
                     changed_price = True,
                     current_price=result["current_high_bid"],
+                    bid_amount = amount,
                     )
+                bid.last_bid_time = timezone.now()
                 bid.save()
                 return result
             if bid.amount <= originalBid: # changing this to < would allow bumping without being the high bidder
                 # there's a high bidder already
                 bid.save() # save the current bid regardless
+                print(f"{user} tried to bid on {lot} less than the current bid of ${originalBid}")
                 result['message'] = f"You can't bid less than ${originalBid + 1}"
                 return result
             # if we get to this point, the user has bid >= the high bid
             bid.was_high_bid = True
+            bid.last_bid_time = timezone.now()
             bid.save()
             if lot.high_bidder.pk == user.pk:
                 try:
@@ -178,6 +196,13 @@ def bid_on_lot(lot, user, amount):
                         # user is upping their own price, don't tell other people about it
                         result['type'] = "INFO"
                         result['message'] = f"You've raised your proxy bid to ${bid.amount}"
+                        print(f"{user} has raised their bid on {lot} to ${bid.amount}")
+                        userData, userdataCreated = UserData.objects.get_or_create(
+                            user = user,
+                            defaults={},
+                        )
+                        userData.has_used_proxy_bidding = True
+                        userData.save()
                         return result
                 except:
                     pass
@@ -203,6 +228,7 @@ def bid_on_lot(lot, user, amount):
                     message = result['message'],
                     changed_price = True,
                     current_price=result["current_high_bid"],
+                    bid_amount = amount,
                     )
                 return result
             result['type'] = "NEW_HIGH_BID"
@@ -215,6 +241,7 @@ def bid_on_lot(lot, user, amount):
                 message = result['message'],
                 changed_price = True,
                 current_price=result["current_high_bid"],
+                bid_amount = amount,
                 )
             return result
     except Exception as e:

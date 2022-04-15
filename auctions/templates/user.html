@@ -12,7 +12,7 @@
                 <tr>
                   <td>Email:</td>
                   <td> {% if data.email_visible %}
-                    <a href='mailto://{{ user.email }}'>{{ user.email }}</a><br>
+                    <a href='mailto:{{ user.email }}'>{{ user.email }}</a><br>
                     {% else %}
                     This user's email address is private<br>
                     {% endif %}
@@ -87,7 +87,7 @@
             <a href="/password/change/" class="btn btn-primary mr-1 mt-1">Change password</a>
             <a href="/email/" class="btn btn-primary mr-1 mt-1">Change email</a>
             <a href="/social/connections/" class="btn btn-primary mr-1 mt-1">Sign in with Google</a>
-            <a href="{% url 'ignore_categories' %}/" class="btn btn-primary mr-1 mt-1">Ignore categories</a>
+            <a href="{% url 'ignore_categories' %}" class="btn btn-primary mr-1 mt-1">Ignore categories</a>
             
             {% endif %}
             <a href='/lots/user/?user={{user.username}}' class="btn btn-primary mr-1 mt-1">View all lots from this user</a>

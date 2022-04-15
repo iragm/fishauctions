@@ -20,7 +20,7 @@
       <th scope="col">Lot name</th>
       <th scope="col">Price</th>
       <th scope="col">High bidder</th>
-      <th scope="col">Activity</th>
+      <th scope="col">Messages</th>
       <th scope="col">Ends</th>
     </tr>
   </thead>
@@ -47,9 +47,12 @@
               {% endif %}
             {% endif %}
           {% endif %}
-        {% if lot.is_watched_by_req_user %}<span class="badge" style='color:yellow; font-size:1.2em; text-shadow: 0px 0px 10px #000000;'>&#9733;</span>{% endif %}
+        {% if lot.is_watched_by_req_user %}<span class="badge text-warning" style='font-size:1.2em; text-shadow: 0px 0px 10px #000000;'>&#9733;</span>{% endif %}
         {% if lot.banned %}
         <span class="text-danger">Banned</span>
+        {% endif %}
+        {% if lot.deactivated %}
+        <span class="text-danger">Deactivated</span>
         {% endif %}
       </td>
       <td>{% if lot.donation %}Donation{% else %}{{ lot.user }}{% endif %}</td>
@@ -66,6 +69,7 @@
     {% endfor %}
   </tbody>
 </table>
+{% include "ad.html" %}
 </div>
 </div>
 </div>

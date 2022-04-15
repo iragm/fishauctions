@@ -74,42 +74,17 @@
     display: none;
 }
 
-/* .chat-body:first-child {
-    margin-top: 0
-} */
+.carousel-indicators {
+    position: static;
+  }
 
-/* .chats {
-    padding: 30px 15px
-}
-
-.chat-avatar {
-    float: right
-} */
-/* .chat-content>p:last-child {
-    margin-bottom: 0
-} */
-
-/* .chat-right .chat-content:before {
-    right: auto;
-    right: -10px;
-    border-right-color: #dfe9ef;
-    border-right-color: transparent
-} */
-
-
-/* 
-.chat-box {
+.carousel-indicators li {
+    width: 300px;
     height: 100%;
-    width: 100%;
-    background-color: #fff;
-    overflow: hidden
-} */
-/* 
-.chat-right .chat-avatar {
-    float: right;
-} */
-
-/* .chat-right .chat-body {
-    margin-right: 0;
-    margin-right: 0px
-} */
+    opacity: 0.8;
+  }
+.carousel-caption {
+    position: relative;
+    left: auto;
+    right: auto;
+}

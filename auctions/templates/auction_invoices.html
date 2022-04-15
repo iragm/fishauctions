@@ -13,9 +13,36 @@
           <span class='text-muted'>
         <br>Marking an invoice ready will send an email noficiation to the user telling them that their invoice is ready.
       </span>
+
+      <div class="form-check">
+        <input class="form-check-input visibility_checkbox" type="checkbox" value="" id="show_owe_club" checked>
+        <label class="form-check-label" for="show_owe_club">
+          Show invoices that owe the club
+        </label>
+      </div>
+      <div class="form-check">
+        <input class="form-check-input visibility_checkbox" type="checkbox" value="" id="show_club_owes" checked>
+        <label class="form-check-label" for="show_club_owes">
+          Show invoices the club owes
+        </label>
+      </div>
+      <div class="form-check">
+        <input class="form-check-input visibility_checkbox" type="checkbox" value="" id="show_paid" checked>
+        <label class="form-check-label" for="show_paid">
+          Show paid
+        </label>
+      </div>
+      <div class="form-check">
+        <input class="form-check-input visibility_checkbox" type="checkbox" value="" id="show_unpaid" checked>
+        <label class="form-check-label" for="show_unpaid">
+          Show unpaid
+        </label>
+      </div>
+
         <table class="table">
           <thead>
             <tr>
+              <th scope="col">Number</th>
               <th scope="col">Opened</th>
               <th scope="col">User</th>
               <th scope="col">Edit</th>
@@ -29,7 +56,8 @@
           <tbody>
             
             {% for invoice in invoices %}
-            <tr>
+            <tr id="row_{{invoice.pk}}" class="{% if invoice.user_should_be_paid %}user_should_be_paid{% else %}club_should_be_paid{% endif %} {% if invoice.status == 'PAID'%}row_paid{%else%}row_unpaid{% endif %}">
+              <td>{{ invoice.pk }}</td>
               <td>{% if not invoice.opened %}No{%endif%}</td>
               <td><a href="/invoices/{{invoice.pk}}/">{% if invoice.user.first_name %}{{ invoice.user.first_name }} {{ invoice.user.last_name }}{% else %}{{ invoice.user }}{% endif %}</a></td>
               <td><a href="/invoices/{{invoice.pk}}/?print">Print</a></td>
@@ -75,6 +103,75 @@
     });
   }
   
+  $( ".visibility_checkbox" ).change(function() {
+    refresh();
+  });
+
+  function refresh() {
+    var show_club_owes = $('#show_club_owes').prop('checked');
+    var show_owe_club = $('#show_owe_club').prop('checked');
+    var show_paid = $('#show_paid').prop('checked');
+    var show_unpaid = $('#show_unpaid').prop('checked');
+    var found = false;
+    if (!show_club_owes && !show_owe_club) {
+      $('.club_should_be_paid').hide();
+      $('.user_should_be_paid').hide();
+    }
+    if (!show_paid && !show_unpaid) {
+      $('.row_paid').hide();
+      $('.row_unpaid').hide();
+    }
+    if (show_paid && show_unpaid && show_club_owes && show_owe_club) {
+      $('.row_unpaid').show();
+      $('.row_paid').show();
+      $('.club_should_be_paid').show();
+      $('.user_should_be_paid').show();
+    }
+    if (!show_paid && show_unpaid && show_club_owes && show_owe_club) {
+      $('.row_unpaid.user_should_be_paid').show();
+      $('.row_unpaid.club_should_be_paid').show();
+      $('.row_paid').hide();
+    }
+    if (show_paid && !show_unpaid && show_club_owes && show_owe_club) {
+      $('.row_paid.club_should_be_paid').show();
+      $('.row_paid.user_should_be_paid').show();
+      $('.row_unpaid').hide();
+    }
+    if (show_paid && !show_unpaid && !show_club_owes && show_owe_club) {
+      $('.row_paid.club_should_be_paid').show();
+      $('.row_paid.user_should_be_paid').hide();
+      $('.row_unpaid').hide();
+    }
+    if (show_paid && !show_unpaid && show_club_owes && !show_owe_club) {
+      $('.row_paid.user_should_be_paid').show();
+      $('.row_paid.club_should_be_paid').hide();
+      $('.row_unpaid').hide();
+    }
+    if (!show_paid && show_unpaid && !show_club_owes && show_owe_club) {
+      $('.row_unpaid.club_should_be_paid').show();
+      $('.row_unpaid.user_should_be_paid').hide();
+      $('.row_paid').hide();
+    }
+    if (show_paid && show_unpaid && show_club_owes && !show_owe_club) {
+      $('.row_unpaid').show();
+      $('.row_paid').show();
+      $('.user_should_be_paid').show();
+      $('.club_should_be_paid').hide();
+    }
+    if (show_paid && show_unpaid && !show_club_owes && show_owe_club) {
+      $('.row_unpaid').show();
+      $('.row_paid').show();
+      $('.club_should_be_paid').show();
+      $('.user_should_be_paid').hide();
+    }
+    if (!show_paid && show_unpaid && show_club_owes && !show_owe_club) {
+      $('.row_unpaid').show();
+      $('.club_should_be_paid').hide();
+      $('.user_should_be_paid').show();
+      $('.row_paid').hide();
+    }
+  }
+
   function payinvoice(id, status) {
     var $ = window.jQuery;
     data = {'status': status};
@@ -109,6 +206,11 @@
                 $('#' + id + "_PAID").addClass("btn-success");
                 $('#' + id + "_UNPAID").addClass("btn-secondary");
                 $('#' + id + "_DRAFT").addClass("btn-secondary");
+                $('#row_' + id ).addClass('paid');
+                $('#row_' + id ).removeClass('unpaid');
+              } else {
+                $('#row_' + id ).addClass('unpaid');
+                $('#row_' + id ).removeClass('paid');
               }
           }
       });

@@ -13,18 +13,30 @@
                   </td>
                 </tr>
                 <tr>
-                <tr>
                   <td>unsubscribes:</td>
                   <td> {{ unsubscribes }}
                   </td>
                 </tr>
                 <tr>
+                  <td>ads off:</td>
+                  <td> {{ hide_ads }}
+                  </td>
+                </tr>
+                <tr>
+                  <td>non-participants:</td>
+                  <td> {{ no_participate }}
+                  </td>
+                </tr>
+                <tr>
+                  <td>using watch:</td>
+                  <td> {{ using_watch }}
+                  </td>
+                </tr>
                 <tr>
                   <td>using_list_view:</td>
                   <td> {{ using_list_view }}
                   </td>
                 </tr>
-                <tr>
                 <tr>
                   <td>light_theme:</td>
                   <td> {{ light_theme }}
@@ -53,13 +65,16 @@
                     <td> {{ feedback_last_30_days }}
                     </td>
                   </tr>
-                  <tr>
-                  <tr>
+                <tr>
                   <td>bidders_last_30_days:</td>
                   <td> {{ bidders_last_30_days }}
                   </td>
                 </tr>
                 <tr>
+                  <td>Printed invoices:</td>
+                  <td> {{ printed_invoices }} / {{ total_invoices }} ({{invoice_percent|floatformat:2}}%)
+                  </td>
+                </tr>
             </table>
             
             <script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.3/dist/Chart.min.js"></script>
