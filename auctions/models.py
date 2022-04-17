@@ -1228,6 +1228,7 @@ class UserData(models.Model):
 	longitude = models.FloatField(default=0)
 	location_coordinates = PlainLocationField(based_fields=['address'], zoom=11, blank=True, null=True, verbose_name="Map")
 	location_coordinates.help_text = "Make sure your map marker is correctly placed - you will get notifications about nearby auctions"
+	last_ip_address = models.CharField(max_length=100, blank=True, null=True)
 	email_me_when_people_comment_on_my_lots = models.BooleanField(default=True, blank=True)
 	email_me_when_people_comment_on_my_lots.help_text = "Notifications will be sent once a day, only for messages you haven't seen"
 	email_me_about_new_auctions = models.BooleanField(default=True, blank=True)
@@ -1253,7 +1254,7 @@ class UserData(models.Model):
 	credit = models.DecimalField(max_digits=6, decimal_places=2, default=0)
 	credit.help_text = "The total balance in your account"
 	show_ads = models.BooleanField(default=True, blank=True)
-	show_ads.help_text = "100% of ad profits support the Tropical Fish Club of Burlington"
+	show_ads.help_text = "Ads have been disabled site-wide indefinitely, so this option doesn't do anything right now."
 	# breederboard info
 	rank_unique_species = models.PositiveIntegerField(null=True, blank=True)
 	number_unique_species = models.PositiveIntegerField(null=True, blank=True)

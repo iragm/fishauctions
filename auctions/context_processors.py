@@ -44,7 +44,22 @@ def add_location(request):
         if request.COOKIES['latitude'] and request.COOKIES['longitude']:
             has_user_location = True
     except:
-        pass
+        if request.user.is_authenticated:
+            try:
+                userData, created = UserData.objects.get_or_create(
+                    user = request.user,
+                    defaults={},
+                )
+                # No cookies?  No worries - we'll get the IP address and get the location from that later - see set_user_location.py
+                x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+                if x_forwarded_for:
+                    ip = x_forwarded_for.split(',')[0]
+                else:
+                    ip = request.META.get('REMOTE_ADDR')
+                userData.last_ip_address = ip
+                userData.save()
+            except:
+                pass
     if request.user.is_authenticated:
         userData, created = UserData.objects.get_or_create(
             user = request.user,
