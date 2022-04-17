@@ -1113,10 +1113,10 @@ class ViewLot(DetailView):
                 context['user_tos'] = True
         except:
             context['user_tos'] = False
-        if lot.minutes_to_end < 10 and lot.minutes_to_end > 0:
-            messages.error(self.request, f"Bidding is ending soon.  This page will update automatically, you don't need to reload it")
+        if lot.within_dynamic_end_time and lot.minutes_to_end > 0 and not lot.sealed_bid:
+            messages.error(self.request, f"Bidding is ending soon.  Bids placed now will extend the end time of this lot.  This page will update automatically, you don't need to reload it")
         if not context['user_tos'] and not lot.ended:
-            messages.error(self.request, f"Please <a href='/auctions/{lot.auction.slug}/?next=/lots/{ lot.pk }/#join'>read the auction's rules and confirm your pickup location</a> to bid")
+            messages.error(self.request, f"Please <a href='/auctions/{lot.auction.slug}/?next=/lots/{ lot.pk }/'>read the auction's rules and confirm your pickup location</a> to bid")
         if self.request.user.is_authenticated:
             userData, created = UserData.objects.get_or_create(
                 user = self.request.user,

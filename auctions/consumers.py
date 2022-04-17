@@ -7,6 +7,8 @@ from post_office import mail
 from django.contrib.sites.models import Site
 from django.conf import settings
 from django.utils import timezone
+import datetime
+
 def check_bidding_permissions(lot, user):
     """
     Returns false if everything is OK, or a string error message
@@ -54,6 +56,20 @@ def check_all_permissions(lot, user):
     if lot.banned:
         return "This lot has been banned"
     return False
+
+def reset_lot_end_time(lot):
+    """When bid are placed at the last minute on a lot, we need to bump up the end time.  Call this function any time a bid that changes the price is placed on a lot.
+    Return ms-format timestamp for use on the lot page"""
+    if lot.within_dynamic_end_time:
+        new_end_time = timezone.now() + datetime.timedelta(minutes=15)
+        if new_end_time > lot.hard_end:
+            new_end_time = lot.hard_end
+        if lot.date_end != new_end_time:
+            lot.date_end = new_end_time
+            lot.save()
+            # ms - to be parsed by js and set to local time on view_lot_images.html
+            return int(lot.date_end.timestamp() * 1000)
+    return None
 
 def bid_on_lot(lot, user, amount):
     """
@@ -127,7 +143,7 @@ def bid_on_lot(lot, user, amount):
             if not created:
                 if amount <= bid.amount:
                     result['message'] = f"Bid more than your proxy bid (${bid.amount})"
-                    print(f"{user} tried to bid on {lot} less than their original bid of ${originalBid}")
+                    #print(f"{user} tried to bid on {lot} less than their original bid of ${originalBid}")
                     return result
                 else:
                     bid.last_bid_time = timezone.now()
@@ -183,7 +199,7 @@ def bid_on_lot(lot, user, amount):
             if bid.amount <= originalBid: # changing this to < would allow bumping without being the high bidder
                 # there's a high bidder already
                 bid.save() # save the current bid regardless
-                print(f"{user} tried to bid on {lot} less than the current bid of ${originalBid}")
+                #print(f"{user} tried to bid on {lot} less than the current bid of ${originalBid}")
                 result['message'] = f"You can't bid less than ${originalBid + 1}"
                 return result
             # if we get to this point, the user has bid >= the high bid
@@ -196,7 +212,7 @@ def bid_on_lot(lot, user, amount):
                         # user is upping their own price, don't tell other people about it
                         result['type'] = "INFO"
                         result['message'] = f"You've raised your proxy bid to ${bid.amount}"
-                        print(f"{user} has raised their bid on {lot} to ${bid.amount}")
+                        #print(f"{user} has raised their bid on {lot} to ${bid.amount}")
                         userData, userdataCreated = UserData.objects.get_or_create(
                             user = user,
                             defaults={},
@@ -206,10 +222,12 @@ def bid_on_lot(lot, user, amount):
                         return result
                 except:
                     pass
-                
-                # bidder has changed!!
+                # New high bidder!  If we get to this point, the user has bid against someone else and changed the price
+                result['date_end'] = reset_lot_end_time(lot)
                 result['type'] = "NEW_HIGH_BIDDER"
                 result['message'] = f"{lot.high_bidder} is now the high bidder at ${lot.high_bid}"
+                if result['date_end']:
+                    result['message'] += ". End time extended!"
                 result['high_bidder_pk'] = lot.high_bidder.pk
                 result['high_bidder_name'] = str(lot.high_bidder)
                 result["current_high_bid"] = lot.high_bid
@@ -231,9 +249,13 @@ def bid_on_lot(lot, user, amount):
                     bid_amount = amount,
                     )
                 return result
+            # bumped up against a proxy bid
+            result['date_end'] = reset_lot_end_time(lot)
             result['type'] = "NEW_HIGH_BID"
             result["current_high_bid"] = lot.high_bid
             result['message'] = f"{user} bumped the price up to ${lot.high_bid}.  {lot.high_bidder} is still the high bidder."
+            if result['date_end']:
+                result['message'] += "  End time extended!"
             result['send_to'] = 'everyone'
             LotHistory.objects.create(
                 lot = lot,
@@ -403,6 +425,7 @@ class LotConsumer(WebsocketConsumer):
                                         'high_bidder_pk': result["high_bidder_pk"],
                                         'high_bidder_name': result["high_bidder_name"],
                                         'current_high_bid': result["current_high_bid"],
+                                        'date_end': result['date_end'],
                                     }
                                 )
                     except:

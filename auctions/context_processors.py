@@ -16,6 +16,7 @@ def theme(request):
         )
         theme = userData.use_dark_theme
         show_ads = userData.show_ads
+    show_ads = False # ads off for everyone!  (at least for now...we made $46 in a year from google ads, what a joke!)
     return {'theme': theme, 'show_ads': show_ads}
 
 def add_tz(request):

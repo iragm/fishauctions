@@ -186,7 +186,7 @@ class Auction(models.Model):
 	lot_submission_start_date.help_text = "Users can submit (but not bid on) lots on this date"
 	lot_submission_end_date = models.DateTimeField(null=True, blank=True)
 	date_end = models.DateTimeField()
-	date_end.help_text = "Bidding will end on this date"
+	date_end.help_text = "Bidding will end on this date.  If last-minute bids are placed, bidding can go up to 1 hour past this time on those lots."
 	watch_warning_email_sent = models.BooleanField(default=False)
 	invoiced = models.BooleanField(default=False)
 	created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
@@ -714,19 +714,31 @@ class Lot(models.Model):
 		return Watch.objects.filter(lot_number=self.lot_number).count()
 
 	@property
-	def calculated_end(self):
-		# fixme - rolling auction ends here
+	def hard_end(self):
+		"""The absolute latest a lot can end, even with dynamic endings"""
+		dynamic_end = datetime.timedelta(minutes=60)
 		if self.auction:
-			auction = Auction.objects.get(pk=self.auction.pk)
-			if auction.date_end > timezone.now():
-				# fixme - this should be top level, I think, confirm and unindent
-				# if this lot was won by buy now
-				if self.winner:
-					return self.date_end
-			return auction.date_end
+			return self.auction.date_end + dynamic_end
+		# there is currently no hard endings on lots not associated with an auction
+		# as soon as the lot is saved, date_end will be set to dynamic_end (by consumers.reset_lot_end_time)
+		# a new field hard_end could be added to lot to accomplish this, but I do not think it makes sense to have a hard end at this point
+		# collect stats from a couple auctions with dynamic endings and re-assess
+		return self.date_end + dynamic_end
+
+	@property
+	def calculated_end(self):
+		# with dynamic endings, we no longer need to check the auction
+		# if self.auction:
+		# 	auction = Auction.objects.get(pk=self.auction.pk)
+		# 	if auction.date_end > timezone.now():
+		# 		# if this lot was won by buy now 
+		# 		in consumers.py, we set the date end to timezone.now() when buy now is used.  This code is unnecessary with the dynamic ending changes
+		# 		if self.winner:
+		# 			return self.date_end
+		# 	return auction.date_end
 		if self.date_end:
 			return self.date_end
-		# I would hope we never get here...
+		# I would hope we never get here...but it it theoretically possible that a bug could cause self.date_end to be blank
 		return timezone.now()
 
 	@property
@@ -762,6 +774,7 @@ class Lot(models.Model):
 
 	@property
 	def bidding_error(self):
+		return False
 		"""Return false if bidding is allowed, or an error message.  Used when trying to bid on lots.
 		"""
 		if self.banned:
@@ -791,7 +804,7 @@ class Lot(models.Model):
 	@property
 	def ended(self):
 		"""Used by the view for display of whether or not the auction has ended
-		See also the database field active, which is set by a system job"""
+		See also the database field active, which is set (based on this field) by a system job (endauctions.py)"""
 		if timezone.now() > self.calculated_end:
 			return True
 		else:
@@ -823,6 +836,16 @@ class Lot(models.Model):
 		"""
 		warning_date = self.calculated_end - datetime.timedelta(minutes=1)
 		if timezone.now() > warning_date:
+			return True
+		else:
+			return False
+
+	@property
+	def within_dynamic_end_time(self):
+		"""
+		Return true if a lot will end in the next 15 minutes.  This is used to update the lot end time when last minute bids are placed.
+		"""
+		if self.minutes_to_end < 15:
 			return True
 		else:
 			return False
@@ -1566,9 +1589,16 @@ def on_save_auction(sender, instance, **kwargs):
 		instance.lot_submission_end_date = instance.date_end
 	if not instance.lot_submission_start_date:
 		instance.lot_submission_start_date = instance.date_start
-	# perhaps we should refactor the lot.active code and update the end date for all lots in the auction here?
-	# fixme - yes, we should for rolling ends of auctions
-	
+	# if this is an existing auction
+	if instance.pk:
+		print('updating date end on lots because this is an existing auction')
+		# update the date end for all lots associated with this auction
+		# note that we do NOT update the end time if there's a winner!
+		# This means you cannot reopen an auction simply by changing the date end
+		lots = Lot.objects.filter(auction=instance.pk, winner__isnull=True, active=True)
+		for lot in lots:
+			lot.date_end = instance.date_end
+
 @receiver(pre_save, sender=UserData)
 @receiver(pre_save, sender=PickupLocation)
 @receiver(pre_save, sender=Club)
@@ -1599,8 +1629,10 @@ def update_lot_info(sender, instance, **kwargs):
 	Fill out the location and address from the user
 	Fill out end date from the auction
 	"""
-	if instance.auction:
-		instance.date_end = instance.auction.date_end
+	if not instance.pk:
+		# new lot?  set the default end date to the auction end
+		if instance.auction:
+			instance.date_end = instance.auction.date_end
 	userData, created = UserData.objects.get_or_create(
 		user = instance.user,
 		defaults={},

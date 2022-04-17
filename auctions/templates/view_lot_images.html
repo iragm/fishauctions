@@ -530,6 +530,11 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
             if (data.info == "CHAT") {
                 addChat(data.pk, data.username, data.message);
             } else {
+                if (data.date_end) {
+                    var date_end = new Date(data.date_end);
+                    // $('#end_date').html("<span class='text-danger>" + date_end.toLocaleString("en-US", {timeZone: "{{user_timezone}}"}) + "</span>");
+                    $('#end_date').html(date_end.toLocaleTimeString('en-US', { hour12: true }));
+                }
                 if (data.error) {
                     messageClass = "danger";
                     data.message = data.error;
