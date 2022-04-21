@@ -38,6 +38,7 @@ else:
     DEBUG = False
 
 ALLOWED_HOSTS = ['localhost', '127.0.0.1', os.environ['ALLOWED_HOST_1'], os.environ['ALLOWED_HOST_2'], os.environ['ALLOWED_HOST_3']]
+CSRF_TRUSTED_ORIGINS = ['http://localhost', 'http://127.0.0.1', 'https://' + os.environ['ALLOWED_HOST_1'], 'https://' + os.environ['ALLOWED_HOST_2'], 'https://' + os.environ['ALLOWED_HOST_3']]
 
 # Channels
 CHANNEL_LAYERS = {

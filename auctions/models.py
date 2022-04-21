@@ -497,6 +497,9 @@ class AuctionTOS(models.Model):
 	auction = models.ForeignKey(Auction, on_delete=models.CASCADE)
 	pickup_location = models.ForeignKey(PickupLocation, on_delete=models.CASCADE)
 	createdon = models.DateTimeField(auto_now_add=True, blank=True)
+	confirm_email_sent = models.BooleanField(default=False)
+	# this key will be used for a future 
+	is_admin = 	models.BooleanField(default=False, verbose_name="Grant admin permissions to help run this auction")
 	def __str__(self):
 		return f"{self.user} will meet at {self.pickup_location} for {self.auction}"
 	class Meta: 
