@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ lot.lot_name }}{% endblock %}
+{% block title %}{{ lot.lot_name }}{% if lot.ended %} (Ended){% endif %}{% endblock %}
 {% load static %}
 
 {% block extra_css %}
