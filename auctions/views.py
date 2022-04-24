@@ -1636,11 +1636,11 @@ class AuctionInfo(FormMixin, DetailView):
             context['hasChosenLocation'] = True
         except:
             context['hasChosenLocation'] = False
-            if not self.get_object().no_location:
-                # this selects the first location in multi-location auction as the default
-                existingTos = PickupLocation.objects.filter(auction=self.get_object().pk)[0]
-            else:
-                existingTos = None
+            # if not self.get_object().no_location:
+            #     # this selects the first location in multi-location auction as the default
+            #     existingTos = PickupLocation.objects.filter(auction=self.get_object().pk)[0]
+            # else:
+            existingTos = None
             if self.get_object().multi_location:
                 i_agree = True
             else:
