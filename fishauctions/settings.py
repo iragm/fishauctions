@@ -154,6 +154,7 @@ SITE_DOMAIN = os.environ['SITE_DOMAIN']
 # https://docs.djangoproject.com/en/3.1/howto/static-files/
 
 STATIC_URL = '/static/'
+STATIC_ROOT = os.environ['STATIC_ROOT']
 
 AUTHENTICATION_BACKENDS = [
     # Needed to login by username in Django admin, regardless of `allauth`
