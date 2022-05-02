@@ -559,6 +559,8 @@ class Lot(models.Model):
 	winner = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="winner")
 	active = models.BooleanField(default=True)
 	winning_price = models.PositiveIntegerField(null=True, blank=True)
+	refunded = models.BooleanField(default=False)
+	refunded.help_text = "Don't charge the winner or pay the seller for this lot."
 	banned = models.BooleanField(default=False)
 	banned.help_text = "This lot will be hidden from views, and users won't be able to bid on it.  Banned lots are not charged in invoices."
 	ban_reason = models.CharField(max_length=100, blank=True, null=True)
