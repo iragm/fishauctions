@@ -239,6 +239,15 @@ class Auction(models.Model):
 			if error:
 				return reverse("edit_pickup", kwargs={'pk': location.pk}) 
 		return False
+		
+	@property
+	def dynamic_end(self):
+		"""The absolute latest a lot in this auction can end"""
+		if self.sealed_bid:
+			return self.date_end
+		else:
+			dynamic_end = datetime.timedelta(minutes=60)
+			return self.date_end + dynamic_end
 
 	@property
 	def ending_soon(self):
@@ -721,7 +730,7 @@ class Lot(models.Model):
 		"""The absolute latest a lot can end, even with dynamic endings"""
 		dynamic_end = datetime.timedelta(minutes=60)
 		if self.auction:
-			return self.auction.date_end + dynamic_end
+			return self.auction.dynamic_end
 		# there is currently no hard endings on lots not associated with an auction
 		# as soon as the lot is saved, date_end will be set to dynamic_end (by consumers.reset_lot_end_time)
 		# a new field hard_end could be added to lot to accomplish this, but I do not think it makes sense to have a hard end at this point

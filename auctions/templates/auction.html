@@ -130,6 +130,7 @@ function initMap() {
             <h5>The following rules will be automatically enforced by this site:</h5>
             <ul>
                 <li>Bidding will be open from {{ auction.date_start }} to {{ auction.date_end}}</li>
+                {% if not auction.sealed_bid %}<li>If last minute bids are placed on a lot, the <a href="/faq#how-exactly-do-dynamic-endings-work">end time for that lot will be extended</a>.  All lots will end by {{ auction.dynamic_end }}</li>{% endif %}
                 {% if auction.lot_submission_start_date != auction.date_start %}<li>You can submit lots starting {{ auction.lot_submission_start_date }}</li>{% endif %}
                 {% if auction.lot_submission_end_date != auction.date_end %}<li>You can submit lots until {{ auction.lot_submission_end_date }}</li>{% endif %}
                 {% if auction.sealed_bid %}<li>This is a sealed bid auction - you won't be able to see how much others have bid on an item.</li>{% endif %}
