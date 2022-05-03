@@ -157,7 +157,7 @@ def bid_on_lot(lot, user, amount):
                     lot.winner = user
                     lot.winning_price = lot.buy_now_price
                     lot.buy_now_used = True
-                    lot.date_end = timezone.now()
+                    #lot.date_end = timezone.now()
                     lot.watch_warning_email_sent = True
                     lot.save()
                     result['send_to'] = 'everyone'
