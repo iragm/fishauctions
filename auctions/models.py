@@ -1606,7 +1606,7 @@ def on_save_auction(sender, instance, **kwargs):
 		instance.lot_submission_start_date = instance.date_start
 	# if this is an existing auction
 	if instance.pk:
-		print('updating date end on lots because this is an existing auction')
+		#print('updating date end on lots because this is an existing auction')
 		# update the date end for all lots associated with this auction
 		# note that we do NOT update the end time if there's a winner!
 		# This means you cannot reopen an auction simply by changing the date end
