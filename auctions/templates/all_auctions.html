@@ -20,7 +20,6 @@
             <tr>
               <th scope="col">Auction</th>
               <th scope="col">Lots</th>
-              <th scope="col">Rules</th>
               <th scope="col">Ends</th>
             </tr>
           </thead>
@@ -28,12 +27,11 @@
             
             {% for auction in object_list %}
             <tr>
-              <td>{{ auction.title }}
+              <td><a href='/auctions/{{auction.slug}}'>{{ auction.title }}</a>
                 {% if request.user.is_superuser or auction.created_by == request.user %}&nbsp;<a href='/auctions/{{auction.slug}}/invoices/'>Invoices</a>{% endif %} {% if not auction.promote_this_auction %}<span class='text-muted'>(Not promoted)</span>{% endif %}
               </td>
               <td>{% if auction.started %}<a href='/lots/?auction={{auction.slug}}'>View lots</a>{% else %}Starts: 
                 {{auction.date_start}} {% endif %}</td>
-              <td><a href='/auctions/{{auction.slug}}'>{% if auction.created_by == request.user %}View or edit auction{%else%}Payment and pickup info{%endif%}</a></td>
               <td>{% if auction.closed %}<span style="color:red">{{ auction.date_end }}</span>{% else %}{{ auction.date_end }}{% endif %}</td>
             </tr>
             {% endfor %}
