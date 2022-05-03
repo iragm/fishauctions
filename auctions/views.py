@@ -1645,7 +1645,10 @@ class AuctionInfo(FormMixin, DetailView):
                 i_agree = True
             else:
                 i_agree = False
-                existingTos = PickupLocation.objects.filter(auction=self.get_object())[0]
+                try:
+                    existingTos = PickupLocation.objects.filter(auction=self.get_object())[0]
+                except:
+                    pass
             # if self.request.user.is_authenticated and not context['ended']:
             #     if not self.get_object().no_location:
             #         messages.add_message(self.request, messages.ERROR, "Please confirm you have read these rules by selecting your pickup location at the bottom of this page.")

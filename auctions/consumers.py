@@ -94,6 +94,7 @@ def bid_on_lot(lot, user, amount):
                     "high_bidder_name": None,
                     "current_high_bid": None,
                     'winner': None,
+                    'date_end':None,
                 }
         if lot.ended:
             result['message'] = "Bidding has ended"

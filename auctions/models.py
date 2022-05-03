@@ -1613,6 +1613,7 @@ def on_save_auction(sender, instance, **kwargs):
 		lots = Lot.objects.filter(auction=instance.pk, winner__isnull=True, active=True)
 		for lot in lots:
 			lot.date_end = instance.date_end
+			lot.save()
 
 @receiver(pre_save, sender=UserData)
 @receiver(pre_save, sender=PickupLocation)

@@ -262,6 +262,8 @@ SOCIALACCOUNT_PROVIDERS = {
     }
 }
 
+SOCIALACCOUNT_LOGIN_ON_GET=True
+
 INTERNAL_IPS = [
 #    '127.0.0.1', # uncomment this to enable the django debug toolbar
 ]
