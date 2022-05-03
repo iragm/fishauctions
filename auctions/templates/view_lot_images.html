@@ -336,7 +336,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
         <h5>Exchange info</h5>
         <table class="table">
             <tr>
-                <td><b>Seller:</b><br></td><td>{{ lot.user.first_name }} {{ lot.user.last_name }} (<a href="mailto:{{lot.user.email}}">{{lot.user.email}}</a>)<br> <small>{{ lot.location }}</small> <a href="{{ lot.seller_invoice_link }}">Seller's invoice</a></td>
+                <td><b>Seller:</b><br></td><td>{{ lot.user.first_name }} {{ lot.user.last_name }} (<a href="mailto:{{lot.user.email}}">{{lot.user.email}}</a>) <small>(Paid: ${{lot.your_cut|floatformat:2}})</small><br> <small>{{ lot.location }}</small> <a href="{{ lot.seller_invoice_link }}">Seller's invoice</a></td>
             </tr>
             <tr>
                 <td><b>Winner:</b></td><td>{{ lot.winner.first_name }} {{ lot.winner.last_name }} (<a href="mailto:{{lot.winner.email}}">{{lot.winner.email}}</a>)<br><small>{{ lot.winner_location }}</small> <a href="{{ lot.winner_invoice_link }}">Winner's invoice</a></td>
@@ -427,7 +427,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
             <a href="/admin/auctions/lot/{{lot.pk}}/change/" class="btn btn-danger">Admin</a>
             Promo weight: {{lot.promotion_weight}}
         {% endif %}
-        {% if user.is_authenticated %}
+        {% if request.user.is_authenticated %}
             <span id="watch" {% if watched %} class="watched text-warning">&#9733; Watching{% else %}>&#9734; Watch{% endif %}</span><br>
         {% endif %}
         
