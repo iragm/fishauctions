@@ -61,7 +61,7 @@ class Command(BaseCommand):
                         'auctions': template_auctions,
                         'nearby_lots': template_nearby_lots,
                         'shippable_lots': template_shippable_lots,
-                        'unsubscribe': user.userdata.unsubscribe_link
+                        'unsubscribe': user.userdata.unsubscribe_link,
                         'special_message': ""
                         },
                 )
