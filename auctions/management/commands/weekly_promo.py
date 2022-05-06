@@ -18,9 +18,11 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         # get any users who have opted into the weekly email
+        exclude_newer_than = timezone.now() - datetime.timedelta(days=6)
+        exclude_older_than = timezone.now() - datetime.timedelta(days=400)
         users = User.objects.filter(\
            Q(userdata__email_me_about_new_auctions=True) | Q(userdata__email_me_about_new_local_lots=True) | Q(userdata__email_me_about_new_lots_ship_to_location=True)\
-           ).exclude(userdata__latitude=0, userdata__longitude=0).exclude(userdata__last_activity__gte=(timezone.now() - datetime.timedelta(days=6)))
+           ).exclude(userdata__latitude=0, userdata__longitude=0).exclude(userdata__last_activity__gte=(exclude_newer_than)).exclude(userdata__last_activity__lte=(exclude_older_than))
         #users = User.objects.filter(pk=1)
         for user in users:
             template_auctions = []
