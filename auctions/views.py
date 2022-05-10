@@ -2252,16 +2252,19 @@ class AdminDashboard(TemplateView):
         context['using_list_view'] = qs.filter(use_list_view=True).count()
         context['light_theme'] = qs.filter(use_dark_theme=False).count()
         context['hide_ads'] = qs.filter(show_ads=False).count()
-        context['no_participate'] = qs.exclude(user__lot=False).count()
+        context['no_club_auction'] = qs.filter(user__auctiontos__isnull=True).distinct().count()
+        context['no_participate'] = qs.filter(user__winner__isnull=True).distinct().filter(user__lot__isnull=True).distinct().count()
+        context['using_watch'] = qs.exclude(user__watch__isnull=True).distinct().count()
+        context['using_buy_now'] = qs.filter(user__winner__buy_now_used=True).count()
+        context['using_proxy_bidding'] = qs.filter(has_used_proxy_bidding=True).count()
+        context['buyers'] = qs.exclude(user__winner__isnull=False).count()
+        context['sellers'] = qs.exclude(user__lot__isnull=False).count()
         context['has_location'] = qs.exclude(latitude=0).count()
-
         context['new_lots_last_7_days'] = Lot.objects.filter(date_posted__gte=timezone.now() - datetime.timedelta(days=7)).count()
         context['new_lots_last_30_days'] = Lot.objects.filter(date_posted__gte=timezone.now() - datetime.timedelta(days=30)).count()
         context['bidders_last_30_days'] = qs.filter(user__bid__last_bid_time__gte=timezone.now() - datetime.timedelta(days=30)).values('user').distinct().count()
         context['feedback_last_30_days'] = Lot.objects.exclude(feedback_rating=0).filter(date_posted__gte=timezone.now() - datetime.timedelta(days=30)).count()
         invoiceqs = Invoice.objects.filter(date__gte=datetime.datetime(2021, 6, 15)).filter(seller_invoice__winner__isnull=False).distinct()
-        for invoice in invoiceqs:
-            print(invoice)
         context['total_invoices'] = invoiceqs.count()
         context['printed_invoices'] = invoiceqs.filter(printed=True).count()
         context['invoice_percent'] =  context['printed_invoices'] / context['total_invoices'] * 100
