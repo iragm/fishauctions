@@ -490,6 +490,11 @@ class PickupLocation(models.Model):
 	def __str__(self):
 		return self.name
 
+	@property
+	def directions_link(self):
+		"""Google maps link to the lat and lng of this pickup location"""
+		return f"https://www.google.com/maps/search/?api=1&query={self.latitude},{self.longitude}"
+
 class AuctionIgnore(models.Model):
 	"""If a user does not want to participate in an auction, create one of these"""
 	user = models.ForeignKey(User, on_delete=models.CASCADE)

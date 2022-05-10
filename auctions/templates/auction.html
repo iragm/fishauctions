@@ -80,7 +80,7 @@ function initMap() {
         {% for location in pickup_locations %}
         ['<div class="info_content" style="color:black;">' +
         '<h5>{{ location.name }}</h5>' +
-        '<p><a href="https://www.google.com/maps/search/?api=1&query={{ location.latitude }},{{ location.longitude }}">Get directions</a>'+
+        '<p><a href="{{location.directions_link}}">Get directions</a>'+
         '<p>{{ location.description|linebreaksbr }}<br>' +
         '{% if location.users_must_coordinate_pickup %}You must schedule your pickup time in advance.{% else %}{{ location.pickup_time }} {% if location.second_pickup_time %}<br>You must return at {{ location.second_pickup_time }} to pick up lots from other locations.{% endif %}{%endif%}</p>' +        '</div>'],
         {% endfor %}
@@ -150,6 +150,7 @@ function initMap() {
                 <a href="/locations/edit/{{ location.pk }}/?next=/auctions/{{auction.slug}}" class="btn btn-warning">Edit this location</a>
                 <br>
                 {% endif %}
+                <a href="{{location.directions_link}}">Get directions</a><br>
                 {{ location.description }} {% if location.users_must_coordinate_pickup %}You must schedule your pickup time in advance.{% else %}at {{ location.pickup_time }} {% if location.second_pickup_time %}<br>You must return at {{ location.second_pickup_time }} to pick up lots from other locations.{% endif %}{%endif%}<br><br>
                 {% if location.pickup_location_contact_name and request.user.is_authenticated %}
                 Contact for this location: <b>{{location.pickup_location_contact_name}}</b><br>
