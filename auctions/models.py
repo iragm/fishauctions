@@ -793,7 +793,6 @@ class Lot(models.Model):
 
 	@property
 	def bidding_error(self):
-		return False
 		"""Return false if bidding is allowed, or an error message.  Used when trying to bid on lots.
 		"""
 		if self.banned:

@@ -344,79 +344,83 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
         </table>
         {% endif %}
         <span id="bid_area">
-        {% if lot.tos_needed %}
-        <span >Bidding is not allowed on this lot until {% if lot.user.pk == request.user.id%} you have <a href="{{lot.tos_needed}}">confirmed your pickup location</a> {% if lot.can_be_deleted %}<span><a href="/lots/delete/{{lot.pk}}" class="btn btn-danger">Delete</a>{% endif %}{% else %} the submitter of this lot has confirmed their location{% endif %}</span>
+        {% if lot.banned %}
+        <span>You can't bid on this lot - {% if lot.ban_reason %}{{lot.ban_reason}}{%else%}it has been banned{%endif%}</span>
         {% else %}
-            {% if lot.user.pk == request.user.id or request.user.is_superuser%}
-            {% if lot.can_be_edited %}
-                <a href="/lots/edit/{{lot.pk}}" class="btn btn-warning">Edit lot</a></span> {% if lot.can_be_deleted %}<span><a href="/lots/delete/{{lot.pk}}" class="btn btn-danger">Delete</a>{% endif %}
+            {% if lot.tos_needed %}
+            <span >Bidding is not allowed on this lot until {% if lot.user.pk == request.user.id%} you have <a href="{{lot.tos_needed}}">confirmed your pickup location</a> {% if lot.can_be_deleted %}<span><a href="/lots/delete/{{lot.pk}}" class="btn btn-danger">Delete</a>{% endif %}{% else %} the submitter of this lot has confirmed their location{% endif %}</span>
             {% else %}
-                <span class='text-muted'>{% if lot.user.pk == request.user.id%}This is your lot.  {% endif %}You can edit a lot for 24 hours after you submit it, as long as no one has bid on it.<br></span>
-            {% endif %}
-            {% elif lot.bidding_error %}
-                <span class="text-danger">{{ lot.bidding_error }}</span><br>
-            
-            {% elif lot.ended or lot.winner %}
-                <span>Bidding has ended on this lot<br></span>
-            {% else %}
-                {% if user.is_authenticated %}
-                    {% if not user_tos %}
-                        This lot is part of the <b>{{ lot.auction }}</b>.  Please <a href='/auctions/{{lot.auction.slug}}/?next=/lots/{{ lot.pk }}/#join'>read the auction's rules and confirm your pickup location</a> to bid<br>
-                    {% else %}
-                        {% if not lot.auction %}Remember to check the seller's feedback before bidding.  This site will not get involved in disputes.<br><br>{%endif%}
-                        <div class="form-group">
-                            <div class="input-group mb-3">
-                                <div class="input-group-prepend">
-                                    <span class="input-group-text">$</span>
-                                </div>
-                                    <input type="number" id='bid_amount' min="1" value="{{ amount }}" class="form-control col-sm-3" aria-label="Amount (to the nearest dollar)">
-                                <div class="input-group-append">
-                                    <span class="input-group-text mr-1">.00</span>
-                                    <button class='btn-sm btn-success' id='bid_button' style='min-width: 150px;' >Place bid</button>
-                                </div>
-                            <div class="invalid-feedback">Enter a number</div>
-                            </div>
-                        </div>
-                        <script>
-                            //$('#bid_amount').focus(); // scrolls page down
-                            document.querySelector('#bid_amount').onkeyup = function(e) {
-                                if (e.keyCode === 13) {
-                                    document.querySelector('#bid_button').click();
-                                }
-                            };
-                            document.querySelector('#bid_button').onclick = function(e) {
-                                var bid = Number($('#bid_amount').val());
-                                if (isNaN(bid) || bid == 0) {
-                                    $('#bid_amount').addClass('is-invalid');
-                                } else {
-                                    $('#bid_amount').removeClass('is-invalid');
-                                    $('#confirmBid').modal('show');
-                                    $('#confirmDialgoText').html("Bid $" + bid + " on {{ lot.lot_name }}<br><small>All bids are final</small>");
-                                    document.querySelector('#finalize-bid').onclick = function(e) {
-                                        lotWebSocket.send(JSON.stringify({
-                                            'bid': bid
-                                        }));
-                                        //$('#bid_amount').val(Number(bid) + 1);
-                                        var your_bid = Number($('#your_bid_price').html());
-                                        var price = Number($('#price').html());
-                                        if (bid > your_bid) {
-                                            $('#your_bid').html('Your max bid is $<span id="your_bid_price">' + bid + "</span>");
-                                        }
-                                        if (bid > price) {
-                                            $('#bid_amount').val(bid + 1);
-                                        }
-                                        $('#confirmBid').modal('hide');
-                                        $('#confirmDialgoText').html("Enter an amount");
-                                    }
-                                }
-                            };
-                        </script>
-                    {% endif %}
+                {% if lot.user.pk == request.user.id or request.user.is_superuser%}
+                {% if lot.can_be_edited %}
+                    <a href="/lots/edit/{{lot.pk}}" class="btn btn-warning">Edit lot</a></span> {% if lot.can_be_deleted %}<span><a href="/lots/delete/{{lot.pk}}" class="btn btn-danger">Delete</a>{% endif %}
                 {% else %}
-                    <a href='/login/?next=/lots/{{lot.pk}}/'>Sign in</a> to bid on this lot.
+                    <span class='text-muted'>{% if lot.user.pk == request.user.id%}This is your lot.  {% endif %}You can edit a lot for 24 hours after you submit it, as long as no one has bid on it.<br></span>
                 {% endif %}
-            {% endif %}
-        {% endif %} {# lot.tos_needed #}
+                {% elif lot.bidding_error %}
+                    <span class="text-danger">{{ lot.bidding_error }}</span><br>
+                
+                {% elif lot.ended or lot.winner %}
+                    <span>Bidding has ended on this lot<br></span>
+                {% else %}
+                    {% if user.is_authenticated %}
+                        {% if not user_tos %}
+                            This lot is part of the <b>{{ lot.auction }}</b>.  Please <a href='/auctions/{{lot.auction.slug}}/?next=/lots/{{ lot.pk }}/#join'>read the auction's rules and confirm your pickup location</a> to bid<br>
+                        {% else %}
+                            {% if not lot.auction %}Remember to check the seller's feedback before bidding.  This site will not get involved in disputes.<br><br>{%endif%}
+                            <div class="form-group">
+                                <div class="input-group mb-3">
+                                    <div class="input-group-prepend">
+                                        <span class="input-group-text">$</span>
+                                    </div>
+                                        <input type="number" id='bid_amount' min="1" value="{{ amount }}" class="form-control col-sm-3" aria-label="Amount (to the nearest dollar)">
+                                    <div class="input-group-append">
+                                        <span class="input-group-text mr-1">.00</span>
+                                        <button class='btn-sm btn-success' id='bid_button' style='min-width: 150px;' >Place bid</button>
+                                    </div>
+                                <div class="invalid-feedback">Enter a number</div>
+                                </div>
+                            </div>
+                            <script>
+                                //$('#bid_amount').focus(); // scrolls page down
+                                document.querySelector('#bid_amount').onkeyup = function(e) {
+                                    if (e.keyCode === 13) {
+                                        document.querySelector('#bid_button').click();
+                                    }
+                                };
+                                document.querySelector('#bid_button').onclick = function(e) {
+                                    var bid = Number($('#bid_amount').val());
+                                    if (isNaN(bid) || bid == 0) {
+                                        $('#bid_amount').addClass('is-invalid');
+                                    } else {
+                                        $('#bid_amount').removeClass('is-invalid');
+                                        $('#confirmBid').modal('show');
+                                        $('#confirmDialgoText').html("Bid $" + bid + " on {{ lot.lot_name }}<br><small>All bids are final</small>");
+                                        document.querySelector('#finalize-bid').onclick = function(e) {
+                                            lotWebSocket.send(JSON.stringify({
+                                                'bid': bid
+                                            }));
+                                            //$('#bid_amount').val(Number(bid) + 1);
+                                            var your_bid = Number($('#your_bid_price').html());
+                                            var price = Number($('#price').html());
+                                            if (bid > your_bid) {
+                                                $('#your_bid').html('Your max bid is $<span id="your_bid_price">' + bid + "</span>");
+                                            }
+                                            if (bid > price) {
+                                                $('#bid_amount').val(bid + 1);
+                                            }
+                                            $('#confirmBid').modal('hide');
+                                            $('#confirmDialgoText').html("Enter an amount");
+                                        }
+                                    }
+                                };
+                            </script>
+                        {% endif %}
+                    {% else %}
+                        <a href='/login/?next=/lots/{{lot.pk}}/'>Sign in</a> to bid on this lot.
+                    {% endif %}
+                {% endif %}
+            {% endif %} {# lot.tos_needed #}
+        {% endif %} {# lot.banned #}
         </span>
         {% if request.user.is_authenticated %}
             {% if lot.auction.created_by.pk == request.user.pk or request.user.is_superuser %}

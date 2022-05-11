@@ -513,6 +513,10 @@ def lotBan(request, pk):
                 lot.banned = True
             lot.ban_reason = ban_reason
             lot.save()
+            # I am debating whether or not to add a LotHistory here
+            # A similar one would need to be added when banning a user,
+            # so it may make more sense to do this with a reciever on save of lot
+            # for now, I'm going to leave this alone
             return HttpResponse("success")
     messages.error(request, "Your account doesn't have permission to view this page")
     return redirect('/')
