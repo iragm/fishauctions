@@ -14,6 +14,8 @@ class LotFilter(django_filters.FilterSet):
     def __init__(self, *args, **kwargs):
         self.canShowAuction = True
         self.listType = None # a special filter for recommended lot views
+        self.latitude = None
+        self.longitude = None
         try:
             self.latitude = kwargs.pop('latitude')
             self.longitude = kwargs.pop('longitude')
@@ -38,12 +40,12 @@ class LotFilter(django_filters.FilterSet):
                 pass
         except:
             self.user = kwargs.pop('user')
-            try:
-                if not self.latitude and not self.longitude:
-                    self.latitude = self.user.userdata.latitude
-                    self.longitude = self.user.userdata.longitude
-            except:
-                pass
+        try:
+            if not self.latitude and not self.longitude:
+                self.latitude = self.user.userdata.latitude
+                self.longitude = self.user.userdata.longitude
+        except:
+            pass
         self.showLocal = True # annotate lots with the distance to the request user, requires self.latitude and self.longitude
         try:
             if not self.latitude and not self.longitude:
