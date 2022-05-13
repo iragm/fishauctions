@@ -1614,10 +1614,12 @@ def on_save_auction(sender, instance, **kwargs):
 		# update the date end for all lots associated with this auction
 		# note that we do NOT update the end time if there's a winner!
 		# This means you cannot reopen an auction simply by changing the date end
-		lots = Lot.objects.filter(auction=instance.pk, winner__isnull=True, active=True)
-		for lot in lots:
-			lot.date_end = instance.date_end
-			lot.save()
+		if instance.date_end + datetime.timedelta(minutes=60) < timezone.now():
+			# if we are at least 60 minutes before the auction end
+			lots = Lot.objects.filter(auction=instance.pk, winner__isnull=True, active=True)
+			for lot in lots:
+				lot.date_end = instance.date_end
+				lot.save()
 
 @receiver(pre_save, sender=UserData)
 @receiver(pre_save, sender=PickupLocation)
