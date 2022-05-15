@@ -763,8 +763,19 @@ class Lot(models.Model):
 	@property
 	def can_be_edited(self):
 		"""Check to see if this lot can be edited.
-		This is needed to prevent people making lots a donation right before the auction ends"""
-		return self.can_be_deleted
+		This is needed to prevent people making lots a donation right before the auction ends
+		Actually, by request from many people, there's nothing at all prventing that right at this moment..."""
+		if self.high_bidder:
+				return False
+		if self.winner:
+			return False
+		if self.auction:
+			# if this lot is part of an auction, allow changes right up until lot submission ends
+			if timezone.now() > self.auction.lot_submission_end_date:
+				return False
+		# if we are getting here, there are no bids or this lot is not part of an auction
+		# lots that are not part of an auction can always be edited as long as there are no bids
+		return True
 	
 	@property
 	def can_be_deleted(self):
@@ -775,11 +786,12 @@ class Lot(models.Model):
 		if self.winner:
 			return False
 		if self.auction:
-			# if this lot is part of an auction, allow changes right up until lot submission ends
-			if timezone.now() > self.auction.lot_submission_end_date:
+			# if this lot is part of an auction, allow changes until 24 hours before the lot submission end
+			if timezone.now() > self.auction.lot_submission_end_date - datetime.timedelta(hours=24):
 				return False
-		# if we are getting here, there are no bids or this lot is not part of an auction
-		# lots that are not part of an auction can always be edited as long as there are now bids
+		# you have at most 24 hours to delete a lot
+		if timezone.now() > self.date_posted + datetime.timedelta(hours=24):
+			return False
 		return True
 
 	@property

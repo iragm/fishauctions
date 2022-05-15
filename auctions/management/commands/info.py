@@ -5,14 +5,12 @@ from django.core.mail import send_mail
 from django.db.models import Count, Case, When, IntegerField, Avg
 from django.core.files import File
 from datetime import datetime
-from post_office import mail
 from django.template.loader import get_template
 import os
 import uuid
 from django.contrib.sites.models import Site
 import csv
 from auctions.filters import get_recommended_lots
-from easy_thumbnails.files import get_thumbnailer
 import re
 from collections import Counter
 
@@ -20,14 +18,18 @@ from collections import Counter
 class Command(BaseCommand):
     help = 'Just a scratchpad to do things'
     def handle(self, *args, **options):
-        auctions = Auction.objects.filter(promote_this_auction=True, slug__icontains="TFCB")
-        total = 0
-        for auction in auctions:
-            print(auction.title)
-            #total += auction.total_unsold_lots * auction.unsold_lot_fee
-            total += auction.club_profit
-        print(total)
-
+        # auctions = Auction.objects.filter(promote_this_auction=True, slug__icontains="TFCB")
+        # total = 0
+        # for auction in auctions:
+        #     print(auction.title)
+        #     #total += auction.total_unsold_lots * auction.unsold_lot_fee
+        #     total += auction.club_profit
+        # print(total)
+        auction=Auction.objects.filter(slug="pvas-2022-spring-auction").first()
+        lots = Lot.objects.filter(auction=auction).exclude(winning_price__isnull=True)
+        for lot in lots:
+            if lot.winning_price > 60:
+                print(lot.winning_price, lot.lot_number)
         # f = open("views.txt", "a")
         # histories = LotHistory.objects.filter(lot__auction__slug='nec-virtual-convention-auction', changed_price=True)
         # for history in histories:
