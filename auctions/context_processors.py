@@ -33,8 +33,15 @@ def add_tz(request):
     except:
         pass
     if not user_timezone:
-        user_timezone = "America/Chicago"
-        user_timezone_set = False
+        user_timezone = "America/New_York" # default timezone if not set
+        if request.user.is_authenticated:
+            userData, created = UserData.objects.get_or_create(
+                user = request.user,
+                defaults={},
+            )
+            if userData.timezone:
+                user_timezone = userData.timezone
+                # user_timezone_set = True # don't set this to true, we want to make it current with js
     return {'user_timezone': user_timezone, 'user_timezone_set': user_timezone_set}
 
 def add_location(request):
@@ -71,6 +78,12 @@ def add_location(request):
             if request.COOKIES['latitude'] and request.COOKIES['longitude']:
                 userData.latitude = request.COOKIES['latitude']
                 userData.longitude = request.COOKIES['longitude']
+                userData.save()
+        except:
+            pass
+        try:
+            if request.COOKIES['user_timezone']:
+                userData.timezone = request.COOKIES['user_timezone']
                 userData.save()
         except:
             pass

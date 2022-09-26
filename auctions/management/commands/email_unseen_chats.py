@@ -10,6 +10,7 @@ from django.template.loader import get_template
 import os
 import uuid
 from django.contrib.sites.models import Site
+from django.db.models import Count, Q
 
 #import csv 
 class Command(BaseCommand):

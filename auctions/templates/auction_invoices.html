@@ -3,15 +3,16 @@
 {% block title %}Invoices for {{ object }}{% endblock %}
 {% load static %}
 {% block content %}
-<div class="container mt-5 mb-5">
+<!-- <div class="container mt-5 mb-5">
     <div class="row">
-      <div class="col-md-10 offset-lg-1">
-        <h1>Invoices for {{ object }}</h1>
-        <br>
+      <div class="col-md-10 offset-lg-1"> -->
+        {% include 'auction_ribbon.html' %}
+        <!-- <h1>Invoices for {{ object }}</h1> -->
+        <!-- <br> -->
         <button type='button' class='btn btn-info mr-1 mt-1' onclick="all_unpaid();">Set all drafts to ready</button>
         <button type='button' class='btn btn-success mr-1 mt-1' onclick="mark_all_paid();">Mark all ready as paid</button>
           <span class='text-muted'>
-        <br>Marking an invoice ready will send an email noficiation to the user telling them that their invoice is ready.
+        <br><small>Marking an invoice ready will send an email notification to the user telling them that their invoice is ready.</small>
       </span>
 
       <div class="form-check">
@@ -44,12 +45,13 @@
             <tr>
               <th scope="col">Number</th>
               <th scope="col">Opened</th>
-              <th scope="col">User</th>
-              <th scope="col">Edit</th>
+              <th scope="col">View</th>
+              <th scope="col">Print</th>
               <th scope="col">Total</th>
               <th scope="col">Status</th>
               <th scope="col">Lots bought</th>
               <th scope="col">Lots sold</th>
+              <th scope="col">Unsold lots</th>
               <th scope="col">Location</th>
             </tr>
           </thead>
@@ -59,9 +61,9 @@
             <tr id="row_{{invoice.pk}}" class="{% if invoice.user_should_be_paid %}user_should_be_paid{% else %}club_should_be_paid{% endif %} {% if invoice.status == 'PAID'%}row_paid{%else%}row_unpaid{% endif %}">
               <td>{{ invoice.pk }}</td>
               <td>{% if not invoice.opened %}No{%endif%}</td>
-              <td><a href="/invoices/{{invoice.pk}}/">{% if invoice.user.first_name %}{{ invoice.user.first_name }} {{ invoice.user.last_name }}{% else %}{{ invoice.user }}{% endif %}</a></td>
+              <td><a href="/invoices/{{invoice.pk}}/">{% if invoice.user.first_name %}{{ invoice.user.first_name }} {{ invoice.user.last_name }}{% else %}{{ invoice.auctiontos_user.name }}{% endif %}</a></td>
               <td><a href="/invoices/{{invoice.pk}}/?print">Print</a></td>
-              <td> {% if invoice.user_should_be_paid %} To be paid {% endif %}${{ invoice.absolute_amount|floatformat:2 }}</td>
+              <td>${{ invoice.calculated_total|floatformat:2 }}</td>
               <td><div class="btn-group" role="group" aria-label="Invoice status selection">
                 <button type="button" id="{{invoice.pk}}_DRAFT" onclick="payinvoice({{ invoice.pk }}, 'DRAFT');" class="btn {% if invoice.status == 'DRAFT'%}draft btn-primary{% else %}btn-secondary{% endif %}">Draft</button>
                 <button type="button" id="{{invoice.pk}}_UNPAID" onclick="payinvoice({{ invoice.pk }}, 'UNPAID');" class="btn {% if invoice.status == 'UNPAID'%}btn-primary unpaid{% else %}btn-secondary{% endif %}">Ready</button>
@@ -69,22 +71,22 @@
               </div></td>
               <!--<td> {% if not invoice.paid %}<a class="btn btn-info active btn-sm" onclick="payinvoice({{ invoice.pk }})" id="pay_{{ invoice.pk }}">Mark paid</a>{% else %}<span>Paid</span>{% endif %}</td>-->
               <td>{% if invoice.lots_bought %}{{ invoice.lots_bought }}{% endif %}</td>
-              <td>{% if invoice.lots_sold_successfully %}{{ invoice.lots_sold_successfully }}{% endif %}</td>
+              <td>{% if invoice.lots_sold %}{{ invoice.lots_sold_successfully }}{% endif %}</td>
+              <td>{% if invoice.lots_sold %}{{ invoice.unsold_lots }}{% endif %}</td>
               <td>{{ invoice.location }}</td>
             </tr>
             {% endfor %}
         </tbody>
       </table>
-      <h3>Send batch Paypal invoices</h3>
-      See <a href="/blog/online-payments-suck/">how to use this</a><br>
+      <h4>Send batch Paypal invoices</h4>
+      For use with Paypal's <a href="https://www.paypal.com/invoice/batch">batch invoice system</a>.  Paypal's fees apply.  <a href="/blog/online-payments-suck/">See how to use this.</a> Only invoices that have been marked <span class="text-danger">ready </span>and <span class="text-danger">have an email </span> will be exported.<br>
       <br>
       {% for chunk in object.paypal_invoice_chunks %}
         <a href="/auctions/{{ object.slug }}/paypal/{{ chunk }}/">Download Batch Invoice File #{{chunk}}</a><br>
       {% endfor %}
-      <br>For use with Paypal's <a href="https://www.paypal.com/invoice/batch">batch invoice system</a>.  Paypal's fees apply.<br>
-    </div>
+    <!-- </div>
 </div>
-</div>  
+</div>   -->
 
 {% endblock %}
 {% block extra_js %}

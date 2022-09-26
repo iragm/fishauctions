@@ -21,14 +21,14 @@
 {% else %}
 {% for lot in object_list %}
 <div class="col-sm-6 col-md-4 col-lg-3 py-2"> 
-<div class="card {% if theme %}border-dark{%else%}bg-light{% endif %} mb-3 h-100 mh-75" style="max-width: 22rem; {% if lot.ended or lot.winner %}
+<div class="card {% if theme %}border-dark{%else%}bg-light{% endif %} mb-3 h-100 mh-75" style="max-width: 22rem; {% if lot.ended or lot.sold %}
 box-shadow: 0px 0px 1px 2px rgba(238, 59, 59, 0.281),
 0px 0px 2px 3px rgba(255, 50, 50, .5),
 0px 0px 5px 4px rgba(255, 20, 20, 0.336);{%endif%}">
       <div class="card-header">
         {% if lot.auction and display_auction_on_lots %}<span class='text-info'><small>{{ lot.auction }}</small></span><br>{%endif%}
         {% if lot.promoted %}<span class="badge badge-success">Promoted</span>{% endif %}{% if lot.is_watched_by_req_user %}<span class="badge text-warning" style='font-size:1.2em; text-shadow: 0px 0px 10px #000000;'>&#9733;</span>{% endif %}
-        Lot {{ lot.lot_number }}
+        Lot {{ lot.lot_number_display }}
         {% if lot.auction %}
         <!--<span class="badge badge-light">Auction</span>-->
           {% else %}
@@ -47,7 +47,7 @@ box-shadow: 0px 0px 1px 2px rgba(238, 59, 59, 0.281),
             {% endif %}
           {% endif %}
           {% if lot.banned %}
-                <span class="badge badge-danger">Banned</span>
+                <span class="badge badge-danger">Removed</span>
           {% endif %}
           {% if lot.deactivated %}
                 <span class="badge badge-danger">Deactivated</span>
@@ -55,16 +55,16 @@ box-shadow: 0px 0px 1px 2px rgba(238, 59, 59, 0.281),
           {% if lot.date_posted > lastView %}<span class="badge badge-info">New</span>{%endif%}
 
           {# activity badge #}
-          {% if lot.user.pk == request.user.pk %}{% if lot.owner_chats %}<span class='badge-pill badge badge-warning' style='color:black;font-weight:900'>{{ lot.owner_chats }}</span>{% endif %}
+          {% if lot.user == request.user %}{% if lot.owner_chats %}<span class='badge-pill badge badge-warning' style='color:black;font-weight:900'>{{ lot.owner_chats }}</span>{% endif %}
           {% else %}
           {% if lot.all_chats %}<span data-toggle="tooltip" data-placement="bottom" data-html="true" title="Chat messages" class='badge-pill badge badge-light' style='color:black;font-weight:900'>{{lot.all_chats}}</span>{% endif %}
           {% endif %}
 
-          <div style='float: right; overflow: hidden;'>{% if lot.donation %}Donation{% else %} {{ lot.user }}{% endif %}</div></div> 
+          <div style='float: right; overflow: hidden;'>{% if lot.donation %}Donation{% else %} {{ lot.seller_as_str }}{% endif %}</div></div> 
 
       <div class="card-body">
         <h5 class="card-title" data-toggle="tooltip" data-placement="bottom" data-html="true" title="{{ lot.description_rendered }}Quantity: {{lot.quantity}}">{{ lot.lot_name }}</h5>
-        {% if not lot.ended and lot.winner %}<h1 class='text-danger font-weight-bold' style="position: absolute;-ms-transform: rotate(-20deg);transform: rotate(-20deg);">SOLD</h1>{%endif%}
+        {% if not lot.ended and lot.sold %}<h1 class='text-danger font-weight-bold' style="position: absolute;-ms-transform: rotate(-20deg);transform: rotate(-20deg);">SOLD</h1>{%endif%}
           {% if lot.thumbnail %}<img class="card-img-top" src="{{ lot.thumbnail.image.lot_list.url }}" style="max-width:100%;"></img>{% endif %}
         <p class="card-text">
           <span class="text-muted"><small>{{ lot.species_category }}</small></span><br>
@@ -74,13 +74,13 @@ box-shadow: 0px 0px 1px 2px rgba(238, 59, 59, 0.281),
           Views: {{ lot.page_views }} Bid rate: {{ lot.view_to_bid_ratio|floatformat:2 }} <br>Special: {{ lot.recommended }}
           <br>
           {% endif %}
-          <span class='text-muted'>{{ lot.calculated_end }}</span><br>
+          <span class='text-muted'>{{ lot.calculated_end_for_templates }}</span><br>
         </p>
         <div style='position: absolute; bottom: 1em; width:80%; left: 50%;
         transform: translate(-50%);'>
           
-          <a href="/lots/{{lot.lot_number}}/{{lot.slug}}/" class="btn btn-primary"
-          style='width:100%; {% if lot.ended or lot.winner %}' data-toggle="tooltip" data-placement="bottom" data-html="true" title='{% if lot.winner %}Sold to {{ lot.winner }}{% else %}Ended{% endif %}{% endif %}
+          <a href="{{ lot.lot_link }}" class="btn btn-primary"
+          style='width:100%; {% if lot.ended or lot.sold %}' data-toggle="tooltip" data-placement="bottom" data-html="true" title='{% if lot.winner_as_str %}Sold to {{ lot.winner_as_str }}{% else %}Ended{% endif %}{% endif %}
             ' >See details</a></div>
       </div>
     </div>

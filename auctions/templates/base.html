@@ -2,6 +2,7 @@
 {% load l10n %}
 {% timezone user_timezone %}
 {% load static %}
+{% load django_htmx %}
 <!DOCTYPE html>
 <!-- Global site tag (gtag.js) - Google Analytics -->
 {% if GOOGLE_MEASUREMENT_ID != "None" %}<script async src="https://www.googletagmanager.com/gtag/js?id={{ GOOGLE_MEASUREMENT_ID }}"></script>
@@ -47,7 +48,9 @@ window.onload = function() {
         <meta name="description" content="" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         {# Global javascript #}
+
         <script type="text/javascript" src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script> 
+        {# 3.5.1 needed for focus to go to select2 dropdowns https://github.com/select2/select2/issues/5993 #}
         <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.11.0/umd/popper.min.js"></script>
         <script type="text/javascript" src="{% static 'js/auction_site.js' %}"></script>
         <script type="text/javascript" src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
@@ -241,7 +244,7 @@ window.onload = function() {
         {# if the location is not set, we can ask for it with a simple location_message, or use custom logic on any element that calls the function setLocation #}
         {% if not has_user_location and location_message %}
         <div class="alert alert-secondary mb-0 alert-dismissible fade show" role="alert"><a href="#" onclick="setLocation()">{{ location_message }}</a> <button type="button" class="close" data-dismiss="alert" aria-label="Close">
-          <span aria-hidden="true">&times;</span>
+          <span aria-hidden="t">&times;</span>
         </button></div>
         {% endif %}
         <script>
@@ -278,12 +281,29 @@ window.onload = function() {
             </div>
             {% endfor %}
         {% endif %}
-
-        {% block content %}{% endblock %}
-
+        <div class="container mt-5 mb-5">
+          <div class="row">
+            <div class="col-md-10 offset-md1">
+              {% block content %}{% endblock %}
+              {% block extra_content %}{% endblock %}
+            </div>
+          </div>
+        </div>  
+        {% block undiv_content %}{% endblock %}
         {% block extra_js %}
             {# Override this in templates to add extra javascript #}
         {% endblock %}
+      <div id="modals-here"></div>
     </body>
+    <!-- <script type="text/javascript" src="https://unpkg.com/htmx.org@1.8.0/dist/htmx.js"></script>-->
+    <script type="text/javascript" src="{% static 'js/htmx.min.js' defer %}"></script>
+    <script type="text/javascript" src="{% static 'js/ws.js' defer %}"></script>
+    {# CRSF for use with HTMX #}
+    <script>
+      document.body.addEventListener('htmx:configRequest', (event) => {
+        event.detail.headers['X-CSRFToken'] = '{{ csrf_token }}';
+      })
+    </script>
+      
 </html>
 {% endtimezone %}

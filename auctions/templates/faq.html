@@ -5,9 +5,6 @@ FAQ
 {% endblock %}
 {% load static %}
 {% block content %}
-<div class="container mt-5 mb-5">
-    <div class="row">
-      <div class="col-md-10 offset-lg-1">
         {% for q in object_list %}
           {% ifchanged %}<br><br><h3>{{ q.category_text }}</h3><br>{% endifchanged %}
           <div><a name="{{q.slug}}"></a>
@@ -19,9 +16,6 @@ FAQ
           <br><br>
         {% endfor %}
         Still got questions? Email me: {{ contact | safe }}<br>
-    </div>
-</div>
-</div>  
 {% endblock %}
 {% block extra_js %}
 <script>

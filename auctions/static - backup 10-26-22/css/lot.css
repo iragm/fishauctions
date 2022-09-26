@@ -1,0 +1,90 @@
+
+#toast-container {
+    position: sticky;
+    z-index: 1055;
+    top: 0
+}
+
+#toast-wrapper {
+    position: absolute;
+    top: 0;
+    right: 0;
+    margin: 5px
+}
+
+#toast-container > #toast-wrapper > .toast {
+    min-width: 150px
+}
+
+#toast-container > #toast-wrapper > .toast >.toast-header strong {
+    padding-right: 20px
+}
+
+.chat-body {
+    display: block;
+    margin: 5px 10px 0 0;
+    overflow: hidden
+}
+
+.chat-content {
+    position: relative;
+    display: block;
+    float: left;
+    padding: 10px 10px;
+    margin-left: 10px;
+    /*margin: 0px 1px 10px 0;*/
+    clear: both;
+    color: rgb(0, 0, 0);
+    background-color: #dfe9ef;
+    border-radius: 3px;
+        -webkit-box-shadow: 0 1px 4px 0 rgba(0,0,0,0.37);
+    box-shadow: 0 1px 4px 0 rgba(0,0,0,0.37);
+}
+
+.chat-username {
+    display: block;
+    margin-top: 1px;
+    color: rgba(0, 0, 0, 0.5)
+}
+
+.chat-submitter .chat-content {
+    background-color: #40c071;
+}
+
+.chat-system .chat-content {
+    background-color: #dde0279a;
+}
+
+.chat-submitter .chat-username::after {
+    content: " (seller)";
+  }
+
+.chat-me .chat-content {
+    float: right;
+    margin: 0 10px 10px 20px;
+    color: #ffffff;
+    background-color: #529bdf;
+}
+
+.chat-me .chat-username {
+    display: none;
+}
+
+.chat-system .chat-username {
+    display: none;
+}
+
+.carousel-indicators {
+    position: static;
+  }
+
+.carousel-indicators li {
+    width: 300px;
+    height: 100%;
+    opacity: 0.8;
+  }
+.carousel-caption {
+    position: relative;
+    left: auto;
+    right: auto;
+}

@@ -5,30 +5,27 @@ Pickup locations
 {% endblock %}
 {% load static %}
 {% block content %}
-<div class="container mt-5 mb-5">
-    <div class="row">
-      <div class="col-md-10 offset-lg-1">
-        <h1>Pickup locations</h1>
-        <table class="table">
+{% include 'auction_ribbon.html' %}
+      <a href="{% url 'create_auction_pickup_location' slug=auction.slug %}" class="btn btn-success btn-sm mt-2" role="button">Add pickup location</a>
+      <table class="table">
           <thead>
             <tr>
-              <th scope="col">Name</th>
-              <th scope="col">Auction</th>
+              <th scope="col">Location</th>
+              <th scope="col">Number of users</th>
+              <th scope="col">Get directions</th>
             </tr>
           </thead>
           <tbody>
             {% for location in object_list %}
             <tr>
               <td><a href='/locations/edit/{{location.pk}}'>{{ location.name }}</a></td>
-              <td><a href='/auctions/{{location.auction.slug}}'>{{ location.auction }}</a></td>
+              <td>{{ location.number_of_users }}</td>
+              <td>{% if location.has_coordinates %}<a href={{ location.directions_link }}>Directions</a> {% else %} Location not set {% endif %}</td>
             </tr>
             {% endfor %}
         </tbody>
       </table>
-      <a href="/locations/new/" class="btn btn-info" role="button">Create pickup location</a>
-    </div>
-</div>
-</div>  
+
 {% endblock %}
 {% block extra_js %}
 {% endblock %}

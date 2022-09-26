@@ -56,6 +56,8 @@ CHANNEL_LAYERS = {
 # Application definition
 INSTALLED_APPS = [
     'auctions',
+    'dal',
+    'dal_select2',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -80,6 +82,8 @@ INSTALLED_APPS = [
     #'debug_toolbar', # having this enabled is handy for sql queries but silences errors in channels
     'markdownfield',
     'qr_code',
+    'django_tables2',
+    'django_htmx',
 ]
 ASGI_APPLICATION = "fishauctions.asgi.application"
 MIDDLEWARE = [
@@ -91,7 +95,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    
+    'django_htmx.middleware.HtmxMiddleware',
 ]
 
 ROOT_URLCONF = 'fishauctions.urls'
@@ -306,3 +310,5 @@ STATICFILES_FINDERS = [
 ]
 
 DEFAULT_AUTO_FIELD = 'django.db.models.AutoField'
+
+SEND_WELCOME_EMAIL = True # when a user adds an unverified email address to their auction, send an email about the site

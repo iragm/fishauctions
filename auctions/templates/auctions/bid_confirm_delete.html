@@ -3,9 +3,6 @@
 {% block title %} Delete bid {% endblock %}
 {% load static %}
 {% block content %}
-<div class="container mt-5 mb-5">
-    <div class="row">
-        <div class="col-md-10 offset-md1">
             <form method="post">{% csrf_token %}
                 <p>Are you sure you want to delete {{ object.user }}'s bid on {{object.lot_number.lot_name }}?</p>
                 <p>Note: this will only remove {{ object.user }}'s bid on <b>this</b> lot.  If {{ object.user }} is causing trouble, you can <a href="{% url 'userpage' slug=object.user %}">ban them here</a>, which will remove all their bids from all lots.
@@ -13,7 +10,4 @@
                 <input type="submit" class='btn btn-danger' value="Delete">
                 <a href="/lots/{{object.lot_number.pk}}" class='btn btn-primary'>Cancel</a>
             </form>
-        </div>
-    </div>
-</div>
 {% endblock %}

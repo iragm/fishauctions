@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% load render_table from django_tables2 %}
+{% load crispy_forms_tags %}
+{% block title %}Lots for {{ auction }}{% endblock %}
+{% load static %}
+
+{% block content %}
+  {% include 'auction_ribbon.html' %}
+    <a href="{% url 'lot_list' slug=auction.slug %}" class="btn btn-sm mt-2 mb-2 btn-warning">Export CSV</a> 
+    <a href="/lots/?auction={{auction.slug}}" class="btn btn-sm btn-primary">See lots as users see them</a>
+    <a class='btn btn-sm btn-info' href="{% url 'auction_lot_winners' slug=auction.slug %}">Set lot winners</a>
+    <small><br><span class='text-danger'>Be careful: </span>This page will let you change the winners of lots that have already sold, or set the winner to be someone whose invoice has already been paid.<br>
+      If you're trying to add new lots, go to the <a href="{% url 'auction_tos_list' slug=auction.slug %}">users page</a> and click Add lots under the appropriate user.</small>
+
+  <form class="col-sm-12 mt-2">
+    {% crispy filter.form %}
+  </form>
+  {# Progress indicator #}
+  {# <div class="progress"> <div class="indeterminate"></div>      </div>  #}
+  {# The actual table #}
+  {% render_table table %}
+  <div id="modals-here"></div>
+{% endblock %}
+
+{% block extra_js %}
+{% endblock %}

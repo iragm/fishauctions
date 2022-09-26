@@ -1,36 +1,14 @@
 {% extends "base.html" %}
-{% block title %}
-Chats for {{ auction }}
-{% endblock %}
+{% load render_table from django_tables2 %}
+{% load crispy_forms_tags %}
+{% block title %}Chat messages for {{ auction }}{% endblock %}
 {% load static %}
 {% block content %}
-<div class="container mt-5 mb-5">
-    <div class="row">
-      <div class="col-md-10 offset-lg-1">
-        <h4>Chats</h4>
-        <table class="table">
-          <thead>
-            <tr>
-              <th scope="col">Name</th>
-              <th scope="col">Comment</th>
-              <th scope="col">Remove</th>
-              <th scope="col">Lot</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for chat in object_list %}
-            <tr>
-              <td><a href='/users/{{ chat.user.username }} '>{{ chat.user.username  }}</a></td>
-              <td>{{ chat.message }}</td>
-              <td><a href='/chats/delete/{{ chat.pk }} '>Remove</a></td>
-              <td><a href='/lots/{{ chat.lot.lot_number }} '>{{ chat.lot.lot_name }}</a></td>
-            </tr>
-            {% endfor %}
-        </tbody>
-      </table>
-    </div>
-</div>
-</div>  
+  {% include 'auction_ribbon.html' %}
+  
+  The ability to monitor and delete chat messages in your auction is <strong>coming soon™</strong>.<p>
+  (Probably years from now, given how much time I've had to work on this site lately)
+  <p>If this is something that's important to you, <a href="https://github.com/iragm/fishauctions/issues/62">leave a comment here</a> or send me an email directly.
 {% endblock %}
 {% block extra_js %}
 {% endblock %}

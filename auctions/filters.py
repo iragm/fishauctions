@@ -1,10 +1,94 @@
 import django_filters
+from crispy_forms.helper import FormHelper
 from django.contrib import messages
 from .models import *
 from django.db.models import Q, F, Count, Case, When, Value, IntegerField, OuterRef, Subquery, Exists, Sum, IntegerField
 from django.forms.widgets import TextInput, Select, NumberInput
 from django.forms import ModelChoiceField
 import re
+
+class AuctionTOSFilter(django_filters.FilterSet):
+    """This filter is used on any admin views that allow adding users to an auction and on lot creation/winner screens"""
+    query = django_filters.CharFilter(method='auctiontos_search',
+                                        label="",
+                                        widget=TextInput(attrs={
+                                        "placeholder":"Filter by bidder number, name, phone, etc...",
+                                        'hx-get':'',
+                                        'hx-target':"div.table-container",
+                                        'hx-trigger':"keyup changed delay:300ms",
+                                        'hx-swap':"outerHTML",
+                                        #'hx-indicator':".progress",
+                                        }))
+    class Meta:
+        model = AuctionTOS
+        fields = [] # nothing here so no buttons show up
+    
+    def __init__(self, *args, **kwargs):
+        result = super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        return result
+
+    def generic(self, qs, value):
+        """Pass this a queryset and a value (string) to filter, and it'll return a suitable queryset
+        This is getting reused in a couple places now, just import it with `from .filters import AuctionTOSFilter` and then use `AuctionTOSFilter.generic(qs, filter)`
+        Some day I will add rhyming names in here, so don't reinvent the wheel, recycle this!
+        """
+        value = value.strip()
+        qs = qs.filter(
+            Q(name__icontains=value) | 
+            Q(email=value) | 
+            Q(phone_number__icontains=value) | 
+            Q(address__icontains=value) | 
+            Q(bidder_number=value) |
+            Q(user__username=value)
+        )
+        return qs
+
+    def auctiontos_search(self, queryset, name, value):
+        return self.generic(queryset, value)
+
+class LotAdminFilter(django_filters.FilterSet):
+    """This filter is used on any admin views that manage lots (really just the one...)"""
+    query = django_filters.CharFilter(method='lot_search',
+                                      label="",
+                                      widget=TextInput(attrs={
+                                        "placeholder":"Filter by lot number, name, or seller's contact info",
+                                        'hx-get':'',
+                                        'hx-target':"div.table-container",
+                                        'hx-trigger':"keyup changed delay:300ms",
+                                        'hx-swap':"outerHTML",
+                                        #'hx-indicator':".progress",
+                                        }))
+    class Meta:
+        model = Lot
+        fields = [] # nothing here so no buttons show up
+
+    def generic(self, queryset, value):
+        if value.isnumeric():
+            queryset = queryset.filter(Q(auctiontos_seller__phone_number__icontains=value) | 
+            Q(auctiontos_seller__address__icontains=value) | 
+            Q(auctiontos_seller__bidder_number=value) |
+            Q(auctiontos_winner__bidder_number=value) |
+            Q(lot_name__icontains=value) |
+            Q(lot_number=value) |
+            Q(custom_lot_number=value)
+            )
+        else:
+            queryset = queryset.filter(
+            Q(auctiontos_seller__name__icontains=value) | 
+            Q(auctiontos_seller__email__icontains=value) | 
+            Q(auctiontos_seller__address__icontains=value) | 
+            Q(auctiontos_seller__bidder_number=value) |
+            Q(auctiontos_winner__bidder_number=value) |
+            Q(auctiontos_seller__user__username=value) |
+            Q(lot_name__icontains=value) |
+            Q(custom_lot_number=value)
+        )
+        return queryset
+        
+    def lot_search(self, queryset, name, value):
+        return self.generic(queryset, value)
+
 
 class LotFilter(django_filters.FilterSet):
     """This is the core of both the lot view and the recommendation engine
@@ -363,13 +447,13 @@ class LotFilter(django_filters.FilterSet):
 
     def text_filter(self, queryset, name, value):
         if value.isnumeric():
-            return queryset.filter(Q(lot_number=int(value))|Q(lot_name__icontains=value))
+            return queryset.filter(Q(lot_number=int(value))|Q(lot_name__icontains=value)|Q(custom_lot_number=value))
         else:
             split = re.split(r'\bor\b', value)
             qList = Q() # empty
             for fragment in split:
                 fragment = fragment.strip()
-                qList |= Q(description__icontains=fragment)|Q(lot_name__icontains=fragment)|Q(user__username=fragment)
+                qList |= Q(description__icontains=fragment)|Q(lot_name__icontains=fragment)|Q(user__username=fragment)|Q(custom_lot_number=fragment)
             return queryset.filter(qList)
     
     def filter_by_shipping_location(self, queryset, name, value):

@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% load render_table from django_tables2 %}
+{% load i18n %}
+
+{% block content %}
+<div class="container">
+    <div class="row">
+        <div class="col-2">
+            <div class="toc mt4 mb-5 text-muted">
+                <strong class="d-block h6 my-2 pb-2 border-bottom">Pages</strong>
+                <nav class="toc">
+                    <ul>
+                    </ul>
+                </nav>
+            </div>
+        </div>
+        <div class="col-10">
+            {% block table_main %}{% endblock %}
+        </div>
+    </div>
+</div>
+{% endblock %}

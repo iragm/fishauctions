@@ -3,16 +3,9 @@
 {% load static %}
 {% block content %}
 {% block extra_js %}{% endblock %}
-<div class="container mt-5 mb-5">
-    <div class="row">
-        <div class="col-md-10 offset-md1">
             <h1>You've unsubscribed</h1>
             You won't get any additional promotional emails.<br><br>Note that you will still receive emails when you've been outbid, or when your watched lots are ending soon.<br><br>
             {% if request.user.is_authenticated %} <a href="/users/{{ request.user.pk }}/preferences/" class='btn btn-primary'>Preferences</a> {% else %}<a href="/account/" class='btn btn-warning'>Your account</a>{% endif %}
-        </div>
-    </div>
-</div>  
-
 {% endblock %}
 
 

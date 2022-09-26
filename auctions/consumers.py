@@ -54,7 +54,7 @@ def check_all_permissions(lot, user):
     except:
         pass
     if lot.banned:
-        return "This lot has been banned"
+        return "This lot has been removed"
     return False
 
 def reset_lot_end_time(lot):
@@ -155,9 +155,17 @@ def bid_on_lot(lot, user, amount):
             if lot.buy_now_price and not originalHighBidder:
                 if bid.amount >= lot.buy_now_price:
                     lot.winner = user
+                    if lot.auction:
+                        auctiontos_winner = AuctionTOS.objects.filter(auction=lot.auction, user=lot.high_bidder).first()
+                    if auctiontos_winner:
+                        lot.auctiontos_winner = auctiontos_winner
+                        invoice, created = Invoice.objects.get_or_create(auctiontos_user=lot.auctiontos_winner, auction=lot.auction, defaults={})
                     lot.winning_price = lot.buy_now_price
                     lot.buy_now_used = True
-                    #lot.date_end = timezone.now()
+                    # this next line makes the lot end immediately after buy now is used
+                    # I have put it in and taken it out a few times now, it is controversial because it causes lots to "disappear" when sold
+                    # see also lot.ended - setting this is needed to make buy now lots go into invoices immediately
+                    lot.date_end = timezone.now()
                     lot.watch_warning_email_sent = True
                     lot.save()
                     result['send_to'] = 'everyone'

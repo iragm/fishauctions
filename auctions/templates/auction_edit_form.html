@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{{ form.media }}
+{% load crispy_forms_tags %}
+{% block extra_js %}
+<script type="text/javascript">
+$('#auction-form').submit(function(event){
+    $(this).find(':input[type=submit]').prop('disabled', true);
+});
+$('#id_winning_bid_percent_to_club').blur(function(event) {
+    $('#id_user_cut').val(100-this.value);
+});
+$('#id_user_cut').blur(function(event) {
+    $('#id_winning_bid_percent_to_club').val(100-this.value);
+});
+var form_id = '#auction-form';
+{% include 'leave_page_warning.js' %}
+</script>
+{% endblock %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<!-- <div class="container mt-5 mb-5">
+        <div class="col-md-10 offset-md1">
+          <div style='padding: 2vw;'> -->
+            {% include 'auction_ribbon.html' %}
+            {% crispy form form.helper %}
+        <!-- </div>
+    </div>
+</div> -->
+{% endblock %}

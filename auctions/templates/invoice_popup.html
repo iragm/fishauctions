@@ -1,0 +1,35 @@
+{% extends 'invoice.html' %}
+{% block extra_content %}
+<div id="modals-container">
+<div id="modal-backdrop" class="modal-backdrop fade show" style="display:block;"></div>
+<div id="modal" class="modal fade show" tabindex="-1" style="display:block;">
+	<div class="modal-dialog modal-dialog-centered">
+	  <div class="modal-content">
+		<div class="modal-header">
+		  <h5 class="modal-title">Create account</h5>
+		</div>
+		<div class="modal-body">
+      <p>Create an account now to manage your invoices, connect with hundreds of other hobbyists near you, and get notified about future auctions. All completely free!
+        <br>
+      <div class="modal-footer">
+        <button onclick="closeModal()" class="btn btn-danger">No thanks, just view invoice</button>
+        <a href="{{view.button_link}}" class="btn btn-success">Create account</a>
+    </div>
+	  </div>
+	</div>
+  </div>
+</div>
+</div>
+<script>function closeModal() {
+	var container = document.getElementById("modals-container")
+	var backdrop = document.getElementById("modal-backdrop")
+	var modal = document.getElementById("modal")
+	modal.classList.remove("show")
+	backdrop.classList.remove("show")
+	setTimeout(function() {
+		container.removeChild(backdrop)
+		container.removeChild(modal)
+	}, 200)
+}
+</script>
+{% endblock %}

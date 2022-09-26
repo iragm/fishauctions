@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}Add lots for {{ tos.name }}{% endblock %}
+{% load static %}
+
+{% block content %}
+  {% include 'auction_ribbon.html' %}
+  <br>
+  <p>You are adding/editing lots for <b><span class="text-primary">{{ tos.name }}</b></span>, bidder number <b>{{ tos.bidder_number}}</b></p>
+  
+  {{ link_formset.management_form }}
+  <form id="form-container" method="POST" action="{% url 'bulk_add_lots' slug=auction.slug bidder_number=tos.bidder_number%}">
+    {% crispy formset helper %}
+    <button class='btn btn-info' id="add-form" type="button">Add row</button><input type="submit" class='btn btn-success float-right' id='save' value="Save lots for {{ tos.name }}">
+  </form>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+var form_id = '#form-container';
+{% include 'leave_page_warning.js' %}
+$('#add-form').click(function() {
+  cloneMore('.lot-form:last', 'form');
+});
+function cloneMore(selector, type) {
+    var newElement = $(selector).clone(true);
+    var total = $('#id_' + type + '-TOTAL_FORMS').val();
+    newElement.find(':input').each(function() {
+        var name = $(this).attr('name').replace('-' + (total-1) + '-','-' + total + '-');
+        var id = 'id_' + name;
+        $(this).attr({'name': name, 'id': id}).removeAttr('checked'); // keep last row's values 
+        //$(this).attr({'name': name, 'id': id}).val('').removeAttr('checked'); // blank rows 
+    });
+    newElement.find('label').each(function() {
+        var newFor = $(this).attr('for').replace('-' + (total-1) + '-','-' + total + '-');
+        $(this).attr('for', newFor);
+    });
+    total++;
+    $('#id_' + type + '-TOTAL_FORMS').val(total);
+    $(selector).after(newElement);
+}
+</script>
+{% endblock %}

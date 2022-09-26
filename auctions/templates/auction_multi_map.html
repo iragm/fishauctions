@@ -1,3 +1,4 @@
+{# this is not used - see auction.html instead #}
 {% extends "base.html" %}
 {% load crispy_forms_tags %}
 {% block title %} {{ auction.title }} {% endblock %}
@@ -84,6 +85,15 @@ function copyLink() {
             <a href='/lots/?auction={{auction.slug}}' class="btn btn-primary active">View all lots for this auction</a>
             <br><br>
             {% if auction.created_by.pk == request.user.id or request.user.is_superuser %}
+            text
+            <ul class="nav nav-tabs">
+                <li class="nav-item">
+                  <a class="nav-link active" data-bs-toggle="tab" href="/home">Home</a>
+                </li>
+                <li class="nav-item">
+                  <a class="nav-link" data-bs-toggle="tab" href="/contact_info">Profile</a>
+                </li>
+            </ul>
                 <a href="/auctions/{{auction.slug}}/edit/" class="btn btn-warning mr-1 mt-1">Edit this auction</a>
                 <a href="/locations/new/?next=/auctions/{{auction.slug}}" class="btn btn-primary mr-1 mt-1">Add pickup location</a>
                 <a href="/locations/" class="btn btn-primary mr-1 mt-1">All pickup locations</a>

@@ -33,9 +33,6 @@ Your lots{% else %}
   <span aria-hidden="true">&times;</span>
 </button></div>
 {% endif %}
-<div class="container mt-5 mb-5">
-    <div class="row">
-      <div class="col-md-10 offset-lg-1">
         <h3>{% if view == "all" %}
           Lots
           {% endif %}
@@ -80,9 +77,6 @@ Your lots{% else %}
         {% if view == "user" %}
           <a href="{% url 'userpage' slug=user %}">View user info for {{ user }} </a><p>
         {% endif %}
-    </div>
-</div>
-</div>  
 {% include page_template %}
 {% endblock %}
 

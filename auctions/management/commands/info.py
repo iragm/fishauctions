@@ -2,7 +2,7 @@ from django.utils import timezone
 from django.core.management.base import BaseCommand, CommandError
 from auctions.models import *
 from django.core.mail import send_mail
-from django.db.models import Count, Case, When, IntegerField, Avg
+from django.db.models import Count, Case, When, IntegerField, Avg, Q, F
 from django.core.files import File
 from datetime import datetime
 from django.template.loader import get_template
@@ -14,22 +14,64 @@ from auctions.filters import get_recommended_lots
 import re
 from collections import Counter
 
-
 class Command(BaseCommand):
     help = 'Just a scratchpad to do things'
     def handle(self, *args, **options):
-        # auctions = Auction.objects.filter(promote_this_auction=True, slug__icontains="TFCB")
-        # total = 0
+        # # fix auctiontos_user on invoices:
+        # invoices = Invoice.objects.filter(auctiontos_user__isnull=True, auction__isnull=False, user__isnull=False)
+        # for invoice in invoices:
+        #     tos = AuctionTOS.objects.filter(user=invoice.user, auction=invoice.auction).first()
+        #     invoice.auctiontos_user = tos
+        #     invoice.save()
+
+        # set auctiontos data from user: this has already been run once and should never need to be run again
+        # auctiontos = AuctionTOS.objects.filter(bidder_number="", user__isnull=False)
+        # for tos in auctiontos:
+        #     tos.name = tos.user.first_name + " " + tos.user.last_name
+        #     tos.email = tos.user.email
+        #     tos.address = tos.user.userdata.address or ""
+        #     tos.phone_number = tos.user.userdata.phone_number or ""
+        #     tos.bidder_number = None
+        #     tos.save()
+
+        # # set auctiontos winners and sellers on lots, as appropriate.  This is hopefully a one-time thing that won't be needed again
+        # lots = Lot.objects.filter(auction__isnull=False)
+        # for lot in lots:
+        #     if not lot.description:
+        #         lot.description = "No description entered"
+        #         lot.save()
+        #     if lot.winner:
+        #         if not lot.auctiontos_winner:
+        #             corrected_winner = AuctionTOS.objects.filter(user=lot.winner, auction=lot.auction).first()
+        #             if not corrected_winner:
+        #                 pass#print(lot)
+        #             else:
+        #                 lot.auctiontos_winner = corrected_winner
+        #                 lot.save()
+        #     if lot.user:
+        #         if not lot.auctiontos_seller:
+        #             corrected_seller = AuctionTOS.objects.filter(user=lot.user, auction=lot.auction).first()
+        #             if not corrected_seller:
+        #                 pass#print(lot)
+        #             else:
+        #                 #print(f"setting {corrected_seller} to be the winenr of {lot}")
+        #                 lot.auctiontos_seller = corrected_seller
+        #                 lot.save()
+        # # check to make sure that all worked correctly
+        # lots = Lot.objects.filter(auction__isnull=False, auctiontos_seller__isnull=True)
+        # for lot in lots:
+        #     print(lot)
+
+        
+        
+        # auctions with no pickup location
+        # auctions = Auction.objects.all()
         # for auction in auctions:
-        #     print(auction.title)
-        #     #total += auction.total_unsold_lots * auction.unsold_lot_fee
-        #     total += auction.club_profit
-        # print(total)
-        auction=Auction.objects.filter(slug="pvas-2022-spring-auction").first()
-        lots = Lot.objects.filter(auction=auction).exclude(winning_price__isnull=True)
-        for lot in lots:
-            if lot.winning_price > 60:
-                print(lot.winning_price, lot.lot_number)
+        #     locations = PickupLocation.objects.filter(auction=auction)
+        #     if not locations:
+        #         print(auction.get_absolute_url())
+
+        # create a graph of how prices change over time
         # f = open("views.txt", "a")
         # histories = LotHistory.objects.filter(lot__auction__slug='nec-virtual-convention-auction', changed_price=True)
         # for history in histories:

@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{{ form.media }}
+{% load crispy_forms_tags %}
+{% block extra_js %}
+<script type="text/javascript">
+$('#auction-form').submit(function(event){
+    $(this).find(':input[type=submit]').prop('disabled', true);
+});
+// when changing the date, set the name automatically
+{% if club %}
+$('#id_date_start').blur(function(event) {
+    var dateObj = new Date(this.value);
+    var month = dateObj.getUTCMonth();
+    var day = dateObj.getUTCDate();
+    var year = dateObj.getUTCFullYear();
+    const monthNames = ["January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+    ];
+    if (!$('#id_title').val()) {
+        $('#id_title').val("{{club}} auction " + monthNames[month] + " " + year);
+    }
+});
+{% endif %}
+$( document ).ready(function() {
+    // make a backup of cloned in case we need it
+    //var original_cloned_from = $('#id_cloned_from').val();
+    // disable submit button, crispy forms can't seem to do this
+    if ($('#auction-copy').hasClass('disabled')) {
+        $('#auction-copy').prop('disabled', true);
+    }
+});
+
+$(".submit-button").click(function(event){
+    if (this.id == "auction-online") {
+        $("#auction-form").attr("action", "?type=online");
+        $('#auction-form').submit();
+        return true
+    } else if (this.id == "auction-offline") {
+        $("#auction-form").attr("action", "?type=offline");
+        $('#auction-form').submit();
+        return true
+    } else {
+        $("#auction-form").attr("action", "?clone=true");
+        $('#auction-form').submit();
+        
+        // if (!$('#id_cloned_from').val()) {
+        //     // restore the original cloned
+        //     $('#id_cloned_from').val(original_cloned_from);
+        // }        
+        // return true
+    }
+    
+});
+</script>
+{% endblock %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<!-- <div class="container mt-5 mb-5">
+        <div class="col-md-10 offset-md1">
+          <div style='padding: 2vw;'> -->
+            <h4>{{ title }}</h4>{% if new %}<br><span class='text-muted'>
+                This will create a club auction that other people can add lots to.
+                If you are trying to sell a single lot, you should <a href='/lots/new'>create a new lot</a> instead.</span><br><br>{% endif %}
+            {% crispy form form.helper %}
+        <!-- </div>
+    </div>
+</div> -->
+{% endblock %}

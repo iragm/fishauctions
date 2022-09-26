@@ -10,12 +10,6 @@ $('#auction-form').submit(function(event){
 {% endblock %}
 {% block title %}{{ title }}{% endblock %}
 {% block content %}
-<div class="container mt-5 mb-5">
-        <div class="col-md-10 offset-md1">
-          <div style='padding: 2vw;'>
             <h4>{{ title }}</h4>
             {% crispy form form.helper %}
-        </div>
-    </div>
-</div>
 {% endblock %}

@@ -146,6 +146,7 @@
     <p class="lead"><span class="it_gets_easier" style="visibility:hidden;">It gets easier.</span> <span
         style="visibility:hidden;" class='free text-info'>(And did we mention free?)</span></p>
   </div>
+  And if you still want to run an in-person auction -- you can do that too!
 </div>
 <div class="jumbotron jumbotron-fluid">
   <div class="container">
@@ -276,22 +277,22 @@
   <div class="container">
     <h1 class="display-4">Ready to get started?</h1>
     <ul class="nav nav-tabs">
-      <li class="nav-item">
-        <a class="nav-link active" data-toggle="tab" href="#moreinfo">I want to know more about this site</a>
-      </li>
-      <li class="nav-item">
-        <a class="nav-link" data-toggle="tab" href="#runAuction">Start your own club auction</a>
-      </li>
       <!-- <li class="nav-item">
-        <a class="nav-link" data-toggle="tab" href="#profile">Buy or sell in an auction</a>
+        <a class="nav-link " data-toggle="tab" href="#moreinfo">I want to know more about this site</a>
       </li> -->
+      <li class="nav-item">
+        <a class="nav-link" data-toggle="tab" href="#runAuction">Start your club's online auction</a>
+      </li>
+      <li class="nav-item">
+        <a class="nav-link active" data-toggle="tab" href="#runInPersonAuction">Run an in-person auction</a>
+      </li>
       <li class="nav-item">
         <a class="nav-link" data-toggle="tab" href="#nonauctionlots">Buy or sell lots without an auction</a>
       </li>
 
     </ul>
     <div id="tabs" class="tab-content">
-      <div class="tab-pane fade active show" id="moreinfo">
+      <!-- <div class="tab-pane fade " id="moreinfo">
         <br>I'm happy to provide help with running your auctions and answer any questions.
         <br>
         <br>{% if not request.user.is_authenticated %}<a href="/google/login/?process=login&next={% firstof request.path '/' %}">Sign in with Google</a> or <a href="/signup/">create an account</a> and my email address will show up here{% else %}Contact me at <a href='mailto:{{ contact_email }}'>{{ contact_email }}</a>{% endif %}.
@@ -303,13 +304,13 @@
         <br>
         <br>
         <br>
-      </div>
+      </div> -->
       <div class="tab-pane fade " id="runAuction">
         <br>
         <ol>
           <li>{% if not request.user.is_authenticated %}<a href="/google/login/?process=login&next={% firstof request.path '/' %}">Sign in with Google</a> or <a href="/signup/">create an account</a>{% else %}Thanks for signing up!{% endif %}</li>
           <li><a href='/auctions/new'>Create an auction</a></li>
-          <li>Add one or more <a href="/locations/">pickup locations</a> to your auction</li>
+          <li>Add one or more pickup locations to your auction</li>
           <li>Wait for the auction to end</li>
           <li>View invoices for all users (<a href="/invoices/example">See example</a>)</li>
           <li>Optional: Send invoices with Paypal (<a href="/blog/online-payments-suck">here's how</a>)</li>
@@ -318,6 +319,20 @@
         <br>
         <br>See <a href="/auctions/tfcb-annual-auction/">example auction rules</a> or see <a href="/lots/?auction=tfcb-annual-auction">lots for an example auction</a>
       </div>
+      <div class="tab-pane fade active show" id="runInPersonAuction">
+        <br>
+        <ol>
+          <li>{% if not request.user.is_authenticated %}<a href="/google/login/?process=login&next={% firstof request.path '/' %}">Sign in with Google</a> or <a href="/signup/">create an account</a>{% else %}Thanks for signing up!{% endif %}</li>
+          <li><a href='/auctions/new'>Create an auction</a></li>
+          <li>Optional: Set the location of your auction, and allow people to pre-register on this site</li>
+          <li>Add people, lots and bids to this site - users don't even need to create an account!</li>
+          <li>Invoices are automatically generated on-demand for all users (<a href="/invoices/example">See example</a>)</li>
+          <li>Optional: Send invoices with Paypal (<a href="/blog/online-payments-suck">here's how</a>)</li>
+        </ol>
+        <br>
+        <br>See <a href="/auctions/tfcb-annual-auction/">example auction rules</a> or see <a href="/lots/?auction=tfcb-annual-auction">lots for an example auction</a>
+      </div>      
+      
       <!-- <div class="tab-pane fade" id="profile">
         <ol>
           <br>

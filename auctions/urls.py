@@ -1,18 +1,19 @@
 from django.conf import settings
-from django.urls import include, path
+from django.urls import include, path, re_path
 from django.contrib import admin
 from . import views
 from django.contrib.auth.decorators import login_required
 from django.views.generic.base import TemplateView
 
 urlpatterns = [
+    path('api/auctiontos-autocomplete/', views.AuctionTOSAutocomplete.as_view(), name='auctiontos-autocomplete'),
+    path('api/lot-autocomplete/', views.LotAutocomplete.as_view(), name='lot-autocomplete'),
     path('ads/fetch/', views.RenderAd.as_view(), name='get_ad'),
     path('ads/<str:uuid>/', views.ClickAd.as_view(), name='click_ad'),
     path('api/payinvoice/<int:pk>/', login_required(views.invoicePaid)),
     path('api/watchitem/<int:pk>/', login_required(views.watchOrUnwatch)),
     path('api/species/', login_required(views.getSpecies)),
     path('api/clubs/', login_required(views.getClubs)),
-    path('api/lots/ban/<int:pk>/', views.lotBan),
     path('api/lots/deactivate/<int:pk>/', views.lotDeactivate),
     path('api/images/rotate/', views.imagesRotate),
     path('api/images/primary/', views.imagesPrimary),
@@ -29,6 +30,8 @@ urlpatterns = [
     path('api/chart/lots/<int:pk>/', views.LotChartView.as_view()),
     path('api/chart/users/<int:pk>/', views.UserChartView.as_view()),
     path('api/chart/auction/', views.AuctionChartView.as_view()),
+    path('api/lot/<int:pk>/', views.LotAdmin.as_view(), name="auctionlotadmin"),
+    path('api/auctiontos/<str:pk>/', views.AuctionTOSAdmin.as_view(), name="auctiontosadmin"),
     path('api/userignorecategory/create/<int:pk>/', views.CreateUserIgnoreCategory.as_view()),
     path('api/userignorecategory/delete/<int:pk>/', views.DeleteUserIgnoreCategory.as_view()),
     path('api/userignorecategory/', views.GetUserIgnoreCategory.as_view()),
@@ -62,6 +65,7 @@ urlpatterns = [
     path('invoices/<int:pk>/', login_required(views.InvoiceView.as_view())),
     path('invoices/<int:pk>/labels', login_required(views.InvoiceLabelView.as_view())),
     path('invoices/example/', views.InvoiceView.as_view()),
+    path('invoices/<uuid:uuid>/', views.InvoiceNoLoginView.as_view()),
     path('images/add_image/<int:lot>/', login_required(views.ImageCreateView.as_view()), name='add_image'),
     path('images/<int:pk>/delete/', views.ImageDelete.as_view(), name="delete_image"),
     path('images/<int:pk>/edit', views.ImageUpdateView.as_view(), name="edit_image"),
@@ -71,11 +75,17 @@ urlpatterns = [
     path('auctions/new/', login_required(views.AuctionCreateView.as_view())),
     path('auctions/<slug:slug>/edit/', views.AuctionUpdate.as_view()),
     path('auctions/<slug:slug>/invoices/', views.AuctionInvoices.as_view()),
+    path('auctions/<slug:slug>/users/', views.AuctionUsers.as_view(), name="auction_tos_list"),
+    path('auctions/<slug:slug>/users/<int:bidder_number>/', views.BulkAddLots.as_view(), name="bulk_add_lots"),
+    path('auctions/<slug:slug>/lots/set-winners/', views.QuickSetLotWinner.as_view(), name='auction_lot_winners'),
+    path('auctions/<slug:slug>/lots/<slug:custom_lot_number>/', views.ViewLot.as_view()),
+    path('auctions/<slug:slug>/lots/<slug:custom_lot_number>/<slug:lot_slug>/', views.ViewLot.as_view()),
+    path('auctions/<slug:slug>/lots/', views.AuctionLots.as_view(), name="auction_lot_list"),
     path('auctions/<slug:slug>/stats/', views.AuctionStats.as_view()),
-    path('auctions/<slug:slug>/report/', views.auctionReport),
-    path('auctions/<slug:slug>/lotlist/', views.auctionLotList),
+    path('auctions/<slug:slug>/report/', views.auctionReport, name="user_list"),
+    path('auctions/<slug:slug>/lotlist/', views.auctionLotList, name="lot_list"),
     path('auctions/<slug:slug>/delete/', views.AuctionDelete.as_view()),
-    #path('auctions/<slug:slug>/chats/', views.AuctionChats.as_view()),
+    path('auctions/<slug:slug>/chat/', views.AuctionChats.as_view()),
     path('auctions/<slug:slug>/paypal/<int:chunk>/', views.auctionInvoicesPaypalCSV),
     path('auctions/<slug:slug>/', views.AuctionInfo.as_view()),
     path('users/<str:slug>/', views.UserByName.as_view(), name='userpage'),
@@ -89,8 +99,10 @@ urlpatterns = [
     path('contact_info/', login_required(views.UserLocationUpdate.as_view()), name='contact_info'),
     path('preferences/', login_required(views.UserPreferencesUpdate.as_view()), name='preferences'),
     path('faq/', views.FAQ.as_view(), name='faq'),
-    path('locations/', views.PickupLocations.as_view(), name='PickupLocation'),
-    path('locations/new/', views.PickupLocationsCreate.as_view()),
+    path('auctions/<slug:slug>/locations/', views.PickupLocations.as_view(), name='auction_pickup_location'),
+    path('auctions/<slug:slug>/locations/new/', views.PickupLocationsCreate.as_view(), name="create_auction_pickup_location"),
+    #path('locations/', views.PickupLocations.as_view(), name='PickupLocation'),
+    #path('locations/new/', views.PickupLocationsCreate.as_view()),
     path('locations/edit/<int:pk>/', views.PickupLocationsUpdate.as_view(), name='edit_pickup'),
     path('blog/<slug:slug>/', views.BlogPostView.as_view()),
     path('feedback/', views.LeaveFeedbackView.as_view(), name='feedback'),

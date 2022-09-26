@@ -49,9 +49,6 @@ function feedback(pk, leave_as, rating, text) {
 </script>
 {% endblock %}
 {% block content %}
-<div class="container mt-5 mb-5 ml-1">
-    <div class="row">
-      <div class="col-md-10 offset-lg-1">
         <a href="{% url 'userpage' slug=request.user %}">See feedback that's been left for you on your account page</a>
         <br><br>
         
@@ -72,7 +69,7 @@ function feedback(pk, leave_as, rating, text) {
     <tbody>
         {% for lot in won_lots %}
         <tr >
-        <td><a href="/lots/{{ lot.lot_number }}/{{lot.slug}}/" target="_blank">{{ lot.lot_name }}</a></td>
+        <td><a href="{{ lot.lot_link }}" target="_blank">{{ lot.lot_name }}</a></td>
         <td><a href="{% url 'userpage' slug=lot.user %}" target="_blank">{{ lot.user }}</a></td>
         <td><div class="btn-group" role="group" aria-label="Feedback selection">
             <button type="button" id="1_{{lot.lot_number}}_winner" onclick="feedback({{ lot.lot_number }}, 'winner', 1, null);" class="btn btn-secondary {% if lot.feedback_rating == 1 %}btn-success{% endif %}">+1</button>
@@ -99,7 +96,7 @@ function feedback(pk, leave_as, rating, text) {
     <tbody>
         {% for lot in sold_lots %}
         <tr >
-        <td><a href="/lots/{{ lot.lot_number }}/{{lot.slug}}/" target="_blank">{{ lot.lot_name }}</a></td>
+        <td><a href="{{ lot.lot_link }}" target="_blank">{{ lot.lot_name }}</a></td>
         <td><a href="{% url 'userpage' slug=lot.winner %}" target="_blank">{{ lot.winner }}</a></td>
         <td><div class="btn-group" role="group" aria-label="Feedback selection">
             <button type="button" id="1_{{lot.lot_number}}_seller" onclick="feedback({{ lot.lot_number }}, 'seller', 1, null);" class="{% if lot.winner_feedback_rating == 0%}unrated{% endif %} btn btn-secondary {% if lot.winner_feedback_rating == 1 %}btn-success{% endif %}">+1</button>
@@ -112,10 +109,6 @@ function feedback(pk, leave_as, rating, text) {
     </tbody>
   </table>
   {% endif %}
-  </div>
-  </div>
-  </div> 
-
 {% endblock %}
 
 

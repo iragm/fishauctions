@@ -11,7 +11,12 @@ function copyLink() {
   copyText.setSelectionRange(0, 99999);
   document.execCommand("copy");
   document.getElementById("copyShareLink").className += " is-valid";
-} 
+}
+var read_start = new Date().getTime();
+$("#submit-id-submit").click(function(event){
+    var time_spent = (new Date().getTime() - read_start) / 1000;
+    $('#id_time_spent_reading_rules').val(~~time_spent);
+});
 </script>
 {% if not hasChosenLocation and not ended %}
 <script>
@@ -73,16 +78,20 @@ function initMap() {
     map = new google.maps.Map(document.getElementById("map_canvas"), mapOptions);
     var markers = [
         {% for location in pickup_locations %}
+        {%if location.has_coordinates %}
         ['{{ location.name }}', {{ location.latitude }},{{ location.longitude }}],
+        {% endif %}
         {% endfor %}
     ];
     var infoWindowContent = [
         {% for location in pickup_locations %}
+        {%if location.has_coordinates %}
         ['<div class="info_content" style="color:black;">' +
         '<h5>{{ location.name }}</h5>' +
         '<p><a href="{{location.directions_link}}">Get directions</a>'+
         '<p>{{ location.description|linebreaksbr }}<br>' +
         '{% if location.users_must_coordinate_pickup %}You must schedule your pickup time in advance.{% else %}{{ location.pickup_time }} {% if location.second_pickup_time %}<br>You must return at {{ location.second_pickup_time }} to pick up lots from other locations.{% endif %}{%endif%}</p>' +        '</div>'],
+        {% endif %}
         {% endfor %}
     ];
        
@@ -120,19 +129,24 @@ function initMap() {
 {% endblock %}
 {% block content %}
 <div id="fb-root"></div>
-<div class="container mt-5 mb-5">
-    <div class="row">
-        <div class="col-md-10 offset-md1">
-            <h1>{{ auction.title }}</h1>
-            An auction created by {{ auction.created_by }}<br>
-            {% if request.user.is_authenticated %} <br>Questions?  Email <a href='mailto:{{ contact_email }}'>{{ contact_email }}</a>{% endif %}<br>
+
+            {% include 'auction_ribbon.html' %}
+            <span class="text-muted"><small>{% if view.is_auction_admin %}<br><a href='/auctions/{{auction.slug}}/edit' class="btn btn-sm btn-warning">Edit these rules</a>{% endif %}</small></span><br><br>
             {% if auction.notes_rendered %}{{ auction.notes_rendered|safe }} {% else %} {% if auction.notes %} {{ auction.notes|safe }}{% endif %}{% endif %}
             <h5>The following rules will be automatically enforced by this site:</h5>
             <ul>
+                <li>This is an {{ auction.auction_type_as_str }}</li>
+                {% if auction.is_online %}
+                <li>You must place bids on this website</li>
                 <li>Bidding will be open from {{ auction.date_start }} to {{ auction.date_end}}</li>
                 {% if not auction.sealed_bid %}<li>If last minute bids are placed on a lot, the <a href="/faq#how-exactly-do-dynamic-endings-work">end time for that lot will be extended</a>.  All lots will end by {{ auction.dynamic_end }}</li>{% endif %}
                 {% if auction.lot_submission_start_date != auction.date_start %}<li>You can submit lots starting {{ auction.lot_submission_start_date }}</li>{% endif %}
                 {% if auction.lot_submission_end_date != auction.date_end %}<li>You can submit lots until {{ auction.lot_submission_end_date }}</li>{% endif %}
+                {% else %}
+                <li>Bids can be placed in-person or on this website</li>
+                {% if auction.lot_submission_start_date != auction.date_start %}<li>You can submit lots starting {{ auction.lot_submission_start_date }}</li>{% endif %}
+                {% if auction.lot_submission_end_date != auction.date_start %}<li>You can submit lots until {{ auction.lot_submission_end_date }}</li>{% endif %}
+                {% endif %}
                 {% if auction.sealed_bid %}<li>This is a sealed bid auction - you won't be able to see how much others have bid on an item.</li>{% endif %}
                 {% if auction.max_lots_per_user %}<li>You can submit up to {{ auction.max_lots_per_user }} lots.{% if auction.allow_additional_lots_as_donation %} Additional lots accepted only as a donation.{% endif %}</li>{% endif %}
                 {% if auction.winning_bid_percent_to_club and auction.lot_entry_fee %} <li>You will be charged ${{ auction.lot_entry_fee }} plus {{ auction.winning_bid_percent_to_club }}%  of the winning price per lot you sell</li>
@@ -141,13 +155,16 @@ function initMap() {
                 {% endif %}
                 {% if auction.unsold_lot_fee %}<li>If your lot does not sell, you will be charged ${{ auction.unsold_lot_fee }}</li>{% endif %}
             </ul> 
-            {% if not auction.no_location %}<br>
+            {% if auction.no_location %}
+            <span class='text-muted'><small><br>{% if view.is_auction_admin %}<br>You haven't set a location for this auction yet.  You can do that <a href='/auctions/{{auction.slug}}/locations'>here</a></small></span>{% endif %}
+            {% else %} {# has a location - show map#}
+            <br>
                 {% if auction.multi_location %}<h3>Pickup locations</h3>{%endif%}
                 {% for location in pickup_locations %}
                 <br>
                 <h5>{% if not auction.multi_location %}Location: {%endif%}{{ location.name }}</h5>
                 {% if auction.created_by.pk == request.user.id or request.user.is_superuser %}
-                <a href="/locations/edit/{{ location.pk }}/?next=/auctions/{{auction.slug}}" class="btn btn-warning">Edit this location</a>
+                <a href="/locations/edit/{{ location.pk }}/?next=/auctions/{{auction.slug}}" class="btn btn-sm btn-warning">Edit this location</a>
                 <br>
                 {% endif %}
                 <a href="{{location.directions_link}}">Get directions</a><br>
@@ -186,44 +203,21 @@ function initMap() {
 
             </div>
             <a name="join"></a>
-            {% if not ended %}
+                        {% if not ended %}
                 <br><br>
-                {% if not auction.no_location %}
-                    {% if request.user.is_authenticated %}
-                        If you want to participate in this auction, you must confirm your pickup location
-                        {% crispy form form.helper %}
-                    {% else %}
-                        <a href="/login/?next={% firstof request.path '/' %}">Please login to confirm your pickup location</a><br><br>
-                    {% endif %}
+                {% if request.user.is_authenticated %}
+                        If you want to participate in this auction, you must confirm that you've read these rules
+                    {% crispy form form.helper %}
                 {% else %}
-                    The creator of this auction has not yet added a pickup location.  Check back soon!
+                    <a href="/login/?next={% firstof request.path '/' %}">Please login to confirm your pickup location</a><br><br>
                 {% endif %}
             {% endif %}
             <a href='/lots/?auction={{auction.slug}}' class="btn btn-primary active">View all lots for this auction</a>
             <br><br>
-            {% if auction.created_by.pk == request.user.id or request.user.is_superuser %}
-                <a href="/auctions/new/?copy={{auction.slug}}" class="btn btn-info mr-1 mt-1">Copy to new auction</a>
-                {% if not auction.invoiced %}<a href="/auctions/{{auction.slug}}/edit/" class="btn btn-warning mr-1 mt-1">Edit this auction</a>
-                <a href="/locations/new/?next=/auctions/{{auction.slug}}" class="btn btn-primary mr-1 mt-1">Add pickup location</a>{% endif %}
-                <a href="/locations/" class="btn btn-primary mr-1 mt-1">All pickup locations</a>
-                <a href="/auctions/{{auction.slug}}/stats/" class="btn btn-primary mr-1 mt-1">Stats</a>
-                <a href="/auctions/{{auction.slug}}/invoices/" class="btn btn-primary mr-1 mt-1">Invoices</a>
-                <a href="/auctions/{{auction.slug}}/report/" class="btn btn-primary mr-1 mt-1">Download CSV Report</a>
-                {% if ended %}
-                <a href="/auctions/{{auction.slug}}/lotlist/" class="btn btn-primary mr-1 mt-1">Download Lot List CSV</a>
-                {% endif %}
-                {% if auction.can_be_deleted %}
-                    <a href="/auctions/{{auction.slug}}/delete/" class="btn btn-danger mr-1 mt-1">Delete</a>
-                {% endif %}
-            {% endif %}
             {% if request.user.is_superuser %}
                 <a href="/admin/auctions/auction/{{auction.pk}}/change/" class="btn btn-danger mr-1 mt-1">Admin</a>
             {% endif %}
             <div id="join-message" style="position:fixed; bottom:0; right:30%; visibility: hidden; opacity: 0;" data-toggle="tooltip" data-placement="top" title="Keep scrolling to join this auction"></div>
-        </div>
-    </div>
-</div>
-
 {% endblock %}
 
 

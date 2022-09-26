@@ -1,0 +1,29 @@
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.1/jquery.min.js"></script>
+{{ form.media }}
+{% load crispy_forms_tags %}
+<div id="modal-backdrop" class="modal-backdrop fade show" style="display:block;"></div>
+<div id="modal" class="modal fade show" tabindex="-1" style="display:block;">
+	<div class="modal-dialog modal-dialog-centered">
+	  <div class="modal-content">
+		<div class="modal-header">
+		  <h5 class="modal-title">{{ modal_title }}</h5>
+		</div>
+		<div class="modal-body">
+            <span class="text-muted">{{ tooltip }}</span>
+			<p>{% crispy form form.helper %}</p>
+	  </div>
+	</div>
+  </div>
+</div>
+<script>function closeModal() {
+	var container = document.getElementById("modals-here")
+	var backdrop = document.getElementById("modal-backdrop")
+	var modal = document.getElementById("modal")
+	modal.classList.remove("show")
+	backdrop.classList.remove("show")
+	setTimeout(function() {
+		container.removeChild(backdrop)
+		container.removeChild(modal)
+	}, 200)
+}
+</script>

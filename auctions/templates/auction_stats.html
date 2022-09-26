@@ -180,10 +180,10 @@
 </script>
 
 {% endblock %}
-<div class="container mt-5 mb-5">
+<!-- <div class="container mt-5 mb-5">
     <div class="row">
-        <div class="col-md-10 offset-md1">
-            <h1>Stats for {{ auction.title }}</h1>
+        <div class="col-md-10 offset-md1"> -->
+            {% include 'auction_ribbon.html' %}
             <br><h3>Users</h3>
             <table class="table">
                 <thead>
@@ -265,9 +265,9 @@
             <br><br>
 
              <a href="/auctions/{{auction.slug}}/" class="btn btn-primary active">View rules</a> <a href="/auctions/{{auction.slug}}/report" class="btn btn-primary active">Download CSV Report</a>
-        </div>
+        <!-- </div>
     </div>
-</div>  
+</div>   -->
 
 {% endblock %}
 

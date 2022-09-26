@@ -31,7 +31,7 @@
     {% for lot in object_list %}
     <tr class='nowrap'>
       <td>{% if lot.auction %}
-            Lot {{ lot.lot_number }}
+            Lot {{ lot.lot_number_display }}
           {% else %}
             {% if lot.local_pickup %}
             {% if lot.distance >= 0 %}{{ lot.distance|floatformat:0 }}{% else %}?{%endif%} miles
@@ -49,22 +49,22 @@
           {% endif %}
         {% if lot.is_watched_by_req_user %}<span class="badge text-warning" style='font-size:1.2em; text-shadow: 0px 0px 10px #000000;'>&#9733;</span>{% endif %}
         {% if lot.banned %}
-        <span class="text-danger">Banned</span>
+        <span class="text-danger">Removed</span>
         {% endif %}
         {% if lot.deactivated %}
         <span class="text-danger">Deactivated</span>
         {% endif %}
       </td>
-      <td>{% if lot.donation %}Donation{% else %}{{ lot.user }}{% endif %}</td>
+      <td>{% if lot.donation %}Donation{% else %}{{ lot.seller_as_str }}{% endif %}</td>
       <td>{{ lot.species_category }}</td>
-      <td><a href="/lots/{{lot.lot_number}}/{{lot.slug}}/">{{ lot.lot_name }}</a></td>
+      <td><a href="{{ lot.lot_link }}">{{ lot.lot_name }}</a></td>
       <td>${{ lot.high_bid }} </td>
       <td>{% if lot.high_bidder %}{{ lot.high_bidder }}{% else %}No bids{% endif %}</td>
-      <td>{% if lot.user.pk == request.user.pk %}{% if lot.owner_chats %}<span class='text-warning'>{{ lot.owner_chats }}</span>{% endif %}
+      <td>{% if lot.user == request.user %}{% if lot.owner_chats %}<span class='text-warning'>{{ lot.owner_chats }}</span>{% endif %}
         {% else %}
         {% if lot.all_chats %}<span class='text-muted>'>{{lot.all_chats}}</span>{% endif %}
         {% endif %}</td>
-      <td >{% if lot.ended %}<span style="color:red">{{ lot.calculated_end }}</span>{% else %}{{ lot.calculated_end }}{% endif %}</td>
+      <td ><span class="{% if lot.ended %}text-danger{% endif %}">{{ lot.calculated_end_for_templates }}</span></td>
     </tr>
     {% endfor %}
   </tbody>

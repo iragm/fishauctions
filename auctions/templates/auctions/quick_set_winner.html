@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% load i18n %}
+{% load crispy_forms_tags %}
+
+{% block title %}Set winners for {{ auction }}{% endblock %}
+
+{% block extra_js %}
+<script>
+  $( document ).ready(function() {
+  $('#id_winning_price').focus();
+  });
+</script>
+{% endblock %}
+{% block content %}
+<div class="container mt-5 mb-5">
+    <div class="row">
+      <div class="col-md-10 offset-md1">
+        {% include 'auction_ribbon.html' %}
+<p><span class='text-muted'><small>Use this page to quickly set the winners of lots.  Only <span class='text-danger'>lots without a winner</span> and users whose <span class='text-danger'>invoice is still open</span> will show up here.</small></span></p>
+{% crispy form form.helper %}
+        </div>
+    </div>
+</div>
+{% endblock %}

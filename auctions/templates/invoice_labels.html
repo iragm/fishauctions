@@ -14,7 +14,7 @@
                 {% qr_from_text lot.qr_code size="t" %}
               </div>
               <div class="col-9">
-                <b>{{ lot.lot_number }} - {{ lot.lot_name }} </b><small>(QTY: {{lot.quantity}})<br>
+                <b>{{ lot.lot_number_display }} - {{ lot.lot_name }} </b><small>(QTY: {{lot.quantity}})<br>
                 <b>Seller:</b> {{ lot.user.first_name }} {{ lot.user.last_name }}<br>{{ lot.user.email }}<br>
                 <b>Winner:</b> {{ lot.winner.first_name }} {{ lot.winner.last_name }}<br>{{ lot.winner.email }}</small>{% if lot.auction.multi_location %}<br><b>{{ lot.winner_location }}{% endif %}</b>
               </div>

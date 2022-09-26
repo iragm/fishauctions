@@ -45,9 +45,6 @@ $(document).ready(function() {
 </script>
 {% endblock %}
 {% block content %}
-<div class="container mt-5 mb-5">
-    <div class="row">
-        <div class="col-md-10 offset-md1">
             <h1>Ignore categories</h1>
             <br>You can hide categories that you're not interested in.  Lots in these categories will not be shown unless you specifically filter by that category.<br><br>
             For example, if you don't have a saltwater tank, you might want to hide corals.  Or, if you can't read, you might hide books/magazines.
@@ -56,10 +53,6 @@ $(document).ready(function() {
             <select id='category-selection' class="category-selection" name="categories" multiple="multiple"></select>
             <br><span class='text-muted'>Note that if you filter lots by a category, you'll still be able to see lots in that category.</span>
             <br><br><a href="/account/" class="btn btn-warning active">Back to account</a>
-        </div>
-    </div>
-</div>  
-
 {% endblock %}
 
 

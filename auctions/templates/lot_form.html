@@ -6,10 +6,9 @@
 {% block extra_js %}
 <script src="https://code.jquery.com/ui/1.12.1/jquery-ui.js"></script>
 <script type="text/javascript">
-$('#lot-form').submit(function(event){
-    isDirty = false;
-    $(this).find(':input[type=submit]').prop('disabled', true);
-});
+
+var form_id = '#lot-form';
+{% include 'leave_page_warning.js' %}
 
 function setAuction(setting) {
     if (setting) {
@@ -32,14 +31,6 @@ function setAuction(setting) {
         $('#div_id_show_payment_pickup_info').show();
     }
 }
-isDirty = true;
-
-window.addEventListener('beforeunload', function(e) {
-  if(isDirty) {
-    e.preventDefault(); //per the standard
-    e.returnValue = ''; //required for Chrome
-  }
-});
 
 $(document).ready(function() {
     if(document.getElementById('id_part_of_auction_0').checked) {
@@ -122,11 +113,7 @@ $(document).ready(function() {
 {% endblock %}
 {% block title %}{{ title }}{% endblock %}
 {% block content %}
-<div class="container mt-5 mb-5">
-      <div class="col-md-10 offset-md1">
             {% crispy form form.helper %}
-    </div>
-</div>
 <!-- confirm bid dialog -->
 <div class="modal fade" id="joinAuction" tabindex="-1" role="dialog" aria-labelledby="label" aria-hidden="true">
     <div class="modal-dialog" role="document">

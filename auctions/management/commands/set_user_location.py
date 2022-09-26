@@ -7,9 +7,9 @@ import requests
 class Command(BaseCommand):
     help = 'Set user lat/long based on their IP address'
     def handle(self, *args, **options):
-        # get users that have been on the site for at least 2 days, but have not set their location
-        two_days_ago = timezone.now() - datetime.timedelta(days=2)
-        users = UserData.objects.filter(last_ip_address__isnull=False, latitude=0, longitude=0, user__date_joined__lte=two_days_ago).order_by('-last_activity')[:100]
+        # get users that have been on the site for at least 1 days, but have not set their location
+        recently = timezone.now() - datetime.timedelta(days=1)
+        users = UserData.objects.filter(last_ip_address__isnull=False, latitude=0, longitude=0, user__date_joined__lte=recently).order_by('-last_activity')[:100]
         # build a list of IPs - bit awkward as we can't use single quotes here, and it has to be a string, not a list
         ip_list = "["
         if users:

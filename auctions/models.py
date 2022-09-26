@@ -1,5 +1,5 @@
 import decimal
-from django.utils import timezone, dateformat
+from django.utils import timezone, dateformat, html
 import datetime
 from django.contrib.auth.models import *
 from django.db import models
@@ -19,7 +19,9 @@ from random import randint
 from django.conf import settings
 from django.utils.formats import date_format
 from django.contrib.sites.models import Site
-
+import re
+from django.contrib.auth.signals import user_logged_in
+from dal import autocomplete
 
 def nearby_auctions(latitude, longitude, distance=100, include_already_joined=False, user=None, return_slugs=False):
 	"""Return a list of auctions or auction slugs that are within a specified distance of the given location"""
@@ -169,23 +171,26 @@ class Product(models.Model):
 
 class Auction(models.Model):
 	"""An auction is a collection of lots"""
-	title = models.CharField(max_length=255)
+	title = models.CharField("Auction name", max_length=255, blank=False, null=False)
+	title.help_text = "This is the name people will see when joining your auction"
 	slug = AutoSlugField(populate_from='title', unique=True)
+	is_online = models.BooleanField(default=True)
+	is_online.help_text = "Is this is an online auction with in-person pickup at one or more locations?"
 	sealed_bid = models.BooleanField(default=False)
 	sealed_bid.help_text = "Users won't be able to see what the current bid is"
 	lot_entry_fee = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(10)])
-	lot_entry_fee.help_text = "The amount, in dollars, that the seller will be charged if a lot sells"
+	lot_entry_fee.help_text = "The amount the seller will be charged if a lot sells"
 	unsold_lot_fee = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(10)])
-	unsold_lot_fee.help_text = "The amount, in dollars, that the seller will be charged if their lot doesn't sell"
+	unsold_lot_fee.help_text = "The amount the seller will be charged if their lot doesn't sell"
 	winning_bid_percent_to_club = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(100)])
-	winning_bid_percent_to_club.help_text = "To give 70% of the final bid to the seller, enter 30 here"
+	winning_bid_percent_to_club.help_text = "In addition to the Lot entry fee, this percent of the winning price will be taken by the club"
 	date_posted = models.DateTimeField(auto_now_add=True)
-	date_start = models.DateTimeField()
-	date_start.help_text = "Bidding will be open on this date"
-	lot_submission_start_date = models.DateTimeField(null=True, blank=True)
+	date_start = models.DateTimeField("Auction start date")
+	date_start.help_text = "Bidding will be open on this date.  Must be in the future."
+	lot_submission_start_date = models.DateTimeField("Lot submission opens", null=True, blank=True)
 	lot_submission_start_date.help_text = "Users can submit (but not bid on) lots on this date"
-	lot_submission_end_date = models.DateTimeField(null=True, blank=True)
-	date_end = models.DateTimeField()
+	lot_submission_end_date = models.DateTimeField("Lot submission ends", null=True, blank=True)
+	date_end = models.DateTimeField("Bidding end date", blank=True, null=True)
 	date_end.help_text = "Bidding will end on this date.  If last-minute bids are placed, bidding can go up to 1 hour past this time on those lots."
 	watch_warning_email_sent = models.BooleanField(default=False)
 	invoiced = models.BooleanField(default=False)
@@ -216,25 +221,100 @@ class Auction(models.Model):
 	make_stats_public.help_text = "Allow any user who has a link to this auction's stats to see them.  Uncheck to only allow the auction creator to view stats"
 	bump_cost = models.PositiveIntegerField(blank=True, default=1, validators=[MinValueValidator(1)])
 	bump_cost.help_text = "The amount a user will be charged each time they move a lot to the top of the list"
+	use_categories = models.BooleanField(default=True, verbose_name="This is a fish auction")
+	use_categories.help_text = "Check to use categories like Cichlids, Livebearers, etc."
+	is_deleted = models.BooleanField(default=False)
 
 	def __str__(self):
 		if "auction" not in self.title.lower():
 			return f"{self.title} auction"
 		return self.title
 	
+	@property
+	def location_qs(self):
+		"""All locations associated with this auction"""
+		return PickupLocation.objects.filter(auction=self.pk).order_by('name')
+
+	@property
+	def physical_location_qs(self):
+		"""Find all non-default locations"""
+		return self.location_qs.exclude(Q(pickup_by_mail=True)|Q(is_default=True))
+	
+	@property
+	def location_with_location_qs(self):
+		"""Find all locations that have coordinates - useful to see if there's an actual location associated with this auction.  By default, auctions get a location with no coordinates added"""
+		return self.location_qs.exclude(latitude=0,longitude=0)
+
+	@property
+	def number_of_locations(self):
+		"""The number of physical locations this auction has"""
+		return self.physical_location_qs.count()
+
+	@property
+	def auction_type(self):
+		"""Returns whether this is an online, in-person, or hybrid auction for use in tooltips and templates.  See also auction_type_as_str for a friendly display version"""
+		number_of_locations = self.number_of_locations
+		if self.is_online and number_of_locations == 1:
+			return "online_one_location"
+		if self.is_online and number_of_locations > 1:
+			return "online_multi_location"
+		if self.is_online and number_of_locations == 0:
+			return "online_no_location"
+		if not self.is_online and number_of_locations == 0:
+			return "inperson_one_location"
+		if not self.is_online and number_of_locations > 0:
+			return "inperson_multi_location"
+		return "unknown"
+
+	@property
+	def auction_type_as_str(self):
+		"""Returns friendly string of whether this is an online, in-person, or hybrid auction"""
+		auction_type = self.auction_type
+		if auction_type == "online_one_location":
+			return "online auction with in-person pickup"
+		if auction_type == "online_multi_location":
+			return "online auction with in-person pickup at multiple locations"
+		if auction_type == "online_no_location":
+			return "online auction with no specified pickup location"
+		if auction_type == "inperson_one_location":
+			return "in-person auction"
+		if auction_type == "inperson_multi_location":
+			return "in person auction with lot delivery to additional locations"
+		return "unknown auction type"							
+
 	def get_absolute_url(self):
 		return f'/auctions/{self.slug}/'
 
+	def get_edit_url(self):
+		return f'/auctions/{self.slug}/edit/'
+
+	def permission_check(self, user):
+		"""See if `user` can make changes to this auction"""
+		if self.created_by == user:
+			return True
+		if user.is_superuser:
+			return True
+		if not user.is_authenticated:
+			return False
+		tos = AuctionTOS.objects.filter(is_admin=True, user=user, user__isnull=False, auction=self.pk).first()
+		if tos:
+			return True
+		return False
+
 	@property
 	def pickup_locations_before_end(self):
-		"""True if there's a problem with the pickup location times, all of them need to be after the end date of the auction"""
-		locations = PickupLocation.objects.filter(auction=self.pk)
+		"""If there's a problem with the pickup location times, all of them need to be after the end date of the auction (or after the start date for an in-person auction).
+		Returns the edit url for the first pickup location whose end time is before the auction end"""
+		locations = self.location_qs
+		time_to_use = self.date_end
+		if not self.is_online:
+			time_to_use = self.date_start
 		for location in locations:
 			error = False
-			if location.pickup_time < self.date_end:
+			if location.pickup_time < time_to_use:
 				error = True
 			if location.second_pickup_time:
-				if location.second_pickup_time < self.date_end:
+				if location.second_pickup_time < time_to_use:
 					error = True
 			if error:
 				return reverse("edit_pickup", kwargs={'pk': location.pk}) 
@@ -261,10 +341,12 @@ class Auction(models.Model):
 	@property
 	def closed(self):
 		"""For display on the main auctions list"""
-		if timezone.now() > self.date_end:
-			return True
-		else:
-			return False
+		if self.date_end:
+			if timezone.now() > self.date_end:
+				return True
+		# fixme - something needs to be done here - you can't have in-person auctions open forever
+		# one option would be to auto-close 24 hours after bidding opens
+		return False
 
 	@property
 	def started(self):
@@ -417,7 +499,7 @@ class Auction(models.Model):
 		"""
 		True if there's more than one location at this auction
 		"""
-		locations = PickupLocation.objects.filter(auction=self.pk).count()
+		locations = self.physical_location_qs.count()
 		if locations > 1:
 			return True
 		return False
@@ -427,16 +509,20 @@ class Auction(models.Model):
 		"""
 		True if there's no pickup location at all for this auction
 		"""
-		locations = PickupLocation.objects.filter(auction=self.pk)
+		locations = self.location_with_location_qs.count()
 		if not locations:
 			return True
 		return False
+		
 	@property
 	def can_be_deleted(self):
 		if self.total_lots:
 			return False
 		else:
 			return True
+	@property
+	def paypal_invoices(self):
+		return Invoice.objects.filter(auction=self, status="UNPAID")
 
 	@property
 	def paypal_invoice_chunks(self):
@@ -445,7 +531,7 @@ class Auction(models.Model):
 		https://www.paypal.com/invoice/batch
 		used by views.auctionInvoicesPaypalCSV
 		"""
-		invoices = Invoice.objects.filter(auction=self.pk)
+		invoices = self.paypal_invoices
 		chunks = 1
 		count = 0
 		chunkSize = 150
@@ -470,7 +556,7 @@ class PickupLocation(models.Model):
 	user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
 	auction = models.ForeignKey(Auction, null=True, blank=True, on_delete=models.CASCADE)
 	auction.help_text = "If your auction isn't listed here, it may not exist or has already ended"
-	description = models.CharField(max_length=300)
+	description = models.CharField(max_length=300, blank=True, null=True)
 	description.help_text = "e.x. First floor of parking garage near Sears entrance"
 	users_must_coordinate_pickup = models.BooleanField(default=False)
 	users_must_coordinate_pickup.help_text = "The pickup time fields will not be used"
@@ -481,19 +567,40 @@ class PickupLocation(models.Model):
 	pickup_time = models.DateTimeField()
 	second_pickup_time = models.DateTimeField(blank=True, null=True)
 	second_pickup_time.help_text = "If you'll have a dropoff for sellers in the morning and then a pickup for buyers in the afternoon at this location, this should be the pickup time."
-	latitude = models.FloatField(blank=True, null=True)
-	longitude = models.FloatField(blank=True, null=True)
+	latitude = models.FloatField(blank=True, default=0)
+	longitude = models.FloatField(blank=True, default=0)
 	address = models.CharField(max_length=500, blank=True, null=True)
 	address.help_text = "Search Google maps with this address"
 	location_coordinates = PlainLocationField(based_fields=['address'], blank=False, null=True, verbose_name="Map")
-	
+	allow_selling_by_default = models.BooleanField(default=True)
+	allow_bidding_by_default = models.BooleanField(default=True)
+	pickup_by_mail = models.BooleanField(default=False)
+	pickup_by_mail.help_text = "Special pickup location without an actual location"
+	is_default = models.BooleanField(default=False)
+	is_default.help_text = "This was a default location added for an in-person auction."
+	contact_person = models.ForeignKey('AuctionTOS', null=True, blank=True, on_delete=models.SET_NULL)
+
 	def __str__(self):
+		if self.pickup_by_mail:
+			return "Mail me my lots"
 		return self.name
 
 	@property
 	def directions_link(self):
 		"""Google maps link to the lat and lng of this pickup location"""
 		return f"https://www.google.com/maps/search/?api=1&query={self.latitude},{self.longitude}"
+
+	@property
+	def has_coordinates(self):
+		"""Return True if this should be included on the auctions map list"""
+		if self.latitude and self.longitude:
+				return True
+		return False
+
+	@property
+	def number_of_users(self):
+		"""How many people have chosen this pickup location?"""
+		return AuctionTOS.objects.filter(pickup_location=self.pk).count()
 
 class AuctionIgnore(models.Model):
 	"""If a user does not want to participate in an auction, create one of these"""
@@ -507,15 +614,136 @@ class AuctionIgnore(models.Model):
 		verbose_name_plural = "User ignoring auction"
 
 class AuctionTOS(models.Model):
-	user = models.ForeignKey(User, on_delete=models.CASCADE)
+	"""Models how a user engages with an auction and is the basis for the user view when running an auction
+	Usually this will correspond with a single person which may or may not also be a user"""
+	user = models.ForeignKey(User, on_delete=models.SET_NULL, blank=True, null=True)
 	auction = models.ForeignKey(Auction, on_delete=models.CASCADE)
 	pickup_location = models.ForeignKey(PickupLocation, on_delete=models.CASCADE)
 	createdon = models.DateTimeField(auto_now_add=True, blank=True)
-	confirm_email_sent = models.BooleanField(default=False)
-	# this key will be used for a future 
-	is_admin = 	models.BooleanField(default=False, verbose_name="Grant admin permissions to help run this auction")
+	confirm_email_sent = models.BooleanField(default=False, blank=True)
+	second_confirm_email_sent = models.BooleanField(default=False, blank=True)
+	print_reminder_email_sent = models.BooleanField(default=False, blank=True)
+	is_admin = 	models.BooleanField(default=False, verbose_name="Grant admin permissions to help run this auction", blank=True)
+	# yes we are using a string to store a number
+	# this is actually important because some day, someone will ask to make the bidder numbers have characters like "1-234" or people's names
+	bidder_number = models.CharField(max_length=20, default="", blank=True)
+	bidding_allowed = models.BooleanField(default=True, blank=True)
+	selling_allowed = models.BooleanField(default=True, blank=True)
+	name = models.CharField(max_length=181, null=True, blank=True)
+	email = models.EmailField(null=True, blank=True)
+	phone_number = models.CharField(max_length=20, blank=True, null=True)
+	address = models.CharField(max_length=500, blank=True, null=True)
+	manually_added = models.BooleanField(default=False, blank=True, null=True)
+	time_spent_reading_rules = models.PositiveIntegerField(validators=[MinValueValidator(0)], blank=True, default=0)
+
+	@property
+	def phone_as_string(self):
+		"""Add proper dashes to phone"""
+		if not self.phone_number:
+			return ""
+		n = re.sub('[^0-9]', "", self.phone_number)
+		return format(int(n[:-1]), ",").replace(",", "-") + n[-1] 
+
+	@property
+	def bulk_add_link_html(self):
+		"""Link to add multiple lots at once for this user"""
+		url = reverse("bulk_add_lots", kwargs = {'bidder_number':self.bidder_number, 'slug':self.auction.slug})
+		return html.format_html(f"<a href='{url}'>Add lots</a>")
+
+	@property
+	def invoice_link_html(self):
+		"""HTML snippet with a link to the invoice for this auctionTOS, if set.  Otherwise, empty"""
+		invoice = Invoice.objects.filter(auctiontos_user=self.pk).first()
+		if invoice:
+			result = html.format_html(f"<a href='{invoice.get_absolute_url()}'>View</a>")
+			return result
+		else:
+			return "None"
+
+	def save(self, *args, **kwargs):
+		if not self.pk:
+			print("new instance of auctionTOS")
+			# no emails for in-person auctions, thankyouverymuch
+			if not self.auction.is_online:
+				self.confirm_email_sent = True
+				self.print_reminder_email_sent = True
+				self.second_confirm_email_sent = True
+		if not self.pk and not self.user and self.email:
+			existing_user = User.objects.filter(email=self.email).exists()
+			if not existing_user and settings.SEND_WELCOME_EMAIL:
+				print(f"fixme - A new user with email {self.email} was just added to an auction.  Send them a welcome email")
+		# fill out some fields from user, if set
+		# There is a huge security concern here:   <<<< ATTENTION!!!
+		# If someone creates an auction and adds every email address that's public
+		# We must avoid allowing them to collect addresses/phone numbers/locations from these people
+		# Having this code below run only on creation means that the user won't be filled out and prevents collecting data
+		# if making changes, remember that there's user_logged_in_callback below which sets the user field
+		if self.user: #fixme - add and not self.pk here after migration
+			if not self.name:
+				self.name = self.user.first_name + " " + self.user.last_name
+			if not self.email:
+				self.email = self.user.email
+			userData, created = UserData.objects.get_or_create(
+				user = self.user,
+				defaults={},
+				)
+			if not self.phone_number:
+				self.phone_number = userData.phone_number
+			if not self.address:
+				self.address = userData.address
+		# set the bidder number based on the phone, address, last used number, or just at random
+		if not self.bidder_number or self.bidder_number == "None":
+			dont_use_these = ['13', '14', '15', '16', '17', '18', '19']
+			search = None
+			if self.phone_number:
+				search = re.search('([\d.]{3}$)|$', self.phone_number).group()
+			if not search or str(search) in dont_use_these:
+				if self.address:
+					search = re.search('([\d.]{3}$)|$', self.address).group()
+			if self.user:
+				userData, created = UserData.objects.get_or_create(
+					user = self.user,
+					defaults={},
+					)
+				if userData.preferred_bidder_number:
+					search = userData.preferred_bidder_number
+			# I guess it's possible that someone could make 999 accounts and have them all join a single auction, which would turn this into an infinite loop
+			failsafe = 0
+			while failsafe < 5000:
+				search = str(search)
+				if search[:-2] not in dont_use_these and search != "None":
+					if AuctionTOS.objects.filter(bidder_number=search, auction=self.auction).count() == 0:
+						self.bidder_number = search
+						if self.user:
+							if not userData.preferred_bidder_number:
+								userData.preferred_bidder_number = search
+								userData.save()
+						break
+				# OK, give up and just randomly generate something
+				search = randint(1, 999)
+				failsafe += 1
+			if failsafe > 4998:
+				# I don't ever want this to be null
+				self.bidder_number = 999
+		super().save(*args, **kwargs) 
+
+	@property
+	def display_name(self):
+		"""Use usernames for online auctions, and bidder numbers for in-person auctions"""
+		#return f"{self.user} will meet at {self.pickup_location} for {self.auction}"
+		if self.auction.is_online:
+			if self.user:
+				return self.user.username
+		if self.bidder_number:
+			return self.bidder_number
+		# shouldn't ever get to this point
+		if self.user:
+			return self.user.username
+		return "Unknown user"
+
 	def __str__(self):
-		return f"{self.user} will meet at {self.pickup_location} for {self.auction}"
+		return self.display_name
+
 	class Meta: 
 		verbose_name = "Auction pickup location"
 		verbose_name_plural = "Auction pickup locations"
@@ -528,6 +756,8 @@ class Lot(models.Model):
 		('RANDOM', 'This picture is from the internet'),
 	)
 	lot_number = models.AutoField(primary_key=True)
+	custom_lot_number = models.CharField(max_length=9, blank=True, null=True)
+	custom_lot_number.help_text = "You can override the default lot number with this"
 	lot_name = models.CharField(max_length=40)
 	slug = AutoSlugField(populate_from='lot_name', unique=False)
 	lot_name.help_text = "Short description of this lot"
@@ -558,16 +788,18 @@ class Lot(models.Model):
 	last_bump_date = models.DateTimeField(null=True, blank=True)
 	last_bump_date.help_text = "Any time a lot is bumped, this date gets changed.  It's used for sorting by newest lots."
 	user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+	auctiontos_seller = models.ForeignKey(AuctionTOS, null=True, blank=True, on_delete=models.SET_NULL, related_name="auctiontos_seller")
 	auction = models.ForeignKey(Auction, blank=True, null=True, on_delete=models.SET_NULL)
 	auction.help_text = "<span class='text-warning' id='last-auction-special'></span>Only auctions that you have <span class='text-warning'>selected a pickup location for</span> will be shown here. This lot must be brought to that location"
 	date_end = models.DateTimeField(auto_now_add=False, blank=True, null=True)
 	winner = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="winner")
+	auctiontos_winner = models.ForeignKey(AuctionTOS, null=True, blank=True, on_delete=models.SET_NULL, related_name="auctiontos_winner")
 	active = models.BooleanField(default=True)
 	winning_price = models.PositiveIntegerField(null=True, blank=True)
 	refunded = models.BooleanField(default=False)
 	refunded.help_text = "Don't charge the winner or pay the seller for this lot."
-	banned = models.BooleanField(default=False)
-	banned.help_text = "This lot will be hidden from views, and users won't be able to bid on it.  Banned lots are not charged in invoices."
+	banned = models.BooleanField(default=False, verbose_name="Removed")
+	banned.help_text = "This lot will be hidden from views, and users won't be able to bid on it.  Removed lots are not charged in invoices."
 	ban_reason = models.CharField(max_length=100, blank=True, null=True)
 	deactivated = models.BooleanField(default=False)
 	deactivated.help_text = "You can deactivate your own lots to remove all bids and stop bidding.  Lots can be reactivated at any time, but existing bids won't be kept"
@@ -582,6 +814,7 @@ class Lot(models.Model):
 	donation = models.BooleanField(default=False)
 	donation.help_text = "All proceeds from this lot will go to the club"
 	watch_warning_email_sent = models.BooleanField(default=False)
+	# seller and buyer invoice are no longer needed and can safely be removed in a future migration
 	seller_invoice = models.ForeignKey('Invoice', null=True, blank=True, on_delete=models.SET_NULL, related_name="seller_invoice")
 	buyer_invoice = models.ForeignKey('Invoice', null=True, blank=True, on_delete=models.SET_NULL, related_name="buyer_invoice")
 	transportable = models.BooleanField(default=True)
@@ -621,62 +854,171 @@ class Lot(models.Model):
 	other_text.help_text = "Shipping methods, temperature restrictions, etc."
 	shipping_locations = models.ManyToManyField(Location, blank=True, verbose_name="I will ship to")
 	shipping_locations.help_text = "Check all locations you're willing to ship to"
+	is_deleted = models.BooleanField(default=False)
 
 	def __str__(self):
-		return "" + str(self.lot_number) + " - " + self.lot_name
+		return "" + str(self.lot_number_display) + " - " + self.lot_name
+
+	def add_winner_message(self, user, tos, winning_price):
+		"""Create a lot history message when a winner is declared (or changed)
+		It's critical that this function is called every time the winner is changed so that invoices get recalculated"""
+		LotHistory.objects.create(
+			lot = self,
+			user = user,
+			message = f"{user.username} has set bidder {tos} as the winner of this lot (${winning_price}).",
+			notification_sent = True,
+			bid_amount = winning_price,
+			changed_price=True,
+			seen=True
+		)
+		invoice, created = Invoice.objects.get_or_create(auctiontos_user=tos, auction=self.auction, defaults={})
+		invoice.recalculate
 
 	@property
 	def seller_invoice_link(self):
-		"""/invoices/123 for the auction/user of this lot"""
+		"""/invoices/123 for the auction/seller of this lot"""
 		try:
-			invoice = Invoice.objects.get(user=self.user, auction=self.auction)
-			return f'/invoices/{invoice.pk}'
+			if self.auctiontos_seller:
+				invoice = Invoice.objects.get(auctiontos_user=self.auctiontos_seller)
+				return f'/invoices/{invoice.pk}'
 		except:
-			return ""
+			pass
+		try:
+			if self.user:
+				invoice = Invoice.objects.get(user=self.user, auction=self.auction)
+				return f'/invoices/{invoice.pk}'
+		except:
+			pass
+		return ""
 	
 	@property
 	def winner_invoice_link(self):
 		"""/invoices/123 for the auction/winner of this lot"""
 		try:
-			invoice = Invoice.objects.get(user=self.winner, auction=self.auction)
-			return f'/invoices/{invoice.pk}'
+			if self.auctiontos_winner:
+				invoice = Invoice.objects.get(auctiontos_user=self.auctiontos_winner)
+				return f'/invoices/{invoice.pk}'
 		except:
-			return ""
-
-	@property
-	def winner_location(self):
-		"""String of location of the winner for this lot"""
+			pass
 		try:
-			return str(AuctionTOS.objects.get(user=self.winner, auction=self.auction).pickup_location)
+			if self.winner:
+				invoice = Invoice.objects.get(user=self.winner, auction=self.auction)
+				return f'/invoices/{invoice.pk}'
 		except:
-			return ""
+			pass
+		return ""
 			
 	@property
 	def tos_needed(self):
 		if not self.auction:
+			return False
+		if self.auctiontos_seller:
 			return False
 		try:
 			AuctionTOS.objects.get(user=self.user, auction=self.auction)
 			return False
 		except:
 			return f'/auctions/{self.auction.slug}'
+
+	@property
+	def winner_location(self):
+		"""String of location of the winner for this lot"""
+		try:
+			return str(self.auctiontos_winner.pickup_location)
+		except:
+			pass
+		try:
+			return str(AuctionTOS.objects.get(user=self.winner, auction=self.auction).pickup_location)
+		except:
+			pass
+		return ""
 		
 	@property
 	def location(self):
 		"""String of location of the seller of this lot"""
 		try:
+			return str(self.auctiontos_seller.pickup_location)
+		except:
+			pass
+		try:
 			return str(AuctionTOS.objects.get(user=self.user, auction=self.auction).pickup_location)
 		except:
-			return ""
-		# try:
-		# 	return UserData.objects.get(user=self.user.pk).location
-		# except:
-		# 	return ""
+			pass
+		return ""
 
 	@property
-	def user_as_str(self):
-		"""String value of the seller of this lot"""
-		return str(self.user)
+	def seller_name(self):
+		"""Full name of the seller of this lot"""
+		if self.user:
+			return self.user.first_name + " " + self.user.last_name
+		if self.auctiontos_seller:
+			return self.auctiontos_seller.name
+		return "Unknown"
+
+	@property
+	def seller_email(self):
+		"""Email of the seller of this lot"""
+		if self.user:
+			return self.user.email
+		if self.auctiontos_seller:
+			return self.auctiontos_seller.email
+		return "Unknown"
+
+	@property
+	def winner_name(self):
+		"""Full name of the winner of this lot"""
+		if self.auctiontos_winner:
+			return self.auctiontos_winner.name
+		if self.winner:
+			return self.winner.first_name + " " + self.winner.last_name
+		return "Unknown"
+
+	@property
+	def winner_email(self):
+		"""Email of the winner of this lot"""
+		if self.auctiontos_winner:
+			return self.auctiontos_winner.email
+		if self.winner:
+			return self.winner.email
+		return "Unknown"
+
+	@property
+	def table_class(self):
+		"""We need to color rows red if a winner is set without a price, or a price is set without a winner"""
+		if self.auctiontos_winner and not self.winning_price:
+			return 'table-danger'
+		if not self.auctiontos_winner and self.winning_price:
+			return 'table-danger'
+		return ""
+	# @property
+	# def user_as_str(self):
+	# 	"""String value of the seller of this lot"""
+	# 	return str(self.user)
+
+	@property
+	def seller_as_str(self):
+		"""String of the seller name or number, for use on lot pages"""
+		if self.auctiontos_seller:
+			return str(self.auctiontos_seller)
+		if self.user:
+			return str(self.user)
+		return "Unknown"
+	
+	@property
+	def winner_as_str(self):
+		"""String of the winner name or number, for use on lot pages"""
+		if self.auctiontos_winner:
+			return str(self.auctiontos_winner)
+		if self.winner:
+			return str(self.winner)
+		return ""
+
+	@property
+	def sold(self):
+		if self.winner or self.auctiontos_winner:
+			if self.winning_price:
+				return True
+		return False
 
 	@property
 	def payout(self):
@@ -690,14 +1032,13 @@ class Lot(models.Model):
 			"to_site": 0,
 			}
 		if self.auction:
-			if not self.active:
+			if (self.auctiontos_winner and self.winning_price) or not self.active:
 				# bidding has officially closed
 				payout['ended'] = True
 				if self.banned:
 					return payout
 				auction = Auction.objects.get(id=self.auction.pk)
-				if self.winner:
-					# this lot sold
+				if self.sold:
 					payout['sold'] = True
 					payout['winning_price'] = self.winning_price
 					if self.donation:
@@ -746,19 +1087,43 @@ class Lot(models.Model):
 
 	@property
 	def calculated_end(self):
-		# with dynamic endings, we no longer need to check the auction
-		# if self.auction:
-		# 	auction = Auction.objects.get(pk=self.auction.pk)
-		# 	if auction.date_end > timezone.now():
-		# 		# if this lot was won by buy now 
-		# 		in consumers.py, we set the date end to timezone.now() when buy now is used.  This code is unnecessary with the dynamic ending changes
-		# 		if self.winner:
-		# 			return self.date_end
-		# 	return auction.date_end
+		"""Return datetime object for when this lot will end.
+		
+		Important: in the case of a lot that is part of an in-person auction with no end time, this will return timezone.now()
+
+		Make sure to only use this after checking lot.is_part_of_in_person_auction.  A good alternative is lot.calculated_end_for_templates which returns either a string or a datetime
+		"""
+		# for in-person auctions only
+		if self.auction:
+			if not self.auction.is_online and self.auction.date_end:
+				return self.auction.date_end
 		if self.date_end:
 			return self.date_end
 		# I would hope we never get here...but it it theoretically possible that a bug could cause self.date_end to be blank
 		return timezone.now()
+
+	@property
+	def calculated_end_for_templates(self):
+		"""For models, use self.calculated_end which always returns a date
+		But for places where a user can see this, we need a friendly reminder that the auction admin needs to manually end lots"""
+		if self.is_part_of_in_person_auction:
+			return "Ends when sold"
+		else:
+			return self.calculated_end
+
+	@property
+	def can_add_images(self):
+		"""Yeah, go for it as long as the lot isn't sold"""
+		if self.winning_price:
+			return False
+		return True
+
+	@property
+	def bids_can_be_removed(self):
+		"""True or False"""
+		if self.ended:
+			return False
+		return True
 
 	@property
 	def can_be_edited(self):
@@ -767,7 +1132,7 @@ class Lot(models.Model):
 		Actually, by request from many people, there's nothing at all prventing that right at this moment..."""
 		if self.high_bidder:
 				return False
-		if self.winner:
+		if self.winner or self.auctiontos_winner:
 			return False
 		if self.auction:
 			# if this lot is part of an auction, allow changes right up until lot submission ends
@@ -783,7 +1148,7 @@ class Lot(models.Model):
 		This is needed to prevent people deleting lots that don't sell right before the auction ends"""
 		if self.high_bidder:
 			return False
-		if self.winner:
+		if self.winner or self.auctiontos_winner:
 			return False
 		if self.auction:
 			# if this lot is part of an auction, allow changes until 24 hours before the lot submission end
@@ -809,8 +1174,8 @@ class Lot(models.Model):
 		"""
 		if self.banned:
 			if self.ban_reason:
-				return f"This lot has been banned: {self.ban_reason}"
-			return "This lot has been banned"
+				return f"This lot has been removed: {self.ban_reason}"
+			return "This lot has been removed"
 		if self.deactivated:
 			return "This lot has been deactivated by its owner"
 		if self.bidding_allowed_on > timezone.now():
@@ -832,9 +1197,28 @@ class Lot(models.Model):
 		return False
 
 	@property
+	def is_part_of_in_person_auction(self):
+		# but, see https://github.com/iragm/fishauctions/issues/116
+		# all we would need for this request is to configure Auction.date_end
+		# and a new view to set it to X date (probably 1 minute in the future)
+		# the biggest issue I see is lack of an undo on this option
+		if self.auction:
+			if self.auction.is_online:
+				return False
+			else:
+				return True
+		return False
+
+	@property
 	def ended(self):
 		"""Used by the view for display of whether or not the auction has ended
 		See also the database field active, which is set (based on this field) by a system job (endauctions.py)"""
+		# lot attached to in person auctions do not end unless manually set
+		if self.sold:
+			return True
+		if self.is_part_of_in_person_auction:
+			return False
+		# all other lots end
 		if timezone.now() > self.calculated_end:
 			return True
 		else:
@@ -843,6 +1227,8 @@ class Lot(models.Model):
 	@property
 	def minutes_to_end(self):
 		"""Number of minutes until bidding ends, as an int.  Returns 0 if bidding has ended"""
+		if self.is_part_of_in_person_auction:
+			return 999
 		timedelta = self.calculated_end - timezone.now()
 		seconds = timedelta.total_seconds()
 		if seconds < 0:
@@ -853,6 +1239,8 @@ class Lot(models.Model):
 	@property
 	def ending_soon(self):
 		"""2 hours before - used to send notifications about watched lots"""
+		if self.is_part_of_in_person_auction:
+			return False
 		warning_date = self.calculated_end - datetime.timedelta(hours=2)
 		if timezone.now() > warning_date:
 			return True
@@ -864,17 +1252,17 @@ class Lot(models.Model):
 		"""
 		If a lot is about to end in less than a minute, notification will be pushed to the channel
 		"""
-		warning_date = self.calculated_end - datetime.timedelta(minutes=1)
-		if timezone.now() > warning_date:
+		if self.minutes_to_end < 1:
 			return True
-		else:
-			return False
+		return False
 
 	@property
 	def within_dynamic_end_time(self):
 		"""
 		Return true if a lot will end in the next 15 minutes.  This is used to update the lot end time when last minute bids are placed.
 		"""
+		if self.is_part_of_in_person_auction:
+			return False
 		if self.minutes_to_end < 15:
 			return True
 		else:
@@ -998,11 +1386,27 @@ class Lot(models.Model):
 		return f'/lots/{self.lot_number}/{self.slug}/'
 
 	@property
+	def lot_number_display(self):
+		return self.custom_lot_number or self.lot_number
+
+	@property
+	def lot_link(self):
+		"""Simplest link to access this lot with"""
+		if self.custom_lot_number and self.auction:
+			return f"/auctions/{self.auction.slug}/lots/{self.custom_lot_number}/{self.slug}/"
+		return f'/lots/{self.lot_number}/{self.slug}/'
+
+	@property
+	def full_lot_link(self):
+		"""Full domain name URL for this lot"""
+		current_site = Site.objects.get_current()
+		return f"{current_site.domain}{self.lot_link}"
+
+	@property
 	def qr_code(self):
 		"""Full domain name URL used to for QR codes"""
-		current_site = Site.objects.get_current()
-		return f"{current_site.domain}/lots/{self.lot_number}/{self.slug}/?src=qr"
-		
+		return f"{self.full_lot_link}?src=qr"
+
 
 class Invoice(models.Model):
 	"""
@@ -1015,13 +1419,16 @@ class Invoice(models.Model):
 	auction = models.ForeignKey(Auction, blank=True, null=True, on_delete=models.SET_NULL)
 	lot = models.ForeignKey(Lot, blank=True, null=True, on_delete=models.SET_NULL)
 	lot.help_text = "not used"
+	# the user field is no longer used and can be removed in a future migration
 	user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+	auctiontos_user = models.ForeignKey(AuctionTOS, null=True, blank=True, on_delete=models.SET_NULL, related_name="auctiontos")
+	# the seller field is no longer used and can be removed in a future migration
 	seller = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="seller")
 	date = models.DateTimeField(auto_now_add=True, blank=True)
 	status = models.CharField(
 		max_length=20,
 		choices=(
-			('DRAFT', 'Draft'),
+			('DRAFT', 'Open'),
 			('UNPAID', "Waiting for payment"),
 			('PAID', "Paid"),
 		),
@@ -1030,6 +1437,7 @@ class Invoice(models.Model):
 	opened = models.BooleanField(default=False)
 	printed = models.BooleanField(default=False)
 	email_sent = models.BooleanField(default=False)
+	# this field should be removed in a future migration, although I think it may still be referenced in a few places
 	seller_email_sent = models.BooleanField(default=False)
 	adjustment_direction = models.CharField(
 		max_length=20,
@@ -1041,6 +1449,15 @@ class Invoice(models.Model):
 	)
 	adjustment = models.PositiveIntegerField(default = 0, validators=[MinValueValidator(0)])
 	adjustment_notes = models.CharField(max_length=150, default="Corrected")
+	no_login_link = models.CharField(max_length=255, default=uuid.uuid4, blank=True, verbose_name="This link will be emailed to the user, allowing them to view their invoice directly without logging in")
+	calculated_total = models.IntegerField(null=True, blank=True)
+	calculated_total.help_text = "This field is set automatically, you shouldn't need to manually change it"
+
+	@property
+	def recalculate(self):
+		"""Store the current net in the calculated_total field.  Call this every time you add or remove a lot from this invoice"""
+		self.calculated_total = self.rounded_net
+		self.save()
 
 	@property
 	def first_bid_payout(self):
@@ -1103,35 +1520,48 @@ class Invoice(models.Model):
 		return abs(self.rounded_net)
 
 	@property
+	def sold_lots_queryset(self):
+		"""Simple qs containing all lots SOLD by this user in this auction"""
+		return Lot.objects.filter(auctiontos_seller=self.auctiontos_user, auction=self.auction, is_deleted=False).order_by('lot_number')
+
+	@property
+	def bought_lots_queryset(self):
+		"""Simple qs containing all lots BOUGHT by this user in this auction"""
+		return Lot.objects.filter(auctiontos_winner=self.auctiontos_user, auction=self.auction, is_deleted=False).order_by('lot_number')
+
+	@property
 	def lots_sold(self):
 		"""Return number of lots the user attempted to sell in this invoice (unsold lots included)"""
-		return len(Lot.objects.filter(seller_invoice=self.pk))
+		return len(self.sold_lots_queryset)
 
 	@property
 	def lots_sold_successfully(self):
 		"""Return number of lots the user sold in this invoice (unsold lots not included)"""
-		return len(Lot.objects.filter(seller_invoice=self.pk, winner__isnull=False))
-
+		return len(self.sold_lots_queryset.filter(auctiontos_winner__isnull=False))
+	
+	@property
+	def unsold_lots(self):
+		"""Return number of lots the user did not sell. This may be simply lots whose winner has not been set yet."""
+		return len(self.sold_lots_queryset.exclude(auctiontos_winner__isnull=False))
 
 	@property
 	def total_sold(self):
 		"""Seller's cut of all lots sold"""
-		allSold = Lot.objects.filter(seller_invoice=self.pk)
 		total_sold = 0
-		for lot in allSold:
+		for lot in self.sold_lots_queryset:
 			total_sold += lot.your_cut
 		return total_sold
 
 	@property
 	def lots_bought(self):
 		"""Return number of lots the user bought in this invoice"""
-		return len(Lot.objects.filter(buyer_invoice=self.pk))
+		return len(self.bought_lots_queryset)
 
 	@property
 	def total_bought(self):
-		allSold = Lot.objects.filter(buyer_invoice=self.pk)
+		#print(self.bought_lots_queryset.annotate(total=Sum('winning_price'))['total'])
 		total_bought = 0
-		for lot in allSold:
+		for lot in self.bought_lots_queryset:
 			if lot.winning_price:
 				total_bought += lot.winning_price
 		return total_bought
@@ -1139,6 +1569,12 @@ class Invoice(models.Model):
 	@property
 	def location(self):
 		"""Pickup location selected by the user"""
+		if self.auctiontos_user:
+			return self.auctiontos_user.pickup_location
+		# try:
+		# 	return self.auctiontos_user.pickup_location
+		# except:
+		# 	pass
 		try:
 			return AuctionTOS.objects.get(user=self.user.pk, auction=self.auction.pk).pickup_location
 		except:
@@ -1146,7 +1582,13 @@ class Invoice(models.Model):
 
 	@property
 	def invoice_summary(self):
-		base = str(self.user.first_name)
+		try:
+			base = str(self.auctiontos_user.name)
+		except:
+			try:
+				base = str(self.user.first_name)
+			except:
+				base = "Unknown"
 		if self.user_should_be_paid:
 			base += " needs to be paid"
 		else:
@@ -1167,6 +1609,8 @@ class Invoice(models.Model):
 		return "Unknown"
 
 	def __str__(self):
+		if self.auctiontos_user:
+			return f"{self.auctiontos_user.name}'s invoice for {self.auctiontos_user.auction}"
 		if self.auction:
 			return f"{self.user}'s invoice for {self.auction}"
 		else:
@@ -1177,6 +1621,9 @@ class Invoice(models.Model):
 		#else:
 		#	base += " owes the club"
 		#return base + " $" + "%.2f" % self.absolute_amount
+	
+	def get_absolute_url(self):
+		return f'/invoices/{self.pk}/'
 
 class Bid(models.Model):
 	"""Bids apply to lots"""
@@ -1186,6 +1633,9 @@ class Bid(models.Model):
 	last_bid_time = models.DateTimeField(auto_now_add=True, blank=True)
 	amount = models.PositiveIntegerField(validators=[MinValueValidator(1)])
 	was_high_bid = models.BooleanField(default=False)
+	# note: there is not AuctionTOS field here - this means that bids can only be placed by Users
+	# AuctionTOSs CAN be declared the winners of lots without placing a single bid
+	# time will tell if this is a mistake or not
 
 	def __str__(self):
 		return str(self.user) + " bid " + str(self.amount) + " on lot " + str(self.lot_number)
@@ -1197,6 +1647,10 @@ class Watch(models.Model):
 	"""
 	user = models.ForeignKey(User, on_delete=models.CASCADE)
 	lot_number = models.ForeignKey(Lot, on_delete=models.CASCADE)
+	# not doing anything with createdon field right now
+	# but might be interesting to track at what point in the auction users watch lots
+	createdon = models.DateTimeField(auto_now_add=True, blank=True)
+
 	def __str__(self):
 		return str(self.user) + " watching " + str(self.lot_number)
 	class Meta:
@@ -1210,6 +1664,8 @@ class UserBan(models.Model):
 	"""
 	user = models.ForeignKey(User, on_delete=models.CASCADE)
 	banned_user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='banned_user')
+	createdon = models.DateTimeField(auto_now_add=True, blank=True)
+
 	def __str__(self):
 		return str(self.user) + " has banned " + str(self.banned_user)
 
@@ -1219,6 +1675,8 @@ class UserIgnoreCategory(models.Model):
 	"""
 	user = models.ForeignKey(User, on_delete=models.CASCADE)
 	category = models.ForeignKey(Category, on_delete=models.CASCADE)
+	createdon = models.DateTimeField(auto_now_add=True, blank=True)
+	
 	def __str__(self):
 		return str(self.user) + " hates " + str(self.category)
 
@@ -1231,6 +1689,8 @@ class PageView(models.Model):
 	date_end = models.DateTimeField(null=True,blank=True)
 	total_time = models.PositiveIntegerField(default=0)
 	total_time.help_text = 'The total time in seconds the user has spent on the lot page'
+	# kinda wonder if we should add a view counter here
+	# perhaps session id as an alternative to user, to track anonymous views
 
 	def __str__(self):
 		thing = self.lot_number
@@ -1271,8 +1731,8 @@ class UserData(models.Model):
 	local_distance.help_text = "miles, from your address"
 	email_me_about_new_lots_ship_to_location = models.BooleanField(default=True, blank=True, verbose_name="Email me about lots that can be shipped")
 	email_me_about_new_lots_ship_to_location.help_text = "Email me when new lots are created that can be shipped to my location"
-	paypal_email_address = models.CharField(max_length=200, blank=True, null=True)
-	paypal_email_address.help_text = "This is your Paypal address, if different from your email address"
+	paypal_email_address = models.CharField(max_length=200, blank=True, null=True, verbose_name="Paypal Address")
+	paypal_email_address.help_text = "If different from your email address"
 	unsubscribe_link = models.CharField(max_length=255, default=uuid.uuid4, blank=True)
 	has_unsubscribed = models.BooleanField(default=False, blank=True)
 	banned_from_chat_until = models.DateTimeField(null=True, blank=True)
@@ -1285,6 +1745,9 @@ class UserData(models.Model):
 	credit.help_text = "The total balance in your account"
 	show_ads = models.BooleanField(default=True, blank=True)
 	show_ads.help_text = "Ads have been disabled site-wide indefinitely, so this option doesn't do anything right now."
+	preferred_bidder_number = models.CharField(max_length=4, default="", blank=True)
+	timezone = models.CharField(max_length=100, null=True, blank=True)
+
 	# breederboard info
 	rank_unique_species = models.PositiveIntegerField(null=True, blank=True)
 	number_unique_species = models.PositiveIntegerField(null=True, blank=True)
@@ -1303,7 +1766,7 @@ class UserData(models.Model):
 	volume_percentile = models.PositiveIntegerField(null=True, blank=True)
 	has_bid = models.BooleanField(default=False)
 	has_used_proxy_bidding = models.BooleanField(default=False)
-
+	
 	def __str__(self):
 		return f"{self.user.username}'s data"
 
@@ -1612,26 +2075,68 @@ class FAQ(models.Model):
 	answer_rendered = RenderedMarkdownField(blank=True, null=True)
 	slug = AutoSlugField(populate_from='question', unique=True)
 	createdon = models.DateTimeField(auto_now_add=True)
+	include_in_auctiontos_confirm_email = models.BooleanField(default=False, blank=True)
 
 @receiver(pre_save, sender=Auction)
 def on_save_auction(sender, instance, **kwargs):
 	"""This is run when an auction is saved"""
+	if instance.date_end and instance.date_start:
+    	# if the user entered an end time that's after the start time
+		if instance.date_end < instance.date_start:
+			new_start = instance.date_end
+			instance.date_end = instance.date_start
+			instance.date_start = new_start
+	if not instance.date_end:
+		if instance.is_online:
+			instance.date_end = instance.date_start + datetime.timedelta(days=7)
 	if not instance.lot_submission_end_date:
-		instance.lot_submission_end_date = instance.date_end
+		if instance.is_online:
+			instance.lot_submission_end_date = instance.date_end
+		else:
+			instance.lot_submission_end_date = instance.date_start
 	if not instance.lot_submission_start_date:
-		instance.lot_submission_start_date = instance.date_start
+		if instance.is_online:
+			instance.lot_submission_start_date = instance.date_start
+		else:
+			instance.lot_submission_start_date = instance.date_start - datetime.timedelta(days=7)
+	# if the lot submission end date is badly set, fix it
+	if instance.is_online:
+		if instance.lot_submission_end_date > instance.date_end:
+			instance.lot_submission_end_date = instance.date_end
+		if instance.lot_submission_start_date > instance.date_start:
+			instance.lot_submission_start_date = instance.date_start
+	# I don't see a problem submitting lots after the auction has started,
+	# or any need to restrict when people add lots to an in-person auction
+	# So I am not putting any new validation checks here
+	
 	# if this is an existing auction
 	if instance.pk:
 		#print('updating date end on lots because this is an existing auction')
 		# update the date end for all lots associated with this auction
 		# note that we do NOT update the end time if there's a winner!
 		# This means you cannot reopen an auction simply by changing the date end
-		if instance.date_end + datetime.timedelta(minutes=60) < timezone.now():
-			# if we are at least 60 minutes before the auction end
-			lots = Lot.objects.filter(auction=instance.pk, winner__isnull=True, active=True)
-			for lot in lots:
-				lot.date_end = instance.date_end
-				lot.save()
+		if instance.date_end:
+			if instance.date_end + datetime.timedelta(minutes=60) < timezone.now():
+				# if we are at least 60 minutes before the auction end
+				lots = Lot.objects.filter(auction=instance.pk, winner__isnull=True, auctiontos_winner__isnull=True, active=True)
+				for lot in lots:
+					lot.date_end = instance.date_end
+					lot.save()
+	else:
+		# logic for new auctions goes here
+		pass
+	#print(instance.date_start)
+	if not instance.is_online:
+		# for in-person auctions, we need to add a single pickup location
+		# and create it if the user was dumb enough to delete it
+		in_person_location, created = PickupLocation.objects.get_or_create(
+			auction = instance,
+			is_default = True,
+			defaults={
+				'name': f'{instance}',
+				'pickup_time':instance.date_start,
+				},
+		)
 
 @receiver(pre_save, sender=UserData)
 @receiver(pre_save, sender=PickupLocation)
@@ -1667,10 +2172,31 @@ def update_lot_info(sender, instance, **kwargs):
 		# new lot?  set the default end date to the auction end
 		if instance.auction:
 			instance.date_end = instance.auction.date_end
-	userData, created = UserData.objects.get_or_create(
-		user = instance.user,
-		defaults={},
-		)
-	instance.latitude = userData.latitude
-	instance.longitude = userData.longitude
-	instance.address = userData.address
+	if instance.user:
+		userData, created = UserData.objects.get_or_create(
+			user = instance.user,
+			defaults={},
+			)
+		instance.latitude = userData.latitude
+		instance.longitude = userData.longitude
+		instance.address = userData.address
+	
+	# create an invoice for this seller/winner
+	if instance.auction and instance.auctiontos_seller:
+		invoice, created = Invoice.objects.get_or_create(auctiontos_user=instance.auctiontos_seller, auction=instance.auction, defaults={})
+	if instance.auction and instance.auctiontos_winner:
+		invoice, created = Invoice.objects.get_or_create(auctiontos_user=instance.auctiontos_winner, auction=instance.auction, defaults={})
+	# This is probably too slow; instead invoices are recalculated when viewing or exporting
+	# if invoice:
+	# 	if instance.winning_price:
+	# 		invoice.recalculate
+    	
+@receiver(user_logged_in)
+def user_logged_in_callback(sender, user, request, **kwargs):
+	"""When a user signs in, check for any AuctionTOS that have this users email but no user, and attach them to the user
+	This allows people to view invoices, leave feedback, get contact information for sellers, etc.
+	Important to have this be any user, not just new ones so that existing users can be signed up for in-person auctions"""
+	auctiontoss = AuctionTOS.objects.filter(user__isnull=True, email=user.email)
+	for auctiontos in auctiontoss:
+		auctiontos.user = user
+		auctiontos.save()

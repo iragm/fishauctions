@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% load render_table from django_tables2 %}
+{% load crispy_forms_tags %}
+{% block title %}Users for {{ auction }}{% endblock %}
+{% load static %}
+{% block content %}
+  {% include 'auction_ribbon.html' %}
+  <button class='btn btn-sm btn-success' 
+    hx-get="/api/auctiontos/{{auction.slug}}/"
+    hx-target="#modals-here"
+    hx-trigger="click"
+    _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">Add user</button>
+  <a href="{% url 'user_list' slug=auction.slug %}" class="btn btn-sm mt-2 mr-2 mb-2 btn-warning">Export CSV</a>
+  <form class="col-sm-12 mt-2">
+  {% crispy filter.form %}
+  </form>
+  {# Progress indicator #}
+  {# <div class="progress"> <div class="indeterminate"></div>      </div>  #}
+  {# The actual table #}
+  {% render_table table %}
+{% endblock %}
+{% block extra_js %}
+{% endblock %}

@@ -1,9 +1,9 @@
 from allauth.account.forms import SignupForm
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import Layout, Submit, HTML
-from crispy_forms.bootstrap import Div, Field
+from crispy_forms.bootstrap import Div, Field, PrependedAppendedText
 from django import forms
-from .models import Lot, Bid, Auction, User, UserData, Location, Club, PickupLocation, AuctionTOS, Invoice, Category, LotImage
+from .models import Lot, Bid, Auction, User, UserData, Location, Club, PickupLocation, AuctionTOS, Invoice, Category, LotImage, UserBan
 from django.forms import ModelForm, HiddenInput, RadioSelect, ModelChoiceField
 # from bootstrap_datepicker_plus import DateTimePickerInput
 from bootstrap_datepicker_plus.widgets import DateTimePickerInput # https://github.com/monim67/django-bootstrap-datepicker-plus/issues/66
@@ -12,9 +12,375 @@ from location_field.models.plain import PlainLocationField
 #from django.core.exceptions import ValidationError
 import datetime
 import pytz
+from django.core.validators import MinValueValidator
+from dal import autocomplete
+from django.urls import reverse
+from django.forms import BaseModelFormSet
 
 # class DateInput(forms.DateInput):
 #     input_type = 'datetime-local'
+
+class QuickAddLot(forms.ModelForm):
+    """Add a new lot by filling out only the most important fields"""
+    
+    class Meta:
+        model = Lot
+        fields = [
+            'custom_lot_number',
+            'lot_name',
+            'species_category',
+            'i_bred_this_fish',
+            'quantity',
+            'donation',
+        ]
+        widgets = {
+            'description': forms.Textarea(attrs={'rows':2}),
+        }
+    def __init__(self, *args, **kwargs):
+        self.auction = kwargs.pop('auction')
+        self.custom_lot_numbers_used = kwargs.pop('custom_lot_numbers_used')
+        # we need to work around the case where a user enters duplicate custom lot numbers
+        super().__init__(*args, **kwargs)
+        self.fields['custom_lot_number'].label = "Custom lot number"
+        self.fields['custom_lot_number'].help_text = ""
+        self.fields['lot_name'].label = "Lot name"
+        self.fields['lot_name'].help_text = ""
+        self.fields['species_category'].label = "Category"
+        self.fields['species_category'].help_text = ""
+        self.fields['i_bred_this_fish'].label = "Breeder points"
+        self.fields['i_bred_this_fish'].help_text = ""
+        self.fields['quantity'].help_text = ""
+        self.fields['donation'].help_text = ""
+        self.fields['species_category'].initial = Category.objects.get(pk=21) # uncategorized
+        self.fields['quantity'].initial = 1
+
+
+    def clean(self):
+        cleaned_data = super().clean()
+        custom_lot_number = cleaned_data.get("custom_lot_number")
+        if custom_lot_number:
+            existing_lots = Lot.objects.filter(custom_lot_number=custom_lot_number, auction=self.auction)
+            lot_number = cleaned_data.get("lot_number")
+            if lot_number:
+                existing_lots = existing_lots.exclude(lot_number=lot_number.pk)
+            else:
+                self.custom_lot_numbers_used.append(custom_lot_number)
+            if existing_lots.count() or self.custom_lot_numbers_used.count(custom_lot_number) > 1:
+                self.add_error('custom_lot_number', "This lot number is already in use")
+        return cleaned_data
+    
+    # def get_form_kwargs(self):
+    #     kwargs = super().get_form_kwargs()
+    #     kwargs['pk'] = self.kwargs['pk']
+    #     print(kwargs['auction'])
+    #     return kwargs
+
+class BaseLotFormSet(BaseModelFormSet):
+    """Validation for QuickAddLot
+    fixme - we need to pass auction here as a kwarg"""
+    def __init__(self, *args, **kwargs):
+        #self.auction = kwargs.pop('auction')
+        #print(self.auction)
+        super().__init__(*args, **kwargs)
+        self.queryset = Lot.objects.filter(auctiontos_seller__bidder_number="259")
+        return
+
+
+    def clean(self):
+        print('clean')
+        if any(self.errors):
+            return
+        issues = False
+        for form in self.forms:
+            if form.cleaned_data:
+                custom_lot_number = form.cleaned_data['custom_lot_number']
+                if custom_lot_number:
+                    print(custom_lot_number)
+                    other_lots = Lot.objects.filter(auction=self.auction, custom_lot_number=custom_lot_number).count()
+                    #if other_lots > 1:
+                    form.add_error('custom_lot_number', "Lot number already in use")
+                    issues = True
+
+                if issues:
+                    raise forms.ValidationError(
+                        'One or more lot numbers are already in use',
+                        code='lot_numbers'
+                    )
+
+class LotFormSetHelper(FormHelper):
+    def __init__(self, *args, **kwargs):
+        #self.auction = kwargs['auction']
+        super().__init__(*args, **kwargs)
+        self.form_method = 'post'
+        
+
+        # self.layout = Layout(
+        #     Div(
+        #         Div('custom_lot_number',css_class='col-sm-5',),
+        #         Div('lot_name',css_class='col-sm-7',),
+        #         css_class='row',
+        #     ),
+        #     Div(
+        #         Div('quantity',css_class='col-sm-4',),
+        #         Div('donation',css_class='col-sm-4',),
+        #         Div('i_bred_this_fish',css_class='col-sm-4',),
+        #         css_class='row',
+        #     ),
+        # )
+        #self.add_input(Submit('submit', 'Save'))
+        self.template = 'auctions/bulk_add_lots_row.html'
+
+class WinnerLot(forms.Form):
+    """Used to quickly set the winners on lots.  Note that this does not use forms.ModelForm"""
+    # note the use of CharFields here; if we use ChoiceFields instead, we get validation errors on submit
+    
+    lot = forms.CharField(
+        widget=autocomplete.Select2(
+        url='lot-autocomplete',
+        forward=['auction'],
+        attrs={'data-html': True,
+        'data-container-css-class': '',
+        })
+        )
+    winner = forms.CharField(
+        widget=autocomplete.Select2(
+        url='auctiontos-autocomplete',
+        forward=['auction','invoice'],
+        attrs={'data-html': True,
+        'data-container-css-class': '',
+        })
+        )
+    winning_price = forms.IntegerField(label="Sell price", min_value=0)
+    invoice = forms.CharField(label='Invoice', max_length=100)
+    auction = forms.CharField(label='Auction', max_length=100)
+
+    def __init__(self, auction, *args, **kwargs):
+        self.auction_pk = auction.pk
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_method = 'post'
+        self.helper.form_class = 'form'
+        self.helper.form_id = 'lot-form'
+        self.helper.form_tag = True
+        self.helper.layout = Layout(
+            'invoice',
+            'auction',
+            PrependedAppendedText('winning_price', '$', '.00' ),
+            'lot',
+            'winner',
+            # Div(
+            #     Div('lot',css_class='col-md-5',),
+            #     Div('winner',css_class='col-md-3',),
+            #     Div('winning_price',css_class='col-md-3',),
+            #     css_class='row',
+            # ),
+            Div(
+                HTML(f'<button type="submit" class="btn btn-success float-right">Save</button>'),
+                css_class='row',
+            )
+        )
+        self.fields['auction'].initial = self.auction_pk
+        self.fields['auction'].widget = HiddenInput()
+        self.fields['invoice'].widget = HiddenInput()
+        self.fields['invoice'].initial = "True"
+
+    class Meta:
+        fields = [
+            'auction',
+            'lot',
+            'winner',
+            'winning_price',
+        ]
+
+class EditLot(forms.ModelForm):
+    """Used for HTMX calls to update Lot.
+    For auction admins only.
+    Note that unlike AuctionTOS (which has a similar form), this form will ONLY update lots, not create them"""
+    def __init__(self, user, lot, auction, *args, **kwargs):
+        self.user = user
+        self.auction = auction
+        self.lot = lot
+        super().__init__(*args, **kwargs)
+        post_url = reverse("auctionlotadmin", kwargs={'pk': lot.pk})
+        self.helper = FormHelper()
+        self.helper.form_method = 'post'
+        self.helper.form_class = 'form'
+        self.helper.form_id = 'lot-form'
+        self.helper.form_tag = True
+        self.helper.layout = Layout(
+            'auction',
+            Div(
+                Div('custom_lot_number',css_class='col-sm-5',),
+                Div('banned',css_class='col-sm-7',),
+                css_class='row',
+            ),
+            'lot_name',
+            'species_category',
+            'description',
+            'auctiontos_seller',
+            Div(
+                Div('quantity',css_class='col-sm-4',),
+                Div('donation',css_class='col-sm-4',),
+                Div('i_bred_this_fish',css_class='col-sm-4',),
+                css_class='row',
+            ),
+            Div(
+                Div('auctiontos_winner',css_class='col-sm-8',),
+                Div('winning_price',css_class='col-sm-4',),
+                css_class='row',
+            ),
+            Div(
+                HTML('<button type="button" class="btn btn-danger float-left" onclick="closeModal()">Cancel</button>'),
+                HTML(f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Save</button>'),
+                css_class="modal-footer",
+            )
+        )
+        #self.fields['species_category'].queryset = auction.location_qs #PickupLocation.objects.filter(auction=self.auction).order_by('name')
+        self.fields['custom_lot_number'].initial = self.lot.custom_lot_number
+        self.fields['auction'].initial = self.lot.auction
+        self.fields['custom_lot_number'].help_text = "Leave blank to automatically generate"
+        self.fields['lot_name'].initial = self.lot.lot_name
+        self.fields['description'].initial = self.lot.lot_name
+        self.fields['auctiontos_seller'].initial = self.lot.auctiontos_seller
+        self.fields['quantity'].initial = self.lot.quantity
+        self.fields['donation'].initial = self.lot.donation
+        self.fields['winning_price'].initial = self.lot.winning_price
+        self.fields['species_category'].initial = self.lot.species_category
+        self.fields['i_bred_this_fish'].initial = self.lot.i_bred_this_fish
+        self.fields['banned'].initial = self.lot.banned
+        self.fields['auctiontos_winner'].initial = self.lot.auctiontos_winner
+        # and some housekeeping on labels and help text
+        self.fields['winning_price'].label = "Price"
+        self.fields['winning_price'].help_text = ""
+        self.fields['lot_name'].help_text = ""
+        self.fields['species_category'].help_text = ""
+        self.fields['auctiontos_winner'].label = "Winner"
+        winner_help_test = ""
+        if lot.high_bidder:
+            winner_help_test = f"High bidder: <span class='text-warning'>{lot.high_bidder}</span> Bid: <span class='text-warning'>${lot.high_bid}</span>"
+        self.fields['auctiontos_winner'].help_text = winner_help_test
+        self.fields['auctiontos_seller'].label = "Seller"
+        self.fields['auctiontos_seller'].help_text = ""
+        self.fields['quantity'].help_text = ""
+        self.fields['donation'].help_text = ""
+        self.fields['i_bred_this_fish'].label = "Breeder points"
+        self.fields['i_bred_this_fish'].help_text = ""
+        
+        # auctiontos_autocomplete_url = reverse("auctiontos-autocomplete", kwargs={'slug': self.auction.slug})
+        # self.fields['auctiontos_winner'].widget = autocomplete.ModelSelect2(url=auctiontos_autocomplete_url)
+        # self.fields['auctiontos_winner'].widget.choices = self.fields['auctiontos_winner'].choices
+        # #attrs = self.fields['auctiontos_winner'].widget.attrs
+        #subattrs = attrs.setdefault('settings_overrides', {})
+        #subattrs['url'] = "new/"
+        #self.fields['auctiontos_seller'].widget = autocomplete.ModelSelect2(url='/better/') #.attrs.update(url=auctiontos_autocomplete_url)
+        #self.fields['auctiontos_winner'].widget.attrs.update(url=auctiontos_autocomplete_url)
+
+        # self.fields['auctiontos_winner'].widget = autocomplete.ModelSelect2(url=auctiontos_autocomplete_url, attrs={
+        #     'forward': self.auction.slug,
+        # });
+
+    class Meta:
+        model = Lot
+        fields = [
+            'lot_name',
+            'custom_lot_number',
+            'auction',
+            'species_category',
+            'description',
+            'auctiontos_seller',
+            'quantity',
+            'donation',
+            'i_bred_this_fish',
+            'banned',
+            'auctiontos_winner',
+            'winning_price'
+        ]
+        widgets = {
+            'description': forms.Textarea(attrs={'rows':2}),
+            'auctiontos_seller': autocomplete.ModelSelect2(url='auctiontos-autocomplete', forward=['auction'], attrs={'data-html': True, 'data-container-css-class': ''}),
+            'auctiontos_winner': autocomplete.ModelSelect2(url='auctiontos-autocomplete', forward=['auction'], attrs={'data-html': True, 'data-container-css-class': ''}),
+            'auction': HiddenInput()
+        }
+
+    def clean(self):
+        cleaned_data = super().clean()
+        auction = cleaned_data.get("auction")
+        if auction:
+            if not auction.permission_check(self.user):
+                self.add_error('auction', "How did you even manage to change this field?")
+        custom_lot_number = cleaned_data.get("custom_lot_number")
+        if custom_lot_number:
+            other_lots = Lot.objects.filter(auction=auction, custom_lot_number=custom_lot_number).count()
+            if other_lots > 1:
+                self.add_error('custom_lot_number', "Lot number already in use")
+        if not cleaned_data.get("auctiontos_winner") and cleaned_data.get("winning_price"):
+            self.add_error('auctiontos_winner', "You need to set a winner")
+        if cleaned_data.get("auctiontos_winner") and not cleaned_data.get("winning_price"):
+            self.add_error('winning_price', "You need to set a sell price")
+        return cleaned_data
+
+class CreateEditAuctionTOS(forms.ModelForm):
+    """Used for HTMX calls to update AuctionTOS.  For auction admins only."""
+    def __init__(self, is_edit_form, auctiontos, auction, *args, **kwargs):
+        self.is_edit_form = is_edit_form
+        self.auction = auction
+        self.auctiontos = auctiontos
+        super().__init__(*args, **kwargs)
+        if self.is_edit_form:
+            post_url = f'/api/auctiontos/{self.auctiontos.pk}/'
+        else:
+            post_url = f'/api/auctiontos/{self.auction.slug}/'
+        self.helper = FormHelper()
+        self.helper.form_method = 'post'
+        self.helper.form_class = 'form'
+        self.helper.form_id = 'user-form'
+        self.helper.form_tag = True        
+        self.helper.layout = Layout(
+			'name',
+			'email',
+			'phone_number',
+			'address',
+            'pickup_location',
+            'is_admin',
+            Div(
+                HTML('<button type="button" class="btn btn-danger float-left" onclick="closeModal()">Cancel</button>'),
+                HTML(f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Save</button>'),
+                #Submit(, 'Save', css_class='btn-success'),
+                css_class="modal-footer",
+            )
+        )
+        self.fields['name'].required=True
+        self.fields['pickup_location'].queryset = auction.location_qs #PickupLocation.objects.filter(auction=self.auction).order_by('name')
+        if self.is_edit_form:
+            # hide fields if editing
+            self.fields['name'].initial = self.auctiontos.name
+            self.fields['email'].initial = self.auctiontos.email
+            try:
+                self.fields['phone_number'].initial = self.auctiontos.phone_as_string
+            except:
+                self.fields['phone_number'].initial = self.auctiontos.phone_number
+            self.fields['address'].initial = self.auctiontos.address
+            self.fields['pickup_location'].initial = self.auctiontos.pickup_location.pk
+            self.fields['is_admin'].initial = self.auctiontos.is_admin
+        else:
+            # special rule: default to the default location
+            self.fields['is_admin'].widget = HiddenInput()
+            if auction.location_qs.count() == 1:
+                self.fields['pickup_location'].initial = auction.location_qs.first()
+
+    class Meta:
+        model = AuctionTOS
+        fields = [
+            'pickup_location',
+            'is_admin',
+			'name',
+			'email',
+			'phone_number',
+			'address',
+        ]
+        widgets = {
+            'address': forms.Textarea(attrs={'rows':3})
+        }
 
 class CreateBid(forms.ModelForm):
     #amount = forms.IntegerField()
@@ -22,7 +388,7 @@ class CreateBid(forms.ModelForm):
         self.req = kwargs.pop('request', None)
         self.lot = kwargs.pop('lot', None)
         super().__init__(*args, **kwargs)
-        self.helper = FormHelper
+        self.helper = FormHelper()
         self.helper.form_method = 'post'
         self.helper.form_class = 'form-inline'
         self.helper.form_tag = True
@@ -55,7 +421,7 @@ class CreateBid(forms.ModelForm):
 class InvoiceUpdateForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.helper = FormHelper
+        self.helper = FormHelper()
         self.helper.form_method = 'post'
         self.helper.form_class = 'form-inline'
         self.helper.form_tag = True
@@ -77,24 +443,26 @@ class InvoiceUpdateForm(forms.ModelForm):
             'adjustment_notes',
         ]
 
-class AuctionTOSForm(forms.ModelForm):
+class AuctionJoin(forms.ModelForm):
     i_agree = forms.BooleanField(required = True)
 
     def __init__(self, user, auction, *args, **kwargs):
         self.user = user
         self.auction = auction
         super().__init__(*args, **kwargs)
-        self.helper = FormHelper
+        self.helper = FormHelper()
         self.helper.form_method = 'post'
         self.helper.form_class = 'form-inline'
+        self.helper.form_id = 'rule-form'
         self.helper.form_tag = True        
         self.helper.layout = Layout(
             'i_agree',
-            #'auction',
+            'time_spent_reading_rules',
             'pickup_location',
             Submit('submit', 'Confirm pickup location', css_class='agree_tos btn-success'),
         )
-        self.fields['pickup_location'].queryset = PickupLocation.objects.filter(auction=self.auction).order_by('name')
+        self.fields['pickup_location'].queryset = auction.location_qs #PickupLocation.objects.filter(auction=self.auction).order_by('name')
+        self.fields['time_spent_reading_rules'].widget = HiddenInput()
         if self.auction.multi_location:
             self.fields['i_agree'].initial = True
             self.fields['i_agree'].widget = HiddenInput()
@@ -102,17 +470,15 @@ class AuctionTOSForm(forms.ModelForm):
         else:
             # single location auction
             self.fields['pickup_location'].widget = HiddenInput()
-            if not self.auction.no_location:
-                self.fields['pickup_location'].initial = PickupLocation.objects.filter(auction=self.auction)[0]
-                self.fields['i_agree'].label = f"Yes, I will be at {PickupLocation.objects.filter(auction=self.auction)[0]}"
+            if self.auction.location_qs.count() == 1: # note: number_of_locations only gives you non-default locations
+                self.fields['pickup_location'].initial = auction.location_qs[0]
+                self.fields['i_agree'].label = f"Yes, I will be at {auction.location_qs[0]}"
 
     class Meta:
         model = AuctionTOS
         fields = [
-            'pickup_location',
+            'i_agree', 'pickup_location', 'time_spent_reading_rules',
         ]
-        exclude = ['user', 'auction',]
-
 
 class PickupLocationForm(forms.ModelForm):
     class Meta:
@@ -125,21 +491,24 @@ class PickupLocationForm(forms.ModelForm):
             'pickup_time': DateTimePickerInput(),
             'second_pickup_time': DateTimePickerInput(),
             'description': forms.Textarea,
+            'auction': forms.HiddenInput,
         }
-    def __init__(self, user, *args, **kwargs):
+    def __init__(self, user, auction, *args, **kwargs):
         timezone.activate(kwargs.pop('user_timezone'))
         super().__init__(*args, **kwargs)
         self.user = user
+        self.auction = auction
         self.fields['description'].widget.attrs = {'rows': 3}
-        if self.user.is_superuser:
-            self.fields['auction'].queryset = Auction.objects.filter(date_end__gte=timezone.now()).order_by('date_end')
-        else:
-            self.fields['auction'].queryset = Auction.objects.filter(created_by=self.user).filter(date_end__gte=timezone.now()).order_by('date_end')
-        self.helper = FormHelper
+        # if self.user.is_superuser:
+        #     self.fields['auction'].queryset = Auction.objects.filter(date_end__gte=timezone.now()).order_by('date_end')
+        # else:
+        #     self.fields['auction'].queryset = Auction.objects.filter(created_by=self.user).filter(date_end__gte=timezone.now()).order_by('date_end')
+        self.helper = FormHelper()
         self.helper.form_method = 'post'
         self.helper.form_id = 'location-form'
         self.helper.form_class = 'form'
         self.helper.form_tag = True
+        self.fields['auction'].initial = auction
         self.helper.layout = Layout(
             'name',
             'description',
@@ -169,10 +538,9 @@ class PickupLocationForm(forms.ModelForm):
         cleaned_data = super().clean()
         auction = cleaned_data.get("auction")
         if auction:
-            if (self.user.pk == auction.created_by.pk) or self.user.is_superuser:
-                pass
-            else:
+            if not auction.permission_check(self.user):
                 self.add_error('auction', "You can only add pickup locations to your own auctions")
+        return cleaned_data
 
 class CreateImageForm(forms.ModelForm):
     class Meta:
@@ -182,7 +550,7 @@ class CreateImageForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.helper = FormHelper
+        self.helper = FormHelper()
         self.helper.form_method = 'post'
         self.helper.form_id = 'auction-form'
         self.helper.form_class = 'form'
@@ -198,19 +566,194 @@ class CreateImageForm(forms.ModelForm):
         )
 
 class CreateAuctionForm(forms.ModelForm):
-    """Create or edit an auction"""
+    """Create a new an auction"""
+    
+    is_online = forms.BooleanField(required=False, widget=forms.HiddenInput())
+    cloned_from = forms.CharField(required=False, widget=forms.HiddenInput())
+    class Meta:
+        model = Auction
+        fields = ['date_start', 'title', ]
+        widgets = {
+            'date_start': DateTimePickerInput(),
+            #'is_online': HiddenInput(),
+        }
+    def __init__(self, *args, **kwargs):
+        self.user = kwargs.pop('user')
+        self.auction = None # this will be the instance of Auction to clone from
+        self.cloned_from = kwargs.pop('cloned_from') # slug only at this point
+        timezone.activate(kwargs.pop('user_timezone'))
+        super().__init__(*args, **kwargs)
+        
+        last_auction = "the last auction I created"
+        last_auction_tooltip = "You haven't created any auctions on this site yet. Once you have, you can easily reuse rules!"
+        last_auction_state = "disabled" # class of the copy my last auction button
+        self.auction = None
+        if self.cloned_from:
+            # did this user ACTUALLY create this auction, or are they stealing rules from someone else?
+            self.auction = Auction.objects.filter(slug=self.cloned_from).first()
+            if self.auction:
+                if not self.auction.permission_check(self.user):
+                    self.auction = None
+        if not self.auction:
+            # either ?copy was not set, or the user didn't make that auction - doesn't matter
+            self.auction = Auction.objects.filter(created_by=self.user).order_by('-date_end').first()
+            if self.auction:
+                if not self.auction.permission_check(self.user):
+                    self.auction = None
+        if self.auction:
+            self.fields['cloned_from'].initial = str(self.auction.slug)
+            last_auction = str(self.auction)
+            last_auction_tooltip = "Same rules and locations, but with new dates and users."
+            last_auction_state = ""
+
+        if self.instance.pk:
+            # editing existing auction
+            print("wait, no, we should never get here!!!")
+        self.helper = FormHelper()
+        self.helper.form_method = 'post'
+        self.helper.form_id = 'auction-form'
+        self.helper.form_class = 'form'
+        self.helper.form_tag = True
+        self.helper.layout = Layout(
+            'is_online',
+            'cloned_from',
+            'date_start',
+            'title',
+            HTML("<h5>What kind of auction is this?</h5>"),
+            Submit('online', 'Create online auction', css_id='auction-online', css_class='submit-button create-auction btn-success'),
+            Div(
+            HTML("<span class='text-muted'><ul><li>An auction where bidding ends automatically at a specified time.</li><li>Users will create an account on this site to join your auction.</li><li>Lots will be brought to one or more locations for exchange after bidding ends.</li></span>"),
+            ),
+            Submit('offline', value='Create in-person auction', css_id='auction-offline', css_class='submit-button btn-success'),
+            Div(
+            HTML("<span class='text-muted'><ul><li>You or your auctioneer will manually set the winners of lots.</li><li>Lots will be brought to a central location before bidding starts.</li></ul></span>"),
+            ),
+            Submit('clone', 'Copy ' + last_auction, css_id='auction-copy', css_class='submit-button btn-info ' + last_auction_state),
+            Div(
+            HTML("<span class='text-muted'><ul><li>"+ last_auction_tooltip + "</li></ul></span>"),
+            )
+        )
+
+class AuctionEditForm(forms.ModelForm):
+    """Make changes to an auction"""
+    user_cut = forms.IntegerField(required=False, help_text="This plus the club cut must be 100%")
+    
+    class Meta:
+        model = Auction
+        fields = ['notes', 'lot_entry_fee','unsold_lot_fee','winning_bid_percent_to_club', 'date_start', 'date_end', 'lot_submission_start_date',\
+            'lot_submission_end_date', 'sealed_bid','use_categories', 'promote_this_auction', 'max_lots_per_user', 'allow_additional_lots_as_donation', ]
+        widgets = {
+            'date_start': DateTimePickerInput(),
+            'date_end': DateTimePickerInput(),
+            'lot_submission_start_date': DateTimePickerInput(),
+            'lot_submission_end_date': DateTimePickerInput(),
+            'notes': forms.Textarea(),
+        }
+
+    def __init__(self, *args, **kwargs):
+        self.user = kwargs.pop('user')
+        self.cloned_from = kwargs.pop('cloned_from')
+        timezone.activate(kwargs.pop('user_timezone'))
+        super().__init__(*args, **kwargs)
+        self.fields['notes'].widget.attrs = {'rows': 10}
+        self.fields['winning_bid_percent_to_club'].label = "Club cut"
+        self.fields['date_start'].label = "Bidding opens"
+        self.fields['date_end'].label = "Bidding ends"
+        #self.fields['notes'].help_text = "Foo"
+        if self.instance.is_online:
+            self.fields['lot_submission_end_date'].help_text = "Recommended to be 1-24 hours before the end of your auction"
+        else:
+            self.fields['date_end'].help_text = "You should probably leave this blank so that you can manually set winners. This field has been indefinitely set to hidden - see https://github.com/iragm/fishauctions/issues/116"
+            self.fields['date_end'].widget=forms.HiddenInput()
+            self.fields['lot_submission_end_date'].help_text = 'This should probably be before bidding starts.  Admins (you) can add more lots at any time, this only restricts users.'
+        self.fields['user_cut'].initial = 100 - self.instance.winning_bid_percent_to_club
+        if self.instance.pk:
+            # editing existing auction
+            pass
+        else:
+            # this is a new auction
+            if self.cloned_from:
+                try:
+                    originalAuction = Auction.objects.get(slug=self.cloned_from)
+                    if (originalAuction.created_by.pk == self.user.pk) or self.user.is_superuser:
+                        # you can only clone your own auctions
+                        cloneFields = ['title', 'notes', 'lot_entry_fee','unsold_lot_fee','winning_bid_percent_to_club', 'first_bid_payout', 'sealed_bid','promote_this_auction', 'max_lots_per_user', 'allow_additional_lots_as_donation','make_stats_public']
+                        for field in cloneFields:
+                            self.fields[field].initial = getattr(originalAuction, field)
+                        self.fields['cloned_from'].initial = self.cloned_from
+                except Exception as e:
+                    pass
+            #try:
+            #    lastAuction = Auction.objects.filter(created_by=self.user).order_by('-date_end')[0]
+            #    self.fields['notes'].initial = "These rules are unchanged from the last auction\n\n" + lastAuction.notes
+            #except Exception as e:
+                # no old auction
+            else:
+                self.fields['notes'].initial = "## General information\n\nYou should remove this line and edit this section to suit your auction.  Use the formatting here as an example.\n\n## Prohibited items\n- You cannot sell any fish or plants banned by state law.\n- You cannot sell large hardware items such as tanks.\n\n## Rules\n- All lots must be properly bagged.  No leaking bags!\n- You do not need to be a club member to buy or sell lots."
+        self.helper = FormHelper()
+        self.helper.form_method = 'post'
+        self.helper.form_id = 'auction-form'
+        self.helper.form_class = 'form'
+        self.helper.form_tag = True
+        self.helper.layout = Layout(
+            'notes',
+            Div(
+                PrependedAppendedText('unsold_lot_fee', '$', '.00',wrapper_class='col-lg-3', ),
+                PrependedAppendedText('lot_entry_fee', '$', '.00',wrapper_class='col-lg-3', ),
+                PrependedAppendedText('winning_bid_percent_to_club', '', '%',wrapper_class='col-lg-3', ),
+                PrependedAppendedText('user_cut', '', '%',wrapper_class='col-lg-3', ),
+                css_class='row',
+            ),
+            Div(
+                Div('lot_submission_start_date',css_class='col-md-4',),
+                Div('date_start',css_class='col-md-4',label="Bidding opens",),
+                Div('lot_submission_end_date',css_class='col-md-4',),
+                #Div(HTML("<span class='text-warning'><small>Hello</small></span>"),css_class="row"),
+                Div('date_end',css_class='col-md-6',),
+                css_class='row',
+            ),
+            Div(
+                Div('max_lots_per_user', css_class='col-md-4',),
+                Div('allow_additional_lots_as_donation', css_class='col-md-4',),
+                css_class='row',
+            ),
+            Div(
+                Div('use_categories',css_class='col-md-4',),
+                Div('promote_this_auction', css_class='col-md-4',),
+                css_class='row',
+            ),
+            Submit('submit', 'Save', css_class='create-update-auction btn-success'),
+        )
+
+    # as it stands right now, we are not cleaning this at all
+    # we are relying on the auction save receiver models.on_save_auction to clean anything up
+    # def clean(self):
+    #     cleaned_data = super().clean()
+    #     date_end = cleaned_data.get("date_end")
+    #     date_start = cleaned_data.get("date_start")
+    #     lot_submission_end_date = cleaned_data.get("lot_submission_end_date")
+    #     if date_end < timezone.now() + datetime.timedelta(hours=2):
+    #         self.add_error('date_end', "The end date can't be in the past")
+    #     if date_end < date_start:
+    #         self.add_error('date_end', "The end date can't be before the start date")
+    #     if lot_submission_end_date:
+    #         if lot_submission_end_date > date_end:
+    #             self.add_error('lot_submission_end_date', "Submission should end before the auction ends")
+    #     return cleaned_data
+
+class OldCreateAuctionForm(forms.ModelForm):
+    """Create a new an auction"""
     
     cloned_from = forms.CharField(required=False, widget=forms.HiddenInput())
 
     class Meta:
         model = Auction
         fields = ['title', 'notes', 'lot_entry_fee','unsold_lot_fee','winning_bid_percent_to_club', 'date_start', 'date_end', 'lot_submission_start_date',\
-            'lot_submission_end_date', 'first_bid_payout', 'sealed_bid','promote_this_auction', 'max_lots_per_user', 'allow_additional_lots_as_donation','make_stats_public']
-        exclude = ['slug', 'watch_warning_email_sent', 'invoiced', 'created_by', 'code_to_add_lots', \
+            'lot_submission_end_date', 'sealed_bid','promote_this_auction', 'max_lots_per_user', 'allow_additional_lots_as_donation',]
+        exclude = ['slug', 'first_bid_payout', 'watch_warning_email_sent', 'invoiced', 'created_by', 'code_to_add_lots', \
             'pickup_location', 'pickup_location_map', 'pickup_time', 'alternate_pickup_location', 'alternate_pickup_location_map',\
-            'alternate_pickup_time','location', ]
+            'alternate_pickup_time','location', 'make_stats_public', ]
         widgets = {
-            'cloned_from': forms.HiddenInput(),
             'date_start': DateTimePickerInput(),
             'date_end': DateTimePickerInput(),
             'lot_submission_start_date': DateTimePickerInput(),
@@ -246,7 +789,7 @@ class CreateAuctionForm(forms.ModelForm):
                 # no old auction
             else:
                 self.fields['notes'].initial = "## General information\n\nYou should remove this line and edit this section to suit your auction.  Use the formatting here as an example.\n\n## Prohibited items\n- You cannot sell any fish or plants banned by state law.\n- You cannot sell large hardware items such as tanks.\n\n## Rules\n- All lots must be properly bagged.  No leaking bags!\n- You do not need to be a club member to buy or sell lots."
-        self.helper = FormHelper
+        self.helper = FormHelper()
         self.helper.form_method = 'post'
         self.helper.form_id = 'auction-form'
         self.helper.form_class = 'form'
@@ -271,11 +814,11 @@ class CreateAuctionForm(forms.ModelForm):
             Div(
                 Div('max_lots_per_user', css_class='col-md-4',),
                 Div('allow_additional_lots_as_donation', css_class='col-md-4',),
-                Div('first_bid_payout',css_class='col-md-4',),
+                # Div('first_bid_payout',css_class='col-md-4',),
                 css_class='row',
             ),
             Div(
-                Div('make_stats_public', css_class='col-md-4',),
+                # Div('make_stats_public', css_class='col-md-4',),
                 Div('sealed_bid', css_class='col-md-4',),
                 Div('promote_this_auction', css_class='col-md-4',),
                 css_class='row',
@@ -296,6 +839,7 @@ class CreateAuctionForm(forms.ModelForm):
             if lot_submission_end_date > date_end:
                 self.add_error('lot_submission_end_date', "Submission should end before the auction ends")
         return cleaned_data
+
 
 class CreateLotForm(forms.ModelForm):
     """Form for creating or updating of lots"""
@@ -400,7 +944,7 @@ class CreateLotForm(forms.ModelForm):
                     self.fields['auction'].initial = lastUserAuction
             except:
                 pass
-        self.helper = FormHelper
+        self.helper = FormHelper()
         self.helper.form_method = 'post'
         self.helper.form_id = 'lot-form'
         self.helper.form_class = 'form'
@@ -500,21 +1044,26 @@ class CreateLotForm(forms.ModelForm):
                 self.add_error('auction', "Select an auction")
         else:
             # set auction to empty
-            self.cleaned_data['auction'] = None
+            cleaned_data['auction'] = None
             auction = None
             if not self.user.userdata.can_submit_standalone_lots:
-                self.add_error('part_of_auction', "This feature will be available starting in April 2021")
+                self.add_error('part_of_auction', "This feature is not enabled for your account")
             if not cleaned_data.get("shipping_locations") and not cleaned_data.get("local_pickup"):
                 self.add_error('show_payment_pickup_info', "Select local pickup and/or a location to ship to")
             if not cleaned_data.get("payment_cash") and not cleaned_data.get("payment_paypal") and not cleaned_data.get("payment_other"):
                 self.add_error('show_payment_pickup_info', "Select at least one payment method")
             if cleaned_data.get("payment_other") and not cleaned_data.get("payment_other_method"):
                 self.add_error('payment_other_method', "Enter your payment method")
-
         if auction:
+            auctiontos = AuctionTOS.objects.filter(user=self.user.pk, auction=auction).first()
+            if not auctiontos:
+                self.add_error('auction', "You need to join this auction before you can add lots")
+            else:
+                if not auctiontos.selling_allowed:
+                    self.add_error('auction', "You don't have permission to sell lots in this auction")
             try:
-                ban = UserBan.objects.get(banned_user=self.user.pk, user=lot.auction.created_by.pk)
-                self.add_error('auction', "The owner of this auction has banned you from submitting lots")
+                ban = UserBan.objects.get(banned_user=self.user.pk, user=auction.created_by.pk)
+                self.add_error('auction', "You've been banned from selling lots in this auction")
             except:
                 pass
             #thisAuction = Auction.objects.get(pk=auction)
@@ -538,7 +1087,7 @@ class CreateLotForm(forms.ModelForm):
                 self.add_error('description', "You've already added a lot exactly like this.  If you mean to submit another lot, change something here so it's unique")
         except:
             pass
-        return self.cleaned_data
+        return cleaned_data
 
         
 class CustomSignupForm(SignupForm):
@@ -642,7 +1191,7 @@ class ChangeUserPreferencesForm(forms.ModelForm):
         )
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.helper = FormHelper
+        self.helper = FormHelper()
         self.helper.form_method = 'post'
         self.helper.form_id = 'user-form'
         self.helper.form_class = 'form'

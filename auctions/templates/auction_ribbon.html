@@ -1,0 +1,34 @@
+{# this is the tabs that are shown on many auction pages #}
+<h3>{{auction}}</h3>
+<small><span class='text-muted'>An {{auction.auction_type_as_str}}, created by {{ auction.created_by }}{% if request.user.is_authenticated %}: {{ auction.created_by.email|urlize }}{% endif %}</span></small>
+{% if view.is_auction_admin %}
+<ul class="nav nav-tabs">
+    <li class="nav-item">
+      <a class="nav-link {% if active_tab == 'main'%}active{% endif %}" data-bs-toggle="tab" href="/auctions/{{auction.slug}}/">Main</a>
+    </li>
+    <li class="nav-item">
+      <a class="nav-link {% if active_tab == 'users'%}active{% endif %}" data-bs-toggle="tab" href="/auctions/{{auction.slug}}/users">Users</a>
+    </li>
+        <li class="nav-item">
+      <a class="nav-link {% if active_tab == 'lots'%}active{% endif %}" data-bs-toggle="tab" href="/auctions/{{auction.slug}}/lots">Lots</a>
+    </li>
+    <li class="nav-item">
+      <a class="nav-link {% if active_tab == 'invoices'%}active{% endif %}" data-bs-toggle="tab" href="/auctions/{{auction.slug}}/invoices">Invoices</a>
+    </li>
+    <li class="nav-item dropdown">
+        <a class="nav-link dropdown-toggle" data-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">Advanced</a>
+        <div class="dropdown-menu">
+          <!-- <h6 class="dropdown-header">Rules and locations</h6> -->
+          <a class="dropdown-item" href="/auctions/{{auction.slug}}/edit">Rules</a>
+          <a class="dropdown-item" href="/auctions/{{auction.slug}}/locations">Locations</a>
+          <!-- <div class="dropdown-divider"></div> -->
+          <!-- <h6 class="dropdown-header">Other</h6> -->
+          <a class="dropdown-item" href="{% url 'auction_lot_winners' slug=auction.slug %}">Set lot winners</a>
+          <a class="dropdown-item" href="/auctions/{{auction.slug}}/chat/">Chat messages</a>
+          <a class="dropdown-item" href="/auctions/new?copy={{auction.slug}}">Copy to new auction</a>
+          <a class="dropdown-item" href="/auctions/{{auction.slug}}/stats/">Stats</a>
+          <a class="dropdown-item" href="/auctions/{{auction.slug}}/delete/">Delete auction</a>
+        </div>
+      </li>
+</ul>
+{% endif %}

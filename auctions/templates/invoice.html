@@ -2,7 +2,6 @@
 {% load crispy_forms_tags %}
 {% block title %} Invoice for {{ invoice.label }} {% endblock %}
 {% load static %}
-{% block content %}
 {% block extra_js %}
 {% if actually_sold and not invoice.printed %}
 <script>
@@ -29,13 +28,11 @@ function payinvoice(id, status) {
   }
   </script>
   {% endblock %}
-<div class="container mt-5 mb-5">
-    <div class="row">
-        <div class="col-md-10 offset-md1">
-            <h1>{% if exampleMode %}Example{%else%}{{ invoice.user.first_name }} {{ invoice.user.last_name }}{% endif %}</h1>
+  {% block content %}{% if show_links %}{% include 'auction_ribbon.html' %}{% endif %}
+  <h1>{% if exampleMode %}Example{%else%}{% if invoice.auctinotos_user.name %}{{ invoice.auctinotos_user.name }}{% else %}{{ invoice.user.first_name }} {{ invoice.user.last_name }}{% endif %}{% endif %}</h1>
             {% if location == 'No location selected' %}{% else %}<h5>{{location}}{% if exampleMode %}<span class='text-muted'> This is the pickup location selected by the user</span>{%endif%}</h5>{%endif%}<br>
             {% if show_links %}
-            {% if request.user.pk == invoice.auction.created_by.pk or request.user.is_superuser or request.user.pk == invoice.seller.pk %}
+            {% if is_admin %}
               <div class="btn-group" role="group" aria-label="Invoice status selection">
                 <button type="button" id="{{invoice.pk}}_DRAFT" onclick="payinvoice({{ invoice.pk }}, 'DRAFT');" class="btn {% if invoice.status == 'DRAFT'%}draft btn-primary{% else %}btn-secondary{% endif %}">Draft</button>
                 <button type="button" id="{{invoice.pk}}_UNPAID" onclick="payinvoice({{ invoice.pk }}, 'UNPAID');" class="btn {% if invoice.status == 'UNPAID'%}btn-primary unpaid{% else %}btn-secondary{% endif %}">Ready</button>
@@ -43,15 +40,20 @@ function payinvoice(id, status) {
               </div>
             {%endif%}
             <a href="{{ request.path }}?print" class="btn btn-primary ml-1 mr-1 mt-1">Print invoice</a>
-            {% if actually_sold %}<a href="{{ request.path }}labels" id="printomatic-9000" class="btn btn-primary ml-1 mr-1 mt-1">Print labels for your lots</a>{% endif %}
+            {% if actually_sold and not exampleMode %}<a href="{{ request.path }}labels" id="printomatic-9000" class="btn btn-primary ml-1 mr-1 mt-1">Print labels for your lots</a>{% endif %}
             <a href="/feedback/" class="btn btn-primary ml-1 mr-1 mt-1">Leave feedback</a>
-            <a href="/blog/transporting-fish/" class="btn btn-primary ml-1 mr-1 mt-1">Info on transporting fish</a></a><br>
+            {% if invoice.auction %}{% if invoice.auction.use_categories %}<a href="/blog/transporting-fish/" class="btn btn-primary ml-1 mr-1 mt-1">Info on transporting fish</a></a>{% endif %}{% endif %}
             {% if location_map %}<a href="{{location_map}}" class="btn btn-primary ml-1 mr-1 mt-1">Get directions</a>{% endif %}
-            {% if request.user.pk == invoice.auction.created_by.pk or request.user.is_superuser or request.user.pk == invoice.seller.pk %}
+            {% if is_admin %}
             {% if invoice.status == "DRAFT" and not invoice.email_sent %}
-            <br><span class='text-muted'>Marking this invoice ready for payment will send a notification email to {{ invoice.user }}</span><br>
+              {% if invoice.auctiontos_user %}
+                {% if invoice.auctiontos_user.email %}
+                  <br><span class='text-muted'>Marking this invoice ready for payment will send a notification email to {{ invoice.auctiontos_user.name }}</span><br>
+                {% else %}
+                  <br><span class='text-danger'>{{ invoice.auctiontos_user.name }} does not have an email address set!</span><br>
+                {%endif%}
+              {%endif%}
             {%endif%}
-
             {% if show_links and invoice.status == "DRAFT" %}
               <br><h5>Adjust this invoice</h5>
               {% crispy form form.helper %}
@@ -68,11 +70,11 @@ function payinvoice(id, status) {
             {% endif %}
             
             {% if auction %}
-              {% if actually_sold %}
+              {% if actually_sold and not exampleMode %}
               <div>{% if show_links %}Either <a href="{{ request.path }}labels">print your labels</a> or <span class='text-danger'>write{% else %}<span>Write{% endif %} the lot number and the name of the winner {% if invoice.auction.multi_location %} and the destination location {% endif %} on each lot. </span></div>
               {% endif %}
             {% endif %}
-            {% if show_links %}{%if contact_email %}<div>Questions?  Email: <a href='mailto:{{ contact_email }}'>{{ contact_email }}</a><br>{% endif %}</div>{% endif %}
+            {% if show_links %}{%if contact_email and not exampleMode %}<div>Questions?  Email: <a href='mailto:{{ contact_email }}'>{{ contact_email }}</a><br>{% endif %}</div>{% endif %}
             <table class="table">
               {% if invoice.seller %}
               <tr>
@@ -91,10 +93,19 @@ function payinvoice(id, status) {
                   Anytown, USA 90210<br>
                   davidbanks@example.com<br>
                   123-456-7890                
-                {%else%} {{ invoice.user.first_name }} {{ invoice.user.last_name }}<br>
+                {%else%} 
+                  {% if invoice.auctiontos_user %}
+                  {{ invoice.auctiontos_user.name|default:""}}<br>
+                  {% if invoice.auctiontos_user.address %}{{ invoice.auctiontos_user.address| linebreaksbr}}<br>{% endif %}
+                  {{ invoice.auctiontos_user.email|default:"" }}<br>
+                  {{ invoice.auctiontos_user.phone_as_string|default:"" }}<br>
+                  {% else %}
+                  {% if invoice.user %}{{ invoice.user.first_name }} {{ invoice.user.last_name }}<br>
                   {{ userdata.address|linebreaksbr }}<br>
                   {{ invoice.user.email }}<br>
-                  {% if userdata.phone_number %}{{ userdata.phone_number }}{% endif %}
+                  {% if userdata.phone_number %}{{ userdata.phone_number|default:"" }}{% endif %}
+                  {% endif %}
+                  {% endif %}
                 {% endif %}
               </td>
             </tr>
@@ -171,13 +182,13 @@ function payinvoice(id, status) {
                   
                  {% for lot in sold %}
                   <tr>
-                    <td>{{ lot.lot_number }}</td>
-                    <td>{% if show_links %}<a href="/lots/{{lot.pk}}/{{lot.slug}}/">{{ lot.lot_name }}</a>{% else %}{{ lot.lot_name }}{% endif%}</td>
-                    <td>{% if lot.winning_price %} {% if exampleMode %}Real name of winner here{%else%}{{ lot.winner.first_name }} {{ lot.winner.last_name }}{% endif %} {% else %} Not sold {% endif %}</td>
+                    <td>{{ lot.lot_number_display }}</td>
+                    <td>{% if show_links %}<a href="{{lot.lot_link}}">{{ lot.lot_name }}</a>{% else %}{{ lot.lot_name }}{% endif%}</td>
+                    <td>{% if lot.winning_price %} {% if exampleMode %}Real name of winner here{%else%}{{ lot.auctiontos_winner }}{% endif %} {% else %} Not sold {% endif %}</td>
                     {% if auction.multi_location %}
-                    <td>{% if lot.winner %}{{ lot.winner_location }}{% endif %}</td>
+                    <td>{% if lot.auctiontos_winner %}{{ lot.winner_location }}{% endif %}</td>
                     {% endif %}
-                    <td>{% if lot.winning_price %} ${{ lot.winning_price|floatformat:2 }} {% else %} {% if lot.banned %}Banned{% else %}Not sold{% endif %} {% endif %}</td>
+                    <td>{% if lot.winning_price %} ${{ lot.winning_price|floatformat:2 }} {% else %} {% if lot.banned %}Removed{% else %}Not sold{% endif %} {% endif %}</td>
                     <td>${{ lot.club_cut|floatformat:2 }}{% if lot.promoted %} (promoted){% endif %}</td>
                     <td>{% if lot.donation %}Donation{% else %}${{ lot.your_cut|floatformat:2 }}{% endif %}</td>
                   </tr>
@@ -204,10 +215,10 @@ function payinvoice(id, status) {
                 </thead>
                 <tbody>
                   
-                 {% for lot in bought%}
+                 {% for lot in bought %}
                   <tr>
-                    <td>{{ lot.lot_number }}</td>
-                    <td>{% if show_links %}<a href="/lots/{{lot.pk}}/{{lot.slug}}/">{{ lot.lot_name }}</a>{% else %}{{ lot.lot_name }}{% endif %}</td>
+                    <td>{{ lot.lot_number_display }}</td>
+                    <td>{% if show_links %}<a href="{{lot.lot_link}}">{{ lot.lot_name }}</a>{% else %}{{ lot.lot_name }}{% endif %}</td>
                     {% if auction.multi_location %}
                     <td>{{ lot.location }}</td>
                     {% endif %}
@@ -222,10 +233,6 @@ function payinvoice(id, status) {
             {% if request.user.is_superuser and show_links %}
             <a href="/admin/auctions/invoice/{{invoice.pk}}/change/" class="btn btn-danger active">Admin</a>
             {% endif %}
-        </div>
-    </div>
-</div>  
-
 {% endblock %}
 
 
