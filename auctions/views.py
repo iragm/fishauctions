@@ -1364,7 +1364,7 @@ class ViewLot(DetailView):
         return super().dispatch(request, *args, **kwargs)
 
     def get_object(self):
-        obj = self.get_queryset().get()
+        obj = self.get_queryset().first()
         if not obj:
             raise Http404
         return obj
