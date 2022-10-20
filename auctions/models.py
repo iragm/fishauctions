@@ -522,7 +522,7 @@ class Auction(models.Model):
 			return True
 	@property
 	def paypal_invoices(self):
-		return Invoice.objects.filter(auction=self, status="UNPAID")
+		return Invoice.objects.filter(auction=self).exclude(status="PAID")
 
 	@property
 	def paypal_invoice_chunks(self):
