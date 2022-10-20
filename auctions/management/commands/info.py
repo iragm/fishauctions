@@ -17,6 +17,11 @@ from collections import Counter
 class Command(BaseCommand):
     help = 'Just a scratchpad to do things'
     def handle(self, *args, **options):
+        auctiontos = AuctionTOS.objects.filter(auction__slug="norwalk-fall-auction")
+        for tos in auctiontos:
+            if tos.is_admin:
+                print(tos.name)
+        
         # # fix auctiontos_user on invoices:
         # invoices = Invoice.objects.filter(auctiontos_user__isnull=True, auction__isnull=False, user__isnull=False)
         # for invoice in invoices:

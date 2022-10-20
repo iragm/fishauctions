@@ -454,9 +454,10 @@ def no_lot_auctions(request):
                     result = f"Lot submission is not yet open for {auction}"
                 else:
                     if auction.max_lots_per_user:
-                        lot_list = Lot.objects.filter(user=request.user, banned=False, deactivated=False, auction=auction, is_deleted=False).count()
+                        lot_list = Lot.objects.filter(user=request.user, banned=False, deactivated=False, auction=auction, is_deleted=False)
                         if auction.allow_additional_lots_as_donation:
                             lot_list = lot_list.filter(donation=False)
+                        lot_list = lot_list.count()
                         result = f"You've added {lot_list} of {auction.max_lots_per_user} lots to {auction}"
             if result:
                 result += "<br>"
@@ -1729,7 +1730,7 @@ class LotCreateView(LotValidation, CreateView):
         lot = form.save(commit=False)
         if lot.auction and lot.auctiontos_seller:
             invoice, created = Invoice.objects.get_or_create(auctiontos_user=lot.auctiontos_seller, auction=lot.auction, defaults={})
-        return super().form_valid(self, form, **kwargs)
+        return super().form_valid(form, **kwargs)
 
 class LotUpdate(LotValidation, UpdateView):
     """
@@ -3033,21 +3034,22 @@ class UnsubscribeView(TemplateView):
 class AuctionChartView(View):
     """GET methods for generating auction charts"""
     def get(self, request, *args, **kwargs):
+        auction = None
         data = request.GET.copy()
         try:
-            auction = slug=data['auction']
+            slug=data['auction']
         except:
             return HttpResponse('auction is required')
         if auction == "none":
-            pass
+            auction = None
         else:
-            try:
-                auction = Auction.objects.get(slug=auction)
-            except:
+            auction = Auction.objects.filter(slug=slug).first()
+            if not auction:
                 return HttpResponse(f'auction {auction} not found')
-        if not auction.permission_check(request.user) or auction.make_stats_public:
-            messages.error(request, "Your account doesn't have permission to view this page")
-            return redirect('/')
+        if auction:
+            if not (auction.permission_check(request.user) or auction.make_stats_public):
+                messages.error(request, "Your account doesn't have permission to view this page")
+                return redirect('/')
         try:
             chart = data['chart']
         except:
@@ -3178,7 +3180,7 @@ class AuctionChartView(View):
             bids = []
             lots = []
             volumes = []
-            if auction == "none":
+            if not auction:
                 # public view to get data for all auctions
                 categories = Category.objects.all().annotate(num_lots=Count('lot')).order_by('-num_lots')
                 allLots = len(Lot.objects.exclude(auction__promote_this_auction=False))
@@ -3194,7 +3196,7 @@ class AuctionChartView(View):
             if allLots:
                 for category in categories[:top]:
                     labels.append(str(category))
-                    if auction == "none":
+                    if not auction:
                         thisViews = len(PageView.objects.filter(lot_number__species_category=category))
                         thisBids = len(Bid.objects.filter(lot_number__species_category=category))
                         thisVolume = Lot.objects.exclude(auction__promote_this_auction=False).filter(species_category=category).aggregate(Sum('winning_price'))['winning_price__sum']

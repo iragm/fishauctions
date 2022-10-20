@@ -1288,25 +1288,34 @@ class Lot(models.Model):
 			return self.reserve_price
 
 	@property
+	def bids(self):
+		"""Get all bids for this lot, highest bid first"""
+		bids = Bid.objects.filter(lot_number=self.lot_number, last_bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount', 'last_bid_time')
+		return bids
+
+	@property
 	def high_bid(self):
 		"""returns the high bid amount for this lot"""
 		if self.winning_price:
 			return self.winning_price
 		if self.sealed_bid:
 			try:
-				bids = Bid.objects.filter(lot_number=self.lot_number, last_bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount', 'last_bid_time')
-				return bids[0].amount
+				bids = self.bids
+				return self.bids[0].amount
 			except:
 				return 0
 		else:
 			try:
-				allBids = Bid.objects.filter(lot_number=self.lot_number, last_bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount', 'last_bid_time')[:2]
+				bids = self.bids
 				# highest bid is the winner, but the second highest determines the price
-				# $1 more than the second highest bid
-				if allBids[0].amount == allBids[1].amount:
-					return allBids[0].amount
+				if bids[0].amount == bids[1].amount:
+					return bids[0].amount
 				else:
-					bidPrice = allBids[1].amount + 1
+					# this is the old method: 1 dollar more than the second highest bidder
+					# this would cause an issue if someone was tied for high bidder, and increased their proxy bid
+					#bidPrice = allBids[1].amount + 1
+					# instead, we'll just return the second highest bid in the case of a
+					bidPrice = bids[1].amount
 				return bidPrice
 			except:
 				#print("no bids for this item")
@@ -1318,8 +1327,8 @@ class Lot(models.Model):
 		if self.banned:
 			return False
 		try:
-			allBids = Bid.objects.filter(lot_number=self.lot_number, last_bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount', 'last_bid_time')[:2]
-			return allBids[0].user
+			bids = self.bids
+			return bids[0].user
 		except:
 			return False
 
@@ -2129,14 +2138,17 @@ def on_save_auction(sender, instance, **kwargs):
 	if not instance.is_online:
 		# for in-person auctions, we need to add a single pickup location
 		# and create it if the user was dumb enough to delete it
-		in_person_location, created = PickupLocation.objects.get_or_create(
-			auction = instance,
-			is_default = True,
-			defaults={
-				'name': f'{instance}',
-				'pickup_time':instance.date_start,
-				},
-		)
+		try:
+			in_person_location, created = PickupLocation.objects.get_or_create(
+				auction = instance,
+				is_default = True,
+				defaults={
+					'name': f'{instance}',
+					'pickup_time':instance.date_start,
+					},
+			)
+		except:
+			print("Somehow there's two pickup locations for this auction -- how is this possible?")
 
 @receiver(pre_save, sender=UserData)
 @receiver(pre_save, sender=PickupLocation)

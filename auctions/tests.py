@@ -84,7 +84,7 @@ class LotModelTests(TestCase):
         bidA = Bid.objects.create(user=userA, lot_number=lot, amount=10)
         bidB = Bid.objects.create(user=userB, lot_number=lot, amount=6)
         self.assertIs(lot.high_bidder.pk, userA.pk)
-        self.assertIs(lot.high_bid, 7)
+        self.assertIs(lot.high_bid, 6)
 
     def test_lot_with_two_changing_bids(self):
         time = timezone.now() + datetime.timedelta(days=30)
@@ -107,11 +107,11 @@ class LotModelTests(TestCase):
         garyBid.amount = 30
         garyBid.save()
         self.assertIs(lot.high_bidder.pk, gary.pk)
-        self.assertIs(lot.high_bid, 21)
+        self.assertIs(lot.high_bid, 20)
         garyBid.last_bid_time = timezone.now()
         garyBid.save()
         self.assertIs(lot.high_bidder.pk, gary.pk)
-        self.assertIs(lot.high_bid, 21)
+        self.assertIs(lot.high_bid, 20)
         jeffBid.amount = 30
         jeffBid.last_bid_time = timezone.now()
         jeffBid.save()

@@ -312,3 +312,5 @@ STATICFILES_FINDERS = [
 DEFAULT_AUTO_FIELD = 'django.db.models.AutoField'
 
 SEND_WELCOME_EMAIL = True # when a user adds an unverified email address to their auction, send an email about the site
+
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 2000

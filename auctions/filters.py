@@ -31,7 +31,7 @@ class AuctionTOSFilter(django_filters.FilterSet):
     def generic(self, qs, value):
         """Pass this a queryset and a value (string) to filter, and it'll return a suitable queryset
         This is getting reused in a couple places now, just import it with `from .filters import AuctionTOSFilter` and then use `AuctionTOSFilter.generic(qs, filter)`
-        Some day I will add rhyming names in here, so don't reinvent the wheel, recycle this!
+        Some day I will add rhyming names in here (https://github.com/iragm/fishauctions/issues/121), so don't reinvent the wheel, recycle this!
         """
         value = value.strip()
         qs = qs.filter(

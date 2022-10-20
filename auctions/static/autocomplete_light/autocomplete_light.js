@@ -33,7 +33,7 @@ window.addEventListener("load", function () {
 });
 
 function dal_init() {
-    console.log('This gets called twice, I am not sure why.');
+    //console.log('Hello.  This gets called twice, I am not sure why.');
     // Check if `django.jQuery` exists otherwise set `django.jQuery` to non namespaced jQuery.
     window.django = window.django || {};
     if (!django.hasOwnProperty('jQuery') && jQuery !== 'undefined') {
