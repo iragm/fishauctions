@@ -1,11 +1,10 @@
 import datetime
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
-from auctions.models import Lot, LotHistory, LotImage
+from auctions.models import *
 import channels.layers
 from asgiref.sync import async_to_sync
 from easy_thumbnails.files import get_thumbnailer
-from models import AuctionTOS, Invoice
 from post_office import mail
 from django.contrib.sites.models import Site
 from django.db.models import Count, Case, When, IntegerField, Avg, Q, F
@@ -95,6 +94,23 @@ def declare_winners_on_lots(lots):
                             changed_price = True,
                             current_price=lot.high_bid,
                         )
+                # logic to email winner and buyer for lots not in an auction
+                if lot.winner and not lot.auction:
+                    current_site = Site.objects.get_current()
+                    # email the winner first
+                    mail.send(
+                        lot.winner.email,
+                        headers={'Reply-to': lot.user.email},
+                        template='non_auction_lot_winner',
+                        context={'lot': lot, 'domain': current_site.domain},
+                    )
+                    # now, email the seller
+                    mail.send(
+                        lot.user.email,
+                        headers={'Reply-to': lot.winner.email},
+                        template='non_auction_lot_seller',
+                        context={'lot': lot, 'domain': current_site.domain},
+                    )
                 # automatic relisting of lots
                 relist = False
                 sendNoRelistWarning = False
@@ -144,7 +160,7 @@ def declare_winners_on_lots(lots):
                             newImage.image_source = 'REPRESENTATIVE'
                         newImage.save()
             except Exception as e:
-                print('Unable to set winner on "{lot}":')
+                print(f'Unable to set winner on "{lot}":')
                 print(e)
         else:
             # note: once again, lots that are part of an in-person auction are not included here

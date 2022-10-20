@@ -2,7 +2,7 @@
 import json
 from asgiref.sync import async_to_sync
 from channels.generic.websocket import WebsocketConsumer
-from .models import Lot, Bid, UserInterestCategory, LotHistory, UserData, UserBan
+from .models import *
 from post_office import mail
 from django.contrib.sites.models import Site
 from django.conf import settings
@@ -157,9 +157,10 @@ def bid_on_lot(lot, user, amount):
                     lot.winner = user
                     if lot.auction:
                         auctiontos_winner = AuctionTOS.objects.filter(auction=lot.auction, user=lot.high_bidder).first()
-                    if auctiontos_winner:
-                        lot.auctiontos_winner = auctiontos_winner
-                        invoice, created = Invoice.objects.get_or_create(auctiontos_user=lot.auctiontos_winner, auction=lot.auction, defaults={})
+                        if auctiontos_winner:
+                            lot.auctiontos_winner = auctiontos_winner
+                            invoice, created = Invoice.objects.get_or_create(auctiontos_user=lot.auctiontos_winner, auction=lot.auction, defaults={})
+                            invoice.recalculate
                     lot.winning_price = lot.buy_now_price
                     lot.buy_now_used = True
                     # this next line makes the lot end immediately after buy now is used
