@@ -813,7 +813,7 @@ def auctionReport(request, slug):
         end = timezone.now().strftime("%Y-%m-%d")
         response['Content-Disposition'] = 'attachment; filename="' + slug + "-report-" + end + '.csv"'
         writer = csv.writer(response)
-        writer.writerow(['Join date', 'Username', 'Name', 'Email', 'Phone', 'Address', 'Location', 'Miles to pickup location', 'Club', 'Lots viewed', 'Lots bid', 'Lots submitted', 'Lots won', 'Invoice', 'Total bought', 'Total sold', 'Invoice total due', 'Breeder points', "Number of lots sold outside auction", "Total value of lots sold outside auction"])
+        writer.writerow(['Join date', 'Username', 'Name', 'Email', 'Phone', 'Address', 'Location', 'Miles to pickup location', 'Club', 'Lots viewed', 'Lots bid', 'Lots submitted', 'Lots won', 'Invoice', 'Total bought', 'Total sold', 'Invoice total due', 'Breeder points', "Number of lots sold outside auction", "Total value of lots sold outside auction", "Time spent reading rules"])
         users = AuctionTOS.objects.filter(auction=auction).annotate(distance_traveled=distance_to(\
                 '`auctions_userdata`.`latitude`', '`auctions_userdata`.`longitude`', \
                 lat_field_name='`auctions_pickuplocation`.`latitude`',\
@@ -865,7 +865,7 @@ def auctionReport(request, slug):
                 data.phone_as_string, address, data.pickup_location, distance,\
                 club, len(lotsViewed), len(lotsBid), len(lotsSumbitted), \
                 len(lotsWon), invoiceStatus, totalSpent, totalPaid, invoiceTotal, len(breederPoints),\
-                numberLotsOutsideAuction, profitOutsideAuction])
+                numberLotsOutsideAuction, profitOutsideAuction, data.time_spent_reading_rules])
         return response    
     messages.error(request, "Your account doesn't have permission to view this page")
     return redirect('/')
