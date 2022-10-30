@@ -71,7 +71,7 @@
               </div></td>
               <!--<td> {% if not invoice.paid %}<a class="btn btn-info active btn-sm" onclick="payinvoice({{ invoice.pk }})" id="pay_{{ invoice.pk }}">Mark paid</a>{% else %}<span>Paid</span>{% endif %}</td>-->
               <td>{% if invoice.lots_bought %}{{ invoice.lots_bought }}{% endif %}</td>
-              <td>{% if invoice.lots_sold %}{{ invoice.lots_sold_successfully }}{% endif %}</td>
+              <td>{% if invoice.lots_sold %}{{ invoice.lots_sold_successfully_count }}{% endif %}</td>
               <td>{% if invoice.lots_sold %}{{ invoice.unsold_lots }}{% endif %}</td>
               <td>{{ invoice.location }}</td>
             </tr>

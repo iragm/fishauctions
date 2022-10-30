@@ -17,10 +17,14 @@ from collections import Counter
 class Command(BaseCommand):
     help = 'Just a scratchpad to do things'
     def handle(self, *args, **options):
-        auctiontos = AuctionTOS.objects.filter(auction__slug="norwalk-fall-auction")
-        for tos in auctiontos:
-            if tos.is_admin:
-                print(tos.name)
+        auction = Auction.objects.get(slug="tfcb-2022-annual-auction")
+        invoices = Invoice.objects.filter(auction=auction, auctiontos_user__pickup_location__name="NY: Albany")
+        for invoice in invoices:
+            print(invoice.auctiontos_user.name, f"https://auction.fish/invoices/{invoice.pk}", invoice.net)
+
+        #lots = Lot.objects.filter(Q(feedback_text__isnull=False)|Q(winner_feedback_text__isnull=False))
+        #for lot in lots:
+        #    print(lot.winner_feedback_text, lot.feedback_text)
         
         # # fix auctiontos_user on invoices:
         # invoices = Invoice.objects.filter(auctiontos_user__isnull=True, auction__isnull=False, user__isnull=False)

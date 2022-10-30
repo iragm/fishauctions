@@ -813,7 +813,7 @@ def auctionReport(request, slug):
         end = timezone.now().strftime("%Y-%m-%d")
         response['Content-Disposition'] = 'attachment; filename="' + slug + "-report-" + end + '.csv"'
         writer = csv.writer(response)
-        writer.writerow(['Join date', 'Username', 'Name', 'Email', 'Phone', 'Address', 'Location', 'Miles to pickup location', 'Club', 'Lots viewed', 'Lots bid', 'Lots submitted', 'Lots won', 'Invoice', 'Total bought', 'Total sold', 'Invoice total due', 'Breeder points', "Number of lots sold outside auction", "Total value of lots sold outside auction", "Time spent reading rules"])
+        writer.writerow(['Join date', 'Username', 'Name', 'Email', 'Phone', 'Address', 'Location', 'Miles to pickup location', 'Club', 'Lots viewed', 'Lots bid', 'Lots submitted', 'Lots won', 'Invoice', 'Total bought', 'Total sold', 'Invoice total due', 'Breeder points', "Number of lots sold outside auction", "Total value of lots sold outside auction", "Seconds spent reading rules", "Other auctions joined"])
         users = AuctionTOS.objects.filter(auction=auction).annotate(distance_traveled=distance_to(\
                 '`auctions_userdata`.`latitude`', '`auctions_userdata`.`longitude`', \
                 lat_field_name='`auctions_pickuplocation`.`latitude`',\
@@ -839,7 +839,9 @@ def auctionReport(request, slug):
                 except:
                     pass
                 username = data.user.username
+                previous_auctions = AuctionTOS.objects.filter(user=data.user).exclude(pk=data.pk).count()
             else:
+                previous_auctions = ""
                 lotsViewed = ""
                 lotsBid = ""
                 lotsOutsideAuction = ""
@@ -857,15 +859,15 @@ def auctionReport(request, slug):
                 totalPaid = invoice.total_sold
                 invoiceTotal = invoice.rounded_net
             except:
-                invoiceStatus = "N/A"
+                invoiceStatus = ""
                 totalSpent = "0" 
                 totalPaid = "0"
-                invoiceTotal = "N/A"
+                invoiceTotal = ""
             writer.writerow([data.createdon.strftime("%m-%d-%Y"), username, data.name, data.email, \
                 data.phone_as_string, address, data.pickup_location, distance,\
                 club, len(lotsViewed), len(lotsBid), len(lotsSumbitted), \
                 len(lotsWon), invoiceStatus, totalSpent, totalPaid, invoiceTotal, len(breederPoints),\
-                numberLotsOutsideAuction, profitOutsideAuction, data.time_spent_reading_rules])
+                numberLotsOutsideAuction, profitOutsideAuction, data.time_spent_reading_rules, previous_auctions])
         return response    
     messages.error(request, "Your account doesn't have permission to view this page")
     return redirect('/')
@@ -1824,7 +1826,7 @@ class BidDelete(LoginRequiredMixin, DeleteView):
     
     def dispatch(self, request, *args, **kwargs):
         auth = False
-        if self.get_object().lot_number.bids_can_be_removed:
+        if not self.get_object().lot_number.bids_can_be_removed:
             messages.error(request, "You can no longer remove bids from this lot.")
             return redirect(self.get_success_url())
         if request.user.is_superuser:
@@ -1841,6 +1843,9 @@ class BidDelete(LoginRequiredMixin, DeleteView):
         lot = self.get_object().lot_number
         success_url = self.get_success_url()
         historyMessage = f"{request.user} has removed {self.get_object().user}'s bid"
+        # it looks like we are removing all bids if the lot has ended
+        # This seems like a bad idea, and there's a check (in lot.ended) preventing us from ever getting here right now
+        # We probably need to rethink how bid removal works at some point
         if lot.winner:
             lot = Lot.objects.get(lot_number=lot.pk)
             lot.winner = None
@@ -2496,13 +2501,12 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
         context['auction'] = self.auction
         context['is_admin'] = self.is_admin
         invoice = self.get_object()
-        
         sold = invoice.sold_lots_queryset
         bought = invoice.bought_lots_queryset
         userData = None
-        if self.get_object().user:
+        if invoice.user:
             userData, created = UserData.objects.get_or_create(
-                user = self.get_object().user.pk,
+                user = invoice.user.pk,
                 defaults={},
                 )
         context['exampleMode'] = self.exampleMode
@@ -2521,7 +2525,7 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
             bought = sorted(bought, key=lambda t: str(t.lot_number))
         except:
             pass
-        context['actually_sold'] = Lot.objects.filter(seller_invoice=self.get_object(), winner__isnull=False, banned=False).order_by('lot_number')
+        context['actually_sold'] = invoice.lots_sold_successfully
         context['sold'] = sold
         context['bought'] = bought
         context['userdata'] = userData
@@ -2600,10 +2604,11 @@ class InvoiceNoLoginView(InvoiceView):
         invoice.save()
         tos = invoice.auctiontos_user
         auctiontos_user_already_exists = User.objects.filter(email=invoice.auctiontos_user.email).first()
-        if not auctiontos_user_already_exists:
+        if auctiontos_user_already_exists:
             if request.user.is_authenticated:
-                tos.user = request.user
-                tos.save()
+                if not tos.user:
+                    tos.user = request.user
+                    tos.save()
         else:
             self.template_name = 'invoice_popup.html'
             if tos.email.endswith("@gmail.com"):
@@ -2617,6 +2622,12 @@ class InvoiceLabelView(InvoiceView):
     template_name = 'invoice_labels.html'
     form_view = 'printed'
     auth_needed = True
+
+class InvoiceLabelNoLoginView(InvoiceNoLoginView):
+    """Allows printing of labels without logging in"""
+    template_name = 'invoice_labels.html'
+    form_view = 'printed'
+    auth_needed = False
 
 @login_required
 def getClubs(request):

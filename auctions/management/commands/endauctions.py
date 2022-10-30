@@ -55,12 +55,6 @@ def declare_winners_on_lots(lots):
                     info = None
                     if lot.high_bidder:# and not lot.sold: # not sure what that was here, we already filter this in the if above
                         lot.winner = lot.high_bidder
-                        # if this is part of an auction, look for the TOS and create the invoice
-                        if lot.auction:
-                            auctiontos_winner = AuctionTOS.objects.filter(auction=lot.auction, user=lot.high_bidder).first()
-                            if auctiontos_winner:
-                                lot.auctiontos_winner = auctiontos_winner
-                                invoice, created = Invoice.objects.get_or_create(auctiontos_user=lot.auctiontos_winner, auction=lot.auction, defaults={})
                         lot.winning_price = lot.high_bid
                         info = 'LOT_END_WINNER'
                         bidder = lot.high_bidder
@@ -94,6 +88,22 @@ def declare_winners_on_lots(lots):
                             changed_price = True,
                             current_price=lot.high_bid,
                         )
+                # if this is part of an auction, update invoices
+                if lot.sold and lot.auction:
+                    if lot.auctiontos_winner:
+                        auctiontos_winner = lot.auctiontos_winner
+                    else:
+                        # look for the TOS and create the invoice
+                        auctiontos_winner = AuctionTOS.objects.filter(auction=lot.auction, user=lot.high_bidder).first()
+                        if auctiontos_winner:
+                            lot.auctiontos_winner = auctiontos_winner
+                            lot.save()
+                    if lot.auctiontos_winner:
+                        invoice, created = Invoice.objects.get_or_create(auctiontos_user=lot.auctiontos_winner, auction=lot.auction, defaults={})
+                        invoice.recalculate
+                    if lot.auctiontos_seller:
+                        invoice, created = Invoice.objects.get_or_create(auctiontos_user=lot.auctiontos_seller, auction=lot.auction, defaults={})
+                        invoice.recalculate
                 # logic to email winner and buyer for lots not in an auction
                 if lot.winner and not lot.auction:
                     current_site = Site.objects.get_current()

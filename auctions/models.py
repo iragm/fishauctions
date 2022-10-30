@@ -372,7 +372,7 @@ class Auction(models.Model):
 			invoices = Invoice.objects.filter(auction=self.pk)
 			total = 0
 			for invoice in invoices:
-				total -= invoice.rounded_net
+				total -= invoice.calculated_total
 			return total
 		except:
 			return 0
@@ -402,12 +402,20 @@ class Auction(models.Model):
 			return 0
 
 	@property
+	def invoice_recalculate(self):
+		"""Force update of all invoice totals in this auction"""
+		invoices = Invoice.objects.filter(auction=self.pk)
+		for invoice in invoices:
+			invoice.recalculate
+
+	@property
 	def number_of_confirmed_tos(self):
 		"""How many people selected a pickup location in this auction"""
 		return AuctionTOS.objects.filter(auction=self.pk).count()
 
 	@property
 	def number_of_sellers(self):
+		print("warning: this may be outdated an inaccurate.  It uses the lot's winner field instead of the auctiontos_winner field")
 		#users = User.objects.values('lot__user').annotate(Sum('lot')).filter(lot__auction=self.pk, lot__winner__isnull=False)
 		users = User.objects.filter(lot__auction=self.pk, lot__winner__isnull=False).distinct()
 		return len(users)
@@ -1290,7 +1298,8 @@ class Lot(models.Model):
 	@property
 	def bids(self):
 		"""Get all bids for this lot, highest bid first"""
-		bids = Bid.objects.filter(lot_number=self.lot_number, last_bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount', 'last_bid_time')
+		#bids = Bid.objects.filter(lot_number=self.lot_number, last_bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount', 'last_bid_time')
+		bids = Bid.objects.filter(lot_number=self.lot_number, amount__gte=self.reserve_price).order_by('-amount', 'last_bid_time')
 		return bids
 
 	@property
@@ -1313,9 +1322,9 @@ class Lot(models.Model):
 				else:
 					# this is the old method: 1 dollar more than the second highest bidder
 					# this would cause an issue if someone was tied for high bidder, and increased their proxy bid
-					#bidPrice = allBids[1].amount + 1
-					# instead, we'll just return the second highest bid in the case of a
-					bidPrice = bids[1].amount
+					bidPrice = bids[1].amount + 1
+					# instead, we'll just return the second highest bid in the case of a tie
+					#bidPrice = bids[1].amount
 				return bidPrice
 			except:
 				#print("no bids for this item")
@@ -1545,9 +1554,15 @@ class Invoice(models.Model):
 
 	@property
 	def lots_sold_successfully(self):
-		"""Return number of lots the user sold in this invoice (unsold lots not included)"""
-		return len(self.sold_lots_queryset.filter(auctiontos_winner__isnull=False))
+		"""Queryset of lots the user sold in this invoice (unsold lots not included)"""
+		return self.sold_lots_queryset.filter(auctiontos_winner__isnull=False)
 	
+	@property
+	def lots_sold_successfully_count(self):
+		"""Return number of lots the user sold in this invoice (unsold lots not included)"""
+		return self.lots_sold_successfully.count()
+	
+
 	@property
 	def unsold_lots(self):
 		"""Return number of lots the user did not sell. This may be simply lots whose winner has not been set yet."""

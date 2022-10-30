@@ -66,6 +66,7 @@ urlpatterns = [
     path('invoices/<int:pk>/labels', login_required(views.InvoiceLabelView.as_view())),
     path('invoices/example/', views.InvoiceView.as_view()),
     path('invoices/<uuid:uuid>/', views.InvoiceNoLoginView.as_view()),
+    path('invoices/<uuid:uuid>/labels/', views.InvoiceLabelNoLoginView.as_view()),
     path('images/add_image/<int:lot>/', login_required(views.ImageCreateView.as_view()), name='add_image'),
     path('images/<int:pk>/delete/', views.ImageDelete.as_view(), name="delete_image"),
     path('images/<int:pk>/edit', views.ImageUpdateView.as_view(), name="edit_image"),

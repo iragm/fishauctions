@@ -344,7 +344,8 @@ class LotFilter(django_filters.FilterSet):
                     self.order = "-lot_number"
         # don't show very new lots unless they are from this user
         if self.user.is_authenticated:
-            primary_queryset = primary_queryset.exclude(~Q(user=self.user), date_posted__gte=timezone.now() - datetime.timedelta(minutes=20))
+            if not self.user.is_superuser:
+                primary_queryset = primary_queryset.exclude(~Q(user=self.user), date_posted__gte=timezone.now() - datetime.timedelta(minutes=20))
         else:
             primary_queryset = primary_queryset.exclude(date_posted__gte=timezone.now() - datetime.timedelta(minutes=20))
 

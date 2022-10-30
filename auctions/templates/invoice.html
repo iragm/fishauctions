@@ -184,7 +184,7 @@ function payinvoice(id, status) {
                   <tr>
                     <td>{{ lot.lot_number_display }}</td>
                     <td>{% if show_links %}<a href="{{lot.lot_link}}">{{ lot.lot_name }}</a>{% else %}{{ lot.lot_name }}{% endif%}</td>
-                    <td>{% if lot.winning_price %} {% if exampleMode %}Real name of winner here{%else%}{{ lot.auctiontos_winner }}{% endif %} {% else %} Not sold {% endif %}</td>
+                    <td>{% if lot.winning_price %} {% if exampleMode %}Real name of winner here{%else%}{{ lot.winner_name }}{% endif %} {% else %} Not sold {% endif %}</td>
                     {% if auction.multi_location %}
                     <td>{% if lot.auctiontos_winner %}{{ lot.winner_location }}{% endif %}</td>
                     {% endif %}
@@ -222,7 +222,7 @@ function payinvoice(id, status) {
                     {% if auction.multi_location %}
                     <td>{{ lot.location }}</td>
                     {% endif %}
-                    <td>{% if exampleMode %}Real name of seller here{%else%}{{ lot.user.first_name }} {{ lot.user.last_name }}{% endif %}</td>
+                    <td>{% if exampleMode %}Real name of seller here{%else%}{{ lot.seller_name }}{% endif %}</td>
                     <td>${{ lot.winning_price|floatformat:2 }}</td>
                   </tr>
                   {% endfor %}
