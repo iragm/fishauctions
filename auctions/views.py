@@ -2475,7 +2475,8 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
         if invoice.auction:
             self.auction = invoice.auction
             self.is_admin = self.is_auction_admin
-            auth = True
+            if self.is_admin:
+                auth = True
         if self.exampleMode:
             auth = True
         if request.user.is_authenticated:
@@ -2496,6 +2497,7 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
         if mark_invoice_viewed_by_user:
             setattr(invoice, self.form_view, True) # this will set printed or opened as appropriate
             invoice.save()
+        print('finished invoice view dispatch')
         return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
@@ -2527,7 +2529,7 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
             bought = sorted(bought, key=lambda t: str(t.lot_number))
         except:
             pass
-        context['actually_sold'] = invoice.lots_sold_successfully
+        context['lot_labels'] = invoice.lot_labels
         context['sold'] = sold
         context['bought'] = bought
         context['userdata'] = userData
@@ -2617,6 +2619,40 @@ class InvoiceNoLoginView(InvoiceView):
                 self.button_link = f'/google/login/?process=login&next=/invoices/{self.uuid}/'
             else:
                 self.button_link = f'/signup/?next=/invoices/{self.uuid}/'
+        return super().dispatch(request, *args, **kwargs)
+
+class LabelViewForAuctionAdmins(InvoiceView):
+    """This is a bit different than InvoiceLabelView in that it's intended for admins, not regular users."""
+    
+    # these are routes that will be defined by the subclasses for this class
+    bidder_number = None
+    username = None
+    template_name = 'invoice_labels.html'
+    allow_non_admins = False
+
+    def get_object(self):
+        if not self.bidder_number and not self.username:
+            print("One of these needs to be set...")
+        if self.bidder_number:
+            invoice = Invoice.objects.filter(auctiontos_user__auction=self.auction, auctiontos_user__bidder_number=self.bidder_number).first()
+        if self.username:
+            invoice = Invoice.objects.filter(auctiontos_user__auction=self.auction, auctiontos_user__user__username=self.username).first()
+        if not invoice:
+            raise Http404
+        self.exampleMode = False
+        return invoice
+            
+    def dispatch(self, request, *args, **kwargs):
+        # check to make sure the user has permission to view this invoice
+        self.auction = Auction.objects.filter(slug=kwargs['slug']).first()
+        self.bidder_number = kwargs.pop('bidder_number', None)
+        self.username = kwargs.pop('username', None)
+        self.invoice = self.get_object()
+        #self.is_admin = self.is_auction_admin
+        # right now, we are blocking anyone other than an auction admin from viewing this
+        # one thing we could do is add a check for
+        # request.user = invoice.auctiontos_user here, and mark printed if the check passes
+        # this would effectively replace InvoiceLabelView
         return super().dispatch(request, *args, **kwargs)
 
 class InvoiceLabelView(InvoiceView):

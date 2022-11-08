@@ -661,6 +661,15 @@ class AuctionTOS(models.Model):
 		return html.format_html(f"<a href='{url}'>Add lots</a>")
 
 	@property
+	def print_invoice_link_html(self):
+		"""Link print lot labels for this user"""
+		lots = Lot.objects.filter(auctiontos_seller=self.pk).count()
+		if lots:
+			url = reverse("print_labels_by_bidder_number", kwargs = {'bidder_number':self.bidder_number, 'slug':self.auction.slug})
+			return html.format_html(f"<a href='{url}'>Print labels</a>")
+		return ""
+
+	@property
 	def invoice_link_html(self):
 		"""HTML snippet with a link to the invoice for this auctionTOS, if set.  Otherwise, empty"""
 		invoice = Invoice.objects.filter(auctiontos_user=self.pk).first()
@@ -981,7 +990,7 @@ class Lot(models.Model):
 			return self.auctiontos_winner.name
 		if self.winner:
 			return self.winner.first_name + " " + self.winner.last_name
-		return "Unknown"
+		return ""
 
 	@property
 	def winner_email(self):
@@ -990,7 +999,7 @@ class Lot(models.Model):
 			return self.auctiontos_winner.email
 		if self.winner:
 			return self.winner.email
-		return "Unknown"
+		return ""
 
 	@property
 	def table_class(self):
@@ -1575,7 +1584,14 @@ class Invoice(models.Model):
 	def lots_sold_successfully_count(self):
 		"""Return number of lots the user sold in this invoice (unsold lots not included)"""
 		return self.lots_sold_successfully.count()
-	
+
+	@property
+	def lot_labels(self):
+		"""For online auctions, only sold lots will have printed labels.  For in-person auctions, all submitted lots get printed"""
+		if self.is_online:
+			return self.lots_sold_successfully
+		else:
+			return self.sold_lots_queryset
 
 	@property
 	def unsold_lots(self):
@@ -1662,6 +1678,15 @@ class Invoice(models.Model):
 	
 	def get_absolute_url(self):
 		return f'/invoices/{self.pk}/'
+
+	@property
+	def is_online(self):
+		"""Based on the auction associated with this invoice"""
+		if self.auctiontos_user:
+			return self.auctiontos_user.auction.is_online
+		if self.auction:
+			return self.auction.is_online
+		return False
 
 class Bid(models.Model):
 	"""Bids apply to lots"""

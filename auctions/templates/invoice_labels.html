@@ -6,7 +6,7 @@
 <div class='ml-5 mb-5'>⚫ Print on standard 8.5x11 paper in portrait (normal) mode ⚫ Cut each label out with scissors ⚫ Make sure bag is dry ⚫ Attach to bag using packing tape ⚫ Do not run with scissors</div>
 <div class="container-fluid ">
   <div class="row">
-    {% for lot in actually_sold %}
+    {% for lot in lot_labels %}
       <div class="col-5 row no-gutters border border-secondary mb-2 mr-1 half-size" >
               <div class="col-3">
                 {% qr_from_text lot.qr_code size="t" %}
