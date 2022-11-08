@@ -18,9 +18,7 @@ class Command(BaseCommand):
     help = 'Just a scratchpad to do things'
     def handle(self, *args, **options):
         auction = Auction.objects.get(slug="tfcb-2022-annual-auction")
-        invoices = Invoice.objects.filter(auction=auction, auctiontos_user__pickup_location__name="NY: Albany")
-        for invoice in invoices:
-            print(invoice.auctiontos_user.name, f"https://auction.fish/invoices/{invoice.pk}", invoice.net)
+        invoices = Invoice.objects.filter(auction=auction)
 
         #lots = Lot.objects.filter(Q(feedback_text__isnull=False)|Q(winner_feedback_text__isnull=False))
         #for lot in lots:

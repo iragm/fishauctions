@@ -358,7 +358,7 @@ class Auction(models.Model):
 
 	@property
 	def club_profit_raw(self):
-		"""Total amount made by the club in this auction.  This number does not take into account rounding in the invoices"""
+		"""Total amount made by the club in this auction.  This number does not take into account rounding in the invoices, nor any invoice adjustments"""
 		allLots = Lot.objects.filter(auction=self.pk)
 		total = 0
 		for lot in allLots:
@@ -407,6 +407,7 @@ class Auction(models.Model):
 		invoices = Invoice.objects.filter(auction=self.pk)
 		for invoice in invoices:
 			invoice.recalculate
+			invoice.save()
 
 	@property
 	def number_of_confirmed_tos(self):
@@ -500,6 +501,7 @@ class Auction(models.Model):
 
 	@property
 	def number_of_tos(self):
+		"""This will return users, ignoring any auctiontos without a user set"""
 		return User.objects.filter(auctiontos__auction=self.pk).count()
 
 	@property
@@ -1040,12 +1042,14 @@ class Lot(models.Model):
 			"to_site": 0,
 			}
 		if self.auction:
-			if (self.auctiontos_winner and self.winning_price) or not self.active:
+			if self.winning_price or not self.active:
+			#if (self.auctiontos_winner and self.winning_price) or not self.active:
 				# bidding has officially closed
 				payout['ended'] = True
 				if self.banned:
 					return payout
-				auction = Auction.objects.get(id=self.auction.pk)
+				auction = self.auction
+				#auction = Auction.objects.get(id=self.auction.pk)
 				if self.sold:
 					payout['sold'] = True
 					payout['winning_price'] = self.winning_price
@@ -1478,6 +1482,16 @@ class Invoice(models.Model):
 		self.save()
 
 	@property
+	def total_adjustment_amount(self):
+		"""There's a difference between the subtotal and the rounded net -- rounding, manual adjustments, fist bid payouts, etc"""
+		return self.subtotal - self.rounded_net
+
+	@property
+	def subtotal(self):
+		"""don't call this directly, use self.net or another property instead"""
+		return self.total_sold - self.total_bought
+
+	@property
 	def first_bid_payout(self):
 		try:
 			if self.auction.first_bid_payout:
@@ -1495,7 +1509,7 @@ class Invoice(models.Model):
 		Any auction-wide payout promotions
 		Any manual adjustments made to this invoice
 		"""
-		subtotal = self.total_sold - self.total_bought
+		subtotal = self.subtotal
 		# if this auction is using the first bid payout system to encourage people to bid
 		subtotal += self.first_bid_payout
 		if self.adjustment:

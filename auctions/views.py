@@ -709,6 +709,7 @@ def feedback(request, pk, leave_as):
             raise Http404 (f"No lot found with key {lot}") 
         checksPass = False
         if leave_as == "winner":
+            # fixme - we need to allow auctiontos_winner here, too
             if lot.winner.pk == request.user.pk:
                 checksPass = True
                 try:
@@ -722,6 +723,7 @@ def feedback(request, pk, leave_as):
                 except:
                     pass
         if leave_as == "seller":
+            # fixme - we need to allow auctiontos_seller here, too
             if lot.user.pk == request.user.pk:
                 checksPass = True
                 try:
@@ -1198,7 +1200,7 @@ class AuctionInvoices(DetailView, AuctionPermissionsMixin):
         #user = User.objects.get(pk=self.request.user.pk)
         context = super().get_context_data(**kwargs)
         invoices = Invoice.objects.filter(auction=self.auction).order_by('status','user__last_name')
-        invoices = sorted(invoices, key=lambda t: str(t.location) ) 
+        invoices = sorted(invoices, key=lambda t: (str(t.location), t.pk) ) 
         context['invoices'] = invoices
         context['active_tab'] = 'invoices'
         return context
@@ -2330,7 +2332,7 @@ def toDefaultLandingPage(request):
             auction = UserData.objects.get(user=request.user).last_auction_used
             if timezone.now() > auction.date_end:
                 try:
-                    invoice = Invoice.objects.get(user=request.user, auction=auction.pk)
+                    invoice = Invoice.objects.get(auctiontos_user__user=request.user, auction=auction)
                     messages.add_message(request, messages.INFO, f'{auction} has ended.  <a href="/invoices/{invoice.pk}">View your invoice</a>, <a href="/feedback/">leave feedback</a> on lots you bought or sold, or <a href="/lots?auction={auction.slug}">view lots</a>')
                     return redirect("/lots/")
                 except:
