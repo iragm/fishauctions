@@ -655,6 +655,7 @@ class AuctionTOS(models.Model):
 	# yes we are using a string to store a number
 	# this is actually important because some day, someone will ask to make the bidder numbers have characters like "1-234" or people's names
 	bidder_number = models.CharField(max_length=20, default="", blank=True)
+	bidder_number.help_text = "Must be unique, blank to automatically generate"
 	bidding_allowed = models.BooleanField(default=True, blank=True)
 	selling_allowed = models.BooleanField(default=True, blank=True)
 	name = models.CharField(max_length=181, null=True, blank=True)
@@ -679,10 +680,18 @@ class AuctionTOS(models.Model):
 		return html.format_html(f"<a href='{url}'>Add lots</a>")
 
 	@property
+	def lots_qs(self):
+		lots = Lot.objects.filter(auctiontos_seller=self.pk)
+		return lots
+
+	@property
+	def unbanned_lot_count(self):
+		return self.lots_qs.exclude(banned=True).count()
+
+	@property
 	def print_invoice_link_html(self):
 		"""Link print lot labels for this user"""
-		lots = Lot.objects.filter(auctiontos_seller=self.pk).exclude(banned=True).count()
-		if lots:
+		if self.unbanned_lot_count:
 			url = reverse("print_labels_by_bidder_number", kwargs = {'bidder_number':self.bidder_number, 'slug':self.auction.slug})
 			return html.format_html(f"<a href='{url}'>Print labels</a>")
 		return ""
@@ -699,7 +708,7 @@ class AuctionTOS(models.Model):
 
 	def save(self, *args, **kwargs):
 		if not self.pk:
-			print("new instance of auctionTOS")
+			#print("new instance of auctionTOS")
 			# no emails for in-person auctions, thankyouverymuch
 			if not self.auction.is_online:
 				self.confirm_email_sent = True
@@ -892,6 +901,24 @@ class Lot(models.Model):
 	shipping_locations = models.ManyToManyField(Location, blank=True, verbose_name="I will ship to")
 	shipping_locations.help_text = "Check all locations you're willing to ship to"
 	is_deleted = models.BooleanField(default=False)
+	
+	def save(self, *args, **kwargs):
+		"""
+		For in-person auctions, we'll generate a bidder_number-lot_number format
+		"""
+		if not self.custom_lot_number and self.auction:
+			if not self.auction.is_online and self.auctiontos_seller:
+				custom_lot_number = 1
+				other_lots = self.auctiontos_seller.lots_qs
+				for lot in other_lots:
+					match = re.findall(r'\d+', f"{lot.custom_lot_number}")
+					if match:
+						# last string of digits found
+						match = int(match[-1])
+						if match >= custom_lot_number:
+							custom_lot_number = match + 1
+				self.custom_lot_number = f"{self.auctiontos_seller.bidder_number}-{custom_lot_number}"
+		super().save(*args, **kwargs) 
 
 	def __str__(self):
 		return "" + str(self.lot_number_display) + " - " + self.lot_name

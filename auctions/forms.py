@@ -76,7 +76,8 @@ class QuickAddLot(forms.ModelForm):
     #     return kwargs
 
 class BaseLotFormSet(BaseModelFormSet):
-    """Validation for QuickAddLot
+    """This is not used anywhere, see EditLot instead
+    Validation for QuickAddLot
     fixme - we need to pass auction here as a kwarg"""
     def __init__(self, *args, **kwargs):
         #self.auction = kwargs.pop('auction')
@@ -310,8 +311,8 @@ class EditLot(forms.ModelForm):
                 self.add_error('auction', "How did you even manage to change this field?")
         custom_lot_number = cleaned_data.get("custom_lot_number")
         if custom_lot_number:
-            other_lots = Lot.objects.filter(auction=auction, custom_lot_number=custom_lot_number).count()
-            if other_lots > 1:
+            other_lots = Lot.objects.filter(auction=auction, custom_lot_number=custom_lot_number).exclude(pk=self.lot.pk).count()
+            if other_lots:
                 self.add_error('custom_lot_number', "Lot number already in use")
         if not cleaned_data.get("auctiontos_winner") and cleaned_data.get("winning_price"):
             self.add_error('auctiontos_winner', "You need to set a winner")
@@ -336,7 +337,8 @@ class CreateEditAuctionTOS(forms.ModelForm):
         self.helper.form_id = 'user-form'
         self.helper.form_tag = True        
         self.helper.layout = Layout(
-			'name',
+			'bidder_number',
+            'name',
 			'email',
 			'phone_number',
 			'address',
@@ -353,6 +355,9 @@ class CreateEditAuctionTOS(forms.ModelForm):
         self.fields['pickup_location'].queryset = auction.location_qs #PickupLocation.objects.filter(auction=self.auction).order_by('name')
         if self.is_edit_form:
             # hide fields if editing
+            self.fields['bidder_number'].initial = self.auctiontos.bidder_number
+            if self.auctiontos.unbanned_lot_count:
+                self.fields['bidder_number'].help_text = f"<span class='text-danger'>This user has already added {self.auctiontos.unbanned_lot_count} lots.</span> Changing this will not update lot numbers, but invoices will still be accurate"
             self.fields['name'].initial = self.auctiontos.name
             self.fields['email'].initial = self.auctiontos.email
             try:
@@ -371,6 +376,7 @@ class CreateEditAuctionTOS(forms.ModelForm):
     class Meta:
         model = AuctionTOS
         fields = [
+            'bidder_number',
             'pickup_location',
             'is_admin',
 			'name',
@@ -381,6 +387,18 @@ class CreateEditAuctionTOS(forms.ModelForm):
         widgets = {
             'address': forms.Textarea(attrs={'rows':3})
         }
+
+    def clean(self):
+        cleaned_data = super().clean()
+        auction = cleaned_data.get("auction")
+        if auction:
+            if not auction.permission_check(self.user):
+                self.add_error('auction', "How did you even manage to change this field?")
+        bidder_number = cleaned_data.get("bidder_number")
+        other_bidder_numbers = AuctionTOS.objects.filter(auction=self.auction, bidder_number=bidder_number).exclude(pk=self.auctiontos.pk).count()
+        if other_bidder_numbers:
+            self.add_error('bidder_number', "Bidder number already in use")
+        return cleaned_data
 
 class CreateBid(forms.ModelForm):
     #amount = forms.IntegerField()

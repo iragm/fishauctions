@@ -1919,7 +1919,7 @@ class LotAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
             obj.lot_name = form.cleaned_data['lot_name'] or "Unknown lot"
             obj.species_category = form.cleaned_data['species_category'] or 21 # uncategorized
             obj.description = form.cleaned_data['description']
-            obj.auctiontos_seller = form.cleaned_data['auctiontos_seller'] or request.user
+            #obj.auctiontos_seller = form.cleaned_data['auctiontos_seller'] or request.user
             obj.quantity = form.cleaned_data['quantity'] or 1
             obj.donation = form.cleaned_data['donation']
             obj.i_bred_this_fish = form.cleaned_data['i_bred_this_fish']
@@ -1996,6 +1996,7 @@ class AuctionTOSAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
                     pickup_location = form.cleaned_data['pickup_location'],
                     manually_added=True
                 )
+            obj.bidder_number = form.cleaned_data['bidder_number']
             obj.pickup_location = form.cleaned_data['pickup_location']
             obj.name = form.cleaned_data['name']
             obj.email = form.cleaned_data['email']
