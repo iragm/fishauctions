@@ -28,12 +28,17 @@
         <!--<link rel="stylesheet" type="text/css" href="{% static 'css/auction_site.css' %}">-->
         <script>
             $( document ).ready(function() {
-                window.print();
+                //window.print();
             });
         </script>
 <style>
-
-    @media print {
+    @page {
+        margin-top: {{page_margin_top}}{{unit}};
+        margin-bottom: {{page_margin_bottom}}{{unit}};
+        margin-left: {{page_margin_left}}{{unit}};
+        margin-right: {{page_margin_right}}{{unit}};
+    }
+    /* @media print {
         .break {
             break-before: page;
         }
@@ -82,7 +87,7 @@
         .col-sm-1 {
              width: 8.33333333%;
         }
-     }
+     } */
      </style>
         {% block extra_js %}
         {% endblock %}

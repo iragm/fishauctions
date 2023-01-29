@@ -3,7 +3,7 @@ from crispy_forms.helper import FormHelper
 from crispy_forms.layout import Layout, Submit, HTML
 from crispy_forms.bootstrap import Div, Field, PrependedAppendedText
 from django import forms
-from .models import Lot, Bid, Auction, User, UserData, Location, Club, PickupLocation, AuctionTOS, Invoice, Category, LotImage, UserBan
+from .models import Lot, Bid, Auction, User, UserData, Location, Club, PickupLocation, AuctionTOS, Invoice, Category, LotImage, UserBan, UserLabelPrefs
 from django.forms import ModelForm, HiddenInput, RadioSelect, ModelChoiceField
 # from bootstrap_datepicker_plus import DateTimePickerInput
 from bootstrap_datepicker_plus.widgets import DateTimePickerInput # https://github.com/monim67/django-bootstrap-datepicker-plus/issues/66
@@ -217,7 +217,7 @@ class EditLot(forms.ModelForm):
             'lot_name',
             'species_category',
             'description',
-            'auctiontos_seller',
+            #'auctiontos_seller',
             Div(
                 Div('quantity',css_class='col-sm-4',),
                 Div('donation',css_class='col-sm-4',),
@@ -241,7 +241,7 @@ class EditLot(forms.ModelForm):
         self.fields['custom_lot_number'].help_text = "Leave blank to automatically generate"
         self.fields['lot_name'].initial = self.lot.lot_name
         self.fields['description'].initial = self.lot.lot_name
-        self.fields['auctiontos_seller'].initial = self.lot.auctiontos_seller
+        #self.fields['auctiontos_seller'].initial = self.lot.auctiontos_seller
         self.fields['quantity'].initial = self.lot.quantity
         self.fields['donation'].initial = self.lot.donation
         self.fields['winning_price'].initial = self.lot.winning_price
@@ -259,8 +259,8 @@ class EditLot(forms.ModelForm):
         if lot.high_bidder:
             winner_help_test = f"High bidder: <span class='text-warning'>{lot.high_bidder}</span> Bid: <span class='text-warning'>${lot.high_bid}</span>"
         self.fields['auctiontos_winner'].help_text = winner_help_test
-        self.fields['auctiontos_seller'].label = "Seller"
-        self.fields['auctiontos_seller'].help_text = ""
+        #self.fields['auctiontos_seller'].label = "Seller"
+        #self.fields['auctiontos_seller'].help_text = ""
         self.fields['quantity'].help_text = ""
         self.fields['donation'].help_text = ""
         self.fields['i_bred_this_fish'].label = "Breeder points"
@@ -287,7 +287,7 @@ class EditLot(forms.ModelForm):
             'auction',
             'species_category',
             'description',
-            'auctiontos_seller',
+            #'auctiontos_seller',
             'quantity',
             'donation',
             'i_bred_this_fish',
@@ -297,7 +297,7 @@ class EditLot(forms.ModelForm):
         ]
         widgets = {
             'description': forms.Textarea(attrs={'rows':2}),
-            'auctiontos_seller': autocomplete.ModelSelect2(url='auctiontos-autocomplete', forward=['auction'], attrs={'data-html': True, 'data-container-css-class': ''}),
+            #'auctiontos_seller': autocomplete.ModelSelect2(url='auctiontos-autocomplete', forward=['auction'], attrs={'data-html': True, 'data-container-css-class': ''}),
             'auctiontos_winner': autocomplete.ModelSelect2(url='auctiontos-autocomplete', forward=['auction'], attrs={'data-html': True, 'data-container-css-class': ''}),
             'auction': HiddenInput()
         }
@@ -1171,6 +1171,46 @@ class ChangeUsernameForm(forms.ModelForm):
                 Div('username',css_class='col-md-6',),
                 css_class='row',
             ),
+            Submit('submit', 'Save', css_class='btn-success'),
+        )
+
+class UserLabelPrefsForm(forms.ModelForm):
+    class Meta:
+        model = UserLabelPrefs
+        exclude = ('user', )
+        
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_method = 'post'
+        self.helper.form_id = 'printing-prefs'
+        self.helper.form_class = 'form'
+        self.helper.form_tag = True
+        self.helper.layout = Layout(
+            Div(
+                Div('page_width',css_class='col-md-6',),
+                Div('page_height',css_class='col-md-6',),
+                css_class='row',
+            ),
+            Div(
+                Div('page_margin_top',css_class='col-lg-3',),
+                Div('page_margin_bottom',css_class='col-lg-3',),
+                Div('page_margin_left',css_class='col-lg-3',),
+                Div('page_margin_right',css_class='col-lg-3',),
+                css_class='row',
+                ),
+            Div(
+                Div('label_width',css_class='col-lg-3',),
+                Div('label_height',css_class='col-lg-3',),
+                Div('label_margin_right',css_class='col-lg-3',),
+                Div('label_margin_bottom',css_class='col-lg-3',),
+                css_class='row',
+                ),
+            Div(
+                Div('font_size', css_class='col-md-6',),
+                Div('unit', css_class='col-md-6',),
+                css_class='row',
+                ),
             Submit('submit', 'Save', css_class='btn-success'),
         )
 

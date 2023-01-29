@@ -30,7 +30,7 @@
               </td>
               <td>{% if auction.started %}<a href='/lots/?auction={{auction.slug}}'>View lots</a>{% else %}Starts: 
                 {{auction.date_start}} {% endif %}</td>
-              <td>{% if auction.closed %}<span style="color:red">{{ auction.date_end }}</span>{% else %}{{ auction.date_end }}{% endif %}</td>
+              <td>{% if auction.closed %}<span style="color:red">{{ auction.date_end }}</span>{% else %}{{ auction.date_end_as_str }}{% endif %}</td>
             </tr>
             {% endfor %}
         </tbody>

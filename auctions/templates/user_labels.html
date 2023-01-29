@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}Preferences{% endblock %}
+{% load static %}
+
+{% block extra_js %}
+{% endblock %}
+{% block content %}
+<div class="container mt-5 mb-5">
+    <div class="row">
+        <div class="col-md-10 offset-md1">
+            <h1>Label Printing</h1>
+            <br><span class="text-danger">You most likely do not need to change these settings!</span>
+            <ol>
+                <li>Print your labels on regular paper</li>
+                <li>Cut them out with scissors</li>
+                <li>Use packing tape to attach them to your lots (make sure your bags are dry!)</li>
+            </ol>
+            <p>If you want to get fancy, the default settings are already set below so you can print on <a href="https://www.google.com/search?q=1+x+2+5%252F8+labels">Avery 5160 labels</a></p>
+            <p>Changing any of these settings may well break something -- if you have a problem, just leave a comment <a href="https://github.com/iragm/fishauctions/issues/122">here</a> and I'll fix it.</p>
+            {% crispy form form.helper %}
+        </div>
+    </div>
+</div>  
+
+{% endblock %}
+
+

@@ -342,12 +342,18 @@ class LotFilter(django_filters.FilterSet):
                 # instead, let's just show newest (unless we have keywords...)
                 if not self.keywords:
                     self.order = "-lot_number"
-        # don't show very new lots unless they are from this user
-        if self.user.is_authenticated:
-            if not self.user.is_superuser:
+        show_very_new_lots = False
+        if self.user.is_superuser:
+            show_very_new_lots = True
+        if self.regardingAuction:
+            if not self.regardingAuction.is_online:
+                show_very_new_lots = True
+        if not show_very_new_lots:
+            if self.user.is_authenticated:
+                # DO show very new lots from this user
                 primary_queryset = primary_queryset.exclude(~Q(user=self.user), date_posted__gte=timezone.now() - datetime.timedelta(minutes=20))
-        else:
-            primary_queryset = primary_queryset.exclude(date_posted__gte=timezone.now() - datetime.timedelta(minutes=20))
+            else:
+                primary_queryset = primary_queryset.exclude(date_posted__gte=timezone.now() - datetime.timedelta(minutes=20))
 
         # filter by 3 things:
         # local_qs = local lots, within the max range

@@ -330,6 +330,14 @@ class Auction(models.Model):
 			return self.date_end + dynamic_end
 
 	@property
+	def date_end_as_str(self):
+		"""Human-reable end date of the auction; this will always be an empty string for in-person auctions"""
+		if self.is_online:
+			return self.date_end
+		else:
+			return ""
+
+	@property
 	def ending_soon(self):
 		"""Used to send notifications"""
 		warning_date = self.date_end - datetime.timedelta(hours=2)
@@ -596,6 +604,16 @@ class PickupLocation(models.Model):
 		return self.name
 
 	@property
+	def short_name(self):
+		if self.pickup_by_mail:
+			return "Mail"
+		words = self.name.split()
+		abbreviation = ""
+		for word in words:
+			abbreviation += word[0].upper()
+		return abbreviation
+
+	@property
 	def directions_link(self):
 		"""Google maps link to the lat and lng of this pickup location"""
 		return f"https://www.google.com/maps/search/?api=1&query={self.latitude},{self.longitude}"
@@ -663,7 +681,7 @@ class AuctionTOS(models.Model):
 	@property
 	def print_invoice_link_html(self):
 		"""Link print lot labels for this user"""
-		lots = Lot.objects.filter(auctiontos_seller=self.pk).count()
+		lots = Lot.objects.filter(auctiontos_seller=self.pk).exclude(banned=True).count()
 		if lots:
 			url = reverse("print_labels_by_bidder_number", kwargs = {'bidder_number':self.bidder_number, 'slug':self.auction.slug})
 			return html.format_html(f"<a href='{url}'>Print labels</a>")
@@ -1438,6 +1456,33 @@ class Lot(models.Model):
 		"""Full domain name URL used to for QR codes"""
 		return f"{self.full_lot_link}?src=qr"
 
+	@property
+	def label_line_1(self):
+		"""Used for printed labels"""
+		result = f"{self.lot_name}"
+		#if self.quantity > 1:
+		#	result += " QTY: {self.quantity}"
+		return result
+
+	@property
+	def label_line_2(self):
+		"""Used for printed labels"""
+		return "Winner:" + (str(self.auctiontos_winner) or "")
+
+	@property
+	def label_line_3(self):
+		"""Used for printed labels"""
+		result = ""
+		if self.auction:
+			if self.auction.multi_location:
+				if self.auctiontos_winner.pickup_location:
+					return self.auctiontos_winner.pickup_location
+				else:
+					# this is not sold -- allow the auctioneer to check the appropriate pickup location
+					locations = self.auction.location_qs
+					for location in locations:
+						result += "  __" + location.short_name
+		return result
 
 class Invoice(models.Model):
 	"""
@@ -1758,6 +1803,31 @@ class PageView(models.Model):
 	def __str__(self):
 		thing = self.lot_number
 		return f"User {self.user} viewed {thing} for {self.total_time} seconds"
+
+class UserLabelPrefs(models.Model):
+	"""Dimensions used for the label PDF"""
+	user = models.OneToOneField(User, on_delete=models.CASCADE)
+	page_width = models.FloatField(default = 8.5, validators=[MinValueValidator(1), MaxValueValidator(100.0)])
+	page_height = models.FloatField(default = 11, validators=[MinValueValidator(1), MaxValueValidator(100.0)])
+	label_width = models.FloatField(default = 2.51, validators=[MinValueValidator(1), MaxValueValidator(100.0)])
+	label_height = models.FloatField(default = 0.96, validators=[MinValueValidator(0.4), MaxValueValidator(50.0)])
+	label_margin_right = models.FloatField(default = 0.2, validators=[MinValueValidator(0.2), MaxValueValidator(5.0)])
+	label_margin_bottom = models.FloatField(default = 0.02, validators=[MinValueValidator(0.0), MaxValueValidator(5.0)])
+	page_margin_top = models.FloatField(default = 0.55, validators=[MinValueValidator(0.1)])
+	page_margin_bottom = models.FloatField(default = 0.45, validators=[MinValueValidator(0.1)])
+	page_margin_left = models.FloatField(default = 0.18, validators=[MinValueValidator(0.1)])
+	page_margin_right = models.FloatField(default = 0.18, validators=[MinValueValidator(0.1)])
+	font_size = models.FloatField(default = 8, validators=[MinValueValidator(5), MaxValueValidator(25)])
+	UNITS = (
+		('in', 'Inches'),
+		('cm', 'Centimeters'),
+	)
+	unit = models.CharField(
+		max_length=20,
+		choices=UNITS,
+		blank=False, null=False,
+		default="in"
+	)
 
 class UserData(models.Model):
 	"""

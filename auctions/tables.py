@@ -2,11 +2,11 @@ import django_tables2 as tables
 from .models import *
 
 class AuctionTOSHTMxTable(tables.Table):
-    id = tables.Column(accessor='display_name', verbose_name="ID")
-    phone = tables.Column(accessor='phone_as_string', verbose_name="Phone")
-    invoice_link = tables.Column(accessor='invoice_link_html', verbose_name="Invoice")
-    add_lot_link = tables.Column(accessor='bulk_add_link_html', verbose_name="Add lots")
-    print_invoice_link = tables.Column(accessor='print_invoice_link_html', verbose_name="Lot labels")
+    id = tables.Column(accessor='display_name', verbose_name="ID", orderable=False)
+    phone = tables.Column(accessor='phone_as_string', verbose_name="Phone", orderable=False)
+    invoice_link = tables.Column(accessor='invoice_link_html', verbose_name="Invoice", orderable=False)
+    add_lot_link = tables.Column(accessor='bulk_add_link_html', verbose_name="Add lots", orderable=False)
+    print_invoice_link = tables.Column(accessor='print_invoice_link_html', verbose_name="Lot labels", orderable=False)
 
     class Meta:
         model = AuctionTOS

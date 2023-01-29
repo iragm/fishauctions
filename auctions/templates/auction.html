@@ -89,7 +89,7 @@ function initMap() {
         ['<div class="info_content" style="color:black;">' +
         '<h5>{{ location.name }}</h5>' +
         '<p><a href="{{location.directions_link}}">Get directions</a>'+
-        '<p>{{ location.description|linebreaksbr }}<br>' +
+        '{%if location.description %}<p>{{ location.description|linebreaksbr }}<br>{% endif %}' +
         '{% if location.users_must_coordinate_pickup %}You must schedule your pickup time in advance.{% else %}{{ location.pickup_time }} {% if location.second_pickup_time %}<br>You must return at {{ location.second_pickup_time }} to pick up lots from other locations.{% endif %}{%endif%}</p>' +        '</div>'],
         {% endif %}
         {% endfor %}

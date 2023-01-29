@@ -3,7 +3,7 @@ from datetime import datetime
 from random import randint, uniform, sample
 from itertools import chain
 from django.shortcuts import render,redirect
-from django.http import HttpResponse, JsonResponse, HttpResponseRedirect, Http404
+from django.http import HttpResponse, JsonResponse, HttpResponseRedirect, Http404, FileResponse
 from django.utils import timezone
 from django.contrib import messages
 from django.contrib.auth.models import User
@@ -40,6 +40,16 @@ from dal import autocomplete
 from django.utils.html import format_html
 from django.core.exceptions import PermissionDenied
 from django.forms import modelformset_factory
+from reportlab.lib import pagesizes, utils
+from reportlab.lib.units import inch, cm
+from reportlab.lib import colors
+from reportlab.platypus import BaseDocTemplate, Paragraph, SimpleDocTemplate, Table, TableStyle, Flowable, Spacer, ImageAndFlowables, Image as PImage
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.pdfgen import canvas
+from reportlab.lib.enums import TA_JUSTIFY
+import qr_code
+from qr_code.qrcode.utils import QRCodeOptions
+import textwrap
 
 class AuctionPermissionsMixin():
     """For any auction-related views, adds view.is_auction_admin to be used for any kind of permissions-checking
@@ -2529,7 +2539,7 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
             bought = sorted(bought, key=lambda t: str(t.lot_number))
         except:
             pass
-        context['lot_labels'] = invoice.lot_labels
+        #context['lot_labels'] = invoice.lot_labels
         context['sold'] = sold
         context['bought'] = bought
         context['userdata'] = userData
@@ -2621,39 +2631,361 @@ class InvoiceNoLoginView(InvoiceView):
                 self.button_link = f'/signup/?next=/invoices/{self.uuid}/'
         return super().dispatch(request, *args, **kwargs)
 
-class LabelViewForAuctionAdmins(InvoiceView):
-    """This is a bit different than InvoiceLabelView in that it's intended for admins, not regular users."""
+class LotLabelView(View, AuctionPermissionsMixin):
+#class LotLabelView(ListView, AuctionPermissionsMixin):
+    """This replaces the now-deprecated-and-no-longer-used InvoiceLabelView"""
     
-    # these are routes that will be defined by the subclasses for this class
+    # these are defined in urls.py and used in get_object(), below
     bidder_number = None
     username = None
     template_name = 'invoice_labels.html'
-    allow_non_admins = False
+    allow_non_admins = True
+    filename = "" # this will be automatically generated in dispatch
 
-    def get_object(self):
-        if not self.bidder_number and not self.username:
-            print("One of these needs to be set...")
-        if self.bidder_number:
-            invoice = Invoice.objects.filter(auctiontos_user__auction=self.auction, auctiontos_user__bidder_number=self.bidder_number).first()
-        if self.username:
-            invoice = Invoice.objects.filter(auctiontos_user__auction=self.auction, auctiontos_user__user__username=self.username).first()
-        if not invoice:
-            raise Http404
-        self.exampleMode = False
-        return invoice
-            
+    def get_queryset(self):
+        """A set of rules to determine what we print"""
+        lots = Lot.objects.filter(auctiontos_seller=self.tos).exclude(is_deleted=True).exclude(banned=True)
+        if self.auction.is_online:
+            lots = lots.filter(auctiontos_winner__isnull=False, winning_price__isnull=False)
+        return lots
+
     def dispatch(self, request, *args, **kwargs):
         # check to make sure the user has permission to view this invoice
         self.auction = Auction.objects.filter(slug=kwargs['slug']).first()
         self.bidder_number = kwargs.pop('bidder_number', None)
         self.username = kwargs.pop('username', None)
-        self.invoice = self.get_object()
-        #self.is_admin = self.is_auction_admin
-        # right now, we are blocking anyone other than an auction admin from viewing this
-        # one thing we could do is add a check for
-        # request.user = invoice.auctiontos_user here, and mark printed if the check passes
-        # this would effectively replace InvoiceLabelView
-        return super().dispatch(request, *args, **kwargs)
+        if not self.bidder_number and not self.username:
+            raise Exception("bidder_number or username needs to be set, fix urls.py...")
+        if self.bidder_number:
+            self.tos = AuctionTOS.objects.filter(auction=self.auction, bidder_number=self.bidder_number).first()
+        else:
+            self.tos = AuctionTOS.objects.filter(auction=self.auction, user__username=self.username)
+        checks_pass = False
+        if self.is_auction_admin:
+            checks_pass = True
+            # if this is an admin printing someone else's lots, the file name should be the name of the person whose lots they're printing
+            self.filename = self.tos.name or self.tos.bidder_number
+        if request.user.is_authenticated:
+            if request.user == self.tos.user:
+                checks_pass = True
+                # if this is a user printing their own lots, the file name should be the name of the auction
+                self.filename = str(self.auction)
+        if checks_pass and self.tos:
+            if not self.get_queryset():
+                messages.error(request, "There aren't any lots with printable labels")
+                return redirect('/')    
+            return super().dispatch(request, *args, **kwargs)
+        else:
+            messages.error(request, "Your account doesn't have permission to view this page.")
+            return redirect('/')
+
+    def get_context_data(self, **kwargs):
+        user_label_prefs, created = UserLabelPrefs.objects.get_or_create(user=self.request.user)
+        context = {}
+        context.update({f'{field.name}': getattr(user_label_prefs, field.name) for field in UserLabelPrefs._meta.get_fields()})
+        return context
+
+    def get(self, request, *args, **kwargs):
+        context = self.get_context_data(kwargs=kwargs)
+        response = HttpResponse(content_type='application/pdf')
+        label_name = self.filename or "labels"
+        label_name = re.sub(r'[^a-zA-Z0-9]', '_', label_name.lower())
+        response['Content-Disposition'] = f'attachment; filename="{label_name}.pdf"'
+        label_width = context.get('label_width')
+        label_height = context.get('label_height')
+        label_margin_right = context.get('label_margin_right')
+        margin_bottom = context.get('label_margin_bottom')
+        page_margin_top = context.get('page_margin_top')
+        page_margin_bottom = context.get('page_margin_bottom')
+        page_margin_left = context.get('page_margin_left')
+        page_margin_right = context.get('page_margin_right')
+        unit = context.get('unit') or 'in'
+        font_size = context.get("font_size")
+        page_width = context.get('page_width')
+        page_height = context.get('page_height')
+        labels = self.get_queryset()
+        if unit == 'in':
+            unit = inch
+        else:
+            unit = cm
+        doc = SimpleDocTemplate(response, pagesize=[page_width*unit, page_height*unit], leftMargin=page_margin_left*unit, rightMargin=page_margin_right*unit, topMargin=page_margin_top*unit, bottomMargin=page_margin_bottom*unit)
+        elements = []
+        # remove margins from page width
+        page_width = page_width*unit - page_margin_left*unit - page_margin_right*unit
+        # each label is broken into 3 parts, with a seperate cell for each:
+        # first cell
+        qr_code_width = label_width*unit/4
+        
+        if qr_code_width > label_height*unit:
+            qr_code_width = label_height*unit
+        if label_height*unit > qr_code_width:
+            qr_code_height = qr_code_width
+        else:
+            qr_code_height = label_height*unit
+        # second cell
+        text_area_width = label_width*unit - qr_code_width
+        # third cell
+        margin_right_width = label_margin_right*unit
+        # total width of each label is the sum of all 3 cells
+        column_width = qr_code_width + text_area_width + margin_right_width
+        # row height is the same for all 3 parts
+        row_height = (label_height + margin_bottom)*unit
+        num_cols = int(page_width / column_width)
+        labels_row = []
+        table_data = []
+        style = ParagraphStyle(name='Normal', fontName='Helvetica', fontSize=font_size, leading=font_size*1.3)
+        for i, label in enumerate(labels):
+            # currently, we are not trimming the text to fit on a single row
+            # this means that lots with a long label_line_1 will spill over onto 2 rows
+            # we could trim the length to [:20] in the model or here to "fix" this, but it's not a huge problem IMHO
+            label_qr_code = qr_code.qrcode.maker.make_qr_code_image(label.qr_code, QRCodeOptions(size='T', border=4, error_correction='L', image_format="png",))
+            image_stream = BytesIO(label_qr_code)
+            label_qr_code_cell = PImage(image_stream, width=qr_code_width, height=qr_code_height, lazy=0, hAlign="LEFT")
+            label_text_cell = Paragraph(f"<b>Lot: {label.lot_number_display}</b><br />{label.label_line_1}<br />{label.label_line_2}<br />{label.label_line_3}", style)
+            labels_row.append([label_qr_code_cell])
+            labels_row.append([label_text_cell])
+            labels_row.append([Paragraph('', style)]) # margin right cell is empty
+            
+            # Check if the current label is the last label in the current row or the last label in the list
+            if (i+1) % num_cols == 0 or i == len(labels) - 1:
+                # Check if the current label is the last label in the list and labels_row is not full
+                if i == len(labels) - 1 and len(labels_row) < num_cols:
+                    # Add empty elements to the labels_row list until it is filled
+                    labels_row += [[Paragraph('', style), Paragraph('', style), Paragraph('', style)]]*(num_cols - len(labels_row))
+                table_data.append(labels_row)
+                labels_row = []
+        col_widths = []
+        for i in range(num_cols):
+            col_widths += [qr_code_width,text_area_width,margin_right_width]
+        table = Table(table_data, colWidths=col_widths, rowHeights=row_height)
+        table.setStyle([
+            #('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP')
+        ])
+        elements.append(table)
+        doc.build(elements)
+        return response
+
+
+    # def get(self, request, *args, **kwargs):
+    #     number_of_rows = 3
+    #     number_of_columns = 5
+    #     buffer = BytesIO()
+
+    #     # Create the PDF object, using the BytesIO object as its "file."
+    #     doc = SimpleDocTemplate(buffer, pagesize=letter)
+
+    #     # Container for the 'Flowable' objects
+    #     elements = []
+
+    #     # Get the queryset of labels
+    #     labels = self.lots
+    #     styles = getSampleStyleSheet()
+    #     # Define the data for the labels
+    #     data = [[Paragraph(label.lot_name, style=styles['Normal']), Paragraph(label.lot_number, style=styles['Normal'])] for label in labels]
+
+    #     # Create the table for the labels
+    #     t = Table(data)
+
+    #     # Apply a style to the table
+    #     t.setStyle(TableStyle([('GRID', (0, 0), (-1, -1), 1, colors.black),
+    #                         ('BACKGROUND', (0, 0), (-1, -1), colors.grey),
+    #                         ('TEXTCOLOR', (0, 0), (-1, -1), colors.whitesmoke),
+    #                         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+    #                         ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
+    #                         ('BACKGROUND', (0, 0), (0, -1), colors.beige),
+    #                         ('BACKGROUND', (0, 0), (-1, 0), colors.beige),
+    #                         ('BACKGROUND', (-1, 0), (-1, -1), colors.beige),
+    #                         ('BACKGROUND', (0, -1), (-1, -1), colors.beige),
+    #                         ('BOX', (0, 0), (-1, -1), 1, colors.black),
+    #                         ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
+    #                         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+    #                         ('LEFTPADDING', (0, 0), (-1, -1), 5),
+    #                         ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+    #                         ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+    #                         ('TOPPADDING', (0, 0), (-1, -1), 5)]))
+    #     elements.append(t)
+
+    #     # Write the PDF document to the BytesIO object
+    #     doc.build(elements)
+
+    #     # Get the value of the BytesIO buffer
+    #     pdf = buffer.getvalue()
+    #     buffer.close()
+
+    #     # Create the HttpResponse object with the appropriate PDF headers.
+    #     response = HttpResponse(pdf, content_type='application/pdf')
+    #     response['Content-Disposition'] = 'attachment; filename="labels.pdf"'
+
+    #     return response
+
+       
+        
+        
+    #     label_width = float(request.GET.get('label_width', 2.5))
+    #     label_height = float(request.GET.get('label_height', 1))
+    #     spacing_x = float(request.GET.get('spacing_x', 0))
+    #     spacing_y = float(request.GET.get('spacing_y', 0))
+    #     margin_top = 1
+    #     margin_side = 1
+    #     page_x = 8.5*inch
+    #     page_y = 11*inch
+    #     available_height = page_y - margin_top*inch
+    #     available_width = page_x - margin_side*inch
+    #     rows_per_page = int(available_height / (label_height + spacing_y))
+    #     columns_per_page = int(available_width / (label_width + spacing_x))
+    #     #col_widths = (label_width*inch+spacing_x*inch, label_width*inch+spacing_x*inch)
+    #     #col_widths = [[label_width*inch]+[spacing_x*inch]]*columns_per_page
+    #     row_heights = label_height*inch+spacing_x*inch
+    #     #row_heights = [[label_height*inch]+[spacing_x*inch]]*rows_per_page
+    #     buffer = BytesIO()
+    #     doc = SimpleDocTemplate(buffer, pagesize=(page_x, page_y))
+    #     doc.info = {
+    #         "title": "Hello World PDF",
+    #         "author": "Django",
+    #         "subject": "Test PDF",
+    #         "keywords": "pdf, hello, world"
+    #     }
+    #     #table_style = [('GRID', (0,0), (-1,-1), 0.5, (0,0,0))]
+    #     data = []
+    #     #for i in range(0, 4):
+    #     #    for j in range(0, 3):
+    #     for lot in self.lots:
+    #         data.append([f"{lot.lot_name}"])
+
+    #     # Calculate the number of rows and columns
+    #     #num_rows = len(data)
+    #     available_width = page_x - margin_side*inch # subtract margins from the available width
+    #     num_columns = int((available_width - label_width) / (label_width + spacing_x)) + 1 # calculate the number of columns
+
+    #     # styling info
+    #     style = ParagraphStyle(name='Normal', fontName='Helvetica', fontSize=10, leading=12, alignment=TA_JUSTIFY)
+
+
+    #     # Create a list of rows
+    #     rows = []
+    #     for i in range(0, rows_per_page, columns_per_page):
+    #         row = data[i:i+columns_per_page]
+    #         #print(row)
+    #         rows.append(row)
+
+    #     # Create the table data
+    #     #table_data = [[cell for cell in row] for row in rows]
+    #     table_data = []
+    #     for row in rows:
+    #         cells = []
+    #         for cell in row:
+    #             cell = Paragraph('text ', style).split(label_width*.9*inch, label_height*.9*inch)
+    #             #cell.keepWithNext=True
+    #             cells.append(cell)
+    #         table_data.append(cells)
+    #     print(table_data)
+
+    #     # Set the column widths
+    #     colWidths = [label_width] + [spacing_x]*(num_columns-1)
+
+
+    #     # Create the table
+    #     table = Table(table_data, colWidths=colWidths)
+
+    #     #table = Table(data, colWidths=col_widths, rowHeights=row_heights, style=table_style)
+    #     table.setStyle(TableStyle([('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+    #                     ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+    #                     ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+    #                     ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+    #                     ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+    #                     ('BACKGROUND', (0, -1), (-1, -1), colors.beige),
+    #                     ('GRID', (0, 0), (-1, -1), 1, colors.black)]))
+    #     #table = Table(data, colWidths=[label_width*inch, spacing_x*inch], rowHeights=[label_height*inch], style=table_style)
+    #     # Set the table's hAlign and vAlign
+    #     #table.hAlign = 'CENTER'
+    #     #table.vAlign = 'MIDDLE'
+    #     # Set the table's spaceBefore and spaceAfter
+    #     table.spaceBefore = spacing_y*inch
+    #     table.spaceAfter = spacing_y*inch
+    #     # Add the table to the PDF document
+    #     doc.build([table])
+    #     # Get the value of the BytesIO buffer and write it to the response.
+    #     pdf = buffer.getvalue()
+    #     buffer.close()
+    #     response = FileResponse(BytesIO(pdf), content_type='application/pdf')
+    #     response['Content-Disposition'] = 'attachment; filename="labels.pdf"'
+    #     return response
+        
+    #     buffer = BytesIO()
+    #     doc = canvas.Canvas(buffer)
+
+    #     # Draw things on the PDF. Here's where the PDF generation happens.
+    #     # See the ReportLab documentation for the full list of functionality.
+    #     doc.drawString(100, 100, "Hello world.")
+
+    #     # Close the PDF object cleanly, and we're done.
+    #     doc.showPage()
+    #     doc.addJS("this.print({bUI:true,bSilent:false,bShrinkToFit:false});")
+    #     doc.save()
+
+    #     # FileResponse sets the Content-Disposition header so that browsers
+    #     # present the option to save the file.
+    #     buffer.seek(0)
+    #     return FileResponse(buffer, as_attachment=True, filename='labels.pdf')
+        
+    #     doc = BaseDocTemplate(buffer, pagesize=letter)
+
+    #     # doc.info.title = f"{self.tos.name}'s labels for {self.auction}"
+    #     # doc.info.author = "https://auction.fish"
+    #     # doc.info.subject = "Labels"
+    #     # doc.info.keywords = "pdf"
+
+    #     # Add javascript action to print the pdf
+    #     #
+
+    #     # Create the PDF document
+    #     styles = getSampleStyleSheet()
+    #     story = []
+    #     story.append(Paragraph("Hello World", styles["Normal"]))
+    #     doc.build(story)
+
+    #     # Get the value of the BytesIO buffer and write it to the response.
+    #     pdf = buffer.getvalue()
+    #     buffer.close()
+    #     response = FileResponse(BytesIO(pdf), content_type='application/pdf')
+    #     response['Content-Disposition'] = 'attachment; filename="hello_world.pdf"'
+    #     return response
+
+# class LotLabelView(View, AuctionPermissionsMixin):
+#     """This replaces the now-deprecated-and-no-longer-used InvoiceLabelView"""
+    
+#     # these are defined in urls.py and used in get_object(), below
+#     bidder_number = None
+#     username = None
+#     template_name = 'invoice_labels.html'
+#     allow_non_admins = True
+
+#     def get_object(self):
+#         if not self.bidder_number and not self.username:
+#             print("bidder_number or username needs to be set, fix urls.py...")
+#         if self.bidder_number:
+#             invoice = Invoice.objects.filter(auctiontos_user__auction=self.auction, auctiontos_user__bidder_number=self.bidder_number).first()
+#         if self.username:
+#             invoice = Invoice.objects.filter(auctiontos_user__auction=self.auction, auctiontos_user__user__username=self.username).first()
+#         if not invoice:
+#             raise Http404
+#         self.exampleMode = False
+#         return invoice
+            
+#     def dispatch(self, request, *args, **kwargs):
+#         # check to make sure the user has permission to view this invoice
+#         self.auction = Auction.objects.filter(slug=kwargs['slug']).first()
+#         self.bidder_number = kwargs.pop('bidder_number', None)
+#         self.username = kwargs.pop('username', None)
+#         self.invoice = self.get_object()
+#         #self.is_admin = self.is_auction_admin
+#         # right now, we are blocking anyone other than an auction admin from viewing this
+#         # one thing we could do is add a check for
+#         # request.user = invoice.auctiontos_user here, and mark printed if the check passes
+#         # this would effectively replace InvoiceLabelView
+#         return super().dispatch(request, *args, **kwargs)
 
 class InvoiceLabelView(InvoiceView):
     """Allows printing of labels"""
@@ -2755,6 +3087,23 @@ class UsernameUpdate(UpdateView, SuccessMessageMixin):
         if len(data) == 0:
             data['next'] = reverse('account')#"/users/" + str(self.kwargs['pk'])
         return data['next']
+
+class UserLabelPrefsView(UpdateView, SuccessMessageMixin):
+    template_name = 'user_labels.html'
+    model = UserLabelPrefs
+    success_message = 'Printing preferences updated'
+    form_class = UserLabelPrefsForm
+    user_pk = None
+
+    def get_success_url(self):
+        data = self.request.GET.copy()
+        if len(data) == 0:
+            data['next'] = reverse("userpage", kwargs={'slug': self.request.user.username})
+        return data['next']
+    
+    def get_object(self, *args, **kwargs):
+        label_prefs, created = UserLabelPrefs.objects.get_or_create(user=self.request.user, defaults={},)
+        return label_prefs
 
 class UserPreferencesUpdate(UpdateView, SuccessMessageMixin):
     template_name = 'user_preferences.html'

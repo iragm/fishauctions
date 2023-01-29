@@ -27,7 +27,7 @@ function initMap() {
         ['<div class="info_content" style="color:black;">' +
         '<h5>{{ user.first_name }} {{ user.last_name }}</h5>' +
         '<p>{{ user.username }}<br>{{ user.email }}<br> Volume top: {{user.userdata.volume_percentile}}%<br>' +
-        'Last active {{user.userdata.last_activity}}%<br>' +
+        'Last active {{user.userdata.last_activity}}<br>' +
         '<a href="/user/{{ user.username }}" target="_blank">Userpage</a><br>' +
         '<a href="/admin/auth/user/{{ user.pk }}/change/" target="_blank">Admin</a><br>' +
         '</div></p>'],

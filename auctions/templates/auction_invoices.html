@@ -47,7 +47,7 @@
               <th scope="col">Opened</th>
               <th scope="col">View</th>
               <th scope="col">Print</th>
-              <th scope="col">Total</th>
+              <!-- <th scope="col">Total</th> -->
               <th scope="col">Status</th>
               <th scope="col">Lots bought</th>
               <th scope="col">Lots sold</th>
@@ -63,7 +63,7 @@
               <td>{% if not invoice.opened %}No{%endif%}</td>
               <td><a href="/invoices/{{invoice.pk}}/">{% if invoice.user.first_name %}{{ invoice.user.first_name }} {{ invoice.user.last_name }}{% else %}{{ invoice.auctiontos_user.name }}{% endif %}</a></td>
               <td><a href="/invoices/{{invoice.pk}}/?print">Print</a></td>
-              <td>${{ invoice.calculated_total|floatformat:2 }}</td>
+              <!-- <td>${{ invoice.calculated_total|floatformat:2 }}</td> -->
               <td><div class="btn-group" role="group" aria-label="Invoice status selection">
                 <button type="button" id="{{invoice.pk}}_DRAFT" onclick="payinvoice({{ invoice.pk }}, 'DRAFT');" class="btn {% if invoice.status == 'DRAFT'%}draft btn-primary{% else %}btn-secondary{% endif %}">Draft</button>
                 <button type="button" id="{{invoice.pk}}_UNPAID" onclick="payinvoice({{ invoice.pk }}, 'UNPAID');" class="btn {% if invoice.status == 'UNPAID'%}btn-primary unpaid{% else %}btn-secondary{% endif %}">Ready</button>
