@@ -4,7 +4,7 @@ from auctions.models import *
 from django.core.mail import send_mail
 from django.db.models import Count, Case, When, IntegerField, Avg, Q, F
 from django.core.files import File
-from datetime import datetime
+import datetime
 from django.template.loader import get_template
 import os
 import uuid
@@ -14,12 +14,27 @@ from auctions.filters import get_recommended_lots
 import re
 from collections import Counter
 
+
 class Command(BaseCommand):
     help = 'Just a scratchpad to do things'
     def handle(self, *args, **options):
         auction = Auction.objects.get(slug="tfcb-2022-annual-auction")
         invoices = Invoice.objects.filter(auction=auction)
-
+        user = User.objects.get(pk=1)
+        in_person_auctions_cutoff = timezone.now() + datetime.timedelta(days=90)
+        locations = PickupLocation.objects.filter(
+            Q(
+                # any in person auctions before the cutoff, excluding any that have already started
+                Q(auction__date_start__lte=in_person_auctions_cutoff, auction__is_online=False) & ~Q(auction__date_start__lte=timezone.now())\
+                | # or any online auctions that have started, but not those that have ended
+                Q(auction__date_start__lte=timezone.now(), auction__is_online=True) & ~Q(auction__date_end__lte=timezone.now())
+            ))\
+            .exclude(auction__promote_this_auction=False)\
+            .exclude(auction__is_deleted=True)\
+            .annotate(distance=distance_to(user.userdata.latitude, user.userdata.longitude))\
+            .order_by('distance').filter(distance__lte=user.userdata.email_me_about_new_auctions_distance)
+        for location in locations:
+            print(location.auction)
         #lots = Lot.objects.filter(Q(feedback_text__isnull=False)|Q(winner_feedback_text__isnull=False))
         #for lot in lots:
         #    print(lot.winner_feedback_text, lot.feedback_text)

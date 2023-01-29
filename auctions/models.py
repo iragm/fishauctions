@@ -681,7 +681,7 @@ class AuctionTOS(models.Model):
 
 	@property
 	def lots_qs(self):
-		lots = Lot.objects.filter(auctiontos_seller=self.pk)
+		lots = Lot.objects.filter(auctiontos_seller=self.pk).exclude(is_deleted=True)
 		return lots
 
 	@property
@@ -1280,7 +1280,7 @@ class Lot(models.Model):
 		"""Used by the view for display of whether or not the auction has ended
 		See also the database field active, which is set (based on this field) by a system job (endauctions.py)"""
 		# lot attached to in person auctions do not end unless manually set
-		if self.sold:
+		if self.sold or self.banned or self.is_deleted:
 			return True
 		if self.is_part_of_in_person_auction:
 			return False
