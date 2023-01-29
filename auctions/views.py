@@ -2748,10 +2748,12 @@ class LotLabelView(View, AuctionPermissionsMixin):
             
             # Check if the current label is the last label in the current row or the last label in the list
             if (i+1) % num_cols == 0 or i == len(labels) - 1:
+                # print(f'we have reached the end, {len(labels)} in total')
                 # Check if the current label is the last label in the list and labels_row is not full
-                if i == len(labels) - 1 and len(labels_row) < num_cols:
+                if i == len(labels) - 1 and len(labels_row) < num_cols*3:
                     # Add empty elements to the labels_row list until it is filled
-                    labels_row += [[Paragraph('', style), Paragraph('', style), Paragraph('', style)]]*(num_cols - len(labels_row))
+                    #print(f"adding {(num_cols*3) - len(labels_row)} extra labels, *3 total columns added")
+                    labels_row += [[Paragraph('', style), Paragraph('', style), Paragraph('', style)]]*((num_cols*3) - len(labels_row))
                 table_data.append(labels_row)
                 labels_row = []
         col_widths = []
