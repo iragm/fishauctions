@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}Add users to {{ auction }}{% endblock %}
+{% load static %}
+
+{% block content %}
+  {% include 'auction_ribbon.html' %}
+  <br>
+  
+<input type="file" name="csv_file" id="csv_file" accept=".csv" hx-encoding="multipart/form-data" hx-post="{% url 'bulk_add_users' auction.slug %}" hx-swap="outerHTML" hx-target="body" style="display: none;">
+<button class="btn btn-primary btn-sm" onclick="document.getElementById('csv_file').click()">Import from CSV</button>
+{% for other_auction in other_auctions %}<a href="{% url 'bulk_add_users' slug=auction.slug %}?import={{other_auction.slug}}" class="btn btn-sm btn-primary mr-1">Import from {{other_auction}}</a>{% endfor %}
+<br><small>Use this form to quickly add users to your auction</small>
+  {{ link_formset.management_form }}
+  <form id="form-container" method="POST" action="{% url 'bulk_add_users' slug=auction.slug %}">
+    {% crispy formset helper %}
+    <button class='btn btn-info' id="add-form" type="button">Add row</button><input type="submit" class='btn btn-success float-right' id='save' value="Add users to {{ auction }}">
+  </form>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+var form_id = '#form-container';
+{% include 'leave_page_warning.js' %}
+$('#add-form').click(function() {
+  cloneMore('.lot-form:last', 'form');
+});
+function cloneMore(selector, type) {
+    var newElement = $(selector).clone(true);
+    var total = $('#id_' + type + '-TOTAL_FORMS').val();
+    newElement.find(':input').each(function() {
+        var name = $(this).attr('name').replace('-' + (total-1) + '-','-' + total + '-');
+        var id = 'id_' + name;
+        $(this).attr({'name': name, 'id': id}).removeAttr('checked'); // keep last row's values 
+        //$(this).attr({'name': name, 'id': id}).val('').removeAttr('checked'); // blank rows 
+    });
+    newElement.find('label').each(function() {
+        var newFor = $(this).attr('for').replace('-' + (total-1) + '-','-' + total + '-');
+        $(this).attr('for', newFor);
+    });
+    total++;
+    $('#id_' + type + '-TOTAL_FORMS').val(total);
+    $(selector).after(newElement);
+}
+</script>
+{% endblock %}

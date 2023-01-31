@@ -79,6 +79,7 @@ urlpatterns = [
     path('auctions/<slug:slug>/print/user/<str:username>/', views.LotLabelView.as_view()),
     path('auctions/<slug:slug>/print/bidder/<str:bidder_number>/', views.LotLabelView.as_view(), name="print_labels_by_bidder_number"),
     path('auctions/<slug:slug>/users/', views.AuctionUsers.as_view(), name="auction_tos_list"),
+    path('auctions/<slug:slug>/users/bulk-add/', views.BulkAddUsers.as_view(), name="bulk_add_users"),
     path('auctions/<slug:slug>/users/<str:bidder_number>/', views.BulkAddLots.as_view(), name="bulk_add_lots"),
     path('auctions/<slug:slug>/lots/set-winners/', views.QuickSetLotWinner.as_view(), name='auction_lot_winners'),
     path('auctions/<slug:slug>/lots/<slug:custom_lot_number>/', views.ViewLot.as_view()),

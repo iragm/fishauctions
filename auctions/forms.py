@@ -20,6 +20,52 @@ from django.forms import BaseModelFormSet
 # class DateInput(forms.DateInput):
 #     input_type = 'datetime-local'
 
+class QuickAddTOS(forms.ModelForm):
+    """Add a new user to an auction by filling out only the most important fields"""
+    
+    class Meta:
+        model = AuctionTOS
+        fields = [
+            'bidder_number',
+            'name',
+            'email',
+            'phone_number',
+            'address',
+            'pickup_location',
+        ]
+        widgets = {
+            'address': forms.Textarea(attrs={'rows':2}),
+        }
+    def __init__(self, *args, **kwargs):
+        self.auction = kwargs.pop('auction')
+        self.bidder_numbers_on_this_form = kwargs.pop('bidder_numbers_on_this_form')
+        super().__init__(*args, **kwargs)
+        self.fields['bidder_number'].help_text = ""
+        self.fields['name'].help_text = ""
+        self.fields['email'].help_text = ""
+        self.fields['phone_number'].help_text = ""
+        self.fields['address'].help_text = ""
+        self.fields['pickup_location'].queryset = self.auction.location_qs
+        if not self.auction.multi_location:
+            self.fields['pickup_location'].initial = self.auction.location_qs.first()
+
+    def clean(self):
+        cleaned_data = super().clean()
+        bidder_number = cleaned_data.get("bidder_number")
+        if bidder_number:
+            existing_tos = AuctionTOS.objects.filter(bidder_number=bidder_number, auction=self.auction)
+            pk = cleaned_data.get("pk")
+            if pk:
+                existing_tos = existing_tos.exclude(pk=pk)
+            else:
+                self.bidder_numbers_on_this_form.append(bidder_number)
+            if existing_tos.count() or self.bidder_numbers_on_this_form.count(bidder_number) > 1:
+                self.add_error('bidder_number', "This bidder number is already in use")
+        name = cleaned_data.get("name")
+        if not name:
+            self.add_error('name', "Name is required")
+        return cleaned_data
+
 class QuickAddLot(forms.ModelForm):
     """Add a new lot by filling out only the most important fields"""
     
@@ -88,7 +134,6 @@ class BaseLotFormSet(BaseModelFormSet):
 
 
     def clean(self):
-        print('clean')
         if any(self.errors):
             return
         issues = False
@@ -96,7 +141,6 @@ class BaseLotFormSet(BaseModelFormSet):
             if form.cleaned_data:
                 custom_lot_number = form.cleaned_data['custom_lot_number']
                 if custom_lot_number:
-                    print(custom_lot_number)
                     other_lots = Lot.objects.filter(auction=self.auction, custom_lot_number=custom_lot_number).count()
                     #if other_lots > 1:
                     form.add_error('custom_lot_number', "Lot number already in use")
@@ -107,6 +151,28 @@ class BaseLotFormSet(BaseModelFormSet):
                         'One or more lot numbers are already in use',
                         code='lot_numbers'
                     )
+class TOSFormSetHelper(FormHelper):
+    def __init__(self, *args, **kwargs):
+        #self.auction = kwargs['auction']
+        super().__init__(*args, **kwargs)
+        self.form_method = 'post'
+        
+
+        # self.layout = Layout(
+        #     Div(
+        #         Div('custom_lot_number',css_class='col-sm-5',),
+        #         Div('lot_name',css_class='col-sm-7',),
+        #         css_class='row',
+        #     ),
+        #     Div(
+        #         Div('quantity',css_class='col-sm-4',),
+        #         Div('donation',css_class='col-sm-4',),
+        #         Div('i_bred_this_fish',css_class='col-sm-4',),
+        #         css_class='row',
+        #     ),
+        # )
+        #self.add_input(Submit('submit', 'Save'))
+        self.template = 'auctions/bulk_add_users_row.html'
 
 class LotFormSetHelper(FormHelper):
     def __init__(self, *args, **kwargs):
@@ -395,9 +461,25 @@ class CreateEditAuctionTOS(forms.ModelForm):
             if not auction.permission_check(self.user):
                 self.add_error('auction', "How did you even manage to change this field?")
         bidder_number = cleaned_data.get("bidder_number")
-        other_bidder_numbers = AuctionTOS.objects.filter(auction=self.auction, bidder_number=bidder_number).exclude(pk=self.auctiontos.pk).count()
-        if other_bidder_numbers:
+        other_bidder_numbers = AuctionTOS.objects.filter(auction=self.auction, bidder_number=bidder_number)
+        if self.auctiontos:
+            other_bidder_numbers = other_bidder_numbers.exclude(pk=self.auctiontos.pk)
+        if other_bidder_numbers.count():
             self.add_error('bidder_number', "Bidder number already in use")
+        return cleaned_data
+
+    def clean(self):
+        cleaned_data = super().clean()
+        custom_lot_number = cleaned_data.get("custom_lot_number")
+        if custom_lot_number:
+            existing_lots = Lot.objects.filter(custom_lot_number=custom_lot_number, auction=self.auction)
+            lot_number = cleaned_data.get("lot_number")
+            if lot_number:
+                existing_lots = existing_lots.exclude(lot_number=lot_number.pk)
+            else:
+                self.custom_lot_numbers_used.append(custom_lot_number)
+            if existing_lots.count() or self.custom_lot_numbers_used.count(custom_lot_number) > 1:
+                self.add_error('custom_lot_number', "This lot number is already in use")
         return cleaned_data
 
 class CreateBid(forms.ModelForm):

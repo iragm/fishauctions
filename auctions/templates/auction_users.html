@@ -10,8 +10,9 @@
     hx-target="#modals-here"
     hx-trigger="click"
     _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">Add user</button>
-  <a href="{% url 'user_list' slug=auction.slug %}" class="btn btn-sm mt-2 mr-2 mb-2 btn-warning">Export CSV</a>
-  <form class="col-sm-12 mt-2">
+    <a href="{% url 'user_list' slug=auction.slug %}" class="btn btn-sm mt-2  mb-2 btn-warning">Export CSV</a>
+    <a href="{% url 'bulk_add_users' auction.slug %}" class="btn btn-sm mt-2  mb-2 btn-info">Bulk add users</a>
+<form class="col-sm-12 mt-2">
   {% crispy filter.form %}
   </form>
   {# Progress indicator #}

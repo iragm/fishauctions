@@ -30,7 +30,7 @@ from .models import *
 from .filters import *
 from .forms import *
 from .tables import *
-from io import BytesIO
+from io import BytesIO, TextIOWrapper
 from django.core.files import File
 import re
 from urllib.parse import unquote
@@ -825,7 +825,7 @@ def auctionReport(request, slug):
         end = timezone.now().strftime("%Y-%m-%d")
         response['Content-Disposition'] = 'attachment; filename="' + slug + "-report-" + end + '.csv"'
         writer = csv.writer(response)
-        writer.writerow(['Join date', 'Username', 'Name', 'Email', 'Phone', 'Address', 'Location', 'Miles to pickup location', 'Club', 'Lots viewed', 'Lots bid', 'Lots submitted', 'Lots won', 'Invoice', 'Total bought', 'Total sold', 'Invoice total due', 'Breeder points', "Number of lots sold outside auction", "Total value of lots sold outside auction", "Seconds spent reading rules", "Other auctions joined"])
+        writer.writerow(['Join date', 'Bidder number', 'Username', 'Name', 'Email', 'Phone', 'Address', 'Location', 'Miles to pickup location', 'Club', 'Lots viewed', 'Lots bid', 'Lots submitted', 'Lots won', 'Invoice', 'Total bought', 'Total sold', 'Invoice total due', 'Breeder points', "Number of lots sold outside auction", "Total value of lots sold outside auction", "Seconds spent reading rules", "Other auctions joined"])
         users = AuctionTOS.objects.filter(auction=auction).annotate(distance_traveled=distance_to(\
                 '`auctions_userdata`.`latitude`', '`auctions_userdata`.`longitude`', \
                 lat_field_name='`auctions_pickuplocation`.`latitude`',\
@@ -875,7 +875,7 @@ def auctionReport(request, slug):
                 totalSpent = "0" 
                 totalPaid = "0"
                 invoiceTotal = ""
-            writer.writerow([data.createdon.strftime("%m-%d-%Y"), username, data.name, data.email, \
+            writer.writerow([data.createdon.strftime("%m-%d-%Y"), data.bidder_number, username, data.name, data.email, \
                 data.phone_as_string, address, data.pickup_location, distance,\
                 club, len(lotsViewed), len(lotsBid), len(lotsSumbitted), \
                 len(lotsWon), invoiceStatus, totalSpent, totalPaid, invoiceTotal, len(breederPoints),\
@@ -1291,6 +1291,199 @@ class QuickSetLotWinner(FormView, AuctionPermissionsMixin):
                     messages.success(self.request, f"{tos.name} is now the winner of {lot.lot_name}.  <a href='{undo_url}'>Undo this or make other changes to the lot here</a>")
                     return super().form_valid(form)
         return self.form_invalid(form)
+
+class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
+    """Add/edit lots of lots for a given auctiontos pk"""
+    template_name = "auctions/bulk_add_users.html"
+    max_users_that_can_be_added_at_once = 200
+    extra_rows = 5
+    AuctionTOSFormSet = None
+
+    def get(self, *args, **kwargs):
+        # first, try to read in a CSV file stored in session 
+        initial_formset_data = self.request.session.get('initial_formset_data', [])
+        if initial_formset_data:
+            self.extra_rows = len(initial_formset_data) + 1
+            del self.request.session['initial_formset_data']
+        else:
+            # next, check GET to see if they're asking for an import from a past auction
+            import_from_auction = self.request.GET.get('import')
+            if import_from_auction:
+                other_auction = Auction.objects.filter(slug=import_from_auction).first()
+                if not other_auction.permission_check(self.request.user):
+                    messages.error(self.request, f"You don't have permission to add users from {other_auction}")
+                else:
+                    auctiontos = AuctionTOS.objects.filter(auction=other_auction)
+                    total_skipped = 0
+                    total_tos = 0
+                    for tos in auctiontos:
+                        if not self.tos_is_in_auction(self.auction, tos.name, tos.email):
+                            initial_formset_data.append({
+                                'bidder_number':tos.bidder_number,
+                                'name':tos.name,
+                                'phone':tos.phone_number,
+                                'email':tos.email,
+                                'address':tos.address
+                            })
+                            total_tos += 1
+                        else:
+                            total_skipped += 1
+                    if total_tos >= self.max_users_that_can_be_added_at_once:
+                        messages.warning(self.request, f"You can only add {self.max_users_that_can_be_added_at_once} users from another auction at once; run this again to add additional users.")
+                    if total_skipped:
+                        messages.warning(self.request, f"{total_skipped} users are already in this auction (matched by email, or name if email not set) and do not appear below")
+                    if total_tos:
+                        self.extra_rows = total_tos + 1
+        self.instantiate_formset()
+        self.tos_formset = self.AuctionTOSFormSet(form_kwargs={'auction': self.auction, 'bidder_numbers_on_this_form':[]}, queryset=self.queryset, initial=initial_formset_data)
+        context = self.get_context_data(**kwargs)
+        return self.render_to_response(context)
+
+    def handle_csv_file(self, csv_file, *args, **kwargs):
+        """If a CSV file has been uploaded, parse it and redirect"""
+        
+        def extract_info(row, field_name_list, default_response=""):
+            """Pass a row, and a lowercase list of field names
+            extract the first match found (case insenstive) and return the value from the row
+            emptry string returned if the value is not found in the row"""
+            case_insensitive_row = {k.lower(): v for k, v in row.items()}
+            for name in field_name_list:
+                try:
+                    return case_insensitive_row[name]
+                except:
+                    pass
+            return default_response
+        
+        def columns_exist_in_csv(csv_reader, columns):
+            """returns True if any value in the list `columns` exists in the file"""
+            first_row = next(csv_reader)
+            result = extract_info(first_row, columns, None)
+            if result == None:
+                return False
+            else:
+                return True        
+
+        csv_file.seek(0)
+        csv_reader = csv.DictReader(TextIOWrapper(csv_file.file))
+        email_field_names = ['email', 'e-mail', 'email address', 'e-mail address']
+        bidder_number_fields = ['bidder number', 'bidder']
+        name_field_names = ['name', 'full name', 'first name', 'firstname']
+        address_field_names = ['address', 'mailing address']
+        phone_field_names = ['phone', 'phone number','telephone','telephone number']
+        # we are not reading in location here, do we care??
+        some_columns_exist = False
+        error = ""
+        # order matters here - the most important columns should be validated last, 
+        # so the error refers to the most important missing column
+        if not columns_exist_in_csv(csv_reader, phone_field_names):
+            error = "This file does not contain a phone column"
+        else:
+            some_columns_exist = True
+        if not columns_exist_in_csv(csv_reader, address_field_names):
+            error = "This file does not contain an address column"
+        else:
+            some_columns_exist = True
+        if not columns_exist_in_csv(csv_reader, name_field_names):
+            error = "This file does not contain a name column"
+        else:
+            some_columns_exist = True
+        if not columns_exist_in_csv(csv_reader, email_field_names):
+            error = "This file does not contain an email column"
+        else:
+            some_columns_exist = True
+        if not some_columns_exist:
+            error = "Unable to read information from this CSV file.  Make sure it contains an email and name column"
+        total_tos = 0
+        total_skipped = 0
+        initial_formset_data = []
+        for row in csv_reader:
+            bidder_number = extract_info(row, bidder_number_fields)
+            email = extract_info(row, email_field_names)
+            name = extract_info(row, name_field_names)
+            phone = extract_info(row, phone_field_names)
+            address = extract_info(row, address_field_names)
+            if (email or name or phone or address) and total_tos <= self.max_users_that_can_be_added_at_once:
+                if self.tos_is_in_auction(self.auction, name, email):
+                    total_skipped += 1
+                else:
+                    total_tos += 1
+                    initial_formset_data.append({
+                        'bidder_number':bidder_number,
+                        'name':name,
+                        'phone':phone,
+                        'email':email,
+                        'address':address
+                    })
+        # this needs to be added to the session in order to persist when moving from POST (this csv processing) to GET
+        self.request.session['initial_formset_data'] = initial_formset_data
+        if total_tos >= self.max_users_that_can_be_added_at_once:
+            messages.warning(self.request, f"You can only add {self.max_users_that_can_be_added_at_once} users at once; run this again to add additional users.")
+        if total_skipped:
+            messages.warning(self.request, f"{total_skipped} users are already in this auction (matched by email, or name if email not set) and do not appear below")
+        if error:
+            messages.error(self.request, error)
+        if total_tos:
+            self.extra_rows = total_tos
+        # note that regardless of whether this is valid or not, we redirect to the same page after parsign the CSV file
+        return redirect(reverse("bulk_add_users", kwargs={'slug': self.auction.slug}))
+
+    def post(self, request, *args, **kwargs):
+        csv_file = request.FILES.get('csv_file', None)
+        if csv_file:
+            return self.handle_csv_file(csv_file)
+        self.instantiate_formset()
+        tos_formset = self.AuctionTOSFormSet(self.request.POST, form_kwargs={'auction': self.auction, 'bidder_numbers_on_this_form':[]}, queryset=self.queryset)
+        if tos_formset.is_valid():
+            auctiontos = tos_formset.save(commit=False)
+            for tos in auctiontos:
+                tos.auction = self.auction
+                tos.manually_added = True
+                tos.save()
+            messages.success(self.request, f'Added {len(auctiontos)} users')
+            return redirect(reverse("auction_tos_list", kwargs={'slug': self.auction.slug}))
+        self.tos_formset = tos_formset
+        context = self.get_context_data(**kwargs)
+        return self.render_to_response(context)
+    
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['formset'] = self.tos_formset
+        context['helper'] = TOSFormSetHelper()
+        context['auction'] = self.auction
+        context['other_auctions'] = Auction.objects.filter(Q(created_by=self.request.user) | Q(auctiontos__user=self.request.user, auctiontos__is_admin=True)).distinct().order_by('-date_posted')[:3]
+        return context
+
+    def tos_is_in_auction(self, auction, name, email):
+        """Return the tos if the name or email are already present in the auction, otherwise None"""
+        qs = AuctionTOS.objects.filter(auction=auction)
+        if email:
+            qs = qs.filter(email=email)
+        else:
+            qs = qs.filter(
+                Q(name=name, email=None)
+                |
+                Q(name=name, email=""))
+        return qs.first()
+
+    def dispatch(self, request, *args, **kwargs):
+        self.auction = Auction.objects.filter(slug=kwargs.pop('slug')).first()
+        if not self.auction:
+            raise Http404
+        if not self.auction.permission_check(self.request.user):
+            messages.error(request, "Your account doesn't have permission to add users to this auction")
+            return redirect("/")
+        self.queryset = AuctionTOS.objects.none() # we don't want to allow editing
+        return super().dispatch(request, *args, **kwargs)
+
+    def instantiate_formset(self, *args, **kwargs):
+        if not self.AuctionTOSFormSet:
+            self.AuctionTOSFormSet = modelformset_factory(AuctionTOS, extra=self.extra_rows, fields = (
+                'bidder_number',
+                'name',
+                'email',
+                'phone_number',
+                'address',
+                'pickup_location',), form=QuickAddTOS)
 
 class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
     """Add/edit lots of lots for a given auctiontos pk"""
