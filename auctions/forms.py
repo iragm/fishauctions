@@ -233,8 +233,8 @@ class WinnerLot(forms.Form):
         self.helper.layout = Layout(
             'invoice',
             'auction',
-            PrependedAppendedText('winning_price', '$', '.00' ),
             'lot',
+            PrependedAppendedText('winning_price', '$', '.00' ),
             'winner',
             # Div(
             #     Div('lot',css_class='col-md-5',),
@@ -259,6 +259,11 @@ class WinnerLot(forms.Form):
             'winner',
             'winning_price',
         ]
+
+class WinnerLotSimple(WinnerLot):
+    """Simplified form using char fields instead of autocomplete fields"""
+    lot = forms.CharField(max_length=20)
+    winner = forms.CharField(max_length=20)
 
 class EditLot(forms.ModelForm):
     """Used for HTMX calls to update Lot.

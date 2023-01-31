@@ -1239,7 +1239,7 @@ class AuctionStats(DetailView, AuctionPermissionsMixin):
         if not self.get_object().invoiced:
             messages.error(self.request, "This auction is still in progress, check back once it's finished for more complete stats")
         return context
-        
+
 class QuickSetLotWinner(FormView, AuctionPermissionsMixin):
     """A field to let people record the winners of lots (really just for in-person auctions). Just 3 fields:
         lot number
@@ -1251,7 +1251,7 @@ class QuickSetLotWinner(FormView, AuctionPermissionsMixin):
     model = Lot
     
     def get_success_url(self):
-        return reverse('auction_lot_winners', kwargs={'slug': self.auction.slug})
+        return reverse('auction_lot_winners_autocomplete', kwargs={'slug': self.auction.slug})
 
     def get_queryset(self):
         return Lot.objects.filter(auction=self.auction)
@@ -1264,7 +1264,6 @@ class QuickSetLotWinner(FormView, AuctionPermissionsMixin):
     def get_form_kwargs(self):
         form_kwargs = super().get_form_kwargs()
         form_kwargs['auction'] = self.auction
-        #form_kwargs['user'] = self.request.user
         return form_kwargs
         
     def get_context_data(self, **kwargs):
@@ -1290,6 +1289,42 @@ class QuickSetLotWinner(FormView, AuctionPermissionsMixin):
                     undo_url = reverse("auction_lot_list", kwargs={'slug': self.auction.slug}) + f"?query={lot.lot_number_display}"
                     messages.success(self.request, f"{tos.name} is now the winner of {lot.lot_name}.  <a href='{undo_url}'>Undo this or make other changes to the lot here</a>")
                     return super().form_valid(form)
+        return self.form_invalid(form)
+
+class SetLotWinner(QuickSetLotWinner):
+    """Same as QuickSetLotWinner but without the autocomplete, per user requests"""
+    form_class = WinnerLotSimple
+    
+    def get_success_url(self):
+        return reverse('auction_lot_winners', kwargs={'slug': self.auction.slug})
+
+    def form_valid(self, form, **kwargs):
+        """A bit of cleanup"""
+        lot = form.cleaned_data.get("lot")
+        winner = form.cleaned_data.get("winner")
+        winning_price = form.cleaned_data.get("winning_price")
+        qs = Lot.objects.filter(auction=self.auction)
+        lot = qs.filter(custom_lot_number=lot).first()
+        error = None
+        if not lot:
+            lot = qs.filter(lot_number=lot).first()
+        if not lot:
+            form.add_error('lot', "No lot found")
+        tos = AuctionTOS.objects.filter(auction=self.auction, bidder_number=winner)
+        if len(tos) > 1:
+            form.add_error('winner', f"{len(tos)} bidders found with this number!")
+        else:
+            tos = tos.first()
+        if not tos:
+            form.add_error('winner', "No bidder found")
+        if form.is_valid():
+            lot.auctiontos_winner = tos
+            lot.winning_price = winning_price
+            lot.save()
+            lot.add_winner_message(self.request.user, tos, winning_price)
+            undo_url = reverse("auction_lot_list", kwargs={'slug': self.auction.slug}) + f"?query={lot.lot_number_display}"
+            messages.success(self.request, f"Bidder {tos.bidder_number} is now the winner of {lot.lot_number_display}.  <a href='{undo_url}'>Undo this or make other changes to the lot here</a>")
+            return super().form_valid(form)
         return self.form_invalid(form)
 
 class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
