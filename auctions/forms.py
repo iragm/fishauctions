@@ -16,6 +16,7 @@ from django.core.validators import MinValueValidator
 from dal import autocomplete
 from django.urls import reverse
 from django.forms import BaseModelFormSet
+from django.template.loader import render_to_string
 
 # class DateInput(forms.DateInput):
 #     input_type = 'datetime-local'
@@ -393,6 +394,10 @@ class CreateEditAuctionTOS(forms.ModelForm):
         self.auction = auction
         self.auctiontos = auctiontos
         super().__init__(*args, **kwargs)
+        invoice_html = "No invoice"
+        invoice = self.auctiontos.invoice
+        if invoice:
+            invoice_html = render_to_string("invoice_buttons.html", {'invoice':invoice})
         if self.is_edit_form:
             post_url = f'/api/auctiontos/{self.auctiontos.pk}/'
         else:
@@ -411,9 +416,9 @@ class CreateEditAuctionTOS(forms.ModelForm):
             'pickup_location',
             'is_admin',
             Div(
+                HTML(invoice_html),
                 HTML('<button type="button" class="btn btn-danger float-left" onclick="closeModal()">Cancel</button>'),
                 HTML(f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Save</button>'),
-                #Submit(, 'Save', css_class='btn-success'),
                 css_class="modal-footer",
             )
         )

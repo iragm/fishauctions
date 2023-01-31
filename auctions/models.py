@@ -697,11 +697,14 @@ class AuctionTOS(models.Model):
 		return ""
 
 	@property
+	def invoice(self):
+		return Invoice.objects.filter(auctiontos_user=self.pk).first()
+
+	@property
 	def invoice_link_html(self):
 		"""HTML snippet with a link to the invoice for this auctionTOS, if set.  Otherwise, empty"""
-		invoice = Invoice.objects.filter(auctiontos_user=self.pk).first()
-		if invoice:
-			result = html.format_html(f"<a href='{invoice.get_absolute_url()}'>View</a>")
+		if self.invoice:
+			result = html.format_html(f"<a href='{self.invoice.get_absolute_url()}'>View</a>")
 			return result
 		else:
 			return "None"
@@ -1494,7 +1497,7 @@ class Lot(models.Model):
 	@property
 	def label_line_2(self):
 		"""Used for printed labels"""
-		return "Winner:" + (str(self.auctiontos_winner) or "")
+		return "Winner:" + (str(self.auctiontos_winner.name) or "")
 
 	@property
 	def label_line_3(self):
@@ -1707,6 +1710,19 @@ class Invoice(models.Model):
 			return "No location selected"
 
 	@property
+	def invoice_summary_short(self):
+		result = ""
+		if self.user_should_be_paid:
+			result += " needs to be paid"
+		else:
+			result += " owes "
+			if self.auction:
+				result += "the club"
+			elif self.seller:
+				result += str(self.seller)
+		return result + " $" + "%.2f" % self.absolute_amount
+
+	@property
 	def invoice_summary(self):
 		try:
 			base = str(self.auctiontos_user.name)
@@ -1715,15 +1731,7 @@ class Invoice(models.Model):
 				base = str(self.user.first_name)
 			except:
 				base = "Unknown"
-		if self.user_should_be_paid:
-			base += " needs to be paid"
-		else:
-			base += " owes "
-			if self.auction:
-				base += "the club"
-			elif self.seller:
-				base += str(self.seller)
-		return base + " $" + "%.2f" % self.absolute_amount
+		return base + self.invoice_summary_short
 
 	@property
 	def label(self):

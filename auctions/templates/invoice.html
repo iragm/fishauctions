@@ -3,52 +3,31 @@
 {% block title %} Invoice for {{ invoice.label }} {% endblock %}
 {% load static %}
 {% block extra_js %}
-{% if actually_sold and not invoice.printed %}
+{% if print_label_link and not invoice.printed %}
 <script>
 $(document).ready(function(){
   $('#printomatic-9000').attr('data-original-title', "Print on regular paper in portrait mode, no label maker required.").tooltip('show');  
 });
 </script>
 {% endif %}
-<script>
-function payinvoice(id, status) {
-    var $ = window.jQuery;
-    data = {'status': status};
-    $.ajax({
-          type: "POST",
-          beforeSend: function (request) {
-              request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
-          },
-          data:data,
-          url: "/api/payinvoice/" + id + "/",
-          success : function(result) {
-            window.location.reload();
-          }
-      });
-  }
-  </script>
   {% endblock %}
   {% block content %}{% if show_links %}{% include 'auction_ribbon.html' %}{% endif %}
   <h1>{% if exampleMode %}Example{%else%}{% if invoice.auctinotos_user.name %}{{ invoice.auctinotos_user.name }}{% else %}{{ invoice.user.first_name }} {{ invoice.user.last_name }}{% endif %}{% endif %}</h1>
             {% if location == 'No location selected' %}{% else %}<h5>{{location}}{% if exampleMode %}<span class='text-muted'> This is the pickup location selected by the user</span>{%endif%}</h5>{%endif%}<br>
             {% if show_links %}
             {% if is_admin %}
-              <div class="btn-group" role="group" aria-label="Invoice status selection">
-                <button type="button" id="{{invoice.pk}}_DRAFT" onclick="payinvoice({{ invoice.pk }}, 'DRAFT');" class="btn {% if invoice.status == 'DRAFT'%}draft btn-primary{% else %}btn-secondary{% endif %}">Draft</button>
-                <button type="button" id="{{invoice.pk}}_UNPAID" onclick="payinvoice({{ invoice.pk }}, 'UNPAID');" class="btn {% if invoice.status == 'UNPAID'%}btn-primary unpaid{% else %}btn-secondary{% endif %}">Ready</button>
-                <button type="button" id="{{invoice.pk}}_PAID" onclick="payinvoice({{ invoice.pk }}, 'PAID');" class="btn {% if invoice.status == 'PAID'%}btn-success{% else %}btn-secondary{% endif %}">Paid</button>
-              </div>
+              {% include 'invoice_buttons.html' %}
             {%endif%}
             <a href="{{ request.path }}?print" class="btn btn-primary ml-1 mr-1 mt-1">Print invoice</a>
-            {% if actually_sold and not exampleMode %}<a href="{{ request.path }}labels" id="printomatic-9000" class="btn btn-primary ml-1 mr-1 mt-1">Print labels for your lots</a>{% endif %}
+            {% if print_label_link and not exampleMode %}<a href="{{ print_label_link }}" id="printomatic-9000" class="btn btn-primary ml-1 mr-1 mt-1">Print labels for your lots</a>{% endif %}
             <a href="/feedback/" class="btn btn-primary ml-1 mr-1 mt-1">Leave feedback</a>
             {% if invoice.auction %}{% if invoice.auction.use_categories %}<a href="/blog/transporting-fish/" class="btn btn-primary ml-1 mr-1 mt-1">Info on transporting fish</a></a>{% endif %}{% endif %}
             {% if location_map %}<a href="{{location_map}}" class="btn btn-primary ml-1 mr-1 mt-1">Get directions</a>{% endif %}
             {% if is_admin %}
             {% if invoice.status == "DRAFT" and not invoice.email_sent %}
               {% if invoice.auctiontos_user %}
-                {% if invoice.auctiontos_user.email %}
-                  <br><span class='text-muted'>Marking this invoice ready for payment will send a notification email to {{ invoice.auctiontos_user.name }}</span><br>
+                {% if invoice.auctiontos_user.email and invoice.auction.%}
+                  <br><span class='text-muted'>Marking this invoice ready or paid will send a notification email to {{ invoice.auctiontos_user.name }}</span><br>
                 {% else %}
                   <br><span class='text-danger'>{{ invoice.auctiontos_user.name }} does not have an email address set!</span><br>
                 {%endif%}
@@ -70,8 +49,8 @@ function payinvoice(id, status) {
             {% endif %}
             
             {% if auction %}
-              {% if actually_sold and not exampleMode %}
-              <div>{% if show_links %}Either <a href="{{ request.path }}labels">print your labels</a> or <span class='text-danger'>write{% else %}<span>Write{% endif %} the lot number and the name of the winner {% if invoice.auction.multi_location %} and the destination location {% endif %} on each lot. </span></div>
+              {% if print_label_link and not exampleMode %}
+              <div>{% if show_links %}Either <a href="{{ print_label_link }}">print your labels</a> or <span class='text-danger'>write{% else %}<span>Write{% endif %} the lot number and the name of the winner {% if invoice.auction.multi_location %} and the destination location {% endif %} on each lot. </span></div>
               {% endif %}
             {% endif %}
             {% if show_links %}{%if contact_email and not exampleMode %}<div>Questions?  Email: <a href='mailto:{{ contact_email }}'>{{ contact_email }}</a><br>{% endif %}</div>{% endif %}

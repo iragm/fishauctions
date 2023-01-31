@@ -40,6 +40,7 @@ from dal import autocomplete
 from django.utils.html import format_html
 from django.core.exceptions import PermissionDenied
 from django.forms import modelformset_factory
+from django.template.loader import render_to_string
 from reportlab.lib import pagesizes, utils
 from reportlab.lib.units import inch, cm
 from reportlab.lib import colors
@@ -793,7 +794,7 @@ def pageview(request, pk):
     messages.error(request, "Your account doesn't have permission to view this page")
     return redirect('/')
 
-def invoicePaid(request, pk):
+def invoicePaid(request, pk, **kwargs):
     if request.method == 'POST':
         try:
             invoice = Invoice.objects.get(pk=pk)
@@ -807,10 +808,9 @@ def invoicePaid(request, pk):
             if invoice.seller.pk == request.user.pk:
                 checksPass = True
         if checksPass:
-            data = request.POST
-            invoice.status = data['status']
+            invoice.status = kwargs['status']
             invoice.save()
-            return HttpResponse("Success")
+            return HttpResponse(render_to_string("invoice_buttons.html", {'invoice':invoice}), status=200) 
     messages.error(request, "Your account doesn't have permission to view this page")
     return redirect('/')
     
@@ -2173,9 +2173,15 @@ class AuctionTOSAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
         #     auction=self.auction
         # )
         if self.auctiontos:
-            context['modal_title'] = f"Edit {self.auctiontos.name}"
+            try:
+                invoice = self.auctiontos.invoice.invoice_summary_short
+            except:
+                invoice = ""
+            context['modal_title'] = f"{self.auctiontos.name} {invoice}"            
         else:
             context['modal_title'] = "Add new user"
+        if self.auctiontos:
+            context['invoice'] = self.auctiontos.invoice
         return context
         
     def post(self, request, *args, **kwargs):
@@ -2659,7 +2665,7 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
     form_class = InvoiceUpdateForm
     form_view = 'opened' # expects opened or printed, this field will be set to true when the user the invoice is for opens it
     allow_non_admins = True
-    auth_needed = True
+    authorized_by_default = False
 
     def get_object(self):
         """Overridden to allow display of an example"""
@@ -2672,14 +2678,13 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
             
     def dispatch(self, request, *args, **kwargs):
         # check to make sure the user has permission to view this invoice
-        auth = self.auth_needed
+        auth = self.authorized_by_default
         self.is_admin = False
         invoice = self.get_object()
         mark_invoice_viewed_by_user = False
         if invoice.auction:
             self.auction = invoice.auction
-            self.is_admin = self.is_auction_admin
-            if self.is_admin:
+            if self.is_auction_admin:
                 auth = True
         if self.exampleMode:
             auth = True
@@ -2691,10 +2696,6 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
             if invoice.auctiontos_user:
                 if invoice.auctiontos_user.email == request.user.email:
                     mark_invoice_viewed_by_user = True
-        if invoice.seller:
-            if invoice.seller == request.user:
-                self.is_admin = True
-                auth = True
         if not auth:
             messages.error(request, "Your account doesn't have permission to view this inovice.  Are you signed in with the correct account?")
             return redirect('/')
@@ -2753,6 +2754,10 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
             'adjustment':self.get_object().adjustment,
             "adjustment_notes":self.get_object().adjustment_notes
             })
+        context['print_label_link'] = None
+        if invoice.auction.is_online and invoice.auctiontos_user:
+            print('print labels')
+            context['print_label_link'] = reverse("print_labels_by_bidder_number", kwargs={'slug': invoice.auction.slug, 'bidder_number': invoice.auctiontos_user.bidder_number})
         return context
    
     def get_success_url(self):
@@ -2792,7 +2797,7 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
 class InvoiceNoLoginView(InvoiceView):
     """Enter a uuid, go to your invoice.  This bypasses the login checks"""
     # need a template with a popup
-    auth_needed = False
+    authorized_by_default = True
     form_view = 'opened'
     exampleMode = False
 
@@ -2826,7 +2831,6 @@ class InvoiceNoLoginView(InvoiceView):
         return super().dispatch(request, *args, **kwargs)
 
 class LotLabelView(View, AuctionPermissionsMixin):
-#class LotLabelView(ListView, AuctionPermissionsMixin):
     """This replaces the now-deprecated-and-no-longer-used InvoiceLabelView"""
     
     # these are defined in urls.py and used in get_object(), below
@@ -2962,226 +2966,6 @@ class LotLabelView(View, AuctionPermissionsMixin):
         elements.append(table)
         doc.build(elements)
         return response
-
-
-    # def get(self, request, *args, **kwargs):
-    #     number_of_rows = 3
-    #     number_of_columns = 5
-    #     buffer = BytesIO()
-
-    #     # Create the PDF object, using the BytesIO object as its "file."
-    #     doc = SimpleDocTemplate(buffer, pagesize=letter)
-
-    #     # Container for the 'Flowable' objects
-    #     elements = []
-
-    #     # Get the queryset of labels
-    #     labels = self.lots
-    #     styles = getSampleStyleSheet()
-    #     # Define the data for the labels
-    #     data = [[Paragraph(label.lot_name, style=styles['Normal']), Paragraph(label.lot_number, style=styles['Normal'])] for label in labels]
-
-    #     # Create the table for the labels
-    #     t = Table(data)
-
-    #     # Apply a style to the table
-    #     t.setStyle(TableStyle([('GRID', (0, 0), (-1, -1), 1, colors.black),
-    #                         ('BACKGROUND', (0, 0), (-1, -1), colors.grey),
-    #                         ('TEXTCOLOR', (0, 0), (-1, -1), colors.whitesmoke),
-    #                         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-    #                         ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
-    #                         ('BACKGROUND', (0, 0), (0, -1), colors.beige),
-    #                         ('BACKGROUND', (0, 0), (-1, 0), colors.beige),
-    #                         ('BACKGROUND', (-1, 0), (-1, -1), colors.beige),
-    #                         ('BACKGROUND', (0, -1), (-1, -1), colors.beige),
-    #                         ('BOX', (0, 0), (-1, -1), 1, colors.black),
-    #                         ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
-    #                         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-    #                         ('LEFTPADDING', (0, 0), (-1, -1), 5),
-    #                         ('RIGHTPADDING', (0, 0), (-1, -1), 5),
-    #                         ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
-    #                         ('TOPPADDING', (0, 0), (-1, -1), 5)]))
-    #     elements.append(t)
-
-    #     # Write the PDF document to the BytesIO object
-    #     doc.build(elements)
-
-    #     # Get the value of the BytesIO buffer
-    #     pdf = buffer.getvalue()
-    #     buffer.close()
-
-    #     # Create the HttpResponse object with the appropriate PDF headers.
-    #     response = HttpResponse(pdf, content_type='application/pdf')
-    #     response['Content-Disposition'] = 'attachment; filename="labels.pdf"'
-
-    #     return response
-
-       
-        
-        
-    #     label_width = float(request.GET.get('label_width', 2.5))
-    #     label_height = float(request.GET.get('label_height', 1))
-    #     spacing_x = float(request.GET.get('spacing_x', 0))
-    #     spacing_y = float(request.GET.get('spacing_y', 0))
-    #     margin_top = 1
-    #     margin_side = 1
-    #     page_x = 8.5*inch
-    #     page_y = 11*inch
-    #     available_height = page_y - margin_top*inch
-    #     available_width = page_x - margin_side*inch
-    #     rows_per_page = int(available_height / (label_height + spacing_y))
-    #     columns_per_page = int(available_width / (label_width + spacing_x))
-    #     #col_widths = (label_width*inch+spacing_x*inch, label_width*inch+spacing_x*inch)
-    #     #col_widths = [[label_width*inch]+[spacing_x*inch]]*columns_per_page
-    #     row_heights = label_height*inch+spacing_x*inch
-    #     #row_heights = [[label_height*inch]+[spacing_x*inch]]*rows_per_page
-    #     buffer = BytesIO()
-    #     doc = SimpleDocTemplate(buffer, pagesize=(page_x, page_y))
-    #     doc.info = {
-    #         "title": "Hello World PDF",
-    #         "author": "Django",
-    #         "subject": "Test PDF",
-    #         "keywords": "pdf, hello, world"
-    #     }
-    #     #table_style = [('GRID', (0,0), (-1,-1), 0.5, (0,0,0))]
-    #     data = []
-    #     #for i in range(0, 4):
-    #     #    for j in range(0, 3):
-    #     for lot in self.lots:
-    #         data.append([f"{lot.lot_name}"])
-
-    #     # Calculate the number of rows and columns
-    #     #num_rows = len(data)
-    #     available_width = page_x - margin_side*inch # subtract margins from the available width
-    #     num_columns = int((available_width - label_width) / (label_width + spacing_x)) + 1 # calculate the number of columns
-
-    #     # styling info
-    #     style = ParagraphStyle(name='Normal', fontName='Helvetica', fontSize=10, leading=12, alignment=TA_JUSTIFY)
-
-
-    #     # Create a list of rows
-    #     rows = []
-    #     for i in range(0, rows_per_page, columns_per_page):
-    #         row = data[i:i+columns_per_page]
-    #         #print(row)
-    #         rows.append(row)
-
-    #     # Create the table data
-    #     #table_data = [[cell for cell in row] for row in rows]
-    #     table_data = []
-    #     for row in rows:
-    #         cells = []
-    #         for cell in row:
-    #             cell = Paragraph('text ', style).split(label_width*.9*inch, label_height*.9*inch)
-    #             #cell.keepWithNext=True
-    #             cells.append(cell)
-    #         table_data.append(cells)
-    #     print(table_data)
-
-    #     # Set the column widths
-    #     colWidths = [label_width] + [spacing_x]*(num_columns-1)
-
-
-    #     # Create the table
-    #     table = Table(table_data, colWidths=colWidths)
-
-    #     #table = Table(data, colWidths=col_widths, rowHeights=row_heights, style=table_style)
-    #     table.setStyle(TableStyle([('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-    #                     ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-    #                     ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-    #                     ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-    #                     ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-    #                     ('BACKGROUND', (0, -1), (-1, -1), colors.beige),
-    #                     ('GRID', (0, 0), (-1, -1), 1, colors.black)]))
-    #     #table = Table(data, colWidths=[label_width*inch, spacing_x*inch], rowHeights=[label_height*inch], style=table_style)
-    #     # Set the table's hAlign and vAlign
-    #     #table.hAlign = 'CENTER'
-    #     #table.vAlign = 'MIDDLE'
-    #     # Set the table's spaceBefore and spaceAfter
-    #     table.spaceBefore = spacing_y*inch
-    #     table.spaceAfter = spacing_y*inch
-    #     # Add the table to the PDF document
-    #     doc.build([table])
-    #     # Get the value of the BytesIO buffer and write it to the response.
-    #     pdf = buffer.getvalue()
-    #     buffer.close()
-    #     response = FileResponse(BytesIO(pdf), content_type='application/pdf')
-    #     response['Content-Disposition'] = 'attachment; filename="labels.pdf"'
-    #     return response
-        
-    #     buffer = BytesIO()
-    #     doc = canvas.Canvas(buffer)
-
-    #     # Draw things on the PDF. Here's where the PDF generation happens.
-    #     # See the ReportLab documentation for the full list of functionality.
-    #     doc.drawString(100, 100, "Hello world.")
-
-    #     # Close the PDF object cleanly, and we're done.
-    #     doc.showPage()
-    #     doc.addJS("this.print({bUI:true,bSilent:false,bShrinkToFit:false});")
-    #     doc.save()
-
-    #     # FileResponse sets the Content-Disposition header so that browsers
-    #     # present the option to save the file.
-    #     buffer.seek(0)
-    #     return FileResponse(buffer, as_attachment=True, filename='labels.pdf')
-        
-    #     doc = BaseDocTemplate(buffer, pagesize=letter)
-
-    #     # doc.info.title = f"{self.tos.name}'s labels for {self.auction}"
-    #     # doc.info.author = "https://auction.fish"
-    #     # doc.info.subject = "Labels"
-    #     # doc.info.keywords = "pdf"
-
-    #     # Add javascript action to print the pdf
-    #     #
-
-    #     # Create the PDF document
-    #     styles = getSampleStyleSheet()
-    #     story = []
-    #     story.append(Paragraph("Hello World", styles["Normal"]))
-    #     doc.build(story)
-
-    #     # Get the value of the BytesIO buffer and write it to the response.
-    #     pdf = buffer.getvalue()
-    #     buffer.close()
-    #     response = FileResponse(BytesIO(pdf), content_type='application/pdf')
-    #     response['Content-Disposition'] = 'attachment; filename="hello_world.pdf"'
-    #     return response
-
-# class LotLabelView(View, AuctionPermissionsMixin):
-#     """This replaces the now-deprecated-and-no-longer-used InvoiceLabelView"""
-    
-#     # these are defined in urls.py and used in get_object(), below
-#     bidder_number = None
-#     username = None
-#     template_name = 'invoice_labels.html'
-#     allow_non_admins = True
-
-#     def get_object(self):
-#         if not self.bidder_number and not self.username:
-#             print("bidder_number or username needs to be set, fix urls.py...")
-#         if self.bidder_number:
-#             invoice = Invoice.objects.filter(auctiontos_user__auction=self.auction, auctiontos_user__bidder_number=self.bidder_number).first()
-#         if self.username:
-#             invoice = Invoice.objects.filter(auctiontos_user__auction=self.auction, auctiontos_user__user__username=self.username).first()
-#         if not invoice:
-#             raise Http404
-#         self.exampleMode = False
-#         return invoice
-            
-#     def dispatch(self, request, *args, **kwargs):
-#         # check to make sure the user has permission to view this invoice
-#         self.auction = Auction.objects.filter(slug=kwargs['slug']).first()
-#         self.bidder_number = kwargs.pop('bidder_number', None)
-#         self.username = kwargs.pop('username', None)
-#         self.invoice = self.get_object()
-#         #self.is_admin = self.is_auction_admin
-#         # right now, we are blocking anyone other than an auction admin from viewing this
-#         # one thing we could do is add a check for
-#         # request.user = invoice.auctiontos_user here, and mark printed if the check passes
-#         # this would effectively replace InvoiceLabelView
-#         return super().dispatch(request, *args, **kwargs)
 
 class InvoiceLabelView(InvoiceView):
     """Allows printing of labels"""

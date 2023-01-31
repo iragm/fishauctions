@@ -10,7 +10,7 @@ urlpatterns = [
     path('api/lot-autocomplete/', views.LotAutocomplete.as_view(), name='lot-autocomplete'),
     path('ads/fetch/', views.RenderAd.as_view(), name='get_ad'),
     path('ads/<str:uuid>/', views.ClickAd.as_view(), name='click_ad'),
-    path('api/payinvoice/<int:pk>/', login_required(views.invoicePaid)),
+    path('api/payinvoice/<int:pk>/<str:status>', login_required(views.invoicePaid)),
     path('api/watchitem/<int:pk>/', login_required(views.watchOrUnwatch)),
     path('api/species/', login_required(views.getSpecies)),
     path('api/clubs/', login_required(views.getClubs)),
