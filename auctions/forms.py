@@ -86,12 +86,17 @@ class QuickAddLot(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         self.auction = kwargs.pop('auction')
         self.custom_lot_numbers_used = kwargs.pop('custom_lot_numbers_used')
+        self.is_admin = kwargs.pop('is_admin')
         # we need to work around the case where a user enters duplicate custom lot numbers
         super().__init__(*args, **kwargs)
         self.fields['custom_lot_number'].label = "Custom lot number"
         self.fields['custom_lot_number'].help_text = ""
         self.fields['lot_name'].label = "Lot name"
         self.fields['lot_name'].help_text = ""
+        if not self.is_admin:
+            self.fields['custom_lot_number'].widget = HiddenInput()
+        if not self.auction.use_categories:
+            self.fields['species_category'].widget = HiddenInput()
         self.fields['species_category'].label = "Category"
         self.fields['species_category'].help_text = ""
         self.fields['i_bred_this_fish'].label = "Breeder points"
@@ -609,6 +614,14 @@ class PickupLocationForm(forms.ModelForm):
         self.user = user
         self.auction = auction
         self.fields['description'].widget.attrs = {'rows': 3}
+        if not self.auction.multi_location:
+            # to keep things simple when creating a new auction with only one location
+            self.fields['second_pickup_time'].widget=forms.HiddenInput()
+            self.fields['description'].widget=forms.HiddenInput()
+            self.fields['pickup_location_contact_name'].widget=forms.HiddenInput()
+            self.fields['pickup_location_contact_phone'].widget=forms.HiddenInput()
+            self.fields['pickup_location_contact_email'].widget=forms.HiddenInput()
+            self.fields['users_must_coordinate_pickup'].widget=forms.HiddenInput()
         # if self.user.is_superuser:
         #     self.fields['auction'].queryset = Auction.objects.filter(date_end__gte=timezone.now()).order_by('date_end')
         # else:
@@ -623,7 +636,7 @@ class PickupLocationForm(forms.ModelForm):
             'name',
             'description',
             'auction',
-            HTML("<h4>Contact info</h4>"),
+            #HTML("<h4>Contact info</h4>"),
             Div(
                 Div('pickup_location_contact_name',css_class='col-md-6',),
                 Div('pickup_location_contact_phone',css_class='col-md-6',),
@@ -631,9 +644,9 @@ class PickupLocationForm(forms.ModelForm):
                 css_class='row',
             ),
             Div(
-                Div('users_must_coordinate_pickup',css_class='col-md-4',),
                 Div('pickup_time',css_class='col-md-4',),
                 Div('second_pickup_time',css_class='col-md-4',),
+                Div('users_must_coordinate_pickup',css_class='col-md-4',),
                 css_class='row',
             ),
             'address',
@@ -751,7 +764,9 @@ class AuctionEditForm(forms.ModelForm):
     class Meta:
         model = Auction
         fields = ['notes', 'lot_entry_fee','unsold_lot_fee','winning_bid_percent_to_club', 'date_start', 'date_end', 'lot_submission_start_date',\
-            'lot_submission_end_date', 'sealed_bid','use_categories', 'promote_this_auction', 'max_lots_per_user', 'allow_additional_lots_as_donation', ]
+            'lot_submission_end_date', 'sealed_bid','use_categories', 'promote_this_auction', 'max_lots_per_user', 'allow_additional_lots_as_donation',
+            'email_users_when_invoices_ready', 'pre_register_lot_entry_fee_discount', 'pre_register_lot_discount_percent', 'allow_bidding_on_lots'
+            ]
         widgets = {
             'date_start': DateTimePickerInput(),
             'date_end': DateTimePickerInput(),
@@ -769,13 +784,18 @@ class AuctionEditForm(forms.ModelForm):
         self.fields['winning_bid_percent_to_club'].label = "Club cut"
         self.fields['date_start'].label = "Bidding opens"
         self.fields['date_end'].label = "Bidding ends"
+        self.fields['email_users_when_invoices_ready'].label = "Invoice notifications"
+
         #self.fields['notes'].help_text = "Foo"
         if self.instance.is_online:
-            self.fields['lot_submission_end_date'].help_text = "Recommended to be 1-24 hours before the end of your auction"
+            self.fields['lot_submission_end_date'].help_text = "This should be 1-24 hours before the end of your auction"
+            self.fields['allow_bidding_on_lots'].help_text = "Leave this checked or people won't be able to bid!"
         else:
+            self.fields['allow_bidding_on_lots'].help_text = "Check to allow people to place bids on this website."
             self.fields['date_end'].help_text = "You should probably leave this blank so that you can manually set winners. This field has been indefinitely set to hidden - see https://github.com/iragm/fishauctions/issues/116"
             self.fields['date_end'].widget=forms.HiddenInput()
             self.fields['lot_submission_end_date'].help_text = 'This should probably be before bidding starts.  Admins (you) can add more lots at any time, this only restricts users.'
+            self.fields['email_users_when_invoices_ready'].help_text = "Only works if you enter the user's email address when adding them to your auction"
         self.fields['user_cut'].initial = 100 - self.instance.winning_bid_percent_to_club
         if self.instance.pk:
             # editing existing auction
@@ -815,6 +835,11 @@ class AuctionEditForm(forms.ModelForm):
                 css_class='row',
             ),
             Div(
+                PrependedAppendedText('pre_register_lot_entry_fee_discount', '$', '.00',wrapper_class='col-lg-3', ),
+                PrependedAppendedText('pre_register_lot_discount_percent', '', '%',wrapper_class='col-lg-3', ),
+                css_class='row',
+            ),
+            Div(
                 Div('lot_submission_start_date',css_class='col-md-4',),
                 Div('date_start',css_class='col-md-4',label="Bidding opens",),
                 Div('lot_submission_end_date',css_class='col-md-4',),
@@ -828,8 +853,10 @@ class AuctionEditForm(forms.ModelForm):
                 css_class='row',
             ),
             Div(
-                Div('use_categories',css_class='col-md-4',),
-                Div('promote_this_auction', css_class='col-md-4',),
+                Div('use_categories',css_class='col-md-3',),
+                Div('promote_this_auction', css_class='col-md-3',),
+                Div('email_users_when_invoices_ready', css_class='col-md-3',),
+                Div('allow_bidding_on_lots', css_class='col-md-3',),
                 css_class='row',
             ),
             Submit('submit', 'Save', css_class='create-update-auction btn-success'),
@@ -1085,19 +1112,6 @@ class CreateLotForm(forms.ModelForm):
             #HTML("</span><span id='details_selection'><h4>Details</h4><br>"),
             'cloned_from',
             Div(
-                Div('lot_name',css_class='col-md-12',),
-                Div('species_category',css_class='col-md-12',),
-                css_class='row',
-            ),
-            Div(
-                #Div('image',css_class='col-md-8',),
-                #Div('image_source',css_class='col-md-4',),
-                Div('description',css_class='col-md-12',),
-                Div('quantity',css_class='col-md-4',),
-                Div('i_bred_this_fish',css_class='col-md-5',),
-                
-                Div('reserve_price',css_class='col-md-4',),
-                Div('buy_now_price',css_class='col-md-4',),
                 Div('part_of_auction',css_class='col-md-5',),
                 Div('auction',css_class='col-md-8',),
                 #HTML("<br><span class='text-danger col-xl-12'>You must select a pickup location before you can submit lots in an auction</span><br>"),
@@ -1108,6 +1122,26 @@ class CreateLotForm(forms.ModelForm):
                 Div('promoted',css_class='col-md-4',),
                 Div('show_payment_pickup_info',css_class='col-md-12',),
                 css_class='row',
+            ),
+            Div(
+                Div('lot_name',css_class='col-md-12',),
+                Div('species_category',css_class='col-md-12',),
+                css_class='row',
+            ),
+            Div(
+                #Div('image',css_class='col-md-8',),
+                #Div('image_source',css_class='col-md-4',),
+                Div('description',css_class='col-md-12',),
+                css_class='row',
+            ),
+            Div(
+                Div('quantity',css_class='col-md-3',),
+                Div('i_bred_this_fish',css_class='col-md-3',),
+                
+                Div('reserve_price',css_class='col-md-3',),
+                Div('buy_now_price',css_class='col-md-3',),
+                css_class='row',
+                
             ),
             HTML("<span id='payment_pickup_info'><h4>Payment/pickup info</h4><br>"),
             Div(

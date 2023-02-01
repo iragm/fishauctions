@@ -7,9 +7,9 @@
 
 {% block extra_js %}
 <script>
-  $( document ).ready(function() {
-  $('#id_winning_price').focus();
-  });
+$(window).on("load", function() {
+  $('#id_lot').select();
+});
 </script>
 {% endblock %}
 {% block content %}
@@ -17,7 +17,7 @@
     <div class="row">
       <div class="col-md-10 offset-md1">
         {% include 'auction_ribbon.html' %}
-<p><span class='text-muted'><small>Use this page to quickly set the winners of lots.  Remember you can press tab to move to the next field</small></span></p>
+<p><span class='text-muted'><small>Use this page to quickly set the winners of lots.  Tip: press tab to move to the next field</small></span></p>
 {% crispy form form.helper %}
         </div>
     </div>

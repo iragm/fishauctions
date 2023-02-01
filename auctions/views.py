@@ -457,7 +457,7 @@ def no_lot_auctions(request):
             auction = userData.last_auction_used
             now = timezone.now()
             if auction:
-                if auction.date_end < now:
+                if auction.date_end < now and auction.is_online:
                     result = f"{auction} has ended"
                 elif auction.lot_submission_end_date < now:
                     result = f"Lot submission has ended for {auction}"
@@ -839,7 +839,11 @@ def auctionReport(request, slug):
                 # these things will only be written out if the user wants you to have it
                 lotsViewed = PageView.objects.filter(lot_number__auction=auction, user=data.user)
                 lotsBid = Bid.objects.filter(lot_number__auction=auction,user=data.user)
-                lotsOutsideAuction = Lot.objects.filter(user=data.user, auction__isnull=True, date_posted__gte=auction.date_start - datetime.timedelta(days=2), date_posted__lte=auction.date_end + datetime.timedelta(days=2))
+                lot_qs = Lot.objects.filter(user=data.user, auction__isnull=True, date_posted__gte=auction.date_start - datetime.timedelta(days=2))
+                if auction.is_online:
+                    lotsOutsideAuction = lot_qs.filter(date_posted__lte=auction.date_end + datetime.timedelta(days=2))
+                else:
+                    lotsOutsideAuction = lot_qs.filter(date_posted__lte=auction.date_start + datetime.timedelta(days=5))
                 numberLotsOutsideAuction = lotsOutsideAuction.count()
                 profitOutsideAuction = lotsOutsideAuction.aggregate(total=Sum('winning_price'))['total']
                 if not profitOutsideAuction:
@@ -856,7 +860,6 @@ def auctionReport(request, slug):
                 previous_auctions = ""
                 lotsViewed = ""
                 lotsBid = ""
-                lotsOutsideAuction = ""
                 numberLotsOutsideAuction = ""
                 profitOutsideAuction = ""
                 username = ""
@@ -1050,17 +1053,14 @@ class PickupLocationsUpdate(UpdateView, AuctionPermissionsMixin):
 
     def form_valid(self, form, **kwargs):
         messages.success(self.request, "Updated location")
-        print('form valid')
         return super().form_valid(form)
 
     def get_success_url(self):
-        print('success')
         data = self.request.GET.copy()
         try:
             return data['next']
         except:
             url = reverse("auction_pickup_location", kwargs={'slug': self.auction.slug})
-            print(url)
             return url
 
 class PickupLocationsCreate(CreateView, AuctionPermissionsMixin):
@@ -1196,15 +1196,6 @@ class AuctionInvoices(DetailView, AuctionPermissionsMixin):
         self.auction = self.get_object()
         self.is_auction_admin
         return super().dispatch(request, *args, **kwargs)
-
-    # def dispatch(self, request, *args, **kwargs):
-    #     if not (request.user.is_superuser or self.get_object().created_by == self.request.user):
-    #         messages.error(request, "Only the auction creator can view invoices")
-    #         return redirect('/')
-    #     if not self.get_object().invoiced:
-    #         messages.error(request, "This auction hasn't been invoiced yet.  Invoices will be created after the auction closes")
-    #     self.auction = self.get_object()
-    #     return super().dispatch(request, *args, **kwargs)
         
     def get_context_data(self, **kwargs):
         #user = User.objects.get(pk=self.request.user.pk)
@@ -1324,7 +1315,7 @@ class SetLotWinner(QuickSetLotWinner):
             lot.add_winner_message(self.request.user, tos, winning_price)
             undo_url = reverse("auction_lot_list", kwargs={'slug': self.auction.slug}) + f"?query={lot.lot_number_display}"
             messages.success(self.request, f"Bidder {tos.bidder_number} is now the winner of {lot.lot_number_display}.  <a href='{undo_url}'>Undo this or make other changes to the lot here</a>")
-            return super().form_valid(form)
+            return HttpResponseRedirect(self.get_success_url())
         return self.form_invalid(form)
 
 class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
@@ -1523,9 +1514,10 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
 class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
     """Add/edit lots of lots for a given auctiontos pk"""
     template_name = "auctions/bulk_add_lots.html"
+    allow_non_admins = True
 
     def get(self, *args, **kwargs):
-        lot_formset = self.LotFormSet(form_kwargs={'auction': self.auction, 'custom_lot_numbers_used':[]}, queryset=self.queryset)
+        lot_formset = self.LotFormSet(form_kwargs={'auction': self.auction, 'custom_lot_numbers_used':[],'is_admin':self.is_admin}, queryset=self.queryset)
         helper = LotFormSetHelper()
         context = self.get_context_data(**kwargs)
         context['formset'] = lot_formset
@@ -1535,7 +1527,7 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
         return self.render_to_response(context)
 
     def post(self, *args, **kwargs):
-        lot_formset = self.LotFormSet(self.request.POST, form_kwargs={'auction': self.auction, 'custom_lot_numbers_used':[]}, queryset=self.queryset)
+        lot_formset = self.LotFormSet(self.request.POST, form_kwargs={'auction': self.auction, 'custom_lot_numbers_used':[], 'is_admin':self.is_admin}, queryset=self.queryset)
         if lot_formset.is_valid():
             lots = lot_formset.save(commit=False)
             for lot in lots:
@@ -1545,12 +1537,32 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
                     lot.user = self.tos.user
                 if not lot.description:
                     lot.description = ""
+                if not lot.pk:
+                    lot.added_by = self.request.user
+                    if not self.is_admin:
+                        # you are adding lots for yourself, set custom lot number automatically
+                        lot.custom_lot_number = None
                 lot.save()
-            messages.success(self.request, f'Updated lots for {self.tos.name}')
             if lots:
+                messages.success(self.request, f'Updated lots for {self.tos.name}')
                 invoice, created = Invoice.objects.get_or_create(auctiontos_user=self.tos, auction=self.auction, defaults={})
                 invoice.recalculate
-            return redirect(reverse("auction_tos_list", kwargs={'slug': self.auction.slug}))
+            # when saving labels, it doesn't take you off from the page you're on
+            # So we need to go somewhere, and then say "download labels"
+            if "print" in str(self.request.GET.get('type', "")):
+                print_url = f"printredirect={reverse('print_labels_by_bidder_number', kwargs={'slug': self.auction.slug, 'bidder_number': self.tos.bidder_number})}"
+            else:
+                print_url = ""
+            if self.is_admin:
+                redirect_url = reverse("auction_tos_list", kwargs={'slug': self.auction.slug})
+                if print_url:
+                    redirect_url += '?' + print_url
+            else:
+                redirect_url = reverse("user_lots") + f"?user={self.request.user.username}"
+                if print_url:
+                    redirect_url += '&' + print_url
+            return redirect(redirect_url)
+            
         context = self.get_context_data(**kwargs)
         context['formset'] = lot_formset
         context['helper'] = LotFormSetHelper()
@@ -1559,27 +1571,36 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
         return self.render_to_response(context)
 
     def dispatch(self, request, *args, **kwargs):
+        
         self.auction = Auction.objects.filter(slug=kwargs.pop('slug')).first()
+        self.is_admin = False
         if not self.auction:
             raise Http404
-        self.tos = AuctionTOS.objects.filter(bidder_number=kwargs.pop('bidder_number'), auction=self.auction).first()
-        # couple of permissions things to keep in mind:
-        # we need to vet that the user has permission to edit this auction,
-        # and that the tos being edited belongs to that auction
-        # otherwise, users could spoof the auction slug to one that they had permission to edit and change users
+        bidder_number = kwargs.pop('bidder_number', None)
+        self.tos = None
+        if bidder_number:
+            self.tos = AuctionTOS.objects.filter(bidder_number=bidder_number, auction=self.auction).first()
+        if self.is_auction_admin:
+            self.is_admin = True
+        else:
+            # if you don't got permission to edit this auction, you can only add lots for yourself
+            self.tos = AuctionTOS.objects.filter(auction=self.auction).filter(Q(email=request.user.email)|Q(user=request.user)).first()
         if not self.tos:
-            raise Http404
-        if self.tos.auction != self.auction:
-            raise Http404
-        if not self.auction.permission_check(self.request.user):
-            messages.error(request, "Your account doesn't have permission to add lots for this user")
-            return redirect("/")
-        # end permissions checks
-
+            if not self.is_auction_admin:
+                messages.error(request, f"You can't add lots until you join this auction")
+                return redirect(f"/auctions/{self.auction.slug}/?next={reverse('bulk_add_lots_for_myself', kwargs={'slug': self.auction.slug})}")
+            else:
+                raise Http404
+        if not self.is_admin and not self.auction.can_submit_lots:
+            messages.error(request, f"Lot submission has ended for {self.auction}")
+            return redirect(f"/auctions/{self.auction.slug}/?next={reverse('bulk_add_lots_for_myself', kwargs={'slug': self.auction.slug})}")
         self.queryset = Lot.objects.filter(auctiontos_seller=self.tos)
         if self.auction.max_lots_per_user:
             # default rows should be the max that are allowed in the auction
-            extra = self.auction.max_lots_per_user - self.queryset.count()
+            if self.queryset.count() > self.auction.max_lots_per_user:
+                extra = self.queryset.count()
+            else:
+                extra = self.auction.max_lots_per_user - self.queryset.count()
             # but of course sometimes admisn will break the rules for their users:
             if extra < 0:
                 extra = 0
@@ -1908,6 +1929,7 @@ class LotValidation(LoginRequiredMixin):
             lot.save()
         else:
             # this is a new lot
+            lot.added_by = self.request.user
             lot.save()
             # if this was cloned from another lot, get the images from that lot
             if form.cleaned_data['cloned_from']:
@@ -1973,6 +1995,16 @@ class LotCreateView(LotValidation, CreateView):
         if lot.auction and lot.auctiontos_seller:
             invoice, created = Invoice.objects.get_or_create(auctiontos_user=lot.auctiontos_seller, auction=lot.auction, defaults={})
         return super().form_valid(form, **kwargs)
+
+    def dispatch(self, request, *args, **kwargs):
+        userData, created = UserData.objects.get_or_create(
+            user = self.request.user,
+            defaults={},
+        )
+        if userData.last_auction_used:
+            if userData.last_auction_used.can_submit_lots and not userData.last_auction_used.is_online:
+                messages.info(request, f"<a href='{reverse('bulk_add_lots_for_myself', kwargs={'slug': userData.last_auction_used.slug})}'>Add lots of lots to {userData.last_auction_used}</a>")
+        return super().dispatch(request, *args, **kwargs)
 
 class LotUpdate(LotValidation, UpdateView):
     """
@@ -2334,6 +2366,9 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 'is_chat_allowed',
                 'lot_promotion_cost',
                 'code_to_add_lots',
+                'allow_bidding_on_lots',
+                'pre_register_lot_entry_fee_discount',
+                'pre_register_lot_discount_percent',
                 ]
             for field in fields_to_clone:
                 setattr(auction, field, getattr(original_auction, field))
@@ -2342,6 +2377,8 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
             auction.cloned_from = original_auction
         else:
             auction.is_online = is_online
+            if not is_online:
+                auction.allow_bidding_on_lots = False
         if not auction.notes:
             auction.notes = "## General information\n\nYou should remove this line and edit this section to suit your auction.  Use the formatting here as an example.\n\n## Prohibited items\n- You cannot sell anything banned by state law.\n\n## Rules\n- All lots must be properly bagged.  No leaking bags!\n- You do not need to be a club member to buy or sell lots."
         if auction.is_online:
@@ -2721,6 +2758,7 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
             self.auction = invoice.auction
             if self.is_auction_admin:
                 auth = True
+                self.is_admin = True
         if self.exampleMode:
             auth = True
         if request.user.is_authenticated:
@@ -2737,7 +2775,6 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
         if mark_invoice_viewed_by_user:
             setattr(invoice, self.form_view, True) # this will set printed or opened as appropriate
             invoice.save()
-        print('finished invoice view dispatch')
         return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
@@ -2745,14 +2782,7 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
         context['auction'] = self.auction
         context['is_admin'] = self.is_admin
         invoice = self.get_object()
-        sold = invoice.sold_lots_queryset
-        bought = invoice.bought_lots_queryset
-        userData = None
-        if invoice.user:
-            userData, created = UserData.objects.get_or_create(
-                user = invoice.user.pk,
-                defaults={},
-                )
+        context['invoice'] = invoice
         context['exampleMode'] = self.exampleMode
         # light theme for some invoices to allow printing
         if 'print' in self.request.GET.copy():
@@ -2761,29 +2791,7 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
         else:
             context['base_template_name'] = "base.html"
             context['show_links'] = True
-        try:
-            # sort sold by winner's location
-            sold = sorted(sold, key=lambda t: str(t.winner_location) ) 
-            # sort bought by lot number
-            #bought = sorted(bought, key=lambda t: str(t.location))
-            bought = sorted(bought, key=lambda t: str(t.lot_number))
-        except:
-            pass
-        #context['lot_labels'] = invoice.lot_labels
-        context['sold'] = sold
-        context['bought'] = bought
-        context['userdata'] = userData
-        try:
-            context['contact_email'] = User.objects.get(pk=context['auction'].created_by.pk).email
-        except:
-            context['contact_email'] = False
-        try:
-            location = AuctionTOS.objects.get(user=self.get_object().user.pk, auction=self.get_object().auction.pk).pickup_location
-            context['location'] = location
-            context['location_map'] = f'https://www.google.com/maps/search/?api=1&query={location.latitude},{location.longitude}'
-        except Exception as e:
-            context['location'] = 'No location selected'
-            context['location_map'] = None
+        context['location'] = invoice.location
         context['form'] = InvoiceUpdateForm(initial={
             'adjustment_direction': self.get_object().adjustment_direction,
             'adjustment':self.get_object().adjustment,
@@ -2791,7 +2799,6 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
             })
         context['print_label_link'] = None
         if invoice.auction.is_online and invoice.auctiontos_user:
-            print('print labels')
             context['print_label_link'] = reverse("print_labels_by_bidder_number", kwargs={'slug': invoice.auction.slug, 'bidder_number': invoice.auctiontos_user.bidder_number})
         return context
    

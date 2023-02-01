@@ -3,7 +3,7 @@ from .models import *
 
 class AuctionTOSHTMxTable(tables.Table):
     id = tables.Column(accessor='display_name', verbose_name="ID", orderable=False)
-    phone = tables.Column(accessor='phone_as_string', verbose_name="Phone", orderable=False)
+    #phone = tables.Column(accessor='phone_as_string', verbose_name="Phone", orderable=False)
     invoice_link = tables.Column(accessor='invoice_link_html', verbose_name="Invoice", orderable=False)
     add_lot_link = tables.Column(accessor='bulk_add_link_html', verbose_name="Add lots", orderable=False)
     print_invoice_link = tables.Column(accessor='print_invoice_link_html', verbose_name="Lot labels", orderable=False)
@@ -11,7 +11,7 @@ class AuctionTOSHTMxTable(tables.Table):
     class Meta:
         model = AuctionTOS
         template_name = "tables/bootstrap_htmx.html"
-        fields = ('id', 'name', 'email', 'phone', 'print_invoice_link', 'add_lot_link','invoice_link')
+        fields = ('id', 'name', 'email', 'print_invoice_link', 'add_lot_link','invoice_link')
         row_attrs = {
             'style':'cursor:pointer;',
             'hx-get': lambda record: "/api/auctiontos/" + str(record.pk),

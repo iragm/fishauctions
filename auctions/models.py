@@ -184,6 +184,10 @@ class Auction(models.Model):
 	unsold_lot_fee.help_text = "The amount the seller will be charged if their lot doesn't sell"
 	winning_bid_percent_to_club = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(100)])
 	winning_bid_percent_to_club.help_text = "In addition to the Lot entry fee, this percent of the winning price will be taken by the club"
+	pre_register_lot_discount_percent = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(100)])
+	pre_register_lot_discount_percent.help_text = "Decrease the club cut if users add lots through this website"
+	pre_register_lot_entry_fee_discount = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(10)])
+	pre_register_lot_entry_fee_discount.help_text = "Decrease the lot entry fee by this amount if users add lots through this website"
 	date_posted = models.DateTimeField(auto_now_add=True)
 	date_start = models.DateTimeField("Auction start date")
 	date_start.help_text = "Bidding will be open on this date.  Must be in the future."
@@ -224,6 +228,8 @@ class Auction(models.Model):
 	use_categories = models.BooleanField(default=True, verbose_name="This is a fish auction")
 	use_categories.help_text = "Check to use categories like Cichlids, Livebearers, etc."
 	is_deleted = models.BooleanField(default=False)
+	allow_bidding_on_lots = models.BooleanField(default=True)
+	email_users_when_invoices_ready = models.BooleanField(default=True)
 
 	def __str__(self):
 		if "auction" not in self.title.lower():
@@ -349,11 +355,10 @@ class Auction(models.Model):
 	@property
 	def closed(self):
 		"""For display on the main auctions list"""
-		if self.date_end:
+		if self.is_online and self.date_end:
 			if timezone.now() > self.date_end:
 				return True
-		# fixme - something needs to be done here - you can't have in-person auctions open forever
-		# one option would be to auto-close 24 hours after bidding opens
+		# in-person auctions don't end right now
 		return False
 
 	@property
@@ -486,8 +491,9 @@ class Auction(models.Model):
 				return False
 			else:
 				return True
-		if self.date_end > timezone.now():
-			return False
+		if self.is_online:
+			if self.date_end > timezone.now():
+				return False
 		return True
 	
 	@property
@@ -904,7 +910,10 @@ class Lot(models.Model):
 	shipping_locations = models.ManyToManyField(Location, blank=True, verbose_name="I will ship to")
 	shipping_locations.help_text = "Check all locations you're willing to ship to"
 	is_deleted = models.BooleanField(default=False)
-	
+	added_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="added_by")
+	added_by.help_text = "User who added this lot -- used for pre-registration discounts"
+	category_automatically_added = models.BooleanField(default=False)
+
 	def save(self, *args, **kwargs):
 		"""
 		For in-person auctions, we'll generate a bidder_number-lot_number format
@@ -1088,6 +1097,16 @@ class Lot(models.Model):
 		return False
 
 	@property
+	def pre_registered(self):
+		"""True if this lot will get a discount for being pre-registered"""
+		if self.auction:
+			if self.auction.pre_register_lot_discount_percent or self.auction.pre_register_lot_entry_fee_discount:
+				if self.added_by and self.user:
+					if self.added_by == self.user:
+						return True
+		return False
+
+	@property
 	def payout(self):
 		"""Used for invoicing"""
 		payout = {
@@ -1114,7 +1133,10 @@ class Lot(models.Model):
 						clubCut = self.winning_price
 						sellerCut = 0
 					else:
-						clubCut = ( self.winning_price * auction.winning_bid_percent_to_club / 100 ) + auction.lot_entry_fee
+						if self.pre_registered:
+							clubCut = ( self.winning_price * (auction.winning_bid_percent_to_club - auction.pre_register_lot_discount_percent) / 100 ) + auction.lot_entry_fee - auction.pre_register_lot_entry_fee_discount
+						else:
+							clubCut = ( self.winning_price * auction.winning_bid_percent_to_club / 100 ) + auction.lot_entry_fee
 						sellerCut = self.winning_price - clubCut
 					payout['to_club'] = clubCut
 					payout['to_seller'] = sellerCut
@@ -1160,12 +1182,12 @@ class Lot(models.Model):
 		
 		Important: in the case of a lot that is part of an in-person auction with no end time, this will return timezone.now()
 
-		Make sure to only use this after checking lot.is_part_of_in_person_auction.  A good alternative is lot.calculated_end_for_templates which returns either a string or a datetime
+		A good alternative is lot.calculated_end_for_templates which returns either a string or a datetime
 		"""
 		# for in-person auctions only
-		if self.auction:
-			if not self.auction.is_online and self.auction.date_end:
-				return self.auction.date_end
+		if self.is_part_of_in_person_auction:
+			return self.auction.date_start + datetime.timedelta(days=364)
+		# online auctions update lot.date_end (rolling endings)
 		if self.date_end:
 			return self.date_end
 		# I would hope we never get here...but it it theoretically possible that a bug could cause self.date_end to be blank
@@ -1245,6 +1267,9 @@ class Lot(models.Model):
 			if self.ban_reason:
 				return f"This lot has been removed: {self.ban_reason}"
 			return "This lot has been removed"
+		if self.auction:
+			if not self.auction.allow_bidding_on_lots:
+				return "This auction doesn't allow online bidding"
 		if self.deactivated:
 			return "This lot has been deactivated by its owner"
 		if self.bidding_allowed_on > timezone.now():
@@ -1497,7 +1522,7 @@ class Lot(models.Model):
 	@property
 	def label_line_2(self):
 		"""Used for printed labels"""
-		return "Winner:" + (str(self.auctiontos_winner.name) or "")
+		return "Winner:" + (str(self.auctiontos_winner.name) if self.auctiontos_winner else "")
 
 	@property
 	def label_line_3(self):
@@ -1646,6 +1671,13 @@ class Invoice(models.Model):
 		return Lot.objects.filter(auctiontos_winner=self.auctiontos_user, auction=self.auction, is_deleted=False).order_by('lot_number')
 
 	@property
+	def sold_lots_queryset_sorted(self):
+		try:
+			return sorted(self.sold_lots_queryset, key=lambda t: str(t.winner_location) ) 
+		except:
+			return self.sold_lots_queryset
+
+	@property
 	def lots_sold(self):
 		"""Return number of lots the user attempted to sell in this invoice (unsold lots included)"""
 		return len(self.sold_lots_queryset)
@@ -1700,14 +1732,17 @@ class Invoice(models.Model):
 		"""Pickup location selected by the user"""
 		if self.auctiontos_user:
 			return self.auctiontos_user.pickup_location
-		# try:
-		# 	return self.auctiontos_user.pickup_location
-		# except:
-		# 	pass
 		try:
 			return AuctionTOS.objects.get(user=self.user.pk, auction=self.auction.pk).pickup_location
 		except:
-			return "No location selected"
+			return None
+
+	@property
+	def contact_email(self):
+		if self.location:
+			if self.location.pickup_location_contact_email:
+				return self.location.pickup_location_contact_email
+		return self.auction.created_by.email
 
 	@property
 	def invoice_summary_short(self):

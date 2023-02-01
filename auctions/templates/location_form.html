@@ -11,6 +11,8 @@
     $('#location-form').submit(function(event){
         $(this).find(':input[type=submit]').prop('disabled', true);
     });
+var form_id = 'location-form';
+{% include 'leave_page_warning.js' %}
 </script>
 {% endblock %}
 {% block title %}Pickup location{% endblock %}

@@ -6,12 +6,15 @@
 {% block content %}
   {% include 'auction_ribbon.html' %}
   <br>
-  <p>You are adding/editing lots for <b><span class="text-primary">{{ tos.name }}</b></span>, bidder number <b>{{ tos.bidder_number}}</b></p>
+  <p>You are adding/editing lots for <b><span class="text-warning">{{ tos.name }}</b></span>, bidder number <b>{{ tos.bidder_number}}</b></p>
   
   {{ link_formset.management_form }}
   <form id="form-container" method="POST" action="{% url 'bulk_add_lots' slug=auction.slug bidder_number=tos.bidder_number%}">
     {% crispy formset helper %}
-    <button class='btn btn-info' id="add-form" type="button">Add row</button><input type="submit" class='btn btn-success float-right' id='save' value="Save lots for {{ tos.name }}">
+    <button class='btn btn-info' id="add-form" type="button">Add row</button>
+    
+    <input type="submit" class='btn btn-info float-right submit-button mr-2 ml-2' name='save_print' id='save_print' value="Save and print labels">
+    <input type="submit" class='btn btn-success float-right submit-button' name='save_submit' id='save_submit' value="Save lots for {{ tos.name }}">
   </form>
 {% endblock %}
 
@@ -39,5 +42,16 @@ function cloneMore(selector, type) {
     $('#id_' + type + '-TOTAL_FORMS').val(total);
     $(selector).after(newElement);
 }
+$(".submit-button").click(function(event){
+    if (this.id == "save_submit") {
+        $(form_id).attr("action", "?type=submit");
+        $(form_id).submit();
+        return true
+    } else if (this.id == "save_print") {
+        $(form_id).attr("action", "?type=print");
+        $(form_id).submit();
+        return true
+    }
+});
 </script>
 {% endblock %}

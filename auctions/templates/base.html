@@ -296,6 +296,17 @@ window.onload = function() {
         {% endblock %}
       <div id="modals-here"></div>
     </body>
+    {# this is to redirect for printing #}
+    <script>
+      const urlParams = new URLSearchParams(window.location.search);
+      const printredirect = urlParams.get('printredirect');
+      if (printredirect) { 
+        var a = document.createElement("a");
+        a.href = printredirect;
+        document.body.appendChild(a);
+        a.click();
+      }
+    </script>
     <!-- <script type="text/javascript" src="https://unpkg.com/htmx.org@1.8.0/dist/htmx.js"></script>-->
     <script type="text/javascript" src="{% static 'js/htmx.min.js' defer %}"></script>
     <script type="text/javascript" src="{% static 'js/ws.js' defer %}"></script>
