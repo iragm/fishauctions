@@ -17,8 +17,8 @@
           <thead>
             <tr>
               <th scope="col">Auction</th>
+              <th scope="col">Date</th>
               <th scope="col">Lots</th>
-              <th scope="col">Ends</th>
             </tr>
           </thead>
           <tbody>
@@ -26,11 +26,29 @@
             {% for auction in object_list %}
             <tr>
               <td><a href='/auctions/{{auction.slug}}'>{{ auction.title }}</a>
-                {% if request.user.is_superuser or auction.created_by == request.user %}&nbsp;<a href='/auctions/{{auction.slug}}/invoices/'>Invoices</a>{% endif %} {% if not auction.promote_this_auction %}<span class='text-muted'>(Not promoted)</span>{% endif %}
+                {% if not auction.promote_this_auction %}<span class='text-muted'>(Not promoted)</span>{% endif %}
               </td>
-              <td>{% if auction.started %}<a href='/lots/?auction={{auction.slug}}'>View lots</a>{% else %}Starts: 
-                {{auction.date_start}} {% endif %}</td>
-              <td>{% if auction.closed %}<span style="color:red">{{ auction.date_end }}</span>{% else %}{{ auction.date_end_as_str }}{% endif %}</td>
+              <td>{% if auction.closed %}
+                  <span style="color:red">{{ auction.date_end }}</span>
+                  {% else %}
+                  {% if auction.started and auction.date_end %}
+                    Ends: {{ auction.date_end }}
+                  {% else %}
+                    {% if not auction.started %}
+                    Starts: {{ auction.date_start }}
+                    {% else %}
+                    {% if not auction.is_online %}
+                    <span style="color:red">{{ auction.date_start }}</span>
+                    {% else %}
+                    {{ auction.date_start }}
+                    {% endif %}
+                    {% endif %}
+                    {% endif %}
+                {% endif %}
+              <td>
+                {% if auction.show_lot_link_on_auction_list %}
+                <a href='/lots/?auction={{auction.slug}}'>View lots</a>{% else %}Lots open: {{auction.lot_submission_start_date}} {% endif %}</td>
+              </td>
             </tr>
             {% endfor %}
         </tbody>

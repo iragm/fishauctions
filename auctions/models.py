@@ -483,6 +483,12 @@ class Auction(models.Model):
 			return 100
 	
 	@property
+	def show_lot_link_on_auction_list(self):
+		if timezone.now() > self.lot_submission_start_date:
+			return True
+		return False
+
+	@property
 	def can_submit_lots(self):
 		if timezone.now() < self.lot_submission_start_date:
 			return False

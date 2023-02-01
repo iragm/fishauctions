@@ -982,7 +982,6 @@ class AuctionChats(LoginRequiredMixin, ListView, AuctionPermissionsMixin):
     def dispatch(self, request, *args, **kwargs):
         self.auction = Auction.objects.get(slug=kwargs['slug'])
         result = super().dispatch(request, *args, **kwargs)
-        print('through dispatch')
         # if not self.is_auction_admin:
         #     messages.error(request, "You don't have permission to edit this auction")
         #     return redirect('/')
@@ -2333,6 +2332,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
         auction.created_by = self.request.user
         auction.promote_this_auction = False # all auctions start not promoted
         cloned_from = form.cleaned_data['cloned_from']
+        auction.date_start = form.cleaned_data['date_start']
         is_online = True
         clone_from_auction = None
         if 'clone' in str(self.request.GET):
@@ -2349,7 +2349,6 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
         else:
             is_online = False
         run_duration = timezone.timedelta(days=7) # only set for is_online
-        auction.save()
         if clone_from_auction:
             fields_to_clone = ['is_online', 
                 'notes',
@@ -2383,15 +2382,15 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
             auction.notes = "## General information\n\nYou should remove this line and edit this section to suit your auction.  Use the formatting here as an example.\n\n## Prohibited items\n- You cannot sell anything banned by state law.\n\n## Rules\n- All lots must be properly bagged.  No leaking bags!\n- You do not need to be a club member to buy or sell lots."
         if auction.is_online:
             auction.date_end = auction.date_start + run_duration
-        if not auction.lot_submission_end_date:
-            if auction.is_online:
+            if not auction.lot_submission_end_date:
                 auction.lot_submission_end_date = auction.date_end
-            else:
-                auction.lot_submission_end_date = auction.date_start
-        if not auction.lot_submission_start_date:
-            if auction.is_online:
+            if not auction.lot_submission_start_date:
                 auction.lot_submission_start_date = auction.date_start
-            else:
+        else:
+            auction.date_end = None
+            if not auction.lot_submission_end_date:
+                auction.lot_submission_end_date = auction.date_start
+            if not auction.lot_submission_start_date:
                 auction.lot_submission_start_date = auction.date_start - run_duration
         auction.save()
         # let's route in-person auctions to the rule page next
@@ -2644,7 +2643,7 @@ class allAuctions(ListView):
     ordering = ['-date_end']
     
     def get_queryset(self):
-        qs = Auction.objects.all().order_by('-date_end')
+        qs = Auction.objects.all().order_by('-date_start')
         if self.request.user.is_superuser:
             return qs
         if not self.request.user.is_authenticated:
