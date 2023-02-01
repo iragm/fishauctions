@@ -457,13 +457,14 @@ def no_lot_auctions(request):
             auction = userData.last_auction_used
             now = timezone.now()
             if auction:
-                if auction.date_end < now and auction.is_online:
-                    result = f"{auction} has ended"
-                elif auction.lot_submission_end_date < now:
-                    result = f"Lot submission has ended for {auction}"
-                elif auction.lot_submission_start_date > now:
+                if auction.lot_submission_start_date > now:
                     result = f"Lot submission is not yet open for {auction}"
-                else:
+                if auction.lot_submission_end_date < now:
+                    result = f"Lot submission has ended for {auction}"
+                if auction.date_end:
+                    if auction.date_end < now:
+                        result = f"{auction} has ended"
+                if not result:
                     if auction.max_lots_per_user:
                         lot_list = Lot.objects.filter(user=request.user, banned=False, deactivated=False, auction=auction, is_deleted=False)
                         if auction.allow_additional_lots_as_donation:
@@ -1892,7 +1893,14 @@ class LotValidation(LoginRequiredMixin):
         #         lot.i_bred_this_fish = False
         # if lot.image and not lot.image_source:
         #     lot.image_source = 'RANDOM' # default to this pic is from the internet
+        if lot.buy_now_price:
+            if lot.buy_now_price < lot.reserve_price:
+                lot.buy_now_price = lot.reserve_price
+                messages.error(self.request, f"Buy now price can't be lower than the reserve price")
         if lot.auction:
+            if not lot.auction.is_online:
+                if lot.buy_now_price or lot.reserve_price > 2:
+                    messages.warning(self.request, f"Reserve and buy now prices may not be used in this auction.  Read the auction's rules for more information")
             lot.date_end = lot.auction.date_end
             userData, created = UserData.objects.get_or_create(
                 user = self.request.user.pk,
