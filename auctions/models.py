@@ -922,6 +922,31 @@ class AuctionTOS(models.Model):
 		localized_time = time.astimezone(self.timezone)
 		return localized_time.strftime("%B %d at %I:%M %p")
 
+	@property
+	def trying_to_avoid_ban(self):
+		"""We track IPs in userdata, so we can do a quick check for this"""
+		if self.user:
+			userData, created = UserData.objects.get_or_create(
+				user = self.user,
+				defaults={},
+			)
+			if userData.last_ip_address:
+				other_users = UserData.objects.filter(last_ip_address=userData.last_ip_address).exclude(pk=userData.pk)
+				for other_user in other_users:
+					#print(f"{self.user} is also known as {other_user.user}")
+					banned = UserBan.objects.filter(banned_user=other_user.user, user=self.auction.created_by).first()
+					if banned:
+						url = reverse("userpage", kwargs={"slug": other_user.user.username})
+						return f"<a href='{url}'>{other_user.user.username}</a>"
+		return False
+
+	@property
+	def number_of_userbans(self):
+		if self.user:
+			other_bans = UserBan.objects.filter(banned_user=self.user)
+			return other_bans.count()
+		return ""
+
 class Lot(models.Model):
 	"""A lot is something to bid on"""
 	PIC_CATEGORIES = (

@@ -826,7 +826,7 @@ def auctionReport(request, slug):
         end = timezone.now().strftime("%Y-%m-%d")
         response['Content-Disposition'] = 'attachment; filename="' + slug + "-report-" + end + '.csv"'
         writer = csv.writer(response)
-        writer.writerow(['Join date', 'Bidder number', 'Username', 'Name', 'Email', 'Phone', 'Address', 'Location', 'Miles to pickup location', 'Club', 'Lots viewed', 'Lots bid', 'Lots submitted', 'Lots won', 'Invoice', 'Total bought', 'Total sold', 'Invoice total due', 'Breeder points', "Number of lots sold outside auction", "Total value of lots sold outside auction", "Seconds spent reading rules", "Other auctions joined"])
+        writer.writerow(['Join date', 'Bidder number', 'Username', 'Name', 'Email', 'Phone', 'Address', 'Location', 'Miles to pickup location', 'Club', 'Lots viewed', 'Lots bid', 'Lots submitted', 'Lots won', 'Invoice', 'Total bought', 'Total sold', 'Invoice total due', 'Breeder points', "Number of lots sold outside auction", "Total value of lots sold outside auction", "Seconds spent reading rules", "Other auctions joined", "Users who have banned this user", "Account created on"])
         users = AuctionTOS.objects.filter(auction=auction).select_related('user__userdata').select_related('pickup_location').order_by('createdon')
                 #.annotate(distance_traveled=distance_to(\
                 #'`auctions_userdata`.`latitude`', '`auctions_userdata`.`longitude`', \
@@ -857,6 +857,8 @@ def auctionReport(request, slug):
                     pass
                 username = data.user.username
                 previous_auctions = AuctionTOS.objects.filter(user=data.user).exclude(pk=data.pk).count()
+                number_of_userbans = data.number_of_userbans
+                account_age = data.user.date_joined
             else:
                 previous_auctions = ""
                 lotsViewed = ""
@@ -864,6 +866,8 @@ def auctionReport(request, slug):
                 numberLotsOutsideAuction = ""
                 profitOutsideAuction = ""
                 username = ""
+                number_of_userbans = 0
+                account_age = ""
             lotsSumbitted = Lot.objects.filter(auctiontos_seller=data, auction=auction)
             lotsWon = Lot.objects.filter(auctiontos_winner=data, auction=auction)
             breederPoints = Lot.objects.filter(auctiontos_seller=data, auction=auction, i_bred_this_fish=True)
@@ -883,7 +887,7 @@ def auctionReport(request, slug):
                 data.phone_as_string, address, data.pickup_location, distance,\
                 club, len(lotsViewed), len(lotsBid), len(lotsSumbitted), \
                 len(lotsWon), invoiceStatus, totalSpent, totalPaid, invoiceTotal, len(breederPoints),\
-                numberLotsOutsideAuction, profitOutsideAuction, data.time_spent_reading_rules, previous_auctions])
+                numberLotsOutsideAuction, profitOutsideAuction, data.time_spent_reading_rules, previous_auctions, number_of_userbans, account_age])
         return response    
     messages.error(request, "Your account doesn't have permission to view this page")
     return redirect('/')

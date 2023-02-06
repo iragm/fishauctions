@@ -51,6 +51,16 @@ class Command(BaseCommand):
                             'tos': tos,
                             }
                         )
+                if tos.trying_to_avoid_ban:
+                    current_site = Site.objects.get_current()
+                    mail.send(
+                        tos.auction.created_by.email,
+                        template='user_joined_auction_despite_ban',
+                        context={
+                            'domain': current_site.domain,
+                            'tos': tos,
+                            }
+                        )
         in_person_auction_welcome = welcome_email_qs.filter(auction__is_online=False, auction__date_start__gte=timezone.now())
         for tos in in_person_auction_welcome:
             tos.confirm_email_sent = True
