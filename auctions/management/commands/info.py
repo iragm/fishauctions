@@ -13,7 +13,7 @@ import csv
 from auctions.filters import get_recommended_lots
 import re
 from collections import Counter
-
+from post_office import mail
 
 class Command(BaseCommand):
     help = 'Just a scratchpad to do things'

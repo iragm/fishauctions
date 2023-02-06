@@ -2,7 +2,7 @@
 
 This is a free and open source tool to allow fish clubs to run online auctions during COVID.
 
-If you are part of a club looking to run an auction, please [visit the site here](https://auctions.toxotes.org/about)
+If you are part of a club looking to run an auction, please [visit the site here](https://auction.fish)
 
 If you have a suggestion or are a developer who would like to contribute, read on.
 

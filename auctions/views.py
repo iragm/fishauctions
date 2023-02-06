@@ -827,12 +827,13 @@ def auctionReport(request, slug):
         response['Content-Disposition'] = 'attachment; filename="' + slug + "-report-" + end + '.csv"'
         writer = csv.writer(response)
         writer.writerow(['Join date', 'Bidder number', 'Username', 'Name', 'Email', 'Phone', 'Address', 'Location', 'Miles to pickup location', 'Club', 'Lots viewed', 'Lots bid', 'Lots submitted', 'Lots won', 'Invoice', 'Total bought', 'Total sold', 'Invoice total due', 'Breeder points', "Number of lots sold outside auction", "Total value of lots sold outside auction", "Seconds spent reading rules", "Other auctions joined"])
-        users = AuctionTOS.objects.filter(auction=auction).annotate(distance_traveled=distance_to(\
-                '`auctions_userdata`.`latitude`', '`auctions_userdata`.`longitude`', \
-                lat_field_name='`auctions_pickuplocation`.`latitude`',\
-                lng_field_name="`auctions_pickuplocation`.`longitude`",\
-                approximate_distance_to=1)\
-                ).select_related('user__userdata').select_related('pickup_location').order_by('createdon')
+        users = AuctionTOS.objects.filter(auction=auction).select_related('user__userdata').select_related('pickup_location').order_by('createdon')
+                #.annotate(distance_traveled=distance_to(\
+                #'`auctions_userdata`.`latitude`', '`auctions_userdata`.`longitude`', \
+                #lat_field_name='`auctions_pickuplocation`.`latitude`',\
+                #lng_field_name="`auctions_pickuplocation`.`longitude`",\
+                #approximate_distance_to=1)\
+                #)
         for data in users:
             distance = ""
             club = ""
@@ -849,8 +850,7 @@ def auctionReport(request, slug):
                 profitOutsideAuction = lotsOutsideAuction.aggregate(total=Sum('winning_price'))['total']
                 if not profitOutsideAuction:
                     profitOutsideAuction = 0
-                if data.user.userdata.latitude:
-                    distance = data.distance_traveled
+                distance = data.distance_traveled or ""
                 try:
                     club = data.user.userdata.club
                 except:
@@ -2901,12 +2901,15 @@ class LotLabelView(View, AuctionPermissionsMixin):
         self.auction = Auction.objects.filter(slug=kwargs['slug']).first()
         self.bidder_number = kwargs.pop('bidder_number', None)
         self.username = kwargs.pop('username', None)
-        if not self.bidder_number and not self.username:
-            raise Exception("bidder_number or username needs to be set, fix urls.py...")
         if self.bidder_number:
             self.tos = AuctionTOS.objects.filter(auction=self.auction, bidder_number=self.bidder_number).first()
-        else:
-            self.tos = AuctionTOS.objects.filter(auction=self.auction, user__username=self.username)
+        if self.username:
+            self.tos = AuctionTOS.objects.filter(auction=self.auction, user__username=self.username).first()
+        if not self.bidder_number and not self.username:
+            self.tos = AuctionTOS.objects.filter(auction=self.auction, user=request.user).first()
+        if not self.tos:
+            messages.error(request, "It doesn't look like you've joined this auction yet")
+            return redirect(self.auction.get_absolute_url())
         checks_pass = False
         if self.is_auction_admin:
             checks_pass = True

@@ -22,6 +22,7 @@ from django.contrib.sites.models import Site
 import re
 from django.contrib.auth.signals import user_logged_in
 from dal import autocomplete
+from pytz import timezone as pytz_timezone
 
 def nearby_auctions(latitude, longitude, distance=100, include_already_joined=False, user=None, return_slugs=False):
 	"""Return a list of auctions or auction slugs that are within a specified distance of the given location"""
@@ -232,9 +233,12 @@ class Auction(models.Model):
 	email_users_when_invoices_ready = models.BooleanField(default=True)
 
 	def __str__(self):
+		result = self.title
 		if "auction" not in self.title.lower():
-			return f"{self.title} auction"
-		return self.title
+			result += " auction"
+		if not self.title.lower().startswith("the "):
+			result = "The " + result
+		return result
 	
 	@property
 	def location_qs(self):
@@ -293,6 +297,18 @@ class Auction(models.Model):
 
 	def get_edit_url(self):
 		return f'/auctions/{self.slug}/edit/'
+	
+	@property
+	def label_print_link(self):
+		return reverse("print_my_labels", kwargs={'slug': self.slug}) 
+
+	@property
+	def add_lot_link(self):
+		return f'/lots/new/?auction={self.slug}'
+
+	@property
+	def user_admin_link(self):
+		return reverse("auction_tos_list", kwargs={'slug': self.slug}) 
 
 	def permission_check(self, user):
 		"""See if `user` can make changes to this auction"""
@@ -323,7 +339,7 @@ class Auction(models.Model):
 				if location.second_pickup_time < time_to_use:
 					error = True
 			if error:
-				return reverse("edit_pickup", kwargs={'pk': location.pk}) 
+				return reverse("edit_pickup", kwargs={'pk': location.pk})
 		return False
 		
 	@property
@@ -628,7 +644,9 @@ class PickupLocation(models.Model):
 	@property
 	def directions_link(self):
 		"""Google maps link to the lat and lng of this pickup location"""
-		return f"https://www.google.com/maps/search/?api=1&query={self.latitude},{self.longitude}"
+		if self.has_coordinates:
+			return f"https://www.google.com/maps/search/?api=1&query={self.latitude},{self.longitude}"
+		return ""
 
 	@property
 	def has_coordinates(self):
@@ -808,6 +826,101 @@ class AuctionTOS(models.Model):
 	class Meta: 
 		verbose_name = "Auction pickup location"
 		verbose_name_plural = "Auction pickup locations"
+
+	@property
+	def closest_location_for_this_user(self):
+		result = PickupLocation.objects.none()
+		if self.user and self.auction.multi_location:
+			userData, created = UserData.objects.get_or_create(
+				user = self.user,
+				defaults={},
+			)
+			if userData.latitude:
+				result = PickupLocation.objects.filter(auction=self.auction)\
+					.annotate(distance=distance_to(userData.latitude, userData.longitude))\
+					.order_by('distance').first()
+		return result
+
+	@property
+	def has_selected_closest_location(self):
+		if self.closest_location_for_this_user:
+			if self.closest_location_for_this_user == self.pickup_location:
+				return True
+			return False
+		# single location auction, or user's location not set; anyway, not a problem
+		return True
+	
+	@property
+	def distance_traveled(self):
+		if self.user and not self.manually_added:
+			userData, created = UserData.objects.get_or_create(
+				user = self.user,
+				defaults={},
+			)
+			if userData.latitude:
+				location = PickupLocation.objects.filter(pk=self.pickup_location.pk)\
+							.annotate(distance=distance_to(userData.latitude, userData.longitude))\
+							.order_by('distance').first()
+				return location.distance
+		return ""
+
+	@property
+	def closer_location_savings(self):
+		if not self.has_selected_closest_location:
+			if self.closest_location_for_this_user and self.distance_traveled:
+				return int(self.distance_traveled - self.closest_location_for_this_user.distance)
+		return 0
+
+	@property
+	def closer_location_warning(self):
+		current_site = Site.objects.get_current()
+		if self.closer_location_savings > 9:
+			return f"You've selected {self.pickup_location}, but {self.closest_location_for_this_user} is {int(self.closer_location_savings)} miles closer to you.  You can change your pickup location on the auction rules page: https://{current_site.domain}{self.auction.get_absolute_url()}#join"
+		return ""
+
+	@property
+	def closer_location_warning_html(self):
+		current_site = Site.objects.get_current()
+		if self.closer_location_savings > 9:
+			return f"You've selected {self.pickup_location}, but {self.closest_location_for_this_user} is {int(self.closer_location_savings)} miles closer to you.  You can change your pickup location <a href='https://{current_site.domain}{self.auction.get_absolute_url()}#join'>on the auction rules page</a>"
+		return ""
+
+	@property
+	def timezone(self):
+		try:
+			return pytz_timezone(self.user.userdata.timezone)
+		except:
+			try:
+				return pytz_timezone(self.auction.created_by.userdata.timezone)
+			except:
+				return pytz_timezone(settings.TIME_ZONE)
+
+	@property
+	def pickup_time_as_localized_string(self):
+		"""Do not use this in templates; it's for emails"""
+		time = self.pickup_location.pickup_time
+		localized_time = time.astimezone(self.timezone)
+		return localized_time.strftime("%B %d at %I:%M %p")
+
+	@property
+	def second_pickup_time_as_localized_string(self):
+		"""Do not use this in templates; it's for emails"""
+		if self.pickup_location.second_pickup_time:
+			time = self.pickup_location.second_pickup_time
+			localized_time = time.astimezone(self.timezone)
+			return localized_time.strftime("%B %d at %I:%M %p")
+		return ""
+
+	@property
+	def auction_date_as_localized_string(self):
+		"""Note that this is a different date for in person and online!"""
+		if self.auction.is_online:
+			time = self.auction.date_end
+		else:
+			# offline auctions use start time
+			time = self.auction.date_start
+		localized_time = time.astimezone(self.timezone)
+		return localized_time.strftime("%B %d at %I:%M %p")
 
 class Lot(models.Model):
 	"""A lot is something to bid on"""

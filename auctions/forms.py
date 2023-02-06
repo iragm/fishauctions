@@ -1030,10 +1030,10 @@ class CreateLotForm(forms.ModelForm):
         if self.instance.pk:
             # existing lot
             #set run_duration - this does not have to be super precise as it will be recalculated when the form is validated
-            if (self.instance.date_end - self.instance.date_posted).days < 15:
-                self.fields['run_duration'].initial = 10
-            else:
-                self.fields['run_duration'].initial = 21
+            self.fields['run_duration'].initial = 21
+            if self.instance.date_end:
+                if (self.instance.date_end - self.instance.date_posted).days < 15:
+                    self.fields['run_duration'].initial = 10
             self.fields['show_payment_pickup_info'].initial = False # this doesn't really matter, it just gets overridden by javascript anyway
             if self.instance.auction:
                 self.fields['part_of_auction'].initial = "True"
