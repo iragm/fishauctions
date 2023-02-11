@@ -707,7 +707,7 @@ class AuctionTOS(models.Model):
 	def bulk_add_link_html(self):
 		"""Link to add multiple lots at once for this user"""
 		url = reverse("bulk_add_lots", kwargs = {'bidder_number':self.bidder_number, 'slug':self.auction.slug})
-		return html.format_html(f"<a href='{url}'>Add lots</a>")
+		return html.format_html(f"<a href='{url}' hx-noget>Add lots</a>")
 
 	@property
 	def lots_qs(self):
@@ -723,7 +723,7 @@ class AuctionTOS(models.Model):
 		"""Link print lot labels for this user"""
 		if self.unbanned_lot_count:
 			url = reverse("print_labels_by_bidder_number", kwargs = {'bidder_number':self.bidder_number, 'slug':self.auction.slug})
-			return html.format_html(f"<a href='{url}'>Print labels</a>")
+			return html.format_html(f"<a href='{url}' hx-noget>Print labels</a>")
 		return ""
 
 	@property
@@ -734,7 +734,7 @@ class AuctionTOS(models.Model):
 	def invoice_link_html(self):
 		"""HTML snippet with a link to the invoice for this auctionTOS, if set.  Otherwise, empty"""
 		if self.invoice:
-			result = html.format_html(f"<a href='{self.invoice.get_absolute_url()}'>View</a>")
+			result = html.format_html(f"<a href='{self.invoice.get_absolute_url()}' hx-noget>View</a>")
 			return result
 		else:
 			return "None"
@@ -747,17 +747,13 @@ class AuctionTOS(models.Model):
 				self.confirm_email_sent = True
 				self.print_reminder_email_sent = True
 				self.second_confirm_email_sent = True
-		if not self.pk and not self.user and self.email:
-			existing_user = User.objects.filter(email=self.email).exists()
-			if not existing_user and settings.SEND_WELCOME_EMAIL:
-				print(f"fixme - A new user with email {self.email} was just added to an auction.  Send them a welcome email")
 		# fill out some fields from user, if set
 		# There is a huge security concern here:   <<<< ATTENTION!!!
 		# If someone creates an auction and adds every email address that's public
 		# We must avoid allowing them to collect addresses/phone numbers/locations from these people
 		# Having this code below run only on creation means that the user won't be filled out and prevents collecting data
 		# if making changes, remember that there's user_logged_in_callback below which sets the user field
-		if self.user: #fixme - add and not self.pk here after migration
+		if self.user and not self.pk:
 			if not self.name:
 				self.name = self.user.first_name + " " + self.user.last_name
 			if not self.email:
@@ -1225,10 +1221,20 @@ class Lot(models.Model):
 		return "Unknown"
 	
 	@property
+	def high_bidder_display(self):
+		if self.sealed_bid:
+			return "Sealed bid"
+		if self.winner_as_str:
+			return self.winner_as_str
+		if self.high_bidder:
+			return self.high_bidder
+		return "No bids"
+
+	@property
 	def winner_as_str(self):
 		"""String of the winner name or number, for use on lot pages"""
 		if self.auctiontos_winner:
-			return str(self.auctiontos_winner)
+			return f"Bidder {self.auctiontos_winner}"
 		if self.winner:
 			return str(self.winner)
 		return ""
@@ -1666,7 +1672,11 @@ class Lot(models.Model):
 	@property
 	def label_line_2(self):
 		"""Used for printed labels"""
-		return "Winner:" + (str(self.auctiontos_winner.name) if self.auctiontos_winner else "")
+		if self.auctiontos_winner:
+			return f"Winner: {self.auctiontos_winner.name}"
+		if self.auctiontos_seller:
+			return f"Seller: {self.auctiontos_seller.name}"
+		return ""
 
 	@property
 	def label_line_3(self):
@@ -1727,6 +1737,8 @@ class Invoice(models.Model):
 	no_login_link = models.CharField(max_length=255, default=uuid.uuid4, blank=True, verbose_name="This link will be emailed to the user, allowing them to view their invoice directly without logging in")
 	calculated_total = models.IntegerField(null=True, blank=True)
 	calculated_total.help_text = "This field is set automatically, you shouldn't need to manually change it"
+	memo = models.CharField(max_length=500, blank=True, null=True, default="")
+	memo.help_text = "Only other auction admins can see this"
 
 	@property
 	def recalculate(self):

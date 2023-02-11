@@ -219,7 +219,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
             <tr>
                 <td><b>
                     <span id="price_label">{% if lot.sold or lot.ended %}
-                        Won by:
+                        Winner:
                         {% else %}
                             {% if lot.sealed_bid %}
                             Sealed bid auction
@@ -234,7 +234,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                     </span></b></td>
                     <td>
                     {% if lot.sold %}
-                        $<span id="price">{{lot.winning_price}}</span> <span id="high_bidder_name">{% if lot.winner %}<a href="{% url 'userpage' slug=lot.winner %}">{{ lot.winner }}</a>{% else %}{{ lot.auctiontos_winner }}{% endif %}</span>
+                        $<span id="price">{{lot.winning_price}}</span> <span id="high_bidder_name">{% if lot.winner %}<a href="{% url 'userpage' slug=lot.winner %}">{{ lot.winner }}</a>{% else %}Bidder: {{ lot.auctiontos_winner }}{% endif %}</span>
                     {% else %}
                         {% if lot.ended %}
                             Not sold
@@ -316,10 +316,12 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
         <h5>Exchange info</h5>
         <table class="table">
             <tr>
-                <td><b>Seller:</b><br></td><td>{{ lot.seller_name }} ({{ lot.seller_email | urlize }}) <small>(Paid: ${{lot.your_cut|floatformat:2}})</small><br> <small>{{ lot.location }}</small> <a href="{{ lot.seller_invoice_link }}">Seller's invoice</a></td>
+                <td><b>Seller:</b><br></td><td>{% if is_auction_admin %}<a href="#" hx-get="/api/auctiontos/{{lot.auctiontos_seller.pk}}"
+                    hx-target="#modals-here" hx-trigger="click">{{ lot.seller_name }}</a> {% else %} {{ lot.seller_name }} {% endif %}({{ lot.seller_email | urlize }}) <small>(Paid: ${{lot.your_cut|floatformat:2}})</small><br> <small>{{ lot.location }}</small> <a href="{{ lot.seller_invoice_link }}">Seller's invoice</a></td>
             </tr>
             <tr>
-                <td><b>Winner:</b></td><td>{{ lot.winner_name }} ({{ lot.winner_email | urlize }})<br><small>{{ lot.winner_location }}</small> <a href="{{ lot.winner_invoice_link }}">Winner's invoice</a></td>
+                <td><b>Winner:</b></td><td>{% if is_auction_admin %}<a href="#" hx-get="/api/auctiontos/{{lot.auctiontos_winner.pk}}"
+                    hx-target="#modals-here" hx-trigger="click">{{ lot.winner_name }}</a> {% else %} {{ lot.winner_name }} {% endif %} ({{ lot.winner_email | urlize }})<br><small>{{ lot.winner_location }}</small> <a href="{{ lot.winner_invoice_link }}">Winner's invoice</a></td>
             </tr>
         </table>
         {% endif %}
@@ -532,7 +534,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                     addChat(-1, "System", data.message);
                 }
                 if (data.info == "LOT_END_WINNER") {
-                    $('#price_label').html("Won by:");
+                    $('#price_label').html("Winner:");
                     $('#end_date').html("Ended");
                     $('#bid_area').html("Bidding has ended on this lot<br>");
                 }

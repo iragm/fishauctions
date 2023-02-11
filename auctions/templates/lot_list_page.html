@@ -59,7 +59,7 @@
       <td>{{ lot.species_category }}</td>
       <td><a href="{{ lot.lot_link }}">{{ lot.lot_name }}</a></td>
       <td>${{ lot.high_bid }} </td>
-      <td>{% if lot.high_bidder %}{{ lot.high_bidder }}{% else %}No bids{% endif %}</td>
+      <td>{{ lot.high_bidder_display }}</td>
       <td>{% if lot.user == request.user %}{% if lot.owner_chats %}<span class='text-warning'>{{ lot.owner_chats }}</span>{% endif %}
         {% else %}
         {% if lot.all_chats %}<span class='text-muted>'>{{lot.all_chats}}</span>{% endif %}

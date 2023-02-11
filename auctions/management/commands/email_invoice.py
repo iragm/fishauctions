@@ -13,7 +13,7 @@ class Command(BaseCommand):
         for invoice in invoices:
             if invoice.auction.email_users_when_invoices_ready:
                 email = invoice.auctiontos_user.email
-                subject = f"Your invoice for {invoice.label} is ready for payment"
+                subject = f"Your invoice for {invoice.label} is ready"
                 contact_email = invoice.auction.created_by.email
                 current_site = Site.objects.get_current()
                 mail.send(

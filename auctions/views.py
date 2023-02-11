@@ -1313,6 +1313,8 @@ class SetLotWinner(QuickSetLotWinner):
         if not tos:
             form.add_error('winner', "No bidder found")
         if form.is_valid():
+            if lot.auctiontos_winner and lot.winning_price:
+                messages.info(self.request, f"{lot.lot_number_display} already had a winner: {lot.auctiontos_winner}")
             lot.auctiontos_winner = tos
             lot.winning_price = winning_price
             lot.save()
@@ -2252,10 +2254,13 @@ class AuctionTOSAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
         # )
         if self.auctiontos:
             try:
-                invoice = self.auctiontos.invoice.invoice_summary_short
+                invoice = self.auctiontos.invoice
+                invoice_string = invoice.invoice_summary_short
+                context['top_buttons'] = render_to_string("invoice_buttons.html", {'invoice':invoice})
             except:
-                invoice = ""
-            context['modal_title'] = f"{self.auctiontos.name} {invoice}"            
+                invoice = None
+                invoice_string = ""
+            context['modal_title'] = f"{self.auctiontos.name} {invoice_string}"
         else:
             context['modal_title'] = "Add new user"
         if self.auctiontos:
@@ -2780,6 +2785,7 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
             if invoice.auctiontos_user:
                 if invoice.auctiontos_user.email == request.user.email:
                     mark_invoice_viewed_by_user = True
+                    auth = True
         if not auth:
             messages.error(request, "Your account doesn't have permission to view this inovice.  Are you signed in with the correct account?")
             return redirect('/')
@@ -2806,7 +2812,8 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
         context['form'] = InvoiceUpdateForm(initial={
             'adjustment_direction': self.get_object().adjustment_direction,
             'adjustment':self.get_object().adjustment,
-            "adjustment_notes":self.get_object().adjustment_notes
+            "adjustment_notes":self.get_object().adjustment_notes,
+            "memo":self.get_object().memo
             })
         context['print_label_link'] = None
         if invoice.auction.is_online and invoice.auctiontos_user:
@@ -2844,6 +2851,7 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
         invoice.adjustment_direction = adjustment_direction
         invoice.adjustment = adjustment
         invoice.adjustment_notes = adjustment_notes
+        invoice.memo = form.cleaned_data['memo']
         invoice.save()
         return super().form_valid(form)
 

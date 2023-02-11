@@ -404,10 +404,6 @@ class CreateEditAuctionTOS(forms.ModelForm):
         self.auction = auction
         self.auctiontos = auctiontos
         super().__init__(*args, **kwargs)
-        invoice_html = "No invoice"
-        invoice = self.auctiontos.invoice
-        if invoice:
-            invoice_html = render_to_string("invoice_buttons.html", {'invoice':invoice})
         if self.is_edit_form:
             post_url = f'/api/auctiontos/{self.auctiontos.pk}/'
         else:
@@ -426,7 +422,6 @@ class CreateEditAuctionTOS(forms.ModelForm):
             'pickup_location',
             'is_admin',
             Div(
-                HTML(invoice_html),
                 HTML('<button type="button" class="btn btn-danger float-left" onclick="closeModal()">Cancel</button>'),
                 HTML(f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Save</button>'),
                 css_class="modal-footer",
@@ -538,17 +533,24 @@ class InvoiceUpdateForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = 'post'
-        self.helper.form_class = 'form-inline'
-        self.helper.form_tag = True
+        self.helper.form_class = 'form'
+        self.helper.form_id = 'invoice-form'
+        self.helper.form_tag = True   
         self.helper.layout = Layout(
-            'adjustment_direction',
-            'adjustment',
-            'adjustment_notes',
-            Submit('submit', 'Update', css_class='btn-primary'),
+            'memo',
+            HTML("<h5>Adjust</h5>"),
+            Div(
+            Div('adjustment_direction',css_class='col-lg-3',),
+            PrependedAppendedText('adjustment', '$', '.00',wrapper_class='col-lg-3', ),
+            Div('adjustment_notes',css_class='col-lg-6',),
+            css_class='row',
+            ),
+            Submit('submit', 'Save', css_class='btn-success'), 
         )
         self.fields['adjustment_direction'].label = ""
-        self.fields['adjustment'].label = " $"
-        self.fields['adjustment_notes'].label = "Reason"
+        self.fields['adjustment'].label = ""
+        self.fields['adjustment_notes'].label = ""
+        self.fields['adjustment_notes'].help_text = f"Adjustment reason will be visible to the user"
         
     class Meta:
         model = Invoice
@@ -556,6 +558,7 @@ class InvoiceUpdateForm(forms.ModelForm):
             'adjustment_direction',
             'adjustment',
             'adjustment_notes',
+            'memo',
         ]
 
 class AuctionJoin(forms.ModelForm):
