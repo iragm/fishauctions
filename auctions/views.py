@@ -1279,6 +1279,7 @@ class QuickSetLotWinner(FormView, AuctionPermissionsMixin):
                 if tos.auction == self.auction:
                     lot.auctiontos_winner = tos
                     lot.winning_price = winning_price
+                    lot.date_end = timezone.now()
                     lot.save()
                     lot.add_winner_message(self.request.user, tos, winning_price)
                     undo_url = reverse("auction_lot_list", kwargs={'slug': self.auction.slug}) + f"?query={lot.lot_number_display}"
@@ -1317,6 +1318,7 @@ class SetLotWinner(QuickSetLotWinner):
                 messages.info(self.request, f"{lot.lot_number_display} already had a winner: {lot.auctiontos_winner}")
             lot.auctiontos_winner = tos
             lot.winning_price = winning_price
+            lot.date_end = timezone.now()
             lot.save()
             lot.add_winner_message(self.request.user, tos, winning_price)
             undo_url = reverse("auction_lot_list", kwargs={'slug': self.auction.slug}) + f"?query={lot.lot_number_display}"

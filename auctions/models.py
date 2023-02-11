@@ -1348,6 +1348,9 @@ class Lot(models.Model):
 		"""For models, use self.calculated_end which always returns a date
 		But for places where a user can see this, we need a friendly reminder that the auction admin needs to manually end lots"""
 		if self.is_part_of_in_person_auction:
+			if self.winner_as_str and self.date_end:
+				# a sold lot that's part of an in-person auction
+				return self.date_end
 			return "Ends when sold"
 		else:
 			return self.calculated_end

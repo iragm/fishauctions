@@ -9,8 +9,8 @@
         {% include 'auction_ribbon.html' %}
         <!-- <h1>Invoices for {{ object }}</h1> -->
         <!-- <br> -->
-        <button type='button' class='btn btn-info mr-1 mt-1' onclick="all_unpaid();">Set all drafts to ready</button>
-        <button type='button' class='btn btn-success mr-1 mt-1' onclick="mark_all_paid();">Mark all ready as paid</button>
+        <button type='button' class='btn btn-sm btn-info mr-1 mt-1' onclick="all_unpaid();">Set all drafts to ready</button>
+        <button type='button' class='btn btn-sm btn-primary mr-1 mt-1' onclick="mark_all_paid();">Mark all ready as paid</button>
           <span class='text-muted'>
         <br><small>Marking an invoice ready will send an email notification to the user telling them that their invoice is ready.</small>
       </span>
@@ -176,14 +176,12 @@
 
   function payinvoice(id, status) {
     var $ = window.jQuery;
-    data = {'status': status};
     $.ajax({
           type: "POST",
           beforeSend: function (request) {
               request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
           },
-          data:data,
-          url: "/api/payinvoice/" + id + "/",
+          url: "/api/payinvoice/" + id + "/" + status,
           success : function(result) {
               if (status == "DRAFT") {
                 $('#' + id + "_PAID").removeClass("btn-success");
