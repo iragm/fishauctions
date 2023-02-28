@@ -25,8 +25,8 @@
             
             {% for auction in object_list %}
             <tr>
-              <td><a href='/auctions/{{auction.slug}}'>{{ auction.title }}</a>
-                {% if not auction.promote_this_auction %}<span class='text-muted'>(Not promoted)</span>{% endif %}
+              <td><a href='/auctions/{{auction.slug}}'>{{ auction.title }}</a> {% if auction.is_online %}<span class="badge bg-info">Online</span>{% endif %}
+                {% if not auction.promote_this_auction %}<span class='badge bg-dark'>Not promoted</span>{% endif %}
               </td>
               <td>{% if auction.closed %}
                   <span style="color:red">{{ auction.date_end }}</span>

@@ -1373,6 +1373,7 @@ class ChangeUserPreferencesForm(forms.ModelForm):
         model = UserData
         fields = ('email_visible', 'use_dark_theme', 'use_list_view', 'show_ads', 'email_me_about_new_auctions','email_me_about_new_auctions_distance',\
             'email_me_about_new_local_lots','local_distance', 'email_me_about_new_lots_ship_to_location', 'email_me_when_people_comment_on_my_lots',\
+            'email_me_about_new_in_person_auctions', 'email_me_about_new_in_person_auctions_distance',
             )
         exclude = (
             'user','phone_number','address','location','location_coordinates',\
@@ -1408,13 +1409,18 @@ class ChangeUserPreferencesForm(forms.ModelForm):
             ),
             HTML("You'll get one email per week that contains an update on everything you've checked below<span class='text-muted'><small><br>And you'll only get that if you haven't visited the site in the last 6 days.</small></span><br><br>"),
             Div(
-                Div('email_me_about_new_auctions',css_class='col-md-5',),
-                Div('email_me_about_new_auctions_distance',css_class='col-md-3',),
+                Div('email_me_about_new_auctions',css_class='col-md-8',),
+                Div('email_me_about_new_auctions_distance',css_class='col-md-4',),
                 css_class='row',
             ),
             Div(
-                Div('email_me_about_new_local_lots',css_class='col-md-5',),
-                Div('local_distance',css_class='col-md-3',),
+                Div('email_me_about_new_in_person_auctions',css_class='col-md-8',),
+                Div('email_me_about_new_in_person_auctions_distance',css_class='col-md-4',),
+                css_class='row',
+            ),
+            Div(
+                Div('email_me_about_new_local_lots',css_class='col-md-8',),
+                Div('local_distance',css_class='col-md-4',),
                 css_class='row',
             ),
             Div(

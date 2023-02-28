@@ -2084,9 +2084,13 @@ class UserData(models.Model):
 	email_me_when_people_comment_on_my_lots = models.BooleanField(default=True, blank=True)
 	email_me_when_people_comment_on_my_lots.help_text = "Notifications will be sent once a day, only for messages you haven't seen"
 	email_me_about_new_auctions = models.BooleanField(default=True, blank=True)
-	email_me_about_new_auctions.help_text = "When new auctions are created with pickup locations near my location, notify me"
-	email_me_about_new_auctions_distance = models.PositiveIntegerField(null=True, blank=True, default=100, verbose_name="New auction distance")
+	email_me_about_new_auctions.help_text = "When new <span class='text-info'>online</span> auctions are created with pickup locations near my location, notify me"
+	email_me_about_new_auctions_distance = models.PositiveIntegerField(null=True, blank=True, default=100, verbose_name="New online auction distance")
 	email_me_about_new_auctions_distance.help_text = "miles, from your address"
+	email_me_about_new_in_person_auctions = models.BooleanField(default=True, blank=True)
+	email_me_about_new_in_person_auctions.help_text = "When new in-person auctions are created near my location, notify me"
+	email_me_about_new_in_person_auctions_distance = models.PositiveIntegerField(null=True, blank=True, default=100, verbose_name="New in-person auction distance")
+	email_me_about_new_in_person_auctions_distance.help_text = "miles, from your address"
 	email_me_about_new_local_lots = models.BooleanField(default=True, blank=True)
 	email_me_about_new_local_lots.help_text = "When new nearby lots (that aren't part of an auction) are created, notify me"
 	local_distance = models.PositiveIntegerField(null=True, blank=True, default=60, verbose_name="New local lot distance")

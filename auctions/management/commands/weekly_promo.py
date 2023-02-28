@@ -20,21 +20,17 @@ class Command(BaseCommand):
         # get any users who have opted into the weekly email
         exclude_newer_than = timezone.now() - datetime.timedelta(days=6)
         exclude_older_than = timezone.now() - datetime.timedelta(days=400)
-        in_person_auctions_cutoff = timezone.now() + datetime.timedelta(days=14)
+        in_person_auctions_cutoff = timezone.now() + datetime.timedelta(days=96)
         users = User.objects.filter(\
-           Q(userdata__email_me_about_new_auctions=True) | Q(userdata__email_me_about_new_local_lots=True) | Q(userdata__email_me_about_new_lots_ship_to_location=True)\
+           Q(userdata__email_me_about_new_in_person_auctions=True) | Q(userdata__email_me_about_new_auctions=True) | Q(userdata__email_me_about_new_local_lots=True) | Q(userdata__email_me_about_new_lots_ship_to_location=True)\
            ).exclude(userdata__latitude=0, userdata__longitude=0).exclude(userdata__last_activity__gte=(exclude_newer_than)).exclude(userdata__last_activity__lte=(exclude_older_than))
         #users = User.objects.filter(pk=1)
         for user in users:
             template_auctions = []
             if user.userdata.email_me_about_new_auctions:
                 locations = PickupLocation.objects.filter(
-                    Q(
-                        # any in person auctions before the cutoff, excluding any that have already started
-                        Q(auction__date_start__lte=in_person_auctions_cutoff, auction__is_online=False) & ~Q(auction__date_start__lte=timezone.now())\
-                        | # or any online auctions that have started, but not those that have ended
                         Q(auction__date_start__lte=timezone.now(), auction__is_online=True) & ~Q(auction__date_end__lte=timezone.now())
-                    ))\
+                    )\
                     .exclude(auction__use_categories=False)\
                     .exclude(auction__promote_this_auction=False)\
                     .exclude(auction__is_deleted=True)\
@@ -52,7 +48,31 @@ class Command(BaseCommand):
                         auctions.append(location.auction.slug)
                         distances[location.auction.slug] = location.distance
                         titles[location.auction.slug] = location.auction.title
-                
+                for auction in auctions:
+                    template_auctions.append({'slug':auction, 'distance': distances[auction], 'title': titles[auction]})
+            # see #130; request to differentiate between online and in-person
+            if user.userdata.email_me_about_new_in_person_auctions:
+                locations = PickupLocation.objects.filter(
+                        # any in person auctions before the cutoff, excluding any that have already started
+                        Q(auction__date_start__lte=in_person_auctions_cutoff, auction__is_online=False) & ~Q(auction__date_start__lte=timezone.now())\
+                    )\
+                    .exclude(auction__use_categories=False)\
+                    .exclude(auction__promote_this_auction=False)\
+                    .exclude(auction__is_deleted=True)\
+                    .annotate(distance=distance_to(user.userdata.latitude, user.userdata.longitude))\
+                    .order_by('distance').filter(distance__lte=user.userdata.email_me_about_new_in_person_auctions_distance)
+                auctions = [] # just the slugs of the auctions, to remove duplicates
+                distances = {}
+                titles = {}
+                for location in locations:
+                    if location.auction.slug in auctions:
+                        # it's already included, see if this distance is smaller
+                        if location.distance < distances[location.auction.slug]:
+                            distances[location.auction.slug] = location.distance
+                    else:
+                        auctions.append(location.auction.slug)
+                        distances[location.auction.slug] = location.distance
+                        titles[location.auction.slug] = location.auction.title
                 for auction in auctions:
                     template_auctions.append({'slug':auction, 'distance': distances[auction], 'title': titles[auction]})
             template_nearby_lots = []
