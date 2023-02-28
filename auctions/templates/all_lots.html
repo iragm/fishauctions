@@ -57,7 +57,7 @@ Your lots{% else %}
           <button type="submit" class="btn btn-primary mr-1 mt-1">Apply Filter</button> {% if view == "mylots" or view == "all" %}<br>
           {% if auction %}<a href="/auctions/{{auction.slug}}/" class="btn btn-info mr-1 mt-1" role="button">View rules</a> 
             {% if auction.can_submit_lots %}
-              {% if auction_tos %}<a href="/lots/new/" class="btn btn-info mr-1 mt-1" role="button">Create lot</a>
+              {% if auction_tos %}<a href="{{auction.add_lot_link}}" class="btn btn-info mr-1 mt-1" role="button">Create lot</a>
                 <span class="">You can add lots to this auction until {{ auction.lot_submission_end_date }}</span>
               {% else %}
                 {% if not request.user.is_authenticated %}

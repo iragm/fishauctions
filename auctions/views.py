@@ -1865,6 +1865,8 @@ class LotValidation(LoginRequiredMixin):
     """
     Base class for adding a lot.  This defines the rules for validating a lot
     """
+    auction = None # used for specifying which auction via GET param
+    
     def dispatch(self, request, *args, **kwargs):
         # if the user hasn't filled out their address, redirect:
         userData, created = UserData.objects.get_or_create(
@@ -1976,6 +1978,7 @@ class LotValidation(LoginRequiredMixin):
 
     def get_form_kwargs(self, *args, **kwargs):
         kwargs = super().get_form_kwargs(*args, **kwargs)
+        kwargs['auction'] = self.auction
         kwargs['user'] = self.request.user
         kwargs['cloned_from'] = None
         try:
@@ -1993,6 +1996,7 @@ class LotCreateView(LotValidation, CreateView):
     model = Lot
     template_name = 'lot_form.html'
     form_class = CreateLotForm 
+    auction = None
 
     # it's better to take the user to the lot they just added, in case they want to edit it
     #def get_success_url(self):
@@ -2018,7 +2022,24 @@ class LotCreateView(LotValidation, CreateView):
         )
         if userData.last_auction_used:
             if userData.last_auction_used.can_submit_lots and not userData.last_auction_used.is_online:
-                messages.info(request, f"<a href='{reverse('bulk_add_lots_for_myself', kwargs={'slug': userData.last_auction_used.slug})}'>Add lots of lots to {userData.last_auction_used}</a>")
+                messages.info(request, f"Sick of adding lots one at a time?  <a href='{reverse('bulk_add_lots_for_myself', kwargs={'slug': userData.last_auction_used.slug})}'>Add lots of lots to {userData.last_auction_used}</a>")
+        data = self.request.GET.copy()
+        auction_slug = data.get('auction', None)
+        if auction_slug:
+            self.auction = Auction.objects.filter(slug=auction_slug).first()
+            if self.auction:
+                error = None
+                if timezone.now() < self.auction.lot_submission_start_date:
+                    error = "Lot submission has not opened yet for this auction."
+                if self.auction.lot_submission_end_date:
+                    if self.auction.lot_submission_end_date < timezone.now():
+                        error = "Lot submission has ended for this auction."
+                tos = AuctionTOS.objects.filter(user=self.request.user, auction=self.auction).first()
+                if not tos:
+                    error = f"You haven't joined this auction yet.  Click the green button at the bottom of this page to join the auction.</a>"
+                if error:
+                    messages.error(request, error)
+                    return redirect(self.auction.get_absolute_url())
         return super().dispatch(request, *args, **kwargs)
 
 class LotUpdate(LotValidation, UpdateView):
@@ -2756,14 +2777,25 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
     form_view = 'opened' # expects opened or printed, this field will be set to true when the user the invoice is for opens it
     allow_non_admins = True
     authorized_by_default = False
+    exampleMode = False
 
     def get_object(self):
         """Overridden to allow display of an example"""
         try:
-            self.exampleMode = False
             return Invoice.objects.get(pk=self.kwargs.get(self.pk_url_kwarg))
         except:
-            self.exampleMode = True
+            try:
+                if self.request.user.is_authenticated:
+                    invoice = Invoice.objects.filter(
+                        auctiontos_user_id__user = self.request.user,
+                        auction__slug = self.kwargs['slug']
+                    ).first()
+                    if invoice:
+                        return invoice
+                    else:
+                        self.exampleMode = True
+            except:
+                self.exampleMode = True
             return Invoice.objects.get(pk=152) # this is a good example
             
     def dispatch(self, request, *args, **kwargs):
@@ -2789,7 +2821,7 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
                     mark_invoice_viewed_by_user = True
                     auth = True
         if not auth:
-            messages.error(request, "Your account doesn't have permission to view this inovice.  Are you signed in with the correct account?")
+            messages.error(request, "Your account doesn't have permission to view this invoice. Are you signed in with the correct account?")
             return redirect('/')
         if mark_invoice_viewed_by_user:
             setattr(invoice, self.form_view, True) # this will set printed or opened as appropriate
@@ -2857,6 +2889,20 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
         invoice.save()
         return super().form_valid(form)
 
+class InvoiceViewNoExampleMode(InvoiceView):
+    """For auction invoices, we don't want to fall back to example mode if the invoice isn't found"""
+    def dispatch(self, request, *args, **kwargs):
+        parent_dispatch = super().dispatch(request, *args, **kwargs)
+        if self.exampleMode:
+            auction = Auction.objects.filter(slug=self.kwargs['slug']).first()
+            if auction:
+                messages.error(request, "You don't have an invoice for this auction yet.  Your invoice will be created once you buy or sell lots in this auction.")
+                return redirect(auction.get_absolute_url())        
+            # no auction?  404
+            raise Http404
+        # no example mode?  all good
+        return parent_dispatch
+
 class InvoiceNoLoginView(InvoiceView):
     """Enter a uuid, go to your invoice.  This bypasses the login checks"""
     # need a template with a popup
@@ -2915,6 +2961,7 @@ class LotLabelView(View, AuctionPermissionsMixin):
         self.auction = Auction.objects.filter(slug=kwargs['slug']).first()
         self.bidder_number = kwargs.pop('bidder_number', None)
         self.username = kwargs.pop('username', None)
+        printing_for_self = False
         if self.bidder_number:
             self.tos = AuctionTOS.objects.filter(auction=self.auction, bidder_number=self.bidder_number).first()
         if self.username:
@@ -2922,7 +2969,11 @@ class LotLabelView(View, AuctionPermissionsMixin):
         if not self.bidder_number and not self.username:
             self.tos = AuctionTOS.objects.filter(auction=self.auction, user=request.user).first()
         if not self.tos:
-            messages.error(request, "It doesn't look like you've joined this auction yet")
+            if self.is_auction_admin:
+                # should never get here as long as admins are following links
+                messages.error(request, "Unable to find any labels to print.")
+            else:
+                messages.error(request, "You haven't joined this auction yet.  You need to join this auction and add lots before you can print labels.")
             return redirect(self.auction.get_absolute_url())
         checks_pass = False
         if self.is_auction_admin:
@@ -2931,13 +2982,21 @@ class LotLabelView(View, AuctionPermissionsMixin):
             self.filename = self.tos.name or self.tos.bidder_number
         if request.user.is_authenticated:
             if request.user == self.tos.user:
+                printing_for_self = True
                 checks_pass = True
                 # if this is a user printing their own lots, the file name should be the name of the auction
                 self.filename = str(self.auction)
+        if printing_for_self:
+            if self.auction.is_online and not self.auction.closed:
+                messages.error(request, "This is an online auction; you should print your labels after the auction ends, and before you exchange lots.")
+                return redirect(self.auction.get_absolute_url())
         if checks_pass and self.tos:
             if not self.get_queryset():
-                messages.error(request, "There aren't any lots with printable labels")
-                return redirect('/')    
+                if printing_for_self:
+                    messages.error(request, "You don't have any lots with printable labels in this auction.")
+                else:
+                    messages.error(request, "There aren't any lots with printable labels")
+                return redirect(self.auction.get_absolute_url())
             return super().dispatch(request, *args, **kwargs)
         else:
             messages.error(request, "Your account doesn't have permission to view this page.")

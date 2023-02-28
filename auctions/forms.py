@@ -1017,12 +1017,16 @@ class CreateLotForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         self.user = kwargs.pop('user')
         self.cloned_from = kwargs.pop('cloned_from')
+        self.auction = kwargs.pop('auction')
         super().__init__(*args, **kwargs)
         self.fields['description'].widget.attrs = {'rows': 3}
         self.fields['species_category'].required = True
         self.fields['auction'].queryset = Auction.objects.filter(lot_submission_end_date__gte=timezone.now())\
             .filter(lot_submission_start_date__lte=timezone.now())\
             .filter(auctiontos__user=self.user).order_by('date_end')
+        if self.auction:
+            if self.fields['auction'].queryset.filter(pk=self.auction.pk).exists():
+                self.fields['auction'].queryset = Auction.objects.filter(pk=self.auction.pk)
         # Default auction selection:
         # try:
         #     auctions = Auction.objects.filter(lot_submission_end_date__gte=timezone.now()).filter(date_start__lte=timezone.now()).order_by('date_end')
@@ -1076,14 +1080,17 @@ class CreateLotForm(forms.ModelForm):
         if self.instance.auction:
             pass
         else:
-            try:
-                # see if this user's last auction is still available
-                userData, created = UserData.objects.get_or_create(user=self.user)
-                lastUserAuction = userData.last_auction_used
-                if lastUserAuction.lot_submission_end_date > timezone.now():
-                    self.fields['auction'].initial = lastUserAuction
-            except:
-                pass
+            if self.auction:
+                self.fields['auction'].initial = self.auction
+            else:
+                try:
+                    # see if this user's last auction is still available
+                    userData, created = UserData.objects.get_or_create(user=self.user)
+                    lastUserAuction = userData.last_auction_used
+                    if lastUserAuction.lot_submission_end_date > timezone.now():
+                        self.fields['auction'].initial = lastUserAuction
+                except:
+                    pass
         self.helper = FormHelper()
         self.helper.form_method = 'post'
         self.helper.form_id = 'lot-form'

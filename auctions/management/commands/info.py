@@ -18,6 +18,15 @@ from post_office import mail
 class Command(BaseCommand):
     help = 'Just a scratchpad to do things'
     def handle(self, *args, **options):
+        user = User.objects.get(username="Ira")
+        auction = 'tfcb-2021-annual-auction'
+        invoices = Invoice.objects.filter(
+            auctiontos_user_id__user = user,
+            auction__slug=auction
+        )
+        for invoice in invoices:
+            print(invoice.user)
+            print(invoice.calculated_total)
         #lots = Lot.objects.filter(Q(feedback_text__isnull=False)|Q(winner_feedback_text__isnull=False))
         #for lot in lots:
         #    print(lot.winner_feedback_text, lot.feedback_text)
