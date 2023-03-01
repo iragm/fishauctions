@@ -314,11 +314,8 @@ class RecommendedLots(ListView):
             keywords = []
             keywordsString = data['keywords'].lower()
             lotWords = re.findall('[A-Z|a-z]{3,}', keywordsString)
-            # the following words should not be used when generating recommended lots, since they are very common
-            ignoreTerms = ['red','blue','pair','super','fish','black','breeding','group','fry','female','water','male','trio','green','lot','fin','yellow','gold','large','donation','young','filter','white','fire','blood','and','orange','bag','qty','juvies','starter','adult','hardy','with','small','size','breeders','brown','breeder','pack','two','pink','proven','better','than','more','adults','inch','from','wild','bunch','superb','the','double','reverse','new']
             for word in lotWords:
-                word = word
-                if word not in ignoreTerms:
+                if word not in settings.IGNORE_WORDS:
                     keywords.append(word)
         except:
             keywords = []
@@ -1590,15 +1587,12 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
             self.tos = AuctionTOS.objects.filter(bidder_number=bidder_number, auction=self.auction).first()
         if self.is_auction_admin:
             self.is_admin = True
-        else:
+        if not self.tos:
             # if you don't got permission to edit this auction, you can only add lots for yourself
             self.tos = AuctionTOS.objects.filter(auction=self.auction).filter(Q(email=request.user.email)|Q(user=request.user)).first()
         if not self.tos:
-            if not self.is_auction_admin:
-                messages.error(request, f"You can't add lots until you join this auction")
-                return redirect(f"/auctions/{self.auction.slug}/?next={reverse('bulk_add_lots_for_myself', kwargs={'slug': self.auction.slug})}")
-            else:
-                raise Http404
+            messages.error(request, f"You can't add lots until you join this auction")
+            return redirect(f"/auctions/{self.auction.slug}/?next={reverse('bulk_add_lots_for_myself', kwargs={'slug': self.auction.slug})}")
         if not self.is_admin and not self.auction.can_submit_lots:
             messages.error(request, f"Lot submission has ended for {self.auction}")
             return redirect(f"/auctions/{self.auction.slug}/?next={reverse('bulk_add_lots_for_myself', kwargs={'slug': self.auction.slug})}")

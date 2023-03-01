@@ -155,14 +155,63 @@ class WatchInline(admin.TabularInline):
 
 class LotAdmin(admin.ModelAdmin):
     model = Lot 
-    list_display = ("lot_name", "auction", "lot_number", "user", "species_category",)
+    list_display = ("lot_name", "auction", "user", "species_category",)
     list_filter = ("active","auction","banned")
     search_fields = ("lot_number","lot_name","description","species_category__name","user__first_name","user__last_name")
+    exclude = ('slug', 'image', 'i_bred_this_fish','seller_invoice', 'winner_invoice', 'image_source','date_posted','last_bump_date',
+               'species', 'user', 'auctiontos_seller', 'auction', 'refunded', 'ban_reason', 'lot_run_duration', 'relist_countdown',
+               'number_of_bumps', 'watch_warning_email_sent', 'transportable', 'promote_this_lot', 'promotion_budget', 'promotion_weight', 'added_by',)
     inlines = [
          BidInline,
          WatchInline,
     ]
+
+class LotAutoCategory(Lot):
+    class Meta:
+        proxy = True
     
+class LotAutoCategoryAdmin(admin.ModelAdmin):
+    model = LotAutoCategory 
+    fields = ('lot_name', 'species_category', 'category_automatically_added')
+    list_display = ("lot_name", "species_category",)
+    list_filter = ("active","auction","banned",'category_automatically_added')
+    search_fields = ("lot_number","lot_name","description","species_category__name","user__first_name","user__last_name")
+    ordering = ('-lot_number',)
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.filter(category_automatically_added=True)
+
+    actions = ['approve', 'retry', 'uncategorize']
+
+    def approve(self, request, queryset):
+        """Change category_automatically_added to false to remove the warning banner from these"""
+        for lot in queryset:
+            lot.category_automatically_added = False
+            lot.save()
+        self.message_user(request, "Lot categories have been marked as correct")
+
+    def retry(self, request, queryset):
+        """When the category isn't right, try again"""
+        count = 0
+        for lot in queryset:
+            category = guess_category(lot.lot_name)
+            if category:
+                count += 1
+                lot.species_category = category
+                lot.category_automatically_added = True
+                lot.save()
+        self.message_user(request, f"{count} out of {queryset.count()} lots were automatically assigned to a category")
+
+    def uncategorize(self, request, queryset):
+        """Change to uncategorized"""
+        uncategorized = Category.objects.get(pk=21)
+        for lot in queryset:
+            lot.species_category = uncategorized
+            lot.category_automatically_added = False
+            lot.save()
+        self.message_user(request, "Lots have been changed to no category")
+
 class BidAdmin(admin.ModelAdmin):
     model = Bid 
     menu_label = "Bids"  
@@ -249,3 +298,4 @@ admin.site.register(BlogPost, BlogPostAdmin)
 admin.site.register(AdCampaign, AdCampaignAdmin)
 admin.site.register(AdCampaignGroup, AdCampaignGroupAdmin)
 admin.site.register(FAQ, FaqAdmin)
+admin.site.register(LotAutoCategory, LotAutoCategoryAdmin)

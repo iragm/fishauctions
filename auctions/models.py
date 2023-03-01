@@ -4,7 +4,7 @@ import datetime
 from django.contrib.auth.models import *
 from django.db import models
 from django.core.validators import *
-from django.db.models import Count, Sum, Q
+from django.db.models import Count, Sum, Q, F
 from django.db.models.expressions import RawSQL
 from autoslug import AutoSlugField
 from django.urls import reverse
@@ -95,6 +95,41 @@ def distance_to(latitude, longitude, unit='miles', lat_field_name="latitude", ln
     #     (latitude, longitude, latitude, correction)
     # )
     return distance_raw_sql
+
+def guess_category(text):
+	"""Given some text, look up lots with similar names and make a guess at the category this `text` belongs to based on the category used there"""
+	keywords = []
+	words = re.findall('[A-Z|a-z]{3,}', text.lower())
+	for word in words:
+		if word not in settings.IGNORE_WORDS:
+			keywords.append(word)
+
+	if not keywords:
+		return None
+	lot_qs = Lot.objects.filter(category_automatically_added=False, species_category__isnull=False, is_deleted=False).exclude(species_category__pk=21).exclude(auction__promote_this_auction=False)
+	q_objects = Q()
+	for keyword in keywords:
+		q_objects |= Q(lot_name__iregex=r'\b{}\b'.format(re.escape(keyword)))
+
+	lot_qs = lot_qs.filter(q_objects)
+
+	#category = lot_qs.values('species_category').annotate(count=Count('species_category')).order_by('-count').first()
+	# attempting this as a single-shot query is extremely difficult to debug
+	categories = {}
+	for lot in lot_qs:
+		if lot.species_category.pk == 21:
+			print("lot!")
+		matches = 0
+		for keyword in keywords:
+			if keyword in lot.lot_name.lower():
+				matches += 1
+		category_total = categories.get(lot.species_category.pk, 0)
+		categories[lot.species_category.pk] = category_total + matches
+	sorted_categories = sorted(categories.items(), key=lambda x: x[1], reverse=True)	
+	for key, value in sorted_categories:
+		#print(Category.objects.filter(pk=key).first(), value)
+		return Category.objects.filter(pk=key).first()
+	return None
 
 class BlogPost(models.Model):
 	"""
@@ -1053,6 +1088,7 @@ class Lot(models.Model):
 	added_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="added_by")
 	added_by.help_text = "User who added this lot -- used for pre-registration discounts"
 	category_automatically_added = models.BooleanField(default=False)
+	category_checked = models.BooleanField(default=False)
 
 	def save(self, *args, **kwargs):
 		"""
@@ -1070,6 +1106,15 @@ class Lot(models.Model):
 						if match >= custom_lot_number:
 							custom_lot_number = match + 1
 				self.custom_lot_number = f"{self.auctiontos_seller.bidder_number}-{custom_lot_number}"
+		# a bit of magic to automatically set categories		
+		if self.species_category.pk == 21 or not self.species_category and not self.category_checked:
+			self.category_checked = True
+			if self.auction:
+				if self.auction.use_categories:
+					result = guess_category(self.lot_name)
+					if result:
+						self.species_category = result
+						self.category_automatically_added = True
 		super().save(*args, **kwargs) 
 
 	def __str__(self):
