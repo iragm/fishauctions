@@ -280,6 +280,10 @@ class BanAdmin(admin.ModelAdmin):
     list_filter = ()
     search_fields = ("user__first_name", "user__last_name", "banned_user__first_name","banned_user__last_name",)
 
+class AuctionTOSAdmin(admin.ModelAdmin):
+    model = AuctionTOS
+    list_display = ("name",'auction', 'manually_added')
+    search_fields = ("name",'user__email','user__username','bidder_number', )
 
 admin.site.register(PickupLocation, PickupLocationAdmin)
 admin.site.unregister(User)
@@ -299,3 +303,4 @@ admin.site.register(AdCampaign, AdCampaignAdmin)
 admin.site.register(AdCampaignGroup, AdCampaignGroupAdmin)
 admin.site.register(FAQ, FaqAdmin)
 admin.site.register(LotAutoCategory, LotAutoCategoryAdmin)
+admin.site.register(AuctionTOS, AuctionTOSAdmin)

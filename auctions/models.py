@@ -857,8 +857,8 @@ class AuctionTOS(models.Model):
 		return self.display_name
 
 	class Meta: 
-		verbose_name = "Auction pickup location"
-		verbose_name_plural = "Auction pickup locations"
+		verbose_name = "User in auction"
+		verbose_name_plural = "Users in auction"
 
 	@property
 	def closest_location_for_this_user(self):
@@ -2192,47 +2192,50 @@ class UserData(models.Model):
 		return f"{self.user.username}'s data"
 
 	@property
+	def my_lots_qs(self):
+		"""All lots this user submitted, whether in an auction, or independently"""
+		return Lot.objects.filter(Q(user=self.user)|Q(auctiontos_seller__user=self.user)).exclude(is_deleted=True)
+
+	@property
 	def lots_submitted(self):
 		"""All lots this user has submitted, including unsold"""
-		allLots = Lot.objects.filter(user=self.user)
-		return len(allLots)
+		return self.my_lots_qs.count()
 
 	@property
 	def lots_sold(self):
 		"""All lots this user has sold"""
-		allLots = Lot.objects.filter(user=self.user,winner__isnull=False)
-		return len(allLots)
+		return self.my_lots_qs.filter(winner__isnull=False).count()
 
 	@property
 	def total_sold(self):
-		"""Total amount this user has spent on this site"""
-		allLots = Lot.objects.filter(user=self.user.pk)
+		"""Total amount this user has sold on this site"""
 		total = 0
-		for lot in allLots:
-			try:
-				total += lot.winning_price
-			except:
-				pass
+		for lot in self.my_lots_qs.filter(winning_price__isnull=False):
+			total += lot.winning_price
 		return total
 
 	@property
 	def species_sold(self):
 		"""Total different species that this user has bred and sold in auctions"""
-		allLots = Lot.objects.filter(user=self.user,i_bred_this_fish=True,winner__isnull=False).values('species').distinct().count()
+		print("species_sold is is no longer used, there's no way for users to enter species information anymore")
+		allLots = self.my_lots_qs.filter(i_bred_this_fish=True,winner__isnull=False).values('species').distinct().count()
 		return allLots
+
+	@property
+	def my_won_lots_qs(self):
+		"""All lots won by this user, in an auction or independently"""
+		return Lot.objects.filter(Q(winner=self.user)|Q(auctiontos_winner__user=self.user), winning_price__isnull=False).exclude(is_deleted=True)
 
 	@property
 	def lots_bought(self):
 		"""Total number of lots this user has purchased"""
-		allLots = Lot.objects.filter(winner=self.user)
-		return len(allLots)
+		return self.my_won_lots_qs.count()
 	
 	@property
 	def total_spent(self):
 		"""Total amount this user has spent on this site"""
-		allLots = Lot.objects.filter(winner=self.user)
 		total = 0
-		for lot in allLots:
+		for lot in self.my_won_lots_qs:
 			total += lot.winning_price
 		return total
 
@@ -2291,13 +2294,11 @@ class UserData(models.Model):
 	
 	@property
 	def positive_feedback_as_seller(self):
-		feedback = Lot.objects.filter(user=self.user.pk, feedback_rating=1).count()
-		return feedback
+		return self.my_lots_qs.filter(feedback_rating=1).count()
 
 	@property
 	def negative_feedback_as_seller(self):
-		feedback = Lot.objects.filter(user=self.user.pk, feedback_rating=-1).count()
-		return feedback
+		return self.my_lots_qs.filter(feedback_rating=-1).count()
 
 	@property
 	def percent_positive_feedback_as_seller(self):
@@ -2309,13 +2310,11 @@ class UserData(models.Model):
 
 	@property
 	def positive_feedback_as_winner(self):
-		feedback = Lot.objects.filter(winner=self.user.pk, winner_feedback_rating=1).count()
-		return feedback
+		return self.my_won_lots_qs.filter(winner_feedback_rating=1).count()
 
 	@property
 	def negative_feedback_as_winner(self):
-		feedback = Lot.objects.filter(winner=self.user.pk, winner_feedback_rating=-1).count()
-		return feedback
+		return self.my_won_lots_qs.filter(winner_feedback_rating=-1).count()
 
 	@property
 	def percent_positive_feedback_as_winner(self):
