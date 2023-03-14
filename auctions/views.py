@@ -2279,11 +2279,14 @@ class AuctionTOSAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
         #     auctiontos=self.auctiontos,
         #     auction=self.auction
         # )
+        context['unsold_lot_warning'] = ""
         if self.auctiontos:
             try:
                 invoice = self.auctiontos.invoice
                 invoice_string = invoice.invoice_summary_short
                 context['top_buttons'] = render_to_string("invoice_buttons.html", {'invoice':invoice})
+                if invoice.unsold_non_donation_lots:
+                    context['unsold_lot_warning'] = f"{invoice.unsold_non_donation_lots} unsold lot(s)"
             except:
                 invoice = None
                 invoice_string = ""

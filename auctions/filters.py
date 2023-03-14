@@ -509,7 +509,7 @@ class UserWonLotFilter(LotFilter):
     @property
     def qs(self):
         primary_queryset=super().qs
-        return primary_queryset.filter(winner=self.user)
+        return primary_queryset.filter(Q(winner=self.user)|Q(auctiontos_winner__user=self.user))
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args,**kwargs)

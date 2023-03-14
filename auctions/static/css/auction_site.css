@@ -48,8 +48,12 @@ a.ad:hover {
 
   .modal {
     overflow-y:auto;
+    overflow:auto;
   }
 
   .modelselect2 {
     display: none !important;
+  }
+  body {
+    overflow: hidden;
   }

@@ -1920,6 +1920,11 @@ class Invoice(models.Model):
 		return len(self.sold_lots_queryset.exclude(auctiontos_winner__isnull=False))
 
 	@property
+	def unsold_non_donation_lots(self):
+		"""Return number of lots the user did not sell. This may be simply lots whose winner has not been set yet."""
+		return len(self.sold_lots_queryset.exclude(auctiontos_winner__isnull=False).filter(donation=False, banned=False))
+
+	@property
 	def total_sold(self):
 		"""Seller's cut of all lots sold"""
 		total_sold = 0
