@@ -808,10 +808,10 @@ class AuctionTOS(models.Model):
 			dont_use_these = ['13', '14', '15', '16', '17', '18', '19']
 			search = None
 			if self.phone_number:
-				search = re.search('([\d.]{3}$)|$', self.phone_number).group()
+				search = re.search('([\d]{3}$)|$', self.phone_number).group()
 			if not search or str(search) in dont_use_these:
 				if self.address:
-					search = re.search('([\d.]{3}$)|$', self.address).group()
+					search = re.search('([\d]{3}$)|$', self.address).group()
 			if self.user:
 				userData, created = UserData.objects.get_or_create(
 					user = self.user,
@@ -821,7 +821,12 @@ class AuctionTOS(models.Model):
 					search = userData.preferred_bidder_number
 			# I guess it's possible that someone could make 999 accounts and have them all join a single auction, which would turn this into an infinite loop
 			failsafe = 0
-			while failsafe < 5000:
+			# bidder numbers shouldn't start with 0
+			if str(search)[0] == "0":
+				search = search[1:]
+			if str(search)[0] == "0":
+				search = search[1:]
+			while failsafe < 6000:
 				search = str(search)
 				if search[:-2] not in dont_use_these and search != "None":
 					if AuctionTOS.objects.filter(bidder_number=search, auction=self.auction).count() == 0:
@@ -834,9 +839,9 @@ class AuctionTOS(models.Model):
 				# OK, give up and just randomly generate something
 				search = randint(1, 999)
 				failsafe += 1
-			if failsafe > 4998:
-				# I don't ever want this to be null
-				self.bidder_number = 999
+		if not self.bidder_number:
+			# I don't ever want this to be null
+			self.bidder_number = 999
 		super().save(*args, **kwargs) 
 
 	@property
@@ -1722,9 +1727,9 @@ class Lot(models.Model):
 	@property
 	def label_line_0(self):
 		"""Used for printed labels"""
-		result = f"<b>Lot: {self.lot_number_display}</b>"
-		if self.quantity > 1:
-			result += f" QTY: {self.quantity}"
+		result = f"<b>LOT: {self.lot_number_display}</b>"
+		#if self.quantity > 1:
+		result += f" QTY: {self.quantity}"
 		if self.buy_now_price:
 			result += f" ${self.buy_now_price}"
 		return result
@@ -2110,12 +2115,12 @@ class UserLabelPrefs(models.Model):
 	page_height = models.FloatField(default = 11, validators=[MinValueValidator(1), MaxValueValidator(100.0)])
 	label_width = models.FloatField(default = 2.51, validators=[MinValueValidator(1), MaxValueValidator(100.0)])
 	label_height = models.FloatField(default = 0.98, validators=[MinValueValidator(0.4), MaxValueValidator(50.0)])
-	label_margin_right = models.FloatField(default = 0.2, validators=[MinValueValidator(0.2), MaxValueValidator(5.0)])
+	label_margin_right = models.FloatField(default = 0.2, validators=[MinValueValidator(0.1), MaxValueValidator(5.0)])
 	label_margin_bottom = models.FloatField(default = 0.02, validators=[MinValueValidator(0.0), MaxValueValidator(5.0)])
 	page_margin_top = models.FloatField(default = 0.55, validators=[MinValueValidator(0.1)])
 	page_margin_bottom = models.FloatField(default = 0.45, validators=[MinValueValidator(0.1)])
 	page_margin_left = models.FloatField(default = 0.18, validators=[MinValueValidator(0.1)])
-	page_margin_right = models.FloatField(default = 0.18, validators=[MinValueValidator(0.1)])
+	page_margin_right = models.FloatField(default = 0.18, validators=[MinValueValidator(0.05)])
 	font_size = models.FloatField(default = 8, validators=[MinValueValidator(5), MaxValueValidator(25)])
 	UNITS = (
 		('in', 'Inches'),

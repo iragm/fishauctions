@@ -3016,21 +3016,21 @@ class LotLabelView(View, AuctionPermissionsMixin):
         if user_label_prefs.preset == "sm":
             # Avery 5160 labels
             context['page_width'] = 8.5
-            context['page_height'] = 11,
-            context['label_width'] = 2.51
-            context['label_height'] = 0.98
+            context['page_height'] = 11
+            context['label_width'] = 2.5
+            context['label_height'] = 0.96
             context['label_margin_right'] = 0.2
-            context['label_margin_bottom'] = 0.02
-            context['page_margin_top'] = 0.55
-            context['page_margin_bottom'] = 0.45
-            context['page_margin_left'] = 0.18
-            context['page_margin_right'] = 0.18
-            context['font_size'] = 8
+            context['label_margin_bottom'] = 0.03
+            context['page_margin_top'] = 0.6
+            context['page_margin_bottom'] = 0.1
+            context['page_margin_left'] = 0.16
+            context['page_margin_right'] = 0.1
+            context['font_size'] = 10
             context['unit'] = 'in'
         elif user_label_prefs.preset == "lg":
             # Avery 18262 labels
             context['page_width'] = 8.5
-            context['page_height'] = 11,
+            context['page_height'] = 11
             context['label_width'] = 3.9
             context['label_height'] = 1.2
             context['label_margin_right'] = 0.2
@@ -3136,11 +3136,11 @@ class LotLabelView(View, AuctionPermissionsMixin):
         return response
 
     def get(self, request, *args, **kwargs):
-        if True:#try:
+        try:
             return self.create_labels(request, *args, **kwargs)
-        #except:
-        #    messages.error(request, "Unable to print labels, this is likely caused by an invalid setting")
-        #    return redirect(reverse('printing'))
+        except:
+            messages.error(request, "Unable to print labels, this is likely caused by an invalid custom setting here")
+            return redirect(reverse('printing'))
 
 class InvoiceLabelView(InvoiceView):
     """Allows printing of labels"""
