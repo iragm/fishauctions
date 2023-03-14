@@ -8,9 +8,7 @@
   <h5>You've already seen all your recommended lots</h5>
   {% endif %}
 {% else %}
-<div class="container mt-5 mb-5 ml-1">
-  <div class="row">
-    <div class="col-md-10 offset-lg-1">
+
 <table class="table">
   <thead>
     <tr>
@@ -20,7 +18,7 @@
       <th scope="col">Lot name</th>
       <th scope="col">Price</th>
       <th scope="col">High bidder</th>
-      <th scope="col">Messages</th>
+      <th scope="col">Activity</th>
       <th scope="col">Ends</th>
     </tr>
   </thead>
@@ -60,7 +58,7 @@
       <td><a href="{{ lot.lot_link }}">{{ lot.lot_name }}</a></td>
       <td>${{ lot.high_bid }} </td>
       <td>{{ lot.high_bidder_display }}</td>
-      <td>{% if lot.user == request.user %}{% if lot.owner_chats %}<span class='text-warning'>{{ lot.owner_chats }}</span>{% endif %}
+      <td>{% if lot.user == request.user %}{% if lot.owner_chats %}<span class='text-warning'>{{ lot.owner_chats }}</span>{% else %}Views: {{ lot.page_views }}{% endif %}
         {% else %}
         {% if lot.all_chats %}<span class='text-muted>'>{{lot.all_chats}}</span>{% endif %}
         {% endif %}</td>
@@ -70,9 +68,7 @@
   </tbody>
 </table>
 {% include "ad.html" %}
-</div>
-</div>
-</div>
+
 {% endif %}
 
 {% if embed == 'all_lots' %}

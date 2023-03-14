@@ -335,11 +335,15 @@ class Auction(models.Model):
 	
 	@property
 	def label_print_link(self):
-		return reverse("print_my_labels", kwargs={'slug': self.slug}) 
+		return f"{self.get_absolute_url()}?printredirect={reverse('print_my_labels', kwargs={'slug': self.slug})}"
 
 	@property
 	def add_lot_link(self):
 		return f'/lots/new/?auction={self.slug}'
+
+	@property
+	def view_lot_link(self):
+		return f"/lots/?auction={self.slug}&status=all"
 
 	@property
 	def user_admin_link(self):
@@ -480,10 +484,9 @@ class Auction(models.Model):
 
 	@property
 	def number_of_sellers(self):
-		print("warning: this may be outdated an inaccurate.  It uses the lot's winner field instead of the auctiontos_winner field")
+		return AuctionTOS.objects.filter(auctiontos_seller__auction=self.pk, auctiontos_winner__isnull=False).distinct().count()
 		#users = User.objects.values('lot__user').annotate(Sum('lot')).filter(lot__auction=self.pk, lot__winner__isnull=False)
-		users = User.objects.filter(lot__auction=self.pk, lot__winner__isnull=False).distinct()
-		return len(users)
+		#users = User.objects.filter(lot__auction=self.pk, lot__winner__isnull=False).distinct()
 
 	# @property
 	# def number_of_unsuccessful_sellers(self):
@@ -495,17 +498,9 @@ class Auction(models.Model):
 	@property
 	def number_of_buyers(self):
 		#users = User.objects.values('lot__winner').annotate(Sum('lot')).filter(lot__auction=self.pk)
-		users = User.objects.filter(winner__auction=self.pk).distinct()
-		return len(users)
+		return AuctionTOS.objects.filter(auctiontos_winner__auction=self.pk).distinct().count()
+		#users = User.objects.filter(winner__auction=self.pk).distinct()
 
-	@property
-	def users_signed_up(self):
-		"""numbers users signed up druing this auction's open period"""
-		#users = User.objects.values('').annotate(Sum('lot')).filter(lot__auction=self.pk)
-		return False #len(users)
-	# users who bought a single lot
-	# users who viewed but didn't bid
-	
 	@property
 	def median_lot_price(self):
 		lots = Lot.objects.filter(auction=self.pk, winning_price__isnull=False)
@@ -566,14 +561,20 @@ class Auction(models.Model):
 		"""
 		Number of users who bought or sold at least one lot
 		"""
-		buyers = User.objects.filter(winner__auction=self.pk).distinct()
-		sellers = User.objects.filter(lot__auction=self.pk, lot__winner__isnull=False).exclude(id__in=buyers).distinct()
+		buyers = AuctionTOS.objects.filter(auctiontos_winner__auction=self.pk).distinct()
+		sellers = AuctionTOS.objects.filter(auctiontos_seller__auction=self.pk, auctiontos_winner__isnull=False).exclude(id__in=buyers).distinct()
+		#buyers = User.objects.filter(winner__auction=self.pk).distinct()
+		#sellers = User.objects.filter(lot__auction=self.pk, lot__winner__isnull=False).exclude(id__in=buyers).distinct()
 		return len(sellers) + len(buyers)
 
 	@property
 	def number_of_tos(self):
 		"""This will return users, ignoring any auctiontos without a user set"""
-		return User.objects.filter(auctiontos__auction=self.pk).count()
+		return AuctionTOS.objects.filter(auction=self.pk).count()
+	
+	@property
+	def preregistered_users(self):
+		return AuctionTOS.objects.filter(auction=self.pk, manually_added=False).count()
 
 	@property
 	def multi_location(self):
@@ -779,9 +780,10 @@ class AuctionTOS(models.Model):
 			#print("new instance of auctionTOS")
 			# no emails for in-person auctions, thankyouverymuch
 			if not self.auction.is_online:
-				self.confirm_email_sent = True
-				self.print_reminder_email_sent = True
-				self.second_confirm_email_sent = True
+				pass
+				#self.confirm_email_sent = True
+				#self.print_reminder_email_sent = True
+				#self.second_confirm_email_sent = True
 		# fill out some fields from user, if set
 		# There is a huge security concern here:   <<<< ATTENTION!!!
 		# If someone creates an auction and adds every email address that's public
@@ -1107,7 +1109,15 @@ class Lot(models.Model):
 							custom_lot_number = match + 1
 				self.custom_lot_number = f"{self.auctiontos_seller.bidder_number}-{custom_lot_number}"
 		# a bit of magic to automatically set categories		
-		if self.species_category.pk == 21 or not self.species_category and not self.category_checked:
+		fix_category = False
+		if self.species_category:
+			if self.species_category.pk == 21:
+				fix_category = True
+		if not self.species_category:
+			fix_category = True
+		if self.category_checked:
+			fix_category = False
+		if fix_category:
 			self.category_checked = True
 			if self.auction:
 				if self.auction.use_categories:

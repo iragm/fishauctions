@@ -18,10 +18,6 @@ from post_office import mail
 class Command(BaseCommand):
     help = 'Just a scratchpad to do things'
     def handle(self, *args, **options):
-        lots = Lot.objects.all()
-        for lot in lots:
-            lot.save()
-
         #lots = Lot.objects.filter(Q(feedback_text__isnull=False)|Q(winner_feedback_text__isnull=False))
         #for lot in lots:
         #    print(lot.winner_feedback_text, lot.feedback_text)

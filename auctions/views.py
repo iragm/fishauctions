@@ -716,36 +716,47 @@ def feedback(request, pk, leave_as):
             lot = Lot.objects.get(pk=pk)
         except:
             raise Http404 (f"No lot found with key {lot}") 
-        checksPass = False
+        winner_checks_pass = False
+        seller_checks_pass = False
         if leave_as == "winner":
-            # fixme - we need to allow auctiontos_winner here, too
-            if lot.winner.pk == request.user.pk:
-                checksPass = True
-                try:
-                    lot.feedback_rating = data['rating']
-                    lot.save()
-                except:
-                    pass
-                try:
-                    lot.feedback_text = data['text']
-                    lot.save()
-                except:
-                    pass
+            if lot.winner:
+                if lot.winner.pk == request.user.pk:
+                    winner_checks_pass = True
+            if lot.auctiontos_winner:
+                if lot.auctiontos_winner.user:
+                    if lot.auctiontos_winner.user.pk == request.user.pk:
+                        winner_checks_pass = True
+        if winner_checks_pass:
+            try:
+                lot.feedback_rating = data['rating']
+                lot.save()
+            except:
+                pass
+            try:
+                lot.feedback_text = data['text']
+                lot.save()
+            except:
+                pass
         if leave_as == "seller":
-            # fixme - we need to allow auctiontos_seller here, too
-            if lot.user.pk == request.user.pk:
-                checksPass = True
-                try:
-                    lot.winner_feedback_rating = data['rating']
-                    lot.save()
-                except:
-                    pass
-                try:
-                    lot.winner_feedback_text = data['text']
-                    lot.save()
-                except:
-                    pass
-        if not checksPass:
+            if lot.user:
+                if lot.user.pk == request.user.pk:
+                    seller_checks_pass = True
+            if lot.auctiontos_seller:
+                if lot.auctiontos_seller.user:
+                    if lot.auctiontos_seller.user.pk == request.user.pk:
+                        seller_checks_pass = True
+        if seller_checks_pass:
+            try:
+                lot.winner_feedback_rating = data['rating']
+                lot.save()
+            except:
+                pass
+            try:
+                lot.winner_feedback_text = data['text']
+                lot.save()
+            except:
+                pass
+        if not winner_checks_pass and not seller_checks_pass:
             messages.error(request, "Only the seller or winner of a lot can leave feedback")
             return redirect('/')
         return HttpResponse("Success")
@@ -969,9 +980,8 @@ class LeaveFeedbackView(LoginRequiredMixin, ListView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         cutoffDate =  timezone.now() - datetime.timedelta(days=90)
-        #new_context = super().get_context_data()
-        context['won_lots'] = Lot.objects.filter(winner=self.request.user.pk, date_posted__gte=cutoffDate).order_by('-date_posted')
-        context['sold_lots'] = Lot.objects.filter(user=self.request.user.pk, date_posted__gte=cutoffDate, winner__isnull=False).order_by('-date_posted')
+        context['won_lots'] = Lot.objects.filter(Q(winner=self.request.user)|Q(auctiontos_winner__user=self.request.user), date_posted__gte=cutoffDate).order_by('-date_posted')
+        context['sold_lots'] = Lot.objects.filter(Q(user=self.request.user)|Q(auctiontos_seller__user=self.request.user), date_posted__gte=cutoffDate, winning_price__isnull=False).order_by('-date_posted')
         return context
 
 class AuctionChats(LoginRequiredMixin, ListView, AuctionPermissionsMixin):
@@ -1228,7 +1238,7 @@ class AuctionStats(DetailView, AuctionPermissionsMixin):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        if not self.get_object().invoiced:
+        if not self.get_object().invoiced and self.get_object().is_online:
             messages.error(self.request, "This auction is still in progress, check back once it's finished for more complete stats")
         return context
 
@@ -2049,7 +2059,7 @@ class LotUpdate(LotValidation, UpdateView):
         if not (request.user.is_superuser or self.get_object().user == self.request.user):
             messages.error(request, "Only the lot creator can edit a lot")
             return redirect('/')
-        if not self.get_object().can_be_deleted:
+        if not self.get_object().can_be_edited:
             messages.error(request, "It's too late to edit this lot")
             return redirect('/')
         return super().dispatch(request, *args, **kwargs)
@@ -2198,7 +2208,7 @@ class LotAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['tooltip'] = ""
-        context['modal_title'] = f"Edit {self.lot.lot_number_display}"
+        context['modal_title'] = f"Edit lot <a href='{self.lot.lot_link}'>{self.lot.lot_number_display}</a>"
         return context
         
     def post(self, request, *args, **kwargs):
@@ -2479,10 +2489,10 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
         data = self.request.GET.copy()
         try:
             if not data['next']:
-                data['next'] = f'/lots/?auction={self.get_object().slug}'
+                data['next'] = self.get_object().view_lot_link
             return data['next']
         except Exception as e:
-            return f'/lots/?auction={self.get_object().slug}'
+            return self.get_object().view_lot_link
 
     def get_form_kwargs(self):
         form_kwargs = super().get_form_kwargs()
@@ -2505,7 +2515,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
         context['google_maps_api_key'] = settings.LOCATION_FIELD['provider.google.api_key']
         if self.get_object().closed:
             context['ended'] = True
-            messages.add_message(self.request, messages.ERROR, f"This auction has ended.  You can't bid on anything, but you can still <a href='/lots/?auction={self.get_object().slug}'>view lots</a>.")
+            messages.add_message(self.request, messages.ERROR, f"This auction has ended.  You can't bid on anything, but you can still <a href='{self.get_object().view_lot_link}'>view lots</a>.")
         else:
             context['ended'] = False
         try:
@@ -3002,7 +3012,7 @@ class LotLabelView(View, AuctionPermissionsMixin):
         context.update({f'{field.name}': getattr(user_label_prefs, field.name) for field in UserLabelPrefs._meta.get_fields()})
         return context
 
-    def get(self, request, *args, **kwargs):
+    def create_labels(self, request, *args, **kwargs):
         context = self.get_context_data(kwargs=kwargs)
         response = HttpResponse(content_type='application/pdf')
         label_name = self.filename or "labels"
@@ -3085,6 +3095,13 @@ class LotLabelView(View, AuctionPermissionsMixin):
         elements.append(table)
         doc.build(elements)
         return response
+
+    def get(self, request, *args, **kwargs):
+        try:
+            return self.create_labels(request, *args, **kwargs)
+        except:
+            messages.error(request, "Unable to print labels, this is likely caused by an invalid setting")
+            return redirect(reverse('printing'))
 
 class InvoiceLabelView(InvoiceView):
     """Allows printing of labels"""

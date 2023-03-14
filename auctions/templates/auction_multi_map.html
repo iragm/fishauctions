@@ -82,7 +82,7 @@ function copyLink() {
                     The creator of this auction has not yet added a pickup location.  Check back soon!
                 {% endif %}
             {% endif %}
-            <a href='/lots/?auction={{auction.slug}}' class="btn btn-primary active">View all lots for this auction</a>
+            <a href='{{ auction.view_lot_link }}' class="btn btn-primary active">View all lots for this auction</a>
             <br><br>
             {% if auction.created_by.pk == request.user.id or request.user.is_superuser %}
             text

@@ -95,7 +95,8 @@ class QuickAddLot(forms.ModelForm):
         self.fields['lot_name'].help_text = ""
         if not self.is_admin:
             self.fields['custom_lot_number'].widget = HiddenInput()
-        if not self.auction.use_categories:
+        #if not self.auction.use_categories:
+        if True: # hide category field, it's automatically set now
             self.fields['species_category'].widget = HiddenInput()
         self.fields['species_category'].label = "Category"
         self.fields['species_category'].help_text = ""

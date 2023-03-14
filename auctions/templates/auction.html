@@ -225,7 +225,7 @@ function initMap() {
                     <a href="/login/?next={% firstof request.path '/' %}">Please login to confirm your pickup location</a><br><br>
                 {% endif %}
             {% endif %}
-            <a href='/lots/?auction={{auction.slug}}' class="btn btn-info active mr-1 mt-1">View lots</a>
+            <a href='{{ auction.view_lot_link }}' class="btn btn-info active mr-1 mt-1">View lots</a>
             {% if auction.is_online %}<a href='{{auction.add_lot_link}}' class="btn btn-primary active mr-1 mt-1">Add a lot</a>{% else %}
             <a href='{% url "bulk_add_lots_for_myself" slug=auction.slug %}' class="btn btn-primary active mr-1 mt-1">Add lots</a>{% endif %}
             <a href='{% url "print_my_labels" slug=auction.slug %}' class="btn btn-primary active mr-1 mt-1">Print your lot labels</a>

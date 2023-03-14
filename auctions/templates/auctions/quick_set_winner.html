@@ -17,7 +17,7 @@ $(window).on("load", function() {
     <div class="row">
       <div class="col-md-10 offset-md1">
         {% include 'auction_ribbon.html' %}
-<p><span class='text-muted'><small>Use this page to quickly set the winners of lots.  Tip: press tab to move to the next field</small></span></p>
+<p><span class='text-muted'><small>Use this page to quickly set the winners of lots. Choose between the <a href="{% url 'auction_lot_winners_autocomplete' slug=auction.slug %}">autocomplete form</a> that lets you search for people's names, or the <a href="{% url 'auction_lot_winners' slug=auction.slug %}">standard form</a> that uses bidder numbers only, perfect for large auctions.  Tip: press tab to move to the next field</small></span></p>
 {% crispy form form.helper %}
         </div>
     </div>

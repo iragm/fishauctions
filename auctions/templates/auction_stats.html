@@ -180,9 +180,6 @@
 </script>
 
 {% endblock %}
-<!-- <div class="container mt-5 mb-5">
-    <div class="row">
-        <div class="col-md-10 offset-md1"> -->
             {% include 'auction_ribbon.html' %}
             <br><h3>Users</h3>
             <table class="table">
@@ -199,7 +196,10 @@
                     <td>Users who bought or sold at least one item</td><td>{{auction.number_of_participants}}</td>
                   </tr>
                   <tr>
-                    <td>Users who confirmed a pickup location</td><td>{{auction.number_of_tos}}</td>
+                    <td>Total users</td><td>{{auction.number_of_tos}}</td>
+                  </tr>
+                  <tr>
+                    <td>Users who preregistered through this site</td><td>{{auction.preregistered_users}}</td>
                   </tr>
               </tbody>
             </table>
@@ -263,11 +263,7 @@
             If there is equal supply, interest, and demand in a category, views/bids/number of lots should be the same height (and determined by the number of lots).  When they are different, you can get some interesting info from this graph.
             For example, categories with more bids are likely to be in higher demand, especially if views are lower.  Categories with lots of views but no bids may be something people are curious about, but don't actually want.  To wit: <i>What's this tequila fish?  Oh, it's a gray livebearer, never mind.</i>
             <br><br>
-
-             <a href="/auctions/{{auction.slug}}/" class="btn btn-primary active">View rules</a> <a href="/auctions/{{auction.slug}}/report" class="btn btn-primary active">Download CSV Report</a>
-        <!-- </div>
-    </div>
-</div>   -->
+             <a href="/auctions/{{auction.slug}}/" class="btn btn-primary active">Back to rules</a>
 
 {% endblock %}
 

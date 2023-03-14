@@ -12,7 +12,7 @@ class AuctionTOSFilter(django_filters.FilterSet):
     query = django_filters.CharFilter(method='auctiontos_search',
                                         label="",
                                         widget=TextInput(attrs={
-                                        "placeholder":"Filter by bidder number, name, phone, etc...",
+                                        "placeholder":"Filter by bidder number, name, email...",
                                         'hx-get':'',
                                         'hx-target':"div.table-container",
                                         'hx-trigger':"keyup changed delay:300ms",
@@ -37,8 +37,8 @@ class AuctionTOSFilter(django_filters.FilterSet):
         qs = qs.filter(
             Q(name__icontains=value) | 
             Q(email=value) | 
-            Q(phone_number__icontains=value) | 
-            Q(address__icontains=value) | 
+            #Q(phone_number__icontains=value) | 
+            #   Q(address__icontains=value) | 
             Q(bidder_number=value) |
             Q(user__username=value)
         )
@@ -454,13 +454,13 @@ class LotFilter(django_filters.FilterSet):
 
     def text_filter(self, queryset, name, value):
         if value.isnumeric():
-            return queryset.filter(Q(lot_number=int(value))|Q(lot_name__icontains=value)|Q(custom_lot_number=value))
+            return queryset.filter(Q(lot_number=int(value))|Q(lot_name__icontains=value)|Q(custom_lot_number=value)|Q(auctiontos_seller__bidder_number=value))
         else:
             split = re.split(r'\bor\b', value)
             qList = Q() # empty
             for fragment in split:
                 fragment = fragment.strip()
-                qList |= Q(description__icontains=fragment)|Q(lot_name__icontains=fragment)|Q(user__username=fragment)|Q(custom_lot_number=fragment)
+                qList |= Q(description__icontains=fragment)|Q(lot_name__icontains=fragment)|Q(user__username=fragment)|Q(custom_lot_number=fragment)|Q(auctiontos_seller__bidder_number=fragment)
             return queryset.filter(qList)
     
     def filter_by_shipping_location(self, queryset, name, value):

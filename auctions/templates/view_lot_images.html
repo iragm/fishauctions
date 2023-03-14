@@ -658,7 +658,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
 <span id='recommendations'>Searching for recommended lots...</span>
 {% endif %}
 {% if lot.auction %}
-    <br><a href='/lots/?auction={{lot.auction.slug}}'>View all lots for {{ lot.auction }}</a><br>
+    <br><a href='{{lot.auction.view_lot_link}}'>View all lots for {{ lot.auction }}</a><br>
 {% endif %}
 </div>
 </div>
