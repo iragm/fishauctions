@@ -4,6 +4,23 @@
 {% load static %}
 
 {% block extra_js %}
+<script>
+function show_hide_advanced() {
+    var data = document.getElementById('id_preset').val();
+    console.log(data);
+    if (data == 'custom') {
+        $('#custom').show();
+    } else {
+        $('#custom').hide();
+    }
+}
+
+$('#div_id_preset').change(show_hide_advanced());
+$(document).ready(function() {
+    show_hide_advanced();
+});
+var form_id = '#printing-prefs';</script>
+{% include 'leave_page_warning.js' %}
 {% endblock %}
 {% block content %}
 <div class="container mt-5 mb-5">
@@ -16,7 +33,7 @@
                 <li>Cut them out with scissors</li>
                 <li>Use packing tape to attach them to your lots (make sure your bags are dry!)</li>
             </ol>
-            <p>If you want to get fancy, the default settings are already set below so you can print on <a href="https://www.google.com/search?q=1+x+2+5%252F8+labels">Avery 5160 labels</a></p>
+            <p>If you want to get fancy, the default settings are already set below so you can print on <a href="https://www.google.com/search?q=1+x+2+5/8+labels">Avery 5160 labels</a></p>
             <p>Changing any of these settings may well break something -- if you have a problem, just leave a comment <a href="https://github.com/iragm/fishauctions/issues/122">here</a> and I'll fix it.</p>
             {% crispy form form.helper %}
         </div>

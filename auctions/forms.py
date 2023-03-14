@@ -1343,6 +1343,9 @@ class UserLabelPrefsForm(forms.ModelForm):
         self.helper.form_tag = True
         self.helper.layout = Layout(
             Div(
+                Div('preset',css_class='col-sm-12',),
+            ),
+            Div(
                 Div('page_width',css_class='col-md-6',),
                 Div('page_height',css_class='col-md-6',),
                 css_class='row',

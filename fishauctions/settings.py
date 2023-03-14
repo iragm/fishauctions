@@ -84,6 +84,7 @@ INSTALLED_APPS = [
     'qr_code',
     'django_tables2',
     'django_htmx',
+    'crispy_bootstrap4',
 ]
 ASGI_APPLICATION = "fishauctions.asgi.application"
 MIDDLEWARE = [

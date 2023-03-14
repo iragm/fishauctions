@@ -2096,10 +2096,12 @@ class PageView(models.Model):
 class UserLabelPrefs(models.Model):
 	"""Dimensions used for the label PDF"""
 	user = models.OneToOneField(User, on_delete=models.CASCADE)
+	empty_labels = models.IntegerField(default = 0, validators=[MinValueValidator(0), MaxValueValidator(100)])
+	empty_labels.help_text = "To print on partially used label sheets, skip this many blank labels."
 	page_width = models.FloatField(default = 8.5, validators=[MinValueValidator(1), MaxValueValidator(100.0)])
 	page_height = models.FloatField(default = 11, validators=[MinValueValidator(1), MaxValueValidator(100.0)])
 	label_width = models.FloatField(default = 2.51, validators=[MinValueValidator(1), MaxValueValidator(100.0)])
-	label_height = models.FloatField(default = 0.96, validators=[MinValueValidator(0.4), MaxValueValidator(50.0)])
+	label_height = models.FloatField(default = 0.98, validators=[MinValueValidator(0.4), MaxValueValidator(50.0)])
 	label_margin_right = models.FloatField(default = 0.2, validators=[MinValueValidator(0.2), MaxValueValidator(5.0)])
 	label_margin_bottom = models.FloatField(default = 0.02, validators=[MinValueValidator(0.0), MaxValueValidator(5.0)])
 	page_margin_top = models.FloatField(default = 0.55, validators=[MinValueValidator(0.1)])
@@ -2116,6 +2118,17 @@ class UserLabelPrefs(models.Model):
 		choices=UNITS,
 		blank=False, null=False,
 		default="in"
+	)
+	PRESETS = (
+		('lg', 'Small (Avery 5160)'),
+		('sm', 'Large (Avery 18262)'),
+		('custom', 'Custom'),
+	)
+	preset = models.CharField(
+		max_length=20,
+		choices=PRESETS,
+		blank=False, null=False,
+		default="lg"
 	)
 
 class UserData(models.Model):
