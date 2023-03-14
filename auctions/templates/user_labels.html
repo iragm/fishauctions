@@ -6,21 +6,25 @@
 {% block extra_js %}
 <script>
 function show_hide_advanced() {
-    var data = document.getElementById('id_preset').val();
+    var data = document.getElementById('id_preset').value;
     console.log(data);
     if (data == 'custom') {
-        $('#custom').show();
+        $('#custom_form').show();
     } else {
-        $('#custom').hide();
+        $('#custom_form').hide();
     }
 }
 
-$('#div_id_preset').change(show_hide_advanced());
+$('#id_preset').change(function(data){
+    show_hide_advanced();
+});
+    
 $(document).ready(function() {
     show_hide_advanced();
 });
-var form_id = '#printing-prefs';</script>
+var form_id = '#printing-prefs';
 {% include 'leave_page_warning.js' %}
+</script>
 {% endblock %}
 {% block content %}
 <div class="container mt-5 mb-5">
@@ -33,8 +37,7 @@ var form_id = '#printing-prefs';</script>
                 <li>Cut them out with scissors</li>
                 <li>Use packing tape to attach them to your lots (make sure your bags are dry!)</li>
             </ol>
-            <p>If you want to get fancy, the default settings are already set below so you can print on <a href="https://www.google.com/search?q=1+x+2+5/8+labels">Avery 5160 labels</a></p>
-            <p>Changing any of these settings may well break something -- if you have a problem, just leave a comment <a href="https://github.com/iragm/fishauctions/issues/122">here</a> and I'll fix it.</p>
+            <p>If you want to print on self-adhesive labels, search for <a href="https://www.google.com/search?q=Avery 5160 labels">small labels</a> or <a href="https://www.google.com/search?q=Avery 18262 labels">large labels</a>, and make sure to print using a laser jet printer (inkjet runs when it's wet).</p>
             {% crispy form form.helper %}
         </div>
     </div>

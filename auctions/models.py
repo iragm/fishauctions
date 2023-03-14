@@ -1720,11 +1720,19 @@ class Lot(models.Model):
 		return f"{self.full_lot_link}?src=qr"
 
 	@property
+	def label_line_0(self):
+		"""Used for printed labels"""
+		result = f"<b>Lot: {self.lot_number_display}</b>"
+		if self.quantity > 1:
+			result += f" QTY: {self.quantity}"
+		if self.buy_now_price:
+			result += f" ${self.buy_now_price}"
+		return result
+
+	@property
 	def label_line_1(self):
 		"""Used for printed labels"""
 		result = f"{self.lot_name}"
-		#if self.quantity > 1:
-		#	result += " QTY: {self.quantity}"
 		return result
 
 	@property
@@ -2097,7 +2105,7 @@ class UserLabelPrefs(models.Model):
 	"""Dimensions used for the label PDF"""
 	user = models.OneToOneField(User, on_delete=models.CASCADE)
 	empty_labels = models.IntegerField(default = 0, validators=[MinValueValidator(0), MaxValueValidator(100)])
-	empty_labels.help_text = "To print on partially used label sheets, skip this many blank labels."
+	empty_labels.help_text = "To print on partially used label sheets, print this many blank labels before printing the actual labels."
 	page_width = models.FloatField(default = 8.5, validators=[MinValueValidator(1), MaxValueValidator(100.0)])
 	page_height = models.FloatField(default = 11, validators=[MinValueValidator(1), MaxValueValidator(100.0)])
 	label_width = models.FloatField(default = 2.51, validators=[MinValueValidator(1), MaxValueValidator(100.0)])
@@ -2120,8 +2128,8 @@ class UserLabelPrefs(models.Model):
 		default="in"
 	)
 	PRESETS = (
-		('lg', 'Small (Avery 5160)'),
-		('sm', 'Large (Avery 18262)'),
+		('sm', 'Small (Avery 5160)'),
+		('lg', 'Large (Avery 18262)'),
 		('custom', 'Custom'),
 	)
 	preset = models.CharField(

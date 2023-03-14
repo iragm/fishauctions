@@ -1343,7 +1343,13 @@ class UserLabelPrefsForm(forms.ModelForm):
         self.helper.form_tag = True
         self.helper.layout = Layout(
             Div(
-                Div('preset',css_class='col-sm-12',),
+                Div('preset',css_class='col-sm-8',),
+                Div('empty_labels',css_class='col-sm-4',),
+                css_class='row',
+            ),
+            Div(
+            HTML(
+            """Changing any of these settings may well break something -- if you have a problem, just leave a comment <a href="https://github.com/iragm/fishauctions/issues/122">here</a> and I'll fix it.</p>"""
             ),
             Div(
                 Div('page_width',css_class='col-md-6',),
@@ -1369,6 +1375,7 @@ class UserLabelPrefsForm(forms.ModelForm):
                 Div('unit', css_class='col-md-6',),
                 css_class='row',
                 ),
+            id='custom_form',),
             Submit('submit', 'Save', css_class='btn-success'),
         )
 

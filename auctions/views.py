@@ -3012,7 +3012,37 @@ class LotLabelView(View, AuctionPermissionsMixin):
     def get_context_data(self, **kwargs):
         user_label_prefs, created = UserLabelPrefs.objects.get_or_create(user=self.request.user)
         context = {}
-        context.update({f'{field.name}': getattr(user_label_prefs, field.name) for field in UserLabelPrefs._meta.get_fields()})
+        context['empty_labels'] = user_label_prefs.empty_labels
+        if user_label_prefs.preset == "sm":
+            # Avery 5160 labels
+            context['page_width'] = 8.5
+            context['page_height'] = 11,
+            context['label_width'] = 2.51
+            context['label_height'] = 0.98
+            context['label_margin_right'] = 0.2
+            context['label_margin_bottom'] = 0.02
+            context['page_margin_top'] = 0.55
+            context['page_margin_bottom'] = 0.45
+            context['page_margin_left'] = 0.18
+            context['page_margin_right'] = 0.18
+            context['font_size'] = 8
+            context['unit'] = 'in'
+        elif user_label_prefs.preset == "lg":
+            # Avery 18262 labels
+            context['page_width'] = 8.5
+            context['page_height'] = 11,
+            context['label_width'] = 3.9
+            context['label_height'] = 1.2
+            context['label_margin_right'] = 0.2
+            context['label_margin_bottom'] = 0.125
+            context['page_margin_top'] = 0.88
+            context['page_margin_bottom'] = 0.6
+            context['page_margin_left'] = 0.19
+            context['page_margin_right'] = 0.1
+            context['font_size'] = 16
+            context['unit'] = 'in'
+        else:
+            context.update({f'{field.name}': getattr(user_label_prefs, field.name) for field in UserLabelPrefs._meta.get_fields()})
         return context
 
     def create_labels(self, request, *args, **kwargs):
@@ -3033,6 +3063,7 @@ class LotLabelView(View, AuctionPermissionsMixin):
         font_size = context.get("font_size")
         page_width = context.get('page_width')
         page_height = context.get('page_height')
+        empty_labels = context['empty_labels']
         labels = self.get_queryset()
         if unit == 'in':
             unit = inch
@@ -3064,17 +3095,22 @@ class LotLabelView(View, AuctionPermissionsMixin):
         labels_row = []
         table_data = []
         style = ParagraphStyle(name='Normal', fontName='Helvetica', fontSize=font_size, leading=font_size*1.3)
+        if empty_labels:
+            labels = ['empty'] * empty_labels + list(labels)
         for i, label in enumerate(labels):
-            # currently, we are not trimming the text to fit on a single row
-            # this means that lots with a long label_line_1 will spill over onto 2 rows
-            # we could trim the length to [:20] in the model or here to "fix" this, but it's not a huge problem IMHO
-            label_qr_code = qr_code.qrcode.maker.make_qr_code_image(label.qr_code, QRCodeOptions(size='T', border=4, error_correction='L', image_format="png",))
-            image_stream = BytesIO(label_qr_code)
-            label_qr_code_cell = PImage(image_stream, width=qr_code_width, height=qr_code_height, lazy=0, hAlign="LEFT")
-            label_text_cell = Paragraph(f"<b>Lot: {label.lot_number_display}</b><br />{label.label_line_1}<br />{label.label_line_2}<br />{label.label_line_3}", style)
-            labels_row.append([label_qr_code_cell])
-            labels_row.append([label_text_cell])
-            labels_row.append([Paragraph('', style)]) # margin right cell is empty
+            if label == "empty":
+                labels_row += [[Paragraph('', style), Paragraph('', style), Paragraph('', style)]]*3
+            else:
+                # currently, we are not trimming the text to fit on a single row
+                # this means that lots with a long label_line_1 will spill over onto 2 rows
+                # we could trim the length to [:20] in the model or here to "fix" this, but it's not a huge problem IMHO
+                label_qr_code = qr_code.qrcode.maker.make_qr_code_image(label.qr_code, QRCodeOptions(size='T', border=4, error_correction='L', image_format="png",))
+                image_stream = BytesIO(label_qr_code)
+                label_qr_code_cell = PImage(image_stream, width=qr_code_width, height=qr_code_height, lazy=0, hAlign="LEFT")
+                label_text_cell = Paragraph(f"{label.label_line_0}<br />{label.label_line_1}<br />{label.label_line_2}<br />{label.label_line_3}", style)
+                labels_row.append([label_qr_code_cell])
+                labels_row.append([label_text_cell])
+                labels_row.append([Paragraph('', style)]) # margin right cell is empty
             
             # Check if the current label is the last label in the current row or the last label in the list
             if (i+1) % num_cols == 0 or i == len(labels) - 1:
@@ -3100,11 +3136,11 @@ class LotLabelView(View, AuctionPermissionsMixin):
         return response
 
     def get(self, request, *args, **kwargs):
-        try:
+        if True:#try:
             return self.create_labels(request, *args, **kwargs)
-        except:
-            messages.error(request, "Unable to print labels, this is likely caused by an invalid setting")
-            return redirect(reverse('printing'))
+        #except:
+        #    messages.error(request, "Unable to print labels, this is likely caused by an invalid setting")
+        #    return redirect(reverse('printing'))
 
 class InvoiceLabelView(InvoiceView):
     """Allows printing of labels"""
