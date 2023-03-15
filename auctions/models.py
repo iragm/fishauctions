@@ -2159,7 +2159,8 @@ class UserLabelPrefs(models.Model):
 		max_length=20,
 		choices=PRESETS,
 		blank=False, null=False,
-		default="lg"
+		default="lg",
+		verbose_name="Label size"
 	)
 
 class UserData(models.Model):

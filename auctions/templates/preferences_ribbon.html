@@ -1,0 +1,25 @@
+{# this is the tabs that are shown on many preferences pages #}
+<ul class="nav nav-tabs">
+    <li class="nav-item">
+      <a class="nav-link {% if active_tab == 'preferences'%}active{% endif %}" data-bs-toggle="tab" href="{% url 'preferences' %}">Preferences</a>
+    </li>
+    <li class="nav-item">
+      <a class="nav-link {% if active_tab == 'contact'%}active{% endif %}" data-bs-toggle="tab" href="{% url 'contact_info' %}">Contact info</a>
+    </li>
+        <li class="nav-item">
+      <a class="nav-link {% if active_tab == 'printing'%}active{% endif %}" data-bs-toggle="tab" href="{% url 'printing' %}">Label printing</a>
+    </li>
+    <li class="nav-item">
+      <a class="nav-link {% if active_tab == 'ignore'%}active{% endif %}" data-bs-toggle="tab" href="{% url 'ignore_categories' %}">Ignore categories</a>
+    </li>
+    <li class="nav-item dropdown">
+        <a class="nav-link dropdown-toggle" data-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">Advanced</a>
+        <div class="dropdown-menu">
+          <a class="dropdown-item" href="{% url 'change_username' %}">Change username</a>
+          <a class="dropdown-item" href="/password/change/">Change password</a>
+          <a class="dropdown-item" href="/email/">Change email</a>
+          <a class="dropdown-item" href="/social/connections/">Sign in with Google</a>
+          <a class="dropdown-item" href="/account/">My account</a>
+        </div>
+      </li>
+</ul>

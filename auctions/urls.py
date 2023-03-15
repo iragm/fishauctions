@@ -102,7 +102,7 @@ urlpatterns = [
     path('u/<str:slug>/', views.UserByName.as_view()),
     path('store/<str:slug>/', views.UserByName.as_view()),
     #path('users/<int:pk>/location/', views.UserLocationUpdate.as_view()),
-    path('username/', views.UsernameUpdate.as_view(), name='change_username'),
+    path('username/', login_required(views.UsernameUpdate.as_view()), name='change_username'),
     #path('users/<int:pk>/preferences/', views.UserPreferencesUpdate.as_view()),
     path('ignore/', login_required(views.IgnoreCategoriesView.as_view()), name='ignore_categories'),
     path('contact_info/', login_required(views.UserLocationUpdate.as_view()), name='contact_info'),

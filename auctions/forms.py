@@ -1423,7 +1423,7 @@ class UserLabelPrefsForm(forms.ModelForm):
             ),
             Div(
             HTML(
-            """Changing any of these settings may well break something -- if you have a problem, just leave a comment <a href="https://github.com/iragm/fishauctions/issues/122">here</a> and I'll fix it.</p>"""
+            """<span class='text-warning'>You most likely do not need to change these settings!</span><br><br>Some combinations may not work, so if you have a problem, just leave a comment <a href="https://github.com/iragm/fishauctions/issues/122">here</a> and I'll fix it.</p>"""
             ),
             Div(
                 Div('page_width',css_class='col-md-6',),

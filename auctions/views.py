@@ -1043,6 +1043,9 @@ class PickupLocationsDelete(DeleteView, AuctionPermissionsMixin):
     def dispatch(self, request, *args, **kwargs):
         self.auction = self.get_object().auction
         self.success_url = reverse("auction_pickup_location", kwargs={'slug': self.auction.slug})
+        if self.get_object().auction.location_qs.count() < 2:
+            messages.error(request, "You can't delete the only pickup location in this auction")
+            return redirect(self.success_url)
         if self.get_object().number_of_users:
             messages.error(request, "There are already users that have selected this location, it can't be deleted")
             return redirect(self.success_url)
@@ -3332,7 +3335,17 @@ class UserLabelPrefsView(UpdateView, SuccessMessageMixin):
     def get_object(self, *args, **kwargs):
         label_prefs, created = UserLabelPrefs.objects.get_or_create(user=self.request.user, defaults={},)
         return label_prefs
-
+    
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['active_tab'] = 'printing'
+        userData, created = UserData.objects.get_or_create(
+            user = self.request.user,
+            defaults={},
+        )
+        context['last_auction_used'] = userData.last_auction_used
+        return context
+    
 class UserPreferencesUpdate(UpdateView, SuccessMessageMixin):
     template_name = 'user_preferences.html'
     model = UserData
@@ -3360,6 +3373,11 @@ class UserPreferencesUpdate(UpdateView, SuccessMessageMixin):
     
     def get_object(self, *args, **kwargs):
         return UserData.objects.get(user__pk=self.user_pk) # get the hack
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['active_tab'] = 'preferences'
+        return context
 
 class UserLocationUpdate(UpdateView, SuccessMessageMixin):
     template_name = 'user_location.html'
@@ -3407,6 +3425,11 @@ class UserLocationUpdate(UpdateView, SuccessMessageMixin):
         userData.last_activity = timezone.now()
         userData.save()
         return super(UserLocationUpdate, self).form_valid(form)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['active_tab'] = 'contact'
+        return context
 
 class UserChartView(View):
     def get(self, request, *args, **kwargs):
@@ -3575,6 +3598,7 @@ class IgnoreCategoriesView(TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        context['active_tab'] = 'ignore'
         return context
 
 class CreateUserIgnoreCategory(View):

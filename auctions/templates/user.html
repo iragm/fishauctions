@@ -2,11 +2,11 @@
 {% block title %} {{ user.username }} {% endblock %}
 {% load static %}
 {% block content %}
-<div class="container mt-5 mb-5">
-    <div class="row">
-        <div class="col-md-10 offset-md1">
-            <h1>{{ user.username }}</h1>
-            <h4>Account information</h4>
+            {% if user.pk == request.user.id %}
+            {% include "preferences_ribbon.html" %}
+            {% endif %}
+            <h4>{{ user.username }}</h4>
+            <h6>Account information</h6>
             <table class="table">
                 {% if request.user.is_authenticated %}
                 <tr>
@@ -45,7 +45,7 @@
                   </tr>
             </table>
             {% if user.pk == request.user.id or request.user.is_superuser %}
-            <h4>Only visible to you:</h4>
+            <h6>Only visible to you:</h6>
             <table class="table">
                 <tr>
                     <td>Location:</td>
@@ -80,15 +80,6 @@
             </table>
             
             <br>
-            <br>
-            <a href="{% url 'contact_info' %}" class="btn btn-primary mr-1 mt-1">Contact info</a> 
-            <a href="{% url 'preferences' %}" class="btn btn-primary mr-1 mt-1">Preferences</a> 
-            <a href="{% url 'change_username' %}" class="btn btn-primary mr-1 mt-1">Change username</a> 
-            <a href="/password/change/" class="btn btn-primary mr-1 mt-1">Change password</a>
-            <a href="/email/" class="btn btn-primary mr-1 mt-1">Change email</a>
-            <a href="/social/connections/" class="btn btn-primary mr-1 mt-1">Sign in with Google</a>
-            <a href="{% url 'ignore_categories' %}" class="btn btn-primary mr-1 mt-1">Ignore categories</a>
-            
             {% endif %}
             <a href='/lots/user/?user={{user.username}}' class="btn btn-primary mr-1 mt-1">View all lots from this user</a>
             <br><br><h4>Feedback</h4>
@@ -164,9 +155,6 @@
                 });
             </script>
             {% endif %}
-        </div>
-    </div>
-</div>  
 {% endblock %}
 
 

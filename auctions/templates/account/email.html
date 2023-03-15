@@ -6,10 +6,9 @@
 {% block title %}{% trans "E-mail Addresses" %}{% endblock %}
 
 {% block content %}
-<div class="container mt-5 mb-5">
-  <div class="row">
-    <div class="col-md-6 offset-md3">
-  <h1>{% trans "E-mail Addresses" %}</h1>
+  
+{% include "preferences_ribbon.html" %}
+
   {% if user.emailaddress_set.all %}
   <p>{% trans 'The following e-mail addresses are associated with your account:' %}</p>
 
@@ -35,9 +34,9 @@
     {% endfor %}
 
   <div class="buttonHolder">
-        <button class="btn btn-primary secondaryAction" type="submit" name="action_primary" >{% trans 'Make Primary' %}</button>
-        <button class="btn btn-primary secondaryAction" type="submit" name="action_send" >{% trans 'Re-send Verification' %}</button>
-        <button class="btn btn-danger primaryAction" type="submit" name="action_remove" >{% trans 'Remove' %}</button>
+        <button class="btn btn-sm btn-primary secondaryAction" type="submit" name="action_primary" >{% trans 'Make Primary' %}</button>
+        <button class="btn btn-sm btn-primary secondaryAction" type="submit" name="action_send" >{% trans 'Re-send Verification' %}</button>
+        <button class="btn btn-sm btn-warning primaryAction" type="submit" name="action_remove" >{% trans 'Remove' %}</button>
   </div>
 
   </fieldset>
@@ -54,11 +53,8 @@
       <form method="post" action="{% url 'account_email' %}" class="add_email">
           {% csrf_token %}
           {{ form | crispy }}
-          <button class='btn btn-primary' name="action_add" type="submit">{% trans "Add E-mail" %}</button> <a href="/account/" class="btn btn-warning active">Back to Account</a>
+          <button class='btn btn-success' name="action_add" type="submit">{% trans "Add E-mail" %}</button>
       </form>
-  </div>
-  </div>
-</div>
 {% endblock %}
 
 

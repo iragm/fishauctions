@@ -6,16 +6,9 @@
 {% block extra_js %}
 {% endblock %}
 {% block content %}
-<div class="container mt-5 mb-5">
-    <div class="row">
-        <div class="col-md-10 offset-md1">
-            <h1>Preferences</h1>
-            <br>
-            {% crispy form form.helper %}
-        </div>
-    </div>
-</div>  
-
+{% include "preferences_ribbon.html" %}
+<br>
+{% crispy form form.helper %}
 {% endblock %}
 
 

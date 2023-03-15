@@ -5,10 +5,8 @@
 {% block title %}{% trans "Account Connections" %}{% endblock %}
 
 {% block content %}
-<div class="container mt-5 mb-5">
-    <div class="row">
-      <div class="col-md-10 offset-md1">
-<h1>{% trans "Connect your Google account" %}</h1>
+{% include "preferences_ribbon.html" %}
+<br><h4>{% trans "Connect your Google account" %}</h4>
 
 {% if form.accounts %}
 <p>{% blocktrans %}You can sign in to your account using a Google account.{% endblocktrans %}</p>
