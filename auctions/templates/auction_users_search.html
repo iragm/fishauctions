@@ -19,7 +19,7 @@
       <td>{{ t.email }}</td>
       <td>{{ t.phone_as_string }}</td>
       <td>{{ t.pickup_location }}</td>
-      <td>{% if t.is_admin %}<span class="badge bg-warning">Admin</span> {% endif %}{% if t.bidding_allowed %}<span class="badge bg-success">Bid</span> {% endif %}{% if t.selling_allowed %}<span class="badge bg-success">Sell</span> {% endif %}</td>
+      <td>{% if t.is_admin %}<span class="badge bg-warning">Admin</span> {% endif %}{% if t.bidding_allowed %}<span class="badge bg-success text-dark">Bid</span> {% endif %}{% if t.selling_allowed %}<span class="badge bg-success text-dark">Sell</span> {% endif %}</td>
     </tr>
     {% endfor %}
 </tbody>

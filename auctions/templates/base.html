@@ -127,7 +127,7 @@ window.onload = function() {
                   <!--<li class="nav-item">
                     <a class="nav-link" target="_blank" href="https://tfcb.org">TFCB homepage</a>
                   </li>-->
-                  <li class="nav-item dropdown">
+                  <!-- <li class="nav-item dropdown">
                     <a class="nav-link dropdown-toggle" data-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">Nifty numbers</a>
                     <div class="dropdown-menu">
                       <a class="dropdown-item" href="/leaderboard/">Leaderboard</a>
@@ -136,33 +136,26 @@ window.onload = function() {
                       <a class="dropdown-item" href="/blog/category-popularity/">Category popularity</a>
                       <a class="dropdown-item" href="/blog/how-much-should-you-bid/">How much should you bid?</a>
                       <a class="dropdown-item" href="/blog/optimal-lot-submission-time/">The best time to add lots</a>
-                      
                     </div>
+                  </li> -->
+                  <li class="nav-item">
+                    <a class="nav-link" href="/auctions/">Auctions <span id="new_auctions" class='badge-pill badge badge-warning' style='color:black;font-weight:900'></span></a>
                   </li>
                   <li class="nav-item">
                     <a class="nav-link" href="/lots/">Lots</a>
                   </li>
                   <li class="nav-item">
-                    <a class="nav-link" href="/auctions/">Auctions <span id="new_auctions" class='badge-pill badge badge-warning' style='color:black;font-weight:900'></span></a>
-                  </li>  
-                  {% if request.user.is_authenticated %}
-                  <li class="nav-item">
-                    <a class="nav-link" href="/lots/new">Create lot</a>
-                  </li>  
-                  <li class="nav-item">
-                    <a class="nav-link" href="/lots/watched">Watched lots</a>
-                  </li>  
-                  <li class="nav-item">
-                  <a class="nav-link" href="/lots/user/?user={{request.user.username}}">My lots <span id="total_unread_lot_messages" class='badge-pill badge badge-warning' style='color:black;font-weight:900'></span></a>
+                  <a class="nav-link" href="{% url 'selling' %}">Selling <span id="total_unread_lot_messages" class='badge-pill badge badge-warning' style='color:black;font-weight:900'></span></a>
                   </li>
-                  {% endif %}
+                  <li class="nav-item">
+                    <a class="nav-link" href="{% url 'watched' %}">Watched lots</a>
+                  </li>  
                   {% if request.user.is_superuser %}
                   <li class="nav-item">
                     <a class="nav-link" href="/admin/auth/user/?o=-5">Admin Site</a>
                   </li>
                   <li class="nav-item"><a class="nav-link" href="/dashboard">Dashboard</a></li>
                   <li class="nav-item"><a class="nav-link" href="{% url 'admin_user_map' %}?view=recent&filter=24">User Map</a></li>
-                   
                   {% endif %}
                   <li class="nav-item dropdown">
                     <a class="nav-link dropdown-toggle" data-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">About</a>
@@ -182,9 +175,10 @@ window.onload = function() {
                     <a class="nav-link dropdown-toggle" data-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">{{ request.user.username }}</a>
                     <div class="dropdown-menu">
                       <h6 class="dropdown-header">Lots</h6>
-                      <a class="dropdown-item" href="/lots/watched">Watched lots</a>
-                      <a class="dropdown-item" href="/bids">Bids</a>
-                      <a class="dropdown-item" href="/lots/won">Won lots</a>
+                      <a class="dropdown-item" href="{% url 'selling' %}">Selling</a>
+                      <a class="dropdown-item" href="{% url 'watched' %}">Watched lots</a>
+                      <a class="dropdown-item" href="{% url 'my_bids' %}">Bids</a>
+                      <a class="dropdown-item" href="{% url 'won_lots' %}">Won lots</a>
                       <div class="dropdown-divider"></div>
                       <h6 class="dropdown-header">Account</h6>
                       <a class="dropdown-item" href="{% url 'account' %}">Account information</a>
@@ -204,7 +198,6 @@ window.onload = function() {
                       <!--<a class="dropdown-item" href="/logout/">Sign out with confirmation page</a>-->
                     </div>
                   </li>
-
                   {% else %}
                   <a href="/login/?next={% firstof request.path '/' %}" class='nav-link'>Sign in</a>
                 {% endif %}

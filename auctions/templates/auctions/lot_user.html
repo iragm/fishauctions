@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% load render_table from django_tables2 %}
+{% load crispy_forms_tags %}
+{% block title %}Selling{% endblock %}
+{% load static %}
+{% block extra_js %}
+<script>
+$.ajax({
+  type: "POST",
+  beforeSend: function (request) {
+      request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+  },
+  url: "/api/lots/new_lot_last_auction/",
+  success : function(result) {
+      $('#last-auction-special').html(result.result);
+  }
+});
+</script>
+{% endblock %}
+{% block content %}
+    <span class="">Looking to sell stuff?  Use this page to quickly create and manage your lots.</span><br><br><small>It's free to use this site to sell fish with or without an auction.  If you sell fish without putting them in a club auction, promotional emails advertising your lots will go out every Wednesday.</small><br>
+    <small><span class='text-warning' id="last-auction-special"></span></small><br>
+    <a href="{% url 'new_lot' %}" class="btn btn-sm mr-2 mt-2 mb-2 btn-info">Create new lot</a>
+    {% if userdata.last_auction_used %}
+    {% if not userdata.last_auction_used.is_online %}
+      <a href="{% url 'bulk_add_lots_for_myself' slug=userdata.last_auction_used.slug %}" class="btn btn-sm mr-2 mt-2 mb-2 btn-info">Bulk add lots to {{userdata.last_auction_used}}</a>
+    {% endif %}
+    <a href="{% url 'my_auction_invoice' slug=userdata.last_auction_used.slug %}" class="btn btn-sm mr-2 mt-2 mb-2 btn-primary">Invoice for {{userdata.last_auction_used}}</a>
+    <a href="{% url 'print_my_labels' slug=userdata.last_auction_used.slug %}" class="btn btn-sm mr-2 mt-2 mb-2 btn-primary">Print labels for {{userdata.last_auction_used}}</a>
+    {% endif %}
+  <form class="col-sm-12 mt-2">
+    {% crispy filter.form %}
+  </form>
+  {# Progress indicator #}
+  {# <div class="progress"> <div class="indeterminate"></div>      </div>  #}
+  {# The actual table #}
+  {% render_table table %}
+  <div id="modals-here"></div>
+{% endblock %}

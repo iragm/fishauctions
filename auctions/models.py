@@ -1601,6 +1601,13 @@ class Lot(models.Model):
 		return False
 
 	@property
+	def price(self):
+		"""Price display"""
+		if self.winning_price:
+			return self.winning_price
+		return self.max_bid
+
+	@property
 	def max_bid(self):
 		"""returns the highest bid amount for this lot - this number should not be visible to the public"""
 		allBids = Bid.objects.filter(lot_number=self.lot_number, last_bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount', 'last_bid_time')[:2]

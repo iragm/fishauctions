@@ -53,17 +53,11 @@ function initMap() {
 </script>
 {% endblock %}
 {% block content %}
-<div class="container mt-5 mb-5">
-    <div class="row">
-        <div class="col-xl-10 offset-md1">
-            <h1>User map</h1>
+            <h4>User map</h4>
             <div id="map_wrapper" style='height: 600px;'>
                 <div id="map_canvas" class="mapping" style='width: 100%; height: 100%;'></div>
             </div>
             {% if not has_user_location %}
             <span><a href="#" onclick="setLocation()">{{ location_message }}</a></span>
             {% endif %}
-        </div>
-    </div>
-</div>  
 {% endblock %}

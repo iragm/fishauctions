@@ -52,7 +52,7 @@ class LotAdminFilter(django_filters.FilterSet):
     query = django_filters.CharFilter(method='lot_search',
                                       label="",
                                       widget=TextInput(attrs={
-                                        "placeholder":"Filter by lot number, name, or seller's contact info",
+                                        "placeholder":"Type to filter...",
                                         'hx-get':'',
                                         'hx-target':"div.table-container",
                                         'hx-trigger':"keyup changed delay:300ms",
@@ -267,8 +267,8 @@ class LotFilter(django_filters.FilterSet):
     
     @property
     def qs(self):
-        primary_queryset=super(LotFilter, self).qs
-        
+        primary_queryset=super().qs
+        primary_queryset = primary_queryset.exclude(is_deleted=True)
         # it's faster without this
         # with these, it's 320 queries in 5500 ms, without them it's 400 queries in 1500 ms
         # primary_queryset = primary_queryset.select_related('species_category', 'user', 'user__userdata', 'auction', 'winner')
@@ -476,6 +476,20 @@ class LotFilter(django_filters.FilterSet):
             self.showShipping = False
             return queryset.filter(Q(local_pickup=True)|Q(auction__isnull=False))
         return queryset
+
+class UserLotFilter(LotFilter):
+    """For the selling dashboard"""
+    @property
+    def qs(self):
+        primary_queryset=super().qs
+        return primary_queryset.filter(Q(user=self.request.user)|Q(auctiontos_seller__user=self.request.user))
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args,**kwargs)
+        self.regardingUser = self.request.user
+        self.showDeactivated = True
+        self.showBanned = True
+        self.showViewed = "yes"
 
 class UserWatchLotFilter(LotFilter):
     """A version of the lot filter that only shows lots watched by the current user"""

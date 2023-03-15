@@ -357,14 +357,32 @@ class MyBids(LotListView):
         context['lotsAreHidden'] = -1
         return context
 
-# class MyLots(LotListView):
-#     """Show all lots submitted by the current user"""
-#     def get_context_data(self, **kwargs):
-#         context = super().get_context_data(**kwargs)
-#         context['filter'] = UserOwnedLotFilter(self.request.GET, queryset=self.get_queryset(), request=self.request, ignore=False)
-#         context['view'] = 'mylots'
-#         context['lotsAreHidden'] = -1
-#         return context
+class MyLots(SingleTableMixin, FilterView):
+    """Selling dashboard.  List of lots added by this user."""
+    model = Lot
+    table_class = LotHTMxTableForUsers
+    filterset_class = LotAdminFilter
+    paginate_by = 100
+
+    def get_template_names(self):
+        if self.request.htmx:
+            template_name = "tables/table_generic.html"
+        else:
+            template_name = "auctions/lot_user.html"
+        return template_name
+
+    def dispatch(self, request, *args, **kwargs):
+        self.queryset = UserLotFilter(request=request).qs
+        return super().dispatch(request, *args, **kwargs)
+        
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['userdata'], created = UserData.objects.get_or_create(
+                user = self.request.user,
+                defaults={},
+            )
+        return context
+
         
 class MyWatched(LotListView):
     """Show all lots watched by the current user"""
