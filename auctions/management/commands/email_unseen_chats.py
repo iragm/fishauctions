@@ -20,7 +20,7 @@ class Command(BaseCommand):
         users = User.objects.filter(userdata__email_me_when_people_comment_on_my_lots=True, lot__lothistory__seen=False, lot__lothistory__changed_price=False, lot__lothistory__notification_sent=False).distinct()
         current_site = Site.objects.get_current()
         for user in users:
-            lots = Lot.objects.filter(user=user, lothistory__seen=False, lothistory__changed_price=False).annotate(
+            lots = Lot.objects.exclude(is_deleted=True).filter(user=user, lothistory__seen=False, lothistory__changed_price=False).annotate(
                 owner_chats=Count('lothistory', filter=Q(lothistory__seen=False, lothistory__changed_price=False, lothistory__notification_sent=False))
             )
             mail.send(

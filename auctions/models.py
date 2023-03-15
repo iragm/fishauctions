@@ -106,7 +106,7 @@ def guess_category(text):
 
 	if not keywords:
 		return None
-	lot_qs = Lot.objects.filter(category_automatically_added=False, species_category__isnull=False, is_deleted=False).exclude(species_category__pk=21).exclude(auction__promote_this_auction=False)
+	lot_qs = Lot.objects.exclude(is_deleted=True).filter(category_automatically_added=False, species_category__isnull=False, is_deleted=False).exclude(species_category__pk=21).exclude(auction__promote_this_auction=False)
 	q_objects = Q()
 	for keyword in keywords:
 		q_objects |= Q(lot_name__iregex=r'\b{}\b'.format(re.escape(keyword)))
@@ -275,6 +275,10 @@ class Auction(models.Model):
 			result = "The " + result
 		return result
 	
+	def delete(self, *args, **kwargs):
+		self.is_deleted=True
+		self.save()	
+
 	@property
 	def location_qs(self):
 		"""All locations associated with this auction"""
@@ -427,7 +431,7 @@ class Auction(models.Model):
 	@property
 	def club_profit_raw(self):
 		"""Total amount made by the club in this auction.  This number does not take into account rounding in the invoices, nor any invoice adjustments"""
-		allLots = Lot.objects.filter(auction=self.pk)
+		allLots = Lot.objects.exclude(is_deleted=True).filter(auction=self.pk)
 		total = 0
 		for lot in allLots:
 			total += lot.club_cut
@@ -449,7 +453,7 @@ class Auction(models.Model):
 	def gross(self):
 		"""Total value of all lots sold"""
 		try:
-			gross = Lot.objects.filter(auction=self.pk).aggregate(Sum('winning_price'))['winning_price__sum']
+			gross = Lot.objects.exclude(is_deleted=True).filter(auction=self.pk).aggregate(Sum('winning_price'))['winning_price__sum']
 			if gross is None:
 				gross = 0
 			return gross
@@ -503,23 +507,28 @@ class Auction(models.Model):
 
 	@property
 	def median_lot_price(self):
-		lots = Lot.objects.filter(auction=self.pk, winning_price__isnull=False)
+		lots = self.lots_qs.filter(winning_price__isnull=False)
 		if lots:
 			return median_value(lots,'winning_price')
 		else:
 			return 0
 	
 	@property
+	def lots_qs(self):
+		"""All lots in this auction"""
+		return Lot.objects.exclude(is_deleted=True).filter(auction=self.pk)
+	
+	@property
 	def total_sold_lots(self):
-		return len(Lot.objects.filter(auction=self.pk, winning_price__isnull=False))
+		return self.lots_qs.filter(winning_price__isnull=False).count()
 
 	@property
 	def total_unsold_lots(self):
-		return len(Lot.objects.filter(auction=self.pk, winning_price__isnull=True))
+		return self.lots_qs.filter(winning_price__isnull=True).count()
 
 	@property
 	def total_lots(self):
-		return len(Lot.objects.filter(auction=self.pk))
+		return self.lots_qs.exclude(banned=True).count()
 
 	@property
 	def percent_unsold_lots(self):
@@ -746,8 +755,13 @@ class AuctionTOS(models.Model):
 		return html.format_html(f"<a href='{url}' hx-noget>Add lots</a>")
 
 	@property
+	def bought_lots_qs(self):
+		lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_winner=self.pk)
+		return lots
+
+	@property
 	def lots_qs(self):
-		lots = Lot.objects.filter(auctiontos_seller=self.pk).exclude(is_deleted=True)
+		lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller=self.pk)
 		return lots
 
 	@property
@@ -1149,6 +1163,10 @@ class Lot(models.Model):
 		)
 		invoice, created = Invoice.objects.get_or_create(auctiontos_user=tos, auction=self.auction, defaults={})
 		invoice.recalculate
+
+	def delete(self, *args, **kwargs):
+		self.is_deleted=True
+		self.save()
 
 	@property
 	def seller_invoice_link(self):
@@ -1777,7 +1795,7 @@ class Invoice(models.Model):
 	lot.help_text = "not used"
 	# the user field is no longer used and can be removed in a future migration
 	user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
-	auctiontos_user = models.ForeignKey(AuctionTOS, null=True, blank=True, on_delete=models.SET_NULL, related_name="auctiontos")
+	auctiontos_user = models.ForeignKey(AuctionTOS, null=True, blank=True, on_delete=models.CASCADE, related_name="auctiontos")
 	# the seller field is no longer used and can be removed in a future migration
 	seller = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="seller")
 	date = models.DateTimeField(auto_now_add=True, blank=True)
@@ -2110,7 +2128,7 @@ class UserLabelPrefs(models.Model):
 	"""Dimensions used for the label PDF"""
 	user = models.OneToOneField(User, on_delete=models.CASCADE)
 	empty_labels = models.IntegerField(default = 0, validators=[MinValueValidator(0), MaxValueValidator(100)])
-	empty_labels.help_text = "To print on partially used label sheets, print this many blank labels before printing the actual labels."
+	empty_labels.help_text = "To print on partially used label sheets, print this many blank labels before printing the actual labels.  Just remember to set this back to 0 when starting a new sheet of labels!"
 	page_width = models.FloatField(default = 8.5, validators=[MinValueValidator(1), MaxValueValidator(100.0)])
 	page_height = models.FloatField(default = 11, validators=[MinValueValidator(1), MaxValueValidator(100.0)])
 	label_width = models.FloatField(default = 2.51, validators=[MinValueValidator(1), MaxValueValidator(100.0)])
@@ -2569,7 +2587,7 @@ def on_save_auction(sender, instance, **kwargs):
 		if instance.date_end:
 			if instance.date_end + datetime.timedelta(minutes=60) < timezone.now():
 				# if we are at least 60 minutes before the auction end
-				lots = Lot.objects.filter(auction=instance.pk, winner__isnull=True, auctiontos_winner__isnull=True, active=True)
+				lots = Lot.objects.exclude(is_deleted=True).filter(auction=instance.pk, winner__isnull=True, auctiontos_winner__isnull=True, active=True)
 				for lot in lots:
 					lot.date_end = instance.date_end
 					lot.save()

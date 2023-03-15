@@ -112,7 +112,7 @@ class QuickAddLot(forms.ModelForm):
         cleaned_data = super().clean()
         custom_lot_number = cleaned_data.get("custom_lot_number")
         if custom_lot_number:
-            existing_lots = Lot.objects.filter(custom_lot_number=custom_lot_number, auction=self.auction)
+            existing_lots = Lot.objects.exclude(is_deleted=True).filter(custom_lot_number=custom_lot_number, auction=self.auction)
             lot_number = cleaned_data.get("lot_number")
             if lot_number:
                 existing_lots = existing_lots.exclude(lot_number=lot_number.pk)
@@ -128,36 +128,36 @@ class QuickAddLot(forms.ModelForm):
     #     print(kwargs['auction'])
     #     return kwargs
 
-class BaseLotFormSet(BaseModelFormSet):
-    """This is not used anywhere, see EditLot instead
-    Validation for QuickAddLot
-    fixme - we need to pass auction here as a kwarg"""
-    def __init__(self, *args, **kwargs):
-        #self.auction = kwargs.pop('auction')
-        #print(self.auction)
-        super().__init__(*args, **kwargs)
-        self.queryset = Lot.objects.filter(auctiontos_seller__bidder_number="259")
-        return
+# class BaseLotFormSet(BaseModelFormSet):
+#     """This is not used anywhere, see EditLot instead
+#     Validation for QuickAddLot
+#     fixme - we need to pass auction here as a kwarg"""
+#     def __init__(self, *args, **kwargs):
+#         #self.auction = kwargs.pop('auction')
+#         #print(self.auction)
+#         super().__init__(*args, **kwargs)
+#         self.queryset = Lot.objects.filter(auctiontos_seller__bidder_number="259")
+#         return
 
 
-    def clean(self):
-        if any(self.errors):
-            return
-        issues = False
-        for form in self.forms:
-            if form.cleaned_data:
-                custom_lot_number = form.cleaned_data['custom_lot_number']
-                if custom_lot_number:
-                    other_lots = Lot.objects.filter(auction=self.auction, custom_lot_number=custom_lot_number).count()
-                    #if other_lots > 1:
-                    form.add_error('custom_lot_number', "Lot number already in use")
-                    issues = True
+#     def clean(self):
+#         if any(self.errors):
+#             return
+#         issues = False
+#         for form in self.forms:
+#             if form.cleaned_data:
+#                 custom_lot_number = form.cleaned_data['custom_lot_number']
+#                 if custom_lot_number:
+#                     other_lots = Lot.objects.exclude(is_deleted=True).filter(auction=self.auction, custom_lot_number=custom_lot_number).count()
+#                     #if other_lots > 1:
+#                     form.add_error('custom_lot_number', "Lot number already in use")
+#                     issues = True
 
-                if issues:
-                    raise forms.ValidationError(
-                        'One or more lot numbers are already in use',
-                        code='lot_numbers'
-                    )
+#                 if issues:
+#                     raise forms.ValidationError(
+#                         'One or more lot numbers are already in use',
+#                         code='lot_numbers'
+#                     )
 class TOSFormSetHelper(FormHelper):
     def __init__(self, *args, **kwargs):
         #self.auction = kwargs['auction']
@@ -270,6 +270,71 @@ class WinnerLotSimple(WinnerLot):
     """Simplified form using char fields instead of autocomplete fields"""
     lot = forms.CharField(max_length=20)
     winner = forms.CharField(max_length=20)
+
+class DeleteAuctionTOS(forms.Form):
+    """For deleting auctionTOS and optionally merging lots, admins only"""
+    delete_lots = forms.BooleanField(required = False)
+    merge_with = forms.CharField(
+        widget=autocomplete.Select2(
+        url='auctiontos-autocomplete',
+        forward=['auction'],
+        attrs={'data-html': True,
+        'data-container-css-class': '',
+        })
+        )
+    auction = forms.CharField(label='Auction', max_length=100)
+    def __init__(self, auctiontos, auction, *args, **kwargs):
+        self.auction = auction
+        self.auctiontos = auctiontos
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_method = 'post'
+        self.helper.form_class = 'form'
+        self.helper.form_id = 'auctiontos-delete-form'
+        self.helper.form_tag = True
+        self.helper.layout = Layout(
+            'auction',
+            Div(
+                'delete_lots',
+                css_class='row',
+            ),
+            Div(
+                Div('merge_with',css_class='col-sm-12',),
+                css_class='row',
+            css_id="merge_selection",
+            ),
+            Div(
+                HTML('<a class="btn btn-success" href="javascript:window.history.back();">Keep this user</a>'),
+                HTML(f'<button type="submit" class="btn btn-warning float-right">Delete</button>'),
+                css_class="modal-footer",
+            )
+        )
+        self.fields['auction'].widget = HiddenInput()
+        self.fields['auction'].initial = self.auctiontos.auction.pk
+        self.fields['merge_with'].required=False
+        existing_lots = self.auctiontos.unbanned_lot_count
+        bought_lots = self.auctiontos.bought_lots_qs.count()
+        if not existing_lots and not bought_lots:
+            self.fields['delete_lots'].widget = HiddenInput()
+        else:
+            self.fields['delete_lots'].label = f"Also delete {existing_lots} lot(s) for this user and mark {bought_lots} lot(s) that this user won as unsold"
+            self.fields['delete_lots'].help_text = "Uncheck if this is a duplicate user.  Lot numbers will not be changed."
+            self.fields['merge_with'].label = "To keep these lots, select a user to assign them to"
+
+    def clean(self):
+        cleaned_data = super().clean()
+        delete_lots = cleaned_data.get("delete_lots")
+        if not delete_lots:
+            merge_with = cleaned_data.get("merge_with")
+            if not merge_with:
+                self.add_error('merge_with', "Select a new user to preserve this user's data")
+            else:
+                if AuctionTOS.objects.get(pk=merge_with).auction.pk != self.auctiontos.auction.pk:
+                    self.add_error('merge_with', "This shouldn't even be possible!")
+                if AuctionTOS.objects.get(pk=merge_with) == self.auctiontos:
+                    self.add_error('merge_with', "You can't select the user you're about to delete")
+        return cleaned_data
+
 
 class EditLot(forms.ModelForm):
     """Used for HTMX calls to update Lot.
@@ -389,7 +454,7 @@ class EditLot(forms.ModelForm):
                 self.add_error('auction', "How did you even manage to change this field?")
         custom_lot_number = cleaned_data.get("custom_lot_number")
         if custom_lot_number:
-            other_lots = Lot.objects.filter(auction=auction, custom_lot_number=custom_lot_number).exclude(pk=self.lot.pk).count()
+            other_lots = Lot.objects.exclude(is_deleted=True).filter(auction=auction, custom_lot_number=custom_lot_number).exclude(pk=self.lot.pk).count()
             if other_lots:
                 self.add_error('custom_lot_number', "Lot number already in use")
         if not cleaned_data.get("auctiontos_winner") and cleaned_data.get("winning_price"):
@@ -405,8 +470,11 @@ class CreateEditAuctionTOS(forms.ModelForm):
         self.auction = auction
         self.auctiontos = auctiontos
         super().__init__(*args, **kwargs)
+        delete_button_html = ""
         if self.is_edit_form:
             post_url = f'/api/auctiontos/{self.auctiontos.pk}/'
+            delete_url = reverse("auctiontosdelete", kwargs={'pk': self.auctiontos.pk})
+            delete_button_html = f"<a href={delete_url} class='btn btn-warning'>Delete</a>"
         else:
             post_url = f'/api/auctiontos/{self.auction.slug}/'
         self.helper = FormHelper()
@@ -423,7 +491,7 @@ class CreateEditAuctionTOS(forms.ModelForm):
             'pickup_location',
             'is_admin',
             Div(
-                HTML('<button type="button" class="btn btn-danger float-left" onclick="closeModal()">Cancel</button>'),
+                HTML(f'{delete_button_html}<button type="button" class="btn btn-danger float-left" onclick="closeModal()">Cancel</button>'),
                 HTML(f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Save</button>'),
                 css_class="modal-footer",
             )
@@ -483,7 +551,7 @@ class CreateEditAuctionTOS(forms.ModelForm):
         cleaned_data = super().clean()
         custom_lot_number = cleaned_data.get("custom_lot_number")
         if custom_lot_number:
-            existing_lots = Lot.objects.filter(custom_lot_number=custom_lot_number, auction=self.auction)
+            existing_lots = Lot.objects.exclude(is_deleted=True).filter(custom_lot_number=custom_lot_number, auction=self.auction)
             lot_number = cleaned_data.get("lot_number")
             if lot_number:
                 existing_lots = existing_lots.exclude(lot_number=lot_number.pk)
@@ -614,6 +682,8 @@ class PickupLocationForm(forms.ModelForm):
         }
     def __init__(self, user, auction, *args, **kwargs):
         timezone.activate(kwargs.pop('user_timezone'))
+        self.is_edit_form = kwargs.pop('is_edit_form')
+        self.pickup_location = kwargs.pop('pickup_location')
         super().__init__(*args, **kwargs)
         self.user = user
         self.auction = auction
@@ -630,6 +700,9 @@ class PickupLocationForm(forms.ModelForm):
         #     self.fields['auction'].queryset = Auction.objects.filter(date_end__gte=timezone.now()).order_by('date_end')
         # else:
         #     self.fields['auction'].queryset = Auction.objects.filter(created_by=self.user).filter(date_end__gte=timezone.now()).order_by('date_end')
+        delete_button_html = ""
+        if self.is_edit_form:
+            delete_button_html = f"<a href='{reverse('delete_pickup', kwargs={'pk': self.pickup_location.pk})}' class='btn btn-warning mr-2'>Delete this location</a>"
         self.helper = FormHelper()
         self.helper.form_method = 'post'
         self.helper.form_id = 'location-form'
@@ -658,6 +731,7 @@ class PickupLocationForm(forms.ModelForm):
             Div(
                 HTML("The pin on the map must be at the <span class='text-warning'>exact location of the pickup location!</span><br><small>People will get directions based on this pin, and will get lost if it's not in the right place</small>"),
             ),
+            HTML(f'<a class="btn btn-danger mr-2" href="javascript:window.history.back();">Cancel</a>{delete_button_html}'),
             Submit('submit', 'Save', css_class='btn-success'),
         )
     
@@ -717,13 +791,13 @@ class CreateAuctionForm(forms.ModelForm):
         self.auction = None
         if self.cloned_from:
             # did this user ACTUALLY create this auction, or are they stealing rules from someone else?
-            self.auction = Auction.objects.filter(slug=self.cloned_from).first()
+            self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=self.cloned_from).first()
             if self.auction:
                 if not self.auction.permission_check(self.user):
                     self.auction = None
         if not self.auction:
             # either ?copy was not set, or the user didn't make that auction - doesn't matter
-            self.auction = Auction.objects.filter(created_by=self.user).order_by('-date_end').first()
+            self.auction = Auction.objects.exclude(is_deleted=True).filter(created_by=self.user).order_by('-date_end').first()
             if self.auction:
                 if not self.auction.permission_check(self.user):
                     self.auction = None
@@ -808,7 +882,7 @@ class AuctionEditForm(forms.ModelForm):
             # this is a new auction
             if self.cloned_from:
                 try:
-                    originalAuction = Auction.objects.get(slug=self.cloned_from)
+                    originalAuction = Auction.objects.get(slug=self.cloned_from, is_deleted=False)
                     if (originalAuction.created_by.pk == self.user.pk) or self.user.is_superuser:
                         # you can only clone your own auctions
                         cloneFields = ['title', 'notes', 'lot_entry_fee','unsold_lot_fee','winning_bid_percent_to_club', 'first_bid_payout', 'sealed_bid','promote_this_auction', 'max_lots_per_user', 'allow_additional_lots_as_donation','make_stats_public']
@@ -914,7 +988,7 @@ class OldCreateAuctionForm(forms.ModelForm):
             # this is a new auction
             if self.cloned_from:
                 try:
-                    originalAuction = Auction.objects.get(slug=self.cloned_from)
+                    originalAuction = Auction.objects.get(slug=self.cloned_from, is_deleted=False)
                     if (originalAuction.created_by.pk == self.user.pk) or self.user.is_superuser:
                         # you can only clone your own auctions
                         cloneFields = ['title', 'notes', 'lot_entry_fee','unsold_lot_fee','winning_bid_percent_to_club', 'first_bid_payout', 'sealed_bid','promote_this_auction', 'max_lots_per_user', 'allow_additional_lots_as_donation','make_stats_public']
@@ -1022,12 +1096,12 @@ class CreateLotForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.fields['description'].widget.attrs = {'rows': 3}
         self.fields['species_category'].required = True
-        self.fields['auction'].queryset = Auction.objects.filter(lot_submission_end_date__gte=timezone.now())\
+        self.fields['auction'].queryset = Auction.objects.exclude(is_deleted=True).filter(lot_submission_end_date__gte=timezone.now())\
             .filter(lot_submission_start_date__lte=timezone.now())\
             .filter(auctiontos__user=self.user).order_by('date_end')
         if self.auction:
             if self.fields['auction'].queryset.filter(pk=self.auction.pk).exists():
-                self.fields['auction'].queryset = Auction.objects.filter(pk=self.auction.pk)
+                self.fields['auction'].queryset = Auction.objects.exclude(is_deleted=True).filter(pk=self.auction.pk)
         # Default auction selection:
         # try:
         #     auctions = Auction.objects.filter(lot_submission_end_date__gte=timezone.now()).filter(date_start__lte=timezone.now()).order_by('date_end')
@@ -1052,7 +1126,7 @@ class CreateLotForm(forms.ModelForm):
         else:
             if self.cloned_from:
                 try:
-                    cloneLot = Lot.objects.get(pk=self.cloned_from)
+                    cloneLot = Lot.objects.get(pk=self.cloned_from, is_deleted=False)
                     if (cloneLot.user.pk == self.user.pk) or self.user.is_superuser:
                         # you can only clone your lots
                         cloneFields = ['lot_name', 'quantity', 'species_category', 'description', 'i_bred_this_fish', 'reserve_price', 'buy_now_price',]
@@ -1066,7 +1140,7 @@ class CreateLotForm(forms.ModelForm):
             self.fields['run_duration'].initial = 10
             try:
                 # try to get the last lot shipping/payment info and use that, set show_payment_pickup_info as needed
-                lastLot = Lot.objects.filter(user=self.user, auction__isnull=True).latest("date_of_last_user_edit")
+                lastLot = Lot.objects.exclude(is_deleted=True).filter(user=self.user, auction__isnull=True).latest("date_of_last_user_edit")
                 self.fields['show_payment_pickup_info'].initial = False
                 self.fields['shipping_locations'].initial = [place[0] for place in lastLot.shipping_locations.values_list()] 
                 self.fields['local_pickup'].initial = lastLot.local_pickup
@@ -1225,9 +1299,9 @@ class CreateLotForm(forms.ModelForm):
             if not self.instance.pk: # only run this check when creating a lot, not when editing
                 if auction.max_lots_per_user:
                     if auction.allow_additional_lots_as_donation:
-                        numberOfLots = Lot.objects.filter(user=self.user, auction=auction, donation=False, banned=False).count()
+                        numberOfLots = Lot.objects.exclude(is_deleted=True).filter(user=self.user, auction=auction, donation=False, banned=False).count()
                     else:
-                        numberOfLots = Lot.objects.filter(user=self.user, auction=auction, banned=False).count()
+                        numberOfLots = Lot.objects.exclude(is_deleted=True).filter(user=self.user, auction=auction, banned=False).count()
                     if numberOfLots >= auction.max_lots_per_user:
                         if auction.allow_additional_lots_as_donation:
                             if not cleaned_data.get("donation"):
@@ -1237,7 +1311,7 @@ class CreateLotForm(forms.ModelForm):
            
         # check to see if this lot exists already
         try:
-            existingLot = Lot.objects.filter(user=self.user, lot_name=cleaned_data.get("lot_name"), description=cleaned_data.get("description"), active = True).exclude(pk=self.instance.pk)
+            existingLot = Lot.objects.exclude(is_deleted=True).filter(user=self.user, lot_name=cleaned_data.get("lot_name"), description=cleaned_data.get("description"), active = True).exclude(pk=self.instance.pk)
             if existingLot:
                 self.add_error('description', "You've already added a lot exactly like this.  If you mean to submit another lot, change something here so it's unique")
         except:

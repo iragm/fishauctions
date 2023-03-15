@@ -65,8 +65,7 @@ class LotAdminFilter(django_filters.FilterSet):
 
     def generic(self, queryset, value):
         if value.isnumeric():
-            queryset = queryset.filter(Q(auctiontos_seller__phone_number__icontains=value) | 
-            Q(auctiontos_seller__address__icontains=value) | 
+            queryset = queryset.filter(
             Q(auctiontos_seller__bidder_number=value) |
             Q(auctiontos_winner__bidder_number=value) |
             Q(lot_name__icontains=value) |
@@ -76,8 +75,6 @@ class LotAdminFilter(django_filters.FilterSet):
         else:
             queryset = queryset.filter(
             Q(auctiontos_seller__name__icontains=value) | 
-            Q(auctiontos_seller__email__icontains=value) | 
-            Q(auctiontos_seller__address__icontains=value) | 
             Q(auctiontos_seller__bidder_number=value) |
             Q(auctiontos_winner__bidder_number=value) |
             Q(auctiontos_seller__user__username=value) |
@@ -179,13 +176,13 @@ class LotFilter(django_filters.FilterSet):
         try:
             forceAuction = kwargs.pop('auction')
             if self.listType == "auction":
-                self.regardingAuction = Auction.objects.get(slug=forceAuction)
+                self.regardingAuction = Auction.objects.get(slug=forceAuction, is_deleted=False)
         except:
             pass
         try:
             forceAuction = self.request.GET['auction']
             if forceAuction != "no_auction":
-                self.regardingAuction = Auction.objects.get(slug=forceAuction)
+                self.regardingAuction = Auction.objects.get(slug=forceAuction, is_deleted=False)
             else:
                 self.regardingAuction = None
         except:
@@ -211,7 +208,7 @@ class LotFilter(django_filters.FilterSet):
                 self.showShipping = False
         # an extra filter
         specialAuctions = Q(slug=regardingAuctionSlug)
-        self.possibleAuctions = Auction.objects.all().order_by('title')
+        self.possibleAuctions = Auction.objects.exclude(is_deleted=True).order_by('title')
         if self.user.is_authenticated:
             self.possibleAuctions = self.possibleAuctions.filter(Q(auctiontos__user=self.user)|specialAuctions).distinct()
         else:
@@ -432,7 +429,7 @@ class LotFilter(django_filters.FilterSet):
         if value == "no_auction":
             return queryset.filter(auction__isnull=True)
         try:
-            self.regardingAuction = Auction.objects.get(slug=value)
+            self.regardingAuction = Auction.objects.get(slug=value, is_deleted=False)
             #self.form.initial['auction'] = self.regardingAuction.slug
             if self.regardingAuction.closed:
                 self.status = "all"

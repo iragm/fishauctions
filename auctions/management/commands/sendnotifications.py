@@ -9,11 +9,11 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         current_site = Site.objects.get_current()
         notificationEmails = []
-        auctions = Auction.objects.filter(watch_warning_email_sent=False)
+        auctions = Auction.objects.exclude(is_deleted=True).filter(watch_warning_email_sent=False)
         for auction in auctions:
             if auction.ending_soon:
                 self.stdout.write(f'{auction} is ending soon')
-                lots = Lot.objects.filter(auction=auction)
+                lots = Lot.objects.exclude(is_deleted=True).filter(banned=False, auction=auction)
                 for lot in lots:
                     self.stdout.write(f' +-\ {lot}')
                     watched = Watch.objects.filter(lot_number=lot.lot_number)
@@ -28,7 +28,7 @@ class Command(BaseCommand):
             #else:
             #    self.stdout.write(f'{auction} still in progress')
         # Handle lots that aren't attached to an auction
-        lots = Lot.objects.filter(watch_warning_email_sent=False, auction=None)
+        lots = Lot.objects.exclude(is_deleted=True).filter(watch_warning_email_sent=False, auction=None, deactivated=False)
         for lot in lots:
             if lot.ending_soon:
                 self.stdout.write(f'{lot}')

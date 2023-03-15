@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %} Delete user {% endblock %}
+{% load static %}
+{% block extra_js %}
+<script>
+function show_hide_advanced() {
+    var elem = document.getElementById('id_delete_lots')
+    if (elem.type == "hidden") {
+        
+        $('#merge_selection').hide();
+    } else {
+        console.log('not hid')
+        if (!elem.checked) {
+            $('#merge_selection').show();
+        } else {
+            $('#merge_selection').hide();
+        }
+    }
+}
+
+$('#id_delete_lots').change(function(data){
+    show_hide_advanced();
+});
+    
+$(document).ready(function() {
+    show_hide_advanced();
+});
+</script>
+{% endblock %}
+{% block content %}
+    <h4>Delete user</h4>
+    <p>Are you sure you want to delete {{ auctiontos.name }}?</p>
+    <span class="text-warning">This cannot be undone!</span><br><br>
+    {% crispy form form.helper %}
+{% endblock %}
