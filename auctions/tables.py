@@ -87,7 +87,7 @@ class LotHTMxTableForUsers(tables.Table):
             result += f' <a href="{reverse("add_image", kwargs={"lot": record.pk})}" class="badge badge-primary">Add image</a>'
         if record.can_be_edited:
             result += f' <a href="{reverse("edit_lot", kwargs={"pk": record.pk})}" class="badge badge-warning">Edit</a>'
-        result += f' <a href="{reverse("new_lot")}?copy={record.pk}" class="badge badge-info">Copy to new lot</a>'
+        result += f' <a href="{reverse("new_lot")}?copy={record.pk}" class="badge badge-info text-dark">Copy to new lot</a>'
         return mark_safe(result)
 
     def render_lot_name(self, value, record):
@@ -101,8 +101,9 @@ class LotHTMxTableForUsers(tables.Table):
             'active',
             'lot_number',
             'lot_name',
-            'views',
             'price',
+            'auction',
+            'views',
             )
         row_attrs = {
             #'class': lambda record: str(record.table_class),

@@ -480,6 +480,11 @@ def no_lot_auctions(request):
                     if auction.date_end < now:
                         result = f"{auction} has ended"
                 if not result:
+                    tos = AuctionTOS.objects.filter(user=request.user, auction=auction).first()
+                    if tos:
+                        if not tos.selling_allowed:
+                            result = f"You don't have permission to add lots to {auction}"
+                if not result:
                     if auction.max_lots_per_user:
                         lot_list = Lot.objects.filter(user=request.user, banned=False, deactivated=False, auction=auction, is_deleted=False)
                         if auction.allow_additional_lots_as_donation:
@@ -1644,9 +1649,13 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
         if not self.tos:
             messages.error(request, f"You can't add lots until you join this auction")
             return redirect(f"/auctions/{self.auction.slug}/?next={reverse('bulk_add_lots_for_myself', kwargs={'slug': self.auction.slug})}")
+        else:
+            if not self.tos.selling_allowed and not self.is_admin:
+                messages.error(request, f"You don't have permission to add lots to this auction")
+                return redirect(f"/auctions/{self.auction.slug}/")
         if not self.is_admin and not self.auction.can_submit_lots:
             messages.error(request, f"Lot submission has ended for {self.auction}")
-            return redirect(f"/auctions/{self.auction.slug}/?next={reverse('bulk_add_lots_for_myself', kwargs={'slug': self.auction.slug})}")
+            return redirect(f"/auctions/{self.auction.slug}/")
         self.queryset = Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller=self.tos)
         if self.auction.max_lots_per_user:
             # default rows should be the max that are allowed in the auction
@@ -2313,8 +2322,18 @@ class AuctionTOSDelete(TemplateView, FormMixin, AuctionPermissionsMixin):
                 for lot in sold_lots:
                     lot.delete()
                 for lot in won_lots:
+                    LotHistory.objects.create(
+                        lot = lot,
+                        user = request.user,
+                        message = f"{request.user.username} has removed {self.auctiontos} from this auction, this lot no longer has a winner.",
+                        notification_sent = True,
+                        bid_amount = 0,
+                        changed_price=True,
+                        seen=True
+                    )
                     lot.auctiontos_winner = None
                     lot.winning_price = None
+                    lot.active = True
                     lot.save()
             else:
                 new_auctiontos = AuctionTOS.objects.get(pk=form.cleaned_data['merge_with'])
@@ -2325,6 +2344,7 @@ class AuctionTOSDelete(TemplateView, FormMixin, AuctionPermissionsMixin):
                 for lot in won_lots:
                     lot.auctiontos_winner = new_auctiontos
                     lot.save()
+                    lot.add_winner_message(request.user, new_auctiontos, lot.winning_price)
                 invoice.recalculate
             # not needed if we have models.CASCADE on Invoice
             #invoices = Invoice.objects.filter(auctiontos_user=self.auctiontos)
@@ -2415,6 +2435,7 @@ class AuctionTOSAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
             obj.phone_number = form.cleaned_data['phone_number']
             obj.address = form.cleaned_data['address']
             obj.is_admin = form.cleaned_data['is_admin']
+            obj.selling_allowed = form.cleaned_data['selling_allowed']
             obj.save()
             return HttpResponse("<script>location.reload();</script>", status=200)
             #return HttpResponse("<script>closeModal();</script>", status=200)
@@ -2515,6 +2536,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 'allow_bidding_on_lots',
                 'pre_register_lot_entry_fee_discount',
                 'pre_register_lot_discount_percent',
+                'only_approved_sellers',
                 ]
             for field in fields_to_clone:
                 setattr(auction, field, getattr(original_auction, field))

@@ -79,7 +79,8 @@ class LotAdminFilter(django_filters.FilterSet):
             Q(auctiontos_winner__bidder_number=value) |
             Q(auctiontos_seller__user__username=value) |
             Q(lot_name__icontains=value) |
-            Q(custom_lot_number=value)
+            Q(custom_lot_number=value) |
+            Q(auction__title__icontains=value)
         )
         return queryset
         

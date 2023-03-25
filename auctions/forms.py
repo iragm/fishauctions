@@ -489,6 +489,7 @@ class CreateEditAuctionTOS(forms.ModelForm):
 			'phone_number',
 			'address',
             'pickup_location',
+            'selling_allowed',
             'is_admin',
             Div(
                 HTML(f'{delete_button_html}<button type="button" class="btn btn-danger float-left" onclick="closeModal()">Cancel</button>'),
@@ -512,12 +513,14 @@ class CreateEditAuctionTOS(forms.ModelForm):
             self.fields['address'].initial = self.auctiontos.address
             self.fields['pickup_location'].initial = self.auctiontos.pickup_location.pk
             self.fields['is_admin'].initial = self.auctiontos.is_admin
+            self.fields['selling_allowed'].initial = self.auctiontos.selling_allowed
         else:
             # special rule: default to the default location
             self.fields['is_admin'].widget = HiddenInput()
             if auction.location_qs.count() == 1:
                 self.fields['pickup_location'].initial = auction.location_qs.first()
-
+        if not auction.only_approved_sellers:
+            self.fields['selling_allowed'].widget = HiddenInput()
     class Meta:
         model = AuctionTOS
         fields = [
@@ -528,6 +531,7 @@ class CreateEditAuctionTOS(forms.ModelForm):
 			'email',
 			'phone_number',
 			'address',
+            'selling_allowed',
         ]
         widgets = {
             'address': forms.Textarea(attrs={'rows':3})
@@ -547,19 +551,19 @@ class CreateEditAuctionTOS(forms.ModelForm):
             self.add_error('bidder_number', "Bidder number already in use")
         return cleaned_data
 
-    def clean(self):
-        cleaned_data = super().clean()
-        custom_lot_number = cleaned_data.get("custom_lot_number")
-        if custom_lot_number:
-            existing_lots = Lot.objects.exclude(is_deleted=True).filter(custom_lot_number=custom_lot_number, auction=self.auction)
-            lot_number = cleaned_data.get("lot_number")
-            if lot_number:
-                existing_lots = existing_lots.exclude(lot_number=lot_number.pk)
-            else:
-                self.custom_lot_numbers_used.append(custom_lot_number)
-            if existing_lots.count() or self.custom_lot_numbers_used.count(custom_lot_number) > 1:
-                self.add_error('custom_lot_number', "This lot number is already in use")
-        return cleaned_data
+    # def clean(self):
+    #     cleaned_data = super().clean()
+    #     custom_lot_number = cleaned_data.get("custom_lot_number")
+    #     if custom_lot_number:
+    #         existing_lots = Lot.objects.exclude(is_deleted=True).filter(custom_lot_number=custom_lot_number, auction=self.auction)
+    #         lot_number = cleaned_data.get("lot_number")
+    #         if lot_number:
+    #             existing_lots = existing_lots.exclude(lot_number=lot_number.pk)
+    #         else:
+    #             self.custom_lot_numbers_used.append(custom_lot_number)
+    #         if existing_lots.count() or self.custom_lot_numbers_used.count(custom_lot_number) > 1:
+    #             self.add_error('custom_lot_number', "This lot number is already in use")
+    #     return cleaned_data
 
 class CreateBid(forms.ModelForm):
     #amount = forms.IntegerField()
@@ -843,7 +847,7 @@ class AuctionEditForm(forms.ModelForm):
         model = Auction
         fields = ['notes', 'lot_entry_fee','unsold_lot_fee','winning_bid_percent_to_club', 'date_start', 'date_end', 'lot_submission_start_date',\
             'lot_submission_end_date', 'sealed_bid','use_categories', 'promote_this_auction', 'max_lots_per_user', 'allow_additional_lots_as_donation',
-            'email_users_when_invoices_ready', 'pre_register_lot_entry_fee_discount', 'pre_register_lot_discount_percent', 'allow_bidding_on_lots'
+            'email_users_when_invoices_ready', 'pre_register_lot_entry_fee_discount', 'pre_register_lot_discount_percent', 'allow_bidding_on_lots','only_approved_sellers',
             ]
         widgets = {
             'date_start': DateTimePickerInput(),
@@ -928,6 +932,7 @@ class AuctionEditForm(forms.ModelForm):
             Div(
                 Div('max_lots_per_user', css_class='col-md-4',),
                 Div('allow_additional_lots_as_donation', css_class='col-md-4',),
+                Div('only_approved_sellers',css_class='col-md-4',),
                 css_class='row',
             ),
             Div(
@@ -1098,7 +1103,7 @@ class CreateLotForm(forms.ModelForm):
         self.fields['species_category'].required = True
         self.fields['auction'].queryset = Auction.objects.exclude(is_deleted=True).filter(lot_submission_end_date__gte=timezone.now())\
             .filter(lot_submission_start_date__lte=timezone.now())\
-            .filter(auctiontos__user=self.user).order_by('date_end')
+            .filter(auctiontos__user=self.user, auctiontos__selling_allowed=True).order_by('date_end')
         if self.auction:
             if self.fields['auction'].queryset.filter(pk=self.auction.pk).exists():
                 self.fields['auction'].queryset = Auction.objects.exclude(is_deleted=True).filter(pk=self.auction.pk)

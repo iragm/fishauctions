@@ -66,6 +66,7 @@ $(document).ready(function(){
                   123-456-7890                
                 {%else%} 
                   {% if invoice.auctiontos_user %}
+                  {% if invoice.auctiontos_user.bidder_number %}Bidder number: <b>{{ invoice.auctiontos_user.bidder_number}}</b><br>{% endif %}
                   {{ invoice.auctiontos_user.name|default:""}}<br>
                   {% if invoice.auctiontos_user.address %}{{ invoice.auctiontos_user.address| linebreaksbr}}<br>{% endif %}
                   {{ invoice.auctiontos_user.email|default:"" }}<br>

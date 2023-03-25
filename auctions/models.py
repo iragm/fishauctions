@@ -265,6 +265,8 @@ class Auction(models.Model):
 	use_categories.help_text = "Check to use categories like Cichlids, Livebearers, etc."
 	is_deleted = models.BooleanField(default=False)
 	allow_bidding_on_lots = models.BooleanField(default=True)
+	only_approved_sellers = models.BooleanField(default=False)
+	only_approved_sellers.help_text = "Require admin approval before users can add lots"
 	email_users_when_invoices_ready = models.BooleanField(default=True)
 
 	def __str__(self):
@@ -792,6 +794,8 @@ class AuctionTOS(models.Model):
 	def save(self, *args, **kwargs):
 		if not self.pk:
 			#print("new instance of auctionTOS")
+			if self.auction.only_approved_sellers:
+				self.selling_allowed = False
 			# no emails for in-person auctions, thankyouverymuch
 			if not self.auction.is_online:
 				pass
