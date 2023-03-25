@@ -767,8 +767,12 @@ class AuctionTOS(models.Model):
 		return lots
 
 	@property
+	def unbanned_lot_qs(self):
+		return self.lots_qs.exclude(banned=True)
+
+	@property
 	def unbanned_lot_count(self):
-		return self.lots_qs.exclude(banned=True).count()
+		return self.unbanned_lot_qs.count()
 
 	@property
 	def print_invoice_link_html(self):

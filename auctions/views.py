@@ -1578,7 +1578,7 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
     allow_non_admins = True
 
     def get(self, *args, **kwargs):
-        lot_formset = self.LotFormSet(form_kwargs={'auction': self.auction, 'custom_lot_numbers_used':[],'is_admin':self.is_admin}, queryset=self.queryset)
+        lot_formset = self.LotFormSet(form_kwargs={'tos':self.tos, 'auction': self.auction, 'custom_lot_numbers_used':[],'is_admin':self.is_admin}, queryset=self.queryset)
         helper = LotFormSetHelper()
         context = self.get_context_data(**kwargs)
         context['formset'] = lot_formset
@@ -1588,7 +1588,7 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
         return self.render_to_response(context)
 
     def post(self, *args, **kwargs):
-        lot_formset = self.LotFormSet(self.request.POST, form_kwargs={'auction': self.auction, 'custom_lot_numbers_used':[], 'is_admin':self.is_admin}, queryset=self.queryset)
+        lot_formset = self.LotFormSet(self.request.POST, form_kwargs={'tos':self.tos, 'auction': self.auction, 'custom_lot_numbers_used':[], 'is_admin':self.is_admin}, queryset=self.queryset)
         if lot_formset.is_valid():
             lots = lot_formset.save(commit=False)
             for lot in lots:
@@ -1656,7 +1656,7 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
         if not self.is_admin and not self.auction.can_submit_lots:
             messages.error(request, f"Lot submission has ended for {self.auction}")
             return redirect(f"/auctions/{self.auction.slug}/")
-        self.queryset = Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller=self.tos)
+        self.queryset = self.tos.unbanned_lot_qs
         if self.auction.max_lots_per_user:
             # default rows should be the max that are allowed in the auction
             if self.queryset.count() > self.auction.max_lots_per_user:

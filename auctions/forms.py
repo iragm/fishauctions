@@ -87,6 +87,8 @@ class QuickAddLot(forms.ModelForm):
         self.auction = kwargs.pop('auction')
         self.custom_lot_numbers_used = kwargs.pop('custom_lot_numbers_used')
         self.is_admin = kwargs.pop('is_admin')
+        self.tos = kwargs.pop('tos')
+        self.lot_count = 0
         # we need to work around the case where a user enters duplicate custom lot numbers
         super().__init__(*args, **kwargs)
         self.fields['custom_lot_number'].label = "Custom lot number"
@@ -120,6 +122,26 @@ class QuickAddLot(forms.ModelForm):
                 self.custom_lot_numbers_used.append(custom_lot_number)
             if existing_lots.count() or self.custom_lot_numbers_used.count(custom_lot_number) > 1:
                 self.add_error('custom_lot_number', "This lot number is already in use")
+        # we need to make sure users can't add extra lots
+        if not self.is_admin and self.auction.max_lots_per_user:
+            existing_lots = self.tos.unbanned_lot_qs
+            if self.auction.allow_additional_lots_as_donation:
+                existing_lots = existing_lots.exclude(donation=True)
+            if not cleaned_data.get("lot_number"):
+                # new lots only
+                total_lots = existing_lots.count() + self.lot_count
+                if total_lots > self.auction.max_lots_per_user:
+                    if self.auction.allow_additional_lots_as_donation:
+                        if not cleaned_data.get("donation"):
+                            self.add_error('donation', "Any additional lots need to be a donation")
+                    else:
+                        self.add_error('lot_name', "You can't add more lots to this auction")
+                # increment counter of unsaved lots
+                if self.auction.allow_additional_lots_as_donation:
+                    if not cleaned_data.get("donation"):
+                        self.lot_count += 1
+                else:
+                    self.lot_count += 1
         return cleaned_data
     
     # def get_form_kwargs(self):

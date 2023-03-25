@@ -5,6 +5,7 @@
 {% load static %}
 {% block content %}
   {% include 'auction_ribbon.html' %}
+  <small>This is a list of people in your auction.  Click on a name to edit that user.<br></small>
   <button class='btn btn-sm btn-success' 
     hx-get="/api/auctiontos/{{auction.slug}}/"
     hx-target="#modals-here"
