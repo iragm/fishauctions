@@ -31,10 +31,103 @@ class AuctionTOSFilter(django_filters.FilterSet):
     def generic(self, qs, value):
         """Pass this a queryset and a value (string) to filter, and it'll return a suitable queryset
         This is getting reused in a couple places now, just import it with `from .filters import AuctionTOSFilter` and then use `AuctionTOSFilter.generic(qs, filter)`
-        Some day I will add rhyming names in here (https://github.com/iragm/fishauctions/issues/121), so don't reinvent the wheel, recycle this!
         """
+        RHYMING_NAMES = [
+            ['alex','alexander','lex','lexi'],
+            ['al','albert','bert'],
+            ['bart','bartholomew','bartie'],
+            ['ben','benjamin','benny'],
+            ['bill','william','billy','will'],
+            ['bob','robert','bobby','rob'],
+            ['brad','bradley'],
+            ['brandon','bran'],
+            ['brent','brenton'],
+            ['brian','bryan'],
+            ['cal','calvin'],
+            ['carl','carlton'],
+            ['chad','chadwick'],
+            ['charles','charlie','chuck'],
+            ['chris','christopher','chrissy','christy'],
+            ['dick','richard','ricky'],
+            ['dan','daniel','danny'],
+            ['dave','david','davy'],
+            ['dean','deano'],
+            ['don','donald','donnie'],
+            ['doug','douglas','dougie'],
+            ['ed','eddie','edward','edwin'],
+            ['eli','elijah'],
+            ['eric','erick'],
+            ['frank','franklin','frankie'],
+            ['fred','frederick','freddy'],
+            ['gary','gareth'],
+            ['george','georgie'],
+            ['greg','gregory','gregg'],
+            ['hank','henry'],
+            ['jack','jackson','jackie'],
+            ['james','jamie','jim','jimmy'],
+            ['jason','jay','jase'],
+            ['jeff','jeffrey','jeffry'],
+            ['jerry','gerald'],
+            ['jesse','jess','jessie'],
+            ['jim','james','jimmy'],
+            ['joe','joseph','joey'],
+            ['john','jonathan','jon','johnny'],
+            ['josh','joshua','joshie'],
+            ['justin','justine','jussi'],
+            ['keith','keithan'],
+            ['ken','kenneth','kenny'],
+            ['kevin','kev'],
+            ['larry','lawrence','lars'],
+            ['lee','leeland'],
+            ['len','leonard','lenny'],
+            ['leo','leonard','leon'],
+            ['logan','logie'],
+            ['lou','louis','louie'],
+            ['mark','marcus','markie'],
+            ['matt','matthew','matty'],
+            ['max','maximilian'],
+            ['mike','michael','mikey'],
+            ['nate','nathan','nathaniel','natey'],
+            ['nick','nicholas','nicky'],
+            ['pat','patrick','paddy'],
+            ['paul','paulie'],
+            ['pete','peter','petey'],
+            ['phil','philip','phillip','philly'],
+            ['ray','raymond','raymie'],
+            ['rich','richard','richie','rick'],
+            ['rob','robert','robbie'],
+            ['ron','ronald','ronnie'],
+            ['russ','russell'],
+            ['ryan','ry'],
+            ['sam','samuel','sammie'],
+            ['scott','scottie'],
+            ['sean','shawn','shaun','shawny'],
+            ['steve','steven','stevie'],
+            ['ted','theodore','teddy'],
+            ['tim','timothy','timmy'],
+            ['tom','thomas','tommy'],
+            ['tony','anthony','tonya','toni'],
+            ['travis','trav'],
+            ['trey','treyton'],
+            ['tyler','ty tye'],
+            ['vern','vernon'],
+            ['vic','victor'],
+            ['vince','vincent','vinny'],
+            ['walt','walter','wally'],
+            ['warren','warrick'],
+            ['wayne','waine'],
+            ['wes','wesley'],
+            ['will','william','willy'],
+            ['zach','zachary','zachie'],
+            ['abe','abraham'],
+            ['ace','acer'],
+            ['adam','ad'],
+            ['art','arthur','artie'],
+            ['ash','ashley','asher']
+        ]
+        
         value = value.strip()
-        qs = qs.filter(
+        normal_filter = Q(
             Q(name__icontains=value) | 
             Q(email=value) | 
             #Q(phone_number__icontains=value) | 
@@ -42,6 +135,14 @@ class AuctionTOSFilter(django_filters.FilterSet):
             Q(bidder_number=value) |
             Q(user__username=value)
         )
+        qList = Q()
+        first_name = value.split()[0].lower()
+        for name_set in RHYMING_NAMES:
+            if first_name in name_set:
+                # got a match?  Add all possible matches as OR filters
+                for possible_matching_name in name_set:
+                    qList |= Q(name__istartswith=possible_matching_name)
+        qs = qs.filter(Q(normal_filter|Q(qList)))
         return qs
 
     def auctiontos_search(self, queryset, name, value):

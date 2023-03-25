@@ -62,9 +62,20 @@ class QuickAddTOS(forms.ModelForm):
                 self.bidder_numbers_on_this_form.append(bidder_number)
             if existing_tos.count() or self.bidder_numbers_on_this_form.count(bidder_number) > 1:
                 self.add_error('bidder_number', "This bidder number is already in use")
+        if cleaned_data.get("email") and not cleaned_data.get("pk"):
+            # duplicate email check for new users only
+            existing_tos = AuctionTOS.objects.filter(email=cleaned_data.get("email"), auction=self.auction).first()
+            if existing_tos:
+                self.add_error('email', "This email address is already in use")
         name = cleaned_data.get("name")
         if not name:
             self.add_error('name', "Name is required")
+        # # duplicate name check for new users only
+        # else:
+        #     if not cleaned_data.get('pk'):
+        #         existing_tos = AuctionTOS.objects.filter(name=name, auction=self.auction).first()
+        #         if existing_tos:
+        #             self.add_error('name', "This name is already in use, add a middle name or a number or something to make it unique")
         return cleaned_data
 
 class QuickAddLot(forms.ModelForm):
