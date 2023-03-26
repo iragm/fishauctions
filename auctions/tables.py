@@ -91,7 +91,7 @@ class LotHTMxTableForUsers(tables.Table):
         return mark_safe(result)
 
     def render_lot_name(self, value, record):
-        result = f"<a href='{record.get_absolute_url()}'>{value}</a>"
+        result = f"<a href='{record.lot_link}?src=my_lots'>{value}</a>"
         return mark_safe(result)
 
     class Meta:

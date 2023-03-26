@@ -92,6 +92,7 @@ urlpatterns = [
     path('auctions/<slug:slug>/lots/', views.AuctionLots.as_view(), name="auction_lot_list"),
     path('auctions/<slug:slug>/stats/', login_required(views.AuctionStats.as_view())),
     path('auctions/<slug:slug>/report/', views.auctionReport, name="user_list"),
+    path('selling/csv/', views.my_lot_report, name="my_lot_report"),
     path('auctions/<slug:slug>/lotlist/', views.auctionLotList, name="lot_list"),
     path('auctions/<slug:slug>/delete/', views.AuctionDelete.as_view()),
     path('auctions/<slug:slug>/chat/', views.AuctionChats.as_view()),

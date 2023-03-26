@@ -2147,6 +2147,7 @@ class PageView(models.Model):
 	date_end = models.DateTimeField(null=True,blank=True)
 	total_time = models.PositiveIntegerField(default=0)
 	total_time.help_text = 'The total time in seconds the user has spent on the lot page'
+	source = models.CharField(max_length=200, blank=True, null=True)
 	# kinda wonder if we should add a view counter here
 	# perhaps session id as an alternative to user, to track anonymous views
 

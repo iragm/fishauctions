@@ -58,6 +58,11 @@ function deactivate_lot() {
     }, 1000);
     {% endif %}
     // handle page views
+    const urlParams = new URLSearchParams(window.location.search);
+    const src = urlParams.get('src');
+    // Remove the "src" parameter from the URL
+    const newUrl = window.location.href.replace(/(\?|&)src=[^&]*(&|$)/, '$1').replace(/(&|\?)$/, '');
+    window.history.replaceState(null, document.title, newUrl)
     pageView();
     setInterval(function(){ pageViewUpdate(); }, 10000);
     function pageView() {
@@ -67,6 +72,7 @@ function deactivate_lot() {
                 request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
             },
             url: "/api/pageview/{{lot.pk}}/new/",
+            data: {src: src},
         });
     }
     function pageViewUpdate() {
@@ -77,6 +83,7 @@ function deactivate_lot() {
                     request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
                 },
                 url: "/api/pageview/{{lot.pk}}/",
+                data: {src: src},
             });
         }
     }

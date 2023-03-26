@@ -150,7 +150,7 @@ $(document).ready(function(){
                   <tr>
                     <td>{{ lot.lot_number_display }}</td>
                     <td>{% if show_links %}{% if is_admin %}<a href="#" hx-get="/api/lot/{{lot.pk}}"
-                      hx-target="#modals-here" hx-trigger="click">{{ lot.lot_name }}</a>{% else %}<a href="{{lot.lot_link}}">{{ lot.lot_name }}</a>{% endif %}{% else %}{{ lot.lot_name }}{% endif%}</td>
+                      hx-target="#modals-here" hx-trigger="click">{{ lot.lot_name }}</a>{% else %}<a href="{{lot.lot_link}}?src=invoice_sold">{{ lot.lot_name }}</a>{% endif %}{% else %}{{ lot.lot_name }}{% endif%}</td>
                     <td>{% if lot.winning_price %} {% if exampleMode %}Real name of winner here{%else%}{% if show_links and is_admin %}<a href="#" hx-get="/api/auctiontos/{{lot.auctiontos_winner.pk}}"
                       hx-target="#modals-here" hx-trigger="click">{{ lot.winner_name }}</a>{% else %}{{ lot.winner_name }}{% endif %}{% endif %} {% else %} Not sold {% endif %}</td>
                     {% if auction.multi_location %}
@@ -187,7 +187,7 @@ $(document).ready(function(){
                   <tr>
                     <td>{{ lot.lot_number_display }}</td>
                     <td>{% if show_links %}{% if is_admin %}<a href="#" hx-get="/api/lot/{{lot.pk}}"
-                      hx-target="#modals-here" hx-trigger="click">{{ lot.lot_name }}</a>{% else %}<a href="{{lot.lot_link}}">{{ lot.lot_name }}</a>{%endif%} {% else %}{{ lot.lot_name }}{% endif %}</td>
+                      hx-target="#modals-here" hx-trigger="click">{{ lot.lot_name }}</a>{% else %}<a href="{{lot.lot_link}}?src=invoice_bought">{{ lot.lot_name }}</a>{%endif%} {% else %}{{ lot.lot_name }}{% endif %}</td>
                     {% if auction.multi_location %}
                     <td>{{ lot.location }}</td>
                     {% endif %}

@@ -795,11 +795,16 @@ def pageview(request, pk):
     if request.method == 'POST':
         user = request.user
         lot_number = Lot.objects.get(pk=pk, is_deleted=False)
+        try:
+            source = request.POST['src']
+        except:
+            source = ""
         # Initial pageview to record page views to the PageView model
         if user.is_authenticated:
             obj, created = PageView.objects.get_or_create(
                 lot_number=lot_number,
                 user=user,
+                source=source,
                 defaults={},
             )
             if "new" not in request.path:
@@ -821,6 +826,7 @@ def pageview(request, pk):
                 PageView.objects.create(
                     lot_number=lot_number,
                     user=None,
+                    source=source,
                 )
         return HttpResponse("Success")
     messages.error(request, "Your account doesn't have permission to view this page")
@@ -846,6 +852,25 @@ def invoicePaid(request, pk, **kwargs):
     messages.error(request, "Your account doesn't have permission to view this page")
     return redirect('/')
     
+@login_required
+def my_lot_report(request):
+    """CSV file showing my lots"""
+    lots = Lot.objects.filter(Q(user=request.user)|Q(auctiontos_seller__email=request.user.email)).exclude(is_deleted=True)
+    current_site = Site.objects.get_current()
+    response = HttpResponse(content_type='text/csv')
+    response['Content-Disposition'] = f'attachment; filename="my_lots_from_{current_site.domain.replace(".","_")}.csv"'
+    writer = csv.writer(response)
+    writer.writerow(["Lot number", "Name", "Auction", "Status", "Winning price", "My cut"])
+    for lot in lots:
+        status = 'Unsold'
+        if lot.banned:
+            status = 'Removed'
+        elif lot.deactivated:
+            status = 'Deactivated'
+        elif lot.winner or lot.auctiontos_winner:
+            status = 'Sold'
+        writer.writerow([lot.lot_number_display, lot.lot_name, lot.auction, status, lot.winning_price, lot.your_cut])
+    return response
 
 @login_required
 def auctionReport(request, slug):
@@ -2260,7 +2285,7 @@ class LotAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['tooltip'] = ""
-        context['modal_title'] = f"Edit lot <a href='{self.lot.lot_link}'>{self.lot.lot_number_display}</a>"
+        context['modal_title'] = f"Edit lot <a href='{self.lot.lot_link}?src=admin'>{self.lot.lot_number_display}</a>"
         return context
         
     def post(self, request, *args, **kwargs):
