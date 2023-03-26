@@ -1776,6 +1776,9 @@ class ViewLot(DetailView):
             )
             userData.last_activity = timezone.now()
             userData.save()
+            if userData.last_ip_address:
+                if userData.last_ip_address != lot.seller_ip and lot.bidder_ip_same_as_seller:
+                    messages.error(self.request, "Heads up: one of the bidders on this lot has the same IP address as the seller of this lot.  This can happen when someone is bidding on their own lots.  Never bid more than a lot is worth to you.")
         if lot.user:
             if lot.user.pk == self.request.user.pk:
                 LotHistory.objects.filter(lot=lot.pk, seen=False).update(seen=True)

@@ -1797,6 +1797,21 @@ class Lot(models.Model):
 						result += "  __" + location.short_name
 		return result
 
+	@property
+	def seller_ip(self):
+		try:
+			return self.user.userdata.last_ip_address
+		except:
+			return None
+	
+	@property
+	def bidder_ip_same_as_seller(self):
+		if self.seller_ip:
+			bids = Bid.objects.filter(lot_number__pk=self.pk, user__userdata__last_ip_address=self.seller_ip).count()
+			if bids:
+				return bids
+		return None
+
 class Invoice(models.Model):
 	"""
 	An invoice is applied to an auction
