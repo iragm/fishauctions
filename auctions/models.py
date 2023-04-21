@@ -636,7 +636,6 @@ class Auction(models.Model):
 					chunks += 1
 					returnList.append(chunks)
 					count = 0
-		#print(returnList)
 		return returnList
 
 class PickupLocation(models.Model):

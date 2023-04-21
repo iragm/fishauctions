@@ -966,6 +966,7 @@ def auctionInvoicesPaypalCSV(request, slug, chunk):
         count = 0
         chunkSize = 150 # attention: this is also set in models.auction.
         for invoice in invoices:
+            invoice.recalculate
             # we loop through everything regardless of which chunk
             if not invoice.user_should_be_paid:
                 count += 1
@@ -983,11 +984,11 @@ def auctionInvoicesPaypalCSV(request, slug, chunk):
                     currencyCode = "USD"
                     noteToCustomer = f"https://{current_site.domain}/invoices/{invoice.pk}/"
                     termsAndConditions = ""
-                    memoToSelf = ""
+                    memoToSelf = invoice.memo
                     if itemAmount > 0 and email:
                         writer.writerow([email, firstName, lastName, invoiceNumber, dueDate, reference, itemName, description, itemAmount, shippingAmount, discountAmount,\
                             currencyCode, noteToCustomer, termsAndConditions, memoToSelf])
-            return response    
+        return response    
     messages.error(request, "Your account doesn't have permission to view this page")
     return redirect('/')
 
@@ -3189,7 +3190,7 @@ class LotLabelView(View, AuctionPermissionsMixin):
             context['page_margin_bottom'] = 0.6
             context['page_margin_left'] = 0.19
             context['page_margin_right'] = 0.1
-            context['font_size'] = 16
+            context['font_size'] = 14
             context['unit'] = 'in'
         else:
             context.update({f'{field.name}': getattr(user_label_prefs, field.name) for field in UserLabelPrefs._meta.get_fields()})

@@ -18,32 +18,32 @@ from post_office import mail
 class Command(BaseCommand):
     help = 'Just a scratchpad to do things'
     def handle(self, *args, **options):
-        lots_with_buy_now_available = Lot.objects.filter(is_deleted=False, auction__isnull=False, auction__promote_this_auction=True, buy_now_price__isnull=False)
-        #lots_with_buy_now_used = Lot.objects.filter(is_deleted=False, auction__isnull=False, auction__promote_this_auction=True, buy_now_price__isnull=False, winning_price=F('buy_now_price'))
-        sum_of_buy_now_used = 0
-        sum_of_lots_that_sold_for_more_than_buy_now = 0
-        sum_of_lots_that_sold_for_less_than_buy_now = 0
-        count_of_unsold = 0
-        count_of_buy_now_used = 0
-        count_of_lots_that_sold_for_more_than_buy_now = 0
-        count_of_lots_that_sold_for_less_than_buy_now = 0
-        for lot in lots_with_buy_now_available:
-            if not lot.winning_price:
-                count_of_unsold += 1
-            else:
-                if lot.winning_price == lot.buy_now_price:
-                    count_of_buy_now_used += 1
-                    sum_of_buy_now_used += lot.winning_price
-                if lot.winning_price > lot.buy_now_price:
-                    count_of_lots_that_sold_for_more_than_buy_now += 1
-                    sum_of_lots_that_sold_for_more_than_buy_now += lot.winning_price
-                if lot.winning_price < lot.buy_now_price:
-                    count_of_lots_that_sold_for_less_than_buy_now += 1
-                    sum_of_lots_that_sold_for_less_than_buy_now += lot.winning_price
-        print(f"buy now is used {count_of_buy_now_used/lots_with_buy_now_available.count()*100}% of the time when it's available")
-        print(f"average sell price when buy now is used is ${sum_of_buy_now_used/count_of_buy_now_used}")
-        print(f"average sell price when buy now is not used is ${(sum_of_lots_that_sold_for_less_than_buy_now+sum_of_lots_that_sold_for_more_than_buy_now)/(count_of_lots_that_sold_for_less_than_buy_now+count_of_lots_that_sold_for_more_than_buy_now)}")
-        print(f"when buy now is not used, the lot sells for more than the buy now price {count_of_lots_that_sold_for_more_than_buy_now/(count_of_lots_that_sold_for_less_than_buy_now+count_of_lots_that_sold_for_more_than_buy_now)*100}% of the time")
+        # lots_with_buy_now_available = Lot.objects.filter(is_deleted=False, auction__isnull=False, auction__promote_this_auction=True, buy_now_price__isnull=False)
+        # #lots_with_buy_now_used = Lot.objects.filter(is_deleted=False, auction__isnull=False, auction__promote_this_auction=True, buy_now_price__isnull=False, winning_price=F('buy_now_price'))
+        # sum_of_buy_now_used = 0
+        # sum_of_lots_that_sold_for_more_than_buy_now = 0
+        # sum_of_lots_that_sold_for_less_than_buy_now = 0
+        # count_of_unsold = 0
+        # count_of_buy_now_used = 0
+        # count_of_lots_that_sold_for_more_than_buy_now = 0
+        # count_of_lots_that_sold_for_less_than_buy_now = 0
+        # for lot in lots_with_buy_now_available:
+        #     if not lot.winning_price:
+        #         count_of_unsold += 1
+        #     else:
+        #         if lot.winning_price == lot.buy_now_price:
+        #             count_of_buy_now_used += 1
+        #             sum_of_buy_now_used += lot.winning_price
+        #         if lot.winning_price > lot.buy_now_price:
+        #             count_of_lots_that_sold_for_more_than_buy_now += 1
+        #             sum_of_lots_that_sold_for_more_than_buy_now += lot.winning_price
+        #         if lot.winning_price < lot.buy_now_price:
+        #             count_of_lots_that_sold_for_less_than_buy_now += 1
+        #             sum_of_lots_that_sold_for_less_than_buy_now += lot.winning_price
+        # print(f"buy now is used {count_of_buy_now_used/lots_with_buy_now_available.count()*100}% of the time when it's available")
+        # print(f"average sell price when buy now is used is ${sum_of_buy_now_used/count_of_buy_now_used}")
+        # print(f"average sell price when buy now is not used is ${(sum_of_lots_that_sold_for_less_than_buy_now+sum_of_lots_that_sold_for_more_than_buy_now)/(count_of_lots_that_sold_for_less_than_buy_now+count_of_lots_that_sold_for_more_than_buy_now)}")
+        # print(f"when buy now is not used, the lot sells for more than the buy now price {count_of_lots_that_sold_for_more_than_buy_now/(count_of_lots_that_sold_for_less_than_buy_now+count_of_lots_that_sold_for_more_than_buy_now)*100}% of the time")
 
         #lots = Lot.objects.filter(Q(feedback_text__isnull=False)|Q(winner_feedback_text__isnull=False))
         #for lot in lots:
