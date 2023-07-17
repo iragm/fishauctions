@@ -83,6 +83,7 @@ Your lots{% else %}
 
 {% block extra_js %}
     {{ block.super }}
+    <script type='text/javascript'>pageView();</script>
     <script src="/static/js/el-pagination.js"></script>
     <script>$.endlessPaginate({
       onCompleted: function(context, fragment) {

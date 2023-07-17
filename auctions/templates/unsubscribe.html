@@ -2,7 +2,7 @@
 {% block title %} Unsubscribe {% endblock %}
 {% load static %}
 {% block content %}
-{% block extra_js %}{% endblock %}
+{% block extra_js %}<script type='text/javascript'>pageView();</script>{% endblock %}
             <h1>You've unsubscribed</h1>
             You won't get any additional promotional emails.<br><br>Note that you will still receive emails when you've been outbid, or when your watched lots are ending soon.<br><br>
             {% if request.user.is_authenticated %} <a href="/users/{{ request.user.pk }}/preferences/" class='btn btn-primary'>Preferences</a> {% else %}<a href="/account/" class='btn btn-warning'>Your account</a>{% endif %}

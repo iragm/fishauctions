@@ -125,9 +125,45 @@
                     }    
                 });
             </script> 
+            <table>
+              <thead>
+                <tr>
+                  <th>Page</th>
+                  <th>Total views</th>
+                  <th>Unique views</th>
+                </tr>
+              </thead>
+              <tbody>
+              {% for page in page_views %}
+                <tr>
+                  <td><a href='{{page.url}}'>{{ page.title }}</a></td>
+                  <td>{{ page.total_view_count }}</td>
+                  <td>{{ page.unique_view_count }}</td>
+                </tr>
+              {% endfor %}
+              </tbody>
+            </table>
+            <table>
+              <thead>
+                <tr>
+                  <th>Referrer</th>
+                  <th>Clicks</th>
+                  <th>Top page</th>
+                </tr>
+              </thead>
+              <tbody>
+              {% for ref in referrers %}
+                <tr>
+                  <td><a href='{{ref.referrer}}'>{{ ref.referrer }}</a></td>
+                  <td>{{ ref.total_clicks }}</td>
+                  <td><a href='{{ref.url}}'>{{ ref.title }}</a></td>
+                </tr>
+              {% endfor %}
+              </tbody>
+            </table>              
 {% endblock %}
 
 
 {% block extra_js %}
-
+<script type='text/javascript'>pageView();</script>
 {% endblock %}

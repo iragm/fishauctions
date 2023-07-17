@@ -786,7 +786,7 @@ def feedback(request, pk, leave_as):
     messages.error(request, "Your account doesn't have permission to view this page")
     return redirect('/')
 
-def pageview(request, pk):
+def pageview(request):
     """
     Record interest in lots
     Initial interest (/new/) creates product interest
@@ -794,24 +794,45 @@ def pageview(request, pk):
     """
     if request.method == 'POST':
         user = request.user
-        lot_number = Lot.objects.get(pk=pk, is_deleted=False)
-        try:
-            source = request.POST['src']
-        except:
-            source = ""
-        # Initial pageview to record page views to the PageView model
-        if user.is_authenticated:
-            obj, created = PageView.objects.get_or_create(
-                lot_number=lot_number,
-                user=user,
-                source=source,
-                defaults={},
+        data = request.POST
+        session_id = request.session.session_key
+        auction = data.get("auction", None)
+        if auction:
+            auction = Auction.objects.filter(pk=auction).first()
+        lot_number = data.get("lot", None)
+        if lot_number:
+            lot_number = Lot.objects.filter(pk=lot_number, is_deleted=False).first()
+        source = data.get("src", None)
+        url = data.get("url", None)
+        url_without_params = re.sub(r'\?.*', '', url)
+        url_without_params = url_without_params[:600]
+        title = data.get("title", "")
+        title = title[:600]
+        referrer = data.get("referrer", None)
+        referrer = referrer[:600]
+        first_view = data.get("first_view", False)
+        if request.user.is_authenticated:
+            pageview, created = PageView.objects.get_or_create(
+                lot_number = lot_number,
+                url = url_without_params,
+                auction = auction,
+                user = user,
+                defaults = {},
             )
-            if "new" not in request.path:
-                obj.total_time += 10
-            obj.date_end = timezone.now()
-            obj.save()
-            if created:
+        else:
+            # anonymous view
+            pageview, created = PageView.objects.get_or_create(
+                user = None,
+                lot_number = lot_number,
+                url = url_without_params,
+                auction = auction,
+                session_id = session_id,
+                defaults = {},
+            )
+        if created:
+            pageview.referrer = referrer
+            pageview.title = title
+            if user.is_authenticated and lot_number:
                 # create interest in this category if this is a new view for this category
                 interest, created = UserInterestCategory.objects.get_or_create(
                     category=lot_number.species_category,
@@ -821,13 +842,52 @@ def pageview(request, pk):
                 interest.interest += settings.VIEW_WEIGHT
                 interest.save()
         else:
-            # anonymous user, always create
-            if "new" in request.path:
-                PageView.objects.create(
-                    lot_number=lot_number,
-                    user=None,
-                    source=source,
-                )
+            if first_view == "true":
+                pageview.counter += 1
+            else:
+                pageview.total_time += 10
+        # in all cases, update:
+        if source and source not in pageview.source:
+            new_source = pageview.source + " " + source
+            new_source = new_source[:200]
+            pageview.source = new_source
+        pageview.date_end = timezone.now()
+        pageview.save()
+
+        #lot_number = Lot.objects.get(pk=pk, is_deleted=False)
+        # try:
+        #     source = request.POST['src']
+        # except:
+        #     source = ""
+        # # Initial pageview to record page views to the PageView model
+        # if user.is_authenticated:
+        #     obj, created = PageView.objects.get_or_create(
+        #         lot_number=lot_number,
+        #         user=user,
+        #         source=source,
+        #         defaults={},
+        #     )
+        #     if "new" not in request.path:
+        #         obj.total_time += 10
+        #     obj.date_end = timezone.now()
+        #     obj.save()
+        #     if created:
+        #         # create interest in this category if this is a new view for this category
+        #         interest, created = UserInterestCategory.objects.get_or_create(
+        #             category=lot_number.species_category,
+        #             user=user,
+        #             defaults={ 'interest': 0 }
+        #             )
+        #         interest.interest += settings.VIEW_WEIGHT
+        #         interest.save()
+        # else:
+        #     # anonymous user, always create
+        #     if "new" in request.path:
+        #         PageView.objects.create(
+        #             lot_number=lot_number,
+        #             user=None,
+        #             source=source,
+        #         )
         return HttpResponse("Success")
     messages.error(request, "Your account doesn't have permission to view this page")
     return redirect('/')
@@ -1072,6 +1132,8 @@ class PickupLocations(ListView, AuctionPermissionsMixin):
     
     def dispatch(self, request, *args, **kwargs):
         self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs.pop('slug')).first()
+        if not self.auction:
+            raise Http404
         self.is_auction_admin
         return super().dispatch(request, *args, **kwargs)
 
@@ -3607,6 +3669,19 @@ class AdminDashboard(TemplateView):
         for day in activity:
             context['last_activity_days'].append((timezone.now()-day['day']).days)
             context['last_activity_count'].append(day['c'])
+        seven_days_ago = timezone.now() - datetime.timedelta(days=7)
+        page_view_qs = PageView.objects.filter(date_end__gte=seven_days_ago)
+        context['page_views'] = page_view_qs.values('url', 'title').annotate(
+            unique_view_count=Count('url'),
+            total_view_count=Sum('counter') + F('unique_view_count')
+        ).order_by('-total_view_count')[:100]
+        referrers = page_view_qs.exclude(referrer__isnull=True)
+        # comment out next line to include internal referrers 
+        referrers = referrers.exclude(referrer__startswith="https://" + Site.objects.get_current().domain)
+        context['referrers'] = referrers.values('referrer', 'url', 'title').annotate(
+            total_clicks=Count('referrer'),
+            #total_view_count=Sum('counter') + F('unique_view_count')
+        ).order_by('-total_clicks')[:100]
         return context
 
 

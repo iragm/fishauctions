@@ -1,7 +1,9 @@
 {% extends "base.html" %}
 {% block title %} Leave feedback {% endblock %}
 {% load static %}
-{% block extra_js %}<script type="text/javascript">
+{% block extra_js %}
+<script type='text/javascript'>pageView();</script>
+<script type="text/javascript">
 var $ = window.jQuery;
 function all_positive() {
   $(".unrated").each(function() {

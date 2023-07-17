@@ -1,0 +1,30 @@
+{# This is included in base.html. To use it, call pageView(data) from any javascript template; data should be a dict containing auction : pk and lot : pk values, or can be blank #}
+     
+<script>
+    const urlParams = new URLSearchParams(window.location.search);
+    const src = urlParams.get('src');
+    // Remove the "src" parameter from the URL
+    const newUrl = window.location.href.replace(/(\?|&)src=[^&]*(&|$)/, '$1').replace(/(&|\?)$/, '');
+    window.history.replaceState(null, document.title, newUrl)
+    let first_view = true;
+    function pageView(data) {
+        data = data ?? {};
+        data.src = src;
+        data.url = newUrl;
+        data.title = document.title;
+        data.referrer = document.referrer;
+        data.first_view = first_view;
+        $.ajax({
+            type: "POST",
+            beforeSend: function (request) {
+                request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+            },
+            url: "{% url 'pageview' %}",
+            data: data,
+        });
+        first_view = false;
+        setTimeout(() => {
+            pageView(data);
+        }, 10000);
+    }
+</script>

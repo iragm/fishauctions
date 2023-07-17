@@ -54,6 +54,7 @@ window.onload = function() {
         <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.11.0/umd/popper.min.js"></script>
         <script type="text/javascript" src="{% static 'js/auction_site.js' %}"></script>
         <script type="text/javascript" src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+        {% include 'base_page_view.html' %}
         {# handle the unread messages and auctions notification counter #}
         <script>
           updateMessageCounter();

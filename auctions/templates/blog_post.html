@@ -3,6 +3,7 @@
 {% load static %}
 {% block content %}
 {% block extra_js %}
+<script type='text/javascript'>pageView();</script>
     {{ blogpost.extra_js | safe }}
 {% endblock %}
     <h1>{{ blogpost.title }}</h1>

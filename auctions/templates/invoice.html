@@ -2,7 +2,7 @@
 {% load crispy_forms_tags %}
 {% block title %} Invoice for {{ invoice.label }} {% endblock %}
 {% load static %}
-{% block extra_js %}
+{% block extra_js %}<script type='text/javascript'>pageView();</script>
 {% if print_label_link and not invoice.printed %}
 <script>
 $(document).ready(function(){

@@ -843,10 +843,13 @@ class AuctionTOS(models.Model):
 			# I guess it's possible that someone could make 999 accounts and have them all join a single auction, which would turn this into an infinite loop
 			failsafe = 0
 			# bidder numbers shouldn't start with 0
-			if str(search)[0] == "0":
-				search = search[1:]
-			if str(search)[0] == "0":
-				search = search[1:]
+			try:
+				if str(search)[0] == "0":
+					search = search[1:]
+				if str(search)[0] == "0":
+					search = search[1:]
+			except:
+				pass
 			while failsafe < 6000:
 				search = str(search)
 				if search[:-2] not in dont_use_these and search != "None":
@@ -2141,17 +2144,24 @@ class UserIgnoreCategory(models.Model):
 class PageView(models.Model):
 	"""Track what lots a user views, and how long they spend looking at each one"""
 	user = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True)
+	auction = models.ForeignKey(Auction, null=True, blank=True, on_delete=models.CASCADE)
+	auction.help_text = "Only filled out when a user views an auction's rules page"
 	lot_number = models.ForeignKey(Lot, null=True, blank=True, on_delete=models.CASCADE)
+	lot_number.help_text = "Only filled out when a user views a specific lot's page"
 	date_start = models.DateTimeField(auto_now_add=True)
 	date_end = models.DateTimeField(null=True,blank=True)
 	total_time = models.PositiveIntegerField(default=0)
 	total_time.help_text = 'The total time in seconds the user has spent on the lot page'
 	source = models.CharField(max_length=200, blank=True, null=True)
-	# kinda wonder if we should add a view counter here
-	# perhaps session id as an alternative to user, to track anonymous views
-
+	counter = models.PositiveIntegerField(default=0)
+	url = models.CharField(max_length=600, blank=True, null=True)
+	title = models.CharField(max_length=600, blank=True, null=True)
+	referrer = models.CharField(max_length=600, blank=True, null=True)
+	session_id = models.CharField(max_length=600, blank=True, null=True)
+	notification_sent = models.BooleanField(default=False)
+	
 	def __str__(self):
-		thing = self.lot_number
+		thing = self.title
 		return f"User {self.user} viewed {thing} for {self.total_time} seconds"
 
 class UserLabelPrefs(models.Model):

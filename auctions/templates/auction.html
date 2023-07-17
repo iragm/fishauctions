@@ -4,6 +4,7 @@
 {% load static %}
 {% block extra_js %}
 <script async defer crossorigin="anonymous" src="https://connect.facebook.net/en_US/sdk.js#xfbml=1&version=v9.0" nonce="e1MMTYSx"></script>
+<script>pageView({'auction':{{ auction.pk }} });</script>
 <script>
 function copyLink() {
   var copyText = document.getElementById("copyShareLink");

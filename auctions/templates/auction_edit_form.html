@@ -2,6 +2,7 @@
 {{ form.media }}
 {% load crispy_forms_tags %}
 {% block extra_js %}
+<script type='text/javascript'>pageView();</script>
 <script type="text/javascript">
 $('#auction-form').submit(function(event){
     $(this).find(':input[type=submit]').prop('disabled', true);
