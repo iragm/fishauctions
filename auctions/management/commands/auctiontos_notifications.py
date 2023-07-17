@@ -73,9 +73,44 @@ class Command(BaseCommand):
             tos.save()
             if tos.unbanned_lot_count:
                 send_tos_notification('auction_print_reminder', tos)
-        in_person_auction_print_reminder = print_reminder_qs.filter(auction__is_online=False, auction__date_start__gte=timezone.now() - datetime.timedelta(hours=28))
+        in_person_auction_print_reminder = print_reminder_qs.filter(auction__is_online=False, auction__date_start__lte=timezone.now() - datetime.timedelta(hours=28))
         for tos in in_person_auction_print_reminder:
             tos.print_reminder_email_sent = True
             tos.save()
             if tos.unbanned_lot_count:
                 send_tos_notification('auction_print_reminder', tos)
+        # this is a quick reminder to join auctions that you've viewed but haven't joined.  Fixes #134
+        join_auction_reminder = PageView.objects.filter(date_start__lte=timezone.now() - datetime.timedelta(hours=24),
+                                                        user__isnull=False,
+                                                        notification_sent=False,
+                                                        auction__isnull=False,
+                                                        user__userdata__has_unsubscribed=False)
+        for pageview in join_auction_reminder:
+            email = pageview.user.email
+            lots = Lot.objects.filter(pageview__user=pageview.user, auction=pageview.auction).distinct()
+            pageview.notification_sent = True
+            pageview.save()
+            send_email = True
+            # don't send these emails if it's too late to join, such as an online auction that's ended or an in-person auction that's started
+            if pageview.auction.closed:
+                send_email = False
+            if not pageview.auction.is_online and pageview.auction.started:
+                send_email = False
+            if send_email:
+                userData, created = UserData.objects.get_or_create(
+                    user = pageview.user,
+                    defaults={},
+                )
+                current_site = Site.objects.get_current()
+                mail.send(
+                    email,
+                    template='join_auction_reminder',
+                    headers={'Reply-to': pageview.auction.created_by.email},
+                    context={
+                        'domain': current_site.domain,
+                        'auction': pageview.auction,
+                        'lots': lots,
+                        'user':pageview.user,
+                        'unsubscribe':userData.unsubscribe_link
+                        }
+                    )

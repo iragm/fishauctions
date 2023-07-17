@@ -303,30 +303,20 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
             </tr>
         </table>
         {% endif %}
+        {% if lot.user.pk == request.user.id %}
+        {% if lot.can_be_edited %}
+            <a href="/lots/edit/{{lot.pk}}" class="btn btn-warning">Edit lot</a>
+        {% endif %}
+        {% if lot.can_be_deleted %}
+            <a href="/lots/delete/{{lot.pk}}" class="btn btn-danger">Delete</a>
+        {% endif %}
+        {% endif %}
         <span id="bid_area">
-        {% if lot.banned %}
-        <span>You can't bid on this lot - {% if lot.ban_reason %}{{lot.ban_reason}}{%else%}it has been removed{%endif%}</span>
-        {% else %}
-            {% if lot.tos_needed %}
-            <span >Bidding is not allowed on this lot until {% if lot.user == request.user %} you have <a href="{{lot.tos_needed}}">confirmed your pickup location</a> {% if lot.can_be_deleted %}<span><a href="/lots/delete/{{lot.pk}}" class="btn btn-danger">Delete</a>{% endif %}{% else %} the submitter of this lot has confirmed their location{% endif %}</span>
-            {% else %}
-                {% if lot.user.pk == request.user.id or request.user.is_superuser%}
-                {% if lot.can_be_edited %}
-                    <a href="/lots/edit/{{lot.pk}}" class="btn btn-warning">Edit lot</a></span> {% if lot.can_be_deleted %}<span><a href="/lots/delete/{{lot.pk}}" class="btn btn-danger">Delete</a>{% endif %}
-                {% else %}
-                    <span class='text-muted'>{% if lot.user.pk == request.user.id%}This is your lot.  {% endif %}<br></span>
-                {% endif %}
-                {% elif lot.bidding_error %}
-                    <span class="text-danger">{{ lot.bidding_error }}</span><br>
-                
+                {% if lot.bidding_error %}
+                    <span class="text-danger">{{ lot.bidding_error }}</span><br>    
                 {% elif lot.ended or lot.winner %}
                     <span>Bidding has ended on this lot<br></span>
                 {% else %}
-                    {% if user.is_authenticated %}
-                        {% if not user_tos %}
-                            This lot is part of the <b>{{ lot.auction }}</b>.  Please <a href='/auctions/{{lot.auction.slug}}/?next=/lots/{{ lot.pk }}/#join'>read the auction's rules and confirm your pickup location</a> to bid<br>
-                        {% else %}
-                            {% if not lot.auction %}Remember to check the seller's feedback before bidding.  This site will not get involved in disputes.<br><br>{%endif%}
                             <div class="form-group">
                                 <div class="input-group mb-3">
                                     <div class="input-group-prepend">
@@ -340,6 +330,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                                 <div class="invalid-feedback">Enter a number</div>
                                 </div>
                             </div>
+                            {% if not lot.auction %}Remember to check the seller's feedback before bidding.  This site will not get involved in disputes.<br>{%endif%}
                             <script>
                                 //$('#bid_amount').focus(); // scrolls page down
                                 document.querySelector('#bid_amount').onkeyup = function(e) {
@@ -348,6 +339,9 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                                     }
                                 };
                                 document.querySelector('#bid_button').onclick = function(e) {
+                                    {% if user_specific_bidding_error %}
+                                    $('#bidError').modal('show');
+                                    {% else %}
                                     var bid = Number($('#bid_amount').val());
                                     if (isNaN(bid) || bid == 0) {
                                         $('#bid_amount').addClass('is-invalid');
@@ -372,15 +366,10 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                                             $('#confirmDialgoText').html("Enter an amount");
                                         }
                                     }
+                                    {% endif %}
                                 };
                             </script>
-                        {% endif %}
-                    {% else %}
-                        <a href='/login/?next=/lots/{{lot.pk}}/'>Sign in</a> to place bids.
-                    {% endif %}
                 {% endif %}
-            {% endif %} {# lot.tos_needed #}
-        {% endif %} {# lot.banned #}
         </span>
         {% if request.user.is_authenticated %}
             {% if is_auction_admin %}
@@ -429,7 +418,38 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
         </div>
     </div>
 </div>
-
+<!-- bid error dialog -->
+<div class="modal fade" id="bidError" tabindex="-1" role="dialog" aria-labelledby="label" aria-hidden="true">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+        <div class="modal-header bg-danger">
+            <h5 class="modal-title" id="label">Bid failed!</h5>
+            <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+            <span aria-hidden="true">&times;</span>
+            </button>
+        </div>
+        <div id='confirmDialgoText' class="modal-body">
+            {% if not user.is_authenticated %}
+                You have to <a href='/login/?next=/lots/{{lot.pk}}/'>sign in</a> to place bids.
+            {% elif not user_tos %}
+                This lot is part of the <b>{{ lot.auction }}</b>.  Please <a href='/auctions/{{lot.auction.slug}}/?next=/lots/{{ lot.pk }}/#join'>read the auction's rules and confirm your pickup location</a> to bid<br>
+            {% elif lot.user.pk == request.user.id %} You can't bid on your own lot.
+            {% else %}
+            An unknown error occurred.
+            {% endif %}
+        </div>
+        <div class="modal-footer">
+            {% if not user.is_authenticated %}
+            <a href="/login/?next=/lots/{{lot.pk}}/" role="button" class="btn btn-info">Log in</a>
+            <a href="/signup/?next=/lots/{{lot.pk}}/" role="button" class="btn btn-info">Sign up</a>
+            {% elif not user_tos %}
+            <a href="/auctions/{{lot.auction.slug}}/?next=/lots/{{ lot.pk }}/#join" role="button" class="btn btn-info">Read auction rules</a>
+            {% endif %}
+            <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+        </div>
+        </div>
+    </div>
+</div>
 <!-- Chat -->
 <div class="container-fluid col-md-offset-1 col-xl-4 mt-1 mb-1 mt-xl-5">
     <div class="mt-xl-5 col-md-11 bg-primary rounded pb-1" style="box-shadow: 5px 5px 8px 2px rgba(121, 121, 121, 0.2);"> 
@@ -553,18 +573,18 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
             }
             showLatestChat();
         }
-        lotWebSocket.onclose = function(e) {
-            var errorHtml = '<span class="mr-1 mt-1 text-danger">Connection lost</span>\
-            <input id="reconnect_button" onclick="window.location.reload(true);"\
-            type="button" class="col-md-2 mr-1 mt-1 btn-sm btn-danger" value="Reconnect"><br>';
-            $('#send_chat_area').html(errorHtml);
-            $('#bid_area').html(errorHtml);
-            $.toast({
-                title: 'Connection lost',
-                type: 'error',
-                delay: 10000
-            });
-        };
+        // lotWebSocket.onclose = function(e) {
+        //     var errorHtml = '<span class="mr-1 mt-1 text-danger">Connection lost</span>\
+        //     <input id="reconnect_button" onclick="window.location.reload(true);"\
+        //     type="button" class="col-md-2 mr-1 mt-1 btn-sm btn-danger" value="Reconnect"><br>';
+        //     $('#send_chat_area').html(errorHtml);
+        //     $('#bid_area').html(errorHtml);
+        //     $.toast({
+        //         title: 'Connection lost',
+        //         type: 'error',
+        //         delay: 10000
+        //     });
+        // };
 
         function showLatestChat() {
             var objDiv = document.getElementById("chat");
@@ -638,6 +658,5 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
 {% if lot.auction %}
     <br><a href='{{lot.auction.view_lot_link}}'>View all lots for {{ lot.auction }}</a><br>
 {% endif %}
-</div>
 </div>
 {% endblock %}

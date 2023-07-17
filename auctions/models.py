@@ -1508,6 +1508,8 @@ class Lot(models.Model):
 			if self.ban_reason:
 				return f"This lot has been removed: {self.ban_reason}"
 			return "This lot has been removed"
+		if self.tos_needed:
+			return "The creator of this lot has not confirmed their pickup location for this auction."
 		if self.auction:
 			if not self.auction.allow_bidding_on_lots:
 				return "This auction doesn't allow online bidding"
@@ -1528,7 +1530,7 @@ class Lot(models.Model):
 				unit = "day"
 			if delta != 1:
 				unit += "s"
-			return f"You can't bid on this lot for {delta} {unit}"
+			return f"This lot is very new, you can bid on it in {delta} {unit}"
 		return False
 
 	@property
@@ -2152,7 +2154,7 @@ class PageView(models.Model):
 	date_end = models.DateTimeField(null=True,blank=True)
 	total_time = models.PositiveIntegerField(default=0)
 	total_time.help_text = 'The total time in seconds the user has spent on the lot page'
-	source = models.CharField(max_length=200, blank=True, null=True)
+	source = models.CharField(max_length=200, blank=True, null=True, default="")
 	counter = models.PositiveIntegerField(default=0)
 	url = models.CharField(max_length=600, blank=True, null=True)
 	title = models.CharField(max_length=600, blank=True, null=True)

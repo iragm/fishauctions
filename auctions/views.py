@@ -847,10 +847,11 @@ def pageview(request):
             else:
                 pageview.total_time += 10
         # in all cases, update:
-        if source and source not in pageview.source:
-            new_source = pageview.source + " " + source
-            new_source = new_source[:200]
-            pageview.source = new_source
+        if source:
+            if source not in pageview.source:
+                new_source = pageview.source + " " + source
+                new_source = new_source[:200]
+                pageview.source = new_source
         pageview.date_end = timezone.now()
         pageview.save()
 
@@ -1841,6 +1842,11 @@ class ViewLot(DetailView):
             context['submitter_pk'] = lot.user.pk
         except:
             context['submitter_pk'] = 0
+        context['user_specific_bidding_error'] = False
+        if not self.request.user.is_authenticated:
+            context['user_specific_bidding_error'] = True
+        if context['viewer_pk'] == context['submitter_pk']:
+            context['user_specific_bidding_error'] = True
         context['amount'] = defaultBidAmount
         context['watched'] = Watch.objects.filter(lot_number=lot.lot_number, user=self.request.user.id)
         context['category'] = lot.species_category
@@ -1853,10 +1859,12 @@ class ViewLot(DetailView):
                 context['user_tos'] = True
         except:
             context['user_tos'] = False
+            context['user_specific_bidding_error'] = True
         if lot.within_dynamic_end_time and lot.minutes_to_end > 0 and not lot.sealed_bid:
             messages.error(self.request, f"Bidding is ending soon.  Bids placed now will extend the end time of this lot.  This page will update automatically, you don't need to reload it")
-        if not context['user_tos'] and not lot.ended:
-            messages.error(self.request, f"Please <a href='/auctions/{lot.auction.slug}/?next=/lots/{ lot.pk }/'>read the auction's rules and confirm your pickup location</a> to bid")
+        if not context['user_tos'] and not lot.ended and lot.auction:
+            if lot.auction.allow_bidding_on_lots:
+                messages.error(self.request, f"Please <a href='/auctions/{lot.auction.slug}/?next=/lots/{ lot.pk }/'>read the auction's rules and confirm your pickup location</a> to bid")
         if self.request.user.is_authenticated:
             userData, created = UserData.objects.get_or_create(
                 user = self.request.user,
@@ -1872,7 +1880,7 @@ class ViewLot(DetailView):
                 LotHistory.objects.filter(lot=lot.pk, seen=False).update(seen=True)
         context['bids'] = []
         if lot.auction:
-            if lot.auction.created_by.pk == self.request.user.pk:
+            if context['is_auction_admin']:
                 bids = Bid.objects.filter(lot_number=lot.pk)
                 context['bids'] = bids
         context['debug'] = settings.DEBUG
@@ -1880,7 +1888,7 @@ class ViewLot(DetailView):
             if lot.local_pickup:
                 context['distance'] = f"{int(lot.distance)} miles away"
             else:
-                distances = [100, 200, 300, 500, 1000, 2000, 3000]
+                distances = [25, 50, 100, 200, 300, 500, 1000, 2000, 3000]
                 for distance in distances:
                     if lot.distance < distance:
                         context['distance'] = f"less than {distance} miles away"
@@ -1895,6 +1903,8 @@ class ViewLot(DetailView):
             if context['is_auction_admin'] or self.request.user == lot.user:
                 if lot.ended:
                     context['showExchangeInfo'] = True
+        context['user_specific_bidding_error'] = False
+
         return context
     
 def createSpecies(name, scientific_name, category=False):
