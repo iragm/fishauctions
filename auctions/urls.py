@@ -46,7 +46,7 @@ urlpatterns = [
     path("ads.txt", TemplateView.as_view(template_name="ads.txt", content_type="text/plain"),),
     path('lots/recommended/', views.AllRecommendedLots.as_view()),
     path('lots/', views.AllLots.as_view(), name='allLots'),
-    path('lots/<int:pk>/', views.ViewLot.as_view()),
+    path('lots/<int:pk>/', views.ViewLot.as_view(), name="lot_by_pk"),
     path('lots/edit/<int:pk>/', login_required(views.LotUpdate.as_view()), name='edit_lot'),
     path('lots/delete/<int:pk>/', views.LotDelete.as_view()),
     path('lots/new/', login_required(views.LotCreateView.as_view()), name='new_lot'),

@@ -1635,7 +1635,7 @@ class Lot(models.Model):
 	def bids(self):
 		"""Get all bids for this lot, highest bid first"""
 		#bids = Bid.objects.filter(lot_number=self.lot_number, last_bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount', 'last_bid_time')
-		bids = Bid.objects.filter(lot_number=self.lot_number, amount__gte=self.reserve_price).order_by('-amount', 'last_bid_time')
+		bids = Bid.objects.filter(lot_number=self.lot_number, last_bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount', 'last_bid_time')
 		return bids
 
 	@property

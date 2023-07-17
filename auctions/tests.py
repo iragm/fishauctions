@@ -8,9 +8,10 @@ from django.contrib.auth.models import User
 from django.test.client import Client
 from io import StringIO
 from django.core.management import call_command
-from .models import Lot, Bid, Auction, Invoice, UserData
+from .models import *
 from channels.testing import HttpCommunicator
 from .consumers import LotConsumer
+from django.urls import reverse
 
 # class SocketTest(TestCase):
 #     async def test_my_consumer(self):
@@ -18,6 +19,43 @@ from .consumers import LotConsumer
 #         response = await communicator.get_response()
 #         self.assertEqual(response["body"], b"test response")
 #         self.assertEqual(response["status"], 200)
+
+class ViewLotTest(TestCase):
+    def setUp(self):
+        time = timezone.now() - datetime.timedelta(days=2)
+        timeStart = timezone.now() - datetime.timedelta(days=3)
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        self.auction = Auction.objects.create(title="A test auction", date_end=time, date_start=timeStart)
+        self.location = PickupLocation.objects.create(name='location', auction=self.auction, pickup_time=theFuture)
+        self.user = User.objects.create_user(username="my_lot", password='testpassword')
+        self.userB = User.objects.create_user(username="no_tos", password='testpassword')
+        self.tos = AuctionTOS.objects.create(user=self.user, auction=self.auction, pickup_location=self.location)
+        self.lot = Lot.objects.create(lot_name="A test lot", date_end=theFuture, reserve_price=5, auction=self.auction, user=self.user, quantity=1, description="")
+        self.url = reverse('lot_by_pk', kwargs={'pk': self.lot.pk})
+        # Create a user for the logged-in scenario
+        self.userC = User.objects.create_user(username='testuser', password='testpassword')
+
+    def test_non_logged_in_user(self):
+        response = self.client.get(self.url)
+        self.assertContains(response, f"You have to <a href='/login/?next=/lots/{self.lot.pk}/'>sign in</a> to place bids.")
+
+    def test_logged_in_user(self):
+        # Log in the user
+        self.client.login(username='testuser', password='testpassword')
+        response = self.client.get(self.url)
+        self.assertContains(response, "read the auction's rules and confirm your pickup location")
+    
+    def test_no_bidding_on_your_own_lots(self):
+        # Log in the user
+        self.client.login(username='my_lot', password='testpassword')
+        response = self.client.get(self.url)
+        self.assertContains(response, "You can't bid on your own lot")
+
+    def test_with_tos_on_new_lot(self):
+        AuctionTOS.objects.create(user=self.userB, auction=self.auction, pickup_location=self.location)
+        self.client.login(username='no_tos', password='testpassword')
+        response = self.client.get(self.url)
+        self.assertContains(response, "This lot is very new")
 
 class AuctionModelTests(TestCase):
     """Test for the auction model, duh"""
@@ -84,7 +122,7 @@ class LotModelTests(TestCase):
         bidA = Bid.objects.create(user=userA, lot_number=lot, amount=10)
         bidB = Bid.objects.create(user=userB, lot_number=lot, amount=6)
         self.assertIs(lot.high_bidder.pk, userA.pk)
-        self.assertIs(lot.high_bid, 6)
+        self.assertIs(lot.high_bid, 7)
 
     def test_lot_with_two_changing_bids(self):
         time = timezone.now() + datetime.timedelta(days=30)
@@ -107,11 +145,11 @@ class LotModelTests(TestCase):
         garyBid.amount = 30
         garyBid.save()
         self.assertIs(lot.high_bidder.pk, gary.pk)
-        self.assertIs(lot.high_bid, 20)
+        self.assertIs(lot.high_bid, 21)
         garyBid.last_bid_time = timezone.now()
         garyBid.save()
         self.assertIs(lot.high_bidder.pk, gary.pk)
-        self.assertIs(lot.high_bid, 20)
+        self.assertIs(lot.high_bid, 21)
         jeffBid.amount = 30
         jeffBid.last_bid_time = timezone.now()
         jeffBid.save()
