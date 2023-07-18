@@ -33,6 +33,7 @@ Your lots{% else %}
   <span aria-hidden="true">&times;</span>
 </button></div>
 {% endif %}
+        {% if auction %}{% include 'auction_ribbon.html' %}{%else%}
         <h3>{% if view == "all" %}
           Lots
           {% endif %}
@@ -50,7 +51,8 @@ Your lots{% else %}
           {% endif %}
           {% if view == "mywonlots" %}
           Lots you've won
-          {% endif %}{% if auction %} {% if view != "all"%} Lots{%endif%} for {{ auction }}{% endif %}</h3>
+          {% endif %}</h3>
+          {% endif %}
           <span class="d-sm-block d-md-none"><button onclick="$('#lot_filter_form').toggleClass('d-none d-sm-none d-sm-block');" class="btn btn-primary mr-1 mt-1">Filters</button></span> 
           <form method="GET" id='lot_filter_form' class='form-inline d-none d-sm-none d-md-flex'>
           {{ filter.form | crispy }}

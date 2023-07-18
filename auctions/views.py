@@ -2940,10 +2940,11 @@ class Leaderboard(ListView):
         context['total_bids'] = UserData.objects.filter(rank_total_bids__isnull=False).order_by('rank_total_bids')
         return context
 
-class AllLots(LotListView):
+class AllLots(LotListView, AuctionPermissionsMixin):
     """Show all lots"""
     rewrite_url = None # use JS to rewrite the shown URL.  This is used only for auctions.
     auction = None
+    allow_non_admins = True
 
     def render_to_response(self, context, **response_kwargs):
         """override the default just to add a cookie -- this will allow us to save ordering for subsequent views"""
@@ -2969,6 +2970,10 @@ class AllLots(LotListView):
                 pass
         if not context['auction']:
             context['auction'] = self.auction
+        else:
+            self.auction = context['auction']
+        if self.auction:
+            context['is_auction_admin'] = self.is_auction_admin            
         if self.rewrite_url:
             if 'auction' not in data and 'q' not in data:
                 context['rewrite_url'] = self.rewrite_url

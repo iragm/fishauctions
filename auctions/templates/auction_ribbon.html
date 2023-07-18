@@ -1,7 +1,7 @@
 {# this is the tabs that are shown on many auction pages #}
 <h3>{{auction}}</h3>
 <small><span class='text-muted'>An {{auction.auction_type_as_str}}, created by {{ auction.created_by }}{% if request.user.is_authenticated %}: {{ auction.created_by.email|urlize }}{% endif %}</span></small>
-{% if view.is_auction_admin %}
+{% if view.is_auction_admin or is_auction_admin %}
 <ul class="nav nav-tabs">
     <li class="nav-item">
       <a class="nav-link {% if active_tab == 'main'%}active{% endif %}" data-bs-toggle="tab" href="/auctions/{{auction.slug}}/">Main</a>
