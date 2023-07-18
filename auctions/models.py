@@ -1127,7 +1127,7 @@ class Lot(models.Model):
 		For in-person auctions, we'll generate a bidder_number-lot_number format
 		"""
 		if not self.custom_lot_number and self.auction:
-			if not self.auction.is_online and self.auctiontos_seller:
+			if self.auctiontos_seller:
 				custom_lot_number = 1
 				other_lots = self.auctiontos_seller.lots_qs
 				for lot in other_lots:
