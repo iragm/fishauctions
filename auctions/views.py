@@ -1378,7 +1378,7 @@ class AuctionStats(DetailView, AuctionPermissionsMixin):
         return context
 
 class QuickSetLotWinner(FormView, AuctionPermissionsMixin):
-    """A field to let people record the winners of lots (really just for in-person auctions). Just 3 fields:
+    """A form to let people record the winners of lots (really just for in-person auctions). Just 3 fields:
         lot number
         winner
         winning price
@@ -1443,8 +1443,8 @@ class SetLotWinner(QuickSetLotWinner):
         winning_price = form.cleaned_data.get("winning_price")
         qs = self.auction.lots_qs
         lot = qs.filter(custom_lot_number=lot).first()
-        error = None
         if not lot:
+            lot = form.cleaned_data.get("lot")
             lot = qs.filter(lot_number=lot).first()
         if not lot:
             form.add_error('lot', "No lot found")
@@ -1455,15 +1455,16 @@ class SetLotWinner(QuickSetLotWinner):
             tos = tos.first()
         if not tos:
             form.add_error('winner', "No bidder found")
-        if form.is_valid():
+        if lot:
+            undo_url = reverse("auction_lot_list", kwargs={'slug': self.auction.slug}) + f"?query={lot.lot_number_display}"
             if lot.auctiontos_winner and lot.winning_price:
-                messages.info(self.request, f"{lot.lot_number_display} already had a winner: {lot.auctiontos_winner}")
+                form.add_error('lot', mark_safe(f"Lot {lot.lot_number_display} has already been sold.  You can <a href='{undo_url}'>change the winner by clicking on the name of the lot here</a>."))
+        if form.is_valid():
             lot.auctiontos_winner = tos
             lot.winning_price = winning_price
             lot.date_end = timezone.now()
             lot.save()
             lot.add_winner_message(self.request.user, tos, winning_price)
-            undo_url = reverse("auction_lot_list", kwargs={'slug': self.auction.slug}) + f"?query={lot.lot_number_display}"
             messages.success(self.request, f"Bidder {tos.bidder_number} is now the winner of {lot.lot_number_display}.  <a href='{undo_url}'>Undo this or make other changes to the lot here</a>")
             return HttpResponseRedirect(self.get_success_url())
         return self.form_invalid(form)
