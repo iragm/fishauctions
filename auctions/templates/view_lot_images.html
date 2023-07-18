@@ -178,12 +178,8 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
             {% if lot.can_add_images and lot.user == request.user %}
             <a href="{% url 'add_image' lot=lot.lot_number %}" class="btn btn-primary">Add image</a><br>
             {% endif %}
-        <span>
-            <a href="https://www.google.com/search?q={{lot.lot_name}}&tbm=isch" target="_blank">Google image search</a>
-        </span>
-        <span>
-            or look for this on <a href="https://www.seriouslyfish.com/species/search/{% if lot.species and lot.species.scientific_name %}{{ lot.species.scientific_name }}{% else %}{{lot.lot_name}}{%endif%}" target="_blank">Seriously Fish</a>
-        </span><br><br>
+            <a href="{{lot.reference_link}}">More information from {{lot.reference_link_domain}}</a>
+        <br><br>
         <div class="jumbotron">{% if lot.description %}{{ lot.description_rendered | safe }}{% endif %}</div>
         <table class="table">
             <tr>
@@ -432,7 +428,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
             {% if not user.is_authenticated %}
                 You have to <a href='/login/?next=/lots/{{lot.pk}}/'>sign in</a> to place bids.
             {% elif not user_tos %}
-                This lot is part of the <b>{{ lot.auction }}</b>.  Please <a href='/auctions/{{lot.auction.slug}}/?next=/lots/{{ lot.pk }}/#join'>read the auction's rules and confirm your pickup location</a> to bid<br>
+                This lot is part of <b>{{ lot.auction }}</b>.  Please <a href='/auctions/{{lot.auction.slug}}/?next=/lots/{{ lot.pk }}/#join'>read the auction's rules and confirm your pickup location</a> to bid<br>
             {% elif lot.user.pk == request.user.id %} You can't bid on your own lot.
             {% else %}
             An unknown error occurred.

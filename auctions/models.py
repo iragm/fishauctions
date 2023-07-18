@@ -1035,7 +1035,8 @@ class Lot(models.Model):
 	description = MarkdownField(rendered_field='description_rendered', validator=VALIDATOR_STANDARD, blank=True, null=True)
 	description.help_text = "To add a link: [Link text](https://www.google.com)"
 	description_rendered = RenderedMarkdownField(blank=True, null=True)
-	
+	reference_link = models.URLField(blank=True, null=True)
+	reference_link.help_text = "A URL with additional information about this lot"
 	quantity = models.PositiveIntegerField(validators=[MinValueValidator(1)])
 	quantity.help_text = "How many of this item are in this lot?"
 	reserve_price = models.PositiveIntegerField(default=2, validators=[MinValueValidator(1), MaxValueValidator(2000)])
@@ -1154,6 +1155,8 @@ class Lot(models.Model):
 					if result:
 						self.species_category = result
 						self.category_automatically_added = True
+		if not self.reference_link:
+			self.reference_link = f"https://www.google.com/search?q={self.lot_name}&tbm=isch"
 		super().save(*args, **kwargs) 
 
 	def __str__(self):
@@ -1815,6 +1818,18 @@ class Lot(models.Model):
 			if bids:
 				return bids
 		return None
+
+	@property
+	def reference_link_domain(self):
+		if self.reference_link:
+			pattern = r"https?://(?:www\.)?([a-zA-Z0-9.-]+)\.([a-zA-Z]{2,6})"
+			# Use the regex pattern to find the matches in the URL
+			match = re.search(pattern, self.reference_link)
+			if match:
+				base_domain = match.group(1)
+				extension = match.group(2)
+				return f"{base_domain}.{extension}"
+		return ""
 
 class Invoice(models.Model):
 	"""

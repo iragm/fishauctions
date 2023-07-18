@@ -1119,7 +1119,8 @@ class CreateLotForm(forms.ModelForm):
         model = Lot
         fields = ('relist_if_sold', 'relist_if_not_sold', 'lot_name', 'i_bred_this_fish','description','quantity','reserve_price','species_category',\
             'auction','donation', 'shipping_locations', 'buy_now_price', 'show_payment_pickup_info', 'promoted', 'part_of_auction',\
-            'other_text', 'local_pickup', 'payment_paypal', 'payment_cash', 'payment_other', 'payment_other_method', 'payment_other_address', 'run_duration',)
+            'other_text', 'local_pickup', 'payment_paypal', 'payment_cash', 'payment_other', 'payment_other_method', 'payment_other_address',\
+             'run_duration', 'reference_link',)
         exclude = ["user", 'image', 'image_source']
         widgets = {
             'description': forms.Textarea(),
@@ -1249,6 +1250,7 @@ class CreateLotForm(forms.ModelForm):
             Div(
                 Div('lot_name',css_class='col-md-12',),
                 Div('species_category',css_class='col-md-12',),
+                Div('reference_link',css_class='col-md-12',),
                 css_class='row',
             ),
             Div(

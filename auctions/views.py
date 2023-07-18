@@ -1903,8 +1903,6 @@ class ViewLot(DetailView):
             if context['is_auction_admin'] or self.request.user == lot.user:
                 if lot.ended:
                     context['showExchangeInfo'] = True
-        context['user_specific_bidding_error'] = False
-
         return context
     
 def createSpecies(name, scientific_name, category=False):
