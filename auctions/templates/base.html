@@ -52,8 +52,9 @@ window.onload = function() {
         <script type="text/javascript" src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script> 
         {# 3.5.1 needed for focus to go to select2 dropdowns https://github.com/select2/select2/issues/5993 #}
         <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.11.0/umd/popper.min.js"></script>
+        <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/js/bootstrap.min.js"></script>
         <script type="text/javascript" src="{% static 'js/auction_site.js' %}"></script>
-        <script type="text/javascript" src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+        
         {% include 'base_page_view.html' %}
         {# handle the unread messages and auctions notification counter #}
         <script>
@@ -98,6 +99,40 @@ window.onload = function() {
         <link rel="stylesheet" type="text/css" href="{% static 'css/c.min.css' %}">
         {% endif %}
         <link rel="stylesheet" type="text/css" href="{% static 'css/auction_site.css' %}">
+        <style>
+.bs-canvas-overlay {
+   opacity: 0;
+   z-index: -1;
+}
+
+.bs-canvas-overlay.show {
+   opacity: 0.85;
+   z-index: 1100;
+}
+
+.bs-canvas {
+   top: 0;
+   width: 0;
+   z-index: 1110;
+   overflow-x: hidden;
+   overflow-y: auto;
+}
+
+.bs-canvas-left {
+   left: 0;
+}
+
+.bs-canvas-right {
+   right: 0;
+}
+
+.bs-canvas-anim {
+   transition: all .1s ease-out;
+   -webkit-transition: all .1s ease-out;
+   -moz-transition: all .1s ease-out;
+   -ms-transition: all .1s ease-out;
+}
+        </style>
         {% block extra_css %}
             {# Override this in templates to add extra stylesheets #}
         {% endblock %}
@@ -110,6 +145,58 @@ window.onload = function() {
             } catch(e) {}
             {% endif %}
           });
+          jQuery(document).ready(function($) {
+            var bsDefaults = {
+                  offset: false,
+                  overlay: true,
+                  width: '330px'
+                },
+                bsMain = $('.bs-offset-main'),
+                bsOverlay = $('.bs-canvas-overlay');
+
+            $('[data-toggle="canvas"][aria-expanded="false"]').on('click', function() {
+                var canvas = $(this).data('target'),
+                  opts = $.extend({}, bsDefaults, $(canvas).data()),
+                  prop = $(canvas).hasClass('bs-canvas-right') ? 'margin-right' : 'margin-left';
+
+                if (opts.width === '100%')
+                  opts.offset = false;
+                
+                $(canvas).css('width', opts.width);
+                if (opts.offset && bsMain.length)
+                  bsMain.css(prop, opts.width);
+
+                $(canvas + ' .bs-canvas-close').attr('aria-expanded', "true");
+                $('[data-toggle="canvas"][data-target="' + canvas + '"]').attr('aria-expanded', "true");
+                if (opts.overlay && bsOverlay.length)
+                  bsOverlay.addClass('show');
+                return false;
+            });
+
+            $('.bs-canvas-close, .bs-canvas-overlay').on('click', function() {
+                var canvas, aria;
+                if ($(this).hasClass('bs-canvas-close')) {
+                  canvas = $(this).closest('.bs-canvas');
+                  aria = $(this).add($('[data-toggle="canvas"][data-target="#' + canvas.attr('id') + '"]'));
+                  if (bsMain.length)
+                      bsMain.css(($(canvas).hasClass('bs-canvas-right') ? 'margin-right' : 'margin-left'), '');
+                } else {
+                  canvas = $('.bs-canvas');
+                  aria = $('.bs-canvas-close, [data-toggle="canvas"]');
+                  if (bsMain.length)
+                      bsMain.css({
+                        'margin-left': '',
+                        'margin-right': ''
+                      });
+                }
+                canvas.css('width', '');
+                aria.attr('aria-expanded', "false");
+                if (bsOverlay.length)
+                  bsOverlay.removeClass('show');
+                return false;
+            });
+          });
+	
           </script>
       </head>
 
@@ -118,6 +205,7 @@ window.onload = function() {
     <noscript><iframe src="https://www.googletagmanager.com/ns.html?id={{ GOOGLE_TAG_ID }}"
       height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
       <!-- End Google Tag Manager (noscript) -->
+      <div class="bs-canvas-overlay bs-canvas-anim bg-dark position-fixed w-100 h-100"></div>
       <nav class="navbar navbar-expand-lg navbar-dark bg-primary navbar-static-top" role="navigation">
           <a class="navbar-brand" href="/">auction.fish</a>  
           <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#site_navbar" aria-controls="navbarColor02" aria-expanded="false" aria-label="Toggle navigation">
@@ -277,12 +365,10 @@ window.onload = function() {
             {% endfor %}
         {% endif %}
         <div class="container mt-5 mb-5">
-          <div class="row">
-            <div class="col-md-10 offset-md1">
+            <div class="col-md-12">
               {% block content %}{% endblock %}
               {% block extra_content %}{% endblock %}
             </div>
-          </div>
         </div>  
         {% block undiv_content %}{% endblock %}
         {% block extra_js %}

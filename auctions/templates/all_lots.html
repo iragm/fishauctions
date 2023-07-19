@@ -33,53 +33,65 @@ Your lots{% else %}
   <span aria-hidden="true">&times;</span>
 </button></div>
 {% endif %}
-        {% if auction %}{% include 'auction_ribbon.html' %}{%else%}
-        <h3>{% if view == "all" %}
-          Lots
-          {% endif %}
-          {% if view == "watch" %}
-          Watched lots
-          {% endif %}
-          {% if view == "mybids" %}
-          Bids
-          {% endif %}
-          {% if view == "mylots" %}
-          Your lots
-          {% endif %}
+<h3>
+        <button class="btn btn-info" type="button" id='search-form-toggle' data-toggle="canvas" data-target="#search-form" aria-expanded="false" aria-controls="bs-canvas-left">&#9776;</button>
+        {% if auction %}{% include 'auction_ribbon.html' %}{%endif%}
+    {% if not auction %}
+    {% if view == "all" %}
+      Lots
+      {% endif %}
+      {% if view == "watch" %}
+      Watched lots
+      {% endif %}
+      {% if view == "mybids" %}
+      Bids
+      {% endif %}
+      {% if view == "mylots" %}
+      Your lots
+      {% endif %}
+      {% if view == "user" %}
+      All lots from {{ user }}
+      {% endif %}
+      {% if view == "mywonlots" %}
+      Lots you've won
+      {% endif %}
+      {% endif %}</h3>
+    
+    <!-- Off-canvas sidebar markup, left/right or both. -->
+    <div id="search-form" class="bs-canvas bs-canvas-anim bs-canvas-left position-fixed bg-dark h-100">
+        <header class="bs-canvas-header p-3 bg-dark">
+            <h4 class="d-inline-block mb-0">Search and filter</h4>
+            <button type="button" class="bs-canvas-close close" aria-label="Close"><span aria-hidden="true" class="">&times;</span></button>
+        </header>
+        <div class="bs-canvas-content px-3 py-5 bg-dark">
           {% if view == "user" %}
-          All lots from {{ user }}
-          {% endif %}
-          {% if view == "mywonlots" %}
-          Lots you've won
-          {% endif %}</h3>
-          {% endif %}
-          <span class="d-sm-block d-md-none"><button onclick="$('#lot_filter_form').toggleClass('d-none d-sm-none d-sm-block');" class="btn btn-primary mr-1 mt-1">Filters</button></span> 
-          <form method="GET" id='lot_filter_form' class='form-inline d-none d-sm-none d-md-flex'>
-          {{ filter.form | crispy }}
-          <button type="submit" class="btn btn-primary mr-1 mt-1">Apply Filter</button> {% if view == "mylots" or view == "all" %}<br>
-          {% if auction %}<a href="/auctions/{{auction.slug}}/" class="btn btn-info mr-1 mt-1" role="button">View rules</a> 
-            {% if auction.can_submit_lots %}
-              {% if auction_tos %}{% if auction.is_online %}<a href='{{auction.add_lot_link}}' class="btn btn-primary active mr-1 mt-1">Add a lot</a>{% else %}
-              <a href='{% url "bulk_add_lots_for_myself" slug=auction.slug %}' class="btn btn-primary active mr-1 mt-1">Add lots</a>{% endif %}
-                <span class="">You can add lots to this auction until {{ auction.lot_submission_end_date }}</span>
-              {% else %}
-                {% if not request.user.is_authenticated %}
-                  <a href="/login/?next=/auctions/{{auction.slug}}">Login and confirm your pickup location for this auction</a>
-                {% else %}
-                  <a href="/auctions/{{auction.slug}}/"><span class='text-warning'>Confirm your pickup location</span> at the bottom of this page to add lots to this auction</a>
-                {%endif%}
-              {%endif%}
-            {% else %} 
-              {# {% if not auction.started and not auction.closed %}This auction hasn't started yet.  You can add lots starting {{ auction.date_start }} {%endif%} #}
-            {% endif %}
-          {% endif %}
-          {% endif %}
-          
-        </form>
-        {% if lotsAreHidden >= 0 %}<span class="text-muted">{{lotsAreHidden}} categories are <a href="{% url 'ignore_categories' %}">ignored</a></span>{% endif %}
-        {% if view == "user" %}
           <a href="{% url 'userpage' slug=user %}">View user info for {{ user }} </a><p>
         {% endif %}
+          {% if lotsAreHidden >= 0 %}<span class="text-muted">{{lotsAreHidden}} categories are <a href="{% url 'ignore_categories' %}">ignored</a></span>{% endif %}
+        <form method="GET" id='lot_filter_form' class=''>
+            {{ filter.form | crispy }} {# alternative: {% crispy filter.form %} #}
+            <button type="submit" class="btn btn-primary mr-1 mt-1">Apply Filter</button> {% if view == "mylots" or view == "all" %}<br>
+            {% if auction %}<a href="/auctions/{{auction.slug}}/" class="btn btn-info mr-1 mt-1" role="button">View rules</a> 
+              {% if auction.can_submit_lots %}
+                {% if auction_tos %}{% if auction.is_online %}<a href='{{auction.add_lot_link}}' class="btn btn-primary active mr-1 mt-1">Add a lot</a>{% else %}
+                <a href='{% url "bulk_add_lots_for_myself" slug=auction.slug %}' class="btn btn-primary active mr-1 mt-1">Add lots</a>{% endif %}
+                  <span class="">You can add lots to this auction until {{ auction.lot_submission_end_date }}</span>
+                {% else %}
+                  {% if not request.user.is_authenticated %}
+                    <a href="/login/?next=/auctions/{{auction.slug}}">Login and confirm your pickup location for this auction</a>
+                  {% else %}
+                    <a href="/auctions/{{auction.slug}}/"><span class='text-warning'>Confirm your pickup location</span> at the bottom of this page to add lots to this auction</a>
+                  {%endif%}
+                {%endif%}
+              {% else %} 
+                {# {% if not auction.started and not auction.closed %}This auction hasn't started yet.  You can add lots starting {{ auction.date_start }} {%endif%} #}
+              {% endif %}
+            {% endif %}
+            {% endif %}
+          </form>
+        </div>
+    </div>       
+        
 {% include page_template %}
 {% endblock %}
 
@@ -105,5 +117,10 @@ Your lots{% else %}
       // console.log('{{rewrite_url}}');
       // $("#id_auction").val('{{rewrite_url}}'.replace("/?auction=", "")).change();
       // {% endif %}
+      {% if search_button_tooltip %}
+      $(document).ready(function(){
+          $('#search-form-toggle').attr('data-original-title', "{{ search_button_tooltip }}").tooltip('show');  
+        });
       </script>
+      {% endif %}
 {% endblock %}

@@ -2951,7 +2951,7 @@ class AllLots(LotListView, AuctionPermissionsMixin):
         """override the default just to add a cookie -- this will allow us to save ordering for subsequent views"""
         response = super().render_to_response(context, **response_kwargs)
         try:
-            response.set_cookie('lot_order', context['lot_order'])
+            response.set_cookie('lot_order', self.ordering)
         except:
             pass
         return response
@@ -2959,25 +2959,39 @@ class AllLots(LotListView, AuctionPermissionsMixin):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         data = self.request.GET.copy()
+        can_show_unloved_tip = True
+        self.ordering = "" # default ordering is set in LotFilter.__init__
         # I don't love having this in two places, but it seems necessary
         if self.request.GET.get('page'):
             del data['page'] # required for pagination to work
         if 'order' in data:
-            context['lot_order'] = data['order']
+            self.ordering = data['order']
         else:
-            try:
+            if 'lot_order' in self.request.COOKIES:
                 data['order'] = self.request.COOKIES['lot_order']
-            except:
-                pass
+                self.ordering = data['order']
+        if self.ordering == 'unloved':
+            can_show_unloved_tip = False
+            if randint(1, 10) > 9:
+                # we need a gentle nudge to remind people not to ALWAYS sort by least popular
+                context['search_button_tooltip'] = "Sorting by least popular"
         if not context['auction']:
             context['auction'] = self.auction
         else:
             self.auction = context['auction']
         if self.auction:
-            context['is_auction_admin'] = self.is_auction_admin            
+            context['is_auction_admin'] = self.is_auction_admin
+            if self.auction.minutes_to_end < 1440 and can_show_unloved_tip:
+                context['search_button_tooltip'] = "Try sorting by least popular to find deals!"
         if self.rewrite_url:
             if 'auction' not in data and 'q' not in data:
                 context['rewrite_url'] = self.rewrite_url
+        if 'q' in data:
+            if data['q']:
+                user = None
+                if self.request.user.is_authenticated:
+                    user = self.request.user
+                SearchHistory.objects.create(user=user, search=data['q'], auction=self.auction)
         context['view'] = 'all'
         context['filter'] = LotFilter(data, queryset=self.get_queryset(), request=self.request, ignore=True, regardingAuction = self.auction)
         return context
@@ -3672,6 +3686,7 @@ class AdminDashboard(TemplateView):
         context['total_invoices'] = invoiceqs.count()
         context['printed_invoices'] = invoiceqs.filter(printed=True).count()
         context['invoice_percent'] =  context['printed_invoices'] / context['total_invoices'] * 100
+        context['users_with_search_history'] = User.objects.filter(searchhistory__isnull=False).distinct().count()
         #source of lot images?
         activity = qs.filter(last_activity__gte=timezone.now() - datetime.timedelta(days=60))\
             .annotate(day=TruncDay('last_activity')).order_by('-day')\

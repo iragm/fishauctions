@@ -8,9 +8,8 @@
 {% block content %}
 <div class="container mt-5 mb-5">
   <div class="row">
-    <div class="col-md-10 offset-md1">
 
-    <h1>{% trans "Confirm E-mail Address" %}</h1>
+    <h4>{% trans "Confirm E-mail Address" %}</h4>
 
     {% if confirmation %}
 
@@ -30,11 +29,6 @@
     <p>{% blocktrans %}This e-mail confirmation link expired or is invalid. Please <a href="{{ email_url }}">issue a new e-mail confirmation request</a>.{% endblocktrans %}</p>
     
     {% endif %}
-
-    
-
-          
-    </div>
     </div>
 </div>
 {%endblock%}

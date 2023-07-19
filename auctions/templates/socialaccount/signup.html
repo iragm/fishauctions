@@ -5,10 +5,6 @@
 {% block title %}{% trans "Signup" %}{% endblock %}
 
 {% block content %}
-<div class="container mt-5 mb-5">
-  <div class="row">
-    <div class="col-md-10 offset-md1">
-    
 <h1>{% trans "Sign Up" %}</h1>
 
 <p>{% blocktrans with provider_name=account.get_provider.name site_name=site.name %}You are about to use your {{provider_name}} account to login to
@@ -26,7 +22,4 @@ If you are signing up for the first time and seeing this page, please enter the 
   {% endif %}
   <button class="btn btn-primary" type="submit">{% trans "Sign Up" %}</button>
 </form>
-    </div>
-  </div>
-</div>
 {% endblock %}

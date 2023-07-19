@@ -9,6 +9,11 @@ class FaqAdmin(admin.ModelAdmin):
     #list_filter = ("title",)
     search_fields = ("category_text",'question','answer', )
 
+class SearchHistoryAdmin(admin.ModelAdmin):
+    model = SearchHistory 
+    list_display = ("user",'search')
+    search_fields = ()
+
 class AdCampaignResponseInline(admin.TabularInline):
      fields = ['user', 'clicked','timestamp']
      readonly_fields = ['user', 'clicked','timestamp']
@@ -301,6 +306,7 @@ admin.site.register(GeneralInterest, GeneralInterestAdmin)
 admin.site.register(BlogPost, BlogPostAdmin)
 admin.site.register(AdCampaign, AdCampaignAdmin)
 admin.site.register(AdCampaignGroup, AdCampaignGroupAdmin)
+admin.site.register(SearchHistory, SearchHistoryAdmin)
 admin.site.register(FAQ, FaqAdmin)
 admin.site.register(LotAutoCategory, LotAutoCategoryAdmin)
 admin.site.register(AuctionTOS, AuctionTOSAdmin)

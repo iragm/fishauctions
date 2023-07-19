@@ -321,6 +321,14 @@ class LotFilter(django_filters.FilterSet):
         self.filters['ships'].extra['choices'] = self.ships_choices()
         # if self.regardingAuction:
         #     self.filters['auction'].initial=self.regardingAuction.slug          
+        self.helper = FormHelper()
+        self.helper.form_method = 'post'
+        self.helper.form_class = 'form'
+        self.helper.form_id = 'search-form'
+        self.helper.form_tag = True        
+        for name, field in self.filters.items():
+            widget = field.field.widget
+            widget.attrs['class'] = 'col-12 form-control'
 
     STATUS = (
         ('all', 'Open/ended'),
@@ -343,26 +351,35 @@ class LotFilter(django_filters.FilterSet):
         return [{"local_only":"local", "Local pickup":"title"}] + choices
 
     def generate_attrs(placeholder="", tooltip=""):
-        return {'placeholder': placeholder, 'data-toggle':"tooltip", 'data-placement':"bottom", 'title':tooltip}
+        return {'class':" col-12", 'placeholder': placeholder, 'data-toggle':"tooltip", 'data-placement':"bottom", 'title':tooltip}
 
-    q = django_filters.CharFilter(label='', method='text_filter', widget=TextInput(attrs=generate_attrs("Search","Search by title, description, username or lot number.   Use or to search for multiple terms at once")))
+    q = django_filters.CharFilter(label='', method='text_filter',
+        widget=TextInput(attrs=generate_attrs("Search here","")),
+        help_text='Looks in title, description, seller or lot number')
     auction = django_filters.ChoiceFilter(label='', empty_label='Any auction', method='filter_by_auction',
-        widget=Select(attrs=generate_attrs(None,"Auctions you've confirmed your pickup location for appear here")))
+        widget=Select(attrs=generate_attrs(None,"")),
+        help_text="Auctions you've joined appear here")
     category = django_filters.ModelChoiceFilter(label='',\
         queryset=Category.objects.all().order_by('name'), method='filter_by_category', empty_label='Any category',\
         widget=Select(attrs=generate_attrs(None,"Picking something here overrides your ignored categories")))
     status = django_filters.ChoiceFilter(label='', choices=STATUS,\
         method='filter_by_status', empty_label='Open',\
         widget=Select(attrs=generate_attrs(None,"Has no effect if you're viewing a single user's lots or an auction that's ended")))
-    distance = django_filters.NumberFilter(label='', method='filter_by_distance', widget=NumberInput(attrs=generate_attrs('Distance (miles)',"This only works on lots that aren't in an auction")))
+    distance = django_filters.NumberFilter(label='', method='filter_by_distance', 
+        widget=NumberInput(attrs=generate_attrs('Distance (miles)',"")),
+        help_text="Doesn't apply to lots in an auction")
     ships = django_filters.ChoiceFilter(label='',\
         method='filter_by_shipping_location',
         empty_label='Ships to',\
-        widget=Select(attrs=generate_attrs(None,"This only works on lots that aren't in an auction")))
-    user = django_filters.CharFilter(label='', method='filter_by_user', widget=NumberInput(attrs={'style': 'display:none'}))
+        widget=Select(attrs=generate_attrs(None,"")),
+        help_text="Doesn't apply to lots in an auction")
+    user = django_filters.CharFilter(label='', method='filter_by_user', widget=TextInput(attrs={'style': 'display:none'}))
     viewed = django_filters.ChoiceFilter(label='', choices=VIEWED, method='filter_by_viewed', empty_label='All',)
-    order = django_filters.ChoiceFilter(label='', choices=ORDER, method='filter_by_order', empty_label='Newest',)
+    order = django_filters.ChoiceFilter(label='', choices=ORDER, method='filter_by_order', empty_label='Newest',
+        help_text='Sort by least popular to find deals')
     
+
+
     class Meta:
         model = Lot
         fields = {} # nothing here so no buttons show up

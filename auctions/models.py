@@ -405,10 +405,20 @@ class Auction(models.Model):
 			return ""
 
 	@property
+	def minutes_to_end(self):
+		if not self.date_end:
+			return 999
+		timedelta = self.date_end - timezone.now()
+		seconds = timedelta.total_seconds()
+		if seconds < 0:
+			return 0
+		minutes = seconds // 60
+		return minutes
+
+	@property
 	def ending_soon(self):
 		"""Used to send notifications"""
-		warning_date = self.date_end - datetime.timedelta(hours=2)
-		if timezone.now() > warning_date:
+		if self.minutes_to_end < 120:
 			return True
 		else:
 			return False
@@ -2603,6 +2613,13 @@ class FAQ(models.Model):
 	slug = AutoSlugField(populate_from='question', unique=True)
 	createdon = models.DateTimeField(auto_now_add=True)
 	include_in_auctiontos_confirm_email = models.BooleanField(default=False, blank=True)
+
+class SearchHistory(models.Model):
+	"""To keep track of what people are searching for"""
+	user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+	search = models.CharField(max_length=600)
+	createdon = models.DateTimeField(auto_now_add=True)
+	auction = models.ForeignKey(Auction, null=True, blank=True, on_delete=models.SET_NULL)
 
 @receiver(pre_save, sender=Auction)
 def on_save_auction(sender, instance, **kwargs):
