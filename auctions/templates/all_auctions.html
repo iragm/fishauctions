@@ -7,13 +7,14 @@
 {% block content %}
 
 
-        <h1>Auctions</h1>
-        <span class='text-muted'>This is a listing of club auctions which have been created on this site.<br><small>Auctions which are set to "do not promote" are not listed on this page, unless you have confirmed your pickup location for them.</small></span><br><br>
+        <h3>Auctions</h3>
+        <div class='mb-3'>This is a listing of club auctions which have been created on this site.</div>
+        <small class="text-muted">Auctions which are set to "do not promote", auctions that aren't related to the fish hobby, and auctions that are starting more than 90 days from today are not listed on this page, unless you have confirmed your pickup location for them.</small></span><br><br>
       
 
-        <a href="/auctions/new/" class='btn btn-info'>Create a new auction</a><br>
+        <a href="/auctions/new/" class='btn btn-info mb-3'>Create a new auction</a><br>
         
-        <table class="table">
+        <table class="table table-responsive">
           <thead>
             <tr>
               <th scope="col">Auction</th>
@@ -29,7 +30,7 @@
                 {% if not auction.promote_this_auction %}<span class='badge bg-dark'>Not promoted</span>{% endif %}
               </td>
               <td>{% if auction.closed %}
-                  <span style="color:red">{{ auction.date_end }}</span>
+                  {{ auction.date_end }} <span class="badge badge-danger">Ended</span>
                   {% else %}
                   {% if auction.started and auction.date_end %}
                     Ends: {{ auction.date_end }}
@@ -38,7 +39,7 @@
                     Starts: {{ auction.date_start }}
                     {% else %}
                     {% if not auction.is_online %}
-                    <span style="color:red">{{ auction.date_start }}</span>
+                    {{ auction.date_start }} <span class="badge badge-danger">Ended</span>
                     {% else %}
                     {{ auction.date_start }}
                     {% endif %}

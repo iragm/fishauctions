@@ -2,6 +2,23 @@
 <h3>{{auction}}</h3>
 <small><span class='text-muted'>An {{auction.auction_type_as_str}}, created by {{ auction.created_by }}{% if request.user.is_authenticated %}: {{ auction.created_by.email|urlize }}{% endif %}</span></small>
 {% if view.is_auction_admin or is_auction_admin %}
+{% if not auction.admin_checklist_completed %}
+<div class='jumbotron'><h5>Finish setting up</h5>
+  <ul class="list-unstyled">
+    <li>✅ Create your auction</li>
+    <li>{% if auction.admin_checklist_location_set %}✅{% else %}⭕{%endif%} {% if auction.set_location_link %}<a href='{{auction.set_location_link}}'>Set the location</a>{% else %}<a href='/auctions/{{auction.slug}}/locations'>Set the location</a>{% endif %}</li>
+    <li>{% if auction.admin_checklist_rules_updated %}✅{% else %}⭕{%endif%} <a href="/auctions/{{auction.slug}}/edit">Edit the rules</a></li>
+    <li>{% if auction.admin_checklist_joined %}✅{% else %}⭕{%endif%} Join this auction at the bottom <a href="/auctions/{{auction.slug}}/">of this page</a></li>
+    <li>{% if auction.admin_checklist_others_joined %}✅{% else %}⭕{%endif%} Convince other people to join{% if not auction.is_online %}, or <a href="/auctions/{{auction.slug}}/users">manually add them here</a>{% endif %}</li>
+    <li>{% if auction.admin_checklist_lots_added %}✅{% else %}⭕{%endif%} <a href="/lots/new/">Add lots</a>{% if not auction.is_online %} for yourself, or <a href="/auctions/{{auction.slug}}/users">for other users</a>{% endif %}</li>
+    {% if not auction.is_online %}
+    <li>{% if auction.admin_checklist_winner_set %}✅{% else %}⭕{%endif%} <a href="{% url 'auction_lot_winners' slug=auction.slug %}">Mark lots as sold</li>
+    <li>{% if auction.admin_checklist_additional_admin %}✅{% else %}⭕{%endif%} Click a name to edit that user and <a href="/auctions/{{auction.slug}}/users">add an additional admin</a> to help you set lot winners</li>
+    {% endif %}
+  </ul>
+  <small class="'text-muted">This message will disappear once you've finished setting up your auction.</small>
+</div>
+{% endif %}
 <ul class="nav nav-tabs">
     <li class="nav-item">
       <a class="nav-link {% if active_tab == 'main'%}active{% endif %}" data-bs-toggle="tab" href="/auctions/{{auction.slug}}/">Main</a>

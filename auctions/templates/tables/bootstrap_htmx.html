@@ -5,7 +5,8 @@
 
 {% block table.thead %}
   {% if table.show_header %}
-      <thead {{ table.attrs.thead.as_html }}>
+  <div class="table-responsive"> 
+    <thead {{ table.attrs.thead.as_html }}>
       <tr>
           {% for column in table.columns %}
               <th {{ column.attrs.th.as_html }}
@@ -20,6 +21,7 @@
           {% endfor %}
       </tr>
       </thead>
+  </div>
   {% endif %}
 {% endblock table.thead %}
 

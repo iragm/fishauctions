@@ -3,16 +3,12 @@
 {% block title %}Invoices for {{ object }}{% endblock %}
 {% load static %}
 {% block content %}
-<!-- <div class="container mt-5 mb-5">
-    <div class="row">
-      <div class="col-md-10 offset-lg-1"> -->
         {% include 'auction_ribbon.html' %}
-        <!-- <h1>Invoices for {{ object }}</h1> -->
-        <!-- <br> -->
-        <button type='button' class='btn btn-sm btn-info mr-1 mt-1' onclick="all_unpaid();">Set all drafts to ready</button>
+        <small>Invoices are created automatically whenever a user sells or wins a lot.
+          {% if auction.email_users_when_invoices_ready %}Marking an invoice ready or paid will send an email notification to the user.{% else %}Email notifications to users are off.{% endif %} <a href="/auctions/{{auction.slug}}/edit">Turn invoice notifications on or off here</a>.</small><br>
+        <button type='button' class='btn btn-sm btn-primary mr-1 mt-1' onclick="all_unpaid();">Set all drafts to ready</button>
         <button type='button' class='btn btn-sm btn-primary mr-1 mt-1' onclick="mark_all_paid();">Mark all ready as paid</button>
-          <span class='text-muted'>
-        <br><small>Marking an invoice ready will send an email notification to the user telling them that their invoice is ready.</small>
+          <span class=''>
       </span>
 
       <div class="form-check">
@@ -79,7 +75,7 @@
         </tbody>
       </table>
       <h4>Send batch Paypal invoices</h4>
-      For use with Paypal's <a href="https://www.paypal.com/invoice/batch">batch invoice system</a>.  Paypal's fees apply.  <a href="/blog/online-payments-suck/">See how to use this.</a> Only invoices that have been marked <span class="text-danger">ready </span>and <span class="text-danger">have an email </span> will be exported.<br>
+      For use with Paypal's <a href="https://www.paypal.com/invoice/batch">batch invoice system</a>.  Paypal's fees apply.  <a href="/blog/online-payments-suck/">See how to use this.</a> Only invoices that have been marked <span class="font-weight-bold">ready </span>and <span class="font-weight-bold">have an email </span> will be exported.<br>
       <br>
       {% for chunk in object.paypal_invoice_chunks %}
         <a href="/auctions/{{ object.slug }}/paypal/{{ chunk }}/">Download Batch Invoice File #{{chunk}}</a><br>

@@ -8,6 +8,6 @@
                 <p>Note: this will only remove {{ object.user }}'s bid on <b>this</b> lot.  If {{ object.user }} is causing trouble, you can <a href="{% url 'userpage' slug=object.user %}">ban them here</a>, which will remove all their bids from all lots.
                 </p>
                 <input type="submit" class='btn btn-danger' value="Delete">
-                <a href="/lots/{{object.lot_number.pk}}" class='btn btn-primary'>Cancel</a>
+                <a href="{{object.lot_number.lot_link}}" class='btn btn-secondary'>Cancel</a>
             </form>
 {% endblock %}

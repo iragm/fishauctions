@@ -62,7 +62,7 @@
         {% else %}
         {% if lot.all_chats %}<span class='text-muted>'>{{lot.all_chats}}</span>{% endif %}
         {% endif %}</td>
-      <td ><span class="{% if lot.ended %}text-danger{% endif %}">{{ lot.calculated_end_for_templates }}</span></td>
+      <td ><span class="">{{ lot.calculated_end_for_templates }}</span>{% if lot.ended %}<span class='badge-pill badge badge-danger'>Ended</span>{% endif %}</td>
     </tr>
     {% endfor %}
   </tbody>

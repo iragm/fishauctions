@@ -6,10 +6,10 @@
 
 {% block content %}
   {% include 'auction_ribbon.html' %}
-  <small>This is a list of items for sale in your auction.  If you're trying to add new lots, go to the <a href="{% url 'auction_tos_list' slug=auction.slug %}">users page</a> and click add lots under the appropriate user.<br></small>
-    <a href="{% url 'lot_list' slug=auction.slug %}" class="btn btn-sm mt-2 mb-2 btn-warning">Export CSV</a> 
+  <small>This is a list of items for sale in your auction.  Click a lot to edit it.  To add new lots, go to the <a href="{% url 'auction_tos_list' slug=auction.slug %}">users page</a> and click add lots under the appropriate user.<br></small>
+    <a href="{% url 'lot_list' slug=auction.slug %}" class="btn btn-sm mt-2 mb-2 btn-primary">Export CSV</a> 
     <a href="{{auction.view_lot_link}}" class="btn btn-sm btn-primary">See lots as users see them</a>
-    <a class='btn btn-sm btn-info' href="{% url 'auction_lot_winners' slug=auction.slug %}">Set lot winners</a>
+    <a class='btn btn-sm btn-primary' href="{% url 'auction_lot_winners' slug=auction.slug %}">Set lot winners</a>
 
   <form class="col-sm-12 mt-2">
     {% crispy filter.form %}

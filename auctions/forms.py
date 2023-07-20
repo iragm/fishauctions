@@ -337,7 +337,7 @@ class DeleteAuctionTOS(forms.Form):
             css_id="merge_selection",
             ),
             Div(
-                HTML('<a class="btn btn-success" href="javascript:window.history.back();">Keep this user</a>'),
+                HTML('<a class="btn btn-secondary" href="javascript:window.history.back();">Keep this user</a>'),
                 HTML(f'<button type="submit" class="btn btn-warning float-right">Delete</button>'),
                 css_class="modal-footer",
             )
@@ -407,7 +407,7 @@ class EditLot(forms.ModelForm):
                 css_class='row',
             ),
             Div(
-                HTML('<button type="button" class="btn btn-danger float-left" onclick="closeModal()">Cancel</button>'),
+                HTML('<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'),
                 HTML(f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Save</button>'),
                 css_class="modal-footer",
             )
@@ -525,7 +525,7 @@ class CreateEditAuctionTOS(forms.ModelForm):
             'selling_allowed',
             'is_admin',
             Div(
-                HTML(f'{delete_button_html}<button type="button" class="btn btn-danger float-left" onclick="closeModal()">Cancel</button>'),
+                HTML(f'{delete_button_html}<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'),
                 HTML(f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Save</button>'),
                 css_class="modal-footer",
             )
@@ -536,7 +536,7 @@ class CreateEditAuctionTOS(forms.ModelForm):
             # hide fields if editing
             self.fields['bidder_number'].initial = self.auctiontos.bidder_number
             if self.auctiontos.unbanned_lot_count:
-                self.fields['bidder_number'].help_text = f"<span class='text-danger'>This user has already added {self.auctiontos.unbanned_lot_count} lots.</span> Changing this will not update lot numbers, but invoices will still be accurate"
+                self.fields['bidder_number'].help_text = f"<span class=''>This user has already added {self.auctiontos.unbanned_lot_count} lots.</span> Changing this will not update lot numbers, but invoices will still be accurate"
             self.fields['name'].initial = self.auctiontos.name
             self.fields['email'].initial = self.auctiontos.email
             try:
@@ -612,7 +612,7 @@ class CreateBid(forms.ModelForm):
             'user',
             'lot_number',
             'amount',
-            Submit('submit', 'Place bid', css_class='place-bid btn-success'),
+            Submit('submit', 'Place bid', css_class='place-bid btn-info'),
         )
         self.fields['user'].widget = HiddenInput()
         self.fields['lot_number'].widget = HiddenInput()
@@ -768,7 +768,7 @@ class PickupLocationForm(forms.ModelForm):
             Div(
                 HTML("The pin on the map must be at the <span class='text-warning'>exact location of the pickup location!</span><br><small>People will get directions based on this pin, and will get lost if it's not in the right place</small>"),
             ),
-            HTML(f'<a class="btn btn-danger mr-2" href="javascript:window.history.back();">Cancel</a>{delete_button_html}'),
+            HTML(f'<a class="btn btn-secondary mr-2" href="javascript:window.history.back();">Cancel</a>{delete_button_html}'),
             Submit('submit', 'Save', css_class='btn-success'),
         )
     
@@ -900,11 +900,14 @@ class AuctionEditForm(forms.ModelForm):
         self.fields['date_start'].label = "Bidding opens"
         self.fields['date_end'].label = "Bidding ends"
         self.fields['email_users_when_invoices_ready'].label = "Invoice notifications"
+        self.fields['email_users_when_invoices_ready'].help_text = "Send an email to users when their invoice is ready or paid"
 
         #self.fields['notes'].help_text = "Foo"
         if self.instance.is_online:
             self.fields['lot_submission_end_date'].help_text = "This should be 1-24 hours before the end of your auction"
             self.fields['allow_bidding_on_lots'].help_text = "Leave this checked or people won't be able to bid!"
+            self.fields['pre_register_lot_entry_fee_discount'].widget=forms.HiddenInput()
+            self.fields['pre_register_lot_discount_percent'].widget=forms.HiddenInput()
         else:
             self.fields['allow_bidding_on_lots'].help_text = "Check to allow people to place bids on this website."
             self.fields['date_end'].help_text = "You should probably leave this blank so that you can manually set winners. This field has been indefinitely set to hidden - see https://github.com/iragm/fishauctions/issues/116"

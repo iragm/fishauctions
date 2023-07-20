@@ -563,7 +563,7 @@ class LotFilter(django_filters.FilterSet):
 
     def filter_by_viewed(self, queryset, name, value):
         if not self.user.is_authenticated:
-            messages.warning(self.request, "Sign in to use this filter")
+            messages.error(self.request, "Sign in to use this filter")
         else:
             self.showViewed = value
         return queryset

@@ -6,6 +6,6 @@
             <form method="post">{% csrf_token %}
                 <p>Are you sure you want to delete this image from {{ object.lot_number.lot_name }}?</p>
                 <input type="submit" class='btn btn-danger' value="Delete">
-                <a href="/lots/{{object.lot_number.pk}}" class='btn btn-primary'>Cancel</a>
+                <a href="{{object.lot_number.lot_link}}" class='btn btn-secondary'>Cancel</a>
             </form>
 {% endblock %}

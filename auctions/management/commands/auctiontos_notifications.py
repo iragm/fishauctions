@@ -35,7 +35,7 @@ class Command(BaseCommand):
         base_qs = AuctionTOS.objects.filter(manually_added=False, user__isnull=False, user__userdata__has_unsubscribed=False)
         welcome_email_qs = base_qs.filter(confirm_email_sent=False)
         # there's an additional filter to make sure the tos is 24 hours old here -- this is to give a better chance of the user's location being set 
-        online_auction_welcome = welcome_email_qs.filter(auction__is_online=True, auction__lot_submission_start_date__gte=timezone.now(), createdon__gte=timezone.now()-datetime.timedelta(hours=24))
+        online_auction_welcome = welcome_email_qs.filter(auction__is_online=True, auction__lot_submission_start_date__lte=timezone.now(), createdon__gte=timezone.now()+datetime.timedelta(hours=24))
         for tos in online_auction_welcome:
             tos.confirm_email_sent = True
             tos.save()

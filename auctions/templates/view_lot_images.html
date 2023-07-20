@@ -76,7 +76,7 @@ function deactivate_lot() {
             success : function(result) {
                 if (data.watch) {
                     $("#watch").addClass("watched text-warning");
-                    $("#watch").html("&#9733; Watching - you'll get an email 2 hours before bidding ends");
+                    $("#watch").html("&#9733; Watching{% if not lot.auction or lot.auction.is_online %} - you'll get an email 2 hours before bidding ends{% endif %}");
                 } else {
                     $("#watch").removeClass("watched text-warning");
                     $("#watch").html('&#9734; Watch');
@@ -150,7 +150,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                                 <div class='row mb-3'>
                                     <button class="btn btn-primary mr-1" name="rotate-left" onclick="rotate('{{image.pk}}', 90)">Rotate ↶</button>
                                     {% if not image.is_primary %}<button class="btn btn-info mr-1" name="make-primary" onclick="make_primary('{{image.pk}}')">Make primary</button>{% endif %}
-                                    <a href="{% url 'edit_image' pk=image.pk %}" class="btn btn-warning mr-1">Edit image</a>
+                                    <a href="{% url 'edit_image' pk=image.pk %}" class="btn btn-primary mr-1">Edit image</a>
                                     <a href="{% url 'delete_image' pk=image.pk %}" class="btn btn-danger mr-1">Delete image</a>
                                     <button class="btn btn-primary" name="rotate-right" onclick="rotate('{{image.pk}}', -90)">Rotate ↷</button>
                                 </div>
@@ -178,9 +178,9 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
             {% if lot.can_add_images and lot.user == request.user %}
             <a href="{% url 'add_image' lot=lot.lot_number %}" class="btn btn-primary">Add image</a><br>
             {% endif %}
+        <br>
+        {% if lot.description %}<div class="jumbotron">{{ lot.description_rendered | safe }}</div>{% endif %}
             <a href="{{lot.reference_link}}">More information from {{lot.reference_link_domain}}</a>
-        <br><br>
-        <div class="jumbotron">{% if lot.description %}{{ lot.description_rendered | safe }}{% endif %}</div>
         <table class="table">
             <tr>
                 <td><b>Quantity:</b></td><td>{{ lot.quantity }}</td>
@@ -257,17 +257,17 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
             {% endif %}
 
             <tr>
-                <td><b>Ends:</b></td><td><span id="end_date" class="{% if lot.ended %} text-danger {% endif %}">{{ lot.calculated_end_for_templates }}</span></td>
+                <td><b>Ends:</b></td><td><span id="end_date" class="{% if lot.ended %} {% endif %}">{{ lot.calculated_end_for_templates }}</span>{% if lot.ended %}<span class='badge-pill badge badge-danger'>Ended</span>{% endif %}</td>
             </tr>
             
             {% if lot.auction and lot.location %}
             <tr>
-                <td><b>Location:</b></td><td>{% if user_location.pk != lot.location.pk %} <span class="text-danger">{{ lot.location }} </span> {% else %} {{ lot.location }} {% endif %}</td>
+                <td><b>Location:</b></td><td>{{ lot.location }}</td>
             </tr>
             {% endif %}
             {% if not lot.transportable %}
             <tr>
-                <td><b>Not transportable</b></td><td>This lot can only be picked up at its location, we won't deliver it to the other pickup location</td>
+                <td><b>Not transportable</b></td><td>This lot can only be picked up at its location, we won't deliver it to other pickup locations</td>
             </tr>
             {% endif %}
             {% if not lot.sealed_bid %}
@@ -281,7 +281,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
         {% if not lot.auction %}
             {% if request.user.is_authenticated %}
                 {% if lot.user == request.user or request.user.is_superuser %}
-                <button class="btn btn-danger" name="action_deactivate" onclick="deactivate_lot()">{% if lot.deactivated %}Reactivate{% else %}Deactivate this lot{% endif %}</button>
+                <button class="btn btn-primary" name="action_deactivate" onclick="deactivate_lot()">{% if lot.deactivated %}Reactivate{% else %}Deactivate this lot{% endif %}</button>
                 {% endif %}
             {% endif %}
         {% endif %}
@@ -309,7 +309,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
         {% endif %}
         <span id="bid_area">
                 {% if lot.bidding_error %}
-                    <span class="text-danger">{{ lot.bidding_error }}</span><br>    
+                    <div class='jumbotron font-weight-bold'>{{ lot.bidding_error }}</div>
                 {% elif lot.ended or lot.winner %}
                     <span>Bidding has ended on this lot<br></span>
                 {% else %}
@@ -369,7 +369,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
         </span>
         {% if request.user.is_authenticated %}
             {% if is_auction_admin %}
-            <button class="btn btn-danger" hx-get="/api/lot/{{lot.pk}}/",
+            <button class="btn btn-primary" hx-get="/api/lot/{{lot.pk}}/",
                 hx-target="#modals-here",
                 hx-trigger="click",
                 _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">Manage this lot</button>
@@ -426,7 +426,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
         </div>
         <div id='confirmDialgoText' class="modal-body">
             {% if not user.is_authenticated %}
-                You have to <a href='/login/?next=/lots/{{lot.pk}}/'>sign in</a> to place bids.
+                You have to <a href='/login/?next={{ lot.lot_link }}'>sign in</a> to place bids.
             {% elif not user_tos %}
                 This lot is part of <b>{{ lot.auction }}</b>.  Please <a href='/auctions/{{lot.auction.slug}}/?next=/lots/{{ lot.pk }}/#join'>read the auction's rules and confirm your pickup location</a> to bid<br>
             {% elif lot.user.pk == request.user.id %} You can't bid on your own lot.
@@ -436,10 +436,10 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
         </div>
         <div class="modal-footer">
             {% if not user.is_authenticated %}
-            <a href="/login/?next=/lots/{{lot.pk}}/" role="button" class="btn btn-info">Log in</a>
-            <a href="/signup/?next=/lots/{{lot.pk}}/" role="button" class="btn btn-info">Sign up</a>
+            <a href="/login/?next={{ lot.lot_link }}" role="button" class="btn btn-primary">Log in</a>
+            <a href="/signup/?next={{ lot.lot_link }}" role="button" class="btn btn-primary">Sign up</a>
             {% elif not user_tos %}
-            <a href="/auctions/{{lot.auction.slug}}/?next=/lots/{{ lot.pk }}/#join" role="button" class="btn btn-info">Read auction rules</a>
+            <a href="/auctions/{{lot.auction.slug}}/?next={{ lot.lot_link }}#join" role="button" class="btn btn-primary">Read auction rules</a>
             {% endif %}
             <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
         </div>

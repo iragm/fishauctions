@@ -48,24 +48,20 @@ class LotHTMxTable(tables.Table):
         }
 
 class LotHTMxTableForUsers(tables.Table):
+    hide_string = "d-md-table-cell d-none"
     #seller = tables.Column(accessor='auctiontos_seller', verbose_name="Seller")
     #winner = tables.Column(accessor='auctiontos_winner', verbose_name="Winner")
     #winning_price = tables.Column(accessor='winning_price', verbose_name="Price")
-    lot_number = tables.Column(accessor='lot_number_display', verbose_name="Lot number", orderable=False)
-    lot_number = tables.Column(accessor='lot_number_display', verbose_name="Lot number", orderable=False)
+    lot_number = tables.Column(accessor='lot_number_display', verbose_name="Lot number", orderable=False, attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}})
+    #lot_number = tables.Column(accessor='lot_number_display', verbose_name="Lot number", orderable=False)
     active = tables.Column(accessor='active', verbose_name="Status")
     price = tables.Column(accessor='price', verbose_name="Price")
-    views = tables.Column(accessor='page_views', verbose_name="Views", orderable=False)
-    bids = tables.Column(accessor='number_of_bids', verbose_name="Bids")
-    chats = tables.Column(accessor='all_chats', verbose_name="Messages")
+    views = tables.Column(accessor='page_views', verbose_name="Views", orderable=False, attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}})
+    #bids = tables.Column(accessor='number_of_bids', verbose_name="Bids")
+    #chats = tables.Column(accessor='all_chats', verbose_name="Messages")
     actions = tables.Column(accessor='all_chats', verbose_name="Actions")
+    auction = tables.Column(attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}})
 
-    def render_chats(self, value, record):
-        if record.owner_chats:
-            return mark_safe(f'{record.all_chats}<span class="badge bg-warning">{record.owner_chats}</span>')
-        else:
-            return record.all_chats
-        
     def render_active(self, value, record):
         if value:
             return mark_safe('<span class="badge bg-primary">Active</span>')
@@ -73,7 +69,7 @@ class LotHTMxTableForUsers(tables.Table):
             if record.banned:
                 return mark_safe('<span class="badge bg-danger">Removed</span>')
             elif record.deactivated:
-                return mark_safe('<span class="badge bg-danger">Deactivated</span>')
+                return mark_safe('<span class="badge bg-secondary">Deactivated</span>')
             if record.winner or record.auctiontos_winner:
                 return mark_safe('<span class="badge bg-success text-dark">Sold</span>')
             return mark_safe('<span class="badge bg-secondary">Unsold</span>')
@@ -91,8 +87,15 @@ class LotHTMxTableForUsers(tables.Table):
         return mark_safe(result)
 
     def render_lot_name(self, value, record):
-        result = f"<a href='{record.lot_link}?src=my_lots'>{value}</a>"
+        result = f"<a href='{record.lot_link}?src=my_lots'>{value}"
+        if record.owner_chats:
+            result += f" <span style='color:black;font-weight:900' class='badge bg-warning'>{record.owner_chats}</span>"
+        result += '</a>'
         return mark_safe(result)
+
+    def render_auction(self, value, record):
+        return mark_safe(f"<small>{value}</small>")
+
 
     class Meta:
         model = Lot

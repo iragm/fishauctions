@@ -1192,11 +1192,11 @@ class PickupLocationsUpdate(UpdateView, AuctionPermissionsMixin):
         self.is_auction_admin
         users = AuctionTOS.objects.filter(pickup_location=self.get_object().pk).count()
         if users:
-            messages.warning(request, f"{users} users have already selected this as a pickup location.  Don't make large changes!")
+            messages.info(request, f"{users} users have already selected this as a pickup location.  Don't make large changes!")
         return super().dispatch(request, *args, **kwargs)
 
     def form_valid(self, form, **kwargs):
-        messages.success(self.request, "Updated location")
+        messages.info(self.request, "Updated location")
         return super().form_valid(form)
 
     def get_success_url(self):
@@ -1255,7 +1255,7 @@ class AuctionUpdate(UpdateView, AuctionPermissionsMixin):
         self.is_auction_admin
         existing_lots = Lot.objects.exclude(is_deleted=True).filter(auction=self.get_object()).count()
         if existing_lots:
-            messages.warning(request, "Lots have already been added to this auction.  Don't make large changes!")
+            messages.info(request, "Lots have already been added to this auction.  Don't make large changes!")
         return super().dispatch(request, *args, **kwargs)
     
     def get_success_url(self):
@@ -1374,7 +1374,7 @@ class AuctionStats(DetailView, AuctionPermissionsMixin):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         if not self.get_object().invoiced and self.get_object().is_online:
-            messages.error(self.request, "This auction is still in progress, check back once it's finished for more complete stats")
+            messages.info(self.request, "This auction is still in progress, check back once it's finished for more complete stats")
         return context
 
 class QuickSetLotWinner(FormView, AuctionPermissionsMixin):
@@ -1506,9 +1506,9 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
                         else:
                             total_skipped += 1
                     if total_tos >= self.max_users_that_can_be_added_at_once:
-                        messages.warning(self.request, f"You can only add {self.max_users_that_can_be_added_at_once} users from another auction at once; run this again to add additional users.")
+                        messages.error(self.request, f"You can only add {self.max_users_that_can_be_added_at_once} users from another auction at once; run this again to add additional users.")
                     if total_skipped:
-                        messages.warning(self.request, f"{total_skipped} users are already in this auction (matched by email, or name if email not set) and do not appear below")
+                        messages.info(self.request, f"{total_skipped} users are already in this auction (matched by email, or name if email not set) and do not appear below")
                     if total_tos:
                         self.extra_rows = total_tos + 1
         self.instantiate_formset()
@@ -1594,9 +1594,9 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
         # this needs to be added to the session in order to persist when moving from POST (this csv processing) to GET
         self.request.session['initial_formset_data'] = initial_formset_data
         if total_tos >= self.max_users_that_can_be_added_at_once:
-            messages.warning(self.request, f"You can only add {self.max_users_that_can_be_added_at_once} users at once; run this again to add additional users.")
+            messages.error(self.request, f"You can only add {self.max_users_that_can_be_added_at_once} users at once; run this again to add additional users.")
         if total_skipped:
-            messages.warning(self.request, f"{total_skipped} users are already in this auction (matched by email, or name if email not set) and do not appear below")
+            messages.info(self.request, f"{total_skipped} users are already in this auction (matched by email, or name if email not set) and do not appear below")
         if error:
             messages.error(self.request, error)
         if total_tos:
@@ -1821,7 +1821,7 @@ class ViewLot(DetailView):
             context['is_auction_admin'] = lot.auction.permission_check(self.request.user)
             if lot.auction.first_bid_payout and not lot.auction.invoiced:
                 if not self.request.user.is_authenticated or not Bid.objects.filter(user=self.request.user, lot_number__auction=lot.auction):
-                    messages.success(self.request, f"Bid on (and win) any lot in the {lot.auction} and get ${lot.auction.first_bid_payout} back!")
+                    messages.info(self.request, f"Bid on (and win) any lot in the {lot.auction} and get ${lot.auction.first_bid_payout} back!")
         try:
             defaultBidAmount = Bid.objects.get(user=self.request.user, lot_number=lot.pk).amount
             context['viewer_bid'] = defaultBidAmount
@@ -1862,10 +1862,10 @@ class ViewLot(DetailView):
             context['user_tos'] = False
             context['user_specific_bidding_error'] = True
         if lot.within_dynamic_end_time and lot.minutes_to_end > 0 and not lot.sealed_bid:
-            messages.error(self.request, f"Bidding is ending soon.  Bids placed now will extend the end time of this lot.  This page will update automatically, you don't need to reload it")
+            messages.info(self.request, f"Bidding is ending soon.  Bids placed now will extend the end time of this lot.  This page will update automatically, you don't need to reload it")
         if not context['user_tos'] and not lot.ended and lot.auction:
             if lot.auction.allow_bidding_on_lots:
-                messages.error(self.request, f"Please <a href='/auctions/{lot.auction.slug}/?next=/lots/{ lot.pk }/'>read the auction's rules and confirm your pickup location</a> to bid")
+                messages.info(self.request, f"Please <a href='/auctions/{lot.auction.slug}/?next=/lots/{ lot.pk }/'>read the auction's rules and confirm your pickup location</a> to bid")
         if self.request.user.is_authenticated:
             userData, created = UserData.objects.get_or_create(
                 user = self.request.user,
@@ -1875,7 +1875,7 @@ class ViewLot(DetailView):
             userData.save()
             if userData.last_ip_address:
                 if userData.last_ip_address != lot.seller_ip and lot.bidder_ip_same_as_seller:
-                    messages.error(self.request, "Heads up: one of the bidders on this lot has the same IP address as the seller of this lot.  This can happen when someone is bidding on their own lots.  Never bid more than a lot is worth to you.")
+                    messages.info(self.request, "Heads up: one of the bidders on this lot has the same IP address as the seller of this lot.  This can happen when someone is bidding on their own lots.  Never bid more than a lot is worth to you.")
         if lot.user:
             if lot.user.pk == self.request.user.pk:
                 LotHistory.objects.filter(lot=lot.pk, seen=False).update(seen=True)
@@ -2028,7 +2028,7 @@ class LotValidation(LoginRequiredMixin):
             defaults={},
         )
         if not userData.address or not request.user.first_name or not request.user.last_name:
-            messages.warning(self.request, "Please fill out your contact info before creating a lot")
+            messages.error(self.request, "Please fill out your contact info before creating a lot")
             return redirect(f'/contact_info?next=/lots/new/')
             #return redirect(reverse("contact_info"))
         return super().dispatch(request, *args, **kwargs)
@@ -2064,7 +2064,7 @@ class LotValidation(LoginRequiredMixin):
         if lot.auction:
             if not lot.auction.is_online:
                 if lot.buy_now_price or lot.reserve_price > 2:
-                    messages.warning(self.request, f"Reserve and buy now prices may not be used in this auction.  Read the auction's rules for more information")
+                    messages.info(self.request, f"Reserve and buy now prices may not be used in this auction.  Read the auction's rules for more information")
             lot.date_end = lot.auction.date_end
             userData, created = UserData.objects.get_or_create(
                 user = self.request.user.pk,
@@ -2493,7 +2493,7 @@ class AuctionTOSAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         if not self.is_edit_form and self.auction.is_online:
-            context['tooltip'] = "This is an online auction: users should join through this site. You probably don't want to add them here"
+            context['tooltip'] = "This is an online auction: users should join through this site. You probably don't want to add them here."
         # context['new_form'] = CreateEditAuctionTOS(
         #     is_edit_form=self.is_edit_form,
         #     auctiontos=self.auctiontos,
@@ -2725,12 +2725,12 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
         form_kwargs['auction'] = self.get_object()
         return form_kwargs
 
-    def dispatch(self, request, *args, **kwargs):
-        if self.get_object().permission_check(request.user):
-            locations = self.get_object().location_qs.count()
-            if not locations:
-                messages.add_message(self.request, messages.ERROR, "You haven't added any pickup locations to this auction yet. <a href='/locations/new/'>Add one now</a>")
-        return super().dispatch(request, *args, **kwargs)
+    # def dispatch(self, request, *args, **kwargs):
+    #     if self.get_object().permission_check(request.user):
+    #         locations = self.get_object().location_qs.count()
+    #         if not locations:
+    #             messages.info(self.request, "You haven't added any pickup locations to this auction yet. <a href='/locations/new/'>Add one now</a>")
+    #     return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -2740,7 +2740,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
         context['google_maps_api_key'] = settings.LOCATION_FIELD['provider.google.api_key']
         if self.get_object().closed:
             context['ended'] = True
-            messages.add_message(self.request, messages.ERROR, f"This auction has ended.  You can't bid on anything, but you can still <a href='{self.get_object().view_lot_link}'>view lots</a>.")
+            messages.info(self.request, f"This auction has ended.  You can't bid on anything, but you can still <a href='{self.get_object().view_lot_link}'>view lots</a>.")
         else:
             context['ended'] = False
         try:
@@ -2770,7 +2770,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
         if self.request.user.pk == self.get_object().created_by.pk:
             invalidPickups = self.get_object().pickup_locations_before_end
             if invalidPickups:
-                messages.add_message(self.request, messages.ERROR, f"<a href='{invalidPickups}'>Some pickup times</a> are set before the end date of the auction")
+                messages.info(self.request, f"<a href='{invalidPickups}'>Some pickup times</a> are set before the end date of the auction")
         
         context['form'] = AuctionJoin(user=self.request.user, auction=self.get_object(), initial={'user': self.request.user.id, 'auction':self.get_object().pk, 'pickup_location':existingTos, "i_agree": i_agree})
         context['rewrite_url'] = self.rewrite_url
@@ -2883,7 +2883,7 @@ def toDefaultLandingPage(request):
             if timezone.now() > auction.date_end:
                 try:
                     invoice = Invoice.objects.get(auctiontos_user__user=request.user, auction=auction)
-                    messages.add_message(request, messages.INFO, f'{auction} has ended.  <a href="/invoices/{invoice.pk}">View your invoice</a>, <a href="/feedback/">leave feedback</a> on lots you bought or sold, or <a href="/lots?auction={auction.slug}">view lots</a>')
+                    messages.info(request, f'{auction} has ended.  <a href="/invoices/{invoice.pk}">View your invoice</a>, <a href="/feedback/">leave feedback</a> on lots you bought or sold, or <a href="/lots?auction={auction.slug}">view lots</a>')
                     return redirect("/lots/")
                 except:
                     pass
@@ -2913,13 +2913,14 @@ class allAuctions(ListView):
     
     def get_queryset(self):
         qs = Auction.objects.exclude(is_deleted=True).order_by('-date_start')
+        next_90_days = timezone.now() + datetime.timedelta(days=90)
         if self.request.user.is_superuser:
             return qs
         if not self.request.user.is_authenticated:
-            return qs.filter(promote_this_auction=True)
+            return qs.filter(promote_this_auction=True, date_start__lte=next_90_days)
         return qs.filter(Q(auctiontos__user=self.request.user)|\
             Q(created_by=self.request.user)|\
-            Q(promote_this_auction=True)
+            Q(promote_this_auction=True, date_start__lte=next_90_days)
             ).distinct()
 
     def get_context_data(self, **kwargs):
@@ -3704,7 +3705,7 @@ class AdminDashboard(TemplateView):
             unique_view_count=Count('url'),
             total_view_count=Sum('counter') + F('unique_view_count')
         ).order_by('-total_view_count')[:100]
-        referrers = page_view_qs.exclude(referrer__isnull=True)
+        referrers = page_view_qs.exclude(referrer__isnull=True).exclude(referrer="").exclude(referrer__startswith='http://127.0.0.1:8000')
         # comment out next line to include internal referrers 
         referrers = referrers.exclude(referrer__startswith="https://" + Site.objects.get_current().domain)
         context['referrers'] = referrers.values('referrer', 'url', 'title').annotate(

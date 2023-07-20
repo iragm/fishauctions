@@ -9,7 +9,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         current_site = Site.objects.get_current()
         notificationEmails = []
-        auctions = Auction.objects.exclude(is_deleted=True).filter(watch_warning_email_sent=False)
+        auctions = Auction.objects.exclude(is_deleted=True).filter(watch_warning_email_sent=False, is_online=True)
         for auction in auctions:
             if auction.ending_soon:
                 self.stdout.write(f'{auction} is ending soon')

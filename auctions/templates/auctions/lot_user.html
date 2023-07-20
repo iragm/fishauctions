@@ -36,5 +36,5 @@ $.ajax({
   {# The actual table #}
   {% render_table table %}
   <div id="modals-here"></div>
-  <a href="{% url 'my_lot_report' %}">Export CSV</a>
+  <a href="{% url 'my_lot_report' %}" class="btn btn-primary">Export CSV</a>
 {% endblock %}

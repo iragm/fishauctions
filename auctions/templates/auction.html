@@ -226,11 +226,11 @@ function initMap() {
                     <a href="/login/?next={% firstof request.path '/' %}">Please login to confirm your pickup location</a><br><br>
                 {% endif %}
             {% endif %}
-            <a href='{{ auction.view_lot_link }}' class="btn btn-info active mr-1 mt-1">View lots</a>
-            {% if auction.is_online %}<a href='{{auction.add_lot_link}}' class="btn btn-primary active mr-1 mt-1">Add a lot</a>{% else %}
-            <a href='{% url "bulk_add_lots_for_myself" slug=auction.slug %}' class="btn btn-primary active mr-1 mt-1">Add lots</a>{% endif %}
-            <a href='{% url "print_my_labels" slug=auction.slug %}' class="btn btn-primary active mr-1 mt-1">Print your lot labels</a>
-            <a href='{% url "my_auction_invoice" slug=auction.slug %}' class="btn btn-primary active mr-1 mt-1">View your invoice</a>
+            <a href='{{ auction.view_lot_link }}' class="btn btn-primary active mr-1 mt-1">View lots</a>
+            {% if auction.is_online %}<a href='{{auction.add_lot_link}}' class="btn btn-info active mr-1 mt-1">Add a lot</a>{% else %}
+            <a href='{% url "bulk_add_lots_for_myself" slug=auction.slug %}' class="btn btn-info active mr-1 mt-1">Add lots</a>{% endif %}
+            <a href='{% url "print_my_labels" slug=auction.slug %}' class="btn btn-secondary active mr-1 mt-1">Print your lot labels</a>
+            <a href='{% url "my_auction_invoice" slug=auction.slug %}' class="btn btn-secondary active mr-1 mt-1">View your invoice</a>
             {% if request.user.is_superuser %}
                 <a href="/admin/auctions/auction/{{auction.pk}}/change/" class="btn btn-danger mr-1 mt-1">Admin</a>
             {% endif %}

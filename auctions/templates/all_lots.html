@@ -71,16 +71,16 @@ Your lots{% else %}
         <form method="GET" id='lot_filter_form' class=''>
             {{ filter.form | crispy }} {# alternative: {% crispy filter.form %} #}
             <button type="submit" class="btn btn-primary mr-1 mt-1">Apply Filter</button> {% if view == "mylots" or view == "all" %}<br>
-            {% if auction %}<a href="/auctions/{{auction.slug}}/" class="btn btn-info mr-1 mt-1" role="button">View rules</a> 
+            {% if auction %}<a href="/auctions/{{auction.slug}}/" class="mr-1 mt-1">View {{ auction }} rules</a><br>
               {% if auction.can_submit_lots %}
-                {% if auction_tos %}{% if auction.is_online %}<a href='{{auction.add_lot_link}}' class="btn btn-primary active mr-1 mt-1">Add a lot</a>{% else %}
-                <a href='{% url "bulk_add_lots_for_myself" slug=auction.slug %}' class="btn btn-primary active mr-1 mt-1">Add lots</a>{% endif %}
-                  <span class="">You can add lots to this auction until {{ auction.lot_submission_end_date }}</span>
+                {% if auction_tos %}{% if auction.is_online %}<a href='{{auction.add_lot_link}}' class="mr-1 mt-1">Add a lot</a>{% else %}
+                <a href='{% url "bulk_add_lots_for_myself" slug=auction.slug %}' class="mr-1 mt-1">Add lots</a>{% endif %}
+                  <small class="">You can add lots to this auction until {{ auction.lot_submission_end_date }}</small>
                 {% else %}
                   {% if not request.user.is_authenticated %}
-                    <a href="/login/?next=/auctions/{{auction.slug}}">Login and confirm your pickup location for this auction</a>
+                    <a href="/login/?next=/auctions/{{auction.slug}}">Login and join this auction</a>
                   {% else %}
-                    <a href="/auctions/{{auction.slug}}/"><span class='text-warning'>Confirm your pickup location</span> at the bottom of this page to add lots to this auction</a>
+                  Join this auction <a href="/auctions/{{auction.slug}}/">at the bottom of this page</a> to participate
                   {%endif%}
                 {%endif%}
               {% else %} 
@@ -121,6 +121,6 @@ Your lots{% else %}
       $(document).ready(function(){
           $('#search-form-toggle').attr('data-original-title', "{{ search_button_tooltip }}").tooltip('show');  
         });
+        {% endif %}
       </script>
-      {% endif %}
 {% endblock %}

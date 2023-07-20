@@ -289,12 +289,14 @@ class Auction(models.Model):
 	@property
 	def physical_location_qs(self):
 		"""Find all non-default locations"""
-		return self.location_qs.exclude(Q(pickup_by_mail=True)|Q(is_default=True))
+		# I am not sure why we were excluding the default location, but it doesn't make sense to
+		#return self.location_qs.exclude(Q(pickup_by_mail=True)|Q(is_default=True))
+		return self.location_qs.exclude(pickup_by_mail=True)
 	
 	@property
 	def location_with_location_qs(self):
 		"""Find all locations that have coordinates - useful to see if there's an actual location associated with this auction.  By default, auctions get a location with no coordinates added"""
-		return self.location_qs.exclude(latitude=0,longitude=0)
+		return self.physical_location_qs.exclude(latitude=0,longitude=0)
 
 	@property
 	def number_of_locations(self):
@@ -407,7 +409,7 @@ class Auction(models.Model):
 	@property
 	def minutes_to_end(self):
 		if not self.date_end:
-			return 999
+			return 9999
 		timedelta = self.date_end - timezone.now()
 		seconds = timedelta.total_seconds()
 		if seconds < 0:
@@ -648,6 +650,68 @@ class Auction(models.Model):
 					count = 0
 		return returnList
 
+	@property
+	def set_location_link(self):
+		"""If there's a location without a lat and lng, this link will let you edit the first one found"""
+		location = self.physical_location_qs.filter(latitude=0,longitude=0).first()
+		if location:
+			return "/locations/edit/" + location.pk
+		return None
+
+	@property
+	def admin_checklist_completed(self):
+		if self.admin_checklist_location_set and self.admin_checklist_rules_updated and self.admin_checklist_joined \
+			and self.admin_checklist_others_joined and self.admin_checklist_lots_added and self.admin_checklist_winner_set \
+			and self.admin_checklist_additional_admin:
+			return True
+		return False
+	
+	@property
+	def admin_checklist_location_set(self):
+		if self.location_with_location_qs.count() > 0:
+			return True
+		return False
+	
+	@property
+	def admin_checklist_rules_updated(self):
+		if "You should remove this line and edit this section to suit your auction." in self.notes:
+			return False
+		return True
+	
+	@property
+	def admin_checklist_joined(self):
+		if AuctionTOS.objects.filter(auction__pk=self.pk).filter(Q(user=self.created_by)|Q(is_admin=True)).count() > 0:
+			return True
+		return False
+	
+	@property
+	def admin_checklist_others_joined(self):
+		if self.number_of_tos > 1:
+			return True
+		return False
+
+	@property
+	def admin_checklist_lots_added(self):
+		if self.lots_qs.count() > 0:
+			return True
+		return False
+
+	@property
+	def admin_checklist_winner_set(self):
+		if self.is_online:
+			return True
+		if self.lots_qs.filter(auctiontos_winner__isnull=False).count():
+			return True
+		return False
+	
+	@property
+	def admin_checklist_additional_admin(self):
+		if self.is_online:
+			return True
+		if self.lots_qs.filter(auctiontos_winner__isnull=False).count():
+			return True
+		return False
+	
 class PickupLocation(models.Model):
 	"""
 	A pickup location associated with an auction
