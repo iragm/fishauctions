@@ -2916,6 +2916,8 @@ class allAuctions(ListView):
     def get_queryset(self):
         qs = Auction.objects.exclude(is_deleted=True).order_by('-date_start')
         next_90_days = timezone.now() + datetime.timedelta(days=90)
+        two_years_ago = timezone.now() - datetime.timedelta(days=365*2)
+        standard_filter = Q(promote_this_auction=True, date_start__lte=next_90_days, date_posted__gte=two_years_ago)
         latitude = 0
         longitude = 0
         try:
@@ -2941,10 +2943,10 @@ class allAuctions(ListView):
         if self.request.user.is_superuser:
             return qs
         if not self.request.user.is_authenticated:
-            return qs.filter(promote_this_auction=True, date_start__lte=next_90_days)
+            return qs.filter(standard_filter)
         return qs.filter(Q(auctiontos__user=self.request.user)|\
             Q(created_by=self.request.user)|\
-            Q(promote_this_auction=True, date_start__lte=next_90_days)
+            standard_filter
             ).distinct()
 
     def get_context_data(self, **kwargs):

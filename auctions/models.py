@@ -55,46 +55,49 @@ def median_value(queryset, term):
     return queryset.values_list(term, flat=True).order_by(term)[int(round(count/2))]
 
 def distance_to(latitude, longitude, unit='miles', lat_field_name="latitude", lng_field_name="longitude", approximate_distance_to=10):
-    """
-    GeoDjango has been fustrating with MySQL and Point objects.
-    This function is a workaound done using raw SQL.
+	"""
+	GeoDjango has been fustrating with MySQL and Point objects.
+	This function is a workaound done using raw SQL.
 
-    Given a latitude and longitude, it will return raw SQL that can be used to annotate a queryset
+	Given a latitude and longitude, it will return raw SQL that can be used to annotate a queryset
 
-    The model being annotated must have fields named 'latitude' and 'longitude' for this to work
+	The model being annotated must have fields named 'latitude' and 'longitude' for this to work
 
-    For example:
+	For example:
 
-    qs = model.objects.all()\
-            .annotate(distance=distance_to(latitude, longitude))\
-            .order_by('distance')
-    """
-    if unit == "miles":
-        correction = 0.6213712 # close enough
-    else:
-        correction = 1 # km
-    # Great circle distance formula, CEILING is used to keep people from triangulating locations
-    gcd_formula = f"CEILING( 6371 * acos(least(greatest( \
-        cos(radians({latitude})) * cos(radians({lat_field_name})) \
-        * cos(radians({lng_field_name}) - radians({longitude})) + \
-        sin(radians({latitude})) * sin(radians({lat_field_name})) \
-        , -1), 1)) * {correction} / {approximate_distance_to}) * {approximate_distance_to}"
-    distance_raw_sql = RawSQL(
-        gcd_formula, ()
-    )
+	qs = model.objects.all()\
+			.annotate(distance=distance_to(latitude, longitude))\
+			.order_by('distance')
+	"""
+	if unit == "miles":
+		correction = 0.6213712 # close enough
+	else:
+		correction = 1 # km
+	for i in [latitude, longitude, lat_field_name, lng_field_name, approximate_distance_to]:
+		if '"' in str(i) or "'" in str(i):
+			raise TypeError("invalid character passed to distance_to, possible sql injection risk")
+	# Great circle distance formula, CEILING is used to keep people from triangulating locations
+	gcd_formula = f"CEILING( 6371 * acos(least(greatest( \
+		cos(radians({latitude})) * cos(radians({lat_field_name})) \
+		* cos(radians({lng_field_name}) - radians({longitude})) + \
+		sin(radians({latitude})) * sin(radians({lat_field_name})) \
+		, -1), 1)) * {correction} / {approximate_distance_to}) * {approximate_distance_to}"
+	distance_raw_sql = RawSQL(
+		gcd_formula, ()
+	)
 	# This one works fine when I print qs.query and run the output in SQL but does not work when Django runs the qs
 	# Seems to be an issue with annotating on related entities
 	# Injection attacks don't seem possible here because latitude and longitude can only contain a float as set in update_user_location()
 	# gcd_formula = f"CEILING( 6371 * acos(least(greatest( \
-    #     cos(radians(%s)) * cos(radians({lat_field_name})) \
-    #     * cos(radians({lng_field_name}) - radians(%s)) + \
-    #     sin(radians(%s)) * sin(radians({lat_field_name})) \
-    #     , -1), 1)) * %s / {approximate_distance_to}) * {approximate_distance_to}"
-    # distance_raw_sql = RawSQL(
-    #     gcd_formula,
-    #     (latitude, longitude, latitude, correction)
-    # )
-    return distance_raw_sql
+	#     cos(radians(%s)) * cos(radians({lat_field_name})) \
+	#     * cos(radians({lng_field_name}) - radians(%s)) + \
+	#     sin(radians(%s)) * sin(radians({lat_field_name})) \
+	#     , -1), 1)) * %s / {approximate_distance_to}) * {approximate_distance_to}"
+	# distance_raw_sql = RawSQL(
+	#     gcd_formula,
+	#     (latitude, longitude, latitude, correction)
+	# )
+	return distance_raw_sql
 
 def guess_category(text):
 	"""Given some text, look up lots with similar names and make a guess at the category this `text` belongs to based on the category used there"""

@@ -50,6 +50,13 @@
             {% endfor %}
         </tbody>
       </table>
-<small class="text-muted">Auctions which are set to "do not promote", auctions that aren't related to the fish hobby, and auctions that are starting more than 90 days from today are not listed on this page, unless you have confirmed your pickup location for them.</small></span><br><br>
+<small class="text-muted">Note: Auctions you haven't joined won't appear in this list if they:
+  <ul>
+    <li>aren't related to the fish hobby</li>
+    <li>are set to "do not promote"</li>
+    <li>are starting more than 90 days from today</li>
+    <li>were created more than 2 years ago</li>
+  </ul>
+  Auctions you've joined will always show up here.</small></span>
 {% endblock %}
 {% block extra_js %}<script type='text/javascript'>pageView();</script>{% endblock %}
