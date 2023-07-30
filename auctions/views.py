@@ -2916,6 +2916,28 @@ class allAuctions(ListView):
     def get_queryset(self):
         qs = Auction.objects.exclude(is_deleted=True).order_by('-date_start')
         next_90_days = timezone.now() + datetime.timedelta(days=90)
+        latitude = 0
+        longitude = 0
+        try:
+            latitude = self.request.COOKIES['latitude']
+            longitude = self.request.COOKIES['longitude']
+        except:
+            if self.request.user.is_authenticated:
+                userData, created = UserData.objects.get_or_create(
+                    user = self.request.user,
+                    defaults={},
+                )
+                latitude = userData.latitude
+                longitude = userData.longitude
+        if latitude and longitude:
+            closest_pickup_location_subquery = PickupLocation.objects.filter(
+                auction=OuterRef('pk')
+            ).annotate(
+                distance=distance_to(latitude, longitude)
+            ).order_by('distance').values('distance')[:1]
+            qs = qs.annotate(
+                distance=Subquery(closest_pickup_location_subquery)
+                )
         if self.request.user.is_superuser:
             return qs
         if not self.request.user.is_authenticated:
@@ -2930,7 +2952,10 @@ class allAuctions(ListView):
         try:
             self.request.COOKIES['longitude']
         except:
-            context['location_message'] = "Set your location to get notifications about new auctions near you"
+            if self.request.user.is_authenticated:
+                context['location_message'] = "Set your location to get notifications about new auctions near you"
+            else:
+                context['location_message'] = "Set your location to see how far away auctions are"
         return context
 
 class Leaderboard(ListView):

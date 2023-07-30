@@ -655,7 +655,7 @@ class Auction(models.Model):
 		"""If there's a location without a lat and lng, this link will let you edit the first one found"""
 		location = self.physical_location_qs.filter(latitude=0,longitude=0).first()
 		if location:
-			return "/locations/edit/" + location.pk
+			return f"/locations/edit/{location.pk}"
 		return None
 
 	@property

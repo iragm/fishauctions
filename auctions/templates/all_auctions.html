@@ -9,11 +9,7 @@
 
         <h3>Auctions</h3>
         <div class='mb-3'>This is a listing of club auctions which have been created on this site.</div>
-        <small class="text-muted">Auctions which are set to "do not promote", auctions that aren't related to the fish hobby, and auctions that are starting more than 90 days from today are not listed on this page, unless you have confirmed your pickup location for them.</small></span><br><br>
-      
-
         <a href="/auctions/new/" class='btn btn-info mb-3'>Create a new auction</a><br>
-        
         <table class="table table-responsive">
           <thead>
             <tr>
@@ -23,11 +19,11 @@
             </tr>
           </thead>
           <tbody>
-            
             {% for auction in object_list %}
             <tr>
               <td><a href='/auctions/{{auction.slug}}'>{{ auction.title }}</a> {% if auction.is_online %}<span class="badge bg-info">Online</span>{% endif %}
                 {% if not auction.promote_this_auction %}<span class='badge bg-dark'>Not promoted</span>{% endif %}
+                {% if not location_message and auction.admin_checklist_location_set %}<span class='badge bg-primary'>{{ auction.distance | floatformat:0 }} miles from you</span>{% endif %}
               </td>
               <td>{% if auction.closed %}
                   {{ auction.date_end }} <span class="badge badge-danger">Ended</span>
@@ -54,7 +50,6 @@
             {% endfor %}
         </tbody>
       </table>
-
-
+<small class="text-muted">Auctions which are set to "do not promote", auctions that aren't related to the fish hobby, and auctions that are starting more than 90 days from today are not listed on this page, unless you have confirmed your pickup location for them.</small></span><br><br>
 {% endblock %}
 {% block extra_js %}<script type='text/javascript'>pageView();</script>{% endblock %}
