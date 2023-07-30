@@ -27,4 +27,7 @@ You should now be looking at the cron tab editing screen.  Paste the following a
 # Send welcome and print reminder emails
 */4 * * * * cd /home/user/auction_site_production/ && /home/user/auction_site_production/venv/bin/python /home/user/auction_site_production/fishauctions/manage.py auctiontos_notifications
 
+# check for duplicate page views
+*/15 * * * * cd /home/user/auction_site_production/ && /home/user/auction_site_production/venv/bin/python /home/user/auction_site_production/fishauctions/manage.py remove_duplicate_views
+
 ```

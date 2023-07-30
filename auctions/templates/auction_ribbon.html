@@ -12,7 +12,7 @@
     <li>{% if auction.admin_checklist_others_joined %}✅{% else %}⭕{%endif%} Convince other people to join{% if not auction.is_online %}, or <a href="/auctions/{{auction.slug}}/users">manually add them here</a>{% endif %}</li>
     <li>{% if auction.admin_checklist_lots_added %}✅{% else %}⭕{%endif%} <a href="/lots/new/">Add lots</a>{% if not auction.is_online %} for yourself, or <a href="/auctions/{{auction.slug}}/users">for other users</a>{% endif %}</li>
     {% if not auction.is_online %}
-    <li>{% if auction.admin_checklist_winner_set %}✅{% else %}⭕{%endif%} <a href="{% url 'auction_lot_winners' slug=auction.slug %}">Mark lots as sold</li>
+    <li>{% if auction.admin_checklist_winner_set %}✅{% else %}⭕{%endif%} <a href="{% url 'auction_lot_winners' slug=auction.slug %}">Mark lots as sold</a></li>
     <li>{% if auction.admin_checklist_additional_admin %}✅{% else %}⭕{%endif%} Click a name to edit that user and <a href="/auctions/{{auction.slug}}/users">add an additional admin</a> to help you set lot winners</li>
     {% endif %}
   </ul>
@@ -33,7 +33,7 @@
       <a class="nav-link {% if active_tab == 'invoices'%}active{% endif %}" data-bs-toggle="tab" href="/auctions/{{auction.slug}}/invoices">Invoices</a>
     </li>
     <li class="nav-item dropdown">
-        <a class="nav-link dropdown-toggle" data-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">Advanced</a>
+        <a class="nav-link dropdown-toggle" data-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">More</a>
         <div class="dropdown-menu">
           <!-- <h6 class="dropdown-header">Rules and locations</h6> -->
           <a class="dropdown-item" href="/auctions/{{auction.slug}}/edit">Rules</a>

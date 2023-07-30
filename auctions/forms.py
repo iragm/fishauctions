@@ -690,7 +690,7 @@ class AuctionJoin(forms.ModelForm):
         if self.auction.multi_location:
             self.fields['i_agree'].initial = True
             self.fields['i_agree'].widget = HiddenInput()
-            self.fields['pickup_location'].label = "Yes, I will be at &nbsp;&nbsp;&nbsp;"
+            self.fields['pickup_location'].label = "Yes, I will be at "
         else:
             # single location auction
             self.fields['pickup_location'].widget = HiddenInput()

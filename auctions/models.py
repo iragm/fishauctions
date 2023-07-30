@@ -2240,7 +2240,7 @@ class PageView(models.Model):
 	lot_number = models.ForeignKey(Lot, null=True, blank=True, on_delete=models.CASCADE)
 	lot_number.help_text = "Only filled out when a user views a specific lot's page"
 	date_start = models.DateTimeField(auto_now_add=True)
-	date_end = models.DateTimeField(null=True,blank=True)
+	date_end = models.DateTimeField(null=True,blank=True, default=timezone.now)
 	total_time = models.PositiveIntegerField(default=0)
 	total_time.help_text = 'The total time in seconds the user has spent on the lot page'
 	source = models.CharField(max_length=200, blank=True, null=True, default="")
@@ -2250,10 +2250,45 @@ class PageView(models.Model):
 	referrer = models.CharField(max_length=600, blank=True, null=True)
 	session_id = models.CharField(max_length=600, blank=True, null=True)
 	notification_sent = models.BooleanField(default=False)
-	
+	duplicate_check_completed = models.BooleanField(default=False)
+
 	def __str__(self):
-		thing = self.title
+		thing = self.url
+		#thing = self.title
 		return f"User {self.user} viewed {thing} for {self.total_time} seconds"
+
+	@property
+	def duplicates(self):
+		"""Some duplciates have appeared and I can't figure out how it's possible"""
+		return PageView.objects.filter(user=self.user,
+				lot_number=self.lot_number,
+            	url=self.url,
+				auction=self.auction,
+				session_id=self.session_id).exclude(pk=self.pk)
+	
+	@property
+	def duplicate_count(self):
+		return self.duplicates.count()
+
+	@property
+	def merge_and_delete_duplicate(self):
+		if self.duplicate_count:
+			dup = self.duplicates.first()
+			if self.date_start > dup.date_start:
+				self.date_start = dup.date_start
+			if self.date_end and dup.date_end:
+				if self.date_end < dup.date_end:
+					self.date_end = dup.date_end
+			self.total_time = self.total_time + dup.total_time
+			if not self.source:
+				self.source = dup.source
+			self.counter = self.counter + dup.counter
+			if not self.title:
+				self.title = dup.title
+			if not self.referrer:
+				self.referrer = dup.referrer
+			self.save()
+			dup.delete()
 
 class UserLabelPrefs(models.Model):
 	"""Dimensions used for the label PDF"""

@@ -87,7 +87,7 @@ class Command(BaseCommand):
                                                         user__userdata__has_unsubscribed=False)
         for pageview in join_auction_reminder:
             email = pageview.user.email
-            lots = Lot.objects.filter(pageview__user=pageview.user, auction=pageview.auction).distinct()
+            lots = Lot.objects.filter(pageview__user=pageview.user, auction=pageview.auction)
             pageview.notification_sent = True
             pageview.save()
             send_email = True
@@ -95,6 +95,9 @@ class Command(BaseCommand):
             if pageview.auction.closed:
                 send_email = False
             if not pageview.auction.is_online and pageview.auction.started:
+                send_email = False
+            user_has_already_joined = AuctionTOS.objects.filter(user=pageview.user, auction=pageview.auction).first()
+            if user_has_already_joined:
                 send_email = False
             if send_email:
                 userData, created = UserData.objects.get_or_create(

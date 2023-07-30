@@ -793,9 +793,7 @@ def pageview(request):
     Staying on the page will update the time in page views on the PageView model
     """
     if request.method == 'POST':
-        user = request.user
         data = request.POST
-        session_id = request.session.session_key
         auction = data.get("auction", None)
         if auction:
             auction = Auction.objects.filter(pk=auction).first()
@@ -812,27 +810,30 @@ def pageview(request):
         referrer = referrer[:600]
         first_view = data.get("first_view", False)
         if request.user.is_authenticated:
-            pageview, created = PageView.objects.get_or_create(
-                lot_number = lot_number,
-                url = url_without_params,
-                auction = auction,
-                user = user,
-                defaults = {},
-            )
+            user = request.user
+            session_id = None
         else:
-            # anonymous view
-            pageview, created = PageView.objects.get_or_create(
-                user = None,
+            # anonymous users go by session
+            user = None
+            session_id = request.session.session_key
+        pageview = PageView.objects.filter(
                 lot_number = lot_number,
                 url = url_without_params,
                 auction = auction,
                 session_id = session_id,
-                defaults = {},
+                user = user,
+            ).order_by('date_start').first()
+        if not pageview:
+            pageview = PageView.objects.create(
+                lot_number = lot_number,
+                url = url_without_params,
+                auction = auction,
+                session_id = session_id,
+                user = user,
             )
-        if created:
             pageview.referrer = referrer
             pageview.title = title
-            if user.is_authenticated and lot_number:
+            if user and lot_number:
                 # create interest in this category if this is a new view for this category
                 interest, created = UserInterestCategory.objects.get_or_create(
                     category=lot_number.species_category,
@@ -842,6 +843,7 @@ def pageview(request):
                 interest.interest += settings.VIEW_WEIGHT
                 interest.save()
         else:
+            # this is the second (or more) time this user has viewed this page
             if first_view == "true":
                 pageview.counter += 1
             else:
@@ -2747,7 +2749,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
             existingTos = AuctionTOS.objects.get(user=self.request.user, auction=self.get_object())
             existingTos = existingTos.pickup_location
             i_agree = True
-            context['hasChosenLocation'] = True
+            context['hasChosenLocation'] = existingTos.pk
         except:
             context['hasChosenLocation'] = False
             # if not self.get_object().no_location:
