@@ -2281,6 +2281,10 @@ class PageView(models.Model):
 	session_id = models.CharField(max_length=600, blank=True, null=True)
 	notification_sent = models.BooleanField(default=False)
 	duplicate_check_completed = models.BooleanField(default=False)
+	latitude = models.FloatField(default=0)
+	longitude = models.FloatField(default=0)
+	ip_address = models.CharField(max_length=100, blank=True, null=True) 
+	user_agent = models.CharField(max_length=200, blank=True, null=True)
 
 	def __str__(self):
 		thing = self.url
@@ -2313,6 +2317,8 @@ class PageView(models.Model):
 			if not self.source:
 				self.source = dup.source
 			self.counter = self.counter + dup.counter
+			if dup.notification_sent:
+				self.notification_sent = True
 			if not self.title:
 				self.title = dup.title
 			if not self.referrer:

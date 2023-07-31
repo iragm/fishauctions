@@ -788,11 +788,7 @@ def feedback(request, pk, leave_as):
     return redirect('/')
 
 def pageview(request):
-    """
-    Record interest in lots
-    Initial interest (/new/) creates product interest
-    Staying on the page will update the time in page views on the PageView model
-    """
+    """Record page views"""
     if request.method == 'POST':
         data = request.POST
         auction = data.get("auction", None)
@@ -831,6 +827,8 @@ def pageview(request):
                 auction = auction,
                 session_id = session_id,
                 user = user,
+                user_agent = request.META.get('HTTP_USER_AGENT'[:200], None),
+                ip_address = request.META.get('REMOTE_ADDR'[:100]),
             )
             pageview.referrer = referrer
             pageview.title = title
