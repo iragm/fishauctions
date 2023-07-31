@@ -23,7 +23,7 @@
             <tr>
               <td><a href='/auctions/{{auction.slug}}'>{{ auction.title }}</a> {% if auction.is_online %}<span class="badge bg-info">Online</span>{% endif %}
                 {% if not auction.promote_this_auction %}<span class='badge bg-dark'>Not promoted</span>{% endif %}
-                {% if not location_message and auction.admin_checklist_location_set %}<span class='badge bg-primary'>{{ auction.distance | floatformat:0 }} miles from you</span>{% endif %}
+                {% if not location_message and auction.number_of_locations %}<span class='badge bg-primary'>{{ auction.distance | floatformat:0 }} miles from you</span>{% endif %}
               </td>
               <td>{% if auction.closed %}
                   {{ auction.date_end }} <span class="badge badge-danger">Ended</span>

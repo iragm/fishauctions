@@ -115,6 +115,8 @@ urlpatterns = [
     #path('locations/', views.PickupLocations.as_view(), name='PickupLocation'),
     #path('locations/new/', views.PickupLocationsCreate.as_view()),
     path('locations/edit/<int:pk>/', views.PickupLocationsUpdate.as_view(), name='edit_pickup'),
+    path('locations/<int:pk>/incoming-lots', views.PickupLocationsIncoming.as_view(), name='location_incoming'),
+    path('locations/<int:pk>/outgoing-lots', views.PickupLocationsOutgoing.as_view(), name='location_outgoing'),
     path('locations/delete/<int:pk>/', views.PickupLocationsDelete.as_view(), name='delete_pickup'),
     path('blog/<slug:slug>/', views.BlogPostView.as_view()),
     path('feedback/', views.LeaveFeedbackView.as_view(), name='feedback'),

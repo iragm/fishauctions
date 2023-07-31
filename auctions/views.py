@@ -4114,4 +4114,42 @@ class AuctionChartView(View):
             return True
         return False
 
+class PickupLocationsIncoming(View, AuctionPermissionsMixin):
+    """All lots destined for this location"""
+    def dispatch(self, request, *args, **kwargs):
+        self.location = PickupLocation.objects.filter(pk=kwargs.pop('pk')).first()
+        if self.location:
+            self.auction = self.location.auction
+            self.is_auction_admin
+            return super().dispatch(request, *args, **kwargs)
 
+    def get(self, request):
+        queryset = self.location.incoming_lots.order_by('-auctiontos_seller__name')
+        response = HttpResponse(content_type='text/csv')
+        name = self.location.name.lower().replace(" ","_")
+        response['Content-Disposition'] = f'attachment; filename="incoming_lots_destined_for_{name}.csv"'
+        csv_writer = csv.writer(response)
+        csv_writer.writerow(['Lot number', 'Lot name', 'Winner name', 'Origin', 'Seller name',])
+        for lot in queryset:
+            csv_writer.writerow([lot.lot_number_display, lot.lot_name, lot.winner_name, lot.location,  lot.seller_name])
+        return response
+    
+class PickupLocationsOutgoing(View, AuctionPermissionsMixin):
+    """CSV of all lots coming from this location"""
+    def dispatch(self, request, *args, **kwargs):
+        self.location = PickupLocation.objects.filter(pk=kwargs.pop('pk')).first()
+        if self.location:
+            self.auction = self.location.auction
+            self.is_auction_admin
+            return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request):
+        queryset = self.location.outgoing_lots.order_by('-auctiontos_winner__pickup_location__name')
+        response = HttpResponse(content_type='text/csv')
+        name = self.location.name.lower().replace(" ","_")
+        response['Content-Disposition'] = f'attachment; filename="outgoing_lots_coming_from_{name}.csv"'
+        csv_writer = csv.writer(response)
+        csv_writer.writerow(['Lot number', 'Seller name', 'Lot name', 'Destination',  'Winner name'])
+        for lot in queryset:
+            csv_writer.writerow([lot.lot_number_display, lot.seller_name, lot.lot_name, lot.winner_location, lot.winner_name])
+        return response

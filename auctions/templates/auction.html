@@ -210,7 +210,11 @@ function initMap() {
                 {# location content for multi-location auction ONLY here #}
                 <div class="tab-pane fade {% if hasChosenLocation == location.pk%}active show {% endif %}" id="location_{{location.pk}}{{location.short_name}}" role="tabpanel">
                     {% if view.is_auction_admin %}
-                    <a href="/locations/edit/{{ location.pk }}/?next=/auctions/{{auction.slug}}" class="btn btn-sm btn-warning">Edit this location</a>
+                    <a href="/locations/edit/{{ location.pk }}/?next=/auctions/{{auction.slug}}" class="btn btn-sm mt-2 mr-2 btn-warning">Edit this location</a>
+                    {% if auction.all_location_count > 1 %}
+                    <a href='{% url "location_incoming" pk=location.pk %}' class="btn btn-sm mt-2 mr-2 btn-primary">Incoming lot list</a>
+                    <a href='{% url "location_outgoing" pk=location.pk %}' class="btn btn-sm mt-2 mr-2 btn-primary">Outgoing lot list</a>
+                    {% endif %}
                     <br>
                     {% endif %}
                     {% if hasChosenLocation == location.pk%}<span class="badge bg-success">Your confirmed location</span><br>{% endif %}

@@ -15,6 +15,10 @@ Pickup locations
             <tr>
               <th scope="col">Location</th>
               <th scope="col">Number of users</th>
+              {% if auction.all_location_count > 1 %}
+              <th scope="col">Incoming lots</th>
+              <th scope="col">Outgoing lots</th>
+              {% endif %}
               <th scope="col">Get directions</th>
             </tr>
           </thead>
@@ -23,6 +27,10 @@ Pickup locations
             <tr>
               <td><a href='/locations/edit/{{location.pk}}'>{{ location }}</a></td>
               <td>{{ location.number_of_users }}</td>
+              {% if auction.all_location_count > 1 %}
+              <td><a href='{% url "location_incoming" pk=location.pk %}'>{{ location.number_of_incoming_lots }} incoming lots going to here</a></td>
+              <td><a href='{% url "location_outgoing" pk=location.pk %}'>{{ location.number_of_outgoing_lots }} outgoing lots coming from here</a></td>
+              {% endif %}
               <td>{% if location.pickup_by_mail %}N/A{% else %}{% if location.has_coordinates %}<a href={{ location.directions_link }}>Directions</a> {% else %} Location not set {% endif %}{% endif %}</td>
             </tr>
             {% endfor %}

@@ -791,6 +791,25 @@ class PickupLocation(models.Model):
 		"""How many people have chosen this pickup location?"""
 		return AuctionTOS.objects.filter(pickup_location=self.pk).count()
 
+	@property
+	def incoming_lots(self):
+		"""Queryset of all lots destined for this location"""
+		return Lot.objects.filter(auctiontos_winner__pickup_location__pk=self.pk, is_deleted=False, banned=False)
+	
+	@property
+	def outgoing_lots(self):
+		"""Queryset of all lots coming from this location"""
+		lots = Lot.objects.filter(auctiontos_seller__pickup_location__pk=self.pk, is_deleted=False, banned=False, auctiontos_winner__isnull=False)
+		return lots
+	
+	@property
+	def number_of_incoming_lots(self):
+		return self.incoming_lots.count()
+	
+	@property
+	def number_of_outgoing_lots(self):
+		return self.outgoing_lots.count()
+	
 class AuctionIgnore(models.Model):
 	"""If a user does not want to participate in an auction, create one of these"""
 	user = models.ForeignKey(User, on_delete=models.CASCADE)

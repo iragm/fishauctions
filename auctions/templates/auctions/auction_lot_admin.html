@@ -8,7 +8,7 @@
   {% include 'auction_ribbon.html' %}
   <small>This is a list of items for sale in your auction.  Click a lot to edit it.  To add new lots, go to the <a href="{% url 'auction_tos_list' slug=auction.slug %}">users page</a> and click add lots under the appropriate user.<br></small>
     <a class='btn btn-sm btn-primary' href="{% url 'auction_lot_winners' slug=auction.slug %}">Set lot winners</a>
-    <a href="{% url 'lot_list' slug=auction.slug %}" class="btn btn-sm mt-2 mb-2 btn-primary">Export CSV</a> 
+    <a id='all_lot_list' href="{% url 'lot_list' slug=auction.slug %}" class="btn btn-sm mt-2 mb-2 btn-primary">Export CSV</a> 
     <a href="{{auction.view_lot_link}}" class="btn btn-sm btn-primary">See lots as users see them</a>
 
   <form class="col-sm-12 mt-2">
@@ -22,4 +22,13 @@
 {% endblock %}
 
 {% block extra_js %}
+{% if auction.all_location_count > 1 %}
+<script>
+  $(document).ready(function(){
+    $('#all_lot_list').mouseover(function() {
+      $('#all_lot_list').attr('data-original-title', "This is a full list of all lots, you can download location-specific lot lists from the locations page").tooltip('show');
+    });
+  });
+  </script>
+  {% endif %}
 {% endblock %}
