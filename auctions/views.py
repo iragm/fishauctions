@@ -2,6 +2,7 @@ import csv
 from datetime import datetime
 from random import randint, uniform, sample
 from itertools import chain
+from typing import Any, Dict
 from django.shortcuts import render,redirect
 from django.http import HttpResponse, JsonResponse, HttpResponseRedirect, Http404, FileResponse
 from django.utils import timezone
@@ -1170,9 +1171,9 @@ class PickupLocationsDelete(DeleteView, AuctionPermissionsMixin):
 
     def get_success_url(self):
         return self.success_url
-
-class PickupLocationsUpdate(UpdateView, AuctionPermissionsMixin):
-    """Edit pickup locations"""
+    
+class PickupLocationForm():
+    """Base form for create and update"""
     model = PickupLocation
     template_name = 'location_form.html'
     form_class = PickupLocationForm
@@ -1180,40 +1181,67 @@ class PickupLocationsUpdate(UpdateView, AuctionPermissionsMixin):
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
         kwargs['user'] = self.request.user
+        kwargs['auction'] = self.auction
         try:
             kwargs['user_timezone'] = self.request.COOKIES['user_timezone']
         except:
             kwargs['user_timezone'] = settings.TIME_ZONE
-        kwargs['auction'] = self.auction
-        kwargs['is_edit_form'] = True
-        kwargs['pickup_location'] = self.get_object()
         return kwargs
-
-    def dispatch(self, request, *args, **kwargs):
-        self.auction = self.get_object().auction
-        self.is_auction_admin
-        users = AuctionTOS.objects.filter(pickup_location=self.get_object().pk).count()
-        if users:
-            messages.info(request, f"{users} users have already selected this as a pickup location.  Don't make large changes!")
-        return super().dispatch(request, *args, **kwargs)
-
-    def form_valid(self, form, **kwargs):
-        messages.info(self.request, "Updated location")
-        return super().form_valid(form)
 
     def get_success_url(self):
         data = self.request.GET.copy()
         try:
             return data['next']
         except:
-            url = reverse("auction_pickup_location", kwargs={'slug': self.auction.slug})
-            return url
+            return reverse('auction_pickup_location', kwargs={'slug': self.auction.slug})    
 
-class PickupLocationsCreate(CreateView, AuctionPermissionsMixin):
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['auction'] = self.auction
+        return context
+
+    def form_valid(self, form):
+        location = form.save(commit=False)
+        location.user = self.request.user
+        location.auction = self.auction
+        if not location.name:
+            location.name = str(location.auction)
+        if not location.pickup_time:
+            location.users_must_coordinate_pickup = True
+        if form.cleaned_data.get("mail_or_not") == "False":
+            location.pickup_by_mail = False
+        else:
+            location.pickup_by_mail = True
+        location.save()
+        return super().form_valid(form)
+
+class PickupLocationsUpdate(PickupLocationForm, UpdateView, AuctionPermissionsMixin):
+    """Edit pickup locations"""
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs['is_edit_form'] = True
+        kwargs['pickup_location'] = self.get_object()
+        return kwargs
+    
+    def get(self, *args, **kwargs):
+        users = AuctionTOS.objects.filter(pickup_location=self.get_object().pk).count()
+        if users:
+            messages.info(self.request, f"{users} users have already selected this as a pickup location.  Don't make large changes!")
+        return super().get(*args, **kwargs)
+
+    def dispatch(self, request, *args, **kwargs):
+        self.auction = self.get_object().auction
+        self.is_auction_admin
+        return super().dispatch(request, *args, **kwargs)
+
+    def form_valid(self, form, **kwargs):
+        form = super().form_valid(form)
+        messages.info(self.request, "Updated location")
+        return form
+
+class PickupLocationsCreate(PickupLocationForm, CreateView, AuctionPermissionsMixin):
     """Create a new pickup location"""
-    model = PickupLocation
-    template_name = 'location_form.html'
-    form_class = PickupLocationForm
 
     def dispatch(self, request, *args, **kwargs):
         self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs.pop('slug')).first()
@@ -1222,29 +1250,9 @@ class PickupLocationsCreate(CreateView, AuctionPermissionsMixin):
 
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
-        kwargs['user'] = self.request.user
-        kwargs['auction'] = self.auction
-        try:
-            kwargs['user_timezone'] = self.request.COOKIES['user_timezone']
-        except:
-            kwargs['user_timezone'] = settings.TIME_ZONE
         kwargs['is_edit_form'] = False
         kwargs['pickup_location'] = None
         return kwargs
-
-    def form_valid(self, form):
-        obj = form.save(commit=False)
-        obj.user = self.request.user
-        obj.auction = self.auction
-        obj.save()
-        return super().form_valid(form)
-   
-    def get_success_url(self):
-        data = self.request.GET.copy()
-        try:
-            return data['next']
-        except:
-            return reverse('auction_pickup_location', kwargs={'slug': self.auction.slug})
 
 class AuctionUpdate(UpdateView, AuctionPermissionsMixin):
     """The form users fill out to edit an auction"""
@@ -2736,7 +2744,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context['pickup_locations'] = self.get_object().location_qs.exclude(pickup_by_mail=True) # note: not physical_location_qs, deliberately
+        context['pickup_locations'] = self.get_object().location_qs
         current_site = Site.objects.get_current()
         context['domain'] = current_site.domain
         context['google_maps_api_key'] = settings.LOCATION_FIELD['provider.google.api_key']
@@ -2761,10 +2769,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
                 i_agree = True
             else:
                 i_agree = False
-                try:
-                    existingTos = PickupLocation.objects.filter(auction=self.get_object())[0]
-                except:
-                    pass
+                existingTos = PickupLocation.objects.filter(auction=self.get_object()).first()
             # if self.request.user.is_authenticated and not context['ended']:
             #     if not self.get_object().no_location:
             #         messages.add_message(self.request, messages.ERROR, "Please confirm you have read these rules by selecting your pickup location at the bottom of this page.")
@@ -2782,6 +2787,10 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
         self.object = self.get_object()
         form = self.get_form()
         if form.is_valid():
+            userData, created = UserData.objects.get_or_create(
+                user = self.request.user,
+                defaults={},
+            )
             find_by_email = AuctionTOS.objects.filter(
                 email=self.request.user.email,
                 auction=self.get_object(),
@@ -2797,16 +2806,18 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
                     defaults={'pickup_location': form.cleaned_data['pickup_location']},
                 )
             obj.pickup_location = form.cleaned_data['pickup_location']
+            # check if mail was chosen
+            if obj.pickup_location.pickup_by_mail:
+                if not userData.address:
+                    messages.error(self.request, f"You have to set your address before you can choose pickup by mail")
+                    return redirect(f'/contact_info?next={self.object.get_absolute_url()}')
             if form.cleaned_data['time_spent_reading_rules'] > obj.time_spent_reading_rules:
                 obj.time_spent_reading_rules = form.cleaned_data['time_spent_reading_rules']
             # even if an auctiontos was originally manually added, if the user clicked join, mark them as not manually added
             obj.manually_added = False
             obj.save()
             # also update userdata to reflect the last auction
-            userData, created = UserData.objects.get_or_create(
-                user = self.request.user,
-                defaults={},
-            )
+
             userData.last_auction_used = self.get_object()
             userData.last_activity = timezone.now()
             userData.save()

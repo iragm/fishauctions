@@ -1,0 +1,17 @@
+{% if location.description %}
+    <p>{{ location.description|linebreaksbr }}</p>
+{% endif %}
+{% if not location.pickup_by_mail %}
+    {%if location.has_coordinates %}    
+    <a href="{{location.directions_link}}">Get directions</a>
+    {% endif %}
+    {% if location.users_must_coordinate_pickup %}
+        You must schedule your pickup time in advance.
+    {% else %}
+        <p><b>{{ location.pickup_time }}</b>
+            {% if location.second_pickup_time %}
+            <br>You must return at <b>{{ location.second_pickup_time }}</b> to pick up lots from other locations.
+            {% endif %}
+        </p>
+    {% endif %}
+{% endif %}

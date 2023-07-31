@@ -12,13 +12,42 @@
     $('#location-form').submit(function(event){
         $(this).find(':input[type=submit]').prop('disabled', true);
     });
+    $(document).ready(function() {
+        if(document.getElementById('id_mail_or_not_1').checked) {
+            $('#non-mail').hide();
+        } else {
+            $('#non-mail').show();
+        }
+        $('#id_mail_or_not_0').change(function(data) {
+            $('#non-mail').show();
+        });
+        $('#id_mail_or_not_1').change(function(data) {
+            $('#non-mail').hide();
+        });
+        if(document.getElementById('id_users_must_coordinate_pickup').checked) {
+            $('#div_id_pickup_time').hide();
+            {% if auction.multi_location %}$('#div_id_second_pickup_time').hide();{% endif %}
+        } else {
+            $('#div_id_pickup_time').show();
+            {% if auction.multi_location %}$('#div_id_second_pickup_time').show();{% endif %}
+        }
+        $('#id_users_must_coordinate_pickup').change(function(data) {
+            if (this.checked) {
+                $('#div_id_pickup_time').hide();
+                {% if auction.multi_location %}$('#div_id_second_pickup_time').hide();{% endif %}
+            } else {
+                $('#div_id_pickup_time').show();
+                {% if auction.multi_location %}$('#div_id_second_pickup_time').show();{% endif %}
+            }
+        });
+    });
 var form_id = '#location-form';
 {% include 'leave_page_warning.js' %}
 </script>
 {% endblock %}
 {% block title %}Pickup location{% endblock %}
 {% block content %}
-            <a href='/blog/multiple-location-auctions/' target="_blank">Learn about having multiple pickup locations in your auction</a>
+            {% if not auction.all_location_count %}<small>Use this page to set your auction's location.</small>{% endif %}
             <br><br>
             {% crispy form form.helper %}
             <br>

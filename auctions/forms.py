@@ -694,9 +694,13 @@ class AuctionJoin(forms.ModelForm):
         else:
             # single location auction
             self.fields['pickup_location'].widget = HiddenInput()
-            if self.auction.location_qs.count() == 1: # note: number_of_locations only gives you non-default locations
-                self.fields['pickup_location'].initial = auction.location_qs[0]
-                self.fields['i_agree'].label = f"Yes, I will be at {auction.location_qs[0]}"
+            if self.auction.all_location_count == 1: # note: number_of_locations only gives you non-default locations
+                location = auction.location_qs[0]
+                self.fields['pickup_location'].initial = location
+                if location.pickup_by_mail:
+                    self.fields['i_agree'].label = f"Yes, {location}"
+                else:
+                    self.fields['i_agree'].label = f"Yes, I will be at {location}"
 
     class Meta:
         model = AuctionTOS
@@ -705,12 +709,14 @@ class AuctionJoin(forms.ModelForm):
         ]
 
 class PickupLocationForm(forms.ModelForm):
+    MAIL_CHOICES=[(False,'This is an in-person pickup location'),
+                        (True,"Lots will be mailed (or emailed) to the winner")]
+    mail_or_not = forms.ChoiceField(choices=MAIL_CHOICES, widget=forms.RadioSelect, label="", help_text="It's up to you to calculate any shipping charges after the auction ends", required = False)
+
     class Meta:
         model = PickupLocation
-        fields = ['name', 'auction', 'description',  'pickup_time', 'second_pickup_time', 'address', \
-            'location_coordinates', 'pickup_location_contact_name', 'pickup_location_contact_phone', \
-            'pickup_location_contact_email', 'users_must_coordinate_pickup']
-        exclude = ['user', 'latitude', 'longitude',]
+        exclude = ['user', 'latitude', 'longitude', 'is_default',
+                   'pickup_location_contact_name', 'pickup_location_contact_phone','pickup_location_contact_email']
         widgets = {
             'pickup_time': DateTimePickerInput(),
             'second_pickup_time': DateTimePickerInput(),
@@ -725,18 +731,29 @@ class PickupLocationForm(forms.ModelForm):
         self.user = user
         self.auction = auction
         self.fields['description'].widget.attrs = {'rows': 3}
+        if self.auction.all_location_count < 2:
+            self.fields['name'].widget=forms.HiddenInput()
+            self.fields['contact_person'].widget=forms.HiddenInput()
         if not self.auction.multi_location:
             # to keep things simple when creating a new auction with only one location
             self.fields['second_pickup_time'].widget=forms.HiddenInput()
-            self.fields['description'].widget=forms.HiddenInput()
-            self.fields['pickup_location_contact_name'].widget=forms.HiddenInput()
-            self.fields['pickup_location_contact_phone'].widget=forms.HiddenInput()
-            self.fields['pickup_location_contact_email'].widget=forms.HiddenInput()
-            self.fields['users_must_coordinate_pickup'].widget=forms.HiddenInput()
+            #self.fields['description'].widget=forms.HiddenInput()
+            # these have been removed in favor of 'contact_person'
+            #self.fields['pickup_location_contact_name'].widget=forms.HiddenInput()
+            #self.fields['pickup_location_contact_phone'].widget=forms.HiddenInput()
+            #self.fields['pickup_location_contact_email'].widget=forms.HiddenInput()
+            #self.fields['users_must_coordinate_pickup'].widget=forms.HiddenInput()
+        self.fields['mail_or_not'].initial = "False"
+        if self.instance.pk:
+            if self.instance.pickup_by_mail:
+                self.fields['mail_or_not'].initial = "True"
         # if self.user.is_superuser:
         #     self.fields['auction'].queryset = Auction.objects.filter(date_end__gte=timezone.now()).order_by('date_end')
         # else:
         #     self.fields['auction'].queryset = Auction.objects.filter(created_by=self.user).filter(date_end__gte=timezone.now()).order_by('date_end')
+        contact_queryset = AuctionTOS.objects.filter(auction=self.auction, is_admin=True).order_by('-createdon')
+        self.fields['contact_person'].queryset = contact_queryset
+        self.fields['contact_person'].label_from_instance = lambda obj: "%s" % obj.name
         delete_button_html = ""
         if self.is_edit_form:
             delete_button_html = f"<a href='{reverse('delete_pickup', kwargs={'pk': self.pickup_location.pk})}' class='btn btn-warning mr-2'>Delete this location</a>"
@@ -747,20 +764,25 @@ class PickupLocationForm(forms.ModelForm):
         self.helper.form_tag = True
         self.fields['auction'].initial = auction
         self.helper.layout = Layout(
-            'name',
-            'description',
-            'auction',
-            #HTML("<h4>Contact info</h4>"),
+            'mail_or_not',
             Div(
-                Div('pickup_location_contact_name',css_class='col-md-6',),
-                Div('pickup_location_contact_phone',css_class='col-md-6',),
-                Div('pickup_location_contact_email',css_class='col-md-6',),
+            Div(
+                Div('name',css_class='col-md-6',),
+                Div('contact_person',css_class='col-md-6',),
                 css_class='row',
             ),
+            'auction',
+            #HTML("<h4>Contact info</h4>"),
+            # Div(
+            #     Div('pickup_location_contact_name',css_class='col-md-6',),
+            #     Div('pickup_location_contact_phone',css_class='col-md-6',),
+            #     Div('pickup_location_contact_email',css_class='col-md-6',),
+            #     css_class='row',
+            # ),
             Div(
+                Div('users_must_coordinate_pickup',css_class='col-md-4',),
                 Div('pickup_time',css_class='col-md-4',),
                 Div('second_pickup_time',css_class='col-md-4',),
-                Div('users_must_coordinate_pickup',css_class='col-md-4',),
                 css_class='row',
             ),
             'address',
@@ -768,6 +790,12 @@ class PickupLocationForm(forms.ModelForm):
             Div(
                 HTML("The pin on the map must be at the <span class='text-warning'>exact location of the pickup location!</span><br><small>People will get directions based on this pin, and will get lost if it's not in the right place</small>"),
             ),
+            #'allow_selling_by_default',
+            #'allow_bidding_by_default',
+            
+            css_id='non-mail',
+            ),
+            'description',
             HTML(f'<a class="btn btn-secondary mr-2" href="javascript:window.history.back();">Cancel</a>{delete_button_html}'),
             Submit('submit', 'Save', css_class='btn-success'),
         )
@@ -778,6 +806,13 @@ class PickupLocationForm(forms.ModelForm):
         if auction:
             if not auction.permission_check(self.user):
                 self.add_error('auction', "You can only add pickup locations to your own auctions")
+        if cleaned_data.get('mail_or_not') == "False":
+            if not cleaned_data.get('location_coordinates'):
+                self.add_error('address', "Search here to set the location on the map below")
+        else:
+            existing_mail_locations = PickupLocation.objects.exclude(pk=self.instance.pk).filter(auction=auction, pickup_by_mail=True).count()
+            if existing_mail_locations:
+                self.add_error('mail_or_not', "You can't have more than one mail location")
         return cleaned_data
 
 class CreateImageForm(forms.ModelForm):

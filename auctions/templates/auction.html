@@ -89,9 +89,7 @@ function initMap() {
         {%if location.has_coordinates %}
         ['<div class="info_content" style="color:black;">' +
         '<h5>{{ location.name }}</h5>' +
-        '<p><a href="{{location.directions_link}}">Get directions</a><br>'+
-        '{%if location.description %}<p>{{ location.description|linebreaksbr }}<br>{% endif %}' +
-        '{% if location.users_must_coordinate_pickup %}You must schedule your pickup time in advance.{% else %}{{ location.pickup_time }} {% if location.second_pickup_time %}<br>You must return at {{ location.second_pickup_time }} to pick up lots from other locations.{% endif %}{%endif%}</p>' +        '</div>'],
+        `{% include 'location_fragment.html' %}</div>`],
         {% endif %}
         {% endfor %}
     ];
@@ -178,18 +176,15 @@ function initMap() {
                     of the winning price per lot, for lots you submit yourself</li>
                 {% endif %}
             </ul> 
-            {% if auction.no_location %}
-            <span class='text-muted'><small><br>{% if view.is_auction_admin %}<br>You haven't set a location for this auction yet.  You can do that <a href='/auctions/{{auction.slug}}/locations'>here</a></small></span>{% endif %}
-            {% else %} {# has a location - show map#}
+            {% if not auction.no_location %}
             <br>
                 <div id="map_wrapper" style='height: 400px;'>
                     <div id="map_canvas" class="mapping" style='width: 100%; height: 100%;'></div>
                 </div>
-
-
-
+            {% endif %}
+            {% if auction.all_location_count %}
             <a name="join"></a>
-                        {% if not ended %}
+            {% if not ended %}
                 <div class="jumbotron">
                 {% if request.user.is_authenticated %}
                         If you want to participate in this auction, you must confirm that you've read these rules
@@ -219,13 +214,10 @@ function initMap() {
                     <br>
                     {% endif %}
                     {% if hasChosenLocation == location.pk%}<span class="badge bg-success">Your confirmed location</span><br>{% endif %}
-                    {% if location.description%}{{ location.description }} {% endif %}{% if location.users_must_coordinate_pickup %}You must schedule your pickup time in advance.{% else %} <br> {{ location.pickup_time }} {% if location.second_pickup_time %}<br>You must return {{ location.second_pickup_time }} to pick up lots from other locations.{% endif %}{%endif%}<br><br>
-                    <a href="{{location.directions_link}}">Get directions</a><br>
-                    {% if location.pickup_location_contact_name and request.user.is_authenticated %}
-                    Contact for this location: <b>{{location.pickup_location_contact_name}}</b><br>
-                        {% if location.pickup_location_contact_phone %}{{location.pickup_location_contact_phone}}<br>{%endif%}
-                        {% if location.pickup_location_contact_email %}<a href='mailto:{{ location.pickup_location_contact_email }}'>{{location.pickup_location_contact_email}}</a><br>{%endif%}
-                        <br>
+                    {% include 'location_fragment.html' %}
+                    {% if hasChosenLocation == location.pk and location.contact_person %}Contact for this location: <b>{{location.contact_person.name | default:""}}</b><br>
+                        {{location.contact_person.email | default:"" | urlize}}<br>
+                        {{location.contact_person.phone_number | default:"" }}<br>
                         {% endif %}
                 </div>
                 {% endfor %}
@@ -233,22 +225,10 @@ function initMap() {
             {% else %}
             {# this is for single location auctions only, still iterating because of how the context is set up #}
             {% for location in pickup_locations %}
-            {# <h5>{% if not auction.multi_location %}Location: {%endif%}{{ location.name }}</h5> #}
-            {% if view.is_auction_admin %}
-            <a href="/locations/edit/{{ location.pk }}/?next=/auctions/{{auction.slug}}" class="btn btn-sm btn-warning">Edit this location</a>
-            <br>
-            {% endif %}
-            <a href="{{location.directions_link}}">Get directions</a><br>
-            {% if location.description%}{{ location.description }} {% endif %}{% if location.users_must_coordinate_pickup %}You must schedule your pickup time in advance.{% else %} {{ location.pickup_time }} {% if location.second_pickup_time %}<br>You must return {{ location.second_pickup_time }} to pick up lots from other locations.{% endif %}{%endif%}<br><br>
-            {% if location.pickup_location_contact_name and request.user.is_authenticated %}
-            Contact for this location: <b>{{location.pickup_location_contact_name}}</b><br>
-            {% if location.pickup_location_contact_phone %}{{location.pickup_location_contact_phone}}<br>{%endif%}
-            {% if location.pickup_location_contact_email %}<a href='mailto:{{ location.pickup_location_contact_email }}'>{{location.pickup_location_contact_email}}</a><br>{%endif%}
-            <br>
-            {% endif %}
+            {% include 'location_fragment.html' %}
             {% endfor %}
-            {%endif%}
-        {% endif %}
+            {%endif%} {# end auction.multi_location #}
+            {% endif %} {# end auction.all_location_count #}
         <br><span class='text-muted'><small>Please spread the word about this auction -- every like and share helps the club bring in new sellers and bidders!</small></span>
         <div class="share-links" style='line-height: 11px;'>
             <div class="input-group mb-3 mr-3 has-success" style="float:left !important;">

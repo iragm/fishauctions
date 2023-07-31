@@ -32,7 +32,7 @@ class Command(BaseCommand):
         # Fixes: https://github.com/iragm/fishauctions/issues/100
         # there are currently two confirmation emails sent.  A field for an additional one (second_confirm_email_sent) exists, but isn't used.
         # we will only send these when people join through the website, not when you manually add them to the auction
-        base_qs = AuctionTOS.objects.filter(manually_added=False, user__isnull=False, user__userdata__has_unsubscribed=False)
+        base_qs = AuctionTOS.objects.filter(manually_added=False, user__isnull=False, user__userdata__has_unsubscribed=False).exclude(pickup_location__pickup_by_mail=True)
         welcome_email_qs = base_qs.filter(confirm_email_sent=False)
         # there's an additional filter to make sure the tos is 24 hours old here -- this is to give a better chance of the user's location being set 
         online_auction_welcome = welcome_email_qs.filter(auction__is_online=True, auction__lot_submission_start_date__lte=timezone.now(), createdon__gte=timezone.now()+datetime.timedelta(hours=24))

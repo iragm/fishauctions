@@ -6,7 +6,10 @@ Pickup locations
 {% load static %}
 {% block content %}
 {% include 'auction_ribbon.html' %}
-      <a href="{% url 'create_auction_pickup_location' slug=auction.slug %}" class="btn btn-info btn-sm mt-2" role="button">Add pickup location</a>
+  <div>
+  <small>This is a list of locations associated with your auction.  Typically, in-person auctions will have a single location.  Online auctions can have one or more locations; <a href='/blog/multiple-location-auctions/'>learn about having multiple pickup locations in your auction</a></small>
+  </div>
+      <a href="{% url 'create_auction_pickup_location' slug=auction.slug %}" class="btn btn-info btn-sm mt-2 mb-2" role="button">Add pickup location</a>
       <table class="table">
           <thead>
             <tr>
@@ -18,9 +21,9 @@ Pickup locations
           <tbody>
             {% for location in object_list %}
             <tr>
-              <td><a href='/locations/edit/{{location.pk}}'>{{ location.name }}</a></td>
+              <td><a href='/locations/edit/{{location.pk}}'>{{ location }}</a></td>
               <td>{{ location.number_of_users }}</td>
-              <td>{% if location.has_coordinates %}<a href={{ location.directions_link }}>Directions</a> {% else %} Location not set {% endif %}</td>
+              <td>{% if location.pickup_by_mail %}N/A{% else %}{% if location.has_coordinates %}<a href={{ location.directions_link }}>Directions</a> {% else %} Location not set {% endif %}{% endif %}</td>
             </tr>
             {% endfor %}
         </tbody>

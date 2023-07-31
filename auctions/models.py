@@ -229,7 +229,7 @@ class Auction(models.Model):
 	pre_register_lot_entry_fee_discount.help_text = "Decrease the lot entry fee by this amount if users add lots through this website"
 	date_posted = models.DateTimeField(auto_now_add=True)
 	date_start = models.DateTimeField("Auction start date")
-	date_start.help_text = "Bidding will be open on this date.  Must be in the future."
+	date_start.help_text = "Bidding starts on this date"
 	lot_submission_start_date = models.DateTimeField("Lot submission opens", null=True, blank=True)
 	lot_submission_start_date.help_text = "Users can submit (but not bid on) lots on this date"
 	lot_submission_end_date = models.DateTimeField("Lot submission ends", null=True, blank=True)
@@ -305,6 +305,11 @@ class Auction(models.Model):
 	def number_of_locations(self):
 		"""The number of physical locations this auction has"""
 		return self.physical_location_qs.count()
+
+	@property
+	def all_location_count(self):
+		"""All locations, even mail"""
+		return self.location_qs.count()
 
 	@property
 	def auction_type(self):
@@ -615,7 +620,7 @@ class Auction(models.Model):
 	@property
 	def no_location(self):
 		"""
-		True if there's no pickup location at all for this auction
+		True if there's no pickup location at all for this auction -- pickup by mail excluded
 		"""
 		locations = self.location_with_location_qs.count()
 		if not locations:
@@ -656,7 +661,7 @@ class Auction(models.Model):
 	@property
 	def set_location_link(self):
 		"""If there's a location without a lat and lng, this link will let you edit the first one found"""
-		location = self.physical_location_qs.filter(latitude=0,longitude=0).first()
+		location = self.location_qs.filter(latitude=0,longitude=0, pickup_by_mail=False).first()
 		if location:
 			return f"/locations/edit/{location.pk}"
 		return None
@@ -671,7 +676,7 @@ class Auction(models.Model):
 	
 	@property
 	def admin_checklist_location_set(self):
-		if self.location_with_location_qs.count() > 0:
+		if not self.set_location_link:
 			return True
 		return False
 	
@@ -720,34 +725,37 @@ class PickupLocation(models.Model):
 	A pickup location associated with an auction
 	A given auction can have multiple pickup locations
 	"""
-	name = models.CharField(max_length=50, default="")
+	name = models.CharField(max_length=50, default="", blank=True, null=True)
 	name.help_text = "Location name shown to users.  e.x. University Mall in VT"
 	user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
 	auction = models.ForeignKey(Auction, null=True, blank=True, on_delete=models.CASCADE)
-	auction.help_text = "If your auction isn't listed here, it may not exist or has already ended"
+	#auction.help_text = "If your auction isn't listed here, it may not exist or has already ended"
 	description = models.CharField(max_length=300, blank=True, null=True)
-	description.help_text = "e.x. First floor of parking garage near Sears entrance"
+	description.help_text = "Notes, shipping charges, etc.  For example: 'Parking lot near Sears entrance'"
 	users_must_coordinate_pickup = models.BooleanField(default=False)
-	users_must_coordinate_pickup.help_text = "The pickup time fields will not be used"
+	users_must_coordinate_pickup.help_text = "You probably want this unchecked, to have everyone arrive at the same time."
 	pickup_location_contact_name = models.CharField(max_length=200, blank=True, null=True, verbose_name="Contact person's name")
 	pickup_location_contact_name.help_text = "Name of the person coordinating this pickup location.  Contact info is only shown to logged in users."
 	pickup_location_contact_phone = models.CharField(max_length=200, blank=True, null=True, verbose_name="Contact person's phone")
 	pickup_location_contact_email = models.CharField(max_length=200, blank=True, null=True, verbose_name="Contact person's email")
-	pickup_time = models.DateTimeField()
+	pickup_time = models.DateTimeField(blank=True, null=True)
 	second_pickup_time = models.DateTimeField(blank=True, null=True)
-	second_pickup_time.help_text = "If you'll have a dropoff for sellers in the morning and then a pickup for buyers in the afternoon at this location, this should be the pickup time."
+	second_pickup_time.help_text = "Only for <a href='/blog/multiple-location-auctions/'>multi-location auctions</a>; people will return to pick up lots from other locations at this time."
 	latitude = models.FloatField(blank=True, default=0)
 	longitude = models.FloatField(blank=True, default=0)
 	address = models.CharField(max_length=500, blank=True, null=True)
 	address.help_text = "Search Google maps with this address"
-	location_coordinates = PlainLocationField(based_fields=['address'], blank=False, null=True, verbose_name="Map")
+	location_coordinates = PlainLocationField(based_fields=['address'], blank=True, null=True, verbose_name="Map")
 	allow_selling_by_default = models.BooleanField(default=True)
+	allow_selling_by_default.help_text = "This is not used"
 	allow_bidding_by_default = models.BooleanField(default=True)
+	allow_bidding_by_default.help_text = "This is not used"
 	pickup_by_mail = models.BooleanField(default=False)
 	pickup_by_mail.help_text = "Special pickup location without an actual location"
 	is_default = models.BooleanField(default=False)
 	is_default.help_text = "This was a default location added for an in-person auction."
 	contact_person = models.ForeignKey('AuctionTOS', null=True, blank=True, on_delete=models.SET_NULL)
+	contact_person.help_text = "Only users that you have granted admin permissions to will show up here.  Their phone and email will be shown to users who select this location."
 
 	def __str__(self):
 		if self.pickup_by_mail:
