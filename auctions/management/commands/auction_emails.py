@@ -11,7 +11,8 @@ class Command(BaseCommand):
     help = 'Drip marketing style emails send to the creator of an auction.  No emails are sent for in-person auctions right now.'
 
     def handle(self, *args, **options):
-        auctions = Auction.objects.exclude(is_online=False).filter(
+        auctions = Auction.objects.exclude(is_deleted=True)
+        auctions = auctions.exclude(is_online=False).filter(
                     Q(email_first_sent=False)|\
                     Q(email_second_sent=False)|\
                     Q(email_third_sent=False)|\

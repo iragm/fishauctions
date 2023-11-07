@@ -552,7 +552,9 @@ class CreateEditAuctionTOS(forms.ModelForm):
             self.fields['is_admin'].widget = HiddenInput()
             if auction.location_qs.count() == 1:
                 self.fields['pickup_location'].initial = auction.location_qs.first()
-        if not auction.only_approved_sellers:
+        if not auction.only_approved_sellers and not self.auctiontos:
+            self.fields['selling_allowed'].widget = HiddenInput()
+        if not auction.only_approved_sellers and self.auctiontos and self.auctiontos.selling_allowed:
             self.fields['selling_allowed'].widget = HiddenInput()
     class Meta:
         model = AuctionTOS
@@ -731,7 +733,12 @@ class PickupLocationForm(forms.ModelForm):
         self.user = user
         self.auction = auction
         self.fields['description'].widget.attrs = {'rows': 3}
+        show_name_contact_fields = True
         if self.auction.all_location_count < 2:
+            show_name_contact_fields = False
+        if self.auction.all_location_count > 0 and not self.is_edit_form:
+            show_name_contact_fields = True
+        if not show_name_contact_fields:
             self.fields['name'].widget=forms.HiddenInput()
             self.fields['contact_person'].widget=forms.HiddenInput()
         if not self.auction.multi_location:
@@ -1206,7 +1213,7 @@ class CreateLotForm(forms.ModelForm):
                     cloneLot = Lot.objects.get(pk=self.cloned_from, is_deleted=False)
                     if (cloneLot.user.pk == self.user.pk) or self.user.is_superuser:
                         # you can only clone your lots
-                        cloneFields = ['lot_name', 'quantity', 'species_category', 'description', 'i_bred_this_fish', 'reserve_price', 'buy_now_price',]
+                        cloneFields = ['lot_name', 'quantity', 'species_category', 'description', 'i_bred_this_fish', 'reserve_price', 'buy_now_price', 'reference_link']
                         for field in cloneFields:
                             self.fields[field].initial = getattr(cloneLot, field)
                         self.fields['cloned_from'].initial = int(self.cloned_from)
@@ -1388,12 +1395,13 @@ class CreateLotForm(forms.ModelForm):
                             self.add_error('auction', f"You can't add more lots to this auction (Limit: {auction.max_lots_per_user})")
            
         # check to see if this lot exists already
-        try:
-            existingLot = Lot.objects.exclude(is_deleted=True).filter(user=self.user, lot_name=cleaned_data.get("lot_name"), description=cleaned_data.get("description"), active = True).exclude(pk=self.instance.pk)
-            if existingLot:
-                self.add_error('description', "You've already added a lot exactly like this.  If you mean to submit another lot, change something here so it's unique")
-        except:
-            pass
+        # this code is no longer needed since we disable the submit button on click; if there start being problems with duplicate lots, I'll uncomment the below
+        # try:
+        #     existingLot = Lot.objects.exclude(is_deleted=True).filter(user=self.user, lot_name=cleaned_data.get("lot_name"), description=cleaned_data.get("description"), active = True).exclude(pk=self.instance.pk)
+        #     if existingLot:
+        #         self.add_error('description', "You've already added a lot exactly like this.  If you mean to submit another lot, change something here so it's unique")
+        # except:
+        #     pass
         return cleaned_data
 
         

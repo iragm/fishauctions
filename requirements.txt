@@ -23,6 +23,10 @@ django-filter
 django-location-field
 django-markdownfield
 django-post-office
+django-autocomplete-light
+django_tables2
+django_htmx
+django_debug_toolbar
 easy-thumbnails
 hyperlink
 idna
@@ -56,3 +60,5 @@ urllib3
 webencodings
 zope.interface
 crispy-bootstrap4
+reportlab
+channels_redis

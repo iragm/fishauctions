@@ -89,7 +89,7 @@ function initMap() {
         {%if location.has_coordinates %}
         ['<div class="info_content" style="color:black;">' +
         '<h5>{{ location.name }}</h5>' +
-        `{% include 'location_fragment.html' %}</div>`],
+        `{% include 'location_fragment_short.html' %}</div>`],
         {% endif %}
         {% endfor %}
     ];
@@ -215,11 +215,12 @@ function initMap() {
                     <a href='{% url "location_incoming" pk=location.pk %}' class="btn btn-sm mt-2 mr-2 btn-primary">Incoming lot list</a>
                     <a href='{% url "location_outgoing" pk=location.pk %}' class="btn btn-sm mt-2 mr-2 btn-primary">Outgoing lot list</a>
                     {% endif %}
+                    <a href="mailto:?bcc={{location.email_list}}&subject={{auction}} - {{location.name}}" class="btn btn-sm mt-2 mr-2 btn-primary">Email {{location.number_of_users}} people</a>
                     <br>
                     {% endif %}
                     {% if hasChosenLocation == location.pk%}<span class="badge bg-success">Your confirmed location</span><br>{% endif %}
                     {% include 'location_fragment.html' %}
-                    {% if hasChosenLocation == location.pk and location.contact_person %}Contact for this location: <b>{{location.contact_person.name | default:""}}</b><br>
+                    {% if location.contact_person and hasChosenLocation == location.pk or view.is_auction_admin %}Contact for this location: <b>{{location.contact_person.name | default:""}}</b><br>
                         {{location.contact_person.email | default:"" | urlize}}<br>
                         {{location.contact_person.phone_number | default:"" }}<br>
                         {% endif %}
@@ -229,6 +230,9 @@ function initMap() {
             {% else %}
             {# this is for single location auctions only, still iterating because of how the context is set up #}
             {% for location in pickup_locations %}
+            {% if view.is_auction_admin %}
+                <a href="mailto:?bcc={{location.email_list}}&subject={{auction}}" class="btn btn-sm mt-2 mr-2 btn-primary">Email {{location.number_of_users}} people</a>
+            {%endif%}
             {% include 'location_fragment.html' %}
             {% endfor %}
             {%endif%} {# end auction.multi_location #}

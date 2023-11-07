@@ -55,7 +55,7 @@ class LotHTMxTableForUsers(tables.Table):
     lot_number = tables.Column(accessor='lot_number_display', verbose_name="Lot number", orderable=False, attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}})
     #lot_number = tables.Column(accessor='lot_number_display', verbose_name="Lot number", orderable=False)
     active = tables.Column(accessor='active', verbose_name="Status")
-    price = tables.Column(accessor='price', verbose_name="Price")
+    price = tables.Column(accessor='high_bid', verbose_name="Price", orderable=False)
     views = tables.Column(accessor='page_views', verbose_name="Views", orderable=False, attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}})
     #bids = tables.Column(accessor='number_of_bids', verbose_name="Bids")
     #chats = tables.Column(accessor='all_chats', verbose_name="Messages")

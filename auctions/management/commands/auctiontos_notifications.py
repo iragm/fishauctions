@@ -35,7 +35,7 @@ class Command(BaseCommand):
         base_qs = AuctionTOS.objects.filter(manually_added=False, user__isnull=False, user__userdata__has_unsubscribed=False).exclude(pickup_location__pickup_by_mail=True)
         welcome_email_qs = base_qs.filter(confirm_email_sent=False)
         # there's an additional filter to make sure the tos is 24 hours old here -- this is to give a better chance of the user's location being set 
-        online_auction_welcome = welcome_email_qs.filter(auction__is_online=True, auction__lot_submission_start_date__lte=timezone.now(), createdon__gte=timezone.now()+datetime.timedelta(hours=24))
+        online_auction_welcome = welcome_email_qs.filter(auction__is_online=True, auction__lot_submission_start_date__lte=timezone.now(), createdon__lte=timezone.now()-datetime.timedelta(hours=24))
         for tos in online_auction_welcome:
             tos.confirm_email_sent = True
             tos.save()
@@ -67,7 +67,7 @@ class Command(BaseCommand):
             tos.save()
             send_tos_notification('in_person_auction_welcome', tos)
         print_reminder_qs = base_qs.filter(print_reminder_email_sent=False)
-        online_auction_print_reminder = print_reminder_qs.filter(auction__is_online=True, auction__date_end__lte=timezone.now() + datetime.timedelta(hours=1))
+        online_auction_print_reminder = print_reminder_qs.filter(auction__is_online=True, auction__date_end__lte=timezone.now() - datetime.timedelta(hours=1))
         for tos in online_auction_print_reminder:
             tos.print_reminder_email_sent = True
             tos.save()

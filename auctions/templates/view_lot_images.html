@@ -260,9 +260,13 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                 <td><b>Ends:</b></td><td><span id="end_date" class="{% if lot.ended %} {% endif %}">{{ lot.calculated_end_for_templates }}</span>{% if lot.ended %}<span class='badge-pill badge badge-danger'>Ended</span>{% endif %}</td>
             </tr>
             
-            {% if lot.auction and lot.location %}
+            {% if lot.auction and lot.auction.multi_location and lot.location %}
             <tr>
-                <td><b>Location:</b></td><td>{{ lot.location }}</td>
+                <td><b>Location:</b></td><td>{{ lot.location }}
+                    {% if user_tos_location and user_tos_location != lot.location_as_object %}
+                        <small class='text-muted'>Delivered to {{ user_tos_location }} at {{ user_tos_location.second_pickup_time|default:user_tos_location.pickup_time }}.</small>
+                    {% endif %}
+                </td>
             </tr>
             {% endif %}
             {% if not lot.transportable %}

@@ -75,7 +75,9 @@
         </tbody>
       </table>
       <h4>Send batch Paypal invoices</h4>
-      For use with Paypal's <a href="https://www.paypal.com/invoice/batch">batch invoice system</a>.  Paypal's fees apply.  <a href="/blog/online-payments-suck/">See how to use this.</a> Only invoices that have been marked <span class="font-weight-bold">ready </span>and <span class="font-weight-bold">have an email </span> will be exported.<br>
+      {% if not auction.is_online %}This is intended for online auctions; you should mange payments separately, one user at a time, and mark invoices paid as needed.  The users tab provides a convenient search function and a button to mark invoices as paid.{% endif %}
+      For use with Paypal's <a href="https://www.paypal.com/invoice/batch">batch invoice system</a>.  Paypal's fees apply.  <a href="/blog/online-payments-suck/">See how to use this.</a><br>
+      <span class="{% if auction.draft_paypal_invoices %}text-warning{% endif %}">{{auction.draft_paypal_invoices}} invoices have not been marked ready and will not be included.</span>
       <br>
       {% for chunk in object.paypal_invoice_chunks %}
         <a href="/auctions/{{ object.slug }}/paypal/{{ chunk }}/">Download Batch Invoice File #{{chunk}}</a><br>

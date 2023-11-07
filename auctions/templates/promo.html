@@ -68,15 +68,17 @@
   }
 
   .magic {
-    animation: magic_animation 1.5s linear infinite 2s;
+    animation: magic_animation 1.5s linear infinite .5s;
   }
 
   @keyframes magic_animation {
     50% {
-      text-shadow: 0 0 8px rgba(230, 201, 35, 0.907);
+      text-shadow: 0 0 8px rgba(180, 157, 26, 0.907);
     }
     
   }
+
+
 </style>
 <script>
 
@@ -130,8 +132,29 @@
 <span id='cross_out_trigger'></span>
 <div style='background:transparent !important' class="jumbotron jumbotron-fluid bg-dark">
   <div class="container">
-    <h1 class="display-4">Upgrade your fish club auctions. <span class='text-info'>For free.</span></h1>
-    <p class="lead">What goes into running your auctions?</p>
+    <h1 class="display-4">Make a spash with your next club auction.</h1>
+    <h2 class="text-right"><span class='text-info'>Completely free.</span></h2>
+  </div>
+</div>
+<h5>This site provides all the tools you need to run traditional, in-person auctions.  Or, run your auctions online without the need to reserve an auction hall or pay an auctioneer.</h5><h4 class="text-right">No paperwork.  No math.  Simple enough to use on your phone.</h4>
+<div><h3>Click below to learn more about:</h3>
+    <ul class="nav nav-pills">
+      <li class="nav-item">
+        <a class="nav-link " data-toggle="tab" href="#runAuction">Online auctions</a>
+      </li>
+      <li class="nav-item">
+        <a class="nav-link " data-toggle="tab" href="#runInPersonAuction">In-person auctions</a>
+      </li>
+      <!-- <li class="nav-item">
+        <a class="nav-link " data-toggle="tab" href="#nonauctionlots">Buying or selling without an auction</a>
+      </li> -->
+
+    </ul>
+</div>
+<div id="tabs" class="tab-content">
+  <div class="tab-pane fade " id="runAuction">
+    <p></p>
+    <div class="lead">Think of the stuff that makes running an auction hard:</div>
     <ol>
       <li>Pick a date and time</li>
       <li>Choose a location</li>
@@ -144,69 +167,38 @@
       <li>Get paid</li>
       <li>Give sold lots to their winners</li>
     </ol>
-    <p class="lead"><span class="it_gets_easier" style="visibility:hidden;">It gets easier.</span> <span
-        style="visibility:hidden;" class='free text-info'>(And did we mention free?)</span></p>
-  </div>
-  And if you still want to run an in-person auction -- you can do that too!
-</div>
-<div class="jumbotron jumbotron-fluid">
-  <div class="container">
-    <h1 class="display-4">Here's how it works</h1>
-    <ol>
-      <li>Your club creates an auction on this site</li>
-      <li>Sellers add lots</li>
-      <li>Buyers select a pickup location and bid on lots</li>
-      <li><span>This site does its <span class='magic'>magic</span>.</span>
-        <ul>
-          <span id='locations_trigger'></span>
-          <li>Watch lots to keep track of what you're interested in</li>
-          <li>Get notifications when you're outbid</li>
-          <li>Ban users who cause trouble <span class='text-muted'>Sorry Mike, water hyacinth isn't legal</span></li>
-          <li>Auctions end automatically</li>
-          <li>Invoices generated automatically</li>
-        </ul>
-      </li>
-      <li>Send invoices and get payment with Paypal (Paypal fees apply)</li>
-      <li>Exchange lots</li>
-      <li>Enjoy your new fish!</li>
-    </ol>
-    <!--<div><img id='locations_animation' style='max-width:100%' src="{% static 'locations_1.svg' %}" class="card-img-top" alt="Pickup locations diagram"></div>
-    <br><br><br><p><div><span class='text-muted'>Note: </span>Having multiple pickup locations is a good way to bring in new people, but it's optional.  You may want to run a single location auction first, so you club members get used to how the process works.</div></p>
-    -->
-  </div>
-</div>
+    <p class="lead"><span class="it_gets_easier" style="visibility:hidden;">It gets easier with online auctions.</span> <span
+        style="visibility:hidden;" class='free text-info'>Still completely free.</span></p>
+
+
 <div class="jumbotron jumbotron-fluid bg-primary">
   <div class="container">
-    <h1 class="display-4">Better for everyone</h1>
+    <h1 class="display-4">Easy to use.  Better for everyone.</h1>
     <div class="row">
       <div class="col-lg-4 col-md-6">
         <div class="card border-secondary mb-3" style="max-width: 20rem;">
-          <div class="card-header">Buyers</div>
+          <div class="card-header">Online auctions benefit everyone</div>
           <div class="card-body">
-            <h4 class="card-title">Less pressure</h4>
+            <h4 class="card-title">Buyers and sellers</h4>
             <h3><img style='max-width:2em' src="{% static 'red_tail_cat.svg' %}" class="card-img-top" alt="Don't buy big fish"></h3>
-            <p class="card-text">Take your time and research fish before you bid. No more accidental pacu purchases!
+            <p class="card-text">Take your time and research items before you bid
+              <p>Set a reserve price, so your items always sell for what they're worth</p>
+              <p>No need to pack and transport unsold items</p>
             </p>
           </div>
         </div>
       </div>
       <div class="col-lg-4 col-md-6">
         <div class="card border-secondary mb-3" style="max-width: 20rem;">
-          <div class="card-header">Clubs</div>
+          <div class="card-header">A game-changer for clubs</div>
           <div class="card-body">
-            <h4 class="card-title">Attract new members</h4>
-            <p class="card-text">Bring in new club members and new fish from other clubs with multiple pickup
-            locations<br><br><span class='text-muted'>Because everyone in your home club already has a pair of your
-            swordtails...</span></p>
-          </div>
-        </div>
-      </div>
-      <div class="col-lg-4 col-md-6">
-        <div class="card border-secondary mb-3" style="max-width: 20rem;">
-          <div class="card-header">Sellers</div>
-          <div class="card-body">
-            <h4 class="card-title">Set a reserve price</h4>
-            <p class="card-text">Make sure your carefully raised fish sell for what they're worth<br><br>No need to bag and transport unsold lots - hang on to them for next time</p>
+            <h4 class="card-title">Clubs</h4>
+            <p class="card-text">
+                <p>Attract new members</p>
+                <p>No location rental costs</p>
+                <p>No auctioneer costs</p>
+                <p>Save time and hassle setting up</p>
+            </p>
           </div>
         </div>
       </div>
@@ -220,34 +212,12 @@
             <h3><img style='max-width:1em' src="{% static 'glass.svg' %}" class="card-img-top" alt="Don't drink and bid"></h3>
             <span class='text-info'>Sturgeon general's warning:</span> consumption of alcohol while bidding may be
             beneficial to your club's finances<br><br>
-            <span class='text-muted'>*Pants (and masks) required when exchanging lots</span>
-            </p>
-          </div>
-        </div>
-      </div>
-      <div class="col-lg-4 col-md-6">
-        <div class="card border-secondary mb-3" style="max-width: 20rem;">
-          <div class="card-header">Avoid bidding wars</div>
-          <div class="card-body">
-            <h4 class="card-title">Proxy bidding</h4>
-            <h3><img style='max-width:1em' src="{% static 'zzz.svg' %}" class="card-img-top" alt="Don't drink and bid"></h3>
-            <p class="card-text">The winning bid is determined by the second highest bid<br><br>Bid what a lot is worth to you, and we'll automatically bid on your behalf up to your chosen price
-            </p>
-          </div>
-        </div>
-      </div>
-      <div class="col-lg-4 col-md-6">
-        <div class="card border-secondary mb-3" style="max-width: 20rem;">
-          <div class="card-header">Better bookkeeping</div>
-          <div class="card-body">
-            <h4 class="card-title">Automatic Invoices</h4>
-            <p class="card-text">See exactly how much you owe with invoices that are created automatically after the auction ends.
-              <br><a href='/invoices/example/' class='btn btn-primary' target="_blank">See example</a>
             </p>
           </div>
         </div>
       </div>
     </div>
+    <h1 class="text-right"><span class='magic'>Awesome.</span></h1>
   </div>
 </div>
 <div class="jumbotron jumbotron-fluid">
@@ -261,108 +231,55 @@
         </div>
         <div class="col-lg-4">
           <blockquote class="blockquote text-right">
-            <p class="mb-0">Amazing! The new way to buy and sell fish.</p>
+            <p class="mb-0">Amazing! The best auction software I've ever seen</p>
             <footer class="blockquote-footer">Janine Banks</footer>
           </blockquote>
         </div>
         <div class="col-lg-4">
           <blockquote class="blockquote text-right">
-            <p class="mb-0">Yeah, it's OK, I guess...</p>
-            <footer class="blockquote-footer">Mike</footer>
+            <p class="mb-0">this electronic age shit sucks !!!</p>
+            <footer class="blockquote-footer">John Krol</footer>
           </blockquote>
         </div>
       </div>
     </div>
 </div>
+</div>
+
+<div class="tab-pane fade show" id="runInPersonAuction">
+  <br>
+  <h4>All the software you need to run an in-person auction</h4>
+  <ul>
+    <li>Manage users and lots</li>
+    <li>Quickly and easily set lot winners</li>
+    <li>Get help from friends* to run the auction<br>
+    <span class="text-muted"><small>*Friends not included --  you'll have to make some along the way</small></span></li>
+    <li>Automatic invoicing</li>
+    <li>...and more!</li>
+  </ul>
+  <br>
+</div>      
+
+
+<!-- <div class="tab-pane fade" id="nonauctionlots">
+  <ol>
+    <br> This is something that people asked for, 
+    <br> Click <a href="/lots/new">Create lot</a> to sell an item, or click on <a href="/lots/">Lots</a> to see stuff for sale near you.
+    <br>
+    <br> 
+    <br> If you're selling, remember to set a reserve price so that you don't sell a one-of-a-kind fish for $1!
+    <br> 
+    <br> If you're buying, make sure to check out the seller's feedback before you bid.
+    <br>
+    <br> I do recommend joining a club <a href="/auctions/">auction</a> if one is running near you, since clubs <a href="/faq#can-i-sell-stuff-without-joining-a-club-auction">are fantastic</a>!
+    <br>
+</div> -->
+
+
 <div style="background:transparent !important" class="jumbotron jumbotron-fluid bg-primary">
   <div class="container">
-    <h1 class="display-4">Ready to get started?</h1>
-    <ul class="nav nav-tabs">
-      <!-- <li class="nav-item">
-        <a class="nav-link " data-toggle="tab" href="#moreinfo">I want to know more about this site</a>
-      </li> -->
-      <li class="nav-item">
-        <a class="nav-link" data-toggle="tab" href="#runAuction">Start your club's online auction</a>
-      </li>
-      <li class="nav-item">
-        <a class="nav-link active" data-toggle="tab" href="#runInPersonAuction">Run an in-person auction</a>
-      </li>
-      <li class="nav-item">
-        <a class="nav-link" data-toggle="tab" href="#nonauctionlots">Buy or sell lots without an auction</a>
-      </li>
-
-    </ul>
-    <div id="tabs" class="tab-content">
-      <!-- <div class="tab-pane fade " id="moreinfo">
-        <br>I'm happy to provide help with running your auctions and answer any questions.
-        <br>
-        <br>{% if not request.user.is_authenticated %}<a href="/google/login/?process=login&next={% firstof request.path '/' %}">Sign in with Google</a> or <a href="/signup/">create an account</a> and my email address will show up here{% else %}Contact me at <a href='mailto:{{ contact_email }}'>{{ contact_email }}</a>{% endif %}.
-        <br>
-        <br>For more information, <a href="/faq">check out the FAQ here</a>
-        <br>
-        <br>
-        <br>
-        <br>
-        <br>
-        <br>
-      </div> -->
-      <div class="tab-pane fade " id="runAuction">
-        <br>
-        <ol>
-          <li>{% if not request.user.is_authenticated %}<a href="/google/login/?process=login&next={% firstof request.path '/' %}">Sign in with Google</a> or <a href="/signup/">create an account</a>{% else %}Thanks for signing up!{% endif %}</li>
-          <li><a href='/auctions/new'>Create an auction</a></li>
-          <li>Add one or more pickup locations to your auction</li>
-          <li>Wait for the auction to end</li>
-          <li>View invoices for all users (<a href="/invoices/example">See example</a>)</li>
-          <li>Optional: Send invoices with Paypal (<a href="/blog/online-payments-suck">here's how</a>)</li>
-          <li>Coordinate the exchange of money and fish</li>
-        </ol>
-        <br>
-        <br>See <a href="/auctions/tfcb-annual-auction/">example auction rules</a> or see <a href="/lots/?auction=tfcb-annual-auction">lots for an example auction</a>
-      </div>
-      <div class="tab-pane fade active show" id="runInPersonAuction">
-        <br>
-        <ol>
-          <li>{% if not request.user.is_authenticated %}<a href="/google/login/?process=login&next={% firstof request.path '/' %}">Sign in with Google</a> or <a href="/signup/">create an account</a>{% else %}Thanks for signing up!{% endif %}</li>
-          <li><a href='/auctions/new'>Create an auction</a></li>
-          <li>Optional: Set the location of your auction, and allow people to pre-register on this site</li>
-          <li>Add people, lots and bids to this site - users don't even need to create an account!</li>
-          <li>Invoices are automatically generated on-demand for all users (<a href="/invoices/example">See example</a>)</li>
-          <li>Optional: Send invoices with Paypal (<a href="/blog/online-payments-suck">here's how</a>)</li>
-        </ol>
-        <br>
-        <br>See <a href="/auctions/tfcb-annual-auction/">example auction rules</a> or see <a href="/lots/?auction=tfcb-annual-auction">lots for an example auction</a>
-      </div>      
-      
-      <!-- <div class="tab-pane fade" id="profile">
-        <ol>
-          <br>
-          <li>{% if not request.user.is_authenticated %}<a href="/google/login/?process=login&next={% firstof request.path '/' %}">Sign in with Google</a> or <a href="/signup/">create an account</a>{% else %}Thanks for signing up!{% endif %}</li>
-          <li>Find an auction</li>
-          <li>Read the auction's rules and select the pickup location that works best for you</li>
-          <li><a href='/lots/new/'>Submit</a> and bid on lots</li>
-          <li>After the auction ends, you'll get an invoice listing the lots you won</li>
-          <li>Go to the pickup location</li>
-          <li>Pay</li>
-          <li>Get your lots</li>
-          <li>Enjoy your fish!</li>
-        </ol>
-      </div> -->
-      <div class="tab-pane fade" id="nonauctionlots">
-        <ol>
-          <br>
-          <br> Click <a href="/lots/new">Create lot</a> to sell an item, or click on <a href="/lots/">Lots</a> to see stuff for sale near you.
-          <br>
-          <br> 
-          <br> If you're selling, remember to set a reserve price so that you don't sell a one-of-a-kind fish for $1!
-          <br> 
-          <br> If you're buying, make sure to check out the seller's feedback before you bid.
-          <br>
-          <br> I do recommend joining a club <a href="/auctions/">auction</a> if one is running near you, since clubs <a href="/faq#can-i-sell-stuff-without-joining-a-club-auction">are fantastic</a>!
-          <br>
-      </div>
-
+    <h2 class="display-4">Ready to get started?</h2>
+    <h3 class='text-right'>Head to the <a href='/auctions/'>list of club auctions</a> and add yours today!</h3>
     </div>
-  </div>
 </div>
 {% endblock %}
