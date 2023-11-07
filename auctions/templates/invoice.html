@@ -52,6 +52,7 @@ $(document).ready(function(){
             {% endif %}
             
             {% if auction %}
+              {{ auction.invoice_payment_instructions | default:""}}<br>
               {% if print_label_link and not exampleMode %}
               <div>{% if show_links %}Either <a href="{{ print_label_link }}">print your labels</a> or <span class='font-weight-bold'>write{% else %}<span>Write{% endif %} the lot number and the name of the winner {% if invoice.auction.multi_location %} and the destination location {% endif %} on each lot. </span></div>
               {% endif %}

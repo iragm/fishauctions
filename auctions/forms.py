@@ -923,6 +923,7 @@ class AuctionEditForm(forms.ModelForm):
         fields = ['notes', 'lot_entry_fee','unsold_lot_fee','winning_bid_percent_to_club', 'date_start', 'date_end', 'lot_submission_start_date',\
             'lot_submission_end_date', 'sealed_bid','use_categories', 'promote_this_auction', 'max_lots_per_user', 'allow_additional_lots_as_donation',
             'email_users_when_invoices_ready', 'pre_register_lot_entry_fee_discount', 'pre_register_lot_discount_percent', 'allow_bidding_on_lots','only_approved_sellers',
+            'invoice_payment_instructions', 'minimum_bid',
             ]
         widgets = {
             'date_start': DateTimePickerInput(),
@@ -943,7 +944,7 @@ class AuctionEditForm(forms.ModelForm):
         self.fields['date_end'].label = "Bidding ends"
         self.fields['email_users_when_invoices_ready'].label = "Invoice notifications"
         self.fields['email_users_when_invoices_ready'].help_text = "Send an email to users when their invoice is ready or paid"
-
+        self.fields['invoice_payment_instructions'].widget.attrs = {'placeholder': 'Send money to paypal.me/yourpaypal'}
         #self.fields['notes'].help_text = "Foo"
         if self.instance.is_online:
             self.fields['lot_submission_end_date'].help_text = "This should be 1-24 hours before the end of your auction"
@@ -967,7 +968,11 @@ class AuctionEditForm(forms.ModelForm):
                     originalAuction = Auction.objects.get(slug=self.cloned_from, is_deleted=False)
                     if (originalAuction.created_by.pk == self.user.pk) or self.user.is_superuser:
                         # you can only clone your own auctions
-                        cloneFields = ['title', 'notes', 'lot_entry_fee','unsold_lot_fee','winning_bid_percent_to_club', 'first_bid_payout', 'sealed_bid','promote_this_auction', 'max_lots_per_user', 'allow_additional_lots_as_donation','make_stats_public']
+                        cloneFields = ['title', 'notes', 'lot_entry_fee','unsold_lot_fee','winning_bid_percent_to_club', 'first_bid_payout',
+                                    'sealed_bid','promote_this_auction', 'max_lots_per_user', 'allow_additional_lots_as_donation','make_stats_public',
+                                    'invoice_payment_instructions', 'minimum_bid', 'email_users_when_invoices_ready', 'allow_bidding_on_lots', 'only_approved_sellers',
+                                    'use_categories','pre_register_lot_entry_fee_discount','pre_register_lot_discount_percent',
+                                    ]
                         for field in cloneFields:
                             self.fields[field].initial = getattr(originalAuction, field)
                         self.fields['cloned_from'].initial = self.cloned_from
@@ -1016,8 +1021,13 @@ class AuctionEditForm(forms.ModelForm):
             Div(
                 Div('use_categories',css_class='col-md-3',),
                 Div('promote_this_auction', css_class='col-md-3',),
-                Div('email_users_when_invoices_ready', css_class='col-md-3',),
+                Div('minimum_bid',css_class='col-md-3',),
                 Div('allow_bidding_on_lots', css_class='col-md-3',),
+                css_class='row',
+            ),
+            Div(
+                Div('email_users_when_invoices_ready', css_class='col-md-3',),
+                Div('invoice_payment_instructions', css_class='col-md-9',),
                 css_class='row',
             ),
             Submit('submit', 'Save', css_class='create-update-auction btn-success'),

@@ -271,6 +271,12 @@ class Auction(models.Model):
 	only_approved_sellers = models.BooleanField(default=False)
 	only_approved_sellers.help_text = "Require admin approval before users can add lots.  This will not change permissions for users that have already joined."
 	email_users_when_invoices_ready = models.BooleanField(default=True)
+	invoice_payment_instructions = models.CharField(max_length=255, blank=True, null=True, default="")
+	invoice_payment_instructions.help_text = "Shown to the user on their invoice.  For example, 'You will receive a seperate PayPal invoice with payment instructions'"
+	# partial for #139
+	minimum_bid = models.PositiveIntegerField(default=2, validators=[MinValueValidator(2)])
+	minimum_bid.help_text = "Lowest price a lot can sell for."
+
 
 	def __str__(self):
 		result = self.title
@@ -2320,6 +2326,27 @@ class PageView(models.Model):
 	longitude = models.FloatField(default=0)
 	ip_address = models.CharField(max_length=100, blank=True, null=True) 
 	user_agent = models.CharField(max_length=200, blank=True, null=True)
+	platform = models.CharField(
+		max_length=20,
+		choices=(
+			('UNKNOWN', 'Unknown'),
+			('MOBILE', 'Phone'),
+			('TABLET', "Tablet"),
+			('DESKTOP', "Desktop"),
+		),
+		default="UNKNOWN"
+	)
+	os = models.CharField(
+		max_length=20,
+		choices=(
+			('UNKNOWN', 'Unknown'),
+			('ANDROID', 'Android'),
+			('IPHONE', "iPhone"),
+			('WINDOWS', "Windows"),
+			('OSX', "OS X"),
+		),
+		default="UNKNOWN"
+	)
 
 	def __str__(self):
 		thing = self.url
@@ -2414,7 +2441,7 @@ class UserData(models.Model):
 	use_dark_theme.help_text = "Uncheck to use the blindingly bright light theme"
 	use_list_view = models.BooleanField(default=False)
 	use_list_view.help_text = "Show a list of all lots instead of showing pictures"
-	email_visible = models.BooleanField(default=True)
+	email_visible = models.BooleanField(default=False)
 	email_visible.help_text = "Show your email address on your user page.  This will be visible only to logged in users.  <a href='/blog/privacy/' target='_blank'>Privacy information</a>"
 	last_auction_used = models.ForeignKey(Auction, blank=True, null=True, on_delete=models.SET_NULL)
 	last_activity = models.DateTimeField(auto_now_add=True)
@@ -2455,6 +2482,12 @@ class UserData(models.Model):
 	show_ads.help_text = "Ads have been disabled site-wide indefinitely, so this option doesn't do anything right now."
 	preferred_bidder_number = models.CharField(max_length=4, default="", blank=True)
 	timezone = models.CharField(max_length=100, null=True, blank=True)
+	username_visible = models.BooleanField(default=True, blank=True)
+	username_visible.help_text = "Uncheck to bid anonymously."
+	show_email_warning_sent = models.BooleanField(default=False, blank=True)
+	show_email_warning_sent.help_text = "When a user has their email address hidden and sells a lot, this is checked"
+	username_is_email_warning_sent = models.BooleanField(default=False, blank=True)
+	username_is_email_warning_sent.help_text = "Warning email has been sent because this user made their username an email"
 
 	# breederboard info
 	rank_unique_species = models.PositiveIntegerField(null=True, blank=True)
@@ -2752,6 +2785,22 @@ class AdCampaignResponse(models.Model):
 		else:
 			action = "viewed"
 		return f"{user} {action}"
+
+class AuctionCampaign(models.Model):
+	auction = models.ForeignKey(Auction, null=True, blank=True, on_delete=models.SET_NULL)
+	uuid = models.CharField(max_length=255, default=uuid.uuid4, blank=True)
+	user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+	email = models.CharField(max_length=255, default="", blank=True)
+	timestamp = models.DateTimeField(auto_now_add=True)
+	result = models.CharField(
+		max_length=20,
+		choices=(
+			('NONE', 'No response'),
+			('VIEWED', "Clicked"),
+			('JOINED', 'Joined'),
+		),
+		default="NONE"
+	)
 
 class LotImage(models.Model):
 	"""An image that belongs to a lot.  Each lot can have multiple images"""

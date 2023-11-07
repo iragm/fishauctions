@@ -52,6 +52,7 @@ from reportlab.lib.enums import TA_JUSTIFY
 import qr_code
 from qr_code.qrcode.utils import QRCodeOptions
 import textwrap
+from user_agents import parse
 
 class AuctionPermissionsMixin():
     """For any auction-related views, adds view.is_auction_admin to be used for any kind of permissions-checking
@@ -3110,6 +3111,8 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
             if self.is_auction_admin:
                 auth = True
                 self.is_admin = True
+            if invoice.auction.invoice_payment_instructions and invoice.status == "UNPAID":
+                messages.info(request, invoice.auction.invoice_payment_instructions)
         if self.exampleMode:
             auth = True
         if request.user.is_authenticated:

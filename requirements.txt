@@ -62,3 +62,6 @@ zope.interface
 crispy-bootstrap4
 reportlab
 channels_redis
+pyyaml
+ua-parser
+user-agents
