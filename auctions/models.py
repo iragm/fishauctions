@@ -2966,7 +2966,9 @@ def update_lot_info(sender, instance, **kwargs):
 				changed_price = False,
 				current_price=instance.high_bid,
 				)
-			
+	if instance.auction and instance.reserve_price < instance.auction.minimum_bid:
+		instance.reserve_price = instance.auction.minimum_bid
+		
 @receiver(user_logged_in)
 def user_logged_in_callback(sender, user, request, **kwargs):
 	"""When a user signs in, check for any AuctionTOS that have this users email but no user, and attach them to the user

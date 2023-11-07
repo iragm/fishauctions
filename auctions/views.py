@@ -2082,7 +2082,7 @@ class LotValidation(LoginRequiredMixin):
                 messages.error(self.request, f"Buy now price can't be lower than the reserve price")
         if lot.auction:
             if not lot.auction.is_online:
-                if lot.buy_now_price or lot.reserve_price > 2:
+                if lot.buy_now_price or lot.reserve_price > lot.auction.minimum_bid:
                     messages.info(self.request, f"Reserve and buy now prices may not be used in this auction.  Read the auction's rules for more information")
             lot.date_end = lot.auction.date_end
             userData, created = UserData.objects.get_or_create(
