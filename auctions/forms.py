@@ -434,7 +434,7 @@ class EditLot(forms.ModelForm):
         self.fields['auctiontos_winner'].label = "Winner"
         winner_help_test = ""
         if lot.high_bidder:
-            winner_help_test = f"High bidder: <span class='text-warning'>{lot.high_bidder}</span> Bid: <span class='text-warning'>${lot.high_bid}</span>"
+            winner_help_test = f"High bidder: <span class='text-warning'>{lot.high_bidder_for_admins}</span> Bid: <span class='text-warning'>${lot.high_bid}</span>"
         self.fields['auctiontos_winner'].help_text = winner_help_test
         #self.fields['auctiontos_seller'].label = "Seller"
         #self.fields['auctiontos_seller'].help_text = ""
@@ -1552,19 +1552,19 @@ class UserLabelPrefsForm(forms.ModelForm):
 class ChangeUserPreferencesForm(forms.ModelForm):
     class Meta:
         model = UserData
-        fields = ('email_visible', 'use_dark_theme', 'use_list_view', 'show_ads', 'email_me_about_new_auctions','email_me_about_new_auctions_distance',\
+        fields = ('email_visible', 'use_dark_theme', 'show_ads', 'email_me_about_new_auctions','email_me_about_new_auctions_distance',\
             'email_me_about_new_local_lots','local_distance', 'email_me_about_new_lots_ship_to_location', 'email_me_when_people_comment_on_my_lots',\
-            'email_me_about_new_in_person_auctions', 'email_me_about_new_in_person_auctions_distance',
+            'email_me_about_new_in_person_auctions', 'email_me_about_new_in_person_auctions_distance', 'username_visible',
             )
-        exclude = (
-            'user','phone_number','address','location','location_coordinates',\
-            'last_auction_used','last_activity','latitude','longitude',\
-            'paypal_email_address','unsubscribe_link',\
-            'has_unsubscribed','rank_unique_species','number_unique_species','rank_total_lots',\
-            'number_total_lots','rank_total_spent','number_total_spent','rank_total_bids','number_total_bids',\
-            'number_total_sold','rank_total_sold','total_volume',\
-            'rank_volume','seller_percentile','buyer_percentile','volume_percentile','club',
-        )
+        # exclude = (
+        #     'user','phone_number','address','location','location_coordinates',\
+        #     'last_auction_used','last_activity','latitude','longitude',\
+        #     'paypal_email_address','unsubscribe_link',\
+        #     'has_unsubscribed','rank_unique_species','number_unique_species','rank_total_lots',\
+        #     'number_total_lots','rank_total_spent','number_total_spent','rank_total_bids','number_total_bids',\
+        #     'number_total_sold','rank_total_sold','total_volume',\
+        #     'rank_volume','seller_percentile','buyer_percentile','volume_percentile','club',
+        # )
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
@@ -1574,13 +1574,11 @@ class ChangeUserPreferencesForm(forms.ModelForm):
         self.helper.form_tag = True
         self.helper.layout = Layout(
             Div(
-                Div('email_visible',css_class='col-md-6',),
-                Div('use_list_view',css_class='col-md-6',),
-                css_class='row',
-            ),
-            Div(
-                Div('use_dark_theme',css_class='col-md-6',),
-                Div('show_ads',css_class='col-md-6',),
+                Div('email_visible',css_class='col-md-4',),
+                Div('username_visible',css_class='col-md-4',),
+                #Div('use_list_view',css_class='col-md-4',),
+                Div('use_dark_theme',css_class='col-md-4',),
+                #Div('show_ads',css_class='col-md-3',),
                 css_class='row',
             ),
             HTML("<h4>Notifications</h4><br>"),

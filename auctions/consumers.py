@@ -16,7 +16,7 @@ def check_bidding_permissions(lot, user):
     """
     if lot.ended:
         return "Bidding on this lot has ended"
-    if lot.user.pk == user.pk:
+    if lot.user and lot.user.pk == user.pk:
         return "You can't bid on your own lot"
     return False
 
@@ -130,6 +130,10 @@ def bid_on_lot(lot, user, amount):
             defaults={},
         )
         userData.has_bid = True
+        if userData.username_visible:
+            user_string = str(user)
+        else:
+            user_string = "Anonymous"
         userData.save()
         if not interestCreated:
             interest.interest += settings.BID_WEIGHT
@@ -150,7 +154,7 @@ def bid_on_lot(lot, user, amount):
             if not created:
                 if amount <= bid.amount:
                     result['message'] = f"Bid more than your proxy bid (${bid.amount})"
-                    #print(f"{user} tried to bid on {lot} less than their original bid of ${originalBid}")
+                    #print(f"{user_string} tried to bid on {lot} less than their original bid of ${originalBid}")
                     return result
                 else:
                     bid.last_bid_time = timezone.now()
@@ -177,9 +181,9 @@ def bid_on_lot(lot, user, amount):
                     lot.save()
                     result['send_to'] = 'everyone'
                     result['high_bidder_pk'] = user.pk   
-                    result['high_bidder_name'] = str(user)
+                    result['high_bidder_name'] = user_string
                     result['type'] = "LOT_END_WINNER"
-                    result['message'] = f"{user} bought this lot now!!"
+                    result['message'] = f"{user_string} bought this lot now!!"
                     result["current_high_bid"] = lot.buy_now_price
                     bid.was_high_bid = True
                     bid.last_bid_time = lot.date_end
@@ -199,7 +203,7 @@ def bid_on_lot(lot, user, amount):
                 result['message'] = f"{user} has placed the first bid on this lot"
                 result["current_high_bid"] = lot.reserve_price
                 result['high_bidder_pk'] = user.pk   
-                result['high_bidder_name'] = str(user)
+                result['high_bidder_name'] = user_string
                 bid.was_high_bid = True
                 LotHistory.objects.create(
                     lot = lot,
@@ -215,9 +219,16 @@ def bid_on_lot(lot, user, amount):
             if bid.amount <= originalBid: # changing this to < would allow bumping without being the high bidder
                 # there's a high bidder already
                 bid.save() # save the current bid regardless
-                #print(f"{user} tried to bid on {lot} less than the current bid of ${originalBid}")
+                #print(f"{user_string} tried to bid on {lot} less than the current bid of ${originalBid}")
                 result['message'] = f"You can't bid less than ${originalBid + 1}"
                 return result
+            if bid.amount > originalBid + 1:
+                userData, userdataCreated = UserData.objects.get_or_create(
+                    user = user,
+                    defaults={},
+                )
+                userData.has_used_proxy_bidding = True
+                userData.save()
             # if we get to this point, the user has bid >= the high bid
             bid.was_high_bid = True
             bid.last_bid_time = timezone.now()
@@ -228,24 +239,18 @@ def bid_on_lot(lot, user, amount):
                         # user is upping their own price, don't tell other people about it
                         result['type'] = "INFO"
                         result['message'] = f"You've raised your proxy bid to ${bid.amount}"
-                        #print(f"{user} has raised their bid on {lot} to ${bid.amount}")
-                        userData, userdataCreated = UserData.objects.get_or_create(
-                            user = user,
-                            defaults={},
-                        )
-                        userData.has_used_proxy_bidding = True
-                        userData.save()
+                        #print(f"{user_string} has raised their bid on {lot} to ${bid.amount}")
                         return result
                 except:
                     pass
                 # New high bidder!  If we get to this point, the user has bid against someone else and changed the price
                 result['date_end'] = reset_lot_end_time(lot)
                 result['type'] = "NEW_HIGH_BIDDER"
-                result['message'] = f"{lot.high_bidder} is now the high bidder at ${lot.high_bid}"
+                result['message'] = f"{lot.high_bidder_display} is now the high bidder at ${lot.high_bid}"
                 if result['date_end']:
                     result['message'] += ". End time extended!"
                 result['high_bidder_pk'] = lot.high_bidder.pk
-                result['high_bidder_name'] = str(lot.high_bidder)
+                result['high_bidder_name'] = str(lot.high_bidder_display)
                 result["current_high_bid"] = lot.high_bid
                 result['send_to'] = 'everyone'
                 # email the old one
@@ -269,7 +274,7 @@ def bid_on_lot(lot, user, amount):
             result['date_end'] = reset_lot_end_time(lot)
             result['type'] = "NEW_HIGH_BID"
             result["current_high_bid"] = lot.high_bid
-            result['message'] = f"{user} bumped the price up to ${lot.high_bid}.  {lot.high_bidder} is still the high bidder."
+            result['message'] = f"{user_string} bumped the price up to ${lot.high_bid}.  {lot.high_bidder_display} is still the high bidder."
             if result['date_end']:
                 result['message'] += "  End time extended!"
             result['send_to'] = 'everyone'
@@ -338,7 +343,12 @@ class LotConsumer(WebsocketConsumer):
             self.room_group_name,
             self.channel_name
         )
-        if self.user.pk == self.lot.user.pk:
+        user_pk = None        
+        if self.lot.user:
+            user_pk = self.lot.user.pk
+        if self.lot.auctiontos_seller and self.lot.auctiontos_seller.user:
+            user_pk = self.lot.auctiontos_seller.user
+        if user_pk and self.user.pk == user_pk:
             #print("lot owner is leaving the chat, marking all chats as seen")
             LotHistory.objects.filter(lot=self.lot.pk, seen=False).update(seen=True)
 

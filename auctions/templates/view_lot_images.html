@@ -208,7 +208,15 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                     </span></b></td>
                     <td>
                     {% if lot.sold %}
-                        $<span id="price">{{lot.winning_price}}</span> <span id="high_bidder_name">{% if lot.winner %}<a href="{% url 'userpage' slug=lot.winner %}">{{ lot.winner }}</a>{% else %}Bidder: {{ lot.auctiontos_winner }}{% endif %}</span>
+                        $<span id="price">{{lot.winning_price}}</span> <span id="high_bidder_name">{% if lot.winner %}
+                            {% if lot.winner.userdata.username_visible %}
+                                <a href="{% url 'userpage' slug=lot.winner %}">{{ lot.winner }}</a>
+                            {% else %}
+                                Anonymous
+                            {% endif %}
+                            {% else %}
+                                Bidder: {{ lot.auctiontos_winner }}
+                            {% endif %}</span>
                     {% else %}
                         {% if lot.ended %}
                             Not sold
@@ -222,7 +230,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                                     {% if lot.high_bidder.pk == request.user.id %}
                                     <span id="high_bidder_name"> - you're winning!</span>
                                     {% else %}
-                                    <span id="high_bidder_name"><a href="{% url 'userpage' slug=lot.high_bidder %}">{{ lot.high_bidder }}</a></span>
+                                    <span id="high_bidder_name">{% if lot.high_bidder.userdata.username_visible %}<a href="{% url 'userpage' slug=lot.high_bidder %}">{{ lot.high_bidder }}</a>{% else %}Anonymous{%endif%}</span>
                                     {% endif %}
                                     <span id="your_bid">{% if viewer_bid %}Your max bid is $<span id='your_bid_price'>{{ viewer_bid }}</span>{% endif %}</span>
                                 </span>
@@ -303,7 +311,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
             </tr>
         </table>
         {% endif %}
-        {% if lot.user.pk == request.user.id %}
+        {% if request.user.is_authenticated and lot.user.pk == request.user.id %}
         {% if lot.can_be_edited %}
             <a href="/lots/edit/{{lot.pk}}" class="btn btn-warning">Edit lot</a>
         {% endif %}
@@ -440,8 +448,8 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
         </div>
         <div class="modal-footer">
             {% if not user.is_authenticated %}
-            <a href="/login/?next={{ lot.lot_link }}" role="button" class="btn btn-primary">Log in</a>
-            <a href="/signup/?next={{ lot.lot_link }}" role="button" class="btn btn-primary">Sign up</a>
+            <a href="/login/?next={{ lot.lot_link }}" role="button" class="btn btn-primary">Sign in</a>
+            <a href="/signup/?next={{ lot.lot_link }}" role="button" class="btn btn-primary">Create an account</a>
             {% elif not user_tos %}
             <a href="/auctions/{{lot.auction.slug}}/?next={{ lot.lot_link }}#join" role="button" class="btn btn-primary">Read auction rules</a>
             {% endif %}
@@ -452,6 +460,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
 </div>
 <!-- Chat -->
 <div class="container-fluid col-md-offset-1 col-xl-4 mt-1 mb-1 mt-xl-5">
+    {% if request.user.is_authenticated %} {# chats only shown if you are logged in #}
     <div class="mt-xl-5 col-md-11 bg-primary rounded pb-1" style="box-shadow: 5px 5px 8px 2px rgba(121, 121, 121, 0.2);"> 
     <br><h4>Chat</h4>
     <div class="panel" id="chat" style='min-height: 100px; max-height: 30vh; {# calc(100vh - 200px) #}
@@ -471,7 +480,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
         var high_bidder = '';
         var high_bidder_pk = '{{ request.user.pk }}';
         {% else %}
-        var high_bidder = '{{ lot.high_bidder }}';
+        var high_bidder = '{{ lot.high_bidder_display }}';
         var high_bidder_pk = '{{ lot.high_bidder.pk }}';
         {% endif %}
         var viewer_bid = '{{ lot.viewer_bid }}';
@@ -498,7 +507,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                 }
             }
             if (data.high_bidder_pk) {
-                $('#high_bidder_name').html("<a href='/users/" + data.high_bidder_pk + "/'>" + data.high_bidder_name + "</a>");
+                $('#high_bidder_name').html(data.high_bidder_name);
                 $('#price_label').html("Current bid:");
             }
             var messageClass = "warning";
@@ -610,7 +619,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
         //{% endif %}
     </script>
     </div>
-
+    {% endif %}
 <!-- Chart -->
 {% if request.user.is_superuser %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.3/dist/Chart.min.js"></script>

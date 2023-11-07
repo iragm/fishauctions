@@ -1001,17 +1001,31 @@ class AuctionTOS(models.Model):
 		super().save(*args, **kwargs) 
 
 	@property
+	def display_name_for_admins(self):
+		"""Same as display name, but no anonymous option"""
+		if self.auction.is_online:
+			if self.user and not self.manually_added:
+				return self.user.username
+		if self.bidder_number:
+			return self.bidder_number
+		return "Unknown user"
+
+	@property
 	def display_name(self):
 		"""Use usernames for online auctions, and bidder numbers for in-person auctions"""
 		#return f"{self.user} will meet at {self.pickup_location} for {self.auction}"
 		if self.auction.is_online:
-			if self.user:
-				return self.user.username
+			if self.user and not self.manually_added:
+				userData, created = UserData.objects.get_or_create(
+					user = self.user,
+					defaults={},
+				)
+				if userData.username_visible:
+					return self.user.username
+				else:
+					return "Anonymous"
 		if self.bidder_number:
 			return self.bidder_number
-		# shouldn't ever get to this point
-		if self.user:
-			return self.user.username
 		return "Unknown user"
 
 	def __str__(self):
@@ -1456,16 +1470,40 @@ class Lot(models.Model):
 		if self.winner_as_str:
 			return self.winner_as_str
 		if self.high_bidder:
-			return self.high_bidder
+			userData, userdataCreated = UserData.objects.get_or_create(
+				user = self.high_bidder,
+				defaults={},
+			)
+			if userData.username_visible:
+				return str(self.high_bidder)
+			else:
+				return "Anonymous"
+		return "No bids"
+
+	@property
+	def high_bidder_for_admins(self):
+		if self.auctiontos_winner:
+			return self.auctiontos_winner.display_name_for_admins
+		if self.winner:
+			return str(self.winner)
+		if self.high_bidder:
+			return str(self.high_bidder)
 		return "No bids"
 
 	@property
 	def winner_as_str(self):
 		"""String of the winner name or number, for use on lot pages"""
 		if self.auctiontos_winner:
-			return f"Bidder {self.auctiontos_winner}"
+			return f"{self.auctiontos_winner}"
 		if self.winner:
-			return str(self.winner)
+			userData, created = UserData.objects.get_or_create(
+				user = self.winner,
+				defaults={},
+				)
+			if userData.username_visible:
+				return str(self.winner)
+			else:
+				return "Anonymous"
 		return ""
 
 	@property
@@ -2483,7 +2521,7 @@ class UserData(models.Model):
 	preferred_bidder_number = models.CharField(max_length=4, default="", blank=True)
 	timezone = models.CharField(max_length=100, null=True, blank=True)
 	username_visible = models.BooleanField(default=True, blank=True)
-	username_visible.help_text = "Uncheck to bid anonymously."
+	username_visible.help_text = "Uncheck to bid anonymously.  Your username will still be visible on lots you sell, chat messages, and to the people running any auctions you've joined."
 	show_email_warning_sent = models.BooleanField(default=False, blank=True)
 	show_email_warning_sent.help_text = "When a user has their email address hidden and sells a lot, this is checked"
 	username_is_email_warning_sent = models.BooleanField(default=False, blank=True)
@@ -2968,7 +3006,7 @@ def update_lot_info(sender, instance, **kwargs):
 				)
 	if instance.auction and instance.reserve_price < instance.auction.minimum_bid:
 		instance.reserve_price = instance.auction.minimum_bid
-		
+
 @receiver(user_logged_in)
 def user_logged_in_callback(sender, user, request, **kwargs):
 	"""When a user signs in, check for any AuctionTOS that have this users email but no user, and attach them to the user

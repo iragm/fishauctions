@@ -219,7 +219,7 @@ class LotListView(AjaxListView):
 class LotAutocomplete(autocomplete.Select2QuerySetView):
     def get_result_label(self, result):
         if result.high_bidder:
-            return format_html('<b>{}</b>: {}<br><small>High bidder:<span class="text-warning">{} (${})</span></small>', result.lot_number_display, result.lot_name, result.high_bidder, result.high_bid)
+            return format_html('<b>{}</b>: {}<br><small>High bidder:<span class="text-warning">{} (${})</span></small>', result.lot_number_display, result.lot_name, result.high_bidder_for_admins, result.high_bid)
         else:
             return format_html('<b>{}</b>: {}', result.lot_number_display, result.lot_name)
 
@@ -3501,10 +3501,10 @@ class UserByName(UserView):
             return User.objects.get(username=unquote(self.username))
         except:
             pass
-        try:
-            return User.objects.get(pk=self.username)
-        except:
-            pass
+        # try:
+        #     return User.objects.get(pk=self.username)
+        # except:
+        #     pass
         raise Http404
 
 class UsernameUpdate(UpdateView, SuccessMessageMixin):

@@ -1,6 +1,6 @@
 {# this is the tabs that are shown on many auction pages #}
 <h3>{{auction}}</h3>
-<small><span class='text-muted'>An {{auction.auction_type_as_str}}, created by {{ auction.created_by }}{% if request.user.is_authenticated %}: {{ auction.created_by.email|urlize }}{% endif %}</span></small>
+<small><span class='text-muted'>An {{auction.auction_type_as_str}}, created by {{ auction.created_by }}{% if request.user.is_authenticated and auction.created_by.userdata.email_visible %}: {{ auction.created_by.email|urlize }}{% endif %}</span></small>
 {% if view.is_auction_admin or is_auction_admin %}
 {% if not auction.admin_checklist_completed %}
 <div class='jumbotron'><h5>Finish setting up</h5>

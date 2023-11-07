@@ -59,9 +59,9 @@ def declare_winners_on_lots(lots):
                         info = 'LOT_END_WINNER'
                         bidder = lot.high_bidder
                         high_bidder_pk = lot.high_bidder.pk
-                        high_bidder_name = str(lot.high_bidder)
+                        high_bidder_name = str(lot.high_bidder_display)
                         current_high_bid = lot.high_bid
-                        message = f"Won by {lot.high_bidder}"
+                        message = f"Won by {lot.high_bidder_display}"
                         lot.save()
                     # at this point, the lot should have a winner filled out if it's sold.  If it still doesn't:
                     if not lot.sold:

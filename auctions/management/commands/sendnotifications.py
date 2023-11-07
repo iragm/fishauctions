@@ -1,5 +1,5 @@
 from django.core.management.base import BaseCommand, CommandError
-from auctions.models import Lot, Auction, Watch, User
+from auctions.models import Lot, Auction, Watch, User, UserData
 from post_office import mail
 from django.contrib.sites.models import Site
 
@@ -49,3 +49,14 @@ class Command(BaseCommand):
                 context={'domain': current_site.domain},
             )
             self.stdout.write(f'Emailed {email} about their watched items')
+        
+        # email people whose usernames are an email address
+        userdata = UserData.objects.filter(username_visible=True, user__username__icontains="@", username_is_email_warning_sent=False)
+        for data in userdata:
+            data.username_is_email_warning_sent = True
+            data.save()
+            mail.send(
+                data.user.email,
+                template='username_is_email',
+                context={'username': data.user.username},
+            )
