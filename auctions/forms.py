@@ -524,6 +524,7 @@ class CreateEditAuctionTOS(forms.ModelForm):
             'pickup_location',
             'selling_allowed',
             'is_admin',
+            'is_club_member',
             Div(
                 HTML(f'{delete_button_html}<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'),
                 HTML(f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Save</button>'),
@@ -546,6 +547,7 @@ class CreateEditAuctionTOS(forms.ModelForm):
             self.fields['address'].initial = self.auctiontos.address
             self.fields['pickup_location'].initial = self.auctiontos.pickup_location.pk
             self.fields['is_admin'].initial = self.auctiontos.is_admin
+            self.fields['is_club_member'].initial = self.auctiontos.is_club_member
             self.fields['selling_allowed'].initial = self.auctiontos.selling_allowed
         else:
             # special rule: default to the default location
@@ -567,6 +569,7 @@ class CreateEditAuctionTOS(forms.ModelForm):
 			'phone_number',
 			'address',
             'selling_allowed',
+            'is_club_member',
         ]
         widgets = {
             'address': forms.Textarea(attrs={'rows':3})
@@ -917,13 +920,14 @@ class CreateAuctionForm(forms.ModelForm):
 class AuctionEditForm(forms.ModelForm):
     """Make changes to an auction"""
     user_cut = forms.IntegerField(required=False, help_text="This plus the club cut must be 100%")
+    club_member_cut = forms.IntegerField(required=False, help_text="This plus the club cut for members must be 100%", label="User cut (members)")
     
     class Meta:
         model = Auction
         fields = ['notes', 'lot_entry_fee','unsold_lot_fee','winning_bid_percent_to_club', 'date_start', 'date_end', 'lot_submission_start_date',\
             'lot_submission_end_date', 'sealed_bid','use_categories', 'promote_this_auction', 'max_lots_per_user', 'allow_additional_lots_as_donation',
             'email_users_when_invoices_ready', 'pre_register_lot_entry_fee_discount', 'pre_register_lot_discount_percent', 'allow_bidding_on_lots','only_approved_sellers',
-            'invoice_payment_instructions', 'minimum_bid',
+            'invoice_payment_instructions', 'minimum_bid', 'winning_bid_percent_to_club_for_club_members', 'lot_entry_fee_for_club_members',
             ]
         widgets = {
             'date_start': DateTimePickerInput(),
@@ -940,6 +944,7 @@ class AuctionEditForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.fields['notes'].widget.attrs = {'rows': 10}
         self.fields['winning_bid_percent_to_club'].label = "Club cut"
+        self.fields['winning_bid_percent_to_club_for_club_members'].label = "Club cut (members)"
         self.fields['date_start'].label = "Bidding opens"
         self.fields['date_end'].label = "Bidding ends"
         self.fields['email_users_when_invoices_ready'].label = "Invoice notifications"
@@ -958,32 +963,35 @@ class AuctionEditForm(forms.ModelForm):
             self.fields['lot_submission_end_date'].help_text = 'This should probably be before bidding starts.  Admins (you) can add more lots at any time, this only restricts users.'
             self.fields['email_users_when_invoices_ready'].help_text = "Only works if you enter the user's email address when adding them to your auction"
         self.fields['user_cut'].initial = 100 - self.instance.winning_bid_percent_to_club
+        self.fields['club_member_cut'].initial = 100 - self.instance.winning_bid_percent_to_club_for_club_members
         if self.instance.pk:
             # editing existing auction
             pass
         else:
             # this is a new auction
-            if self.cloned_from:
-                try:
-                    originalAuction = Auction.objects.get(slug=self.cloned_from, is_deleted=False)
-                    if (originalAuction.created_by.pk == self.user.pk) or self.user.is_superuser:
-                        # you can only clone your own auctions
-                        cloneFields = ['title', 'notes', 'lot_entry_fee','unsold_lot_fee','winning_bid_percent_to_club', 'first_bid_payout',
-                                    'sealed_bid','promote_this_auction', 'max_lots_per_user', 'allow_additional_lots_as_donation','make_stats_public',
-                                    'invoice_payment_instructions', 'minimum_bid', 'email_users_when_invoices_ready', 'allow_bidding_on_lots', 'only_approved_sellers',
-                                    'use_categories','pre_register_lot_entry_fee_discount','pre_register_lot_discount_percent',
-                                    ]
-                        for field in cloneFields:
-                            self.fields[field].initial = getattr(originalAuction, field)
-                        self.fields['cloned_from'].initial = self.cloned_from
-                except Exception as e:
-                    pass
-            #try:
+            # if self.cloned_from:
+            #     print(self.cloned_from)
+            #     try:
+            #         originalAuction = Auction.objects.get(slug=self.cloned_from, is_deleted=False)
+            #         #if (originalAuction.created_by.pk == self.user.pk) or self.user.is_superuser:
+            #             # you can only clone your own auctions
+            #         cloneFields = ['notes', 'lot_entry_fee','unsold_lot_fee','winning_bid_percent_to_club',
+            #                 'sealed_bid','use_categories', 'promote_this_auction', 'max_lots_per_user', 'allow_additional_lots_as_donation',
+            #                 'email_users_when_invoices_ready', 'pre_register_lot_entry_fee_discount', 'pre_register_lot_discount_percent', 'allow_bidding_on_lots','only_approved_sellers',
+            #                 'invoice_payment_instructions', 'minimum_bid', 'winning_bid_percent_to_club_for_club_members', 'lot_entry_fee_for_club_members',
+            #                     ]
+            #         for field in cloneFields:
+            #             self.fields[field].initial = getattr(originalAuction, field)
+            #         self.fields['cloned_from'].initial = self.cloned_from
+            #     except Exception as e:
+            #         print(e)
+            # try:
             #    lastAuction = Auction.objects.filter(created_by=self.user).order_by('-date_end')[0]
             #    self.fields['notes'].initial = "These rules are unchanged from the last auction\n\n" + lastAuction.notes
-            #except Exception as e:
-                # no old auction
-            else:
+            # except Exception as e:
+                #no old auction
+            #else:
+            if not self.cloned_from:
                 self.fields['notes'].initial = "## General information\n\nYou should remove this line and edit this section to suit your auction.  Use the formatting here as an example.\n\n## Prohibited items\n- You cannot sell any fish or plants banned by state law.\n- You cannot sell large hardware items such as tanks.\n\n## Rules\n- All lots must be properly bagged.  No leaking bags!\n- You do not need to be a club member to buy or sell lots."
         self.helper = FormHelper()
         self.helper.form_method = 'post'
@@ -992,42 +1000,47 @@ class AuctionEditForm(forms.ModelForm):
         self.helper.form_tag = True
         self.helper.layout = Layout(
             'notes',
+            HTML("<h4>Dates</h4>"),
+            Div(
+                Div('lot_submission_start_date',css_class='col-md-3',),
+                Div('lot_submission_end_date',css_class='col-md-3',),
+                Div('date_start',css_class='col-md-3',label="Bidding opens",),
+                Div('date_end',css_class='col-md-3',),
+                css_class='row',
+            ),
+            HTML("<h4>Lot fees</h4>"),
             Div(
                 PrependedAppendedText('unsold_lot_fee', '$', '.00',wrapper_class='col-lg-3', ),
                 PrependedAppendedText('lot_entry_fee', '$', '.00',wrapper_class='col-lg-3', ),
                 PrependedAppendedText('winning_bid_percent_to_club', '', '%',wrapper_class='col-lg-3', ),
                 PrependedAppendedText('user_cut', '', '%',wrapper_class='col-lg-3', ),
                 css_class='row',
-            ),
+            ),            
+            HTML("<h4>Lot fee discounts</h4>"),
             Div(
                 PrependedAppendedText('pre_register_lot_entry_fee_discount', '$', '.00',wrapper_class='col-lg-3', ),
                 PrependedAppendedText('pre_register_lot_discount_percent', '', '%',wrapper_class='col-lg-3', ),
+                PrependedAppendedText('lot_entry_fee_for_club_members', '$', '.00',wrapper_class='col-lg-3', ),
+                PrependedAppendedText('winning_bid_percent_to_club_for_club_members', '', '%',wrapper_class='col-lg-3', ),
+                PrependedAppendedText('club_member_cut', '', '%',wrapper_class='col-lg-3', ),
                 css_class='row',
             ),
-            Div(
-                Div('lot_submission_start_date',css_class='col-md-4',),
-                Div('date_start',css_class='col-md-4',label="Bidding opens",),
-                Div('lot_submission_end_date',css_class='col-md-4',),
-                #Div(HTML("<span class='text-warning'><small>Hello</small></span>"),css_class="row"),
-                Div('date_end',css_class='col-md-6',),
-                css_class='row',
-            ),
+            HTML("<h4>Lot permissions</h4>"),
             Div(
                 Div('max_lots_per_user', css_class='col-md-4',),
                 Div('allow_additional_lots_as_donation', css_class='col-md-4',),
                 Div('only_approved_sellers',css_class='col-md-4',),
                 css_class='row',
             ),
+
+            HTML("<h4>General</h4>"),
             Div(
-                Div('use_categories',css_class='col-md-3',),
-                Div('promote_this_auction', css_class='col-md-3',),
                 Div('minimum_bid',css_class='col-md-3',),
                 Div('allow_bidding_on_lots', css_class='col-md-3',),
-                css_class='row',
-            ),
-            Div(
                 Div('email_users_when_invoices_ready', css_class='col-md-3',),
+                Div('use_categories',css_class='col-md-3',),
                 Div('invoice_payment_instructions', css_class='col-md-9',),
+                Div('promote_this_auction', css_class='col-md-3',),
                 css_class='row',
             ),
             Submit('submit', 'Save', css_class='create-update-auction btn-success'),
@@ -1048,106 +1061,6 @@ class AuctionEditForm(forms.ModelForm):
     #         if lot_submission_end_date > date_end:
     #             self.add_error('lot_submission_end_date', "Submission should end before the auction ends")
     #     return cleaned_data
-
-class OldCreateAuctionForm(forms.ModelForm):
-    """Create a new an auction"""
-    
-    cloned_from = forms.CharField(required=False, widget=forms.HiddenInput())
-
-    class Meta:
-        model = Auction
-        fields = ['title', 'notes', 'lot_entry_fee','unsold_lot_fee','winning_bid_percent_to_club', 'date_start', 'date_end', 'lot_submission_start_date',\
-            'lot_submission_end_date', 'sealed_bid','promote_this_auction', 'max_lots_per_user', 'allow_additional_lots_as_donation',]
-        exclude = ['slug', 'first_bid_payout', 'watch_warning_email_sent', 'invoiced', 'created_by', 'code_to_add_lots', \
-            'pickup_location', 'pickup_location_map', 'pickup_time', 'alternate_pickup_location', 'alternate_pickup_location_map',\
-            'alternate_pickup_time','location', 'make_stats_public', ]
-        widgets = {
-            'date_start': DateTimePickerInput(),
-            'date_end': DateTimePickerInput(),
-            'lot_submission_start_date': DateTimePickerInput(),
-            'lot_submission_end_date': DateTimePickerInput(),
-            'notes': forms.Textarea(),
-        }
-    def __init__(self, *args, **kwargs):
-        self.user = kwargs.pop('user')
-        self.cloned_from = kwargs.pop('cloned_from')
-        timezone.activate(kwargs.pop('user_timezone'))
-        super().__init__(*args, **kwargs)
-        self.fields['notes'].widget.attrs = {'rows': 10}
-        if self.instance.pk:
-            # editing existing auction
-            pass
-        else:
-            # this is a new auction
-            if self.cloned_from:
-                try:
-                    originalAuction = Auction.objects.get(slug=self.cloned_from, is_deleted=False)
-                    if (originalAuction.created_by.pk == self.user.pk) or self.user.is_superuser:
-                        # you can only clone your own auctions
-                        cloneFields = ['title', 'notes', 'lot_entry_fee','unsold_lot_fee','winning_bid_percent_to_club', 'first_bid_payout', 'sealed_bid','promote_this_auction', 'max_lots_per_user', 'allow_additional_lots_as_donation','make_stats_public']
-                        for field in cloneFields:
-                            self.fields[field].initial = getattr(originalAuction, field)
-                        self.fields['cloned_from'].initial = self.cloned_from
-                except Exception as e:
-                    pass
-            #try:
-            #    lastAuction = Auction.objects.filter(created_by=self.user).order_by('-date_end')[0]
-            #    self.fields['notes'].initial = "These rules are unchanged from the last auction\n\n" + lastAuction.notes
-            #except Exception as e:
-                # no old auction
-            else:
-                self.fields['notes'].initial = "## General information\n\nYou should remove this line and edit this section to suit your auction.  Use the formatting here as an example.\n\n## Prohibited items\n- You cannot sell any fish or plants banned by state law.\n- You cannot sell large hardware items such as tanks.\n\n## Rules\n- All lots must be properly bagged.  No leaking bags!\n- You do not need to be a club member to buy or sell lots."
-        self.helper = FormHelper()
-        self.helper.form_method = 'post'
-        self.helper.form_id = 'auction-form'
-        self.helper.form_class = 'form'
-        self.helper.form_tag = True
-        self.helper.layout = Layout(
-            'cloned_from',
-            'title',
-            'notes',
-            Div(
-                Div('lot_entry_fee',css_class='col-md-4',),
-                Div('winning_bid_percent_to_club',css_class='col-md-4',),
-                Div('unsold_lot_fee',css_class='col-md-4',),
-                css_class='row',
-            ),
-            Div(
-                Div('date_start',css_class='col-md-4',),
-                Div('lot_submission_start_date',css_class='col-md-4',),
-                Div('lot_submission_end_date',css_class='col-md-4',),
-                Div('date_end',css_class='col-md-4',),
-                css_class='row',
-            ),
-            Div(
-                Div('max_lots_per_user', css_class='col-md-4',),
-                Div('allow_additional_lots_as_donation', css_class='col-md-4',),
-                # Div('first_bid_payout',css_class='col-md-4',),
-                css_class='row',
-            ),
-            Div(
-                # Div('make_stats_public', css_class='col-md-4',),
-                Div('sealed_bid', css_class='col-md-4',),
-                Div('promote_this_auction', css_class='col-md-4',),
-                css_class='row',
-            ),
-            Submit('submit', 'Save', css_class='create-update-auction btn-success'),
-        )
-
-    def clean(self):
-        cleaned_data = super().clean()
-        date_end = cleaned_data.get("date_end")
-        date_start = cleaned_data.get("date_start")
-        lot_submission_end_date = cleaned_data.get("lot_submission_end_date")
-        if date_end < timezone.now() + datetime.timedelta(hours=2):
-            self.add_error('date_end', "The end date can't be in the past")
-        if date_end < date_start:
-            self.add_error('date_end', "The end date can't be before the start date")
-        if lot_submission_end_date:
-            if lot_submission_end_date > date_end:
-                self.add_error('lot_submission_end_date', "Submission should end before the auction ends")
-        return cleaned_data
-
 
 class CreateLotForm(forms.ModelForm):
     """Form for creating or updating of lots"""
@@ -1223,7 +1136,7 @@ class CreateLotForm(forms.ModelForm):
                     cloneLot = Lot.objects.get(pk=self.cloned_from, is_deleted=False)
                     if (cloneLot.user.pk == self.user.pk) or self.user.is_superuser:
                         # you can only clone your lots
-                        cloneFields = ['lot_name', 'quantity', 'species_category', 'description', 'i_bred_this_fish', 'reserve_price', 'buy_now_price', 'reference_link']
+                        cloneFields = ['lot_name', 'quantity', 'species_category', 'description', 'i_bred_this_fish', 'reserve_price', 'buy_now_price', 'reference_link', 'donation']
                         for field in cloneFields:
                             self.fields[field].initial = getattr(cloneLot, field)
                         self.fields['cloned_from'].initial = int(self.cloned_from)

@@ -13,6 +13,12 @@ $('#id_winning_bid_percent_to_club').blur(function(event) {
 $('#id_user_cut').blur(function(event) {
     $('#id_winning_bid_percent_to_club').val(100-this.value);
 });
+$('#id_winning_bid_percent_to_club_for_club_members').blur(function(event) {
+    $('#id_club_member_cut').val(100-this.value);
+});
+$('#id_club_member_cut').blur(function(event) {
+    $('#id_winning_bid_percent_to_club_for_club_members').val(100-this.value);
+});
 var form_id = '#auction-form';
 {% include 'leave_page_warning.js' %}
 </script>

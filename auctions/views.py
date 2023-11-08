@@ -798,14 +798,9 @@ def pageview(request):
         lot_number = data.get("lot", None)
         if lot_number:
             lot_number = Lot.objects.filter(pk=lot_number, is_deleted=False).first()
-        source = data.get("src", None)
         url = data.get("url", None)
         url_without_params = re.sub(r'\?.*', '', url)
         url_without_params = url_without_params[:600]
-        title = data.get("title", "")
-        title = title[:600]
-        referrer = data.get("referrer", None)
-        referrer = referrer[:600]
         first_view = data.get("first_view", False)
         if request.user.is_authenticated:
             user = request.user
@@ -814,16 +809,37 @@ def pageview(request):
             # anonymous users go by session
             user = None
             session_id = request.session.session_key
-        pageview = PageView.objects.filter(
-                lot_number = lot_number,
-                url = url_without_params,
-                auction = auction,
-                session_id = session_id,
-                user = user,
-            ).order_by('date_start').first()
-        if not pageview:
+        if first_view == 'true':  #good ol Javascript
             user_agent = request.META.get('HTTP_USER_AGENT', '')
+            platform = 'UNKNOWN'
+            os = "UNKNOWN"
+            parsed_ua = parse(user_agent)
+            if parsed_ua.is_mobile:
+                platform = 'MOBILE'
+            if parsed_ua.is_tablet:
+                platform = 'TABLET'
+            elif parsed_ua.is_pc:
+                platform = 'DESKTOP'
             user_agent = user_agent[:200]
+            referrer = data.get("referrer", None)[:600]
+            source = data.get("src", None)
+            # mark auction campaign results if applicable present
+            ip = ""
+            x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+            if x_forwarded_for:
+                ip = x_forwarded_for.split(',')[0]
+            else:
+                ip = request.META.get('REMOTE_ADDR')
+            if source:
+                campaign = AuctionCampaign.objects.filter(uuid=source).first()
+                if campaign and campaign.result == "NONE":
+                    campaign.result = "VIEWED"
+                    campaign.save()
+                if campaign and campaign.user is not None and campaign.auction is not None:
+                    tos = AuctionTOS.objects.filter(user=campaign.user, auction=campaign.auction).first()
+                    if tos:
+                        campaign.result = "JOINED"
+                        campaign.save()
             pageview = PageView.objects.create(
                 lot_number = lot_number,
                 url = url_without_params,
@@ -831,11 +847,14 @@ def pageview(request):
                 session_id = session_id,
                 user = user,
                 user_agent = user_agent,
-                ip_address = request.META.get('REMOTE_ADDR'[:100]),
+                ip_address = ip[:100],
+                platform=parsed_ua.os.family,
+                os=os,
+                referrer = referrer,
+                title = data.get("title", "")[:600],
+                source = source,
             )
-            pageview.referrer = referrer
-            pageview.title = title
-            if user and lot_number:
+            if user and lot_number and lot_number.species_category:
                 # create interest in this category if this is a new view for this category
                 interest, created = UserInterestCategory.objects.get_or_create(
                     category=lot_number.species_category,
@@ -844,20 +863,28 @@ def pageview(request):
                     )
                 interest.interest += settings.VIEW_WEIGHT
                 interest.save()
+            if auction and user:
+                if not source:
+                    source = referrer
+                campaign, created = AuctionCampaign.objects.get_or_create(
+                    auction = auction,
+                    user = user,
+                    defaults={ 
+                        'email': user.email, 
+                        'source': source
+                    }
+                )
         else:
-            # this is the second (or more) time this user has viewed this page
-            if first_view == "true":
-                pageview.counter += 1
-            else:
+            pageview = PageView.objects.filter(
+                url = url_without_params,
+                session_id = session_id,
+                user = user,
+            ).order_by('-date_start').first()
+            if pageview:
+                # this is the second (or more) time this user has viewed this page
                 pageview.total_time += 10
-        # in all cases, update:
-        if source:
-            if source not in pageview.source:
-                new_source = pageview.source + " " + source
-                new_source = new_source[:200]
-                pageview.source = new_source
-        pageview.date_end = timezone.now()
-        pageview.save()
+                pageview.date_end = timezone.now()
+                pageview.save()
 
         #lot_number = Lot.objects.get(pk=pk, is_deleted=False)
         # try:
@@ -1264,9 +1291,6 @@ class AuctionUpdate(UpdateView, AuctionPermissionsMixin):
     def dispatch(self, request, *args, **kwargs):
         self.auction = self.get_object()
         self.is_auction_admin
-        existing_lots = Lot.objects.exclude(is_deleted=True).filter(auction=self.get_object()).count()
-        if existing_lots:
-            messages.info(request, "Lots have already been added to this auction.  Don't make large changes!")
         return super().dispatch(request, *args, **kwargs)
     
     def get_success_url(self):
@@ -1283,6 +1307,9 @@ class AuctionUpdate(UpdateView, AuctionPermissionsMixin):
         return kwargs
 
     def get_context_data(self, **kwargs):
+        existing_lots = Lot.objects.exclude(is_deleted=True).filter(auction=self.get_object()).count()
+        if existing_lots:
+            messages.info(self.request, "Lots have already been added to this auction.  Don't make large changes!")
         context = super().get_context_data(**kwargs)
         context['title'] = f"{self.auction}"
         context['is_online'] = self.auction.is_online
@@ -2552,6 +2579,7 @@ class AuctionTOSAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
             obj.address = form.cleaned_data['address']
             obj.is_admin = form.cleaned_data['is_admin']
             obj.selling_allowed = form.cleaned_data['selling_allowed']
+            obj.is_club_member = form.cleaned_data['is_club_member']
             obj.save()
             return HttpResponse("<script>location.reload();</script>", status=200)
             #return HttpResponse("<script>closeModal();</script>", status=200)
@@ -2653,6 +2681,11 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 'pre_register_lot_entry_fee_discount',
                 'pre_register_lot_discount_percent',
                 'only_approved_sellers',
+                'email_users_when_invoices_ready',
+                'invoice_payment_instructions',
+                'minimum_bid', 
+                'winning_bid_percent_to_club_for_club_members',
+                'lot_entry_fee_for_club_members',
                 ]
             for field in fields_to_clone:
                 setattr(auction, field, getattr(original_auction, field))

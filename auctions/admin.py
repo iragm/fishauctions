@@ -290,6 +290,14 @@ class AuctionTOSAdmin(admin.ModelAdmin):
     list_display = ("name",'auction', 'manually_added')
     search_fields = ("name",'user__email','user__username','bidder_number', )
 
+class PageViewAdmin(admin.ModelAdmin):
+    model = PageView
+    list_display = ("user",'source', 'url', 'ip_address', 'platform', 'date_start')
+
+class AuctionCampaignAdmin(admin.ModelAdmin):
+    model = AuctionCampaign
+    list_display = ("auction",'source', 'result')
+
 admin.site.register(PickupLocation, PickupLocationAdmin)
 admin.site.unregister(User)
 admin.site.register(User, UserAdmin)
@@ -310,3 +318,5 @@ admin.site.register(SearchHistory, SearchHistoryAdmin)
 admin.site.register(FAQ, FaqAdmin)
 admin.site.register(LotAutoCategory, LotAutoCategoryAdmin)
 admin.site.register(AuctionTOS, AuctionTOSAdmin)
+admin.site.register(PageView, PageViewAdmin)
+admin.site.register(AuctionCampaign, AuctionCampaignAdmin)

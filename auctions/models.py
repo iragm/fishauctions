@@ -276,7 +276,10 @@ class Auction(models.Model):
 	# partial for #139
 	minimum_bid = models.PositiveIntegerField(default=2, validators=[MinValueValidator(2)])
 	minimum_bid.help_text = "Lowest price a lot can sell for."
-
+	lot_entry_fee_for_club_members = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(10)])
+	lot_entry_fee_for_club_members.help_text = "Used instead of the standard entry fee, when you designate someone as a club member"
+	winning_bid_percent_to_club_for_club_members = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(100)])
+	winning_bid_percent_to_club_for_club_members.help_text = "Used instead of the standard split, when you designate someone as a club member"
 
 	def __str__(self):
 		result = self.title
@@ -872,6 +875,8 @@ class AuctionTOS(models.Model):
 	address = models.CharField(max_length=500, blank=True, null=True)
 	manually_added = models.BooleanField(default=False, blank=True, null=True)
 	time_spent_reading_rules = models.PositiveIntegerField(validators=[MinValueValidator(0)], blank=True, default=0)
+	is_club_member = models.BooleanField(default=False, blank=True, verbose_name="Club member")
+	is_club_member.help_text = "Check to use the alternative split for this auction"
 
 	@property
 	def phone_as_string(self):
@@ -1550,10 +1555,16 @@ class Lot(models.Model):
 						clubCut = self.winning_price
 						sellerCut = 0
 					else:
-						if self.pre_registered:
-							clubCut = ( self.winning_price * (auction.winning_bid_percent_to_club - auction.pre_register_lot_discount_percent) / 100 ) + auction.lot_entry_fee - auction.pre_register_lot_entry_fee_discount
+						if self.auctiontos_seller and self.auctiontos_seller.is_club_member:
+							percent_field = 'winning_bid_percent_to_club_for_club_members'
+							fee_field = 'lot_entry_fee_for_club_members'
 						else:
-							clubCut = ( self.winning_price * auction.winning_bid_percent_to_club / 100 ) + auction.lot_entry_fee
+							percent_field = 'winning_bid_percent_to_club'
+							fee_field = 'lot_entry_fee'
+						if self.pre_registered:
+							clubCut = ( self.winning_price * (getattr(auction, percent_field) - auction.pre_register_lot_discount_percent) / 100 ) + getattr(auction, fee_field) - auction.pre_register_lot_entry_fee_discount
+						else:
+							clubCut = ( self.winning_price * getattr(auction, percent_field) / 100 ) + getattr(auction, fee_field)
 						sellerCut = self.winning_price - clubCut
 					payout['to_club'] = clubCut
 					payout['to_seller'] = sellerCut
@@ -2364,16 +2375,7 @@ class PageView(models.Model):
 	longitude = models.FloatField(default=0)
 	ip_address = models.CharField(max_length=100, blank=True, null=True) 
 	user_agent = models.CharField(max_length=200, blank=True, null=True)
-	platform = models.CharField(
-		max_length=20,
-		choices=(
-			('UNKNOWN', 'Unknown'),
-			('MOBILE', 'Phone'),
-			('TABLET', "Tablet"),
-			('DESKTOP', "Desktop"),
-		),
-		default="UNKNOWN"
-	)
+	platform = models.CharField(max_length=200, default = "", blank=True, null=True	)
 	os = models.CharField(
 		max_length=20,
 		choices=(
@@ -2830,6 +2832,7 @@ class AuctionCampaign(models.Model):
 	user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
 	email = models.CharField(max_length=255, default="", blank=True)
 	timestamp = models.DateTimeField(auto_now_add=True)
+	source = models.CharField(max_length=200, blank=True, null=True, default="")
 	result = models.CharField(
 		max_length=20,
 		choices=(
@@ -2839,6 +2842,12 @@ class AuctionCampaign(models.Model):
 		),
 		default="NONE"
 	)
+	email_sent = models.BooleanField(default=False)
+
+	@property
+	def link(self):
+		current_site = Site.objects.get_current()
+		return f"{current_site.domain}auctions/{self.uuid}"
 
 class LotImage(models.Model):
 	"""An image that belongs to a lot.  Each lot can have multiple images"""

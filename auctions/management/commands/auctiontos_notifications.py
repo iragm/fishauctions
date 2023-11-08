@@ -80,40 +80,41 @@ class Command(BaseCommand):
             if tos.unbanned_lot_count:
                 send_tos_notification('auction_print_reminder', tos)
         # this is a quick reminder to join auctions that you've viewed but haven't joined.  Fixes #134
-        join_auction_reminder = PageView.objects.filter(date_start__lte=timezone.now() - datetime.timedelta(hours=24),
+        join_auction_reminder = AuctionCampaign.objects.filter(timestamp__lte=timezone.now() - datetime.timedelta(hours=24),
                                                         user__isnull=False,
-                                                        notification_sent=False,
+                                                        email_sent=False,
                                                         auction__isnull=False,
                                                         user__userdata__has_unsubscribed=False)
-        for pageview in join_auction_reminder:
-            email = pageview.user.email
-            lots = Lot.objects.filter(pageview__user=pageview.user, auction=pageview.auction)
-            pageview.notification_sent = True
-            pageview.save()
+        for camapign in join_auction_reminder:
+            email = camapign.user.email
+            lots = Lot.objects.filter(pageview__user=camapign.user, auction=camapign.auction)
+            camapign.email_sent = True
+            camapign.save()
             send_email = True
             # don't send these emails if it's too late to join, such as an online auction that's ended or an in-person auction that's started
-            if pageview.auction.closed:
+            if camapign.auction.closed:
                 send_email = False
-            if not pageview.auction.is_online and pageview.auction.started:
+            if not camapign.auction.is_online and camapign.auction.started:
                 send_email = False
-            user_has_already_joined = AuctionTOS.objects.filter(user=pageview.user, auction=pageview.auction).first()
+            user_has_already_joined = AuctionTOS.objects.filter(user=camapign.user, auction=camapign.auction).first()
             if user_has_already_joined:
                 send_email = False
             if send_email:
                 userData, created = UserData.objects.get_or_create(
-                    user = pageview.user,
+                    user = camapign.user,
                     defaults={},
                 )
                 current_site = Site.objects.get_current()
                 mail.send(
                     email,
                     template='join_auction_reminder',
-                    headers={'Reply-to': pageview.auction.created_by.email},
+                    headers={'Reply-to': camapign.auction.created_by.email},
                     context={
                         'domain': current_site.domain,
-                        'auction': pageview.auction,
+                        'auction': camapign.auction,
+                        'uuid': camapign.link,
                         'lots': lots,
-                        'user':pageview.user,
+                        'user':camapign.user,
                         'unsubscribe':userData.unsubscribe_link
                         }
                     )

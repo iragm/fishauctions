@@ -9,6 +9,11 @@ class AuctionTOSHTMxTable(tables.Table):
     add_lot_link = tables.Column(accessor='bulk_add_link_html', verbose_name="Add lots", orderable=False)
     print_invoice_link = tables.Column(accessor='print_invoice_link_html', verbose_name="Lot labels", orderable=False)
 
+    def render_name(self, value, record):
+        if record.is_club_member:
+            return mark_safe(f'{value} <span class="badge bg-info">Member</span>')
+        return f"{value}"
+
     class Meta:
         model = AuctionTOS
         template_name = "tables/bootstrap_htmx.html"
