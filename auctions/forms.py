@@ -304,6 +304,45 @@ class WinnerLotSimple(WinnerLot):
     lot = forms.CharField(max_length=20)
     winner = forms.CharField(max_length=20)
 
+class WinnerLotSimpleImages(WinnerLotSimple):
+    """Horizontal layout"""
+    def __init__(self, auction, *args, **kwargs):
+        super().__init__(auction, *args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_method = 'post'
+        self.helper.form_class = 'form'
+        self.helper.form_id = 'lot-form'
+        self.helper.form_tag = True
+        self.helper.layout = Layout(
+            'invoice',
+            'auction',
+            #'lot',
+            #'winner',
+            
+# <div class="col-md-3">
+#     <div id="div_id_winning_price" class="form-group">
+#             <div class="">
+#             <div class="input-group">
+#             </div>
+#          </div>
+#      </div> 
+# </div>
+            Div(
+                Div('lot', css_class='col-md-3'),
+                Div('winner', css_class='col-md-3'),
+                Div(PrependedAppendedText('winning_price', '$', '.00'), css_class='col-md-4'),
+                Div(
+                    HTML('<button type="submit" class="btn btn-success form-control mt-4">Save</button>'),
+                    css_class='col-md-2 form-group'
+                ),
+                css_class='row',
+            )
+        )
+        self.fields['auction'].initial = self.auction_pk
+        self.fields['auction'].widget = HiddenInput()
+        self.fields['invoice'].widget = HiddenInput()
+        self.fields['invoice'].initial = "True"
+
 class DeleteAuctionTOS(forms.Form):
     """For deleting auctionTOS and optionally merging lots, admins only"""
     delete_lots = forms.BooleanField(required = False)

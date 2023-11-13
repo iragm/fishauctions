@@ -1,0 +1,22 @@
+{% if lot %}
+<div class="container mt-4">
+    <div class="row">
+        {% if lot.image_count %}
+            <div class="col-md-6 offset-md1">
+                {% if lot.image_count %}
+                    {% for image in lot.images|slice:":1" %}
+                    <img src="{{ image.image.lot_full.url }}" class="img-fluid">
+                    <span class="text-muted"><small>{{ image.get_image_source_display }}</small></span>{%if image.caption%}<br>{{ image.caption }}{%endif%}
+                    {% endfor %}
+                {% endif %}
+            </div>
+        {% endif %}
+        <div class="col-md-6 offset-md1">
+            <h3>{{ lot.lot_name }}</h3>
+            <b>Quantity:</b>{{ lot.quantity }}
+            {# reserve price?  Online bids? #}
+            {% if lot.description %}<div class="jumbotron">{{ lot.description_rendered | safe }}</div>{% endif %}
+        </div>
+    </div>
+</div>
+{% endif %}

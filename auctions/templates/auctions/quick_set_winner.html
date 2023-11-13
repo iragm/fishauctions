@@ -14,6 +14,7 @@ $(window).on("load", function() {
 {% endblock %}
 {% block content %}
         {% include 'auction_ribbon.html' %}
-<p><span class=''><small>{% if auction.is_online %}<div>This is intended for use with in-person auctions.  You probably don't need it for this auction.</div><br>{% endif %}Use this page to quickly set the winners of lots. Choose between the <a href="{% url 'auction_lot_winners_autocomplete' slug=auction.slug %}">autocomplete form</a> that lets you search for people's names, or the <a href="{% url 'auction_lot_winners' slug=auction.slug %}">standard form</a> that uses bidder numbers only, perfect for large auctions.  <div class="text-muted">Tip: press tab to move to the next field</div></small></span></p>
+<p><span class=''><small>{% if auction.is_online %}<div>This is intended for use with in-person auctions.  You probably don't need it for this auction.</div><br>{% endif %}
+  Use this page to quickly set the winners of lots. Choose between the <a href="{% url 'auction_lot_winners_autocomplete' slug=auction.slug %}">autocomplete form</a> that lets you search for people's names, the <a href="{% url 'auction_lot_winners_images' slug=auction.slug %}">presentation form</a> that shows images, or the <a href="{% url 'auction_lot_winners' slug=auction.slug %}">standard form</a> that uses bidder numbers only, perfect for large auctions.  <div class="text-muted">Tip: press tab to move to the next field</div></small></span></p>
 {% crispy form form.helper %}
 {% endblock %}

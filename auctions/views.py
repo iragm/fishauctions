@@ -1379,7 +1379,7 @@ class AuctionInvoices(DetailView, AuctionPermissionsMixin):
     def dispatch(self, request, *args, **kwargs):
         self.auction = self.get_object()
         self.is_auction_admin
-        if not self.auction.closed:
+        if not self.auction.closed and self.auction.is_online:
             messages.info(self.request, "This auction is still in progress, you probably shouldn't mark any invoices ready yet.")
         return super().dispatch(request, *args, **kwargs)
         
@@ -1515,6 +1515,14 @@ class SetLotWinner(QuickSetLotWinner):
             return HttpResponseRedirect(self.get_success_url())
         return self.form_invalid(form)
 
+class SetLotWinnerImage(SetLotWinner):
+    """Same as QuickSetLotWinner but without the autocomplete, and with images, per user requests"""
+    template_name = "auctions/quick_set_winner_images.html"
+    form_class = WinnerLotSimpleImages
+
+    def get_success_url(self):
+        return reverse('auction_lot_winners_images', kwargs={'slug': self.auction.slug})
+
 class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
     """Add/edit lots of lots for a given auctiontos pk"""
     template_name = "auctions/bulk_add_users.html"
@@ -1546,7 +1554,8 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
                                 'name':tos.name,
                                 'phone':tos.phone_number,
                                 'email':tos.email,
-                                'address':tos.address
+                                'address':tos.address,
+                                'is_club_member':tos.is_club_member
                             })
                             total_tos += 1
                         else:
@@ -1593,6 +1602,7 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
         name_field_names = ['name', 'full name', 'first name', 'firstname']
         address_field_names = ['address', 'mailing address']
         phone_field_names = ['phone', 'phone number','telephone','telephone number']
+        is_club_member_fields = ['member', 'club member']
         # we are not reading in location here, do we care??
         some_columns_exist = False
         error = ""
@@ -1625,6 +1635,7 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
             name = extract_info(row, name_field_names)
             phone = extract_info(row, phone_field_names)
             address = extract_info(row, address_field_names)
+            is_club_member = extract_info(row, is_club_member_fields)
             if (email or name or phone or address) and total_tos <= self.max_users_that_can_be_added_at_once:
                 if self.tos_is_in_auction(self.auction, name, email):
                     total_skipped += 1
@@ -1635,7 +1646,8 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
                         'name':name,
                         'phone':phone,
                         'email':email,
-                        'address':address
+                        'address':address,
+                        'is_club_member':is_club_member
                     })
         # this needs to be added to the session in order to persist when moving from POST (this csv processing) to GET
         self.request.session['initial_formset_data'] = initial_formset_data
@@ -1706,7 +1718,9 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
                 'email',
                 'phone_number',
                 'address',
-                'pickup_location',), form=QuickAddTOS)
+                'pickup_location',
+                'is_club_member',
+                ), form=QuickAddTOS)
 
 class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
     """Add/edit lots of lots for a given auctiontos pk"""
@@ -1819,6 +1833,7 @@ class ViewLot(DetailView):
     model = Lot
     custom_lot_number = None
     auction_slug = None
+    enable_404 = True
 
     def dispatch(self, request, *args, **kwargs):
         self.auction_slug = kwargs.pop('slug', None)
@@ -1827,7 +1842,7 @@ class ViewLot(DetailView):
 
     def get_object(self):
         obj = self.get_queryset().first()
-        if not obj:
+        if not obj and self.enable_404:
             raise Http404
         return obj
 
@@ -1951,7 +1966,17 @@ class ViewLot(DetailView):
                 if lot.ended:
                     context['showExchangeInfo'] = True
         return context
-    
+
+class ViewLotSimple(ViewLot):
+    """Minimalist view of a lot, just image and description.  For htmx calls"""
+    template_name = "view_lot_simple.html"
+    enable_404 = False
+
+    def get_context_data(self, **kwargs):
+        context = DetailView.get_context_data(self, **kwargs)
+        context['lot'] = self.get_object()
+        return context
+
 def createSpecies(name, scientific_name, category=False):
     """
     Create a new product/species

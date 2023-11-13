@@ -39,7 +39,7 @@
         <table class="table">
           <thead>
             <tr>
-              <th scope="col">Number</th>
+              <th scope="col">Bidder</th>
               <th scope="col">Opened</th>
               <th scope="col">View</th>
               <th scope="col">Print</th>
@@ -55,7 +55,7 @@
             
             {% for invoice in invoices %}
             <tr id="row_{{invoice.pk}}" class="{% if invoice.user_should_be_paid %}user_should_be_paid{% else %}club_should_be_paid{% endif %} {% if invoice.status == 'PAID'%}row_paid{%else%}row_unpaid{% endif %}">
-              <td>{{ invoice.pk }}</td>
+              <td>{{ invoice.auctiontos_user.bidder_number}}</td>
               <td>{% if not invoice.opened %}No{%endif%}</td>
               <td><a href="/invoices/{{invoice.pk}}/">{% if invoice.user.first_name %}{{ invoice.user.first_name }} {{ invoice.user.last_name }}{% else %}{{ invoice.auctiontos_user.name }}{% endif %}</a></td>
               <td><a href="/invoices/{{invoice.pk}}/?print">Print</a></td>

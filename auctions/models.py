@@ -876,7 +876,6 @@ class AuctionTOS(models.Model):
 	manually_added = models.BooleanField(default=False, blank=True, null=True)
 	time_spent_reading_rules = models.PositiveIntegerField(validators=[MinValueValidator(0)], blank=True, default=0)
 	is_club_member = models.BooleanField(default=False, blank=True, verbose_name="Club member")
-	is_club_member.help_text = "Check to use the alternative split for this auction"
 
 	@property
 	def phone_as_string(self):

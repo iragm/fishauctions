@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% load i18n %}
+{% load crispy_forms_tags %}
+
+{% block title %}Set winners for {{ auction }}{% endblock %}
+
+{% block extra_js %}
+<script>
+$(window).on("load", function() {
+  $('#id_lot').select();
+  var input = document.getElementById('id_lot');
+  input.addEventListener('keyup', function () {
+    var value = this.value;
+    htmx.ajax('get','/api/{{ auction.slug }}/lots/' + encodeURIComponent(value), {target: '#result'});
+  });
+});
+</script>
+{% endblock %}
+{% block content %}
+{#        {% include 'auction_ribbon.html' %} #}
+{% crispy form form.helper %}
+<div id="result"></div>
+<small>Press F11 for full screen.  <a href="{% url 'auction_main' slug=auction.slug %}">{{auction}} home</a></small>
+{% endblock %}
