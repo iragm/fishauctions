@@ -18,56 +18,6 @@ from post_office import mail
 class Command(BaseCommand):
     help = 'Just a scratchpad to do things'
     def handle(self, *args, **options):
-        join_auction_reminder = AuctionCampaign.objects.filter(timestamp__lte=timezone.now() - datetime.timedelta(hours=24),
-                                                        user__isnull=False,
-                                                        auction__isnull=False,
-                                                        user__userdata__send_reminder_emails_about_joining_auctions=True)
-        for campaign in join_auction_reminder:
-            email = campaign.user.email
-            lots = Lot.objects.filter(pageview__user=campaign.user, auction=campaign.auction)
-            send_email = True
-            # don't send these emails if it's too late to join, such as an online auction that's ended or an in-person auction that's started
-            userData, created = UserData.objects.get_or_create(
-                user = campaign.user,
-                defaults={},
-            )
-            latitude = userData.latitude
-            longitude = userData.longitude
-            if latitude and longitude:
-                qs = Auction.objects.filter(pk=campaign.auction.pk)
-                closest_pickup_location_subquery = PickupLocation.objects.filter(
-                    auction=OuterRef('pk')
-                ).annotate(
-                    distance=distance_to(latitude, longitude)
-                ).order_by('distance').values('distance')[:1]
-                qs = qs.annotate(
-                    distance=Subquery(closest_pickup_location_subquery)
-                    )
-                auction = qs.first()
-                if auction and auction.is_online and auction.distance > userData.email_me_about_new_auctions_distance:
-                    print('too far', auction.distance)
-                    send_email = False
-                if auction and not auction.is_online and auction.distance > userData.email_me_about_new_in_person_auctions_distance:
-                    print('too far', auction.distance)
-                    send_email = False
-                if not auction:
-                    send_email = False
-                    print("no auction, huh?")
-            else: # user has no location:
-                send_email = False
-            if campaign.auction.closed:
-                send_email = False
-            if not campaign.auction.is_online and campaign.auction.started:
-                send_email = False
-            user_has_already_joined = AuctionTOS.objects.filter(user=campaign.user, auction=campaign.auction).first()
-            if user_has_already_joined:
-                send_email = False
-            if not send_email:
-                pass
-                #campaign.result = 'ERR'
-            #    campaign.save()
-            else:
-                print(auction.distance)
         # lots_with_buy_now_available = Lot.objects.filter(is_deleted=False, auction__isnull=False, auction__promote_this_auction=True, buy_now_price__isnull=False)
         # #lots_with_buy_now_used = Lot.objects.filter(is_deleted=False, auction__isnull=False, auction__promote_this_auction=True, buy_now_price__isnull=False, winning_price=F('buy_now_price'))
         # sum_of_buy_now_used = 0

@@ -40,10 +40,11 @@ $("#submit-id-submit").click(function(event){
     (left + width) <= (window.pageXOffset + window.innerWidth)
   );
 }
+{% if auction.allow_bidding_on_lots %}
   var joinButton = document.querySelector('#submit-id-submit');
   var message;
   var messageCheck;
-  document.onscroll = function(event) {
+    document.onscroll = function(event) {
     clearTimeout(messageCheck);
     messageCheck = setTimeout(function(){ 
         if (joinButton) {
@@ -61,6 +62,7 @@ $("#submit-id-submit").click(function(event){
     }, 100);
 
 }
+{% endif %}
 
 </script>
 {% endif %}
