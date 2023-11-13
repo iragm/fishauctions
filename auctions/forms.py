@@ -548,6 +548,17 @@ class CreateEditAuctionTOS(forms.ModelForm):
             self.fields['pickup_location'].initial = self.auctiontos.pickup_location.pk
             self.fields['is_admin'].initial = self.auctiontos.is_admin
             self.fields['is_club_member'].initial = self.auctiontos.is_club_member
+            help_text = "Check to take a cut of "
+            if self.auction.lot_entry_fee_for_club_members:
+                help_text += f"${self.auction.lot_entry_fee_for_club_members}"
+            if self.auction.lot_entry_fee_for_club_members and self.auction.winning_bid_percent_to_club_for_club_members:
+                help_text += " plus "
+            if self.auction.winning_bid_percent_to_club_for_club_members:
+                help_text += f"{self.auction.winning_bid_percent_to_club_for_club_members}%"
+            if not self.auction.lot_entry_fee_for_club_members and not self.auction.winning_bid_percent_to_club_for_club_members:
+                help_text = "Check to charge nothing"
+            help_text += " instead of the standard fee for sold lots"
+            self.fields['is_club_member'].help_text = help_text
             self.fields['selling_allowed'].initial = self.auctiontos.selling_allowed
         else:
             # special rule: default to the default location
@@ -1467,7 +1478,7 @@ class ChangeUserPreferencesForm(forms.ModelForm):
         model = UserData
         fields = ('email_visible', 'use_dark_theme', 'show_ads', 'email_me_about_new_auctions','email_me_about_new_auctions_distance',\
             'email_me_about_new_local_lots','local_distance', 'email_me_about_new_lots_ship_to_location', 'email_me_when_people_comment_on_my_lots',\
-            'email_me_about_new_in_person_auctions', 'email_me_about_new_in_person_auctions_distance', 'username_visible',
+            'email_me_about_new_in_person_auctions', 'email_me_about_new_in_person_auctions_distance', 'send_reminder_emails_about_joining_auctions', 'username_visible',
             )
         # exclude = (
         #     'user','phone_number','address','location','location_coordinates',\
@@ -1497,6 +1508,7 @@ class ChangeUserPreferencesForm(forms.ModelForm):
             HTML("<h4>Notifications</h4><br>"),
             Div(
                 Div('email_me_when_people_comment_on_my_lots',css_class='col-md-6',),
+                Div('send_reminder_emails_about_joining_auctions',css_class='col-md-6',),
                 css_class='row',
             ),
             HTML("You'll get one email per week that contains an update on everything you've checked below<span class='text-muted'><small><br>And you'll only get that if you haven't visited the site in the last 6 days.</small></span><br><br>"),

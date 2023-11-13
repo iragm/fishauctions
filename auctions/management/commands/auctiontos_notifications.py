@@ -2,7 +2,7 @@ from django.utils import timezone
 from django.core.management.base import BaseCommand, CommandError
 from auctions.models import *
 from django.core.mail import send_mail
-from django.db.models import Count, Case, When, IntegerField, Avg
+from django.db.models import Count, Case, When, IntegerField, Avg, OuterRef, Subquery
 from django.core.files import File
 import datetime
 from post_office import mail
@@ -12,7 +12,6 @@ import uuid
 from django.contrib.sites.models import Site
 import csv
 from auctions.filters import get_recommended_lots
-
 def send_tos_notification(template, tos):
     current_site = Site.objects.get_current()
     mail.send(
@@ -84,37 +83,59 @@ class Command(BaseCommand):
                                                         user__isnull=False,
                                                         email_sent=False,
                                                         auction__isnull=False,
-                                                        user__userdata__has_unsubscribed=False)
-        for camapign in join_auction_reminder:
-            email = camapign.user.email
-            lots = Lot.objects.filter(pageview__user=camapign.user, auction=camapign.auction)
-            camapign.email_sent = True
-            camapign.save()
+                                                        user__userdata__send_reminder_emails_about_joining_auctions=True)
+        for campaign in join_auction_reminder:
+            email = campaign.user.email
+            lots = Lot.objects.filter(pageview__user=campaign.user, auction=campaign.auction)
+            campaign.email_sent = True
+            campaign.save()
             send_email = True
             # don't send these emails if it's too late to join, such as an online auction that's ended or an in-person auction that's started
-            if camapign.auction.closed:
+            userData, created = UserData.objects.get_or_create(
+                user = campaign.user,
+                defaults={},
+            )
+            latitude = userData.latitude
+            longitude = userData.longitude
+            if latitude and longitude:
+                qs = Auction.objects.filter(pk=campaign.auction.pk)
+                closest_pickup_location_subquery = PickupLocation.objects.filter(
+                    auction=OuterRef('pk')
+                ).annotate(
+                    distance=distance_to(latitude, longitude)
+                ).order_by('distance').values('distance')[:1]
+                qs = qs.annotate(
+                    distance=Subquery(closest_pickup_location_subquery)
+                    )
+                auction = qs.first()
+                if auction and auction.is_online and auction.distance > userData.email_me_about_new_auctions_distance:
+                    send_email = False
+                if auction and not auction.is_online and auction.distance > userData.email_me_about_new_in_person_auctions_distance:
+                    send_email = False
+            else: # user has no location:
                 send_email = False
-            if not camapign.auction.is_online and camapign.auction.started:
+            if campaign.auction.closed:
                 send_email = False
-            user_has_already_joined = AuctionTOS.objects.filter(user=camapign.user, auction=camapign.auction).first()
+            if not campaign.auction.is_online and campaign.auction.started:
+                send_email = False
+            user_has_already_joined = AuctionTOS.objects.filter(user=campaign.user, auction=campaign.auction).first()
             if user_has_already_joined:
                 send_email = False
-            if send_email:
-                userData, created = UserData.objects.get_or_create(
-                    user = camapign.user,
-                    defaults={},
-                )
+            if not send_email:
+                campaign.result = 'ERR'
+                campaign.save()
+            else:
                 current_site = Site.objects.get_current()
                 mail.send(
                     email,
                     template='join_auction_reminder',
-                    headers={'Reply-to': camapign.auction.created_by.email},
+                    headers={'Reply-to': campaign.auction.created_by.email},
                     context={
                         'domain': current_site.domain,
-                        'auction': camapign.auction,
-                        'uuid': camapign.link,
+                        'auction': campaign.auction,
+                        'uuid': campaign.link,
                         'lots': lots,
-                        'user':camapign.user,
+                        'user':campaign.user,
                         'unsubscribe':userData.unsubscribe_link
                         }
                     )

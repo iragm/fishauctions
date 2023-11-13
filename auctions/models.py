@@ -2492,8 +2492,8 @@ class UserData(models.Model):
 	last_ip_address = models.CharField(max_length=100, blank=True, null=True)
 	email_me_when_people_comment_on_my_lots = models.BooleanField(default=True, blank=True)
 	email_me_when_people_comment_on_my_lots.help_text = "Notifications will be sent once a day, only for messages you haven't seen"
-	email_me_about_new_auctions = models.BooleanField(default=True, blank=True)
-	email_me_about_new_auctions.help_text = "When new <span class='text-info'>online</span> auctions are created with pickup locations near my location, notify me"
+	email_me_about_new_auctions = models.BooleanField(default=True, blank=True, verbose_name="Email me about new online auctions")
+	email_me_about_new_auctions.help_text = "When new online auctions are created with pickup locations near my location, notify me"
 	email_me_about_new_auctions_distance = models.PositiveIntegerField(null=True, blank=True, default=100, verbose_name="New online auction distance")
 	email_me_about_new_auctions_distance.help_text = "miles, from your address"
 	email_me_about_new_in_person_auctions = models.BooleanField(default=True, blank=True)
@@ -2528,6 +2528,8 @@ class UserData(models.Model):
 	show_email_warning_sent.help_text = "When a user has their email address hidden and sells a lot, this is checked"
 	username_is_email_warning_sent = models.BooleanField(default=False, blank=True)
 	username_is_email_warning_sent.help_text = "Warning email has been sent because this user made their username an email"
+	send_reminder_emails_about_joining_auctions = models.BooleanField(default=True, blank=True)
+	send_reminder_emails_about_joining_auctions.help_text = "Get an annoying reminder email when you view an auction but don't join it"
 
 	# breederboard info
 	rank_unique_species = models.PositiveIntegerField(null=True, blank=True)
@@ -2836,6 +2838,7 @@ class AuctionCampaign(models.Model):
 	result = models.CharField(
 		max_length=20,
 		choices=(
+			('ERR', 'No email sent'),
 			('NONE', 'No response'),
 			('VIEWED', "Clicked"),
 			('JOINED', 'Joined'),
