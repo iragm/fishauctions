@@ -14,14 +14,16 @@
         data.title = document.title;
         data.referrer = document.referrer;
         data.first_view = first_view;
-        $.ajax({
-            type: "POST",
-            beforeSend: function (request) {
-                request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
-            },
-            url: "{% url 'pageview' %}",
-            data: data,
-        });
+        if (document.hasFocus() || first_view) {
+            $.ajax({
+                type: "POST",
+                beforeSend: function (request) {
+                    request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+                },
+                url: "{% url 'pageview' %}",
+                data: data,
+            });
+        }
         first_view = false;
         setTimeout(() => {
             pageView(data);

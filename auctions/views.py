@@ -25,6 +25,7 @@ from easy_thumbnails.templatetags.thumbnail import thumbnail_url
 from easy_thumbnails.files import get_thumbnailer
 from post_office import mail
 from PIL import Image
+import HeifImagePlugin
 import os
 from django.conf import settings
 from .models import *
@@ -188,7 +189,7 @@ class LotListView(AjaxListView):
             # probably not signed in
             context['lotsAreHidden'] = -1
         try:
-            context['lastView'] = PageView.objects.filter(user=self.request.user).order_by('-date_start')[0].date_start
+            context['lastView'] = PageView.objects.filter(user=self.request.user, lot__isnull=False).order_by('-date_start')[0].date_start
         except:
             context['lastView'] = timezone.now()
         try:
@@ -213,6 +214,7 @@ class LotListView(AjaxListView):
             self.request.COOKIES['longitude']
         except:
             context['location_message'] = "Set your location to see lots near you"
+        context['src'] = 'lot_list'
         return context
 
 
@@ -335,6 +337,7 @@ class RecommendedLots(ListView):
             context['lastView'] = PageView.objects.filter(user=self.request.user).order_by('-date_start')[0].date_start
         except:
             context['lastView'] = timezone.now()
+        context['src'] = 'recommended'
         return context
 
 class MyWonLots(LotListView):
@@ -414,9 +417,11 @@ def watchOrUnwatch(request, pk):
     if request.method == 'POST':
         watch = request.POST['watch']
         user = request.user
-        lot_number = Lot.objects.get(pk=pk, is_deleted=False)
+        lot = Lot.objects.filter(pk=pk, is_deleted=False).first()
+        if not lot:
+            return HttpResponse("Failure")
         obj, created = Watch.objects.update_or_create(
-            lot_number=lot_number,
+            lot_number=lot,
             user=user,
             defaults={},
         )
@@ -811,15 +816,15 @@ def pageview(request):
             session_id = request.session.session_key
         if first_view == 'true':  #good ol Javascript
             user_agent = request.META.get('HTTP_USER_AGENT', '')
-            platform = 'UNKNOWN'
+            # platform = 'UNKNOWN'
             os = "UNKNOWN"
             parsed_ua = parse(user_agent)
-            if parsed_ua.is_mobile:
-                platform = 'MOBILE'
-            if parsed_ua.is_tablet:
-                platform = 'TABLET'
-            elif parsed_ua.is_pc:
-                platform = 'DESKTOP'
+            # if parsed_ua.is_mobile:
+            #     platform = 'MOBILE'
+            # if parsed_ua.is_tablet:
+            #     platform = 'TABLET'
+            # elif parsed_ua.is_pc:
+            #     platform = 'DESKTOP'
             user_agent = user_agent[:200]
             referrer = data.get("referrer", None)[:600]
             source = data.get("src", None)
@@ -885,41 +890,6 @@ def pageview(request):
                 pageview.total_time += 10
                 pageview.date_end = timezone.now()
                 pageview.save()
-
-        #lot_number = Lot.objects.get(pk=pk, is_deleted=False)
-        # try:
-        #     source = request.POST['src']
-        # except:
-        #     source = ""
-        # # Initial pageview to record page views to the PageView model
-        # if user.is_authenticated:
-        #     obj, created = PageView.objects.get_or_create(
-        #         lot_number=lot_number,
-        #         user=user,
-        #         source=source,
-        #         defaults={},
-        #     )
-        #     if "new" not in request.path:
-        #         obj.total_time += 10
-        #     obj.date_end = timezone.now()
-        #     obj.save()
-        #     if created:
-        #         # create interest in this category if this is a new view for this category
-        #         interest, created = UserInterestCategory.objects.get_or_create(
-        #             category=lot_number.species_category,
-        #             user=user,
-        #             defaults={ 'interest': 0 }
-        #             )
-        #         interest.interest += settings.VIEW_WEIGHT
-        #         interest.save()
-        # else:
-        #     # anonymous user, always create
-        #     if "new" in request.path:
-        #         PageView.objects.create(
-        #             lot_number=lot_number,
-        #             user=None,
-        #             source=source,
-        #         )
         return HttpResponse("Success")
     messages.error(request, "Your account doesn't have permission to view this page")
     return redirect('/')
@@ -1093,8 +1063,8 @@ def auctionLotList(request, slug):
         response = HttpResponse(content_type='text/csv')
         response['Content-Disposition'] = 'attachment; filename="' + slug + '-lot-list.csv"'
         writer = csv.writer(response)
-        writer.writerow(['Lot number', 'Lot', 'Seller', 'Seller email', 'Seller phone', 'Seller location', 'Winner', 'Winner email', 'Winner phone',  'Winner location'])
-        lots = Lot.objects.exclude(is_deleted=True).filter(auction__slug=slug, winner__isnull=False).select_related('user', 'winner')
+        writer.writerow(['Lot number', 'Lot', 'Seller', 'Seller email', 'Seller phone', 'Seller location', 'Winner', 'Winner email', 'Winner phone',  'Winner location', 'Breeder points'])
+        lots = Lot.objects.exclude(is_deleted=True).filter(auction__slug=slug, auctiontos_winner__isnull=False).select_related('user', 'winner')
         for lot in lots:
             lot_number = lot.custom_lot_number or lot.lot_number
             writer.writerow([lot_number,\
@@ -1106,7 +1076,8 @@ def auctionLotList(request, slug):
             lot.auctiontos_winner.name,\
             lot.auctiontos_winner.email,
             lot.auctiontos_winner.phone_as_string,
-            lot.winner_location\
+            lot.winner_location,
+            lot.i_bred_this_fish_display
             ])
         return response    
     messages.error(request, "Your account doesn't have permission to view this page")
@@ -1380,7 +1351,7 @@ class AuctionInvoices(DetailView, AuctionPermissionsMixin):
         self.auction = self.get_object()
         self.is_auction_admin
         if not self.auction.closed and self.auction.is_online:
-            messages.info(self.request, "This auction is still in progress, you probably shouldn't mark any invoices ready yet.")
+            messages.error(self.request, "This auction is still in progress, you probably shouldn't mark any invoices ready yet.")
         return super().dispatch(request, *args, **kwargs)
         
     def get_context_data(self, **kwargs):
@@ -2711,6 +2682,8 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 'minimum_bid', 
                 'winning_bid_percent_to_club_for_club_members',
                 'lot_entry_fee_for_club_members',
+                'set_lot_winners_url',
+                'require_phone_number',
                 ]
             for field in fields_to_clone:
                 setattr(auction, field, getattr(original_auction, field))
@@ -2854,25 +2827,29 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
         return context
 
     def post(self, request, *args, **kwargs):
-        self.object = self.get_object()
+        auction = self.get_object()
         form = self.get_form()
         if form.is_valid():
             userData, created = UserData.objects.get_or_create(
                 user = self.request.user,
                 defaults={},
             )
+            if auction.require_phone_number and not userData.phone_number:
+                messages.error(self.request, f"This auction requires a phone number before you can join")
+                return redirect(f'/contact_info?next={auction.get_absolute_url()}')
             find_by_email = AuctionTOS.objects.filter(
                 email=self.request.user.email,
-                auction=self.get_object(),
-                manually_added=True,
-                user__isnull=True).first()
+                auction=auction
+                #manually_added=True,
+                #user__isnull=True
+                ).first()
             if find_by_email:
                 obj = find_by_email
                 obj.user = self.request.user
             else:
                 obj, created = AuctionTOS.objects.get_or_create(
                     user = self.request.user,
-                    auction = self.get_object(),
+                    auction = auction,
                     defaults={'pickup_location': form.cleaned_data['pickup_location']},
                 )
             obj.pickup_location = form.cleaned_data['pickup_location']
@@ -2880,15 +2857,14 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
             if obj.pickup_location.pickup_by_mail:
                 if not userData.address:
                     messages.error(self.request, f"You have to set your address before you can choose pickup by mail")
-                    return redirect(f'/contact_info?next={self.object.get_absolute_url()}')
+                    return redirect(f'/contact_info?next={auction.get_absolute_url()}')
             if form.cleaned_data['time_spent_reading_rules'] > obj.time_spent_reading_rules:
                 obj.time_spent_reading_rules = form.cleaned_data['time_spent_reading_rules']
             # even if an auctiontos was originally manually added, if the user clicked join, mark them as not manually added
             obj.manually_added = False
             obj.save()
             # also update userdata to reflect the last auction
-
-            userData.last_auction_used = self.get_object()
+            userData.last_auction_used = auction
             userData.last_activity = timezone.now()
             userData.save()
             return self.form_valid(form)
@@ -3781,7 +3757,7 @@ class AdminDashboard(TemplateView):
         qs = UserData.objects.filter(user__is_active=True)
         context['total_users'] = qs.count()
         context['unsubscribes'] = qs.filter(has_unsubscribed=True).count()
-        context['using_list_view'] = qs.filter(use_list_view=True).count()
+        context['anonymous'] = qs.filter(username_visible=False).exclude(user__username__icontains="@").count() # inactive users with an email as their username were set to anonymous Nov 2023
         context['light_theme'] = qs.filter(use_dark_theme=False).count()
         context['hide_ads'] = qs.filter(show_ads=False).count()
         context['no_club_auction'] = qs.filter(user__auctiontos__isnull=True).distinct().count()

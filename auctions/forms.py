@@ -977,7 +977,7 @@ class AuctionEditForm(forms.ModelForm):
         fields = ['notes', 'lot_entry_fee','unsold_lot_fee','winning_bid_percent_to_club', 'date_start', 'date_end', 'lot_submission_start_date',\
             'lot_submission_end_date', 'sealed_bid','use_categories', 'promote_this_auction', 'max_lots_per_user', 'allow_additional_lots_as_donation',
             'email_users_when_invoices_ready', 'pre_register_lot_entry_fee_discount', 'pre_register_lot_discount_percent', 'allow_bidding_on_lots','only_approved_sellers',
-            'invoice_payment_instructions', 'minimum_bid', 'winning_bid_percent_to_club_for_club_members', 'lot_entry_fee_for_club_members',
+            'invoice_payment_instructions', 'minimum_bid', 'winning_bid_percent_to_club_for_club_members', 'lot_entry_fee_for_club_members', 'require_phone_number', 'set_lot_winners_url'
             ]
         widgets = {
             'date_start': DateTimePickerInput(),
@@ -1006,6 +1006,7 @@ class AuctionEditForm(forms.ModelForm):
             self.fields['allow_bidding_on_lots'].help_text = "Leave this checked or people won't be able to bid!"
             self.fields['pre_register_lot_entry_fee_discount'].widget=forms.HiddenInput()
             self.fields['pre_register_lot_discount_percent'].widget=forms.HiddenInput()
+            self.fields['set_lot_winners_url'].widget=forms.HiddenInput()
         else:
             self.fields['allow_bidding_on_lots'].help_text = "Check to allow people to place bids on this website."
             self.fields['date_end'].help_text = "You should probably leave this blank so that you can manually set winners. This field has been indefinitely set to hidden - see https://github.com/iragm/fishauctions/issues/116"
@@ -1087,10 +1088,12 @@ class AuctionEditForm(forms.ModelForm):
             Div(
                 Div('minimum_bid',css_class='col-md-3',),
                 Div('allow_bidding_on_lots', css_class='col-md-3',),
+                Div('require_phone_number',css_class='col-md-3',),
                 Div('email_users_when_invoices_ready', css_class='col-md-3',),
                 Div('use_categories',css_class='col-md-3',),
                 Div('invoice_payment_instructions', css_class='col-md-9',),
                 Div('promote_this_auction', css_class='col-md-3',),
+                Div('set_lot_winners_url', css_class='col-md-3',),
                 css_class='row',
             ),
             Submit('submit', 'Save', css_class='create-update-auction btn-success'),

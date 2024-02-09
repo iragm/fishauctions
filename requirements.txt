@@ -65,3 +65,4 @@ channels_redis
 pyyaml
 ua-parser
 user-agents
+heif-image-plugin

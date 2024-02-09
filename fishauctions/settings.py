@@ -16,7 +16,7 @@ import os
 try:
     from . import customsettings
 except:
-    pass
+    print("You can set your envionrment using a customsettings.py file.  No file found, or file is invalid, assuming the environment has been set some other way.")
 import datetime
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.

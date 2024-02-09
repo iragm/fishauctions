@@ -46,6 +46,8 @@ def add_tz(request):
 
 def add_location(request):
     """request location if not set"""
+    # set some value to generate the session id
+    request.session['status'] = 'started'
     has_user_location = False
     try:
         if request.COOKIES['latitude'] and request.COOKIES['longitude']:

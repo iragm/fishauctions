@@ -7,12 +7,16 @@
 
 {% block extra_js %}
 <script>
+var lotSearch;
 $(window).on("load", function() {
   $('#id_lot').select();
   var input = document.getElementById('id_lot');
   input.addEventListener('keyup', function () {
     var value = this.value;
-    htmx.ajax('get','/api/{{ auction.slug }}/lots/' + encodeURIComponent(value), {target: '#result'});
+    clearTimeout(lotSearch);
+    lotSearch = setTimeout(function () {
+      htmx.ajax('get','/api/{{ auction.slug }}/lots/' + encodeURIComponent(value), {target: '#result'});
+    }, 300);
   });
 });
 </script>
@@ -21,5 +25,5 @@ $(window).on("load", function() {
 {#        {% include 'auction_ribbon.html' %} #}
 {% crispy form form.helper %}
 <div id="result"></div>
-<small>Press F11 for full screen.  <a href="{% url 'auction_main' slug=auction.slug %}">{{auction}} home</a></small>
+<small>Press F11 for full screen, control and + or - to zoom.  <a href="{% url 'auction_main' slug=auction.slug %}">{{auction}} home</a>.</small>
 {% endblock %}

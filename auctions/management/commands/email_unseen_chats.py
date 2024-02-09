@@ -23,14 +23,15 @@ class Command(BaseCommand):
             lots = Lot.objects.exclude(is_deleted=True).filter(user=user, lothistory__seen=False, lothistory__changed_price=False).annotate(
                 owner_chats=Count('lothistory', filter=Q(lothistory__seen=False, lothistory__changed_price=False, lothistory__notification_sent=False))
             )
-            mail.send(
-                user.email,
-                template='unread_chat_messages',
-                context={
-                    'name': user.first_name,
-                    'domain': current_site.domain,
-                    'lots': lots,
-                    'unsubscribe': user.userdata.unsubscribe_link
-                    },
-            )
+            if lots:
+                mail.send(
+                    user.email,
+                    template='unread_chat_messages',
+                    context={
+                        'name': user.first_name,
+                        'domain': current_site.domain,
+                        'lots': lots,
+                        'unsubscribe': user.userdata.unsubscribe_link
+                        },
+                )
         LotHistory.objects.filter(notification_sent = False).update(notification_sent=True)

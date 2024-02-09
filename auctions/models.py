@@ -270,6 +270,8 @@ class Auction(models.Model):
 	allow_bidding_on_lots = models.BooleanField(default=True)
 	only_approved_sellers = models.BooleanField(default=False)
 	only_approved_sellers.help_text = "Require admin approval before users can add lots.  This will not change permissions for users that have already joined."
+	require_phone_number = models.BooleanField(default=False)
+	require_phone_number.help_text = "Require users to have entered a phone number before they can join this auction"
 	email_users_when_invoices_ready = models.BooleanField(default=True)
 	invoice_payment_instructions = models.CharField(max_length=255, blank=True, null=True, default="")
 	invoice_payment_instructions.help_text = "Shown to the user on their invoice.  For example, 'You will receive a seperate PayPal invoice with payment instructions'"
@@ -280,6 +282,18 @@ class Auction(models.Model):
 	lot_entry_fee_for_club_members.help_text = "Used instead of the standard entry fee, when you designate someone as a club member"
 	winning_bid_percent_to_club_for_club_members = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(100)])
 	winning_bid_percent_to_club_for_club_members.help_text = "Used instead of the standard split, when you designate someone as a club member"
+	SET_LOT_WINNER_URLS = (
+		('', "Standard, bidder number/lot number only"),
+		('presentation', 'Show a picture of the lot'),
+		('autocomplete', 'Autocomplete, search by name or bidder number'),
+	)
+	set_lot_winners_url = models.CharField(
+		max_length=20,
+		choices=SET_LOT_WINNER_URLS,
+		blank=True,
+		default="presentation"
+	)
+	set_lot_winners_url.verbose_name = "Set lot winners"
 
 	def __str__(self):
 		result = self.title
@@ -374,6 +388,10 @@ class Auction(models.Model):
 	def user_admin_link(self):
 		return reverse("auction_tos_list", kwargs={'slug': self.slug}) 
 
+	@property
+	def set_lot_winners_link(self):
+		return f"{self.get_absolute_url()}lots/set-winners/{self.set_lot_winners_url}"
+
 	def permission_check(self, user):
 		"""See if `user` can make changes to this auction"""
 		if self.created_by == user:
@@ -397,11 +415,14 @@ class Auction(models.Model):
 			time_to_use = self.date_start
 		for location in locations:
 			error = False
-			if location.pickup_time < time_to_use:
-				error = True
-			if location.second_pickup_time:
-				if location.second_pickup_time < time_to_use:
+			try:
+				if location.pickup_time < time_to_use:
 					error = True
+				if location.second_pickup_time:
+					if location.second_pickup_time < time_to_use:
+						error = True
+			except:
+				error = False
 			if error:
 				return reverse("edit_pickup", kwargs={'pk': location.pk})
 		return False
@@ -1331,6 +1352,13 @@ class Lot(models.Model):
 	def delete(self, *args, **kwargs):
 		self.is_deleted=True
 		self.save()
+
+	@property
+	def i_bred_this_fish_display(self):
+		if self.i_bred_this_fish:
+			return "Yes"
+		else:
+			return ""
 
 	@property
 	def seller_invoice_link(self):

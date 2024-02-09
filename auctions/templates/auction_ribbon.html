@@ -12,7 +12,7 @@
     <li>{% if auction.admin_checklist_others_joined %}✅{% else %}⭕{%endif%} Convince other people to join{% if not auction.is_online %}, or <a href="/auctions/{{auction.slug}}/users">manually add them here</a>{% endif %}</li>
     <li>{% if auction.admin_checklist_lots_added %}✅{% else %}⭕{%endif%} <a href="/lots/new/">Add lots</a>{% if not auction.is_online %} for yourself, or <a href="/auctions/{{auction.slug}}/users">for other users</a>{% endif %}</li>
     {% if not auction.is_online %}
-    <li>{% if auction.admin_checklist_winner_set %}✅{% else %}⭕{%endif%} <a href="{% url 'auction_lot_winners' slug=auction.slug %}">Mark lots as sold</a></li>
+    <li>{% if auction.admin_checklist_winner_set %}✅{% else %}⭕{%endif%} <a href="{{ auction.set_lot_winners_link }}">Mark lots as sold</a></li>
     <li>{% if auction.admin_checklist_additional_admin %}✅{% else %}⭕{%endif%} Click a name to edit that user and <a href="/auctions/{{auction.slug}}/users">add an additional admin</a> to help you set lot winners</li>
     {% endif %}
   </ul>
@@ -40,7 +40,7 @@
           <a class="dropdown-item" href="/auctions/{{auction.slug}}/locations">Locations</a>
           <!-- <div class="dropdown-divider"></div> -->
           <!-- <h6 class="dropdown-header">Other</h6> -->
-          <a class="dropdown-item" href="{% url 'auction_lot_winners' slug=auction.slug %}">Set lot winners</a>
+          <a class="dropdown-item" href="{{ auction.set_lot_winners_link }}">Set lot winners</a>
           <a class="dropdown-item" href="/auctions/{{auction.slug}}/chat/">Chat messages</a>
           <a class="dropdown-item" href="/auctions/new?copy={{auction.slug}}">Copy to new auction</a>
           <a class="dropdown-item" href="/auctions/{{auction.slug}}/stats/">Stats</a>
