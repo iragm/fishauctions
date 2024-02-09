@@ -3,7 +3,6 @@
 import datetime
 import django.core.validators
 from django.db import migrations, models
-from django.utils.timezone import utc
 
 
 class Migration(migrations.Migration):
@@ -31,7 +30,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='userdata',
             name='last_activity',
-            field=models.DateTimeField(auto_now_add=True, default=datetime.datetime(2020, 11, 28, 17, 1, 4, 187665, tzinfo=utc)),
+            field=models.DateTimeField(auto_now_add=True, default=datetime.datetime(2020, 11, 28, 17, 1, 4, 187665, tzinfo=datetime.timezone.utc)),
             preserve_default=False,
         ),
     ]
