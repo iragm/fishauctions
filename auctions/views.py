@@ -2724,6 +2724,8 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
             originalLocations = PickupLocation.objects.filter(auction=clone_from_auction)
             for location in originalLocations:
                 location.pk = None # duplicate all fields
+                if location.name == str(clone_from_auction):
+                    location.name = str(auction)
                 location.auction = auction
                 auction_time = clone_from_auction.date_start
                 if clone_from_auction.date_end:
