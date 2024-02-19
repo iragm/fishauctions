@@ -85,6 +85,7 @@ INSTALLED_APPS = [
     'django_tables2',
     'django_htmx',
     'crispy_bootstrap4',
+    'django_recaptcha',
 ]
 ASGI_APPLICATION = "fishauctions.asgi.application"
 MIDDLEWARE = [
@@ -203,6 +204,7 @@ LOGIN_REDIRECT_URL = "/"
 LOGIN_URL = "/login/"
 ACCOUNT_FORMS = {
 'signup': 'auctions.forms.CustomSignupForm',
+'reset_password': 'auctions.forms.CustomResetPasswordForm',
 }
 ACCOUNT_AUTHENTICATION_METHOD = "username_email"
 ACCOUNT_CONFIRM_EMAIL_ON_GET = True
@@ -235,6 +237,9 @@ EMAIL_HOST_USER = os.environ['EMAIL_HOST_USER']
 EMAIL_HOST_PASSWORD = os.environ['EMAIL_HOST_PASSWORD']
 DEFAULT_FROM_EMAIL = os.environ['DEFAULT_FROM_EMAIL']
 EMAIL_SUBJECT_PREFIX = ""
+
+RECAPTCHA_PUBLIC_KEY = os.environ['RECAPTCHA_PUBLIC_KEY']
+RECAPTCHA_PRIVATE_KEY = os.environ['RECAPTCHA_PRIVATE_KEY']
 
 CRISPY_TEMPLATE_PACK = 'bootstrap4'
 CRISPY_FAIL_SILENTLY = False

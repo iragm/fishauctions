@@ -134,7 +134,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
     <div class="col-md-10 offset-md1">
         <h3>{{ lot.lot_name }}</h3>
             {{ lot.species_category }}{% if lot.category_automatically_added and lot.can_be_edited and lot.user == request.user %}<span class="badge bg-secondary">Cateogry automatically set.  Wrong?  <a href="/lots/edit/{{lot.pk}}">Fix it here</a></span><br>{% else %}, {% endif %}lot number {{lot.lot_number_display }}<br>
-            {% if lot.species %}<span class='text-muted'>{% if lot.species.scientific_name %}<i>{{ lot.species.scientific_name }}</i>{% else %}{{lot.species.common_name}}{%endif%}</span>{%endif%} {% if lot.i_bred_this_fish %}<span class="badge badge-light">Bred by {{ lot.user }}</span>{%endif%} {% if lot.pre_registered and lot.user == request.user %}<span class="badge badge-light">Pre-registered</span>{%endif%}
+            {% if lot.species %}<span class='text-muted'>{% if lot.species.scientific_name %}<i>{{ lot.species.scientific_name }}</i>{% else %}{{lot.species.common_name}}{%endif%}</span>{%endif%} {% if lot.i_bred_this_fish %}<span class="badge badge-light">Bred by {% if lot.auctiontos_seller %}{{lot.auctiontos_seller }}{% else %}{{ lot.user }}{% endif %}</span>{%endif%} {% if lot.pre_registered and lot.user == request.user %}<span class="badge badge-light">Pre-registered</span>{%endif%}
             {% if lot.image_count %}
                 <div>
                 <div id="image_carousel" class="carousel slide">

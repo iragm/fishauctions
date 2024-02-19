@@ -3040,7 +3040,7 @@ def update_lot_info(sender, instance, **kwargs):
 				lot = instance,
 				user = None,
 				message = 'This lot has been removed',
-				changed_price = False,
+				changed_price = True,
 				current_price=instance.high_bid,
 				)
 	if instance.auction and instance.reserve_price < instance.auction.minimum_bid:

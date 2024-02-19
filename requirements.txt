@@ -27,6 +27,7 @@ django-autocomplete-light
 django_tables2
 django_htmx
 django_debug_toolbar
+django-recaptcha
 easy-thumbnails
 hyperlink
 idna

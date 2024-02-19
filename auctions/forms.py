@@ -1,4 +1,4 @@
-from allauth.account.forms import SignupForm
+from allauth.account.forms import SignupForm, ResetPasswordForm
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import Layout, Submit, HTML
 from crispy_forms.bootstrap import Div, Field, PrependedAppendedText
@@ -17,6 +17,8 @@ from dal import autocomplete
 from django.urls import reverse
 from django.forms import BaseModelFormSet
 from django.template.loader import render_to_string
+from django_recaptcha.fields import ReCaptchaField
+from django_recaptcha.widgets import ReCaptchaV2Invisible
 
 # class DateInput(forms.DateInput):
 #     input_type = 'datetime-local'
@@ -1385,11 +1387,16 @@ class CustomSignupForm(SignupForm):
     """To require firstname and lastname when signing up"""
     first_name = forms.CharField(max_length=30, label='First Name')
     last_name = forms.CharField(max_length=30, label='Last Name')
+    captcha = ReCaptchaField(widget=ReCaptchaV2Invisible)
+
     def signup(self, request, user):
         user.first_name = self.cleaned_data['first_name']
         user.last_name = self.cleaned_data['last_name']
         user.save()
         return user
+
+class CustomResetPasswordForm(ResetPasswordForm):
+    captcha = ReCaptchaField(widget=ReCaptchaV2Invisible)
 
 class UserLocation(forms.ModelForm):
     """

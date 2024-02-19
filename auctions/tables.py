@@ -14,6 +14,12 @@ class AuctionTOSHTMxTable(tables.Table):
             return mark_safe(f'{value} <span class="badge bg-info">Member</span>')
         return f"{value}"
 
+    def render_email(self, value, record):
+        email_string = f'<a href="mailto:{value}">{value}</a>'
+        if record.user:
+            email_string += "✅"
+        return mark_safe(email_string)
+
     class Meta:
         model = AuctionTOS
         template_name = "tables/bootstrap_htmx.html"

@@ -1724,6 +1724,9 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
                     if not self.is_admin:
                         # you are adding lots for yourself, set custom lot number automatically
                         lot.custom_lot_number = None
+                        # we need to set lot.user here
+                        if self.tos.user:
+                            lot.user = self.tos.user
                 lot.save()
             if lots:
                 messages.success(self.request, f'Updated lots for {self.tos.name}')

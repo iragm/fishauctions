@@ -144,6 +144,7 @@ window.onload = function() {
               Chart.defaults.global.defaultFontColor = "#fff";
             } catch(e) {}
             {% endif %}
+            $('#div_id_captcha').hide(); //{# django-recaptcha does not play well with crispy forms #}
           });
           jQuery(document).ready(function($) {
             var bsDefaults = {
