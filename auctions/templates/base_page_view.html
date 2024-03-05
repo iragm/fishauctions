@@ -1,12 +1,12 @@
 {# This is included in base.html. To use it, call pageView(data) from any javascript template; data should be a dict containing auction : pk and lot : pk values, or can be blank #}
      
 <script>
-    const urlParams = new URLSearchParams(window.location.search);
-    const src = urlParams.get('src');
+    var urlParams = new URLSearchParams(window.location.search);
+    var src = urlParams.get('src');
     // Remove the "src" parameter from the URL
-    const newUrl = window.location.href.replace(/(\?|&)src=[^&]*(&|$)/, '$1').replace(/(&|\?)$/, '');
+    var newUrl = window.location.href.replace(/(\?|&)src=[^&]*(&|$)/, '$1').replace(/(&|\?)$/, '');
     window.history.replaceState(null, document.title, newUrl)
-    let first_view = true;
+    var first_view = true;
     function pageView(data) {
         data = data ?? {};
         data.src = src;

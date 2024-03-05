@@ -145,7 +145,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                             <div class='carousel-caption text-left'>
                                 <span class="text-muted"><small>{{ image.get_image_source_display }}</small></span>{%if image.caption%}<br>{{ image.caption }}{%endif%}
                             </div>
-                                {% if lot.can_add_images and lot.user == request.user %}
+                                {% if show_image_add_button %}
                                 <div class="container">
                                 <div class='row mb-3'>
                                     <button class="btn btn-primary mr-1" name="rotate-left" onclick="rotate('{{image.pk}}', 90)">Rotate ↶</button>
@@ -175,7 +175,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                 <div>You haven't added any images to this lot yet.  <a href="/blog/whats-a-picture-worth/" target="_blank">Lots with images are more likely to sell</a></div>
                 {% endif %}
             {% endif %}
-            {% if lot.can_add_images and lot.user == request.user %}
+            {% if show_image_add_button %}
             <a href="{% url 'add_image' lot=lot.lot_number %}" class="btn btn-primary">Add image</a><br>
             {% endif %}
         <br>

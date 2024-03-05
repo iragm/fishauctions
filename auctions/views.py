@@ -25,6 +25,7 @@ from easy_thumbnails.templatetags.thumbnail import thumbnail_url
 from easy_thumbnails.files import get_thumbnailer
 from post_office import mail
 from PIL import Image
+from asgiref.sync import sync_to_async
 import HeifImagePlugin
 import os
 from django.conf import settings
@@ -692,7 +693,7 @@ def imagesPrimary(request):
             lotImage = LotImage.objects.get(pk=pk)
         except:
             return HttpResponse(f"Image {pk} not found")
-        if not (user.is_superuser or lotImage.lot_number.user == user):
+        if not lotImage.lot_number.image_permission_check(request.user):
             messages.error(request, "Only the lot creator can change images")
             return redirect('/')
         LotImage.objects.filter(lot_number=lotImage.lot_number.pk).update(is_primary=False)
@@ -717,7 +718,7 @@ def imagesRotate(request):
             lotImage = LotImage.objects.get(pk=pk)
         except:
             return HttpResponse(f"Image {pk} not found")
-        if not (user.is_superuser or lotImage.lot_number.user == user):
+        if not lotImage.lot_number.image_permission_check(request.user):
             messages.error(request, "Only the lot creator can rotate images")
             return redirect('/')
         if not lotImage.image:
@@ -1565,7 +1566,6 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
                 return False
             else:
                 return True        
-
         csv_file.seek(0)
         csv_reader = csv.DictReader(TextIOWrapper(csv_file.file))
         email_field_names = ['email', 'e-mail', 'email address', 'e-mail address']
@@ -1630,7 +1630,7 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
             messages.error(self.request, error)
         if total_tos:
             self.extra_rows = total_tos
-        # note that regardless of whether this is valid or not, we redirect to the same page after parsign the CSV file
+        # note that regardless of whether this is valid or not, we redirect to the same page after parsing the CSV file
         return redirect(reverse("bulk_add_users", kwargs={'slug': self.auction.slug}))
 
     def post(self, request, *args, **kwargs):
@@ -1656,7 +1656,7 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
         context['formset'] = self.tos_formset
         context['helper'] = TOSFormSetHelper()
         context['auction'] = self.auction
-        context['other_auctions'] = Auction.objects.exclude(is_deleted=True).filter(Q(created_by=self.request.user) | Q(auctiontos__user=self.request.user, auctiontos__is_admin=True)).distinct().order_by('-date_posted')[:3]
+        context['other_auctions'] = Auction.objects.exclude(is_deleted=True).filter(Q(created_by=self.request.user) | Q(auctiontos__user=self.request.user, auctiontos__is_admin=True)).distinct().order_by('-date_posted')[:10]
         return context
 
     def tos_is_in_auction(self, auction, name, email):
@@ -1664,11 +1664,13 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
         qs = AuctionTOS.objects.filter(auction=auction)
         if email:
             qs = qs.filter(email=email)
-        else:
+        elif name:
             qs = qs.filter(
                 Q(name=name, email=None)
                 |
                 Q(name=name, email=""))
+        else:
+            return None
         return qs.first()
 
     def dispatch(self, request, *args, **kwargs):
@@ -1939,6 +1941,7 @@ class ViewLot(DetailView):
             if context['is_auction_admin'] or self.request.user == lot.user:
                 if lot.ended:
                     context['showExchangeInfo'] = True
+        context['show_image_add_button'] = lot.image_permission_check(self.request.user)
         return context
 
 class ViewLotSimple(ViewLot):
@@ -1982,15 +1985,8 @@ class ImageCreateView(LoginRequiredMixin, CreateView):
             self.lot = Lot.objects.get(lot_number=kwargs['lot'], is_deleted=False)
         except:
             raise Http404
-        auth = False
-        if self.lot.user == request.user:
-            auth = True
-        if not self.lot.can_add_images:
-            auth = False
-        if request.user.is_superuser:
-            auth = True
-        if not auth:
-            messages.error(request, "Your account doesn't have permission to add an image to this lot")
+        if not self.lot.image_permission_check(request.user):
+            messages.error(request, "You can't add an image to this lot")
             return redirect(self.get_success_url())
         if self.lot.image_count > 5:
             messages.error(request, "You can't add another image to this lot.  Delete one and try again")
@@ -2028,14 +2024,7 @@ class ImageUpdateView(UpdateView):
             self.lot = self.get_object().lot_number
         except:
             raise Http404
-        auth = False
-        if self.lot.user == request.user:
-            auth = True
-        if not self.lot.can_add_images:
-            auth = False
-        if request.user.is_superuser:
-            auth = True
-        if not auth:
+        if not self.lot.image_permission_check(request.user):
             messages.error(request, "You can't change this image")
             return redirect(self.get_success_url())
         return super().dispatch(request, *args, **kwargs)
