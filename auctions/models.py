@@ -754,7 +754,7 @@ class Auction(models.Model):
 	def admin_checklist_additional_admin(self):
 		if self.is_online:
 			return True
-		if self.lots_qs.filter(auctiontos_winner__isnull=False).count():
+		if AuctionTOS.objects.filter(auction__pk=self.pk).exclude(user=self.created_by).filter(is_admin=True).count() > 0:
 			return True
 		return False
 	
@@ -952,6 +952,10 @@ class AuctionTOS(models.Model):
 			return "None"
 
 	def save(self, *args, **kwargs):
+		def check_number_in_auction(number):
+			"""See if any other auctiontos are currently using a given bidder number"""
+			return AuctionTOS.objects.filter(bidder_number=number, auction=self.auction).count()
+		
 		if not self.pk:
 			#print("new instance of auctionTOS")
 			if self.auction.only_approved_sellers:
@@ -983,43 +987,48 @@ class AuctionTOS(models.Model):
 				self.address = userData.address
 		# set the bidder number based on the phone, address, last used number, or just at random
 		if not self.bidder_number or self.bidder_number == "None":
-			dont_use_these = ['13', '14', '15', '16', '17', '18', '19']
-			search = None
-			if self.phone_number:
-				search = re.search('([\d]{3}$)|$', self.phone_number).group()
-			if not search or str(search) in dont_use_these:
-				if self.address:
-					search = re.search('([\d]{3}$)|$', self.address).group()
-			if self.user:
-				userData, created = UserData.objects.get_or_create(
-					user = self.user,
-					defaults={},
-					)
-				if userData.preferred_bidder_number:
-					search = userData.preferred_bidder_number
-			# I guess it's possible that someone could make 999 accounts and have them all join a single auction, which would turn this into an infinite loop
-			failsafe = 0
-			# bidder numbers shouldn't start with 0
-			try:
-				if str(search)[0] == "0":
-					search = search[1:]
-				if str(search)[0] == "0":
-					search = search[1:]
-			except:
-				pass
-			while failsafe < 6000:
-				search = str(search)
-				if search[:-2] not in dont_use_these and search != "None":
-					if AuctionTOS.objects.filter(bidder_number=search, auction=self.auction).count() == 0:
-						self.bidder_number = search
-						if self.user:
-							if not userData.preferred_bidder_number:
-								userData.preferred_bidder_number = search
-								userData.save()
-						break
-				# OK, give up and just randomly generate something
-				search = randint(1, 999)
-				failsafe += 1
+			# recycle numbers from the last auction if we can
+			last_number_used = AuctionTOS.objects.filter(auction__created_by=self.auction.created_by, email=self.email).order_by('-auction__date_posted').first()
+			if self.email and last_number_used and check_number_in_auction(last_number_used.bidder_number) == 0:
+				self.bidder_number = last_number_used.bidder_number
+			else:
+				dont_use_these = ['13', '14', '15', '16', '17', '18', '19']
+				search = None
+				if self.phone_number:
+					search = re.search('([\d]{3}$)|$', self.phone_number).group()
+				if not search or str(search) in dont_use_these:
+					if self.address:
+						search = re.search('([\d]{3}$)|$', self.address).group()
+				if self.user:
+					userData, created = UserData.objects.get_or_create(
+						user = self.user,
+						defaults={},
+						)
+					if userData.preferred_bidder_number:
+						search = userData.preferred_bidder_number
+				# I guess it's possible that someone could make 999 accounts and have them all join a single auction, which would turn this into an infinite loop
+				failsafe = 0
+				# bidder numbers shouldn't start with 0
+				try:
+					if str(search)[0] == "0":
+						search = search[1:]
+					if str(search)[0] == "0":
+						search = search[1:]
+				except:
+					pass
+				while failsafe < 6000:
+					search = str(search)
+					if search[:-2] not in dont_use_these and search != "None":
+						if check_number_in_auction(search) == 0:
+							self.bidder_number = search
+							if self.user:
+								if not userData.preferred_bidder_number:
+									userData.preferred_bidder_number = search
+									userData.save()
+							break
+					# OK, give up and just randomly generate something
+					search = randint(1, 999)
+					failsafe += 1
 		if not self.bidder_number:
 			# I don't ever want this to be null
 			self.bidder_number = 999
