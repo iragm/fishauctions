@@ -726,6 +726,8 @@ def imagesRotate(request):
         thisImage = str(lotImage.image)
         pilImage = Image.open(BytesIO(lotImage.image.read()))
         pilImage = pilImage.rotate(angle, expand=True)
+        if pilImage.mode in ("RGBA", "P"):
+            pilImage = pilImage.convert("RGB")
         output = BytesIO()
         pilImage.save(output, format='JPEG', quality=100)
         output.seek(0)
