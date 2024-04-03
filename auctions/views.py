@@ -3933,6 +3933,7 @@ class UnsubscribeView(TemplateView):
             userData.email_me_about_new_lots_ship_to_location = False
             userData.email_me_when_people_comment_on_my_lots = False
             userData.send_reminder_emails_about_joining_auctions = False
+            userData.email_me_about_new_in_person_auctions = False
             userData.has_unsubscribed = True
             userData.last_activity = timezone.now()
             userData.save()
