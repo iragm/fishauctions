@@ -275,8 +275,8 @@ class WinnerLot(forms.Form):
             'invoice',
             'auction',
             'lot',
-            PrependedAppendedText('winning_price', '$', '.00' ),
             'winner',
+            PrependedAppendedText('winning_price', '$', '.00' ),
             # Div(
             #     Div('lot',css_class='col-md-5',),
             #     Div('winner',css_class='col-md-3',),
@@ -292,7 +292,10 @@ class WinnerLot(forms.Form):
         self.fields['auction'].widget = HiddenInput()
         self.fields['invoice'].widget = HiddenInput()
         self.fields['invoice'].initial = "True"
-
+        self.fields['lot'].widget.attrs['autocomplete'] = 'off'
+        self.fields['winning_price'].widget.attrs['autocomplete'] = 'off'
+        self.fields['winner'].widget.attrs['autocomplete'] = 'off'
+        
     class Meta:
         fields = [
             'auction',
@@ -331,8 +334,8 @@ class WinnerLotSimpleImages(WinnerLotSimple):
 # </div>
             Div(
                 Div('lot', css_class='col-md-3'),
-                Div('winner', css_class='col-md-3'),
                 Div(PrependedAppendedText('winning_price', '$', '.00'), css_class='col-md-4'),
+                Div('winner', css_class='col-md-3'),
                 Div(
                     HTML('<button type="submit" class="btn btn-success form-control mt-4">Save</button>'),
                     css_class='col-md-2 form-group'
