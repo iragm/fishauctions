@@ -6,7 +6,11 @@
 {% block content %}
   {% include 'auction_ribbon.html' %}
   <br>
-  <p>You are adding/editing lots for <b><span class="text-warning">{{ tos.name }}</b></span>, bidder number <b>{{ tos.bidder_number}}</b></p>
+  <p>{% if is_admin %}You are adding/editing lots for <b><span class="text-warning">{{ tos.name }}</b></span>, bidder number <b>{{ tos.bidder_number}}</b>
+  {% else %}
+    Use this page to quickly add lots to {{ auction }}.  Enter one lot per row.  You can edit these lots, add images, or add lots one at a time from your <a href="/selling">selling dashboard</a>.
+  {% endif %}
+  </p>
   
   {{ link_formset.management_form }}
   <form id="form-container" method="POST" action="{% url 'bulk_add_lots' slug=auction.slug bidder_number=tos.bidder_number%}">
@@ -14,7 +18,7 @@
     <button class='btn btn-info' id="add-form" type="button">Add row</button>
     
     <input type="submit" class='btn btn-info float-right submit-button mr-2 ml-2' name='save_print' id='save_print' value="Save and print labels">
-    <input type="submit" class='btn btn-success float-right submit-button' name='save_submit' id='save_submit' value="Save lots for {{ tos.name }}">
+    <input type="submit" class='btn btn-success float-right submit-button' name='save_submit' id='save_submit' value="Save lots for {% if is_admin%}{{ tos.name }}{% else %}{{ auction }}{% endif %}">
   </form>
 {% endblock %}
 

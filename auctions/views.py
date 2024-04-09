@@ -1487,7 +1487,7 @@ class SetLotWinner(QuickSetLotWinner):
         if not tos:
             form.add_error('winner', "No bidder found")
         else:
-            if tos.invoice.status is not "DRAFT":
+            if tos.invoice.status != "DRAFT":
                 form.add_error('winner', "This user's invoice is not open")
         if lot:
             if lot.auctiontos_winner and lot.winning_price:
@@ -1725,8 +1725,6 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
         context = self.get_context_data(**kwargs)
         context['formset'] = lot_formset
         context['helper'] = helper
-        context['tos'] = self.tos
-        context['auction'] = self.auction
         return self.render_to_response(context)
 
     def post(self, *args, **kwargs):
@@ -1772,9 +1770,14 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
         context = self.get_context_data(**kwargs)
         context['formset'] = lot_formset
         context['helper'] = LotFormSetHelper()
+        return self.render_to_response(context)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
         context['tos'] = self.tos
         context['auction'] = self.auction
-        return self.render_to_response(context)
+        context['is_admin'] = self.is_admin
+        return context
 
     def dispatch(self, request, *args, **kwargs):
         
