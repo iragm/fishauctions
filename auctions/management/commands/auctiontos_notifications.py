@@ -72,7 +72,11 @@ class Command(BaseCommand):
             tos.save()
             if tos.unbanned_lot_count:
                 send_tos_notification('auction_print_reminder', tos)
-        in_person_auction_print_reminder = print_reminder_qs.filter(auction__is_online=False, auction__date_start__lte=timezone.now() - datetime.timedelta(hours=28))
+        in_person_auction_print_reminder = print_reminder_qs.filter(
+            auction__is_online=False, 
+            auction__date_start__gte=timezone.now() + datetime.timedelta(hours=24),
+            auction__date_start__lte=timezone.now() + datetime.timedelta(hours=28)
+        )
         for tos in in_person_auction_print_reminder:
             tos.print_reminder_email_sent = True
             tos.save()
