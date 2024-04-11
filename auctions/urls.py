@@ -123,4 +123,13 @@ urlpatterns = [
     path('blog/<slug:slug>/', views.BlogPostView.as_view()),
     path('feedback/', views.LeaveFeedbackView.as_view(), name='feedback'),
     path('unsubscribe/<slug:slug>/', views.UnsubscribeView.as_view()),
+    path('api/auctionstats/<slug:slug>/attrition', views.AuctionStatsAttritionJSONView.as_view(), name='auction_stats_attrition'),
+    path('api/auctionstats/<slug:slug>/auctioneer', views.AuctionStatsAuctioneerSpeedJSONView.as_view(), name='auction_stats_auctioneer'),
+    path('api/auctionstats/<slug:slug>/activity', views.AuctionStatsActivityJSONView.as_view(), name='auction_stats_activity'),
+    path('api/auctionstats/<slug:slug>/pictures', views.AuctionStatsImagesJSONView.as_view(), name='auction_stats_pictures'),
+    path('api/auctionstats/<slug:slug>/distance_traveled', views.AuctionStatsTravelDistanceJSONView.as_view(), name='auction_stats_distance_traveled'),
+    path('api/auctionstats/<slug:slug>/previous_auctions', views.AuctionStatsPreviousAuctionsJSONView.as_view(), name='auction_stats_previous_auctions'),
+    path('api/auctionstats/<slug:slug>/lots_submitted', views.AuctionStatsLotsSubmittedJSONView.as_view(), name='auction_stats_lots_submitted'),
+    path('api/auctionstats/<slug:slug>/location_volume', views.AuctionStatsLocationVolumeJSONView.as_view(), name='auction_stats_location_volume'),
+    path('api/auctionstats/<slug:slug>/feature_use', views.AuctionStatsLocationFeatureUseJSONView.as_view(), name='auction_stats_feature_use'),
 ]

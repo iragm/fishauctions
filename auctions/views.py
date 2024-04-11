@@ -16,7 +16,7 @@ from django.views.generic.edit import FormView
 from django.views.generic.base import TemplateView, ContextMixin
 from django.urls import reverse
 from django.views.generic.edit import UpdateView, CreateView, DeleteView, FormMixin
-from django.db.models import Count, Case, When, IntegerField, Q
+from django.db.models import Count, Case, When, IntegerField, Q, Avg
 from django.db.models.functions import TruncDay
 from django.contrib.messages.views import SuccessMessageMixin
 from allauth.account.models import EmailAddress
@@ -55,6 +55,55 @@ import qr_code
 from qr_code.qrcode.utils import QRCodeOptions
 import textwrap
 from user_agents import parse
+from chartjs.views.lines import BaseLineChartView
+from chartjs.views.columns import BaseColumnsHighChartsView
+from chartjs.colors import next_color
+from collections import Counter
+
+def bin_data(queryset, field_name, number_of_bins, start_bin=None, end_bin=None):
+    """Pass a queryset and this will spit out a count of how many `field_name`s there are in each `number_of_bins`
+    Pass a datetime or an int for start_bin and end_bin, the default is the min/max value in the queryset"""
+    
+    # some cleanup and validation first
+    try:
+        queryset = queryset.order_by(field_name)
+    except:
+        if start_bin is None or end_bin is None:
+            raise ValueError(f"queryset cannot be ordered by '{field_name}', so start_bin and end_bin are required")
+    working_with_date = False
+    if queryset.count():
+        value = getattr(queryset[0], field_name)
+        if isinstance(value, datetime.datetime):
+            working_with_date = True
+        else:
+            try:
+                float(value)
+            except ValueError:
+                raise ValueError(f"{field_name} needs to be either a datetime or an integer value, got value {value}")
+    if start_bin is None:
+        start_bin = value
+    if end_bin is None:
+        end_bin = getattr(queryset.last(), field_name)
+    if working_with_date:
+        bin_size = (end_bin - start_bin).total_seconds() / number_of_bins
+    else:
+        bin_size = (end_bin - start_bin ) / number_of_bins
+
+    bin_counts = Counter()
+    for item in queryset:
+        if working_with_date:
+            bin_index = min(int((getattr(item, field_name) - start_bin).total_seconds() // bin_size), number_of_bins - 1)
+        else:
+            bin_index = min(int((getattr(item, field_name) - start_bin) // bin_size), number_of_bins - 1)
+        bin_counts[bin_index] += 1
+
+    # Ensure all bins are represented (even those with 0)
+    counts_list = [bin_counts[i] for i in range(number_of_bins)]
+
+    #for i in range(number_of_bins):
+    #    print(f"Bin {i+1}: {self.bin_edges[i]} to {self.bin_edges[i+1]}, Count: {bin_counts[i]}")
+    return counts_list        
+
 
 class AuctionPermissionsMixin():
     """For any auction-related views, adds view.is_auction_admin to be used for any kind of permissions-checking
@@ -84,6 +133,26 @@ class AuctionPermissionsMixin():
             #print(f"allowing user {self.request.user} to view {self.auction}")
         return result
 
+class AuctionStatsPermissionsMixin():
+    """For graph classes"""
+
+    @property
+    def is_auction_admin(self):
+        """Helper function used to check and see if request.user is the creator of the auction or is someone who has been made an admin of the auction.
+        Returns False on no permission or True if the user has permission to access the auction"""
+        if not self.auction:
+            raise Exception("you must set self.auction (typically in dispatch) for self.is_auction_admin to be available")
+        result = self.auction.permission_check(self.request.user)
+        if not result:
+            if not self.auction.make_stats_public:
+                pass
+                #print('non-admins allowed')
+            else:
+                raise PermissionDenied()
+        else:
+            pass
+            #print(f"allowing user {self.request.user} to view {self.auction}")
+        return result
 
 class ClickAd(RedirectView):
     def get_redirect_url(self, *args, **kwargs):
@@ -1389,9 +1458,8 @@ class AuctionStats(DetailView, AuctionPermissionsMixin):
         context = super().get_context_data(**kwargs)
         if not self.get_object().closed and self.get_object().is_online:
             messages.info(self.request, "This auction is still in progress, check back once it's finished for more complete stats")
-        # for #67
-        # if self.get_object().date_posted < datetime(year=2024, month=1, day=1):
-        #   messages.info(self.request, "Not all stats are available for old auctions.")
+        if self.get_object().date_posted < timezone.make_aware(datetime.datetime(year=2024, month=1, day=1)):
+           messages.info(self.request, "Not all stats are available for old auctions.")
         return context
 
 class QuickSetLotWinner(FormView, AuctionPermissionsMixin):
@@ -2489,16 +2557,17 @@ class AuctionTOSDelete(TemplateView, FormMixin, AuctionPermissionsMixin):
                     lot.active = True
                     lot.save()
             else:
-                new_auctiontos = AuctionTOS.objects.get(pk=form.cleaned_data['merge_with'])
-                invoice, created = Invoice.objects.get_or_create(auctiontos_user=new_auctiontos, auction=new_auctiontos.auction, defaults={})
-                for lot in sold_lots:
-                    lot.auctiontos_seller = new_auctiontos
-                    lot.save()
-                for lot in won_lots:
-                    lot.auctiontos_winner = new_auctiontos
-                    lot.save()
-                    lot.add_winner_message(request.user, new_auctiontos, lot.winning_price)
-                invoice.recalculate
+                if form.cleaned_data['merge_with']:
+                    new_auctiontos = AuctionTOS.objects.get(pk=form.cleaned_data['merge_with'])
+                    invoice, created = Invoice.objects.get_or_create(auctiontos_user=new_auctiontos, auction=new_auctiontos.auction, defaults={})
+                    for lot in sold_lots:
+                        lot.auctiontos_seller = new_auctiontos
+                        lot.save()
+                    for lot in won_lots:
+                        lot.auctiontos_winner = new_auctiontos
+                        lot.save()
+                        lot.add_winner_message(request.user, new_auctiontos, lot.winning_price)
+                    invoice.recalculate
             # not needed if we have models.CASCADE on Invoice
             #invoices = Invoice.objects.filter(auctiontos_user=self.auctiontos)
             #for invoice in invoices:
@@ -3989,30 +4058,11 @@ class AuctionChartView(View):
             """
             Inverted funnel chart showing user participation
             """
-            try:
-                allViews = Lot.objects.exclude(is_deleted=True).filter(auction=auction).annotate(num_views=Count('pageview')).order_by("-num_views")
-                maxAllViews = allViews[0].num_views
-                medianAllViews = median_value(allViews, 'num_views')
-                signedInViews = Lot.objects.exclude(is_deleted=True).filter(auction=auction).annotate(
-                        num_views=Count(Case(
-                            When(pageview__user__isnull=False, then=1),
-                            output_field=IntegerField(),
-                        ))
-                    ).order_by("-num_views")
-                maxSignedInViews = signedInViews[0].num_views
-                medianSignedInViews = median_value(signedInViews, 'num_views')
-                # this gets a little tricky
-                # We don't have a way to record the total number of unique visitors without an account for a given auction
-                # But, we can calculate the ratio of median signed in to all:
-                maxRatio = maxAllViews / maxSignedInViews
-                medianRatio = medianAllViews / medianSignedInViews
-                # then get the average of those:
-                ratio = ( maxRatio + medianRatio ) / 2
-                usersWhoViewed = len(User.objects.filter(pageview__lot_number__auction=auction).annotate(dcount=Count('id')))
-                totalUsers = int(usersWhoViewed * ratio)
-            except:
-                totalUsers = 0
-                usersWhoViewed = 0
+            all_views = PageView.objects.filter(Q(auction=auction)|Q(lot_number__auction=auction))
+            anonymous_views = all_views.values('session_id').annotate(session_count=Count('session_id')).count()
+            user_views = all_views.values('user').annotate(user_count=Count('user')).count()
+            totalUsers = anonymous_views + user_views
+            usersWhoViewed = user_views
             try:
                 userWhoBid = len(User.objects.filter(bid__lot_number__auction=auction).annotate(dcount=Count('id')))
                 #usersWhoSold = len(User.objects.filter(lot__auction=auction).annotate(dcount=Count('id')))
@@ -4025,8 +4075,8 @@ class AuctionChartView(View):
                 #len(User.objects.filter(lot__in=soldLots).annotate(dcount=Count('id')))
             except:
                 usersWhoWon = 0
-            labels = [  "Total unique views (estimated)",
-                        "Users who viewed lots",
+            labels = [  "Total unique views",
+                        "Views from users with accounts",
                         "Users who bid on at least one item",
                         "Users who won at least one item",
                         ]
@@ -4051,6 +4101,7 @@ class AuctionChartView(View):
                 binSize = 2
             labels = ["Not sold"]
             lots = Lot.objects.exclude(is_deleted=True).filter(auction=auction)
+            # hmmm...shouldn't this be binSize + 2?  and why not a Counter()?
             data = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
             last = 1
             for i in range(len(data)-2):
@@ -4066,6 +4117,7 @@ class AuctionChartView(View):
                     priceBin = int(lot.winning_price / binSize)
                     if priceBin == 0:
                         priceBin = 1
+                # hmmm...shouldn't this be binSize + 1, not 21?
                 if priceBin > 21:
                     priceBin = 21
                 data[priceBin] += 1
@@ -4180,6 +4232,297 @@ class AuctionChartView(View):
         elif auction.make_stats_public:
             return True
         return False
+
+class AuctionStatsActivityJSONView(BaseLineChartView, AuctionStatsPermissionsMixin):
+    # these will no doubt need to be tweaked, perhaps differnt for in-person and online auctions?
+    bins = 21
+    days_before = 16
+    days_after = bins - days_before
+
+    def dispatch(self, request, *args, **kwargs):
+        self.auction = Auction.objects.get(slug=kwargs['slug'], is_deleted=False)
+        if not (self.is_auction_admin or self.auction.make_stats_public):
+            return redirect('/')
+        if self.auction.is_online:
+            self.date_start = self.auction.date_end - timezone.timedelta(days=self.days_before)
+            self.date_end = self.auction.date_end + timezone.timedelta(days=self.days_after)
+        else: # in person
+            self.date_start = self.auction.date_start - timezone.timedelta(days=self.days_before)
+            self.date_end = self.auction.date_start + timezone.timedelta(days=self.days_after)
+        self.bin_size = (self.date_end - self.date_start).total_seconds() / self.bins
+        self.bin_edges = [self.date_start + timezone.timedelta(seconds=self.bin_size * i) for i in range(self.bins + 1)]
+        return super().dispatch(request, *args, **kwargs)
+        
+    def get_labels(self):
+        #return [(f"Day {i}") for i in range(self.bins + 1)]
+        before = [(f"{i} days before") for i in range(self.days_before, 0, -1)]
+        after = [(f"{i} days after") for i in range(1, self.days_after)]
+        midpoint = 'start'
+        if self.auction.is_online:
+            midpoint = "end"
+        return before + [midpoint] + after
+
+    def get_providers(self):
+        return ['Views', 'Joins', 'New lots', 'Searches', 'Bids', 'Watches']
+
+    def get_data(self):
+        """Wonder if these qs should be properties of the Auction model...
+        Might add invoice views here, but it would require updating the pageview model to have an invoice field similar to how auction and lot currently work"""
+
+        views = PageView.objects.filter(Q(auction=self.auction)|Q(lot_number__auction=self.auction))
+        joins = AuctionTOS.objects.filter(auction=self.auction)
+        new_lots = Lot.objects.filter(auction=self.auction)
+        searches = SearchHistory.objects.filter(auction=self.auction)
+        bids = LotHistory.objects.filter(lot__auction=self.auction, changed_price=True)
+        watches = Watch.objects.filter(lot_number__auction=self.auction)
+
+        # what follows is a delightful reminder of how important a consistent naming scheme is
+        return [bin_data(views, 'date_start', self.bins, self.date_start, self.date_end),
+                bin_data(joins, 'createdon', self.bins, self.date_start, self.date_end),
+                bin_data(new_lots, 'date_posted', self.bins, self.date_start, self.date_end),
+                bin_data(searches, 'createdon', self.bins, self.date_start, self.date_end),
+                bin_data(bids, 'timestamp', self.bins, self.date_start, self.date_end),
+                bin_data(watches, 'createdon', self.bins, self.date_start, self.date_end)]
+
+class AuctionStatsAttritionJSONView(BaseLineChartView, AuctionStatsPermissionsMixin):
+    ignore_percent = 10
+
+    def dispatch(self, request, *args, **kwargs):
+        self.auction = Auction.objects.get(slug=kwargs['slug'], is_deleted=False)
+        if not (self.is_auction_admin or self.auction.make_stats_public):
+            return redirect('/')
+        self.lots = Lot.objects.exclude(Q(date_end__isnull=True)|Q(is_deleted=True)).filter(auction=self.auction, winning_price__isnull=False).order_by('-date_end')
+        self.total_lots = self.lots.count()
+        start_index = int(self.ignore_percent / 100 * self.total_lots)
+        end_index = int((1 - (self.ignore_percent / 100)) * self.total_lots) - 1  # Subtract 1 because indexing is zero-based
+        if self.total_lots > 0:
+            self.start_date = self.lots[start_index].date_end
+            self.end_date = self.lots[end_index].date_end if self.total_lots > 1 else self.start_date  # Handle case with only one lot
+            self.total_runtime = self.end_date - self.start_date
+            add_back_on = self.total_runtime / self.ignore_percent
+            self.start_date = self.start_date - (add_back_on * 2)
+            self.end_date = self.end_date + (add_back_on * 2)
+            self.lots = self.lots.filter(date_end__lte=self.start_date, date_end__gte=self.end_date)
+        result = super().dispatch(request, *args, **kwargs)
+        return result
+        
+    def get_labels(self):
+        """Not used for scatter plots"""
+        return []
+
+    def get_providers(self):
+        """Return names of datasets."""
+        return ["Lots"]
+
+    def get_data(self):
+        data = [{
+                'x': (lot.date_end - self.end_date).total_seconds() // 60, # minutes after auction start
+                #'x': lot.date_end.timestamp() * 1000, # this one gives js timestamps and would need moment.js to convert to date
+                'y': lot.winning_price
+            } for lot in self.lots]
+        # Prepare the data structure for Chart.js
+        # data = {
+        #     'data': data
+        # }
+        #return data
+        return [data]
+
+class AuctionStatsBarChartJSONView(BaseColumnsHighChartsView, AuctionPermissionsMixin):
+    """This is needed because of https://github.com/peopledoc/django-chartjs/issues/56"""
+    allow_non_admins = True
+    def dispatch(self, request, *args, **kwargs):
+        self.auction = Auction.objects.get(slug=kwargs['slug'], is_deleted=False)
+        if not (self.is_auction_admin or self.auction.make_stats_public):
+            return redirect('/')
+        result = super().dispatch(request, *args, **kwargs)
+        return result
+    
+    def get_yUnit(self):
+        return ""
+        
+    def get_colors(self):
+        return next_color()
+    
+    def get_context_data(self, **kwargs):
+        """Return graph configuration."""
+        context = super().get_context_data(**kwargs)
+        context.update(
+            {
+                'labels': self.get_labels(),
+                "chart": self.get_type(),
+                "title": self.get_title(),
+                "subtitle": self.get_subtitle(),
+                "xAxis": self.get_xAxis(),
+                "yAxis": self.get_yAxis(),
+                "tooltip": self.get_tooltip(),
+                "plotOptions": self.get_plotOptions(),
+                "datasets": self.get_series(),
+                "credits": self.credits,
+            }
+        )
+        return context
+
+    def get_series(self):
+        datasets = []
+        color_generator = self.get_colors()
+        data = self.get_data()
+        providers = self.get_providers()
+        for i, entry in enumerate(data):
+            color = tuple(next(color_generator))
+            dataset = {"data": entry,
+                       "label": providers[i],}
+            dataset.update(self.get_dataset_options(i, color))
+            datasets.append(dataset)
+        return datasets
+
+    def get_dataset_options(self, index, color):
+        default_opt = {
+            "backgroundColor": "rgba(%d, %d, %d, 0.5)" % color,
+            "borderColor": "rgba(%d, %d, %d, 1)" % color,
+            "pointBackgroundColor": "rgba(%d, %d, %d, 1)" % color,
+            "pointBorderColor": "#fff",
+        }
+        return default_opt
+
+    def get_title(self):
+        return ""
+
+class AuctionStatsImagesJSONView(AuctionStatsBarChartJSONView):
+    def get_labels(self):
+        return ['No images', 'One image', 'Multiple images']
+    
+    def get_providers(self):
+        return ['Median sell price', "Average sell price", "Number of lots"]
+
+    def get_data(self):
+        lots = Lot.objects.filter(auction=self.auction, winning_price__isnull=False).annotate(num_images=Count('lotimage'))
+        lots_with_no_images = lots.filter(num_images=0)
+        lots_with_one_image = lots.filter(num_images=1)
+        lots_with_one_or_more_images = lots.filter(num_images__gte=1)
+        lots_with_no_images_average = lots_with_no_images
+        lots_with_one_image_average = lots_with_one_image.aggregate(avg_value=Avg('winning_price'))['avg_value']
+        lots_with_one_or_more_images_average = lots_with_one_or_more_images.aggregate(avg_value=Avg('winning_price'))['avg_value']
+        medians = []
+        averages = []
+        counts = []
+        for lots in [lots_with_no_images, lots_with_one_image, lots_with_one_or_more_images]:
+            try:
+                medians.append(median_value(lots, 'winning_price'))
+            except:
+                medians.append(0)
+            averages.append(lots.aggregate(avg_value=Avg('winning_price'))['avg_value'])
+            counts.append(lots.count())
+        return [medians, averages,counts ]
+
+class AuctionStatsTravelDistanceJSONView(AuctionStatsBarChartJSONView):
+    def get_labels(self):
+        return ['Less than 10 miles', '10-20 miles', '21-30 miles', '31-40 miles', '41-50 miles', '51+ miles']
+    
+    def get_providers(self):
+        return ['Number of users']
+
+    def get_data(self):
+        auctiontos = AuctionTOS.objects.filter(auction=self.auction)
+        histogram = bin_data(auctiontos, 'distance_traveled', number_of_bins=6, start_bin=-1, end_bin=60)
+        return [histogram]
+
+class AuctionStatsPreviousAuctionsJSONView(AuctionStatsBarChartJSONView):
+    def get_labels(self):
+        return ['First auction', '1 previous auction', '2+ previous auctions']
+    
+    def get_providers(self):
+        return ['Number of users']
+
+    def get_data(self):
+        auctiontos = AuctionTOS.objects.filter(auction=self.auction, email__isnull=False)
+        histogram = bin_data(auctiontos, 'previous_auctions_count', number_of_bins=3, start_bin=0, end_bin=2)
+        return [histogram]
+    
+class AuctionStatsLotsSubmittedJSONView(AuctionStatsBarChartJSONView):
+    def get_labels(self):
+        return ['0-2 Lots', '3-5 Lots', '6-10 Lots', '11+ Lots']
+    
+    def get_providers(self):
+        return ['Number of users']
+
+    def get_data(self):
+        invoices = Invoice.objects.filter(auction=self.auction)
+        histogram = bin_data(invoices, 'lots_sold', number_of_bins=4, start_bin=0, end_bin=11)
+        return [histogram]
+
+class AuctionStatsLocationVolumeJSONView(AuctionStatsBarChartJSONView):
+    def get_labels(self):
+        locations = []
+        for location in self.auction.location_qs:
+            locations.append(location.name)
+        return locations
+    
+    def get_providers(self):
+        return ['Total bought', 'Total sold']
+
+    def get_data(self):
+        sold = []
+        bought = []
+        for location in self.auction.location_qs:
+            sold.append(location.total_sold)
+            bought.append(location.total_bought)
+        return [bought, sold]
+
+class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
+    def get_labels(self):
+            # An account / all
+            # Search / all
+            # Watch / all
+            # Proxy bidding / all bidders
+            # Copy to new lot / all sellers
+            # Chat / all
+            # Buy now / all bidders
+            # Viewed their Invoice / all who bought or sold
+            # Leave feedback / all who bought or sold
+        return ['An account', 'Search', "Watch", "Proxy bidding", "Chat", "Buy now", "View invoice", "Leave feedback for sellers"]
+    
+    def get_providers(self):
+        return ['Percent of users']
+
+    def get_data(self):
+        auctiontos = AuctionTOS.objects.filter(auction=self.auction)
+        auctiontos_with_account = auctiontos.filter(user__isnull=False)
+        account_percent = int(auctiontos_with_account.count() / auctiontos.count() * 100)
+        searches = SearchHistory.objects.filter(user__isnull=False, auction=self.auction).values('user').distinct().count()
+        seach_percent = int(searches/auctiontos_with_account.count() * 100)
+        watches = Watch.objects.filter(lot_number__auction=self.auction).values('user').distinct().count()
+        watch_percent = int(watches/auctiontos_with_account.count() * 100)
+        has_used_proxy_bidding = UserData.objects.filter(has_used_proxy_bidding=True, user__in=auctiontos_with_account.values_list('user')).count()
+        has_used_proxy_bidding_percent = int(has_used_proxy_bidding/auctiontos_with_account.count() * 100)
+        chat = LotHistory.objects.filter(lot__auction=self.auction, user__in=auctiontos_with_account.values_list('user')).values('user').distinct().count()
+        chat_percent = int(chat/auctiontos_with_account.count() * 100)
+        lot_with_buy_now = Lot.objects.filter(auction=self.auction, buy_now_used=True).values('auctiontos_winner').distinct().count()
+        lot_with_buy_now_percent = int(lot_with_buy_now / auctiontos.count() * 100)
+        invoices = Invoice.objects.filter(auction=self.auction)
+        viewed_invoices = invoices.filter(opened=True)
+        view_invoice_percent = int(viewed_invoices.count() / invoices.count() * 100)
+        sold_lots = Lot.objects.filter(auction=self.auction, auctiontos_winner__isnull=False)
+        leave_feedback = sold_lots.filter(~Q(feedback_rating=0)).values('auctiontos_winner').distinct().count()
+        all_sold_lots = sold_lots.values('auctiontos_winner').distinct().count()
+        if all_sold_lots == 0:
+            leave_feedback_percent = 0
+        else:
+            leave_feedback_percent = int(leave_feedback / all_sold_lots * 100)
+        return [[account_percent, seach_percent, watch_percent, has_used_proxy_bidding_percent, chat_percent, lot_with_buy_now_percent, view_invoice_percent, leave_feedback_percent]]
+
+class AuctionStatsAuctioneerSpeedJSONView(AuctionStatsAttritionJSONView):
+    def get_providers(self):
+        """Return names of datasets."""
+        return ["Lots per minute"]
+    
+    def get_data(self):
+        data = []
+        for i in range(1, len(self.lots)):
+            minutes = (self.lots[i - 1].date_end - self.lots[i].date_end).total_seconds() / 60
+            ignore_if_more_than = 3 # minutes
+            if minutes <= ignore_if_more_than:
+                data.append({'x': i, 'y':minutes})
+        return [data]
 
 class PickupLocationsIncoming(View, AuctionPermissionsMixin):
     """All lots destined for this location"""

@@ -5,7 +5,8 @@
 {% block content %}
 {% block extra_js %}
 <script type='text/javascript'>pageView();</script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.3/dist/Chart.min.js"></script>
+<script type="text/javascript" src="{% static 'js/Chart.min.js' %}"></script>
+<!--<script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.3/dist/Chart.min.js"></script>-->
 <script src="/static/js/chart.funnel.min.js"></script>
 <script>
   window.onload = function() {
@@ -89,6 +90,7 @@
           new Chart(ctx, lotPrices);
      }
     });
+    {% if auction.is_online %}
     $.ajax({
       url: '/api/chart/auction/?auction={{auction.slug}}&chart=lotbids',
       success: function (data) {
@@ -130,6 +132,8 @@
           new Chart(ctx, pie);
       }
     });
+    {% endif %}
+    {% if auction.is_online %}
     $.ajax({
       url: '/api/chart/auction/?auction={{auction.slug}}&chart=categories&top=20',
       success: function (data) {
@@ -177,6 +181,7 @@
           new Chart(ctx, categories);
      }
     });
+    {% endif %}
 };
 </script>
 
@@ -204,12 +209,14 @@
                   </tr>
               </tbody>
             </table>
+            {% if auction.is_online %}
             <h4>User engagement</h4>
             Number of users who viewed lots, logged in, bid, and won lots in this auction.
             <canvas id="funnel_chart"></canvas>
             <span><br>In order for the auction to succeed, users must<ol><li>Visit the site</li><li>See a lot they like</li><li>Sign up for an account</li><li>Place a bid</li><li>Up their bid if they are outbid</li></ol>
               This graph represents "friction" in this process.  At each step, some number of people will give up.  Ideally, every user who viewed a lot would win at least a lot or two, meaning there would be very little change as you move down the graph.<br><br>Remember that this graph only indicates people who visited the auction site, we can't know how many people are (for example) aware of your club but don't know about the auction, or have heard about the auction but didn't have a link for the site.</span>
             <br>
+            {% endif %}
 <br><h3>Lots</h3>
 <table class="table">
     <thead>
@@ -251,6 +258,7 @@
             <br>
               Buyer's auctions have a distribution towards the left, seller's auctions towards the right.<br><br>
               <br><br>
+            {% if auction.is_online %}
             <h4>Competition for lots</h4>
             How many bidders were there per lot?
             <canvas id="lot_pie"></canvas>
@@ -263,9 +271,200 @@
             This chart is a good way to look at the popularity of different categories in your auction.<br><br>
             If there is equal supply, interest, and demand in a category, views/bids/number of lots should be the same height (and determined by the number of lots).  When they are different, you can get some interesting info from this graph.
             For example, categories with more bids are likely to be in higher demand, especially if views are lower.  Categories with lots of views but no bids may be something people are curious about, but don't actually want.  To wit: <i>What's this tequila fish?  Oh, it's a gray livebearer, never mind.</i>
-            <br><br>
-             <a href="/auctions/{{auction.slug}}/" class="btn btn-primary active">Back to rules</a>
+            {% endif %}
+{% if not auction.is_online %}
+<p></p>
+<h4>Attrition</h4>
 
+<canvas id="attrition" width="500" height="400"></canvas>
+<script type="text/javascript">
+      $.get('{% url "auction_stats_attrition" slug=auction.slug %}', function(data) {
+          var ctx = $("#attrition").get(0).getContext("2d");
+          new Chart(ctx, {
+            type: 'scatter', data: data
+          });
+        });
+        </script>
+<div>This graph shows lot sell price, graphed against the minutes into the auction.  Generally, prices tend to decrease the longer an auction runs.  (And if you can't see a decrease on this graph, awesome!)  Attrition is often the largest issue in big auctions.  You can counteract it with:
+  <ul>
+    <li>Change our your auctioneer if they start to slow down</li>
+    <li>Enable or require a Buy Now price on lots to skip bidding altogether</li>
+    <li>Put some items up for a silent auction, which will allow people to bid on these items while the main auction is running (you can still use this site for invoicing, just record the silent auction winners once the silent auction ends)</li>
+    <li>Hold more door prize drawings and raffles later in the auction to encourage people to stay</li>
+  </ul>
+</div>
+
+<h5>Auctioneer performance</h5>
+<canvas id="auctioneer" width="500" height="400"></canvas>
+<script type="text/javascript">
+  $.get('{% url "auction_stats_auctioneer" slug=auction.slug %}', function(data) {
+    var ctx = $("#auctioneer").get(0).getContext("2d");
+        new Chart(ctx, {
+          type: 'scatter', data: data
+        });
+      });
+    </script>
+<div>This graph shows the time since the last lot sold, graphed against the minutes into the auction.  Faster auctioneers will tend to be lower down on the Y axis.  If more than 3 minutes elapsed since the last lot, that data point is skipped.  If you changed auctioneers mid-way though the auction, see if you can spot that location on this chart.  Faster isn't always better, but the speed of your auctioneer makes a huge difference on attrition, especially in larger auctions.  And of course, this is based on the lot sell time, so if you're recording bids on paper and tallying them up later, you may not get a perfect representation of your auctioneer's speed.
+</div>{% endif %}
+<p></p>
+<h4>Activity</h4>
+
+<canvas id="activity" width="500" height="400"></canvas>
+<script type="text/javascript">
+  $.get('{% url "auction_stats_activity" slug=auction.slug %}', function(data) {
+    var ctx = $("#activity").get(0).getContext("2d");
+    new Chart(ctx, {
+      type: 'line', data: data
+    });
+  });
+</script>
+This graph shows overall engagement of people with your auction.  You can gauge the effectiveness of advertising by tracking views and bids here.
+
+<p></p>
+<h4>The importance of images on sell price</h4>
+<canvas id="pictures" width="500" height="400"></canvas>
+<script type="text/javascript">
+  $.get('{% url "auction_stats_pictures" slug=auction.slug %}', function(data) {
+    var ctx = $("#pictures").get(0).getContext("2d");
+    console.log(data);
+    new Chart(ctx, {
+      type: 'bar', data: data,
+      options: {
+        scales: {
+            yAxes: [{
+                ticks: {
+                    beginAtZero: true, // start the Y-axis scale at zero
+                }
+            }]
+        }
+      },
+    });
+  });
+</script>
+Generally, having an image make a lot sell for more money, but more images don't help.  Remember that you can click on the legend to show/hide the number of lots or median value.  Does having a picture make a difference in your auction?
+
+<p></p>
+<h4>How far users travel to get to your auction</h4>
+<canvas id="distances_traveled" width="500" height="400"></canvas>
+<script type="text/javascript">
+  $.get('{% url "auction_stats_distance_traveled" slug=auction.slug %}', function(data) {
+    var ctx = $("#distances_traveled").get(0).getContext("2d");
+    console.log(data);
+    new Chart(ctx, {
+      type: 'bar', data: data,
+      options: {
+        scales: {
+            yAxes: [{
+                ticks: {
+                    beginAtZero: true, // start the Y-axis scale at zero
+                }
+            }]
+        }
+      },
+    });
+  });
+</script>
+Use this information to add additional pickup locations to future auctions.  Note that only people who join though this website have their location recorded: if you manually add people to your auction, they will show up in the "less than 10 miles" column.  IP address is used for people who choose not to share their exact location; be aware that IP geolocation is quite imprecise.
+<p></p>
+<h4>How many auctions have your users participated in previously?</h4>
+<canvas id="auction_stats_previous_auctions" width="500" height="400"></canvas>
+<script type="text/javascript">
+  $.get('{% url "auction_stats_previous_auctions" slug=auction.slug %}', function(data) {
+    var ctx = $("#auction_stats_previous_auctions").get(0).getContext("2d");
+    console.log(data);
+    new Chart(ctx, {
+      type: 'bar', data: data,
+      options: {
+        scales: {
+            yAxes: [{
+                ticks: {
+                    beginAtZero: true, // start the Y-axis scale at zero
+                }
+            }]
+        }
+      },
+    });
+  });
+</script>
+You want a good mix of newbies and veterans.  This takes into account ALL auctions on the site, not just ones you've created.  Email address is used to identify people, so if you left that blank, that person won't appear here at all.
+
+<p></p>
+<h4>How many lots do your users submit?</h4>
+<canvas id="auction_stats_lots_submitted" width="500" height="400"></canvas>
+<script type="text/javascript">
+  $.get('{% url "auction_stats_lots_submitted" slug=auction.slug %}', function(data) {
+    var ctx = $("#auction_stats_lots_submitted").get(0).getContext("2d");
+    console.log(data);
+    new Chart(ctx, {
+      type: 'bar', data: data,
+      options: {
+        scales: {
+            yAxes: [{
+                ticks: {
+                    beginAtZero: true, // start the Y-axis scale at zero
+                }
+            }]
+        }
+      },
+    });
+  });
+</script>
+Most people will add very few lots to an auction, but it's worth considering those people, as how their lots do will impact whether or not they come back.  Only people who actually bought or sold a lot are included here.
+{% if auction.multi_location %}
+<p></p>
+<h4>How much volume does each location do?</h4>
+<canvas id="auction_stats_location_volume" width="500" height="400"></canvas>
+<script type="text/javascript">
+  $.get('{% url "auction_stats_location_volume" slug=auction.slug %}', function(data) {
+    var ctx = $("#auction_stats_location_volume").get(0).getContext("2d");
+    console.log(data);
+    new Chart(ctx, {
+      type: 'bar', data: data,
+      options: {
+        scales: {
+            yAxes: [{
+                ticks: {
+                    beginAtZero: true, // start the Y-axis scale at zero
+                }
+            }]
+        }
+      },
+    });
+  });
+</script>
+Use this to spot low-volume locations to skip or advertise more at next time.
+{% endif %}
+<p></p>
+<h4>Website feature utilization</h4>
+<canvas id="auction_stats_feature_use" width="500" height="400"></canvas>
+<script type="text/javascript">
+  $.get('{% url "auction_stats_feature_use" slug=auction.slug %}', function(data) {
+    var ctx = $("#auction_stats_feature_use").get(0).getContext("2d");
+    console.log(data);
+    new Chart(ctx, {
+      type: 'bar', data: data,
+      options: {
+        scales: {
+            yAxes: [{
+                ticks: {
+                    beginAtZero: true, // start the Y-axis scale at zero
+                }
+            }]
+        }
+      },
+    });
+  });
+</script>
+How many of your users are taking advantage of features on this webiste?
+<div>These measure the percent of users who <b>could</b> be taking advantage of the feature, which means:</div>
+<ul>
+  <li>Searches, watches, proxy bidding, and chat measure only the percent of users with an account</li>
+  <li>Proxy bidding shows the percent of your users with an account who have bid and who have ever used proxy bidding, even in other auctions</li>
+  <li>View invoice shows the percent of all users with an invoice who viewed it</li>
+  <li>Leave feedback shows the percent of all users who won a lot and left feedback on it</li>
+</ul>
+
+<div><a href="/auctions/{{auction.slug}}/" class="btn btn-primary active">Back to rules</a></div>
 {% endblock %}
 
 

@@ -862,6 +862,16 @@ class PickupLocation(models.Model):
 				email += user.email + ", "
 		return email
 
+	@property
+	def total_sold(self):
+		lots = self.outgoing_lots.aggregate(total_winning_price=Sum('winning_price'))
+		return lots['total_winning_price'] or 0
+
+	@property
+	def total_bought(self):
+		lots = self.incoming_lots.aggregate(total_winning_price=Sum('winning_price'))
+		return lots['total_winning_price'] or 0
+
 class AuctionIgnore(models.Model):
 	"""If a user does not want to participate in an auction, create one of these"""
 	user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -1104,7 +1114,11 @@ class AuctionTOS(models.Model):
 							.annotate(distance=distance_to(userData.latitude, userData.longitude))\
 							.order_by('distance').first()
 				return location.distance
-		return ""
+		return -1
+
+	@property
+	def previous_auctions_count(self):
+		return AuctionTOS.objects.filter(email=self.email, createdon__lte=self.createdon).exclude(pk=self.pk).count()
 
 	@property
 	def closer_location_savings(self):

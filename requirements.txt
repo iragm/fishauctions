@@ -28,6 +28,7 @@ django_tables2
 django_htmx
 django_debug_toolbar
 django-recaptcha
+django-chartjs
 easy-thumbnails
 hyperlink
 idna

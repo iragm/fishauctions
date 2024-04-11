@@ -86,6 +86,7 @@ INSTALLED_APPS = [
     'django_htmx',
     'crispy_bootstrap4',
     'django_recaptcha',
+    'chartjs',
 ]
 ASGI_APPLICATION = "fishauctions.asgi.application"
 MIDDLEWARE = [

@@ -18,6 +18,11 @@ from post_office import mail
 class Command(BaseCommand):
     help = 'Just a scratchpad to do things'
     def handle(self, *args, **options):
+        auction = 'nec-2024-auction'
+        views = PageView.objects.filter(Q(auction__slug=auction)|Q(lot_number__auction__slug=auction))
+        for view in views:
+            if not view.session_id:
+                print(view.user)
         # lots_with_buy_now_available = Lot.objects.filter(is_deleted=False, auction__isnull=False, auction__promote_this_auction=True, buy_now_price__isnull=False)
         # #lots_with_buy_now_used = Lot.objects.filter(is_deleted=False, auction__isnull=False, auction__promote_this_auction=True, buy_now_price__isnull=False, winning_price=F('buy_now_price'))
         # sum_of_buy_now_used = 0

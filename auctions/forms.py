@@ -391,7 +391,9 @@ class DeleteAuctionTOS(forms.Form):
         self.fields['merge_with'].required=False
         existing_lots = self.auctiontos.unbanned_lot_count
         bought_lots = self.auctiontos.bought_lots_qs.count()
+        self.lots_exist = True
         if not existing_lots and not bought_lots:
+            self.lots_exist = False
             self.fields['delete_lots'].widget = HiddenInput()
         else:
             self.fields['delete_lots'].label = f"Also delete {existing_lots} lot(s) for this user and mark {bought_lots} lot(s) that this user won as unsold"
@@ -404,7 +406,8 @@ class DeleteAuctionTOS(forms.Form):
         if not delete_lots:
             merge_with = cleaned_data.get("merge_with")
             if not merge_with:
-                self.add_error('merge_with', "Select a new user to preserve this user's data")
+                if self.lots_exist:
+                    self.add_error('merge_with', "Select a new user to preserve this user's data")
             else:
                 if AuctionTOS.objects.get(pk=merge_with).auction.pk != self.auctiontos.auction.pk:
                     self.add_error('merge_with', "This shouldn't even be possible!")
