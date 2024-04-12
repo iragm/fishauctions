@@ -138,6 +138,15 @@ function initMap() {
             <a href='{% url "print_my_labels" slug=auction.slug %}' class="btn btn-primary btn-sm mr-1 mt-1">Print your lot labels</a>
             <a href='{% url "my_auction_invoice" slug=auction.slug %}' class="btn btn-primary btn-sm mr-1 mt-1">View your invoice</a>
             {% if view.is_auction_admin %}<a href='/auctions/{{auction.slug}}/edit' class="btn btn-sm btn-warning mr-1 mt-1">Edit these rules</a>{% endif %}
+            {% if view.is_auction_admin %}<a href='{% url "all_my_users" %}' data-toggle="tooltip" title="All contacts for all auctions where you're an admin" class="btn btn-sm btn-primary mr-1 mt-1">Download marketing list</a>
+            {% if not auction.multi_location %}
+            {% for location in pickup_locations %}
+            {% if view.is_auction_admin %}
+                <a href="mailto:?bcc={{location.email_list}}&subject={{auction}}" class="btn btn-sm mt-1 mr-1 btn-primary">Email {{location.number_of_users}} people</a>
+            {%endif%}
+            {% endfor %}
+            {% endif %}
+            {% endif %}
             {% if request.user.is_superuser %}
             <a href="/admin/auctions/auction/{{auction.pk}}/change/" class="btn btn-sm btn-danger mr-1 mt-1">Admin</a>
             {% endif %}
@@ -177,7 +186,13 @@ function initMap() {
                     {% endif %}
                     of the winning price per lot, for lots you submit yourself</li>
                 {% endif %}
-            </ul> 
+            </ul>
+            {% if not auction.multi_location %}
+            {# this is for single location auctions only, still iterating because of how the context is set up #}
+            {% for location in pickup_locations %}
+            {% include 'location_fragment.html' %}
+            {% endfor %}
+            {% endif %}
             {% if not auction.no_location %}
             <br>
                 <div id="map_wrapper" style='height: 400px;'>
@@ -229,14 +244,6 @@ function initMap() {
                 </div>
                 {% endfor %}
             </div>
-            {% else %}
-            {# this is for single location auctions only, still iterating because of how the context is set up #}
-            {% for location in pickup_locations %}
-            {% if view.is_auction_admin %}
-                <a href="mailto:?bcc={{location.email_list}}&subject={{auction}}" class="btn btn-sm mt-2 mr-2 btn-primary">Email {{location.number_of_users}} people</a>
-            {%endif%}
-            {% include 'location_fragment.html' %}
-            {% endfor %}
             {%endif%} {# end auction.multi_location #}
             {% endif %} {# end auction.all_location_count #}
         <br><span class='text-muted'><small>Please spread the word about this auction -- every like and share helps the club bring in new sellers and bidders!</small></span>

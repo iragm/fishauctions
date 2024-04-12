@@ -1083,6 +1083,22 @@ def auctionReport(request, slug):
     return redirect('/')
 
 @login_required
+def userReport(request):
+    """Get a CSV file showing all users from all auctions you're an admin for"""
+    response = HttpResponse(content_type='text/csv')
+    response['Content-Disposition'] = 'attachment; filename=all_auction_contacts.csv"'
+    writer = csv.writer(response)
+    found = []
+    writer.writerow(['Name', 'Email', 'Phone'])
+    auctions = Auction.objects.filter(Q(created_by=request.user)|Q(auctiontos__is_admin=True, auctiontos__user=request.user))
+    users = AuctionTOS.objects.filter(auction__in=auctions)
+    for user in users:
+        if user.email not in found:
+            writer.writerow([user.name, user.email, user.phone_as_string])
+            found.append(user.email)
+    return response
+
+@login_required
 def auctionInvoicesPaypalCSV(request, slug, chunk):
     """Get a CSV file of all unpaid invoices that owe the club money"""
     auction = Auction.objects.get(slug=slug, is_deleted=False)
@@ -3154,7 +3170,7 @@ class AllLots(LotListView, AuctionPermissionsMixin):
             self.auction = context['auction']
         if self.auction:
             context['is_auction_admin'] = self.is_auction_admin
-            if self.auction.minutes_to_end < 1440 and can_show_unloved_tip:
+            if self.auction.minutes_to_end < 1440 and self.auction.minutes_to_end > 0 and can_show_unloved_tip:
                 context['search_button_tooltip'] = "Try sorting by least popular to find deals!"
         if self.rewrite_url:
             if 'auction' not in data and 'q' not in data:

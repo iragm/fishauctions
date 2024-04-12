@@ -99,6 +99,7 @@ urlpatterns = [
     path('auctions/<slug:slug>/delete/', views.AuctionDelete.as_view()),
     path('auctions/<slug:slug>/chat/', views.AuctionChats.as_view()),
     path('auctions/<slug:slug>/paypal/<int:chunk>/', views.auctionInvoicesPaypalCSV),
+    path('auctions/all_users/', views.userReport, name='all_my_users'),
     path('auctions/<slug:slug>/', views.AuctionInfo.as_view(), name="auction_main"),
     path('users/<str:slug>/', views.UserByName.as_view(), name='userpage'),
     path('user/<str:slug>/', views.UserByName.as_view()),
