@@ -4563,7 +4563,10 @@ class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
         lot_with_buy_now_percent = int(lot_with_buy_now / auctiontos.count() * 100)
         invoices = Invoice.objects.filter(auction=self.auction)
         viewed_invoices = invoices.filter(opened=True)
-        view_invoice_percent = int(viewed_invoices.count() / invoices.count() * 100)
+        if invoices.count():
+            view_invoice_percent = int(viewed_invoices.count() / invoices.count() * 100)
+        else:
+            view_invoice_percent = 0
         sold_lots = Lot.objects.filter(auction=self.auction, auctiontos_winner__isnull=False)
         leave_feedback = sold_lots.filter(~Q(feedback_rating=0)).values('auctiontos_winner').distinct().count()
         all_sold_lots = sold_lots.values('auctiontos_winner').distinct().count()
