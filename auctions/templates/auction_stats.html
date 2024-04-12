@@ -463,6 +463,28 @@ How many of your users are taking advantage of features on this webiste?
   <li>View invoice shows the percent of all users with an invoice who viewed it</li>
   <li>Leave feedback shows the percent of all users who won a lot and left feedback on it</li>
 </ul>
+<p></p>
+<h4>Referrers</h4>
+<canvas id="auction_stats_referrers" width="500" height="400"></canvas>
+<script type="text/javascript">
+  $.get('{% url "auction_stats_referrers" slug=auction.slug %}', function(data) {
+    var ctx = $("#auction_stats_referrers").get(0).getContext("2d");
+    console.log(data);
+    new Chart(ctx, {
+      type: 'bar', data: data,
+      options: {
+        scales: {
+            yAxes: [{
+                ticks: {
+                    beginAtZero: true, // start the Y-axis scale at zero
+                }
+            }]
+        }
+      },
+    });
+  });
+</script>
+What websites are sending you traffic?
 
 <div><a href="/auctions/{{auction.slug}}/" class="btn btn-primary active">Back to rules</a></div>
 {% endblock %}

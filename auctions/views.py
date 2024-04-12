@@ -865,6 +865,23 @@ def feedback(request, pk, leave_as):
     messages.error(request, "Your account doesn't have permission to view this page")
     return redirect('/')
 
+def clean_referrer(url):
+    """Make a URL more human readable"""
+    if not url:
+        url = ""
+    url = re.sub(r'^https?://', '', url) # no http/s at the beginning
+    if 'auction.fish/' not in url:
+        url = re.sub(r'\?.*', '', url) # remove get params
+    url = re.sub(r'^www\.', '', url) # www
+    url = re.sub(r'/+$', '', url) # trailing /
+    # if someone has facebook.example.com, it would be recorded as FB...
+    # can update this if it becomes an issue
+    if re.search(r'(facebook)\.', url):
+        url = "Facebook"
+    if re.search(r'(google)\.', url):
+        url = "Google"
+    return url
+
 def pageview(request):
     """Record page views"""
     if request.method == 'POST':
@@ -898,7 +915,7 @@ def pageview(request):
             # elif parsed_ua.is_pc:
             #     platform = 'DESKTOP'
             user_agent = user_agent[:200]
-            referrer = data.get("referrer", None)[:600]
+            referrer = clean_referrer(data.get("referrer", None)[:600])
             source = data.get("src", None)
             # mark auction campaign results if applicable present
             ip = ""
@@ -4402,6 +4419,36 @@ class AuctionStatsBarChartJSONView(BaseColumnsHighChartsView, AuctionPermissions
 
     def get_title(self):
         return ""
+    
+class AuctionStatsReferrersJSONView(AuctionStatsBarChartJSONView):
+    def dispatch(self, request, *args, **kwargs):
+        result = super().dispatch(request, *args, **kwargs)
+        return result
+    
+    def get_labels(self):
+        self.views = PageView.objects.filter(
+            Q(auction=self.auction) | Q(lot_number__auction=self.auction)
+        ).exclude(referrer__isnull=True).exclude(referrer__startswith='auction.fish').exclude(referrer__exact='').values('referrer').annotate(count=Count('referrer'))
+        result = []
+        for view in self.views:
+            if view['count'] > 1:
+                result.append(view['referrer'])
+        result.append("Other")
+        return result
+    
+    def get_providers(self):
+        return ['Number of clicks']
+
+    def get_data(self):
+        result = []
+        other = 0
+        for view in self.views:
+            if view['count'] > 1:
+                result.append(view['count'])
+            else:
+                other += 1
+        result.append(other)
+        return [result]
 
 class AuctionStatsImagesJSONView(AuctionStatsBarChartJSONView):
     def get_labels(self):

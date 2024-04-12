@@ -133,4 +133,5 @@ urlpatterns = [
     path('api/auctionstats/<slug:slug>/lots_submitted', views.AuctionStatsLotsSubmittedJSONView.as_view(), name='auction_stats_lots_submitted'),
     path('api/auctionstats/<slug:slug>/location_volume', views.AuctionStatsLocationVolumeJSONView.as_view(), name='auction_stats_location_volume'),
     path('api/auctionstats/<slug:slug>/feature_use', views.AuctionStatsLocationFeatureUseJSONView.as_view(), name='auction_stats_feature_use'),
+    path('api/auctionstats/<slug:slug>/referrers', views.AuctionStatsReferrersJSONView.as_view(), name='auction_stats_referrers'),
 ]
