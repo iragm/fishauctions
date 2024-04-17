@@ -1588,15 +1588,22 @@ class SetLotWinner(QuickSetLotWinner):
         if not tos:
             form.add_error('winner', "No bidder found")
         else:
-            if tos.invoice.status != "DRAFT":
+            if tos.invoice and tos.invoice.status != "DRAFT":
                 form.add_error('winner', "This user's invoice is not open")
         if lot:
             if lot.auctiontos_winner and lot.winning_price:
                 error = f'Lot {lot.lot_number_display} has already been sold'
-                if tos.invoice.status == "DRAFT" and lot.auctiontos_seller and lot.auctiontos_seller.invoice.status == "DRAFT":
-                    form.add_error('lot', mark_safe(f"{error}.  <a href='{undo_url}'>Click here to mark unsold</a>."))
-                else:
-                    form.add_error('lot', mark_safe(f"{error}.  The seller and winner invoices both need to be open to mark it unsold."))
+                # there's probably quite a few edge cases missing here, not sure it's worth it to add hand holding for all of them
+                # specifically, separate errors for:
+                # seller invoice closed
+                # winner invoice closed
+                try:
+                    if tos.invoice.status == "DRAFT" and lot.auctiontos_seller and lot.auctiontos_seller.invoice.status == "DRAFT":
+                        form.add_error('lot', mark_safe(f"{error}.  <a href='{undo_url}'>Click here to mark unsold</a>."))
+                    else:
+                        form.add_error('lot', mark_safe(f"{error}.  The seller and winner invoices both need to be open to mark it unsold."))
+                except:
+                    pass
         if form.is_valid():
             lot.auctiontos_winner = tos
             lot.winning_price = winning_price
@@ -4485,7 +4492,7 @@ class AuctionStatsTravelDistanceJSONView(AuctionStatsBarChartJSONView):
         return ['Number of users']
 
     def get_data(self):
-        auctiontos = AuctionTOS.objects.filter(auction=self.auction)
+        auctiontos = AuctionTOS.objects.filter(auction=self.auction, user__isnull=False)
         histogram = bin_data(auctiontos, 'distance_traveled', number_of_bins=6, start_bin=-1, end_bin=60)
         return [histogram]
 
