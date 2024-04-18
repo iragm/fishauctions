@@ -705,9 +705,15 @@ class Auction(models.Model):
 		return None
 
 	@property
-	def admin_checklist_completed(self):
+	def admin_checklist_mostly_completed(self):
 		if self.admin_checklist_location_set and self.admin_checklist_rules_updated and self.admin_checklist_joined \
-			and self.admin_checklist_others_joined and self.admin_checklist_lots_added and self.admin_checklist_winner_set \
+			and self.admin_checklist_others_joined:
+			return True
+		return False
+
+	@property
+	def admin_checklist_completed(self):
+		if self.admin_checklist_mostly_completed and self.admin_checklist_lots_added and self.admin_checklist_winner_set \
 			and self.admin_checklist_additional_admin:
 			return True
 		return False
@@ -2754,6 +2760,20 @@ class UserData(models.Model):
 		if not negative:
 			return 100
 		return int(( positive / (positive + negative) ) * 100)
+
+	@property
+	def auctions_created(self):
+		return Auction.objects.filter(created_by__pk=self.user.pk).count()
+	
+	@property
+	def auctions_admined(self):
+		return Auction.objects.filter(auctiontos__email=self.user.email, auctiontos__is_admin=True).count()
+
+	@property
+	def is_experienced(self):
+		if self.auctions_created + self.auctions_admined > 2:
+			return True
+		return False
 
 class UserInterestCategory(models.Model):
 	"""

@@ -603,7 +603,7 @@ class CreateEditAuctionTOS(forms.ModelForm):
             if self.auction.winning_bid_percent_to_club_for_club_members:
                 help_text += f"{self.auction.winning_bid_percent_to_club_for_club_members}%"
             if not self.auction.lot_entry_fee_for_club_members and not self.auction.winning_bid_percent_to_club_for_club_members:
-                help_text = "Check to charge nothing"
+                help_text = "Check to charge <span class='text-warning'>nothing</span>"
             help_text += " instead of the standard fee for sold lots"
             self.fields['is_club_member'].help_text = help_text
             self.fields['selling_allowed'].initial = self.auctiontos.selling_allowed
