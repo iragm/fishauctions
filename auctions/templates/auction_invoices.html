@@ -4,7 +4,11 @@
 {% load static %}
 {% block content %}
         {% include 'auction_ribbon.html' %}
-        <small>Invoices are created automatically whenever a user sells or wins a lot.
+        <small>
+          {% if not auction.is_online %}
+          <span class='text-warning'>This page is primarily for use with online auctions; you should not need to use it for this auction.</span>  To manage invoices in this auction, you should go to the <a href="/auctions/{{auction.slug}}/users">users page</a> and click on a name.<p>
+          {% endif %}
+          Invoices are created automatically whenever a user sells or wins a lot. 
           {% if auction.email_users_when_invoices_ready %}Marking an invoice ready or paid will send an email notification to the user.{% else %}Email notifications to users are off.{% endif %} <a href="/auctions/{{auction.slug}}/edit">Turn invoice notifications on or off here</a>.</small><br>
         <button type='button' class='btn btn-sm btn-primary mr-1 mt-1' onclick="all_unpaid();">Set all drafts to ready</button>
         <button type='button' class='btn btn-sm btn-primary mr-1 mt-1' onclick="mark_all_paid();">Mark all ready as paid</button>
