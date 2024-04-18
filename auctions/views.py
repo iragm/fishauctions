@@ -4566,7 +4566,10 @@ class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
         has_used_proxy_bidding_percent = int(has_used_proxy_bidding/auctiontos_with_account.count() * 100)
         chat = LotHistory.objects.filter(lot__auction=self.auction, user__in=auctiontos_with_account.values_list('user')).values('user').distinct().count()
         chat_percent = int(chat/auctiontos_with_account.count() * 100)
-        lot_with_buy_now = Lot.objects.filter(auction=self.auction, buy_now_used=True).values('auctiontos_winner').distinct().count()
+        if self.auction.is_online:
+            lot_with_buy_now = Lot.objects.filter(auction=self.auction, buy_now_used=True).values('auctiontos_winner').distinct().count()
+        else:
+            lot_with_buy_now = Lot.objects.filter(auction=self.auction, winning_price=F('buy_now_price')).values('auctiontos_winner').distinct().count()
         lot_with_buy_now_percent = int(lot_with_buy_now / auctiontos.count() * 100)
         invoices = Invoice.objects.filter(auction=self.auction)
         viewed_invoices = invoices.filter(opened=True)

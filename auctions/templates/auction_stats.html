@@ -209,6 +209,20 @@
                   </tr>
               </tbody>
             </table>
+<h4>Activity</h4>
+<p></p>
+<canvas id="activity" width="500" height="400"></canvas>
+<script type="text/javascript">
+  $.get('{% url "auction_stats_activity" slug=auction.slug %}', function(data) {
+    var ctx = $("#activity").get(0).getContext("2d");
+    new Chart(ctx, {
+      type: 'line', data: data
+    });
+  });
+</script>
+This graph shows overall engagement of people with your auction.  You can gauge the effectiveness of advertising by tracking views and bids here.
+<p></p>
+            
             {% if auction.is_online %}
             <h4>User engagement</h4>
             Number of users who viewed lots, logged in, bid, and won lots in this auction.
@@ -306,20 +320,6 @@
     </script>
 <div>This graph shows the time since the last lot sold, graphed against the minutes into the auction.  Faster auctioneers will tend to be lower down on the Y axis.  If more than 3 minutes elapsed since the last lot, that data point is skipped.  If you changed auctioneers mid-way though the auction, see if you can spot that location on this chart.  Faster isn't always better, but the speed of your auctioneer makes a huge difference on attrition, especially in larger auctions.  And of course, this is based on the lot sell time, so if you're recording bids on paper and tallying them up later, you may not get a perfect representation of your auctioneer's speed.
 </div>{% endif %}
-<p></p>
-<h4>Activity</h4>
-
-<canvas id="activity" width="500" height="400"></canvas>
-<script type="text/javascript">
-  $.get('{% url "auction_stats_activity" slug=auction.slug %}', function(data) {
-    var ctx = $("#activity").get(0).getContext("2d");
-    new Chart(ctx, {
-      type: 'line', data: data
-    });
-  });
-</script>
-This graph shows overall engagement of people with your auction.  You can gauge the effectiveness of advertising by tracking views and bids here.
-
 <p></p>
 <h4>The importance of images on sell price</h4>
 <canvas id="pictures" width="500" height="400"></canvas>
