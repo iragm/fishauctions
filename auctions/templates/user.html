@@ -87,13 +87,13 @@
                 {% if seller_feedback %}
                 <h5>Comments on lots sold by this user</h5>
                 {% for lot in seller_feedback %}
-                    <a href="{{ lot.lot_link }}?src=userpage">{{ lot.lot_name}}</a>: {{ lot.feedback_text }} <span class='text-muted'>left by</span> <a href="{% url 'userpage' slug=lot.winner %}">{{ lot.winner }}</a><br><br>
+                    <a href="{{ lot.lot_link }}?src=userpage">{{ lot.lot_name}}</a>: {{ lot.feedback_text }} <span class='text-muted'>left by</span> {% if lot.winner %}<a href="{% url 'userpage' slug=lot.winner %}">{{ lot.winner }}</a>{% else %}bidder {{lot.auctiontos_winner}}{%endif%}<br><br>
                 {% endfor %}
                 {% endif %}
                 {% if winner_feedback %}
                 <h5>Comments on lots won by this user</h5>
                 {% for lot in winner_feedback %}
-                    <a href="{{ lot.lot_link }}?src=userpage">{{ lot.lot_name}}</a>: {{ lot.winner_feedback_text }} <span class='text-muted'>left by</span> <a href="{% url 'userpage' slug=lot.user %}">{{ lot.user }}</a><br><br>
+                    {% if lot.user %}<a href="{{ lot.lot_link }}?src=userpage">{{ lot.lot_name}}</a>: {{ lot.winner_feedback_text }} <span class='text-muted'>left by</span> <a href="{% url 'userpage' slug=lot.user %}">{{ lot.user }}</a><br><br>{% endif %}
                 {% endfor %}
                 {% endif %}
             {% else %}

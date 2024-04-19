@@ -2939,7 +2939,20 @@ class AuctionCampaign(models.Model):
 	@property
 	def link(self):
 		current_site = Site.objects.get_current()
-		return f"{current_site.domain}auctions/{self.uuid}"
+		return f"{current_site.domain}/auctions/{self.uuid}"
+
+	@property
+	def update(self):
+		"""Manually update the result of this campaign"""
+		if self.user and self.auction and self.result == "NONE":
+			pageview = PageView.objects.filter(user=self.user, auction=self.auction, date_start__gte=self.timestamp).first()
+			if pageview:
+				self.result = "VIEWED"
+			tos = AuctionTOS.objects.filter(user=self.user, auction=self.auction, createdon__gte=self.timestamp).first()
+			if tos:
+				self.result = "JOINED"
+			if pageview or tos:
+				self.save()
 
 class LotImage(models.Model):
 	"""An image that belongs to a lot.  Each lot can have multiple images"""

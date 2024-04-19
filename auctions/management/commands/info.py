@@ -19,6 +19,25 @@ from auctions.views import clean_referrer
 class Command(BaseCommand):
     help = 'Just a scratchpad to do things'
     def handle(self, *args, **options):
+        #campaigns = AuctionCampaign.objects.all()
+        #for campaign in campaigns:
+        #    campaign.update
+        campaigns = AuctionCampaign.objects.values('result').annotate(count=Count('result'))
+        result_dict = {result['result']: result['count'] for result in campaigns}
+        joined = result_dict['JOINED']
+        no_response = result_dict['NONE']
+        viewed = result_dict['VIEWED']
+        none = result_dict['ERR']
+        total = AuctionCampaign.objects.all().count()
+        total = total-none
+        joined = joined/total * 100
+        print('joined', joined)
+        no_response = no_response/total * 100
+        print('no response', no_response)
+        viewed = viewed/total * 100
+        print('viewed', viewed)
+        #none = none/total * 100
+        #print('no email sent', none)
         # lots_with_buy_now_available = Lot.objects.filter(is_deleted=False, auction__isnull=False, auction__promote_this_auction=True, buy_now_price__isnull=False)
         # #lots_with_buy_now_used = Lot.objects.filter(is_deleted=False, auction__isnull=False, auction__promote_this_auction=True, buy_now_price__isnull=False, winning_price=F('buy_now_price'))
         # sum_of_buy_now_used = 0

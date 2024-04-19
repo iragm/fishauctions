@@ -137,7 +137,7 @@ class Command(BaseCommand):
                     context={
                         'domain': current_site.domain,
                         'auction': campaign.auction,
-                        'uuid': campaign.link,
+                        'uuid': campaign.uuid,
                         'lots': lots,
                         'user':campaign.user,
                         'unsubscribe':userData.unsubscribe_link

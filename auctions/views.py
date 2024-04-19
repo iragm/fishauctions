@@ -968,17 +968,19 @@ def pageview(request):
                         'source': source
                     }
                 )
-        else:
-            pageview = PageView.objects.filter(
-                url = url_without_params,
-                session_id = session_id,
-                user = user,
-            ).order_by('-date_start').first()
-            if pageview:
-                # this is the second (or more) time this user has viewed this page
-                pageview.total_time += 10
-                pageview.date_end = timezone.now()
-                pageview.save()
+        # code below would run on subsequent pageviews.  Not worth the extra server effort for an update every 10 seconds.
+        # some corresponding js on base_page_view.html is also commented out
+        # else:
+        #     pageview = PageView.objects.filter(
+        #         url = url_without_params,
+        #         session_id = session_id,
+        #         user = user,
+        #     ).order_by('-date_start').first()
+        #     if pageview:
+        #         # this is the second (or more) time this user has viewed this page
+        #         pageview.total_time += 10
+        #         pageview.date_end = timezone.now()
+        #         pageview.save()
         return HttpResponse("Success")
     messages.error(request, "Your account doesn't have permission to view this page")
     return redirect('/')
