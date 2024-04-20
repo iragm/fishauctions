@@ -1204,35 +1204,56 @@ class LeaveFeedbackView(LoginRequiredMixin, ListView):
         return context
 
 class AuctionChats(LoginRequiredMixin, ListView, AuctionPermissionsMixin):
-    """Show chats for an auction"""
+    """Auction admins view to show and delete all chats for an auction"""
     model = LotHistory
     template_name = 'chats.html'
-    ordering = ['-timestamp']
-    allow_non_admins = True
 
     def dispatch(self, request, *args, **kwargs):
-        self.auction = Auction.objects.get(slug=kwargs['slug'], is_deleted=False)
-        result = super().dispatch(request, *args, **kwargs)
-        # if not self.is_auction_admin:
-        #     messages.error(request, "You don't have permission to edit this auction")
-        #     return redirect('/')
-        return result
+        self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs.pop('slug')).first()
+        if not self.auction:
+            raise Http404
+        self.is_auction_admin
+        return super().dispatch(request, *args, **kwargs)
 
     def get_queryset(self):
-        user = User.objects.filter(first_name='Lew')[1]
-        # get auction from slug
-        # get user from auction, check against request user
-        # self.request.user.pk
-        new_context = LotHistory.objects.filter(
-            lot__auction__created_by=user,
+        # get related auctiontos if the user has joined the auction
+        auctiontos_subquery = AuctionTOS.objects.filter(
+            user=OuterRef('user'),
+            auction=self.auction
+        ).values('pk')[:1]
+        qs = LotHistory.objects.filter(
+            lot__auction=self.auction,
             changed_price=False,
-        )
-        return new_context
+        ).annotate(
+            auctiontos_pk=Subquery(auctiontos_subquery, output_field=IntegerField(), null=True)
+        ).order_by('-timestamp')
+        return qs
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['auction'] = self.auction
         return context
+
+class AuctionChatDeleteUndelete(View, AuctionPermissionsMixin):
+    """HTMX for auction admins only"""
+    def dispatch(self, request, *args, **kwargs):
+        pk = kwargs.get('pk')
+        self.history = get_object_or_404(LotHistory, pk=pk, lot__auction__is_deleted=False)
+        self.auction = self.history.lot.auction
+        if not self.auction:
+            raise Http404
+        self.is_auction_admin
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        # Toggle the removed field
+        self.history.removed = not self.history.removed
+        self.history.save()
+        if not self.history.removed:
+            result = f'<span id="message_{self.history.pk}" class="badge badge-info">Delete</span>'
+        else:
+            result = f'<span id="message_{self.history.pk}" class="badge badge-danger">Deleted</span>'
+        return HttpResponse(result)
 
 class PickupLocations(ListView, AuctionPermissionsMixin):
     """Show all pickup locations belonging to the current auction"""

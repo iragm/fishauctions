@@ -5,11 +5,49 @@
 {% load static %}
 {% block content %}
   {% include 'auction_ribbon.html' %}
-  
-  The ability to monitor and delete chat messages in your auction is <strong>coming soon™</strong>.<p>
-  (Probably years from now, given how much time I've had to work on this site lately)
-  <p>If this is something that's important to you, <a href="https://github.com/iragm/fishauctions/issues/62">leave a comment here</a> or send me an email directly.
-{% endblock %}
+  <small>These are messages users have posted on lots in your auction.  Deleted messages will show up here, but won't be visible to users on the lot page. {% if not auction.is_chat_allowed %}Chat has been disabled in this auction.{% endif %}</small><p>
+    <table class="table">
+      <thead>
+          <tr>
+              <th>User</th>
+              <th>Timestamp</th>
+              <th>Message</th>
+          </tr>
+      </thead>
+      <tbody>
+          {% for history in object_list %}
+              <tr>
+                  <td> {% if history.auctiontos_pk %}
+                    <a href="#"
+                    style="cursor:pointer;"
+                    hx-get="{% url 'auctiontosadmin' history.auctiontos_pk %}"
+                    hx-target="#modals-here"
+                    hx-trigger="click">
+                    {{ history.user }}</a>{% else %}{{ history.user }}<br><small>User has not joined your auction</small>{% endif %}
+                  </td>
+                  <td><small>{{ history.timestamp }}</small></td>
+                  <td>
+                      
+                          {{ history.message }}
+                            <a href="#"
+                          hx-post="{% url 'delete_auction_chat' history.pk %}"
+                          hx-target="#message_{{ history.pk }}"
+                          hx-swap="outerHTML">
+                          {% if not history.removed %}
+                            <span id="message_{{history.pk}}" class='badge badge-info'>Delete</span>
+                          {% else %}
+                            <span id="message_{{history.pk}}" class="badge badge-danger">Deleted</span>
+                          {% endif %}</a><br>
+                        <small>on <a href='{{history.lot.lot_link}}'>{{ history.lot.lot_name }}</a></small>
+                  </td>
+              </tr>
+          {% endfor %}
+      </tbody>
+  </table>
+  {% if not object_list %}No chat messages in your auction yet.{% endif %}
+</div>
+<div id="modals-here"></div>
+    {% endblock %}
 {% block extra_js %}
 <script type='text/javascript'>pageView();</script>
 {% endblock %}

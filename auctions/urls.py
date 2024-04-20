@@ -38,6 +38,7 @@ urlpatterns = [
     path('api/userignorecategory/', views.GetUserIgnoreCategory.as_view()),
     path('api/ignore_auction/', views.ignoreAuction),
     path('api/<slug:slug>/lots/<slug:custom_lot_number>/', views.ViewLotSimple.as_view(), name='htmx_lot'),
+    path('api/chat/delete/<int:pk>/', views.AuctionChatDeleteUndelete.as_view(), name='delete_auction_chat'),
     path('leaderboard/', views.Leaderboard.as_view()),
     path('clubs/', views.ClubMap.as_view(), name='clubs'),
     path('usermap/', views.UserMap.as_view(), name='admin_user_map'),

@@ -312,7 +312,7 @@ class LotConsumer(WebsocketConsumer):
             )
             self.accept()
             # send the most recent history
-            allHistory = LotHistory.objects.filter(lot = self.lot).order_by('-timestamp')[:200]
+            allHistory = LotHistory.objects.filter(lot = self.lot, removed=False).order_by('-timestamp')[:200]
             # send oldest first
             for history in reversed(allHistory):
                 try:
