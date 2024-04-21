@@ -1236,7 +1236,7 @@ class Lot(models.Model):
 	description.help_text = "To add a link: [Link text](https://www.google.com)"
 	description_rendered = RenderedMarkdownField(blank=True, null=True)
 	reference_link = models.URLField(blank=True, null=True)
-	reference_link.help_text = "A URL with additional information about this lot"
+	reference_link.help_text = "A URL with additional information about this lot.  YouTube videos will be automatically embedded."
 	quantity = models.PositiveIntegerField(validators=[MinValueValidator(1)])
 	quantity.help_text = "How many of this item are in this lot?"
 	reserve_price = models.PositiveIntegerField(default=2, validators=[MinValueValidator(1), MaxValueValidator(2000)])
@@ -1994,6 +1994,14 @@ class Lot(models.Model):
 		return LotImage.objects.filter(lot_number=self.lot_number).count()
 
 	@property
+	def multimedia_count(self):
+		"""Count the number of images + reference link if video associated with this lot"""
+		count = 0
+		if self.video_link:
+			count = 1
+		return self.image_count + count
+
+	@property
 	def images(self):
 		"""All images associated with this lot"""
 		return LotImage.objects.filter(lot_number=self.lot_number).order_by('-is_primary', 'createdon')
@@ -2097,6 +2105,14 @@ class Lot(models.Model):
 				extension = match.group(2)
 				return f"{base_domain}.{extension}"
 		return ""
+
+	def video_link(self):
+		if self.reference_link:
+			pattern = r'(?:https?://)?(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/)([\w-]{11})'
+			match = re.search(pattern, self.reference_link)
+			if match:
+				return match.group(1)
+		return None
 
 class Invoice(models.Model):
 	"""
