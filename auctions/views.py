@@ -1574,8 +1574,11 @@ class QuickSetLotWinner(FormView, AuctionPermissionsMixin):
                     lot.date_end = timezone.now()
                     lot.save()
                     lot.add_winner_message(self.request.user, tos, winning_price)
-                    undo_url = self.get_success_url() + f"?undo={lot.custom_lot_number}"
-                    messages.success(self.request, f"{tos.name} is now the winner of lot {lot.lot_name}.  <a href='{undo_url}'>Undo</a>")
+                    if lot.custom_lot_number:
+                        undo_url = self.get_success_url() + f"?undo={lot.custom_lot_number}"
+                        messages.success(self.request, f"{tos.name} is now the winner of lot {lot.lot_name}.  <a href='{undo_url}'>Undo</a>")
+                    else:
+                        messages.success(self.request, f"{tos.name} is now the winner of lot {lot.lot_name}")
                     return super().form_valid(form)
         return self.form_invalid(form)
 
@@ -1593,7 +1596,9 @@ class SetLotWinner(QuickSetLotWinner):
         winning_price = form.cleaned_data.get("winning_price")
         qs = self.auction.lots_qs
         lot = qs.filter(custom_lot_number=lot).first()
-        undo_url = self.get_success_url() + f"?undo={lot.custom_lot_number}"
+        undo_url = None
+        if lot:
+            undo_url = self.get_success_url() + f"?undo={lot.custom_lot_number}"
         #undo_url = reverse("auction_lot_list", kwargs={'slug': self.auction.slug}) + f"?query={lot.lot_number_display}"
         if not lot:
             lot = form.cleaned_data.get("lot")
