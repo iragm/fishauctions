@@ -3366,7 +3366,7 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
             if invoice.seller.pk == request.user.pk:
                 auth = True
         if invoice.auction:
-            if invoice.auction.created_by.pk == request.user.pk:
+            if self.is_auction_admin:
                 auth = True
         if request.user.is_superuser :
             auth = True
