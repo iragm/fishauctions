@@ -907,7 +907,7 @@ class CreateImageForm(forms.ModelForm):
         )
 
 class CreateAuctionForm(forms.ModelForm):
-    """Create a new an auction"""
+    """Simplified form with just date, online, and name fields"""
     
     is_online = forms.BooleanField(required=False, widget=forms.HiddenInput())
     cloned_from = forms.CharField(required=False, widget=forms.HiddenInput())
@@ -960,14 +960,14 @@ class CreateAuctionForm(forms.ModelForm):
             'cloned_from',
             'date_start',
             'title',
-            HTML("<h5>What kind of auction is this?</h5>"),
+            HTML("<div id='auction_type_fields'><h5>What kind of auction is this?</h5>"),
             Submit('online', 'Create online auction', css_id='auction-online', css_class='submit-button create-auction btn-success'),
             Div(
             HTML("<span class='text-muted'><ul><li>An auction where bidding ends automatically at a specified time.</li><li>Users will create an account on this site to join your auction.</li><li>Lots will be brought to one or more locations for exchange after bidding ends.</li></span>"),
             ),
             Submit('offline', value='Create in-person auction', css_id='auction-offline', css_class='submit-button btn-success'),
             Div(
-            HTML("<span class='text-muted'><ul><li>You or your auctioneer will manually set the winners of lots.</li><li>Lots will be brought to a central location before bidding starts.</li></ul></span>"),
+            HTML("<span class='text-muted'><ul><li>You or your auctioneer will manually set the winners of lots.</li><li>Lots will be brought to a central location before bidding starts.</li></ul></span></div>"),
             ),
             Submit('clone', 'Copy ' + last_auction, css_id='auction-copy', css_class='submit-button btn-info ' + last_auction_state),
             Div(

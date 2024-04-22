@@ -17,8 +17,10 @@ $('#id_date_start').blur(function(event) {
     const monthNames = ["January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December"
     ];
-    if (!$('#id_title').val()) {
-        $('#id_title').val("{{club}} auction " + monthNames[month] + " " + year);
+    if (monthNames[month] !== undefined && !isNaN(year)) {
+        if (!$('#id_title').val()) {
+            $('#id_title').val("{{club}} auction " + monthNames[month] + " " + year);
+        }
     }
 });
 {% endif %}
@@ -29,6 +31,9 @@ $( document ).ready(function() {
     if ($('#auction-copy').hasClass('disabled')) {
         $('#auction-copy').prop('disabled', true);
     }
+    {% if view.cloned_from %} {# you can only copy an auction if you pass ?copy= #}
+    $('#auction_type_fields').hide();
+    {% endif %}
 });
 
 $(".submit-button").click(function(event){

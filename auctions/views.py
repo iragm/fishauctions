@@ -2744,6 +2744,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
     template_name = 'auction_create_form.html'
     form_class = CreateAuctionForm
     redirect_url = None # really only used if this is a cloned auction
+    cloned_from = None
 
     def get_success_url(self):
         if self.redirect_url:
@@ -2781,6 +2782,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
             data = self.request.GET.copy()
             if data['copy']:
                 kwargs['cloned_from'] = data['copy']
+                self.cloned_from = kwargs['cloned_from']
         except:
             pass
         return kwargs
