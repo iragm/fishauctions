@@ -1989,7 +1989,7 @@ class ViewLot(DetailView):
         try:
             latitude = self.request.COOKIES['latitude']
             longitude = self.request.COOKIES['longitude']
-            qs = Lot.objects.annotate(distance=distance_to(latitude, longitude))
+            qs = qs.annotate(distance=distance_to(latitude, longitude))
         except:
             if self.request.user.is_authenticated:
                 userData, created = UserData.objects.get_or_create(
@@ -1999,7 +1999,7 @@ class ViewLot(DetailView):
                 latitude = userData.latitude
                 longitude = userData.longitude
                 if latitude and longitude:
-                    qs = Lot.objects.annotate(distance=distance_to(latitude, longitude))
+                    qs = qs.annotate(distance=distance_to(latitude, longitude))
         if pk:
             qs = qs.filter(pk=pk)
         else:
