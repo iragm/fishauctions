@@ -328,12 +328,20 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
         </table>
         {% endif %}
         {% if request.user.is_authenticated and lot.user.pk == request.user.id %}
-        {% if lot.can_be_edited %}
-            <a href="/lots/edit/{{lot.pk}}" class="btn btn-warning">Edit lot</a>
-        {% endif %}
-        {% if lot.can_be_deleted %}
-            <a href="/lots/delete/{{lot.pk}}" class="btn btn-danger">Delete</a>
-        {% endif %}
+            <a
+            {% if lot.can_be_edited %}
+            href="{% url 'edit_lot' pk=lot.pk %}"
+            {% else %}
+            href="javascript:void(0);" data-toggle="tooltip" data-placement="top" data-original-title="{{ lot.cannot_edit_reason }}"
+            {% endif %}
+            class="btn btn-warning">Edit lot</a>
+            <a
+            {% if lot.can_be_deleted %}
+            href="{% url 'delete_lot' pk=lot.pk %}"
+            {% else %}
+            href="javascript:void(0);" data-toggle="tooltip" data-placement="top" data-original-title="{{ lot.cannot_be_deleted_reason }}"
+            {% endif %}
+            class="btn btn-danger">Delete</a>
         {% endif %}
         <span id="bid_area">
                 {% if lot.bidding_error %}

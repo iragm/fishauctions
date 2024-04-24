@@ -50,7 +50,7 @@ urlpatterns = [
     path('lots/', views.AllLots.as_view(), name='allLots'),
     path('lots/<int:pk>/', views.ViewLot.as_view(), name="lot_by_pk"),
     path('lots/edit/<int:pk>/', login_required(views.LotUpdate.as_view()), name='edit_lot'),
-    path('lots/delete/<int:pk>/', views.LotDelete.as_view()),
+    path('lots/delete/<int:pk>/', views.LotDelete.as_view(), name='delete_lot'),
     path('lots/new/', login_required(views.LotCreateView.as_view()), name='new_lot'),
     path('lots/watched/', login_required(views.MyWatched.as_view()), name='watched'),
     path('lots/won/', login_required(views.MyWonLots.as_view()), name="won_lots"),

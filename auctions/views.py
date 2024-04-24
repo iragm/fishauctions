@@ -2405,7 +2405,7 @@ class LotUpdate(LotValidation, UpdateView):
             messages.error(request, "Only the lot creator can edit a lot")
             return redirect('/')
         if not self.get_object().can_be_edited:
-            messages.error(request, "It's too late to edit this lot")
+            messages.error(request, self.get_object().cannot_be_edited_reason)
             return redirect('/')
         return super().dispatch(request, *args, **kwargs)
     
@@ -2437,13 +2437,10 @@ class LotDelete(LoginRequiredMixin, DeleteView):
     model = Lot
     def dispatch(self, request, *args, **kwargs):
         if not self.get_object().can_be_deleted:
-            messages.error(request, "Only new lots can be deleted")
+            messages.error(request, self.get_object().cannot_be_deleted_reason)
             return redirect('/')
         if not (request.user.is_superuser or self.get_object().user == self.request.user):
             messages.error(request, "Only the creator of a lot can delete it")
-            return redirect('/')
-        if self.get_object().high_bidder:
-            messages.error(request, "Bids have already been placed on this lot")
             return redirect('/')
         return super().dispatch(request, *args, **kwargs)
 

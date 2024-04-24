@@ -1755,36 +1755,57 @@ class Lot(models.Model):
 		return True
 
 	@property
+	def cannot_change_reason(self):
+		"""Reasons used for both editing and deleting"""
+		if self.high_bidder:
+			return "There are already bids placed on this lot"
+		if self.winner or self.auctiontos_winner:
+			return "This lot has sold"
+		return False
+	
+	@property
+	def cannot_be_edited_reason(self):
+		if self.cannot_change_reason:
+			return self.cannot_change_reason
+		if self.auction:
+			# if this lot is part of an auction, allow changes right up until lot submission ends
+			if timezone.now() > self.auction.lot_submission_end_date:
+				return "Lot submission is over for thsi auction"
+		# if we are getting here, there are no bids or this lot is not part of an auction
+		# lots that are not part of an auction can always be edited as long as there are no bids
+		return False		
+
+	@property
 	def can_be_edited(self):
 		"""Check to see if this lot can be edited.
 		This is needed to prevent people making lots a donation right before the auction ends
 		Actually, by request from many people, there's nothing at all prventing that right at this moment..."""
-		if self.high_bidder:
-				return False
-		if self.winner or self.auctiontos_winner:
+		if self.cannot_be_edited_reason:
 			return False
-		if self.auction:
-			# if this lot is part of an auction, allow changes right up until lot submission ends
-			if timezone.now() > self.auction.lot_submission_end_date:
-				return False
-		# if we are getting here, there are no bids or this lot is not part of an auction
-		# lots that are not part of an auction can always be edited as long as there are no bids
 		return True
 	
+	@property
+	def cannot_be_deleted_reason(self):
+		if self.cannot_change_reason:
+			return self.cannot_change_reason
+		if self.auction and self.auction.is_online and self.auction.unsold_lot_fee:
+			# if this lot is part of an auction, allow changes until 24 hours before the lot submission end
+			if timezone.now() > self.auction.lot_submission_end_date - datetime.timedelta(hours=24):
+				return "It's too late to delete lots in this auction"
+		if self.auction and self.auction.unsold_lot_fee:
+			# you have at most 24 hours to delete a lot
+			if timezone.now() > self.date_posted + datetime.timedelta(hours=24):
+				if timezone.now() < self.date_posted + datetime.timedelta(minutes=20):
+					pass # you are allowed to delete very new lots
+				else:
+					return "You can only delete auction lots in the first 24 hours after they have been created."
+		return False
+
 	@property
 	def can_be_deleted(self):
 		"""Check to see if this lot can be deleted.
 		This is needed to prevent people deleting lots that don't sell right before the auction ends"""
-		if self.high_bidder:
-			return False
-		if self.winner or self.auctiontos_winner:
-			return False
-		if self.auction:
-			# if this lot is part of an auction, allow changes until 24 hours before the lot submission end
-			if timezone.now() > self.auction.lot_submission_end_date - datetime.timedelta(hours=24):
-				return False
-		# you have at most 24 hours to delete a lot
-		if timezone.now() > self.date_posted + datetime.timedelta(hours=24):
+		if self.cannot_be_deleted_reason:
 			return False
 		return True
 
