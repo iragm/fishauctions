@@ -295,6 +295,26 @@ class Auction(models.Model):
 	)
 	set_lot_winners_url.verbose_name = "Set lot winners"
 
+	RESERVE_BUY_NOW_CHOICES = (
+		('disable', "Don't allow"),
+		('allow', 'Allow'),
+		('required', 'Required for all lots'),
+	)
+	# buy_now = models.CharField(
+	# 	max_length=20,
+	# 	choices=RESERVE_BUY_NOW_CHOICES,
+	# 	blank=True,
+	# 	default="allow"
+	# )
+	# buy_now.help_text = "Allow lots to be sold without bidding, for a user-specified price"
+	# reserve_price = models.CharField(
+	# 	max_length=20,
+	# 	choices=RESERVE_BUY_NOW_CHOICES,
+	# 	blank=True,
+	# 	default="allow"
+	# )
+	# reserve_price.help_text = "Allow users to set a minimum bid on their lots"
+ 
 	def __str__(self):
 		result = self.title
 		if "auction" not in self.title.lower():
@@ -306,6 +326,14 @@ class Auction(models.Model):
 	def delete(self, *args, **kwargs):
 		self.is_deleted=True
 		self.save()	
+
+	@property
+	def buy_now(self):
+		return "allow"
+	
+	@property
+	def reserve_price(self):
+		return "allow"
 
 	@property
 	def location_qs(self):
@@ -988,19 +1016,20 @@ class AuctionTOS(models.Model):
 		# We must avoid allowing them to collect addresses/phone numbers/locations from these people
 		# Having this code below run only on creation means that the user won't be filled out and prevents collecting data
 		# if making changes, remember that there's user_logged_in_callback below which sets the user field
-		if self.user and not self.pk:
-			if not self.name:
-				self.name = self.user.first_name + " " + self.user.last_name
-			if not self.email:
-				self.email = self.user.email
-			userData, created = UserData.objects.get_or_create(
-				user = self.user,
-				defaults={},
-				)
-			if not self.phone_number:
-				self.phone_number = userData.phone_number
-			if not self.address:
-				self.address = userData.address
+		#if self.user and not self.pk:
+			# moved to AuctionInfo.post()
+			# if not self.name:
+			# 	self.name = self.user.first_name + " " + self.user.last_name
+			# if not self.email:
+			# 	self.email = self.user.email
+			# userData, created = UserData.objects.get_or_create(
+			# 	user = self.user,
+			# 	defaults={},
+			# 	)
+			#if not self.phone_number:
+			#	self.phone_number = userData.phone_number
+			#if not self.address:
+			#	self.address = userData.address
 		# set the bidder number based on the phone, address, last used number, or just at random
 		if not self.bidder_number or self.bidder_number == "None":
 			# recycle numbers from the last auction if we can
@@ -2040,13 +2069,26 @@ class Lot(models.Model):
 		return f"{self.full_lot_link}?src=qr"
 
 	@property
+	def seller_string(self):
+		if self.auctiontos_seller:
+			return f"Seller: {self.auctiontos_seller.name}"
+		return ""
+
+	@property
+	def reserve_and_buy_now_info(self):
+		result = ""
+		if self.reserve_price and not self.sold:
+			result += f" Min bid: ${self.buy_now_price}"		
+		if self.buy_now_price and not self.sold:
+			result += f" Buy now: ${self.buy_now_price}"
+		return result
+
+	@property
 	def label_line_0(self):
 		"""Used for printed labels"""
 		result = f"<b>LOT: {self.lot_number_display}</b>"
 		#if self.quantity > 1:
 		result += f" QTY: {self.quantity}"
-		if self.buy_now_price and not self.sold:
-			result += f" ${self.buy_now_price}"
 		return result
 
 	@property
@@ -2060,23 +2102,24 @@ class Lot(models.Model):
 		"""Used for printed labels"""
 		if self.auctiontos_winner:
 			return f"Winner: {self.auctiontos_winner.name}"
-		if self.auctiontos_seller:
-			return f"Seller: {self.auctiontos_seller.name}"
-		return ""
+		if self.auction and self.auction.multi_location:
+			return self.reserve_and_buy_now_info
+		return self.seller_string
 
 	@property
 	def label_line_3(self):
 		"""Used for printed labels"""
 		result = ""
-		if self.auction:
-			if self.auction.multi_location:
-				if self.auctiontos_winner.pickup_location:
-					return self.auctiontos_winner.pickup_location
-				else:
-					# this is not sold -- allow the auctioneer to check the appropriate pickup location
-					locations = self.auction.location_qs
-					for location in locations:
-						result += "  __" + location.short_name
+		if self.auction and self.auction.multi_location:
+			if self.auctiontos_winner:
+				return self.auctiontos_winner.pickup_location
+			else:
+				# this is not sold -- allow the auctioneer to check the appropriate pickup location
+				locations = self.auction.location_qs
+				for location in locations:
+					result += "  __" + location.short_name
+		else:
+			return self.reserve_and_buy_now_info
 		return result
 
 	@property

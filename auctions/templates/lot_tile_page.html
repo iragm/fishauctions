@@ -67,14 +67,10 @@ box-shadow: 0px 0px 1px 2px rgba(238, 59, 59, 0.281),
         {% if lot.auction.is_online and not lot.auction.ended and lot.sold %}<h1 class='text-danger font-weight-bold' style="position: absolute;-ms-transform: rotate(-20deg);transform: rotate(-20deg);">SOLD</h1>{%endif%}
           {% if lot.thumbnail %}<img class="card-img-top" src="{{ lot.thumbnail.image.lot_list.url }}" style="max-width:100%;"></img>{% endif %}
         <p class="card-text">
-          <span class="text-muted"><small>{{ lot.species_category }}</small></span><br>
-          <b>${{ lot.high_bid }}</b> {{ lot.high_bidder_display }}
-          <br>
-          {% if request.user.is_superuser %}
-          Views: {{ lot.page_views }} Bid rate: {{ lot.view_to_bid_ratio|floatformat:2 }} <br>Special: {{ lot.recommended }}
-          <br>
-          {% endif %}
-          <small class='text-muted'>{{ lot.calculated_end_for_templates }}</small><br>
+          {% if not lot.auction.use_categories %}<span class="text-muted"><small>{{ lot.species_category }}</small></span><br>{% endif %}
+          {% if not lot.auction or lot.auction.allow_bidding_on_lots %}<b>${{ lot.high_bid }}</b> {{ lot.high_bidder_display }}
+          <br>{% endif %}
+          {% if not lot.auction or lot.auction.is_online %}<small class='text-muted'>{{ lot.calculated_end_for_templates }}</small><br>{% endif %}
         </p>
         <div style='position: absolute; bottom: 1em; width:80%; left: 50%;
         transform: translate(-50%);'>

@@ -644,7 +644,14 @@ class CreateEditAuctionTOS(forms.ModelForm):
         if self.auctiontos:
             other_bidder_numbers = other_bidder_numbers.exclude(pk=self.auctiontos.pk)
         if other_bidder_numbers.count():
-            self.add_error('bidder_number', "Bidder number already in use")
+            self.add_error('bidder_number', "This bidder number is already in this auction")
+        email = cleaned_data.get("email")
+        if email:
+            other_emails = AuctionTOS.objects.filter(auction=self.auction, email=email)
+        if self.auctiontos:
+            other_emails = other_emails.exclude(pk=self.auctiontos.pk)
+        if other_emails.count():
+            self.add_error('email', "This email is already in this auction")
         return cleaned_data
 
     # def clean(self):

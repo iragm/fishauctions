@@ -490,6 +490,9 @@ def watchOrUnwatch(request, pk):
         lot = Lot.objects.filter(pk=pk, is_deleted=False).first()
         if not lot:
             return HttpResponse("Failure")
+        # have gotten a MultipleObjectsReturned error pointing here, not sure how that is possible,
+        # probably a race condition when multiple watches are fired off at once
+        # For now I am treating this as a one-off, but we can add some unique_together criteria to the database if it persists
         obj, created = Watch.objects.update_or_create(
             lot_number=lot,
             user=user,
@@ -3017,6 +3020,15 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
                 obj.time_spent_reading_rules = form.cleaned_data['time_spent_reading_rules']
             # even if an auctiontos was originally manually added, if the user clicked join, mark them as not manually added
             obj.manually_added = False
+            # fill out some information in the tos if not already filled out
+            if not obj.name:
+                obj.name = self.request.user.first_name + " " + self.request.user.last_name
+            if not obj.email:
+                obj.email = self.request.user.email
+            if not obj.phone_number:
+                obj.phone_number = userData.phone_number
+            if not obj.address:
+                obj.address = userData.address
             obj.save()
             # also update userdata to reflect the last auction
             userData.last_auction_used = auction
