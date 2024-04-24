@@ -47,7 +47,6 @@
               <th scope="col">Opened</th>
               <th scope="col">View</th>
               <th scope="col">Print</th>
-              <!-- <th scope="col">Total</th> -->
               <th scope="col">Status</th>
               <th scope="col">Lots bought</th>
               <th scope="col">Lots sold</th>
@@ -63,13 +62,11 @@
               <td>{% if not invoice.opened %}No{%endif%}</td>
               <td><a href="/invoices/{{invoice.pk}}/">{% if invoice.user.first_name %}{{ invoice.user.first_name }} {{ invoice.user.last_name }}{% else %}{{ invoice.auctiontos_user.name }}{% endif %}</a></td>
               <td><a href="/invoices/{{invoice.pk}}/?print">Print</a></td>
-              <!-- <td>${{ invoice.calculated_total|floatformat:2 }}</td> -->
               <td><div class="btn-group" role="group" aria-label="Invoice status selection">
                 <button type="button" id="{{invoice.pk}}_DRAFT" onclick="payinvoice({{ invoice.pk }}, 'DRAFT');" class="btn {% if invoice.status == 'DRAFT'%}draft btn-primary{% else %}btn-secondary{% endif %}">Draft</button>
                 <button type="button" id="{{invoice.pk}}_UNPAID" onclick="payinvoice({{ invoice.pk }}, 'UNPAID');" class="btn {% if invoice.status == 'UNPAID'%}btn-primary unpaid{% else %}btn-secondary{% endif %}">Ready</button>
                 <button type="button" id="{{invoice.pk}}_PAID" onclick="payinvoice({{ invoice.pk }}, 'PAID');" class="btn {% if invoice.status == 'PAID'%}btn-success{% else %}btn-secondary{% endif %}">Paid</button>
               </div></td>
-              <!--<td> {% if not invoice.paid %}<a class="btn btn-info active btn-sm" onclick="payinvoice({{ invoice.pk }})" id="pay_{{ invoice.pk }}">Mark paid</a>{% else %}<span>Paid</span>{% endif %}</td>-->
               <td>{% if invoice.lots_bought %}{{ invoice.lots_bought }}{% endif %}</td>
               <td>{% if invoice.lots_sold %}{{ invoice.lots_sold_successfully_count }}{% endif %}</td>
               <td>{% if invoice.lots_sold %}{{ invoice.unsold_lots }}{% endif %}</td>
@@ -80,15 +77,26 @@
       </table>
       <h4>Send batch Paypal invoices</h4>
       {% if not auction.is_online %}This is intended for online auctions; you should mange payments separately, one user at a time, and mark invoices paid as needed.  The users tab provides a convenient search function and a button to mark invoices as paid.{% endif %}
-      For use with Paypal's <a href="https://www.paypal.com/invoice/batch">batch invoice system</a>.  Paypal's fees apply.  <a href="/blog/online-payments-suck/">See how to use this.</a><br>
+      For use with Paypal's <a href="https://www.paypal.com/invoice/batch">batch invoice system</a>.  Paypal's fees apply. 
       <span class="{% if auction.draft_paypal_invoices %}text-warning{% endif %}">{{auction.draft_paypal_invoices}} invoices have not been marked ready and will not be included.</span>
+
+
+
+
       <br>
       {% for chunk in object.paypal_invoice_chunks %}
         <a href="/auctions/{{ object.slug }}/paypal/{{ chunk }}/">Download Batch Invoice File #{{chunk}}</a><br>
       {% endfor %}
-    <!-- </div>
-</div>
-</div>   -->
+      <br><a href="#collapseExample" data-toggle="collapse">How to use this and troubleshooting</a>
+      <div class="collapse mt-3" id="collapseExample">
+        <div class="card card-body">
+            <h5>Usage instructions</h5>
+            <a href="/blog/online-payments-suck/">Follow this step-by-step guide.</a><br>
+            <h5>If Paypal takes you to a page that says "Let's get you back on track" instead of the batch invoice screen</h5>
+            This is an issue on Paypal's end that impacts newly created Paypal accounts.  You can open a case with them, by emailing <a href='mailto:merchanttechsupport@paypal.com'>Merchant Technical Support</a>It may help to reference case 12959943, which is the same issue when my club encountered it.<br><br>
+            It typically takes about 2 weeks for Paypal to reply, so you may want to find some other method to send out invoices for now (such as using an older Paypal account).
+          </div>
+      </div>
 
 {% endblock %}
 {% block extra_js %}
