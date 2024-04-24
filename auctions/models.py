@@ -2033,9 +2033,10 @@ class Lot(models.Model):
 		if self.auction:
 			if not self.auction.is_chat_allowed:
 				return False
-		date_chat_end = self.calculated_end + datetime.timedelta(minutes=60)
-		if timezone.now() > date_chat_end:
-			return False
+		# only allow chat for an hour after an auction ends
+		# date_chat_end = self.calculated_end + datetime.timedelta(minutes=60)
+		# if timezone.now() > date_chat_end:
+		# 	return False
 		return True
 
 	@property
