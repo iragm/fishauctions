@@ -8,7 +8,7 @@
 		<div class="modal-header">
 		  <h5 class="modal-title">{{ modal_title | safe }}</h5> {{ top_buttons }}
 		</div>
-		{% if unsold_lot_warning %}<div class="modal-header"><span class='text-warning'>{{ unsold_lot_warning }}, sell these before marking this paid</span></div>{% endif %}
+		{% if unsold_lot_warning %}<div class="modal-header"><span class='text-warning'>{{ unsold_lot_warning }}</span></div>{% endif %}
 		<div class="modal-body">
             <span class="">{{ tooltip }}</span>
 			<p>{% crispy form form.helper %}</p>

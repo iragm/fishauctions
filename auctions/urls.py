@@ -30,6 +30,8 @@ urlpatterns = [
     path('api/chart/lots/<int:pk>/', views.LotChartView.as_view()),
     path('api/chart/users/<int:pk>/', views.UserChartView.as_view()),
     path('api/chart/auction/', views.AuctionChartView.as_view()),
+    path('api/get_category/', views.CategoryFinder.as_view(), name='guess_category'),
+    path('api/get_auction_info/', views.AuctionFinder.as_view(), name='get_auction_info'),
     path('api/lot/<int:pk>/', views.LotAdmin.as_view(), name="auctionlotadmin"),
     path('api/auctiontos/<str:pk>/', views.AuctionTOSAdmin.as_view(), name="auctiontosadmin"),
     path('api/auctiontos/<str:pk>/delete', views.AuctionTOSDelete.as_view(), name="auctiontosdelete"),

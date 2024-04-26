@@ -1297,7 +1297,7 @@ class Lot(models.Model):
 	user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
 	auctiontos_seller = models.ForeignKey(AuctionTOS, null=True, blank=True, on_delete=models.SET_NULL, related_name="auctiontos_seller")
 	auction = models.ForeignKey(Auction, blank=True, null=True, on_delete=models.SET_NULL)
-	auction.help_text = "<span class='text-warning' id='last-auction-special'></span>Only auctions that you have <span class='text-warning'>selected a pickup location for</span> will be shown here. This lot must be brought to that location"
+	auction.help_text = "<span class='text-warning' id='last-auction-special'></span>Only auctions that you have <span class='text-warning'>joined</span> will be shown here. This lot must be brought to that auction"
 	date_end = models.DateTimeField(auto_now_add=False, blank=True, null=True)
 	winner = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="winner")
 	auctiontos_winner = models.ForeignKey(AuctionTOS, null=True, blank=True, on_delete=models.SET_NULL, related_name="auctiontos_winner")
@@ -2116,8 +2116,8 @@ class Lot(models.Model):
 	@property
 	def reserve_and_buy_now_info(self):
 		result = ""
-		if self.reserve_price and not self.sold:
-			result += f" Min bid: ${self.buy_now_price}"		
+		if self.reserve_price > self.auction.minimum_bid and not self.sold:
+			result += f" Min bid: ${self.reserve_price}"		
 		if self.buy_now_price and not self.sold:
 			result += f" Buy now: ${self.buy_now_price}"
 		return result
@@ -2469,6 +2469,12 @@ class Invoice(models.Model):
 		if self.auction:
 			return self.auction.is_online
 		return False
+
+	@property
+	def unsold_lot_warning(self):
+		if self.unsold_non_donation_lots:
+			return f"{self.unsold_non_donation_lots} unsold lot(s), sell these before marking this paid"
+		return ""
 
 class Bid(models.Model):
 	"""Bids apply to lots"""

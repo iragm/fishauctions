@@ -92,10 +92,13 @@ class QuickAddLot(forms.ModelForm):
             'i_bred_this_fish',
             'quantity',
             'donation',
+            'reserve_price',
+            'buy_now_price',
         ]
         widgets = {
             'description': forms.Textarea(attrs={'rows':2}),
         }
+
     def __init__(self, *args, **kwargs):
         self.auction = kwargs.pop('auction')
         self.custom_lot_numbers_used = kwargs.pop('custom_lot_numbers_used')
@@ -104,7 +107,6 @@ class QuickAddLot(forms.ModelForm):
         self.lot_count = 0
         # we need to work around the case where a user enters duplicate custom lot numbers
         super().__init__(*args, **kwargs)
-        self.fields['custom_lot_number'].label = "Custom lot number"
         self.fields['custom_lot_number'].help_text = ""
         self.fields['lot_name'].label = "Lot name"
         self.fields['lot_name'].help_text = ""
@@ -119,9 +121,23 @@ class QuickAddLot(forms.ModelForm):
         self.fields['i_bred_this_fish'].help_text = ""
         self.fields['quantity'].help_text = ""
         self.fields['donation'].help_text = ""
+        self.fields['reserve_price'].help_text = ""
+        self.fields['buy_now_price'].help_text = ""
         self.fields['species_category'].initial = Category.objects.get(pk=21) # uncategorized
         self.fields['quantity'].initial = 1
 
+        if self.auction.reserve_price == "disable":
+            self.fields['reserve_price'].widget = HiddenInput()
+        # always required anyway...
+        #if self.auction.reserve_price == "required":
+        #    self.fields['reserve_price'].required = True
+        if self.auction.buy_now == "disable":
+            self.fields['buy_now_price'].widget = HiddenInput()
+        if self.auction.buy_now == "required":
+            self.fields['buy_now_price'].required = True            
+
+        if not self.auction.use_categories:
+            self.fields['i_bred_this_fish'].widget = HiddenInput()
 
     def clean(self):
         cleaned_data = super().clean()
@@ -135,6 +151,13 @@ class QuickAddLot(forms.ModelForm):
                 self.custom_lot_numbers_used.append(custom_lot_number)
             if existing_lots.count() or self.custom_lot_numbers_used.count(custom_lot_number) > 1:
                 self.add_error('custom_lot_number', "This lot number is already in use")
+        if not self.is_admin:
+            if self.auction.reserve_price == "disable":
+                cleaned_data['reserve_price'] = self.auction.minimum_bid
+            if self.auction.buy_now == "disable" and cleaned_data.get("buy_now_price"):
+                cleaned_data['buy_now_price'] = None
+            if self.auction.buy_now == "require" and not cleaned_data.get("buy_now_price"):
+                self.add_error('buy_now_price', "Buy Now price is required in this auction")
         # we need to make sure users can't add extra lots
         if not self.is_admin and self.auction.max_lots_per_user:
             existing_lots = self.tos.unbanned_lot_qs
@@ -157,42 +180,6 @@ class QuickAddLot(forms.ModelForm):
                     self.lot_count += 1
         return cleaned_data
     
-    # def get_form_kwargs(self):
-    #     kwargs = super().get_form_kwargs()
-    #     kwargs['pk'] = self.kwargs['pk']
-    #     print(kwargs['auction'])
-    #     return kwargs
-
-# class BaseLotFormSet(BaseModelFormSet):
-#     """This is not used anywhere, see EditLot instead
-#     Validation for QuickAddLot
-#     fixme - we need to pass auction here as a kwarg"""
-#     def __init__(self, *args, **kwargs):
-#         #self.auction = kwargs.pop('auction')
-#         #print(self.auction)
-#         super().__init__(*args, **kwargs)
-#         self.queryset = Lot.objects.filter(auctiontos_seller__bidder_number="259")
-#         return
-
-
-#     def clean(self):
-#         if any(self.errors):
-#             return
-#         issues = False
-#         for form in self.forms:
-#             if form.cleaned_data:
-#                 custom_lot_number = form.cleaned_data['custom_lot_number']
-#                 if custom_lot_number:
-#                     other_lots = Lot.objects.exclude(is_deleted=True).filter(auction=self.auction, custom_lot_number=custom_lot_number).count()
-#                     #if other_lots > 1:
-#                     form.add_error('custom_lot_number', "Lot number already in use")
-#                     issues = True
-
-#                 if issues:
-#                     raise forms.ValidationError(
-#                         'One or more lot numbers are already in use',
-#                         code='lot_numbers'
-#                     )
 class TOSFormSetHelper(FormHelper):
     def __init__(self, *args, **kwargs):
         #self.auction = kwargs['auction']
@@ -443,14 +430,16 @@ class EditLot(forms.ModelForm):
             'description',
             #'auctiontos_seller',
             Div(
-                Div('quantity',css_class='col-sm-4',),
-                Div('donation',css_class='col-sm-4',),
-                Div('i_bred_this_fish',css_class='col-sm-4',),
+                Div('quantity',css_class='col-sm-3',),
+                Div('donation',css_class='col-sm-3',),
+                Div('buy_now_price',css_class='col-sm-3',),
+                Div('reserve_price',css_class='col-sm-3',),
                 css_class='row',
             ),
             Div(
-                Div('auctiontos_winner',css_class='col-sm-8',),
-                Div('winning_price',css_class='col-sm-4',),
+                Div('i_bred_this_fish',css_class='col-sm-3',),
+                Div('auctiontos_winner',css_class='col-sm-6',),
+                Div('winning_price',css_class='col-sm-3',),
                 css_class='row',
             ),
             Div(
@@ -469,8 +458,15 @@ class EditLot(forms.ModelForm):
         self.fields['quantity'].initial = self.lot.quantity
         self.fields['donation'].initial = self.lot.donation
         self.fields['winning_price'].initial = self.lot.winning_price
+        if not self.auction.use_categories:
+            self.fields['species_category'].widget = HiddenInput()
+            self.fields['i_bred_this_fish'].widget = HiddenInput()
         self.fields['species_category'].initial = self.lot.species_category
         self.fields['i_bred_this_fish'].initial = self.lot.i_bred_this_fish
+        self.fields['buy_now_price'].initial = self.lot.buy_now_price
+        self.fields['reserve_price'].initial = self.lot.reserve_price
+        self.fields['buy_now_price'].help_text = ""
+        self.fields['reserve_price'].help_text = ""
         self.fields['banned'].initial = self.lot.banned
         self.fields['auctiontos_winner'].initial = self.lot.auctiontos_winner
         # and some housekeeping on labels and help text
@@ -515,6 +511,8 @@ class EditLot(forms.ModelForm):
             'quantity',
             'donation',
             'i_bred_this_fish',
+            'buy_now_price',
+            'reserve_price',
             'banned',
             'auctiontos_winner',
             'winning_price'
@@ -999,7 +997,8 @@ class AuctionEditForm(forms.ModelForm):
         fields = ['notes', 'lot_entry_fee','unsold_lot_fee','winning_bid_percent_to_club', 'date_start', 'date_end', 'lot_submission_start_date',\
             'lot_submission_end_date', 'sealed_bid','use_categories', 'promote_this_auction', 'max_lots_per_user', 'allow_additional_lots_as_donation',
             'email_users_when_invoices_ready', 'pre_register_lot_entry_fee_discount', 'pre_register_lot_discount_percent', 'allow_bidding_on_lots','only_approved_sellers',
-            'invoice_payment_instructions', 'minimum_bid', 'winning_bid_percent_to_club_for_club_members', 'lot_entry_fee_for_club_members', 'require_phone_number', 'set_lot_winners_url'
+            'invoice_payment_instructions', 'minimum_bid', 'winning_bid_percent_to_club_for_club_members', 'lot_entry_fee_for_club_members', 'require_phone_number', 'set_lot_winners_url',
+            'reserve_price', 'buy_now', 
             ]
         widgets = {
             'date_start': DateTimePickerInput(),
@@ -1100,22 +1099,24 @@ class AuctionEditForm(forms.ModelForm):
             ),
             HTML("<h4>Lot permissions</h4>"),
             Div(
-                Div('max_lots_per_user', css_class='col-md-4',),
-                Div('allow_additional_lots_as_donation', css_class='col-md-4',),
-                Div('only_approved_sellers',css_class='col-md-4',),
+                Div('max_lots_per_user', css_class='col-md-3',),
+                Div('allow_additional_lots_as_donation', css_class='col-md-3',),
+                Div('only_approved_sellers',css_class='col-md-3',),
+                Div('allow_bidding_on_lots', css_class='col-md-3',),
                 css_class='row',
             ),
 
             HTML("<h4>General</h4>"),
             Div(
-                Div('minimum_bid',css_class='col-md-3',),
-                Div('allow_bidding_on_lots', css_class='col-md-3',),
                 Div('require_phone_number',css_class='col-md-3',),
                 Div('email_users_when_invoices_ready', css_class='col-md-3',),
+                Div('invoice_payment_instructions', css_class='col-md-6',),
                 Div('use_categories',css_class='col-md-3',),
-                Div('invoice_payment_instructions', css_class='col-md-9',),
-                Div('promote_this_auction', css_class='col-md-3',),
+                Div('minimum_bid',css_class='col-md-3',),
+                Div('reserve_price', css_class='col-md-3',),
+                Div('buy_now', css_class='col-md-3',),
                 Div('set_lot_winners_url', css_class='col-md-3',),
+                Div('promote_this_auction', css_class='col-md-3',),
                 css_class='row',
             ),
             Submit('submit', 'Save', css_class='create-update-auction btn-success'),

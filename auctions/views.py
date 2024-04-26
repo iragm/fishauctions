@@ -1901,6 +1901,7 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
                 if print_url:
                     redirect_url += '?' + print_url
             else:
+                # may want to make this go to the selling dashboard instead
                 redirect_url = reverse("user_lots") + f"?user={self.request.user.username}"
                 if print_url:
                     redirect_url += '&' + print_url
@@ -1961,7 +1962,10 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
             'species_category',
             'i_bred_this_fish',
             'quantity',
-            'donation',), form=QuickAddLot)
+            'donation',
+            'reserve_price',
+            'buy_now_price',
+            ), form=QuickAddLot)
         return super().dispatch(request, *args, **kwargs)
 
 class ViewLot(DetailView):
@@ -2257,9 +2261,16 @@ class LotValidation(LoginRequiredMixin):
                 lot.buy_now_price = lot.reserve_price
                 messages.error(self.request, f"Buy now price can't be lower than the reserve price")
         if lot.auction:
-            if not lot.auction.is_online:
-                if lot.buy_now_price or lot.reserve_price > lot.auction.minimum_bid:
-                    messages.info(self.request, f"Reserve and buy now prices may not be used in this auction.  Read the auction's rules for more information")
+            #if not lot.auction.is_online:
+            #    if lot.buy_now_price or lot.reserve_price > lot.auction.minimum_bid:
+            #        messages.info(self.request, f"Reserve and buy now prices may not be used in this auction.  Read the auction's rules for more information")
+            if lot.auction.reserve_price == "disable":
+                lot.reserve_price = lot.auction.minimum_bid
+            if lot.auction.buy_now == "disable" and lot.buy_now_price:
+                lot.buy_now_price = None
+            if lot.auction.buy_now == "require" and not lot.buy_now_price:
+                lot.buy_now_price = lot.auction.minimum_bid
+                messages.error(self.request, f"You need to set a buy now price for this lot!")
             lot.date_end = lot.auction.date_end
             userData, created = UserData.objects.get_or_create(
                 user = self.request.user.pk,
@@ -2561,6 +2572,8 @@ class LotAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
             obj.quantity = form.cleaned_data['quantity'] or 1
             obj.donation = form.cleaned_data['donation']
             obj.i_bred_this_fish = form.cleaned_data['i_bred_this_fish']
+            obj.reserve_price = form.cleaned_data['reserve_price']
+            obj.buy_now_price = form.cleaned_data['buy_now_price']
             obj.banned = form.cleaned_data['banned']
             obj.auctiontos_winner = form.cleaned_data['auctiontos_winner']
             obj.winning_price = form.cleaned_data['winning_price']
@@ -2695,8 +2708,7 @@ class AuctionTOSAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
                 invoice = self.auctiontos.invoice
                 invoice_string = invoice.invoice_summary_short
                 context['top_buttons'] = render_to_string("invoice_buttons.html", {'invoice':invoice})
-                if invoice.unsold_non_donation_lots:
-                    context['unsold_lot_warning'] = f"{invoice.unsold_non_donation_lots} unsold lot(s)"
+                context['unsold_lot_warning'] = invoice.unsold_lot_warning
             except:
                 invoice = None
                 invoice_string = ""
@@ -2837,6 +2849,8 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 'lot_entry_fee_for_club_members',
                 'set_lot_winners_url',
                 'require_phone_number',
+                'buy_now',
+                'reserve_price',
                 ]
             for field in fields_to_clone:
                 setattr(auction, field, getattr(original_auction, field))
@@ -3390,6 +3404,11 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
         invoice.memo = form.cleaned_data['memo']
         invoice.save()
         return super().form_valid(form)
+
+    def get(self, request, *args, **kwargs):
+        if self.get_object().unsold_lot_warning and self.is_auction_admin:
+            messages.info(self.request, "This user still has unsold lots, make sure to sell all non-donation lots before marking this ready or paid.")
+        return super().get(request, *args, **kwargs)
 
 class InvoiceViewNoExampleMode(InvoiceView):
     """For auction invoices, we don't want to fall back to example mode if the invoice isn't found"""
@@ -4681,3 +4700,37 @@ class PickupLocationsOutgoing(View, AuctionPermissionsMixin):
         for lot in queryset:
             csv_writer.writerow([lot.lot_number_display, lot.seller_name, lot.lot_name, lot.winner_location, lot.winner_name])
         return response
+    
+class CategoryFinder(View, LoginRequiredMixin):
+    """API view which will return a category (or none) based on POST keyword lot_name"""
+    def get(self, request, *args, **kwargs):
+        return redirect('/')
+
+    def post(self, request, *args, **kwargs):
+        lot_name = request.POST['lot_name']
+        result = guess_category(lot_name)
+        if result:
+            result = {'name':result.name, 'value':result.pk}
+        else:
+            result = {'value': None}
+        return JsonResponse(result)
+
+class AuctionFinder(View, LoginRequiredMixin):
+    """API view which will return information about an auction based on POST keyword auction.  Expects a pk."""
+    def get(self, request, *args, **kwargs):
+        return redirect('/')
+
+    def post(self, request, *args, **kwargs):
+        try:
+            self.auction = Auction.objects.filter(pk = request.POST['auction']).first()
+        except ValueError:
+            self.auction = None
+        if not self.auction or not AuctionTOS.objects.filter(user=request.user, auction=self.auction):
+            # you don't get to query auctions you haven't joined
+            result = {}
+        else:
+            result = {'use_categories':self.auction.use_categories,
+                      'reserve_price':self.auction.reserve_price,
+                      'buy_now':self.auction.buy_now,
+                      }
+        return JsonResponse(result)

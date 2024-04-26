@@ -21,7 +21,8 @@ function setAuction(setting) {
         $('#div_id_run_duration').hide();
         $('#div_id_show_payment_pickup_info').hide();
         $("#id_show_payment_pickup_info").prop('checked', false);
-        $('#payment_pickup_info').hide();        
+        $('#payment_pickup_info').hide();
+        setAuctionRequiredFields($('#id_auction').val())
     } else {
         $('#div_id_auction').hide();
         $('#div_id_donation').hide();
@@ -30,12 +31,56 @@ function setAuction(setting) {
         $('#div_id_relist_if_sold').show();
         $('#div_id_run_duration').show();
         $('#div_id_show_payment_pickup_info').show();
+        setAuctionRequiredFields(false);
     }
+    
+}
+
+function setAuctionRequiredFields(val) {
+    $.ajax({
+            type: "POST",
+            beforeSend: function (request) {
+                request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+            },
+            url: "{% url 'get_auction_info' %}",
+            data: {'auction': val},
+            success : function(result) {
+                if (result.buy_now) {
+                    if (result.use_categories) {
+                        $('#div_id_species_category').show();
+                        $('#div_id_i_bred_this_fish').show();
+                    } else {
+                        $('#div_id_species_category').hide();
+                        $('#div_id_i_bred_this_fish').hide();
+                    }
+                    if (result.reserve_price == 'disable') {
+                        $('#div_id_reserve_price').hide();
+                    } else {
+                        $('#div_id_reserve_price').show();
+                    }
+                    if (result.buy_now == 'disable') {
+                        $('#div_id_buy_now_price').hide();
+                        $('#id_buy_now_price').attr('required', false);
+                    } else {
+                        $('#div_id_buy_now_price').show();
+                    }
+                    if (result.buy_now == 'required') {
+                        $('#id_buy_now_price').attr('required', true);
+                    }
+                } else {
+                    $('#div_id_species_category').show();
+                    $('#div_id_i_bred_this_fish').show();
+                    $('#id_buy_now_price').attr('required', false);
+                    $('#div_id_reserve_price').show();
+                    $('#div_id_buy_now_price').show();
+                }
+            }
+        });
 }
 
 $(document).ready(function() {
     if(document.getElementById('id_part_of_auction_0').checked) {
-        setAuction(true);    
+        setAuction(true); 
     } else {
         setAuction(false);
     }
@@ -57,6 +102,27 @@ $(document).ready(function() {
             $('#payment_pickup_info').hide();
         }
     });
+    $('#id_lot_name').change(function(data) {
+        if (!$('#id_species_category').val() || $('#id_species_category').val() == 21) {
+            if ($('#div_id_species_category').is(':visible')) {
+                $.ajax({
+                type: "POST",
+                beforeSend: function (request) {
+                    request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+                },
+                url: "{% url 'guess_category' %}",
+                data: {'lot_name': this.value},
+                success : function(result) {
+                    if (result['value']) {
+                        $('#id_species_category').val(result['value']);
+                        $('#hint_id_species_category').html("Looks like you're selling " + result['name'] + ".  <span class='text-warning'>If that's not correct, change it here.</span>");
+                    }
+                }
+                });
+            }
+        }
+    });
+    
 });
 </script>
 {% if new %}
