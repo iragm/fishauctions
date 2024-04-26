@@ -563,15 +563,21 @@ class CreateEditAuctionTOS(forms.ModelForm):
         self.helper.form_id = 'user-form'
         self.helper.form_tag = True        
         self.helper.layout = Layout(
-			'bidder_number',
+            'bidder_number',
             'name',
-			'email',
-			'phone_number',
+            Div(
+                Div('email',css_class='col-sm-6',),
+                Div('phone_number',css_class='col-sm-6',),
+                css_class='row',
+            ),            
 			'address',
             'pickup_location',
             'selling_allowed',
-            'is_admin',
-            'is_club_member',
+            Div(
+                Div('is_club_member',css_class='col-sm-6',),
+                Div('is_admin',css_class='col-sm-6',),
+                css_class='row',
+            ), 
             Div(
                 HTML(f'{delete_button_html}<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'),
                 HTML(f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Save</button>'),
@@ -603,8 +609,9 @@ class CreateEditAuctionTOS(forms.ModelForm):
             if self.auction.winning_bid_percent_to_club_for_club_members:
                 help_text += f"{self.auction.winning_bid_percent_to_club_for_club_members}%"
             if not self.auction.lot_entry_fee_for_club_members and not self.auction.winning_bid_percent_to_club_for_club_members:
-                help_text = "Check to charge <span class='text-warning'>nothing</span>"
-            help_text += " instead of the standard fee for sold lots"
+                help_text = "Check to charge <span class='text-warning'>no selling fees</span>.  Are your rules set up correctly?"
+            else:
+                help_text += " instead of the standard fee for sold lots"
             self.fields['is_club_member'].help_text = help_text
             self.fields['selling_allowed'].initial = self.auctiontos.selling_allowed
         else:
@@ -648,10 +655,10 @@ class CreateEditAuctionTOS(forms.ModelForm):
         email = cleaned_data.get("email")
         if email:
             other_emails = AuctionTOS.objects.filter(auction=self.auction, email=email)
-        if self.auctiontos:
-            other_emails = other_emails.exclude(pk=self.auctiontos.pk)
-        if other_emails.count():
-            self.add_error('email', "This email is already in this auction")
+            if self.auctiontos:
+                other_emails = other_emails.exclude(pk=self.auctiontos.pk)
+            if other_emails.count():
+                self.add_error('email', "This email is already in this auction")
         return cleaned_data
 
     # def clean(self):

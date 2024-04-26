@@ -300,20 +300,18 @@ class Auction(models.Model):
 		('allow', 'Allow'),
 		('required', 'Required for all lots'),
 	)
-	# buy_now = models.CharField(
-	# 	max_length=20,
-	# 	choices=RESERVE_BUY_NOW_CHOICES,
-	# 	blank=True,
-	# 	default="allow"
-	# )
-	# buy_now.help_text = "Allow lots to be sold without bidding, for a user-specified price"
-	# reserve_price = models.CharField(
-	# 	max_length=20,
-	# 	choices=RESERVE_BUY_NOW_CHOICES,
-	# 	blank=True,
-	# 	default="allow"
-	# )
-	# reserve_price.help_text = "Allow users to set a minimum bid on their lots"
+	buy_now = models.CharField(
+		max_length=20,
+		choices=RESERVE_BUY_NOW_CHOICES,
+		default="allow"
+	)
+	buy_now.help_text = "Allow lots to be sold without bidding, for a user-specified price"
+	reserve_price = models.CharField(
+		max_length=20,
+		choices=RESERVE_BUY_NOW_CHOICES,
+		default="allow"
+	)
+	reserve_price.help_text = "Allow users to set a minimum bid on their lots"
  
 	def __str__(self):
 		result = self.title
@@ -326,14 +324,6 @@ class Auction(models.Model):
 	def delete(self, *args, **kwargs):
 		self.is_deleted=True
 		self.save()	
-
-	@property
-	def buy_now(self):
-		return "allow"
-	
-	@property
-	def reserve_price(self):
-		return "allow"
 
 	@property
 	def location_qs(self):
@@ -748,7 +738,7 @@ class Auction(models.Model):
 	
 	@property
 	def admin_checklist_location_set(self):
-		if not self.set_location_link:
+		if not self.set_location_link and self.all_location_count:
 			return True
 		return False
 	
@@ -975,11 +965,37 @@ class AuctionTOS(models.Model):
 		return self.unbanned_lot_qs.count()
 
 	@property
+	def print_labels_qs(self):
+		"""A set of rules to determine what we print"""
+		lots = self.unbanned_lot_qs
+		if self.auction.is_online:
+			lots = lots.filter(auctiontos_winner__isnull=False, winning_price__isnull=False)
+		return lots
+
+	@property
+	def unprinted_labels_qs(self):
+		return self.print_labels_qs.exclude(label_printed=True)
+
+	@property
+	def unprinted_label_count(self):
+		return self.unprinted_labels_qs.count()
+
+	@property
 	def print_invoice_link_html(self):
 		"""Link print lot labels for this user"""
 		if self.unbanned_lot_count:
 			url = reverse("print_labels_by_bidder_number", kwargs = {'bidder_number':self.bidder_number, 'slug':self.auction.slug})
-			return html.format_html(f"<a href='{url}' hx-noget>Print labels</a>")
+			unprinted_url = reverse("print_unprinted_labels_by_bidder_number", kwargs = {'bidder_number':self.bidder_number, 'slug':self.auction.slug})
+			result = f"<a href='{url}'>Print labels</a>"
+			if self.unprinted_label_count and self.unprinted_label_count != self.print_labels_qs.count():
+				result += f"""
+				<button type="button" class="btn btn-sm btn-secondary dropdown-toggle dropdown-toggle-split" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+					<span class="sr-only">Toggle Dropdown</span>
+				</button>
+				<div class="dropdown-menu">
+					<a href='{unprinted_url}'>Print only {self.unprinted_label_count} unprinted labels</a>
+				</div>"""
+			return html.format_html(result)
 		return ""
 
 	@property
@@ -1246,7 +1262,7 @@ class Lot(models.Model):
 		('RANDOM', 'This picture is from the internet'),
 	)
 	lot_number = models.AutoField(primary_key=True)
-	custom_lot_number = models.CharField(max_length=9, blank=True, null=True)
+	custom_lot_number = models.CharField(max_length=9, blank=True, null=True, verbose_name="Lot number")
 	custom_lot_number.help_text = "You can override the default lot number with this"
 	lot_name = models.CharField(max_length=40)
 	slug = AutoSlugField(populate_from='lot_name', unique=False)
@@ -1350,6 +1366,7 @@ class Lot(models.Model):
 	added_by.help_text = "User who added this lot -- used for pre-registration discounts"
 	category_automatically_added = models.BooleanField(default=False)
 	category_checked = models.BooleanField(default=False)
+	label_printed = models.BooleanField(default=False)
 
 	def save(self, *args, **kwargs):
 		"""
@@ -2171,6 +2188,7 @@ class Lot(models.Model):
 				return f"{base_domain}.{extension}"
 		return ""
 
+	@property
 	def video_link(self):
 		if self.reference_link:
 			pattern = r'(?:https?://)?(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/)([\w-]{11})'
@@ -2686,6 +2704,7 @@ class UserData(models.Model):
 	username_is_email_warning_sent.help_text = "Warning email has been sent because this user made their username an email"
 	send_reminder_emails_about_joining_auctions = models.BooleanField(default=True, blank=True)
 	send_reminder_emails_about_joining_auctions.help_text = "Get an annoying reminder email when you view an auction but don't join it"
+	email_me_about_new_chat_replies = models.BooleanField(default=True, blank=True)
 
 	# breederboard info
 	rank_unique_species = models.PositiveIntegerField(null=True, blank=True)
@@ -3072,6 +3091,23 @@ class SearchHistory(models.Model):
 	search = models.CharField(max_length=600)
 	createdon = models.DateTimeField(auto_now_add=True)
 	auction = models.ForeignKey(Auction, null=True, blank=True, on_delete=models.SET_NULL)
+
+# for #146
+class ChatSubscription(models.Model):
+	"""Get notifications about new chat messages on lots"""
+	user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+	createdon = models.DateTimeField(auto_now_add=True)
+	lot = models.ForeignKey(Lot, on_delete=models.CASCADE)
+	last_notificaiton_sent = models.DateTimeField(blank=True, null=True)
+	last_seen = models.DateTimeField(blank=True, null=True)
+	unsubscribed = models.BooleanField(default=False)
+
+	def save(self, *args, **kwargs):
+		if not self.last_notificaiton_sent:
+			self.last_notificaiton_sent = timezone.now()
+		if not self.last_seen:
+			self.last_seen = timezone.now()
+		super().save(*args, **kwargs)
 
 @receiver(pre_save, sender=Auction)
 def on_save_auction(sender, instance, **kwargs):

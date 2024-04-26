@@ -2546,7 +2546,7 @@ class LotAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['tooltip'] = ""
-        context['modal_title'] = f"Edit lot <a href='{self.lot.lot_link}?src=admin'>{self.lot.lot_number_display}</a>"
+        context['modal_title'] = f"Edit lot {self.lot.lot_number_display}"
         return context
         
     def post(self, request, *args, **kwargs):
@@ -3452,11 +3452,7 @@ class LotLabelView(View, AuctionPermissionsMixin):
     filename = "" # this will be automatically generated in dispatch
 
     def get_queryset(self):
-        """A set of rules to determine what we print"""
-        lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller=self.tos).exclude(banned=True)
-        if self.auction.is_online:
-            lots = lots.filter(auctiontos_winner__isnull=False, winning_price__isnull=False)
-        return lots
+        return self.tos.print_labels_qs
 
     def dispatch(self, request, *args, **kwargs):
         # check to make sure the user has permission to view this invoice
@@ -3617,6 +3613,8 @@ class LotLabelView(View, AuctionPermissionsMixin):
                     labels_row += [[Paragraph('', style), Paragraph('', style), Paragraph('', style)]]*((num_cols*3) - len(labels_row))
                 table_data.append(labels_row)
                 labels_row = []
+            label.label_printed = True
+            label.save()
         col_widths = []
         for i in range(num_cols):
             col_widths += [qr_code_width,text_area_width,margin_right_width]
@@ -3636,6 +3634,11 @@ class LotLabelView(View, AuctionPermissionsMixin):
         except:
             messages.error(request, "Unable to print labels, this is likely caused by an invalid custom setting here")
             return redirect(reverse('printing'))
+
+class UnprintedLotLabelsView(LotLabelView):
+    """Print lot labels, but only ones that haven't already been printed"""
+    def get_queryset(self):
+        return self.tos.unprinted_labels_qs
 
 class InvoiceLabelView(InvoiceView):
     """Allows printing of labels"""

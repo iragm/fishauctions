@@ -10,27 +10,32 @@ class AuctionTOSHTMxTable(tables.Table):
     print_invoice_link = tables.Column(accessor='print_invoice_link_html', verbose_name="Lot labels", orderable=False)
 
     def render_name(self, value, record):
+        # as a button, looks awful
+        #result = f"<span class='btn btn-secondary btn-sm' style='cursor:pointer;' hx-get='/api/auctiontos/{record.pk}' hx-target='#modals-here' hx-trigger='click'>{value}</span>"
+        # as a link, looks better
+        result = f"<a href='' hx-noget hx-get='/api/auctiontos/{record.pk}' hx-target='#modals-here' hx-trigger='click'>{value}</a>"
         if record.is_club_member:
-            return mark_safe(f'{value} <span class="badge bg-info">Member</span>')
-        return f"{value}"
+            return mark_safe(f'{result} <span class="badge bg-info">Member</span>')
+        return mark_safe(result)
 
     def render_email(self, value, record):
-        email_string = f'<a href="mailto:{value}">{value}</a>'
+        #email_string = f'<a href="mailto:{value}">{value}</a>'
+        email_string = value
         if record.user:
             email_string += "✅"
-        return mark_safe(email_string)
+        return email_string
 
     class Meta:
         model = AuctionTOS
         template_name = "tables/bootstrap_htmx.html"
         fields = ('id', 'name', 'email', 'print_invoice_link', 'add_lot_link','invoice_link')
-        row_attrs = {
-            'style':'cursor:pointer;',
-            'hx-get': lambda record: "/api/auctiontos/" + str(record.pk),
-            'hx-target':"#modals-here",
-	        'hx-trigger':"click",
-            #'_':"on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"
-        }
+        # row_attrs = {
+        #     'style':'cursor:pointer;',
+        #     'hx-get': lambda record: "/api/auctiontos/" + str(record.pk),
+        #     'hx-target':"#modals-here",
+	    #     'hx-trigger':"click",
+        #     #'_':"on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"
+        # }
 
 
 class LotHTMxTable(tables.Table):
@@ -38,6 +43,10 @@ class LotHTMxTable(tables.Table):
     winner = tables.Column(accessor='auctiontos_winner', verbose_name="Winner")
     winning_price = tables.Column(accessor='winning_price', verbose_name="Price")
     lot_number = tables.Column(accessor='lot_number_display', verbose_name="Lot number", orderable=False)
+
+    def render_lot_name(self, value, record):
+        result = f"<a href='' hx-noget hx-get='/api/lot/{record.pk}' hx-target='#modals-here' hx-trigger='click'>{value}</a> (<a href='{record.lot_link}?src=admin'>View</a>)"
+        return mark_safe(result)
 
     class Meta:
         model = Lot
@@ -49,14 +58,14 @@ class LotHTMxTable(tables.Table):
             'winner',
             'winning_price',
             )
-        row_attrs = {
-            'class': lambda record: str(record.table_class),
-            'style':'cursor:pointer;',
-            'hx-get': lambda record: "/api/lot/" + str(record.pk),
-            'hx-target':"#modals-here",
-	        'hx-trigger':"click",
-            '_':"on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"
-        }
+        # row_attrs = {
+        #     'class': lambda record: str(record.table_class),
+        #     'style':'cursor:pointer;',
+        #     'hx-get': lambda record: "/api/lot/" + str(record.pk),
+        #     'hx-target':"#modals-here",
+	    #     'hx-trigger':"click",
+        #     '_':"on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"
+        # }
 
 class LotHTMxTableForUsers(tables.Table):
     hide_string = "d-md-table-cell d-none"
