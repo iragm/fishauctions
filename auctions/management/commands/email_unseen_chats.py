@@ -17,21 +17,22 @@ class Command(BaseCommand):
     help = 'Send emails to lot creators about activity on their lots'
 
     def handle(self, *args, **options):
-        users = User.objects.filter(userdata__email_me_when_people_comment_on_my_lots=True, lot__lothistory__seen=False, lot__lothistory__changed_price=False, lot__lothistory__notification_sent=False).distinct()
         current_site = Site.objects.get_current()
+        users = User.objects.filter(Q(userdata__email_me_when_people_comment_on_my_lots=True)|Q(userdata__email_me_about_new_chat_replies=True))
         for user in users:
-            lots = Lot.objects.exclude(is_deleted=True).filter(user=user, lothistory__seen=False, lothistory__changed_price=False).annotate(
-                owner_chats=Count('lothistory', filter=Q(lothistory__seen=False, lothistory__changed_price=False, lothistory__notification_sent=False))
-            )
-            if lots:
+            if (
+                user.userdata.email_me_when_people_comment_on_my_lots and user.userdata.my_lot_subscriptions_count
+            ) or (
+                user.userdata.email_me_about_new_chat_replies and user.userdata.other_lot_subscriptions_count
+            ):
                 mail.send(
                     user.email,
                     template='unread_chat_messages',
                     context={
                         'name': user.first_name,
                         'domain': current_site.domain,
-                        'lots': lots,
+                        'data': user.userdata,
                         'unsubscribe': user.userdata.unsubscribe_link
                         },
                 )
-        LotHistory.objects.filter(notification_sent = False).update(notification_sent=True)
+                user.userdata.mark_all_subscriptions_notified

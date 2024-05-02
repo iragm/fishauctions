@@ -387,7 +387,7 @@ class LotFilter(django_filters.FilterSet):
     @property
     def qs(self):
         primary_queryset=super().qs
-        primary_queryset = primary_queryset.exclude(is_deleted=True)
+        primary_queryset = primary_queryset.filter(is_deleted=False)
         # it's faster without this
         # with these, it's 320 queries in 5500 ms, without them it's 400 queries in 1500 ms
         # primary_queryset = primary_queryset.select_related('species_category', 'user', 'user__userdata', 'auction', 'winner')
@@ -407,7 +407,6 @@ class LotFilter(django_filters.FilterSet):
             primary_queryset = primary_queryset.filter(active=True)
         if self.status == "unsold":
             primary_queryset = primary_queryset.filter(active=True, winner__isnull=True)
-
         # if not self.regardingAuction and not self.regardingUser:
         #     # no auction or user selected in the filter
         #     primary_queryset = primary_queryset.exclude(auction__promote_this_auction=False)
@@ -423,11 +422,11 @@ class LotFilter(django_filters.FilterSet):
         if self.user.is_authenticated:
             # messages for owner of lot
             primary_queryset = primary_queryset.annotate(
-                owner_chats=Count('lothistory', filter=Q(lothistory__seen=False, lothistory__changed_price=False), distinct=True)
+                owner_chats=Count('lothistory', filter=Q(lothistory__seen=False, lothistory__changed_price=False, lothistory__removed=False), distinct=True)
             )
         # messages for other user
         primary_queryset = primary_queryset.annotate(
-            all_chats=Count('lothistory', filter=Q(lothistory__changed_price=False), distinct=True)
+            all_chats=Count('lothistory', filter=Q(lothistory__changed_price=False, lothistory__removed=False), distinct=True)
         )
         if self.order == 'popularity' or self.order == '-popularity':
             primary_queryset = primary_queryset.annotate(
@@ -504,10 +503,10 @@ class LotFilter(django_filters.FilterSet):
                     # this shows any auction you've joined + any public auction.  Perhaps this should be a preference?
                     # auction_qs = Q(auction__pk__in=self.possibleAuctions)|Q(auction__promote_this_auction=True)
                     # this shows any auction you've joined.  See https://github.com/iragm/fishauctions/issues/66
-                    auction_qs = Q(auction__pk__in=self.possibleAuctions)
+                    auction_qs = Q(auction__pk__in=self.possibleAuctions)|Q(auction__isnull=True)
                 else:
                     # anonymous users can see lots from all promoted auctions
-                    auction_qs = Q(auction__promote_this_auction=True)
+                    auction_qs = Q(auction__promote_this_auction=True)|Q(auction__isnull=True)
                 #auction_qs = Q(auction__auctiontos__user=self.user, auction__promote_this_auction=False)|Q(auction__promote_this_auction=True)
         # putting them all together:
         primary_queryset = primary_queryset.filter(Q(local_qs)|Q(shipping_qs)|Q(auction_qs))

@@ -18,7 +18,11 @@ $.ajax({
 </script>
 {% endblock %}
 {% block content %}
-    <span class="">Looking to sell stuff?  Use this page to quickly create and manage your lots.</span><br><br><small>It's free to use this site to sell fish with or without an auction.  If you sell fish without putting them in a club auction, promotional emails advertising your lots will go out every Wednesday.</small><br>
+    <span class="">Looking to sell stuff?  Use this page to quickly create and manage your lots.</span><br><br><small>It's free to use this site to sell fish with or without an auction.  If you sell fish without putting them in a club auction, promotional emails advertising your lots will go out every Wednesday.</small><br><br>
+    {% if not userdata.email_me_when_people_comment_on_my_lots %}You've turned off email notifications when people comment on your lots.  You should probably turn that back on in <a href="{% url 'preferences' %}">preferences</a>.{% endif %}
+    {% if not userdata.email_visible %}Your email is currently hidden.  You may want to make it visible in <a href="{% url 'preferences' %}">preferences</a>.{% endif %}
+    {% if not userdata.email_me_when_people_comment_on_my_lots and not userdata.email_visible %}With both options turned off, <span class='text-warning'>people have no way to contact you on this site</span> and your sales will probably suffer.{% endif %}
+    
     <small><span class='text-warning' id="last-auction-special"></span></small><br>
     <a href="{% url 'new_lot' %}" class="btn btn-sm mr-2 mt-2 mb-2 btn-info">Create new lot</a>
     {% if userdata.last_auction_used %}

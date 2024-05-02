@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Messages{% endblock %}
+{% load static %}
+{% block extra_js %}
+<script type='text/javascript'>pageView();</script>
+<script type="text/javascript">
+var $ = window.jQuery;
+document.querySelectorAll('.chat_subscribe_checkbox').forEach(function(element) {
+  element.addEventListener('change', function(event) {
+  chat_subscribe(event.target, event.target.checked);
+  })});
+        function chat_subscribe(checkbox, val) {
+          $.ajax({
+                type: "POST",
+                beforeSend: function (request) {
+                    request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+                },
+                url: "{% url 'lot_chat_subscribe' %}",
+                data: {'lot':checkbox.id.replace('chat_subscribe_checkbox__', ''), 'unsubscribed': val},
+                success : function(result) {}});
+        }
+
+</script>
+{% endblock %}
+{% block content %}
+<h4>Chat messages</h4>
+<small>Use this page to find new messages posted to your lots, as well as any lots on which you've posted messages.<br>
+  There are <a href="{% url 'preferences' %}">preferences</a> to send email notifications for <b>your lots</b> (currently turned {% if data.email_me_when_people_comment_on_my_lots %}on{% else %}off{% endif %} for your account), as well as for <b>lots you've commented on</b> (notifications are 
+  {% if data.email_me_about_new_chat_replies %}on{% else %}off{% endif %}).  If these settings are off, you won't get email notifications even if a lot is checked on this page.
+</small>
+<br><br>
+<div>
+  <table class="table">
+    <thead>
+        <tr>
+            <th>Notifications for new messages</th>
+            <th>Lot number</th>
+            <th>Lot</th>
+            <th>Unread messages</th>
+        </tr>
+    </thead>
+    <tbody>
+ {% for sub in subscriptions %}
+            <tr>
+                <td>
+<div class="custom-control custom-checkbox">
+  <input type="checkbox" class="custom-control custom-control-input chat_subscribe_checkbox" id="chat_subscribe_checkbox__{{ sub.lot.pk }}" {% if not sub.unsubscribed %}checked=""{% endif %}>
+  <label class="custom-control-label" for="chat_subscribe_checkbox__{{ sub.lot.pk }}">Email notifications</label>
+                </td>
+                <td>{{ sub.lot.lot_number_display }}
+                </td>
+                <td>
+                  <a href='{{ sub.lot.lot_link }}?src=chat'>{{sub.lot.lot_name}}</a> {% if sub.lot.user == request.user %}<span class="badge badge-pill text-dark badge-info">Your lot</span>{% endif %}
+                </td>
+                <td>
+                  {% if sub.new_message_count %}<span class="badge badge-pill badge-warning text-dark">{{ sub.new_message_count }}</span>{% endif %}
+                </td>
+            </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+  <br>
+</div>
+
+</div>
+
+{% endblock %}
+
+

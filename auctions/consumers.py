@@ -335,6 +335,32 @@ class LotConsumer(WebsocketConsumer):
                     )
                 except Exception as e:
                     print(e)
+            try:
+                owner_chat_notifications = False
+                if self.lot.user:
+                    subscription, created = ChatSubscription.objects.get_or_create(
+                        user = self.lot.user,
+                        lot = self.lot,
+                        defaults = {
+                            'unsubscribed': not self.lot.user.userdata.email_me_when_people_comment_on_my_lots,
+                        }
+                    )
+                    if not subscription.unsubscribed:
+                        owner_chat_notifications = True
+                if not owner_chat_notifications:
+                        async_to_sync(self.channel_layer.group_send)(
+                            self.user_room_name,
+                            {
+                                'type': 'chat_message',
+                                'pk': -1,
+                                'info': "CHAT",
+                                'message': 'The creator of this lot has turned off email notifications when chat messages are posted.  You may not get a reply.',
+                                'username': 'System'
+                            }
+                        )
+            except Exception as e:
+                print(e)
+
         except Exception as e:
             print(e)
     def disconnect(self, close_code):
@@ -343,6 +369,7 @@ class LotConsumer(WebsocketConsumer):
             self.room_group_name,
             self.channel_name
         )
+        # bit redundant, but 'seen' is used for lot notifications for the owner of a given lot
         user_pk = None        
         if self.lot.user:
             user_pk = self.lot.user.pk
@@ -351,6 +378,13 @@ class LotConsumer(WebsocketConsumer):
         if user_pk and self.user.pk == user_pk:
             #print("lot owner is leaving the chat, marking all chats as seen")
             LotHistory.objects.filter(lot=self.lot.pk, seen=False).update(seen=True)
+        # this is for everyone else
+        if self.user.pk:
+            existing_subscription = ChatSubscription.objects.filter(lot=self.lot, user=self.user.pk).first()
+            if existing_subscription:
+                print(f'Marking all ChatSubscription seen last time now for user {self.user.pk}')
+                existing_subscription.last_seen = timezone.now()
+                existing_subscription.save()
 
     # Receive message from WebSocket
     def receive(self, text_data):

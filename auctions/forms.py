@@ -3,7 +3,7 @@ from crispy_forms.helper import FormHelper
 from crispy_forms.layout import Layout, Submit, HTML
 from crispy_forms.bootstrap import Div, Field, PrependedAppendedText
 from django import forms
-from .models import Lot, Bid, Auction, User, UserData, Location, Club, PickupLocation, AuctionTOS, Invoice, Category, LotImage, UserBan, UserLabelPrefs
+from .models import Lot, Bid, Auction, User, UserData, Location, Club, PickupLocation, AuctionTOS, Invoice, Category, LotImage, UserBan, UserLabelPrefs, ChatSubscription
 from django.forms import ModelForm, HiddenInput, RadioSelect, ModelChoiceField
 # from bootstrap_datepicker_plus import DateTimePickerInput
 from bootstrap_datepicker_plus.widgets import DateTimePickerInput # https://github.com/monim67/django-bootstrap-datepicker-plus/issues/66
@@ -1546,8 +1546,9 @@ class UserLabelPrefsForm(forms.ModelForm):
 class ChangeUserPreferencesForm(forms.ModelForm):
     class Meta:
         model = UserData
-        fields = ('email_visible', 'use_dark_theme', 'show_ads', 'email_me_about_new_auctions','email_me_about_new_auctions_distance',\
-            'email_me_about_new_local_lots','local_distance', 'email_me_about_new_lots_ship_to_location', 'email_me_when_people_comment_on_my_lots',\
+        fields = ('email_visible', 'use_dark_theme', 'show_ads', 'email_me_about_new_auctions','email_me_about_new_auctions_distance',
+            'email_me_about_new_local_lots','local_distance', 'email_me_about_new_lots_ship_to_location', 'email_me_when_people_comment_on_my_lots',
+            'email_me_about_new_chat_replies',
             'email_me_about_new_in_person_auctions', 'email_me_about_new_in_person_auctions_distance', 'send_reminder_emails_about_joining_auctions', 'username_visible',
             )
         # exclude = (
@@ -1559,13 +1560,16 @@ class ChangeUserPreferencesForm(forms.ModelForm):
         #     'number_total_sold','rank_total_sold','total_volume',\
         #     'rank_volume','seller_percentile','buyer_percentile','volume_percentile','club',
         # )
-    def __init__(self, *args, **kwargs):
+    def __init__(self, user, *args, **kwargs):
+        self.user = user
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = 'post'
         self.helper.form_id = 'user-form'
         self.helper.form_class = 'form'
         self.helper.form_tag = True
+        self.subscriptions = ChatSubscription.objects.exclude(lot__user=self.user).filter(user=self.user, unsubscribed=False).count()
+        self.fields['email_me_about_new_chat_replies'].help_text = f"Only for lots that don't belong to you.  Unchecking this will turn off notifications for {self.subscriptions} lot(s) you've already commented on."
         self.helper.layout = Layout(
             Div(
                 Div('email_visible',css_class='col-md-4',),
@@ -1577,8 +1581,9 @@ class ChangeUserPreferencesForm(forms.ModelForm):
             ),
             HTML("<h4>Notifications</h4><br>"),
             Div(
-                Div('email_me_when_people_comment_on_my_lots',css_class='col-md-6',),
-                Div('send_reminder_emails_about_joining_auctions',css_class='col-md-6',),
+                Div('email_me_when_people_comment_on_my_lots',css_class='col-md-4',),
+                Div('email_me_about_new_chat_replies',css_class='col-md-4',),
+                Div('send_reminder_emails_about_joining_auctions',css_class='col-md-4',),
                 css_class='row',
             ),
             HTML("You'll get one email per week that contains an update on everything you've checked below<span class='text-muted'><small><br>And you'll only get that if you haven't visited the site in the last 6 days.</small></span><br><br>"),

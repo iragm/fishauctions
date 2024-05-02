@@ -12,7 +12,7 @@ from markdownfield.models import MarkdownField, RenderedMarkdownField
 from markdownfield.validators import VALIDATOR_STANDARD
 from easy_thumbnails.fields import ThumbnailerImageField
 from location_field.models.plain import PlainLocationField
-from django.db.models.signals import pre_save
+from django.db.models.signals import pre_save, post_save
 from django.dispatch import receiver
 import uuid
 from random import randint
@@ -1404,6 +1404,15 @@ class Lot(models.Model):
 		if not self.reference_link: 
 			search = self.lot_name.replace(" ","%20")
 			self.reference_link = f"https://www.google.com/search?q={search}&tbm=isch"
+		# chat history subscription for the owner
+		if self.user:
+			subscription, created = ChatSubscription.objects.get_or_create(
+					user = self.user,
+					lot = self,
+					defaults={
+						'unsubscribed': not self.user.userdata.email_me_when_people_comment_on_my_lots,
+					}
+			)
 		super().save(*args, **kwargs) 
 
 	def __str__(self):
@@ -2711,6 +2720,7 @@ class UserData(models.Model):
 	send_reminder_emails_about_joining_auctions = models.BooleanField(default=True, blank=True)
 	send_reminder_emails_about_joining_auctions.help_text = "Get an annoying reminder email when you view an auction but don't join it"
 	email_me_about_new_chat_replies = models.BooleanField(default=True, blank=True)
+	email_me_about_new_chat_replies.help_text = "When you comment on lots you don't own, send any new messages about that lot to your email"
 
 	# breederboard info
 	rank_unique_species = models.PositiveIntegerField(null=True, blank=True)
@@ -2825,7 +2835,7 @@ class UserData(models.Model):
 	@property
 	def dedication(self):
 		"""Ratio of bids to won lots"""
-		if self.lots_bought:
+		if self.lots_bought and self.total_bids:
 			return self.lots_bought / self.total_bids
 		else:
 			return 0
@@ -2880,6 +2890,77 @@ class UserData(models.Model):
 		if self.auctions_created + self.auctions_admined > 2:
 			return True
 		return False
+
+	@property
+	def subscriptions(self):
+		return ChatSubscription.objects.filter(user=self.user, lot__is_deleted=False, lot__banned=False, unsubscribed=False).order_by('-createdon')
+
+	@property
+	def unviewed_subscriptions(self):
+		"""For templates: A list of all subscriptions annotated with a `new_message_count` property"""
+		return self.subscriptions.annotate(
+			new_message_count=Count(
+				'lot__lothistory',
+				filter=Q(
+					lot__lothistory__removed=False,
+					lot__lothistory__changed_price=False,
+					lot__lothistory__timestamp__gt=F('last_seen')
+				)
+			)
+		)
+	
+	@property
+	def unnotified_subscriptions(self):
+		return self.unviewed_subscriptions.annotate(
+			unnotified_message_count=Count(
+				'lot__lothistory',
+				filter=Q(
+					lot__lothistory__removed=False,
+					lot__lothistory__changed_price=False,
+					lot__lothistory__timestamp__gt=F('last_notification_sent')
+				)
+			)
+		).filter(unnotified_message_count__gt=0)
+	
+	@property
+	def unnotified_subscriptions_count(self):
+		return self.unnotified_subscriptions.count()
+	
+	@property
+	def my_lot_subscriptions(self):
+		return self.unnotified_subscriptions.filter(lot__user=self.user)
+	
+	@property
+	def my_lot_subscriptions_count(self):	
+		return self.my_lot_subscriptions.count()
+	
+	@property
+	def other_lot_subscriptions(self):
+		return self.unnotified_subscriptions.exclude(lot__user=self.user)		
+
+	@property
+	def other_lot_subscriptions_count(self):	
+		return self.other_lot_subscriptions.count()
+
+	@property
+	def mark_all_subscriptions_notified(self):
+		for subscription in self.unnotified_subscriptions:
+			subscription.last_notification_sent = timezone.now()
+			subscription.save()
+
+	@property
+	def mark_all_subscriptions_seen(self):
+		for subscription in self.unviewed_subscriptions:
+			subscription.last_seen = timezone.now()
+			subscription.save()
+
+	def save(self, *args, **kwargs):
+		if not self.email_me_about_new_chat_replies:
+			subscriptions = ChatSubscription.objects.exclude(lot__user=self.user).filter(user=self.user, unsubscribed=False)
+			for subscription in subscriptions:
+				subscription.unsubscribed = True
+				subscription.save()
+		super().save(*args, **kwargs)
 
 class UserInterestCategory(models.Model):
 	"""
@@ -3098,22 +3179,24 @@ class SearchHistory(models.Model):
 	createdon = models.DateTimeField(auto_now_add=True)
 	auction = models.ForeignKey(Auction, null=True, blank=True, on_delete=models.SET_NULL)
 
-# for #146
 class ChatSubscription(models.Model):
 	"""Get notifications about new chat messages on lots"""
 	user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
 	createdon = models.DateTimeField(auto_now_add=True)
 	lot = models.ForeignKey(Lot, on_delete=models.CASCADE)
-	last_notificaiton_sent = models.DateTimeField(blank=True, null=True)
+	last_notification_sent = models.DateTimeField(blank=True, null=True)
 	last_seen = models.DateTimeField(blank=True, null=True)
 	unsubscribed = models.BooleanField(default=False)
 
 	def save(self, *args, **kwargs):
-		if not self.last_notificaiton_sent:
-			self.last_notificaiton_sent = timezone.now()
+		if not self.last_notification_sent:
+			self.last_notification_sent = timezone.now()
 		if not self.last_seen:
 			self.last_seen = timezone.now()
 		super().save(*args, **kwargs)
+
+	def __str__(self):
+		return f"{self.user} on lot {self.lot} Unsubscribed: ({self.unsubscribed})"
 
 @receiver(pre_save, sender=Auction)
 def on_save_auction(sender, instance, **kwargs):
@@ -3253,3 +3336,8 @@ def user_logged_in_callback(sender, user, request, **kwargs):
 	for auctiontos in auctiontoss:
 		auctiontos.user = user
 		auctiontos.save()
+
+@receiver(post_save, sender=User)
+def create_user_userdata(sender, instance, created, **kwargs):
+    if created:
+        UserData.objects.create(user=instance)

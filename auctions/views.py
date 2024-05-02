@@ -3,6 +3,7 @@ from datetime import datetime
 from random import randint, uniform, sample
 from itertools import chain
 from typing import Any, Dict
+from django.db.models.query import QuerySet
 from django.shortcuts import render,redirect, get_object_or_404
 from django.http import HttpResponse, JsonResponse, HttpResponseRedirect, Http404, FileResponse
 from django.utils import timezone
@@ -457,6 +458,16 @@ class MyLots(SingleTableMixin, FilterView):
                 defaults={},
             )
         return context
+    
+    def get(self, *args, **kwargs):
+        if not self.request.htmx:
+            if self.request.user.userdata.unnotified_subscriptions_count:
+                msg =  f"You've got { self.request.user.userdata.unnotified_subscriptions_count } lot"
+                if self.request.user.userdata.unnotified_subscriptions_count > 1:
+                    msg += "s"
+                msg += f""" with new messages.  <a href="{reverse('messages')}">Go to your messages page to see them</a>"""
+                messages.info(self.request, msg)
+        return super().get(*args, **kwargs)
 
         
 class MyWatched(LotListView):
@@ -1901,10 +1912,9 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
                 if print_url:
                     redirect_url += '?' + print_url
             else:
-                # may want to make this go to the selling dashboard instead
-                redirect_url = reverse("user_lots") + f"?user={self.request.user.username}"
+                redirect_url = reverse("selling")
                 if print_url:
-                    redirect_url += '&' + print_url
+                    redirect_url += '?' + print_url
             return redirect(redirect_url)
             
         context = self.get_context_data(**kwargs)
@@ -2104,9 +2114,25 @@ class ViewLot(DetailView):
         # this should be visible only to people running the auction or the seller
         if lot.auction:
             if context['is_auction_admin'] or self.request.user == lot.user:
-                if lot.ended:
+                if lot.sold:
                     context['showExchangeInfo'] = True
         context['show_image_add_button'] = lot.image_permission_check(self.request.user)
+        # chat subscription stuff
+        if self.request.user.is_authenticated:
+            context['show_chat_subscriptions_checkbox'] = True
+            context['autocheck_chat_subscriptions'] = 'false'
+            existing_subscription = ChatSubscription.objects.filter(lot=lot, user=self.request.user).first()
+            if lot.user and lot.user == self.request.user and not self.request.user.userdata.email_me_when_people_comment_on_my_lots:
+                context['show_chat_subscriptions_checkbox'] = False
+            if lot.user != self.request.user and not self.request.user.userdata.email_me_about_new_chat_replies:
+                context['show_chat_subscriptions_checkbox'] = False
+            if self.request.user.userdata.email_me_about_new_chat_replies and not existing_subscription:
+                context['autocheck_chat_subscriptions'] = 'true'
+            if existing_subscription:
+                context['chat_subscriptions_is_checked'] = not existing_subscription.unsubscribed
+                context['autocheck_chat_subscriptions'] = 'false'
+            else:
+                context['chat_subscriptions_is_checked'] = False
         return context
 
 class ViewLotSimple(ViewLot):
@@ -2421,7 +2447,8 @@ class LotUpdate(LotValidation, UpdateView):
         return super().dispatch(request, *args, **kwargs)
     
     def get_success_url(self):
-        return f"/lots/{self.kwargs['pk']}"
+        return reverse("selling")
+        #return f"/lots/{self.kwargs['pk']}"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -3814,6 +3841,11 @@ class UserPreferencesUpdate(UpdateView, SuccessMessageMixin):
         context['active_tab'] = 'preferences'
         return context
 
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs['user'] = self.request.user
+        return kwargs
+
 class UserLocationUpdate(UpdateView, SuccessMessageMixin):
     template_name = 'user_location.html'
     model = UserData
@@ -4116,19 +4148,20 @@ class UnsubscribeView(TemplateView):
     template_name = "unsubscribe.html"
 
     def get_context_data(self, **kwargs):
-        try:
-            userData = UserData.objects.get(unsubscribe_link=kwargs['slug'])
+        userData = UserData.objects.filter(unsubscribe_link=kwargs['slug']).first()
+        if not userData:
+            raise Http404
+        else:
             userData.email_me_about_new_auctions = False
             userData.email_me_about_new_local_lots = False
             userData.email_me_about_new_lots_ship_to_location = False
             userData.email_me_when_people_comment_on_my_lots = False
+            userData.email_me_about_new_chat_replies = False
             userData.send_reminder_emails_about_joining_auctions = False
             userData.email_me_about_new_in_person_auctions = False
             userData.has_unsubscribed = True
             userData.last_activity = timezone.now()
             userData.save()
-        except:
-            raise Http404
         context = super().get_context_data(**kwargs)
         return context
 
@@ -4530,9 +4563,6 @@ class AuctionStatsImagesJSONView(AuctionStatsBarChartJSONView):
         lots_with_no_images = lots.filter(num_images=0)
         lots_with_one_image = lots.filter(num_images=1)
         lots_with_one_or_more_images = lots.filter(num_images__gte=1)
-        lots_with_no_images_average = lots_with_no_images
-        lots_with_one_image_average = lots_with_one_image.aggregate(avg_value=Avg('winning_price'))['avg_value']
-        lots_with_one_or_more_images_average = lots_with_one_or_more_images.aggregate(avg_value=Avg('winning_price'))['avg_value']
         medians = []
         averages = []
         counts = []
@@ -4601,15 +4631,6 @@ class AuctionStatsLocationVolumeJSONView(AuctionStatsBarChartJSONView):
 
 class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
     def get_labels(self):
-            # An account / all
-            # Search / all
-            # Watch / all
-            # Proxy bidding / all bidders
-            # Copy to new lot / all sellers
-            # Chat / all
-            # Buy now / all bidders
-            # Viewed their Invoice / all who bought or sold
-            # Leave feedback / all who bought or sold
         return ['An account', 'Search', "Watch", "Proxy bidding", "Chat", "Buy now", "View invoice", "Leave feedback for sellers"]
     
     def get_providers(self):
@@ -4625,7 +4646,7 @@ class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
         watch_percent = int(watches/auctiontos_with_account.count() * 100)
         has_used_proxy_bidding = UserData.objects.filter(has_used_proxy_bidding=True, user__in=auctiontos_with_account.values_list('user')).count()
         has_used_proxy_bidding_percent = int(has_used_proxy_bidding/auctiontos_with_account.count() * 100)
-        chat = LotHistory.objects.filter(lot__auction=self.auction, user__in=auctiontos_with_account.values_list('user')).values('user').distinct().count()
+        chat = LotHistory.objects.filter(changed_price=False, lot__auction=self.auction, user__in=auctiontos_with_account.values_list('user')).values('user').distinct().count()
         chat_percent = int(chat/auctiontos_with_account.count() * 100)
         if self.auction.is_online:
             lot_with_buy_now = Lot.objects.filter(auction=self.auction, buy_now_used=True).values('auctiontos_winner').distinct().count()
@@ -4734,3 +4755,38 @@ class AuctionFinder(View, LoginRequiredMixin):
                       'buy_now':self.auction.buy_now,
                       }
         return JsonResponse(result)
+
+class LotChatSubscribe(View, LoginRequiredMixin):
+    """Called when a user sends a chat message about a lot to create a ChatSubscription model"""
+    def get(self, request, *args, **kwargs):
+        return redirect('/')
+
+    def post(self, request, *args, **kwargs):
+        try:
+            lot = Lot.objects.filter(pk=request.POST['lot']).first()
+        except ValueError:
+            lot = None
+        if not lot:
+            raise Http404 (f"No lot found with key {lot}")
+        else:
+            subscription, created = ChatSubscription.objects.get_or_create(
+                user = request.user,
+                lot = lot,
+            )
+            unsubscribed = request.POST['unsubscribed']
+            if unsubscribed == "true": # classic javascript, again
+                subscription.unsubscribed = True
+            else:
+                subscription.unsubscribed = False
+            subscription.save()
+        return JsonResponse({'unsubscribed': subscription.unsubscribed})
+    
+class ChatSubscriptions(LoginRequiredMixin, TemplateView):
+    """Show chat messages on your lots and other lots"""
+    template_name = 'chat_subscriptions.html'
+    
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['subscriptions'] = self.request.user.userdata.unviewed_subscriptions.order_by('-new_message_count', '-lot__date_posted')
+        context['data'] = self.request.user.userdata
+        return context

@@ -278,6 +278,7 @@ window.onload = function() {
                       <a class="dropdown-item" href="{% url 'preferences' %}">Preferences</a>
                       <a class="dropdown-item" href="{% url 'printing' %}">Label printing</a>
                       <a class="dropdown-item" href="{% url 'ignore_categories' %}">Ignore categories</a>
+                      <a class="dropdown-item" href="{% url 'messages' %}">Messages</a>
                       <form method="post" action="{% url 'account_logout' %}">
                         {% csrf_token %}
                         {% if redirect_field_value %}

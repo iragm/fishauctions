@@ -485,7 +485,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
 <!-- Chat -->
 <div class="container-fluid col-md-offset-1 col-xl-4 mt-1 mb-1 mt-xl-5">
     {% if request.user.is_authenticated %} {# chats only shown if you are logged in #}
-    <div class="mt-xl-5 col-md-11 bg-primary rounded pb-1" style="box-shadow: 5px 5px 8px 2px rgba(121, 121, 121, 0.2);"> 
+    <div class="mt-xl-5 col-md-11 bg-secondary rounded pb-1" style="box-shadow: 5px 5px 8px 2px rgba(121, 121, 121, 0.2);"> 
     <br><h4>Chat</h4>
     <div class="panel" id="chat" style='min-height: 100px; max-height: 30vh; {# calc(100vh - 200px) #}
     overflow-y: scroll;'></div>
@@ -496,10 +496,19 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
         <div class="input-group-append">
             <button class='btn-sm btn-info' id="chat_send" >Send</button>
         </div>
-        </div>
+    </div>
+
+    {% if show_chat_subscriptions_checkbox %}
+    <small><div class="custom-control custom-checkbox">
+        <input type="checkbox" class="custom-control-input" id="chat_subscribe_checkbox" {% if chat_subscriptions_is_checked %}checked=""{% endif %}>
+        <label class="custom-control-label" for="chat_subscribe_checkbox">Email me when new chat messages are posted</label>
+      </div></small>
+      {% else %}You've turned off email notifications for replies in your <a href="{% url 'preferences' %}">preferences</a>{% endif %}
     {% endif %}
+
     </span>
     <script>
+        var autocheck_chat_subscriptions = {{ autocheck_chat_subscriptions}};
         {% if lot.sealed_bid %}
         var high_bidder = '';
         var high_bidder_pk = '{{ request.user.pk }}';
@@ -629,7 +638,6 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                 document.querySelector('#chat_send').click();
             }
         };
-
         document.querySelector('#chat_send').onclick = function(e) {
             const messageInputDom = document.querySelector('#chat_input');
             const message = messageInputDom.value;
@@ -639,7 +647,29 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                 }));
             }
             messageInputDom.value = '';
+            {% if show_chat_subscriptions_checkbox %}
+            if (autocheck_chat_subscriptions) {
+                document.querySelector('#chat_subscribe_checkbox').checked = true;
+                chat_subscribe(true);
+            }
+            {% endif %}
         };
+        {% if show_chat_subscriptions_checkbox %}
+        document.querySelector('#chat_subscribe_checkbox').addEventListener('change', function(event) {
+            chat_subscribe(event.target.checked);
+        });
+        function chat_subscribe(val) {
+            autocheck_chat_subscriptions = false;
+            $.ajax({
+                type: "POST",
+                beforeSend: function (request) {
+                    request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+                },
+                url: "{% url 'lot_chat_subscribe' %}",
+                data: {'lot':{{ lot.pk }}, 'unsubscribed': !val},
+                success : function(result) {}});
+        }
+        {% endif %}
         //{% endif %}
     </script>
     </div>
