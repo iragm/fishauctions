@@ -113,7 +113,7 @@ $(document).ready(function() {
                 url: "{% url 'guess_category' %}",
                 data: {'lot_name': this.value},
                 success : function(result) {
-                    if (result['value']) {
+                    if (result['value'] && result['value'] !== 21) {
                         $('#id_species_category').val(result['value']);
                         $('#hint_id_species_category').html("Looks like you're selling " + result['name'] + ".  <span class='text-warning'>If that's not correct, change it here.</span>");
                     }

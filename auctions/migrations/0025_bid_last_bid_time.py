@@ -14,7 +14,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='bid',
             name='last_bid_time',
-            field=models.DateTimeField(auto_now_add=True, default=datetime.timezone.utc),
+            field=models.DateTimeField(auto_now_add=True),
             preserve_default=False,
         ),
     ]

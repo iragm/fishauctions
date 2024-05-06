@@ -1009,9 +1009,6 @@ def invoicePaid(request, pk, **kwargs):
         if invoice.auction:
             if invoice.auction.permission_check(request.user):
                 checksPass = True
-        if invoice.seller:
-            if invoice.seller.pk == request.user.pk:
-                checksPass = True
         if checksPass:
             invoice.status = kwargs['status']
             invoice.save()
@@ -1049,7 +1046,8 @@ def auctionReport(request, slug):
         end = timezone.now().strftime("%Y-%m-%d")
         response['Content-Disposition'] = 'attachment; filename="' + slug + "-report-" + end + '.csv"'
         writer = csv.writer(response)
-        writer.writerow(['Join date', 'Bidder number', 'Username', 'Name', 'Email', 'Phone', 'Address', 'Location', 'Miles to pickup location', 'Club', 'Lots viewed', 'Lots bid', 'Lots submitted', 'Lots won', 'Invoice', 'Total bought', 'Total sold', 'Invoice total due', 'Breeder points', "Number of lots sold outside auction", "Total value of lots sold outside auction", "Seconds spent reading rules", "Other auctions joined", "Users who have banned this user", "Account created on"])
+        writer.writerow(['Join date', 'Bidder number', 'Username', 'Name', 'Email', 'Phone', 'Address', 'Location', 'Miles to pickup location', 'Club', 'Lots viewed', 'Lots bid', 'Lots submitted', 'Lots won', 'Invoice', 'Total bought', 'Total sold', 'Invoice total due', 'Breeder points', "Number of lots sold outside auction", "Total value of lots sold outside auction", "Seconds spent reading rules", "Other auctions joined", "Users who have banned this user", "Account created on",
+                         'Memo', ])
         users = AuctionTOS.objects.filter(auction=auction).select_related('user__userdata').select_related('pickup_location').order_by('createdon')
                 #.annotate(distance_traveled=distance_to(\
                 #'`auctions_userdata`.`latitude`', '`auctions_userdata`.`longitude`', \
@@ -1110,7 +1108,7 @@ def auctionReport(request, slug):
                 data.phone_as_string, address, data.pickup_location, distance,\
                 club, len(lotsViewed), len(lotsBid), len(lotsSumbitted), \
                 len(lotsWon), invoiceStatus, totalSpent, totalPaid, invoiceTotal, len(breederPoints),\
-                numberLotsOutsideAuction, profitOutsideAuction, data.time_spent_reading_rules, previous_auctions, number_of_userbans, account_age])
+                numberLotsOutsideAuction, profitOutsideAuction, data.time_spent_reading_rules, previous_auctions, number_of_userbans, account_age, data.memo])
         return response    
     messages.error(request, "Your account doesn't have permission to view this page")
     return redirect('/')
@@ -1167,7 +1165,7 @@ def auctionInvoicesPaypalCSV(request, slug, chunk):
                     currencyCode = "USD"
                     noteToCustomer = f"https://{current_site.domain}/invoices/{invoice.pk}/"
                     termsAndConditions = ""
-                    memoToSelf = invoice.memo
+                    memoToSelf = invoice.auctiontos_user.memo
                     if itemAmount > 0 and email:
                         writer.writerow([email, firstName, lastName, invoiceNumber, dueDate, reference, itemName, description, itemAmount, shippingAmount, discountAmount,\
                             currencyCode, noteToCustomer, termsAndConditions, memoToSelf])
@@ -2766,6 +2764,7 @@ class AuctionTOSAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
             obj.is_admin = form.cleaned_data['is_admin']
             obj.selling_allowed = form.cleaned_data['selling_allowed']
             obj.is_club_member = form.cleaned_data['is_club_member']
+            obj.memo = form.cleaned_data['memo']
             obj.save()
             return HttpResponse("<script>location.reload();</script>", status=200)
             #return HttpResponse("<script>closeModal();</script>", status=200)
@@ -2878,6 +2877,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 'require_phone_number',
                 'buy_now',
                 'reserve_price',
+                'tax',
                 ]
             for field in fields_to_clone:
                 setattr(auction, field, getattr(original_auction, field))
@@ -2888,6 +2888,8 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
             auction.is_online = is_online
             if not is_online:
                 auction.allow_bidding_on_lots = False
+                auction.buy_now = 'disable'
+                auction.reserve_price = 'disable'
         if not auction.notes:
             auction.notes = "## General information\n\nYou should remove this line and edit this section to suit your auction.  Use the formatting here as an example.\n\n## Prohibited items\n- You cannot sell anything banned by state law.\n\n## Rules\n- All lots must be properly bagged.  No leaking bags!\n- You do not need to be a club member to buy or sell lots."
         if auction.is_online:
@@ -3207,8 +3209,9 @@ class allAuctions(ListView):
             return qs
         if not self.request.user.is_authenticated:
             return qs.filter(standard_filter)
-        return qs.filter(Q(auctiontos__user=self.request.user)|\
-            Q(created_by=self.request.user)|\
+        return qs.filter(Q(auctiontos__user=self.request.user)|
+            Q(auctiontos__email=self.request.user.email)|
+            Q(created_by=self.request.user)|
             standard_filter
             ).distinct()
 
@@ -3297,16 +3300,13 @@ class Invoices(ListView, LoginRequiredMixin):
     
     def get_queryset(self):
         qs = Invoice.objects.filter(
-            Q(user=self.request.user.pk)|
+            Q(auctiontos_user__user=self.request.user)|
             Q(auctiontos_user__email=self.request.user.email)
         ).order_by('-date')
         return qs
 
     def get_context_data(self, **kwargs):
-        #user = User.objects.get(pk=self.request.user.pk)
         context = super().get_context_data(**kwargs)
-        context['seller_invoices'] = Invoice.objects.filter(seller=self.request.user.pk)
-        # context['view'] = 'all'
         return context
 
 # password protected in views.py
@@ -3314,70 +3314,63 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
     """Show a single invoice"""
     template_name = 'invoice.html'
     model = Invoice
-    form_class = InvoiceUpdateForm
+    #form_class = InvoiceUpdateForm
     form_view = 'opened' # expects opened or printed, this field will be set to true when the user the invoice is for opens it
     allow_non_admins = True
     authorized_by_default = False
-    exampleMode = False
 
     def get_object(self):
-        """Overridden to allow display of an example"""
+        """"""
         try:
             return Invoice.objects.get(pk=self.kwargs.get(self.pk_url_kwarg))
         except:
-            try:
-                if self.request.user.is_authenticated:
-                    invoice = Invoice.objects.filter(
-                        auctiontos_user_id__user = self.request.user,
-                        auction__slug = self.kwargs['slug']
-                    ).first()
-                    if invoice:
-                        return invoice
-                    else:
-                        self.exampleMode = True
-            except:
-                self.exampleMode = True
-            return Invoice.objects.get(pk=152) # this is a good example
+            if self.request.user.is_authenticated:
+                return Invoice.objects.filter(
+                    auctiontos_user__user = self.request.user,
+                    auction__slug = self.kwargs['slug']
+                ).first()
+        return None
             
     def dispatch(self, request, *args, **kwargs):
         # check to make sure the user has permission to view this invoice
         auth = self.authorized_by_default
         self.is_admin = False
         invoice = self.get_object()
+        if not invoice:
+            auction = Auction.objects.exclude(is_deleted=True).filter(slug=self.kwargs['slug']).first()
+            if auction:
+                messages.error(request, "You don't have an invoice for this auction yet.  Your invoice will be created once you buy or sell lots in this auction.")
+                return redirect(auction.get_absolute_url())
+            raise Http404
         mark_invoice_viewed_by_user = False
-        if invoice.auction:
-            self.auction = invoice.auction
-            if self.is_auction_admin:
-                auth = True
-                self.is_admin = True
-            if invoice.auction.invoice_payment_instructions and invoice.status == "UNPAID":
-                messages.info(request, invoice.auction.invoice_payment_instructions)
-        if self.exampleMode:
+        self.auction = invoice.auctiontos_user.auction
+        if self.is_auction_admin:
             auth = True
+            self.is_admin = True
+        if self.auction.invoice_payment_instructions and invoice.status == "UNPAID":
+            messages.info(request, self.auction.invoice_payment_instructions)
         if request.user.is_authenticated:
-            if invoice.user:
-                if invoice.user == request.user:
-                    auth = True
-                    mark_invoice_viewed_by_user = True
-            if invoice.auctiontos_user:
-                if invoice.auctiontos_user.email == request.user.email:
-                    mark_invoice_viewed_by_user = True
-                    auth = True
+            if invoice.auctiontos_user.email == request.user.email or invoice.auctiontos_user.user == request.user:
+                mark_invoice_viewed_by_user = True
+                auth = True
         if not auth:
             messages.error(request, "Your account doesn't have permission to view this invoice. Are you signed in with the correct account?")
             return redirect('/')
         if mark_invoice_viewed_by_user:
             setattr(invoice, self.form_view, True) # this will set printed or opened as appropriate
             invoice.save()
+        self.InvoiceAdjustmentFormSet = modelformset_factory(InvoiceAdjustment, extra=1,
+            can_delete=True,
+            form=InvoiceAdjustmentForm)
+        self.queryset = invoice.adjustments
         return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
+        invoice = self.get_object()
+        context = {}
         context['auction'] = self.auction
         context['is_admin'] = self.is_admin
-        invoice = self.get_object()
         context['invoice'] = invoice
-        context['exampleMode'] = self.exampleMode
         # light theme for some invoices to allow printing
         if 'print' in self.request.GET.copy():
             context['base_template_name'] = "print.html"
@@ -3386,14 +3379,14 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
             context['base_template_name'] = "base.html"
             context['show_links'] = True
         context['location'] = invoice.location
-        context['form'] = InvoiceUpdateForm(initial={
-            'adjustment_direction': self.get_object().adjustment_direction,
-            'adjustment':self.get_object().adjustment,
-            "adjustment_notes":self.get_object().adjustment_notes,
-            "memo":self.get_object().memo
-            })
+        # context['form'] = InvoiceUpdateForm(initial={
+        #     'adjustment_direction': self.get_object().adjustment_direction,
+        #     'adjustment':self.get_object().adjustment,
+        #     "adjustment_notes":self.get_object().adjustment_notes,
+        #     "memo":self.get_object().memo
+        #     })
         context['print_label_link'] = None
-        if invoice.auction.is_online and invoice.auctiontos_user:
+        if invoice.auction.is_online:
             context['print_label_link'] = reverse("print_labels_by_bidder_number", kwargs={'slug': invoice.auction.slug, 'bidder_number': invoice.auctiontos_user.bidder_number})
         return context
    
@@ -3402,61 +3395,40 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
 
     def post(self, request, *args, **kwargs):
         self.object = self.get_object()
-        form = self.get_form()
-        if form.is_valid():
-            return self.form_valid(form, request)
-        else:
-            return self.form_invalid(form)
-
-    def form_valid(self, form, request):
-        adjustment_direction = form.cleaned_data['adjustment_direction']
-        adjustment = form.cleaned_data['adjustment']
-        adjustment_notes = form.cleaned_data['adjustment_notes']
-        auth = False
-        invoice = self.get_object()
-        if invoice.seller:
-            if invoice.seller.pk == request.user.pk:
-                auth = True
-        if invoice.auction:
-            if self.is_auction_admin:
-                auth = True
-        if request.user.is_superuser :
-            auth = True
-        if not auth:
-            messages.error(request, "Your account doesn't have permission to view this page.")
-            return redirect('/')
-        invoice.adjustment_direction = adjustment_direction
-        invoice.adjustment = adjustment
-        invoice.adjustment_notes = adjustment_notes
-        invoice.memo = form.cleaned_data['memo']
-        invoice.save()
-        return super().form_valid(form)
+        adjustment_formset = self.InvoiceAdjustmentFormSet(self.request.POST, form_kwargs={'invoice':self.get_object()}, queryset=self.queryset)
+        if adjustment_formset.is_valid():
+            adjustments = adjustment_formset.save(commit=False)
+            for adjustment in adjustments:
+                adjustment.invoice = self.get_object()
+                adjustment.user = request.user
+                adjustment.save()
+            if adjustments:
+                messages.success(self.request, f'Invoice adjusted')
+            for form in adjustment_formset.deleted_forms:
+                if form.instance.pk:
+                    form.instance.delete()
+            return redirect(reverse('invoice_by_pk', kwargs={'pk': self.get_object().pk}))
+        context = self.get_context_data(**kwargs)
+        context['formset'] = adjustment_formset
+        context['helper'] = InvoiceAdjustmentFormSetHelper()
+        return self.render_to_response(context)
 
     def get(self, request, *args, **kwargs):
         if self.get_object().unsold_lot_warning and self.is_auction_admin:
             messages.info(self.request, "This user still has unsold lots, make sure to sell all non-donation lots before marking this ready or paid.")
-        return super().get(request, *args, **kwargs)
-
-class InvoiceViewNoExampleMode(InvoiceView):
-    """For auction invoices, we don't want to fall back to example mode if the invoice isn't found"""
-    def dispatch(self, request, *args, **kwargs):
-        parent_dispatch = super().dispatch(request, *args, **kwargs)
-        if self.exampleMode:
-            auction = Auction.objects.exclude(is_deleted=True).filter(slug=self.kwargs['slug']).first()
-            if auction:
-                messages.error(request, "You don't have an invoice for this auction yet.  Your invoice will be created once you buy or sell lots in this auction.")
-                return redirect(auction.get_absolute_url())        
-            # no auction?  404
-            raise Http404
-        # no example mode?  all good
-        return parent_dispatch
+        self.object = self.get_object()
+        invoice_adjustment_formset = self.InvoiceAdjustmentFormSet(form_kwargs={'invoice':self.get_object()}, queryset=self.queryset)
+        helper = InvoiceAdjustmentFormSetHelper()
+        context = self.get_context_data(object=self.object)
+        context['formset'] = invoice_adjustment_formset
+        context['helper'] = helper
+        return self.render_to_response(context)
 
 class InvoiceNoLoginView(InvoiceView):
     """Enter a uuid, go to your invoice.  This bypasses the login checks"""
     # need a template with a popup
     authorized_by_default = True
     form_view = 'opened'
-    exampleMode = False
 
     def get_object(self):
         if not self.uuid:
@@ -3474,12 +3446,7 @@ class InvoiceNoLoginView(InvoiceView):
         invoice.save()
         tos = invoice.auctiontos_user
         auctiontos_user_already_exists = User.objects.filter(email=invoice.auctiontos_user.email).first()
-        if auctiontos_user_already_exists:
-            if request.user.is_authenticated:
-                if not tos.user:
-                    tos.user = request.user
-                    tos.save()
-        else:
+        if not auctiontos_user_already_exists:
             self.template_name = 'invoice_popup.html'
             if tos.email.endswith("@gmail.com"):
                 self.button_link = f'/google/login/?process=login&next=/invoices/{self.uuid}/'
@@ -3686,18 +3653,6 @@ class UnprintedLotLabelsView(LotLabelView):
     def get_queryset(self):
         return self.tos.unprinted_labels_qs
 
-class InvoiceLabelView(InvoiceView):
-    """Allows printing of labels"""
-    template_name = 'invoice_labels.html'
-    form_view = 'printed'
-    auth_needed = True
-
-class InvoiceLabelNoLoginView(InvoiceNoLoginView):
-    """Allows printing of labels without logging in"""
-    template_name = 'invoice_labels.html'
-    form_view = 'printed'
-    auth_needed = False
-
 @login_required
 def getClubs(request):
     if request.method == 'POST':
@@ -3706,16 +3661,6 @@ def getClubs(request):
             Q(name__icontains=species) | Q(abbreviation__icontains=species)
             ).values('id','name', 'abbreviation')
         return JsonResponse(list(result), safe=False)
-
-@login_required
-def getSpecies(request):
-    if request.method == 'POST':
-        species = request.POST['search']
-        result = Product.objects.filter(
-            Q(common_name__icontains=species) | Q(scientific_name__icontains=species)
-            ).values()
-        return JsonResponse(list(result), safe=False)
-     
 
 class UserView(DetailView):
     """View information about a single user"""
@@ -4639,7 +4584,6 @@ class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
     def get_data(self):
         auctiontos = AuctionTOS.objects.filter(auction=self.auction)
         auctiontos_with_account = auctiontos.filter(user__isnull=False)
-        account_percent = int(auctiontos_with_account.count() / auctiontos.count() * 100)
         searches = SearchHistory.objects.filter(user__isnull=False, auction=self.auction).values('user').distinct().count()
         seach_percent = int(searches/auctiontos_with_account.count() * 100)
         watches = Watch.objects.filter(lot_number__auction=self.auction).values('user').distinct().count()
@@ -4652,7 +4596,12 @@ class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
             lot_with_buy_now = Lot.objects.filter(auction=self.auction, buy_now_used=True).values('auctiontos_winner').distinct().count()
         else:
             lot_with_buy_now = Lot.objects.filter(auction=self.auction, winning_price=F('buy_now_price')).values('auctiontos_winner').distinct().count()
-        lot_with_buy_now_percent = int(lot_with_buy_now / auctiontos.count() * 100)
+        if auctiontos.count() == 0:
+            lot_with_buy_now_percent = 0
+            account_percent = 0
+        else:
+            account_percent = int(auctiontos_with_account.count() / auctiontos.count() * 100)
+            lot_with_buy_now_percent = int(lot_with_buy_now / auctiontos.count() * 100)
         invoices = Invoice.objects.filter(auction=self.auction)
         viewed_invoices = invoices.filter(opened=True)
         if invoices.count():
@@ -4787,6 +4736,29 @@ class ChatSubscriptions(LoginRequiredMixin, TemplateView):
     
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context['subscriptions'] = self.request.user.userdata.unviewed_subscriptions.order_by('-new_message_count', '-lot__date_posted')
+        context['subscriptions'] = self.request.user.userdata.subscriptions_with_new_message_annotation.order_by('-new_message_count', '-lot__date_posted')
         context['data'] = self.request.user.userdata
         return context
+    
+class AddTosMemo(View, LoginRequiredMixin, AuctionPermissionsMixin):
+    """API view to update the memo field of an auctiontos"""
+    
+    def dispatch(self, request, *args, **kwargs):
+        pk = kwargs.pop('pk')
+        self.auctiontos = AuctionTOS.objects.filter(pk=pk).first()
+        if not self.auctiontos:
+            raise Http404
+        self.auction = self.auctiontos.auction
+        self.is_auction_admin
+        return super().dispatch(request, *args, **kwargs)
+    
+    def get(self, request, *args, **kwargs):
+        return redirect('/')
+
+    def post(self, request, *args, **kwargs):
+        memo = request.POST['memo']
+        if memo or memo == "":
+            self.auctiontos.memo = memo
+            self.auctiontos.save()
+            return JsonResponse({'result':"ok"})
+        raise Http404

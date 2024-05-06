@@ -3,7 +3,7 @@ from crispy_forms.helper import FormHelper
 from crispy_forms.layout import Layout, Submit, HTML
 from crispy_forms.bootstrap import Div, Field, PrependedAppendedText
 from django import forms
-from .models import Lot, Bid, Auction, User, UserData, Location, Club, PickupLocation, AuctionTOS, Invoice, Category, LotImage, UserBan, UserLabelPrefs, ChatSubscription
+from .models import Lot, Bid, Auction, User, UserData, Location, Club, PickupLocation, AuctionTOS, Invoice, Category, LotImage, UserBan, UserLabelPrefs, ChatSubscription, InvoiceAdjustment
 from django.forms import ModelForm, HiddenInput, RadioSelect, ModelChoiceField
 # from bootstrap_datepicker_plus import DateTimePickerInput
 from bootstrap_datepicker_plus.widgets import DateTimePickerInput # https://github.com/monim67/django-bootstrap-datepicker-plus/issues/66
@@ -225,6 +225,33 @@ class LotFormSetHelper(FormHelper):
         # )
         #self.add_input(Submit('submit', 'Save'))
         self.template = 'auctions/bulk_add_lots_row.html'
+
+class InvoiceAdjustmentFormSetHelper(FormHelper):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.form_method = 'post'
+        self.template = 'auctions/bulk_add_invoice_adjustments_row.html'
+
+class InvoiceAdjustmentForm(forms.ModelForm):
+    class Meta:
+        model = InvoiceAdjustment
+        fields = ['adjustment_type', 'amount', 'notes']
+        # widgets = {
+        #     'notes': forms.Textarea(attrs={'rows': 1, 'cols': 40}),
+        # }
+        
+        # fixme, remove the invoice form from below and combine it with this
+
+    def __init__(self, *args, **kwargs):
+        self.invoice = kwargs.pop('invoice')
+        result = super().__init__(*args, **kwargs)
+        self.fields['notes'].widget.attrs = {'placeholder': 'ex: membership fee'}
+        return result
+
+    def clean(self):
+        cleaned_data = super().clean()
+        #something = cleaned_data.get("something")
+        return cleaned_data
 
 class WinnerLot(forms.Form):
     """Used to quickly set the winners on lots.  Note that this does not use forms.ModelForm"""
@@ -561,7 +588,11 @@ class CreateEditAuctionTOS(forms.ModelForm):
         self.helper.form_id = 'user-form'
         self.helper.form_tag = True        
         self.helper.layout = Layout(
-            'bidder_number',
+            Div(
+                Div('bidder_number',css_class='col-sm-4',),
+                Div('memo',css_class='col-sm-8',),
+                css_class='row',
+            ),  
             'name',
             Div(
                 Div('email',css_class='col-sm-6',),
@@ -589,6 +620,7 @@ class CreateEditAuctionTOS(forms.ModelForm):
             self.fields['bidder_number'].initial = self.auctiontos.bidder_number
             if self.auctiontos.unbanned_lot_count:
                 self.fields['bidder_number'].help_text = f"<span class=''>This user has already added {self.auctiontos.unbanned_lot_count} lots.</span> Changing this will not update lot numbers, but invoices will still be accurate"
+            self.fields['memo'].initial = self.auctiontos.memo
             self.fields['name'].initial = self.auctiontos.name
             self.fields['email'].initial = self.auctiontos.email
             try:
@@ -599,18 +631,6 @@ class CreateEditAuctionTOS(forms.ModelForm):
             self.fields['pickup_location'].initial = self.auctiontos.pickup_location.pk
             self.fields['is_admin'].initial = self.auctiontos.is_admin
             self.fields['is_club_member'].initial = self.auctiontos.is_club_member
-            help_text = "Check to take a cut of "
-            if self.auction.lot_entry_fee_for_club_members:
-                help_text += f"${self.auction.lot_entry_fee_for_club_members}"
-            if self.auction.lot_entry_fee_for_club_members and self.auction.winning_bid_percent_to_club_for_club_members:
-                help_text += " plus "
-            if self.auction.winning_bid_percent_to_club_for_club_members:
-                help_text += f"{self.auction.winning_bid_percent_to_club_for_club_members}%"
-            if not self.auction.lot_entry_fee_for_club_members and not self.auction.winning_bid_percent_to_club_for_club_members:
-                help_text = "Check to charge <span class='text-warning'>no selling fees</span>.  Are your rules set up correctly?"
-            else:
-                help_text += " instead of the standard fee for sold lots"
-            self.fields['is_club_member'].help_text = help_text
             self.fields['selling_allowed'].initial = self.auctiontos.selling_allowed
         else:
             # special rule: default to the default location
@@ -621,6 +641,18 @@ class CreateEditAuctionTOS(forms.ModelForm):
             self.fields['selling_allowed'].widget = HiddenInput()
         if not auction.only_approved_sellers and self.auctiontos and self.auctiontos.selling_allowed:
             self.fields['selling_allowed'].widget = HiddenInput()
+        help_text = "Check to take a cut of "
+        if self.auction.lot_entry_fee_for_club_members:
+            help_text += f"${self.auction.lot_entry_fee_for_club_members}"
+        if self.auction.lot_entry_fee_for_club_members and self.auction.winning_bid_percent_to_club_for_club_members:
+            help_text += " plus "
+        if self.auction.winning_bid_percent_to_club_for_club_members:
+            help_text += f"{self.auction.winning_bid_percent_to_club_for_club_members}%"
+        if not self.auction.lot_entry_fee_for_club_members and not self.auction.winning_bid_percent_to_club_for_club_members:
+            help_text = "Check to charge <span class='text-warning'>no selling fees</span>.  Are your rules set up correctly?"
+        else:
+            help_text += " instead of the standard fee for sold lots"
+        self.fields['is_club_member'].help_text = help_text
     class Meta:
         model = AuctionTOS
         fields = [
@@ -633,6 +665,7 @@ class CreateEditAuctionTOS(forms.ModelForm):
 			'address',
             'selling_allowed',
             'is_club_member',
+            'memo',
         ]
         widgets = {
             'address': forms.Textarea(attrs={'rows':3})
@@ -658,20 +691,6 @@ class CreateEditAuctionTOS(forms.ModelForm):
             if other_emails.count():
                 self.add_error('email', "This email is already in this auction")
         return cleaned_data
-
-    # def clean(self):
-    #     cleaned_data = super().clean()
-    #     custom_lot_number = cleaned_data.get("custom_lot_number")
-    #     if custom_lot_number:
-    #         existing_lots = Lot.objects.exclude(is_deleted=True).filter(custom_lot_number=custom_lot_number, auction=self.auction)
-    #         lot_number = cleaned_data.get("lot_number")
-    #         if lot_number:
-    #             existing_lots = existing_lots.exclude(lot_number=lot_number.pk)
-    #         else:
-    #             self.custom_lot_numbers_used.append(custom_lot_number)
-    #         if existing_lots.count() or self.custom_lot_numbers_used.count(custom_lot_number) > 1:
-    #             self.add_error('custom_lot_number', "This lot number is already in use")
-    #     return cleaned_data
 
 class CreateBid(forms.ModelForm):
     #amount = forms.IntegerField()
@@ -709,38 +728,38 @@ class CreateBid(forms.ModelForm):
             'amount',
         ]
 
-class InvoiceUpdateForm(forms.ModelForm):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.helper = FormHelper()
-        self.helper.form_method = 'post'
-        self.helper.form_class = 'form'
-        self.helper.form_id = 'invoice-form'
-        self.helper.form_tag = True   
-        self.helper.layout = Layout(
-            'memo',
-            HTML("<h5>Adjust</h5>"),
-            Div(
-            Div('adjustment_direction',css_class='col-lg-3',),
-            PrependedAppendedText('adjustment', '$', '.00',wrapper_class='col-lg-3', ),
-            Div('adjustment_notes',css_class='col-lg-6',),
-            css_class='row',
-            ),
-            Submit('submit', 'Save', css_class='btn-success'), 
-        )
-        self.fields['adjustment_direction'].label = ""
-        self.fields['adjustment'].label = ""
-        self.fields['adjustment_notes'].label = ""
-        self.fields['adjustment_notes'].help_text = f"Adjustment reason will be visible to the user"
+# class InvoiceUpdateForm(forms.ModelForm):
+#     def __init__(self, *args, **kwargs):
+#         super().__init__(*args, **kwargs)
+#         self.helper = FormHelper()
+#         self.helper.form_method = 'post'
+#         self.helper.form_class = 'form'
+#         self.helper.form_id = 'invoice-form'
+#         self.helper.form_tag = True   
+#         self.helper.layout = Layout(
+#             'memo',
+#             HTML("<h5>Adjust</h5>"),
+#             Div(
+#             Div('adjustment_direction',css_class='col-lg-3',),
+#             PrependedAppendedText('adjustment', '$', '.00',wrapper_class='col-lg-3', ),
+#             Div('adjustment_notes',css_class='col-lg-6',),
+#             css_class='row',
+#             ),
+#             Submit('submit', 'Save', css_class='btn-success'), 
+#         )
+#         self.fields['adjustment_direction'].label = ""
+#         self.fields['adjustment'].label = ""
+#         self.fields['adjustment_notes'].label = ""
+#         self.fields['adjustment_notes'].help_text = f"Adjustment reason will be visible to the user"
         
-    class Meta:
-        model = Invoice
-        fields = [
-            'adjustment_direction',
-            'adjustment',
-            'adjustment_notes',
-            'memo',
-        ]
+#     class Meta:
+#         model = Invoice
+#         fields = [
+#             'adjustment_direction',
+#             'adjustment',
+#             'adjustment_notes',
+#             'memo',
+#         ]
 
 class AuctionJoin(forms.ModelForm):
     i_agree = forms.BooleanField(required = True)
@@ -998,7 +1017,7 @@ class AuctionEditForm(forms.ModelForm):
             'lot_submission_end_date', 'sealed_bid','use_categories', 'promote_this_auction', 'max_lots_per_user', 'allow_additional_lots_as_donation',
             'email_users_when_invoices_ready', 'pre_register_lot_entry_fee_discount', 'pre_register_lot_discount_percent', 'allow_bidding_on_lots','only_approved_sellers',
             'invoice_payment_instructions', 'minimum_bid', 'winning_bid_percent_to_club_for_club_members', 'lot_entry_fee_for_club_members', 'require_phone_number', 'set_lot_winners_url',
-            'reserve_price', 'buy_now', 
+            'reserve_price', 'buy_now', 'tax',
             ]
         widgets = {
             'date_start': DateTimePickerInput(),
@@ -1117,6 +1136,7 @@ class AuctionEditForm(forms.ModelForm):
                 Div('buy_now', css_class='col-md-3',),
                 Div('set_lot_winners_url', css_class='col-md-3',),
                 Div('promote_this_auction', css_class='col-md-3',),
+                PrependedAppendedText('tax', '', '%',wrapper_class='col-md-3', ),
                 css_class='row',
             ),
             Submit('submit', 'Save', css_class='create-update-auction btn-success'),

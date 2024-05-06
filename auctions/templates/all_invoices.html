@@ -3,34 +3,14 @@
 {% block title %}Invoices{% endblock %}
 {% load static %}
 {% block content %}
-        {% if seller_invoices %}
-        <h3>Your invoices as a seller</h3>
+<h5>Invoices</h5>
+<small>This is a list of invoices for auctions you've participated in.  If you didn't buy or sell any lots in an auction, you won't get an invoice.</small>
+<br>
+<br>
         <table class="table">
           <thead>
             <tr>
-              <th scope="col">For</th>
-              <th scope="col">Total</th>
-              <th scope="col">Status</th>
-              <th scope="col">Date</th>
-            </tr>
-          </thead>
-          <tbody>
-          {% for invoice in seller_invoices %}
-          <tr>
-            <td><a href="/invoices/{{invoice.pk}}/">{{ invoice.user }}</a></td>
-            <td><span {% if invoice.user_should_be_paid %} style="color:red"{% endif %}>${{ invoice.absolute_amount|floatformat:2 }}</span></td>
-            <td>{{ invoice.get_status_display }}</td>
-            <td>{{ invoice.date }}</td>
-          </tr>
-          {% endfor %}
-          </tbody>
-        </table>
-        {% endif %}
-        <h3>Your invoices as a buyer</h3>
-        <table class="table">
-          <thead>
-            <tr>
-              <th scope="col">For</th>
+              <th scope="col">Invoice</th>
               <th scope="col">Total</th>
               <th scope="col">Status</th>
               <th scope="col">Date</th>
@@ -40,7 +20,12 @@
             {% for invoice in object_list %}
             <tr>
               <td><a href="/invoices/{{invoice.pk}}/">{{ invoice.label }}</a></td>
-              <td><span {% if not invoice.user_should_be_paid %} style="color:red"{% endif %}>${{ invoice.calculated_total|floatformat:2 }}</span></td>
+              <td>{% if invoice.user_should_be_paid or invoice.net == 0 %}
+                  ${{ invoice.calculated_total|floatformat:2 }}
+                {% else %}
+                  <span class='text-danger'>(${{ invoice.calculated_total|floatformat:2 }})</span>
+                {% endif %}
+                </td>
               <td>{{ invoice.get_status_display }}</td>
               <td>{{ invoice.date }}</td>
             </tr>

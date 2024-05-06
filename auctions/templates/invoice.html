@@ -2,210 +2,347 @@
 {% load crispy_forms_tags %}
 {% block title %} Invoice for {{ invoice.label }} {% endblock %}
 {% load static %}
-{% block extra_js %}<script type='text/javascript'>pageView();</script>
-{% if print_label_link and not invoice.printed %}
+{% block extra_js %}
+<script type='text/javascript'>pageView();</script>
+{% if is_admin %}
+<script type='text/javascript'>
+var form_id = '#form-container';
+{% include 'leave_page_warning.js' %}
+$('#add-form').click(function() {
+  cloneMore('.adjustment-form:last', 'form');
+});
+function cloneMore(selector, type) {
+    var newElement = $(selector).clone(true);
+    var total = $('#id_' + type + '-TOTAL_FORMS').val();
+    newElement.find(':input').each(function() {
+        var name = $(this).attr('name').replace('-' + (total-1) + '-','-' + total + '-');
+        var id = 'id_' + name;
+        $(this).attr({'name': name, 'id': id}).removeAttr('checked'); // keep last row's values 
+        //$(this).attr({'name': name, 'id': id}).val('').removeAttr('checked'); // blank rows 
+    });
+    newElement.find('label').each(function() {
+        var newFor = $(this).attr('for').replace('-' + (total-1) + '-','-' + total + '-');
+        $(this).attr('for', newFor);
+    });
+    total++;
+    $('#id_' + type + '-TOTAL_FORMS').val(total);
+    $(selector).after(newElement);
+}
+document.querySelector('#memo').addEventListener('change', function(event) {
+            $.ajax({
+                type: "POST",
+                beforeSend: function (request) {
+                    request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+                },
+                url: "{% url 'auctiontosmemo' pk=invoice.auctiontos_user.pk %}",
+                data: {'memo': $(this).val() },
+                success : function(result) {
+                  $('#memo').addClass('is-valid');
+                  isDirty = false;
+                }});
+        });
+</script>
+{% endif %}
+{% if print_label_link and not invoice.printed and not is_admin %}
 <script>
 $(document).ready(function(){
   $('#printomatic-9000').attr('data-original-title', "Print on regular paper in portrait mode, no label maker required.").tooltip('show');  
 });
 </script>
 {% endif %}
-  {% endblock %}
-  {% block content %}{% if show_links %}{% include 'auction_ribbon.html' %}{% endif %}
-  <h1>{% if exampleMode %}Example{%else%}{% if invoice.auctinotos_user.name %}{{ invoice.auctinotos_user.name }}{% else %}{{ invoice.user.first_name }} {{ invoice.user.last_name }}{% endif %}{% endif %}</h1>
-            {% if invoice.auction.multi_location %}
-            {% if location == 'No location selected' %}{% else %}<h5>{{location}}{% if exampleMode %}<span class='text-muted'> This is the pickup location selected by the user</span>{%endif%}</h5>{%endif%}<br>
-            {% endif %}
-            {% if show_links %}
+{% endblock %}
+
+{% block content %}
+{% if show_links %}{% include 'auction_ribbon.html' %}{% endif %}
+
+<h3>{{ invoice.auctiontos_user.name }}</h3>
+<small>{{ invoice.invoice_summary_short }}</small>
+{% if invoice.auction.multi_location %}
+{% if location == 'No location selected' %}{% else %}
+<h5>{{location}}</h5>
+{% endif %}
+{% endif %}
+<br>
+<div class="row">
+  <div class="col-auto">
+    {% if show_links %}
+      {% if is_admin %}
+        {% include 'invoice_buttons.html' %}
+      {% endif %}
+      <a href="{{ request.path }}?print" class="btn btn-primary ml-1 mr-1 ">Print invoice</a>
+      {% if show_links and print_label_link %}
+        <a href="{{ print_label_link }}" id="printomatic-9000" class="btn btn-primary ml-1 mr-1 ">Print labels for your lots</a>
+      {% endif %}
+  </div>
+  <div class="col">
+    {% if not is_admin %}
+      <a href="/feedback/" class="btn btn-primary ml-1 mr-1 ">Leave feedback</a>
+      {% if invoice.auction and invoice.auction.use_categories %}
+        <a href="/blog/transporting-fish/" class="btn btn-primary ml-1 mr-1 ">Info on transporting fish</a>
+      {% endif %}
+      {% if location_map %}
+        <a href="{{location_map}}" class="btn btn-primary ml-1 mr-1 ">Get directions</a>
+      {% endif %}
+    {% else %}
+      <input type="text" placeholder="Memo" value="{{invoice.auctiontos_user.memo}}" class="form-control " id="memo">
+    {% endif %}
+  </div>
+</div>
+<div class="row"><br>
+  {% if is_admin and show_links %}
+    {% if invoice.status == "DRAFT" and not invoice.email_sent %}
+      <small>
+      {% if invoice.auctiontos_user.email %}
+        <span class='text-muted'>Marking this invoice ready or paid will send a notification email to {{ invoice.auctiontos_user.name }}</span><br>
+      {% else %}
+        <span class='text-danger'>{{ invoice.auctiontos_user.name }} does not have an email address set!</span><br>
+      {%endif%}
+      </small>
+    {%endif%}
+    {{ link_formset.management_form }}
+    <form id="form-container" method="POST" action="{% url 'invoice_by_pk' pk=invoice.pk%}">
+      {% crispy formset helper %}
+      <button class='btn btn-info' id="add-form" type="button">Add row</button>
+      <input type="submit" class='btn btn-success float-right submit-button mr-2 ml-2' name='save' id='save' value="Save adjustments">
+    </form>
+  {% endif %}
+</div> 
+{{ auction.invoice_payment_instructions | default:""}}<br>
+{% if print_label_link %}
+  <div>{% if show_links %}
+    Either <a href="{{ print_label_link }}">print your labels</a> or 
+    <span class='font-weight-bold'>write
+      {% else %}
+    <span>Write
+      {% endif %}
+      the lot number and the name of the winner {% if invoice.auction.multi_location %} and the destination location {% endif %} on each lot.
+    </span>
+    {% endif %}
+  </div>
+{% endif %}
+<table class="table">
+  <tr>
+    <td>Contact info:</td>
+    <td>{% if invoice.auctiontos_user.bidder_number %}Bidder number: <b>{{ invoice.auctiontos_user.bidder_number}}</b><br>{% endif %}
+        {{ invoice.auctiontos_user.name|default:""}}<br>
+        {% if invoice.auctiontos_user.address %}{{ invoice.auctiontos_user.address| linebreaksbr}}<br>{% endif %}
+        {{ invoice.auctiontos_user.email|default:"" }}<br>
+        {{ invoice.auctiontos_user.phone_as_string|default:"" }}<br>
+    </td>
+  </tr>
+  <tr>
+    <td>Auction:</td>
+    <td>
+      {% if show_links %}
+        <a href='/auctions/{{ auction.slug }}'>{{ auction }}</a>
+      {% else %}
+        {{ auction }}
+      {%endif%}
+    <br></td>
+  </tr>
+  <tr>
+    <td>Status:</td>
+    <td>{{ invoice.get_status_display }}
+    </td>
+  </tr>
+  <tr>
+    <td>Location:</td>
+    <td>{{ location.name }} <br>
+      {% if location.contact_person %}
+        <b>Lost?  Running late?</b> Contact: {{location.contact_person.name | default:""}}<br>
+        {{location.contact_person.email | default:"" | urlize}}<br>
+        {{location.contact_person.phone_number | default:"" }}<br>
+      {% endif %}
+      <br>{% if location.description %}{{ location.description }} on {%endif%}{{ location.pickup_time }}<br>
+      {% if location.second_pickup_time %}<br>You must also come back on {{ location.second_pickup_time }} to pick up lots purchased from other locations{%endif%}
+      {% if show_links %}<div class='mt-2'><a href="{{location.directions_link}}">Get directions to {{ location.name }}</a></div>{% endif %}
+    </td>
+  </tr>
+  <tr>
+    <td>Total sold</td>
+    <td>${{ invoice.total_sold|floatformat:2 }}</td>
+  </tr>
+  <tr>
+    <td>Total bought</td>
+    <td>${{ invoice.total_bought|floatformat:2 }}</td>
+  </tr>
+  {% if invoice.first_bid_payout %}
+    <tr>
+      <td>Auction promotion</td>
+      <td>${{ invoice.first_bid_payout|floatformat:2 }}</td>
+    </tr>
+  {% endif %}
+  {% if invoice.tax %}
+  <tr>
+    <td>Tax</td>
+    <td>${{invoice.tax|floatformat:2 }}</td>
+  </tr>
+  {% endif %}
+  {% for adjustment in invoice.changed_adjustments %}
+    <tr>
+      <td>{{ adjustment.notes }}</td>
+      <td>{{ adjustment.display }}</td>
+    </tr>
+  {% endfor %}
+  <tr>
+    <td>Final total</td>
+    <td>{{ invoice.invoice_summary }}</td>
+  </tr>
+</table>
+{%if invoice.lots_sold %}  
+  <h3>Lots sold</h3>
+  {% if invoice.auctiontos_user.is_club_member %}
+    Note: Club member split has been applied<br>
+  {% endif %}
+  <table class="table">
+    <thead>
+      <tr>
+        <th scope="col">#</th>
+        <th scope="col">Lot</th>
+        <th scope="col">Winner</th>
+        {% if auction.multi_location %}
+        <th scope="col">Winner Location</th>
+        {% endif %}
+        <th scope="col">Price</th>
+        <th scope="col">Club cut</th>
+        <th scope="col">Net</th>
+      </tr>
+    </thead>
+    <tbody>
+                  
+    {% for lot in invoice.sold_lots_queryset_sorted %}
+      <tr>
+        <td>{{ lot.lot_number_display }}</td>
+        <td>
+          {% if show_links %}
             {% if is_admin %}
-              {% include 'invoice_buttons.html' %}
-            {%endif%}
-            <a href="{{ request.path }}?print" class="btn btn-primary ml-1 mr-1 mt-1">Print invoice</a>
-            {% if show_links and print_label_link and not exampleMode %}<a href="{{ print_label_link }}" id="printomatic-9000" class="btn btn-primary ml-1 mr-1 mt-1">Print labels for your lots</a>{% endif %}
-            <a href="/feedback/" class="btn btn-primary ml-1 mr-1 mt-1">Leave feedback</a>
-            {% if invoice.auction %}{% if invoice.auction.use_categories %}<a href="/blog/transporting-fish/" class="btn btn-primary ml-1 mr-1 mt-1">Info on transporting fish</a></a>{% endif %}{% endif %}
-            {% if location_map %}<a href="{{location_map}}" class="btn btn-primary ml-1 mr-1 mt-1">Get directions</a>{% endif %}
-            {% if is_admin %}
-            {% if invoice.status == "DRAFT" and not invoice.email_sent %}
-              {% if invoice.auctiontos_user %}
-                {% if invoice.auctiontos_user.email and invoice.auction %}
-                  <br><span class='text-muted'>Marking this invoice ready or paid will send a notification email to {{ invoice.auctiontos_user.name }}</span><br>
-                {% else %}
-                  <br><span class='text-danger'>{{ invoice.auctiontos_user.name }} does not have an email address set!</span><br>
-                {%endif%}
-              {%endif%}
-            {%endif%}
+              <a href="#" hx-get="/api/lot/{{lot.pk}}"
+                hx-target="#modals-here" 
+                hx-trigger="click">
+                {{ lot.lot_name }}
+              </a>
+            {% else %}
+            <a href="{{lot.lot_link}}?src=invoice_sold">{{ lot.lot_name }}</a>
+            {% endif %}
+          {% else %}
+            {{ lot.lot_name }}
+          {% endif%}
+        </td>
+        <td>
+          {% if lot.winning_price %}
+            {% if show_links and is_admin %}
+              <a href="#" hx-get="/api/auctiontos/{{lot.auctiontos_winner.pk}}"
+                hx-target="#modals-here"
+                hx-trigger="click">
+                {{ lot.winner_name }}
+              </a>
+            {% else %}
+              {{ lot.winner_name }}
+            {% endif %}
+          {% else %}
+            Not sold
+          {% endif %}
+        </td>
+        {% if auction.multi_location %}
+          <td>
+            {% if lot.auctiontos_winner %}
+              {{ lot.winner_location }}
+            {% endif %}
+          </td>
+        {% endif %}
+        <td>
+          {% if lot.winning_price %}
+            ${{ lot.winning_price|floatformat:2 }}
+          {% else %}
+            {% if lot.banned %}
+              Removed
+            {% else %}
+              Not sold
+            {% endif %}
+          {% endif %}
+        </td>
+        <td>${{ lot.club_cut|floatformat:2 }}</td>
+        <td>
+          {% if lot.donation %}
+            Donation
+          {% else %}
+            ${{ lot.your_cut|floatformat:2 }}
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+<b>Total sold:</b> ${{ invoice.total_sold|floatformat:2 }}<br>         
+{% endif %}
+<br>
+<br>
+{% if invoice.lots_bought %}
+  <br>
+  <h3>Lots purchased</h3>
+  <table class="table">
+    <thead>
+      <tr>
+        <th scope="col">#</th>
+        <th scope="col">Lot</th>
+        {% if auction.multi_location %}
+        <th scope="col">Location</th>
+        {% endif %}
+        <th scope="col">Seller</th>
+        <th scope="col">Price</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for lot in invoice.bought_lots_queryset %}
+        <tr>
+          <td>
+            {{ lot.lot_number_display }}
+          </td>
+          <td>
             {% if show_links %}
-              <br>
-              {% crispy form form.helper %}
-              <br>
-              {% else %} {{ invoice.auctiontos_user.memo }}
+              {% if is_admin %}
+                <a href="#" hx-get="/api/lot/{{lot.pk}}"
+                hx-target="#modals-here"
+                hx-trigger="click">
+                {{ lot.lot_name }}
+                </a>
+              {% else %}
+                <a href="{{lot.lot_link}}?src=invoice_bought">
+                  {{ lot.lot_name }}
+                </a>
               {%endif%}
-            {%endif%}
-            
-            {% if invoice.status == "DRAFT" and not invoice.auction %}
-            <br><span class='text-muted'>This invoice is not finalized.  Any additional lots you purchase from {{ invoice.seller }} will be added to it.</span>
-            {% endif %}
-            {% if invoice.status != "PAID" and not invoice.auction %}
-            <br><br><span class=''>This site does not handle payments or shipping.  Coordinate exchange of payment and lots directly with {{ invoice.seller }}.</span>
-            {% endif %}
-            {% endif %}
-            
-            {% if auction %}
-              {{ auction.invoice_payment_instructions | default:""}}<br>
-              {% if print_label_link and not exampleMode %}
-              <div>{% if show_links %}Either <a href="{{ print_label_link }}">print your labels</a> or <span class='font-weight-bold'>write{% else %}<span>Write{% endif %} the lot number and the name of the winner {% if invoice.auction.multi_location %} and the destination location {% endif %} on each lot. </span></div>
+            {% else %}
+              {{ lot.lot_name }}
               {% endif %}
+          </td>
+          {% if auction.multi_location %}
+            <td>{{ lot.location }}</td>
+          {% endif %}
+          <td>
+            {% if show_links and is_admin %}
+              <a href="#" hx-get="/api/auctiontos/{{lot.auctiontos_seller.pk}}"
+                hx-target="#modals-here" 
+                hx-trigger="click">
+                {{ lot.seller_name }}
+              </a>
+            {% else %}
+              {{ lot.seller_name }}
             {% endif %}
-            <table class="table">
-            <tr>
-              <td>{% if not invoice.auction %}Winner contact info:{% else %}Contact info:{% endif %}</td>
-              <td>{% if exampleMode %}David Banks<br>
-                  1234 Street<br>
-                  Anytown, USA 90210<br>
-                  davidbanks@example.com<br>
-                  123-456-7890                
-                {%else%} 
-                  {% if invoice.auctiontos_user %}
-                  {% if invoice.auctiontos_user.bidder_number %}Bidder number: <b>{{ invoice.auctiontos_user.bidder_number}}</b><br>{% endif %}
-                  {{ invoice.auctiontos_user.name|default:""}}<br>
-                  {% if invoice.auctiontos_user.address %}{{ invoice.auctiontos_user.address| linebreaksbr}}<br>{% endif %}
-                  {{ invoice.auctiontos_user.email|default:"" }}<br>
-                  {{ invoice.auctiontos_user.phone_as_string|default:"" }}<br>
-                  {% else %}
-                  {% if invoice.user %}{{ invoice.user.first_name }} {{ invoice.user.last_name }}<br>
-                  {{ invoice.user.email }}<br>
-                  {% endif %}
-                  {% endif %}
-                {% endif %}
-              </td>
-            </tr>
-            {% if invoice.auction %}
-            <tr>
-              <td>Auction</td>
-              <td>{% if show_links %} <a href='/auctions/{{ auction.slug }}'>{{ auction }}</a>{% else %}{{ auction }}{%endif%}<br></td>
-            </tr>
-            {%endif%}
-            <tr>
-              <td>Status</td>
-              <td>{{ invoice.get_status_display }}{% if exampleMode %}<span class='text-muted'></class> Only the creator of an auction can mark invoices as paid</span>{%endif%}</td>
-            </tr>
-            <tr>
-              <td>Location</td>
-              <td>{{ location.name }} <br>
-                {% if location.pickup_location_contact_name %}<b>Lost?  Running late?</b> Contact {{ location.pickup_location_contact_name }}<br>
-                {% if location.pickup_location_contact_phone %} Phone: {% if show_links %}<a href="tel:{{ location.pickup_location_contact_phone }}">{{location.pickup_location_contact_phone}}</a>{% else %}{{location.pickup_location_contact_phone}}{% endif %}{% endif %}
-                {% if location.pickup_location_contact_email %} Email: {% if show_links %}<a href="mailto:{{ location.pickup_location_contact_email }}">{{ location.pickup_location_contact_email }}</a>{% else %}{{location.pickup_location_contact_email}}{% endif %}{% endif %}
-                <br>{% if location.description %}{{ location.description }} on {%endif%}{{ location.pickup_time }}<br>
-                {% if location.second_pickup_time %}<br>You must also come back on {{ location.second_pickup_time }} to pick up lots purchased from other locations{%endif%}
-                {% if show_links %}<div class='mt-2'><a href="{{location.directions_link}}">Get directions to {{ location.name }}</a></div>{% endif %}
-              </td>
-              </tr>
-            {%endif%}
-            {% if invoice.auction %}
-            <tr>
-              <td>Total sold</td>
-              <td>${{ invoice.total_sold|floatformat:2 }}</td>
-            </tr>
-            {%endif%}
-            <tr>
-              <td>Total bought</td>
-              <td>${{ invoice.total_bought|floatformat:2 }}</td>
-            </tr>
-            {% if invoice.first_bid_payout %}
-            <tr>
-              <td>Auction promotion</td>
-              <td>${{ invoice.first_bid_payout|floatformat:2 }}</td>
-            </tr>
-            {% endif %}
-            {% if invoice.adjustment %}
-            <tr>
-              <td>Other</td>
-              <td>{% if invoice.adjustment_direction == 'PAY_SELLER' %}-{% else%}+{%endif%}${{ invoice.adjustment|floatformat:2 }} {{ invoice.adjustment_notes }}</td>
-            </tr>
-            {% endif %}
-            <tr>
-              <td>Final total {%if invoice.auction %}(rounded){%endif%}</td>
-              <td>{{ invoice.invoice_summary }}</td>
-            </tr>
-          </table>
-          {%if invoice.lots_sold %}  
-            <h3>Lots sold</h3>
-            {% if invoice.auctiontos_user and invoice.auctiontos_user.is_club_member%}Note: Club member split has been applied<br>{% endif %}
-            <table class="table">
-                <thead>
-                  <tr>
-                    <th scope="col">#</th>
-                    <th scope="col">Lot</th>
-                    <th scope="col">Winner</th>
-                    {% if auction.multi_location %}
-                    <th scope="col">Winner Location</th>
-                    {% endif %}
-                    <th scope="col">Price</th>
-                    <th scope="col">Club cut</th>
-                    <th scope="col">Net</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  
-                 {% for lot in invoice.sold_lots_queryset_sorted %}
-                  <tr>
-                    <td>{{ lot.lot_number_display }}</td>
-                    <td>{% if show_links %}{% if is_admin %}<a href="#" hx-get="/api/lot/{{lot.pk}}"
-                      hx-target="#modals-here" hx-trigger="click">{{ lot.lot_name }}</a>{% else %}<a href="{{lot.lot_link}}?src=invoice_sold">{{ lot.lot_name }}</a>{% endif %}{% else %}{{ lot.lot_name }}{% endif%}</td>
-                    <td>{% if lot.winning_price %} {% if exampleMode %}Real name of winner here{%else%}{% if show_links and is_admin %}<a href="#" hx-get="/api/auctiontos/{{lot.auctiontos_winner.pk}}"
-                      hx-target="#modals-here" hx-trigger="click">{{ lot.winner_name }}</a>{% else %}{{ lot.winner_name }}{% endif %}{% endif %} {% else %} Not sold {% endif %}</td>
-                    {% if auction.multi_location %}
-                    <td>{% if lot.auctiontos_winner %}{{ lot.winner_location }}{% endif %}</td>
-                    {% endif %}
-                    <td>{% if lot.winning_price %} ${{ lot.winning_price|floatformat:2 }} {% else %} {% if lot.banned %}Removed{% else %}Not sold{% endif %} {% endif %}</td>
-                    <td>${{ lot.club_cut|floatformat:2 }}{% if lot.promoted %} (promoted){% endif %}</td>
-                    <td>{% if lot.donation %}Donation{% else %}${{ lot.your_cut|floatformat:2 }}{% endif %}</td>
-                  </tr>
-                  {% endfor %}
-              </tbody>
-            </table>
-            <b>Total sold:</b> ${{ invoice.total_sold|floatformat:2 }}<br>         
-            {% endif %}
-            <br>
-            <br>
-            {%if invoice.lots_bought %}
-            <h3>Lots purchased</h3>
-            <table class="table">
-                <thead>
-                  <tr>
-                    <th scope="col">#</th>
-                    <th scope="col">Lot</th>
-                    {% if auction.multi_location %}
-                    <th scope="col">Location</th>
-                    {% endif %}
-                    <th scope="col">Seller</th>
-                    <th scope="col">Price</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  
-                 {% for lot in invoice.bought_lots_queryset %}
-                  <tr>
-                    <td>{{ lot.lot_number_display }}</td>
-                    <td>{% if show_links %}{% if is_admin %}<a href="#" hx-get="/api/lot/{{lot.pk}}"
-                      hx-target="#modals-here" hx-trigger="click">{{ lot.lot_name }}</a>{% else %}<a href="{{lot.lot_link}}?src=invoice_bought">{{ lot.lot_name }}</a>{%endif%} {% else %}{{ lot.lot_name }}{% endif %}</td>
-                    {% if auction.multi_location %}
-                    <td>{{ lot.location }}</td>
-                    {% endif %}
-                    <td>{% if exampleMode %}Real name of seller here{%else%}{% if show_links and is_admin %}<a href="#" hx-get="/api/auctiontos/{{lot.auctiontos_seller.pk}}"
-                      hx-target="#modals-here" hx-trigger="click">{{ lot.seller_name }}</a>{% else %}{{ lot.seller_name }}{%endif%}{% endif %}</td>
-                    <td>${{ lot.winning_price|floatformat:2 }}</td>
-                  </tr>
-                  {% endfor %}
-              </tbody>
-            </table>
-            <b>Total bought:</b> ${{ invoice.total_bought|floatformat:2 }}     <br>       
-            {% endif %}
-            {% if request.user.is_superuser and show_links %}
-            <a href="/admin/auctions/invoice/{{invoice.pk}}/change/" class="btn btn-danger active">Admin</a>
-            {% endif %}
-            <div id="modals-here"></div>
+          </td>
+          <td>
+            ${{ lot.winning_price|floatformat:2 }}
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <b>Total bought:</b> ${{ invoice.total_bought|floatformat:2 }}     <br>       
+  </div>
+{% endif %}
+{% if request.user.is_superuser and show_links %}
+  <a href="/admin/auctions/invoice/{{invoice.pk}}/change/" class="btn btn-danger active">Admin</a>
+{% endif %}
+<div id="modals-here"></div>
 {% endblock %}
 
 

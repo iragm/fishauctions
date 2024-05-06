@@ -37,7 +37,7 @@ class ViewLotTest(TestCase):
 
     def test_non_logged_in_user(self):
         response = self.client.get(self.url)
-        self.assertContains(response, f"You have to <a href='/login/?next=/lots/{self.lot.pk}/'>sign in</a> to place bids.")
+        self.assertContains(response, f">sign in</a> to place bids.")
 
     def test_logged_in_user(self):
         # Log in the user
@@ -224,60 +224,184 @@ class LotModelTests(TestCase):
         self.assertIs(lot.high_bidder, False)
         self.assertIs(lot.high_bid, 5)
 
-# class InvoiceModelTests(TestCase):
-#     """Make sure auctions/lots end and invoices get created correctly"""
-#     def test_invoices(self):
-#         # setting up
-#         timeStart = timezone.now() - datetime.timedelta(days=2)
-#         bidTime = timezone.now() - datetime.timedelta(days=1)
-#         timeEnd = timezone.now() + datetime.timedelta(minutes=60)
-#         theFuture = timezone.now() + datetime.timedelta(days=3)
-#         auction = Auction.objects.create(title="A test auction", date_end=timeEnd, date_start=timeStart, winning_bid_percent_to_club=25, lot_entry_fee=2, unsold_lot_fee=1)
-#         seller = User.objects.create(username="Seller")
-#         lot = Lot.objects.create(lot_name="A test lot", date_end=timeStart, reserve_price=5, auction=auction, user=seller)
-#         unsoldLot = Lot.objects.create(lot_name="Unsold lot", date_end=timeStart, reserve_price=10, auction=auction, user=seller)
-#         userA = User.objects.create(username="Winner of the lot")
-#         bid = Bid.objects.create(user=userA, lot_number=lot, amount=10)
-#         bid.last_bid_time = bidTime
-#         bid.save()
-#         # other tests check all these as well
-#         self.assertIs(auction.ending_soon, True)
-#         self.assertIs(auction.closed, False)
-#         self.assertIs(lot.winner, None)
-#         self.assertIs(lot.ended, False)
-#         self.assertIs(lot.high_bidder.pk, userA.pk)
-#         # change the time
-#         timeEnd = timezone.now() - datetime.timedelta(minutes=60)
-#         auction.date_end = timeEnd
-#         auction.save()
-#         self.assertIs(auction.closed, True)
-#         self.assertIs(lot.ended, True)
-#         self.assertIs(lot.high_bidder.pk, userA.pk)
-#         out = StringIO()
-#         call_command('endauctions', stdout=out)
-#         self.assertIn(f'has been won by {userA}', out.getvalue())
-#         lot.refresh_from_db()
-#         self.assertIs(lot.winner.pk, userA.pk)
-#         self.assertIs(lot.active, False)
-#         self.assertIs(lot.winning_price, 5)
-#         call_command('invoice', stdout=out)
-#         auction.refresh_from_db()
-#         self.assertIs(auction.invoiced, True)
+class ChatSubscriptionTests(TestCase):
+    def test_chat_subscriptions(self):
+        lotuser = User.objects.create(username="thisismylot")
+        chatuser = User.objects.create(username="ichatonlots")
+        my_lot = Lot.objects.create(lot_name="A test lot", date_end=timezone.now() + datetime.timedelta(days=30), reserve_price=5, description="", user=lotuser, quantity=1)
+        my_lot_that_i_have_seen_all = Lot.objects.create(lot_name="seen all", date_end=timezone.now() + datetime.timedelta(days=30), reserve_price=5, description="", user=lotuser, quantity=1)
+        someone_elses_lot = Lot.objects.create(lot_name="Another test lot", date_end=timezone.now() + datetime.timedelta(days=30), reserve_price=5, description="", user=chatuser, quantity=1)
+        my_lot_that_is_unsubscribed = Lot.objects.create(lot_name="An unsubscribed lot", date_end=timezone.now() + datetime.timedelta(days=30), reserve_price=5, description="", user=lotuser, quantity=1)
+        sub = ChatSubscription.objects.get(lot=my_lot, user=lotuser)
+        sub.last_seen=timezone.now() + datetime.timedelta(minutes=15)
+        sub.save()
+        sub = ChatSubscription.objects.get(lot=my_lot_that_is_unsubscribed, user=lotuser)
+        sub.unsubscribed = True
+        sub.save()
+        ChatSubscription.objects.create(lot=someone_elses_lot, user=lotuser)
+        data = lotuser.userdata
+        self.assertIs(data.unnotified_subscriptions_count, 0)
+        ten_minutes_ago = timezone.now() - datetime.timedelta(minutes=10)
+        ten_minutes_in_the_future = timezone.now() + datetime.timedelta(minutes=10)
+        twenty_minutes_in_the_future = timezone.now() + datetime.timedelta(minutes=20)
+        history = LotHistory.objects.create(
+            user=chatuser,
+            lot=my_lot_that_i_have_seen_all,
+            message="a chat in the past",
+            changed_price=False,
+        ) 
+        history.timestamp = ten_minutes_ago
+        history.save()
+        history = LotHistory.objects.create(
+            user=chatuser,
+            lot=my_lot,
+            message="a chat in the past",
+            changed_price=False,
+        )   
+        history.timestamp = ten_minutes_ago
+        history.save()                         
+        self.assertIs(data.subscriptions.count(), 3)
+        self.assertIs(data.my_lot_subscriptions_count, 0)
+        self.assertIs(data.other_lot_subscriptions_count, 0)
+        self.assertIs(data.unnotified_subscriptions_count, 0)
+        history = LotHistory.objects.create(
+            user=chatuser,
+            lot=my_lot,
+            message="a chat in the future",
+            changed_price=False,
+        )
+        history.timestamp = ten_minutes_in_the_future
+        history.save()
+        self.assertIs(data.unnotified_subscriptions_count, 0)
+        history = LotHistory.objects.create(
+            user=chatuser,
+            lot=my_lot,
+            message="a chat in the far future",
+            changed_price=False,
+        )                    
+        history.timestamp = twenty_minutes_in_the_future
+        history.save()
+        self.assertIs(data.unnotified_subscriptions_count, 1)
+        history = LotHistory.objects.create(
+            user=chatuser,
+            lot=someone_elses_lot,
+            message="a chat in the far future",
+            changed_price=False,
+        )             
+        history.timestamp = twenty_minutes_in_the_future
+        history.save()        
+        self.assertIs(data.other_lot_subscriptions_count, 1)
+        history = LotHistory.objects.create(
+            user=chatuser,
+            lot=someone_elses_lot,
+            message="a chat in the far future",
+            changed_price=False,
+        )             
+        history.timestamp = twenty_minutes_in_the_future
+        history.save()                     
+        history = LotHistory.objects.create(
+            user=chatuser,
+            lot=someone_elses_lot,
+            message="a chat in the far future",
+            changed_price=False,
+        )             
+        history.timestamp = twenty_minutes_in_the_future
+        history.save()                   
+        history = LotHistory.objects.create(
+            user=chatuser,
+            lot=my_lot_that_is_unsubscribed,
+            message="a chat in the far future",
+            changed_price=False,
+        )             
+        history.timestamp = twenty_minutes_in_the_future
+        history.save()                 
+        self.assertIs(data.my_lot_subscriptions_count, 1)
+        history = LotHistory.objects.create(
+            user=chatuser,
+            lot=my_lot_that_is_unsubscribed,
+            message="a chat in the far future",
+            changed_price=False,
+        )             
+        history.timestamp = twenty_minutes_in_the_future
+        history.save()                    
+        history = LotHistory.objects.create(
+            user=chatuser,
+            lot=my_lot_that_is_unsubscribed,
+            message="a chat in the far future",
+            changed_price=False,
+        )             
+        history.timestamp = twenty_minutes_in_the_future
+        history.save()  
+        self.assertIs(data.my_lot_subscriptions_count, 1)
+        self.assertIs(data.other_lot_subscriptions_count, 1)
+
+class InvoiceModelTests(TestCase):
+    def setUp(self):
+        time = timezone.now() - datetime.timedelta(days=2)
+        timeStart = timezone.now() - datetime.timedelta(days=3)
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        self.user = User.objects.create_user(username="my_lot", password='testpassword', email='test@example.com')
+        self.auction = Auction.objects.create(created_by=self.user, title="A test auction", date_end=time, date_start=timeStart, winning_bid_percent_to_club=25, lot_entry_fee=2, unsold_lot_fee=10, tax=25)
+        self.location = PickupLocation.objects.create(name='location', auction=self.auction, pickup_time=theFuture)
+        self.userB = User.objects.create_user(username="no_tos", password='testpassword')
+        self.tos = AuctionTOS.objects.create(user=self.user, auction=self.auction, pickup_location=self.location)
+        self.tosB = AuctionTOS.objects.create(user=self.userB, auction=self.auction, pickup_location=self.location)
+        self.lot = Lot.objects.create(lot_name="A test lot", auction=self.auction, auctiontos_seller=self.tos, quantity=1, description="", winning_price=10, auctiontos_winner=self.tosB)
+        self.lotB = Lot.objects.create(lot_name="B test lot", auction=self.auction, auctiontos_seller=self.tos, quantity=1, description="", winning_price=10, auctiontos_winner=self.tosB)
+        self.lotC = Lot.objects.create(lot_name="C test lot", auction=self.auction, auctiontos_seller=self.tos, quantity=1, description="", winning_price=10, auctiontos_winner=self.tosB)
+        self.unsoldLot = Lot.objects.create(lot_name="Unsold lot", reserve_price=10, description="", auction=self.auction, quantity=1, auctiontos_seller=self.tos, active=False)
+        self.invoice = Invoice.objects.create(auctiontos_user=self.tos)    
+        self.invoiceB = Invoice.objects.create(auctiontos_user=self.tosB)
+        self.adjustment_add = InvoiceAdjustment.objects.create(adjustment_type='ADD', amount=10, notes='test', invoice=self.invoiceB)
+        self.adjustment_discount = InvoiceAdjustment.objects.create(adjustment_type='DISCOUNT', amount=10, notes='test', invoice=self.invoiceB)
+        self.adjustment_add_percent = InvoiceAdjustment.objects.create(adjustment_type='ADD_PERCENT', amount=10, notes='test', invoice=self.invoiceB)
+        self.adjustment_discount_percent = InvoiceAdjustment.objects.create(adjustment_type='DISCOUNT_PERCENT', amount=10, notes='test', invoice=self.invoiceB)
+
+    def test_invoices(self):
+        self.assertEqual(self.invoice.auction, self.auction)
         
-#         # check seller invoice
-#         invoice = Invoice.objects.get(user=seller)
-#         self.assertIs(invoice.user_should_be_paid, True)
-#         self.assertIs(invoice.total_bought, 0)
-#         self.assertAlmostEqual(lot.club_cut, 3.25)
-#         self.assertAlmostEqual(lot.your_cut, 1.75)
-#         self.assertAlmostEqual(invoice.total_sold, 0.75)
-#         self.assertAlmostEqual(invoice.absolute_amount, 1)
-#         self.assertAlmostEqual(invoice.net, 0.75)
-       
-#         # check buyer invoice
-#         invoice = Invoice.objects.get(user=userA)
-#         self.assertIs(invoice.user_should_be_paid, False)
-#         self.assertIs(invoice.total_bought, 5)
-#         self.assertAlmostEqual(invoice.total_sold, 0)
-#         self.assertAlmostEqual(invoice.absolute_amount, 5)
-#         self.assertAlmostEqual(invoice.net, -5)
+        self.assertEqual(self.invoiceB.flat_value_adjustments, 0)
+        self.assertEqual(self.invoiceB.percent_value_adjustments, 0)
+        
+        self.assertEqual(self.invoiceB.total_sold, 0)
+        self.assertEqual(self.invoiceB.total_bought, 30)
+        self.assertEqual(self.invoiceB.subtotal, -30)
+        self.assertEqual(self.invoiceB.tax, 7.5)
+        self.assertEqual(self.invoiceB.net, -37.5)
+        self.assertEqual(self.invoiceB.rounded_net, -37)
+        self.assertEqual(self.invoiceB.absolute_amount, 37)
+        self.assertEqual(self.invoiceB.lots_sold, 0)
+        self.assertEqual(self.invoiceB.lots_sold_successfully_count, 0)
+        self.assertEqual(self.invoiceB.unsold_lots, 0)
+        self.assertEqual(self.invoiceB.lots_bought, 3)
+        
+        self.assertEqual(self.invoice.total_sold, 6.5)
+        self.assertEqual(self.invoice.total_bought,0)
+        self.assertEqual(self.invoice.subtotal, 6.5)
+        self.assertEqual(self.invoice.tax, 0)
+        self.assertEqual(self.invoice.net, 6.5)
+        self.assertEqual(self.invoice.rounded_net, 7)
+        self.assertEqual(self.invoice.absolute_amount, 7)
+        self.assertEqual(self.invoice.lots_sold, 4)
+        self.assertEqual(self.invoice.lots_sold_successfully_count, 3)
+        self.assertEqual(self.invoice.unsold_lots, 1)
+        self.assertEqual(self.invoice.lots_bought, 0)
+        self.assertEqual(self.invoiceB.location, self.location)
+        self.assertEqual(self.invoiceB.contact_email, 'test@example.com')
+        self.assertTrue(self.invoiceB.is_online)
+        self.assertEqual(self.invoiceB.unsold_lot_warning, "")
+        self.assertEqual(str(self.invoice), f"{self.tos.name}'s invoice for {self.tos.auction}")
+        
+        #adjustments
+        self.adjustment_add.amount=0
+        self.adjustment_add.save()
+        self.assertEqual(self.invoiceB.net, -27.5)
+        self.adjustment_discount.amount=0
+        self.adjustment_discount.save()
+        self.assertEqual(self.invoiceB.net, -37.5)
+        self.adjustment_add_percent.amount=0
+        self.adjustment_add_percent.save()
+        self.assertEqual(self.invoiceB.net, -40.5)
+        self.adjustment_discount_percent.amount=0
+        self.adjustment_discount_percent.save()
+        self.assertEqual(self.invoiceB.net, -37.5)

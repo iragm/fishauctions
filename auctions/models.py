@@ -312,7 +312,9 @@ class Auction(models.Model):
 		default="allow"
 	)
 	reserve_price.help_text = "Allow users to set a minimum bid on their lots"
- 
+	tax = models.PositiveIntegerField(default = 0, validators=[MinValueValidator(0)])
+	tax.help_text = 'Added to invoices for all won lots'
+
 	def __str__(self):
 		result = self.title
 		if "auction" not in self.title.lower():
@@ -781,7 +783,7 @@ class Auction(models.Model):
 		if AuctionTOS.objects.filter(auction__pk=self.pk).exclude(user=self.created_by).filter(is_admin=True).count() > 0:
 			return True
 		return False
-	
+
 class PickupLocation(models.Model):
 	"""
 	A pickup location associated with an auction
@@ -931,7 +933,9 @@ class AuctionTOS(models.Model):
 	manually_added = models.BooleanField(default=False, blank=True, null=True)
 	time_spent_reading_rules = models.PositiveIntegerField(validators=[MinValueValidator(0)], blank=True, default=0)
 	is_club_member = models.BooleanField(default=False, blank=True, verbose_name="Club member")
-
+	memo = models.CharField(max_length=500, blank=True, null=True, default="")
+	memo.help_text = "Only other auction admins can see this"
+ 
 	@property
 	def phone_as_string(self):
 		"""Add proper dashes to phone"""
@@ -1404,6 +1408,7 @@ class Lot(models.Model):
 		if not self.reference_link: 
 			search = self.lot_name.replace(" ","%20")
 			self.reference_link = f"https://www.google.com/search?q={search}&tbm=isch"
+		super().save(*args, **kwargs)
 		# chat history subscription for the owner
 		if self.user:
 			subscription, created = ChatSubscription.objects.get_or_create(
@@ -1413,7 +1418,6 @@ class Lot(models.Model):
 						'unsubscribed': not self.user.userdata.email_me_when_people_comment_on_my_lots,
 					}
 			)
-		super().save(*args, **kwargs) 
 
 	def __str__(self):
 		return "" + str(self.lot_number_display) + " - " + self.lot_name
@@ -2208,20 +2212,10 @@ class Lot(models.Model):
 
 class Invoice(models.Model):
 	"""
-	An invoice is applied to an auction
-	or a lot (if the lot is not associated with an auction)
-	
-	It's the total amount you owe and how much you owe to the club
-	Invoices get rounded to the nearest dollar
+	The total amount you get paid or owe to the club for an auction
 	"""
 	auction = models.ForeignKey(Auction, blank=True, null=True, on_delete=models.SET_NULL)
-	lot = models.ForeignKey(Lot, blank=True, null=True, on_delete=models.SET_NULL)
-	lot.help_text = "not used"
-	# the user field is no longer used and can be removed in a future migration
-	user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
-	auctiontos_user = models.ForeignKey(AuctionTOS, null=True, blank=True, on_delete=models.CASCADE, related_name="auctiontos")
-	# the seller field is no longer used and can be removed in a future migration
-	seller = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="seller")
+	auctiontos_user = models.ForeignKey(AuctionTOS, blank=True, on_delete=models.CASCADE, related_name="auctiontos")
 	date = models.DateTimeField(auto_now_add=True, blank=True)
 	status = models.CharField(
 		max_length=20,
@@ -2235,23 +2229,33 @@ class Invoice(models.Model):
 	opened = models.BooleanField(default=False)
 	printed = models.BooleanField(default=False)
 	email_sent = models.BooleanField(default=False)
-	# this field should be removed in a future migration, although I think it may still be referenced in a few places
-	seller_email_sent = models.BooleanField(default=False)
-	adjustment_direction = models.CharField(
-		max_length=20,
-		choices=(
-			('PAY_SELLER', 'Discount'),
-			('PAY_CLUB', "Charge extra"),
-		),
-		default="PAY_CLUB"
-	)
-	adjustment = models.PositiveIntegerField(default = 0, validators=[MinValueValidator(0)])
-	adjustment_notes = models.CharField(max_length=150, default="Corrected")
 	no_login_link = models.CharField(max_length=255, default=uuid.uuid4, blank=True, verbose_name="This link will be emailed to the user, allowing them to view their invoice directly without logging in")
 	calculated_total = models.IntegerField(null=True, blank=True)
 	calculated_total.help_text = "This field is set automatically, you shouldn't need to manually change it"
 	memo = models.CharField(max_length=500, blank=True, null=True, default="")
 	memo.help_text = "Only other auction admins can see this"
+
+	def sum_adjusments(self, adjustment_type):
+		total = self.adjustments.filter(adjustment_type=adjustment_type).aggregate(total=Sum('amount'))['total']
+		if not total:
+			return 0
+		return total
+
+	@property
+	def adjustments(self):
+		return InvoiceAdjustment.objects.filter(invoice=self).order_by('-createdon')
+
+	@property
+	def flat_value_adjustments(self):
+		return  self.sum_adjusments('DISCOUNT') - self.sum_adjusments('ADD')
+
+	@property
+	def percent_value_adjustments(self):
+		return self.sum_adjusments('DISCOUNT_PERCENT') - self.sum_adjusments('ADD_PERCENT')
+
+	@property
+	def changed_adjustments(self):
+		return self.adjustments.exclude(amount=0)
 
 	@property
 	def recalculate(self):
@@ -2280,6 +2284,12 @@ class Invoice(models.Model):
 		return 0
 
 	@property
+	def tax(self):
+		if self.auctiontos_user.auction and self.auctiontos_user.auction.tax:
+			return self.total_bought * self.auctiontos_user.auction.tax / 100
+		return 0
+	
+	@property
 	def net(self):
 		"""Factor in:
 		Total bought
@@ -2290,11 +2300,9 @@ class Invoice(models.Model):
 		subtotal = self.subtotal
 		# if this auction is using the first bid payout system to encourage people to bid
 		subtotal += self.first_bid_payout
-		if self.adjustment:
-			if self.adjustment_direction == 'PAY_SELLER':
-				subtotal += self.adjustment
-			else:
-				subtotal -= self.adjustment
+		subtotal += self.flat_value_adjustments
+		subtotal += subtotal * self.percent_value_adjustments / 100
+		subtotal -= self.tax
 		if not subtotal:
 			subtotal = 0
 		return subtotal
@@ -2406,12 +2414,7 @@ class Invoice(models.Model):
 	@property
 	def location(self):
 		"""Pickup location selected by the user"""
-		if self.auctiontos_user:
-			return self.auctiontos_user.pickup_location
-		try:
-			return AuctionTOS.objects.get(user=self.user.pk, auction=self.auction.pk).pickup_location
-		except:
-			return None
+		return self.auctiontos_user.pickup_location
 
 	@property
 	def contact_email(self):
@@ -2424,48 +2427,21 @@ class Invoice(models.Model):
 	def invoice_summary_short(self):
 		result = ""
 		if self.user_should_be_paid:
-			result += " needs to be paid"
+			result += "needs to be paid"
 		else:
-			result += " owes "
-			if self.auction:
-				result += "the club"
-			elif self.seller:
-				result += str(self.seller)
+			result += "owes the club"
 		return result + " $" + "%.2f" % self.absolute_amount
 
 	@property
 	def invoice_summary(self):
-		try:
-			base = str(self.auctiontos_user.name)
-		except:
-			try:
-				base = str(self.user.first_name)
-			except:
-				base = "Unknown"
-		return base + self.invoice_summary_short
+		return f"{self.auctiontos_user.name} {self.invoice_summary_short}"
 
 	@property
 	def label(self):
-		if self.auction:
-			return self.auction
-		if self.seller:
-			dateString = self.date.strftime("%b %Y")
-			return f"{self.seller} {dateString}"
-		return "Unknown"
+		return self.auction
 
 	def __str__(self):
-		if self.auctiontos_user:
-			return f"{self.auctiontos_user.name}'s invoice for {self.auctiontos_user.auction}"
-		if self.auction:
-			return f"{self.user}'s invoice for {self.auction}"
-		else:
-			return f"{self.user}'s invoice from {self.seller}"
-		#base = str(self.user)
-		#if self.user_should_be_paid:
-		#	base += " needs to be paid"
-		#else:
-		#	base += " owes the club"
-		#return base + " $" + "%.2f" % self.absolute_amount
+		return f"{self.auctiontos_user.name}'s invoice for {self.auctiontos_user.auction}"
 	
 	def get_absolute_url(self):
 		return f'/invoices/{self.pk}/'
@@ -2484,6 +2460,48 @@ class Invoice(models.Model):
 		if self.unsold_non_donation_lots:
 			return f"{self.unsold_non_donation_lots} unsold lot(s), sell these before marking this paid"
 		return ""
+
+	def save(self, *args, **kwargs):
+		if not self.auction:
+			self.auction = self.auctiontos_user.auction
+		super().save(*args, **kwargs) 
+
+
+class InvoiceAdjustment(models.Model):
+	"""Alteration to a specific invoice"""
+	invoice = models.ForeignKey('Invoice', null=True, blank=True, on_delete=models.CASCADE)
+	user = models.ForeignKey(User, blank=True, null=True, on_delete=models.SET_NULL)
+	user.help_text = "The auction admin who created this adjustment"
+	createdon = models.DateTimeField(auto_now_add=True, blank=True)
+	adjustment_type = models.CharField(
+		max_length=20,
+		choices=(
+			('ADD', "Charge extra"),
+			('DISCOUNT', "Discount"),
+			('ADD_PERCENT', 'Charge extra percent'),
+			('DISCOUNT_PERCENT', 'Discount percent'),
+		),
+		default="ADD"
+	)
+	amount = models.PositiveIntegerField(default = 0, validators=[MinValueValidator(0)])
+	notes = models.CharField(max_length=150, default="")
+
+	@property
+	def formatted_float_value(self):
+		return '{:.2f}'.format(self.amount)
+
+	@property
+	def display(self):
+		"""for templates"""
+		result = ""
+		if self.adjustment_type in ["DISCOUNT", "DISCOUNT_PERCENT"]:
+			result += "-"
+		if self.adjustment_type in ["ADD", "DISCOUNT"]:
+			result += f"${self.formatted_float_value}"
+		else:
+			result += f"{self.amount}%"
+		return result
+
 
 class Bid(models.Model):
 	"""Bids apply to lots"""
@@ -2896,7 +2914,7 @@ class UserData(models.Model):
 		return ChatSubscription.objects.filter(user=self.user, lot__is_deleted=False, lot__banned=False, unsubscribed=False).order_by('-createdon')
 
 	@property
-	def unviewed_subscriptions(self):
+	def subscriptions_with_new_message_annotation(self):
 		"""For templates: A list of all subscriptions annotated with a `new_message_count` property"""
 		return self.subscriptions.annotate(
 			new_message_count=Count(
@@ -2911,7 +2929,7 @@ class UserData(models.Model):
 	
 	@property
 	def unnotified_subscriptions(self):
-		return self.unviewed_subscriptions.annotate(
+		return self.subscriptions_with_new_message_annotation.annotate(
 			unnotified_message_count=Count(
 				'lot__lothistory',
 				filter=Q(
@@ -2920,7 +2938,7 @@ class UserData(models.Model):
 					lot__lothistory__timestamp__gt=F('last_notification_sent')
 				)
 			)
-		).filter(unnotified_message_count__gt=0)
+		).filter(unnotified_message_count__gt=0, new_message_count__gt=0)
 	
 	@property
 	def unnotified_subscriptions_count(self):
@@ -2944,13 +2962,13 @@ class UserData(models.Model):
 
 	@property
 	def mark_all_subscriptions_notified(self):
-		for subscription in self.unnotified_subscriptions:
+		for subscription in self.subscriptions:
 			subscription.last_notification_sent = timezone.now()
 			subscription.save()
 
 	@property
 	def mark_all_subscriptions_seen(self):
-		for subscription in self.unviewed_subscriptions:
+		for subscription in self.subscriptions:
 			subscription.last_seen = timezone.now()
 			subscription.save()
 

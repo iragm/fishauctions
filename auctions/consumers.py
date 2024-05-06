@@ -384,6 +384,7 @@ class LotConsumer(WebsocketConsumer):
             if existing_subscription:
                 print(f'Marking all ChatSubscription seen last time now for user {self.user.pk}')
                 existing_subscription.last_seen = timezone.now()
+                existing_subscription.last_notification_sent = timezone.now()
                 existing_subscription.save()
 
     # Receive message from WebSocket

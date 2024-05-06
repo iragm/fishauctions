@@ -248,9 +248,9 @@ class BoughtLotInline(admin.TabularInline):
 
 class InvoiceAdmin(admin.ModelAdmin):
     model = Invoice 
-    list_display = ("user", "__str__", 'rounded_net', "status", )
+    list_display = ("__str__", 'rounded_net', "status", )
     list_filter = ("auction", "status",)
-    search_fields = ("user__first_name", "user__last_name",)
+    search_fields = ("auctiontos_user__name",)
     readonly_fields = ("opened", "printed",)
     inlines = [
          SoldLotInline,

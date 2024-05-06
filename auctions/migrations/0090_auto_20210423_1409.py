@@ -16,7 +16,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='auction',
             name='lot_submission_start_date',
-            field=models.DateTimeField(default=datetime.datetime(2021, 4, 23, 18, 9, 6, 911671, tzinfo=datetime.timezone.utc), help_text='Users can submit (but not bid on) lots on this date'),
+            field=models.DateTimeField(null=True, blank=True, help_text='Users can submit (but not bid on) lots on this date'),
             preserve_default=False,
         ),
         migrations.AlterField(
