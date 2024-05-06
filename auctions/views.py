@@ -3379,12 +3379,6 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
             context['base_template_name'] = "base.html"
             context['show_links'] = True
         context['location'] = invoice.location
-        # context['form'] = InvoiceUpdateForm(initial={
-        #     'adjustment_direction': self.get_object().adjustment_direction,
-        #     'adjustment':self.get_object().adjustment,
-        #     "adjustment_notes":self.get_object().adjustment_notes,
-        #     "memo":self.get_object().memo
-        #     })
         context['print_label_link'] = None
         if invoice.auction.is_online:
             context['print_label_link'] = reverse("print_labels_by_bidder_number", kwargs={'slug': invoice.auction.slug, 'bidder_number': invoice.auctiontos_user.bidder_number})
@@ -3396,7 +3390,7 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
     def post(self, request, *args, **kwargs):
         self.object = self.get_object()
         adjustment_formset = self.InvoiceAdjustmentFormSet(self.request.POST, form_kwargs={'invoice':self.get_object()}, queryset=self.queryset)
-        if adjustment_formset.is_valid():
+        if adjustment_formset.is_valid() and self.is_admin:
             adjustments = adjustment_formset.save(commit=False)
             for adjustment in adjustments:
                 adjustment.invoice = self.get_object()
@@ -3455,7 +3449,7 @@ class InvoiceNoLoginView(InvoiceView):
         return super().dispatch(request, *args, **kwargs)
 
 class LotLabelView(View, AuctionPermissionsMixin):
-    """This replaces the now-deprecated-and-no-longer-used InvoiceLabelView"""
+    """View and print labels for an auction"""
     
     # these are defined in urls.py and used in get_object(), below
     bidder_number = None

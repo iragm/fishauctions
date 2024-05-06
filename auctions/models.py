@@ -2251,7 +2251,7 @@ class Invoice(models.Model):
 
 	@property
 	def percent_value_adjustments(self):
-		return self.sum_adjusments('DISCOUNT_PERCENT') - self.sum_adjusments('ADD_PERCENT')
+		return self.sum_adjusments('ADD_PERCENT') - self.sum_adjusments('DISCOUNT_PERCENT')
 
 	@property
 	def changed_adjustments(self):

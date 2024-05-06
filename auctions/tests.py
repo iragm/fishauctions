@@ -335,7 +335,7 @@ class ChatSubscriptionTests(TestCase):
         self.assertIs(data.my_lot_subscriptions_count, 1)
         self.assertIs(data.other_lot_subscriptions_count, 1)
 
-class InvoiceModelTests(TestCase):
+class InvoiceModelTests(TestCase):  
     def setUp(self):
         time = timezone.now() - datetime.timedelta(days=2)
         timeStart = timezone.now() - datetime.timedelta(days=3)
@@ -401,7 +401,7 @@ class InvoiceModelTests(TestCase):
         self.assertEqual(self.invoiceB.net, -37.5)
         self.adjustment_add_percent.amount=0
         self.adjustment_add_percent.save()
-        self.assertEqual(self.invoiceB.net, -40.5)
+        self.assertEqual(self.invoiceB.net, -34.5)
         self.adjustment_discount_percent.amount=0
         self.adjustment_discount_percent.save()
         self.assertEqual(self.invoiceB.net, -37.5)

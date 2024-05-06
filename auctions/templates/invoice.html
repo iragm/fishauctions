@@ -17,8 +17,8 @@ function cloneMore(selector, type) {
     newElement.find(':input').each(function() {
         var name = $(this).attr('name').replace('-' + (total-1) + '-','-' + total + '-');
         var id = 'id_' + name;
-        $(this).attr({'name': name, 'id': id}).removeAttr('checked'); // keep last row's values 
-        //$(this).attr({'name': name, 'id': id}).val('').removeAttr('checked'); // blank rows 
+        //$(this).attr({'name': name, 'id': id}).removeAttr('checked'); // keep last row's values 
+        $(this).attr({'name': name, 'id': id}).val('').removeAttr('checked'); // blank rows 
     });
     newElement.find('label').each(function() {
         var newFor = $(this).attr('for').replace('-' + (total-1) + '-','-' + total + '-');
@@ -41,6 +41,22 @@ document.querySelector('#memo').addEventListener('change', function(event) {
                   isDirty = false;
                 }});
         });
+$('.form-control:not(#memo)').on('blur', function() {
+  $('#invoice_control_buttons').hide()
+  $('#form_dirty_warning').show()
+});
+$(document).ready(function(){  
+  {% if invoice.status != "DRAFT" %}
+    $('#adjustments_area').hide();
+  {% endif %}
+  $(document).on('click', '#{{invoice.pk}}_UNPAID, #{{invoice.pk}}_PAID', function() {  
+    $('#adjustments_area').hide();
+  });
+  $(document).on('click', '#{{invoice.pk}}_DRAFT', function() {  
+    $('#adjustments_area').show();
+  });
+});
+
 </script>
 {% endif %}
 {% if print_label_link and not invoice.printed and not is_admin %}
@@ -67,7 +83,8 @@ $(document).ready(function(){
   <div class="col-auto">
     {% if show_links %}
       {% if is_admin %}
-        {% include 'invoice_buttons.html' %}
+        <span id="invoice_control_buttons">{% include 'invoice_buttons.html' %}</span>
+        <span style="display: none;" class='text-danger' id="form_dirty_warning">Save adjustments to mark ready or paid</span>
       {% endif %}
       <a href="{{ request.path }}?print" class="btn btn-primary ml-1 mr-1 ">Print invoice</a>
       {% if show_links and print_label_link %}
@@ -99,12 +116,15 @@ $(document).ready(function(){
       {%endif%}
       </small>
     {%endif%}
+    <span id="adjustments_area">
+    <br><br><h5>Adjustments</h5>
     {{ link_formset.management_form }}
     <form id="form-container" method="POST" action="{% url 'invoice_by_pk' pk=invoice.pk%}">
       {% crispy formset helper %}
       <button class='btn btn-info' id="add-form" type="button">Add row</button>
       <input type="submit" class='btn btn-success float-right submit-button mr-2 ml-2' name='save' id='save' value="Save adjustments">
     </form>
+    </span>
   {% endif %}
 </div> 
 {{ auction.invoice_payment_instructions | default:""}}<br>
