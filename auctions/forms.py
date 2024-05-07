@@ -761,6 +761,43 @@ class CreateBid(forms.ModelForm):
 #             'memo',
 #         ]
 
+class ChangeInvoiceStatusForm(forms.Form):
+    """confirmation dialog for auction admins only"""
+    send_invoice_ready_notification_emails = forms.BooleanField(required=False)
+
+    def __init__(self, auction, invoice_count, show_checkbox, *args, **kwargs):
+        self.auction = auction
+        self.invoice_count = invoice_count
+        submit_button_html = ""
+        self.show_checkbox = show_checkbox
+        if self.invoice_count:
+            submit_button_html = f'<button hx-post="{reverse("auction_invoices_ready", kwargs={"slug":self.auction.slug})}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Change invoices</button>'
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_method = 'post'
+        self.helper.form_class = 'form'
+        self.helper.form_id = 'invoices-form'
+        self.helper.form_tag = True        
+        self.helper.layout = Layout(
+            Div(
+                Div('send_invoice_ready_notification_emails',css_class='col-sm-12',),
+                css_class='row',
+            ),  
+            Div(
+                HTML(f'<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'),
+                HTML(submit_button_html),
+                css_class="modal-footer",
+            )
+        )
+        self.fields['send_invoice_ready_notification_emails'].initial = self.auction.email_users_when_invoices_ready
+        self.fields['send_invoice_ready_notification_emails'].help_text = "Users get a link to view their invoice.  You probably want to check this."
+        if not self.show_checkbox:
+            self.fields['send_invoice_ready_notification_emails'].widget = HiddenInput()
+    class Meta:
+        fields = [
+            'send_invoice_ready_notification_emails',
+        ]
+
 class AuctionJoin(forms.ModelForm):
     i_agree = forms.BooleanField(required = True)
 

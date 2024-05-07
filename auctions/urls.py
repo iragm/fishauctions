@@ -99,7 +99,7 @@ urlpatterns = [
     path('auctions/<slug:slug>/lotlist/', views.auctionLotList, name="lot_list"),
     path('auctions/<slug:slug>/delete/', views.AuctionDelete.as_view()),
     path('auctions/<slug:slug>/chat/', views.AuctionChats.as_view()),
-    path('auctions/<slug:slug>/paypal/<int:chunk>/', views.auctionInvoicesPaypalCSV),
+    path('auctions/<slug:slug>/paypal/<int:chunk>/', views.auctionInvoicesPaypalCSV, name="paypal_csv"),
     path('auctions/all_users/', views.userReport, name='all_my_users'),
     path('auctions/<slug:slug>/', views.AuctionInfo.as_view(), name="auction_main"),
     path('users/<str:slug>/', views.UserByName.as_view(), name='userpage'),
@@ -136,4 +136,6 @@ urlpatterns = [
     path('api/auctionstats/<slug:slug>/location_volume', views.AuctionStatsLocationVolumeJSONView.as_view(), name='auction_stats_location_volume'),
     path('api/auctionstats/<slug:slug>/feature_use', views.AuctionStatsLocationFeatureUseJSONView.as_view(), name='auction_stats_feature_use'),
     path('api/auctionstats/<slug:slug>/referrers', views.AuctionStatsReferrersJSONView.as_view(), name='auction_stats_referrers'),
+    path('api/invoices/<slug:slug>/ready', views.MarkInvoicesReady.as_view(), name='auction_invoices_ready'),
+    path('api/invoices/<slug:slug>/paid', views.MarkInvoicesPaid.as_view(), name='auction_invoices_paid'),
 ]

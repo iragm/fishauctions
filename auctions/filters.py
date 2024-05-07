@@ -125,7 +125,25 @@ class AuctionTOSFilter(django_filters.FilterSet):
             ['art','arthur','artie'],
             ['ash','ashley','asher']
         ]
-        
+        # search by invoice status
+        invoice_patterns = {
+            'open': {'auctiontos__status': 'DRAFT'},
+            'ready': {'auctiontos__status': 'UNPAID'},
+            'paid': {'auctiontos__status': 'PAID'},
+            'exists': {'auctiontos__isnull': False},
+            'owes club': {'auctiontos__calculated_total__lt': 0},
+            'club owes': {'auctiontos__calculated_total__gt': 0},
+            'seen': {'auctiontos__opened': True},
+            'unseen': {'auctiontos__opened': False},
+        }
+
+        # Apply filters based on patterns
+        for keyword, filter_data in invoice_patterns.items():
+            pattern = re.compile(f'^{keyword}|\s{keyword}\s|\s{keyword}$')
+            if pattern.search(value):
+                value = pattern.sub('', value)
+                qs = qs.filter(**filter_data)
+
         value = value.strip()
         normal_filter = Q(
             Q(name__icontains=value) | 
@@ -135,13 +153,23 @@ class AuctionTOSFilter(django_filters.FilterSet):
             Q(bidder_number=value) |
             Q(user__username=value)
         )
+
+        # search by rhyming names
         qList = Q()
-        first_name = value.split()[0].lower()
+        parts = value.lower().split()
+        if len(parts) >= 1:
+            first_name = parts[0]
+        else:
+            first_name = ""
+        if len(parts) >= 2:
+            last_name = parts[1]
+        else:
+            last_name = ""
         for name_set in RHYMING_NAMES:
             if first_name in name_set:
                 # got a match?  Add all possible matches as OR filters
                 for possible_matching_name in name_set:
-                    qList |= Q(name__istartswith=possible_matching_name)
+                    qList |= Q(name__istartswith=possible_matching_name + " " + last_name)
         qs = qs.filter(Q(normal_filter|Q(qList)))
         return qs
 

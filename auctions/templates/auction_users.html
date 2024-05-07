@@ -11,8 +11,60 @@
     hx-target="#modals-here"
     hx-trigger="click"
     _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">Add user</button>
-    <a href="{% url 'user_list' slug=auction.slug %}" class="btn btn-sm mt-2  mb-2 btn-primary">Export CSV</a>
+    
+    <span class="dropdown">
+      <button class="btn btn-sm mt-2 mb-2 btn-primary dropdown-toggle" type="button" id="dropdownMenuButton" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+        Export
+      </button>
+      <div class="dropdown-menu" aria-labelledby="dropdownMenuButton">
+        <a href="{% url 'user_list' slug=auction.slug %}" class="dropdown-item">Users CSV</a>
+        {% for chunk in auction.paypal_invoice_chunks %}
+        <a href="{% url 'paypal_csv' slug=auction.slug chunk=chunk %}" class="dropdown-item">PayPal Invoice CSV {% if auction.paypal_invoice_chunks|length > 1 %} #{{chunk}}{% endif %}</a>
+        {% endfor %}
+        {% if not auction.paypal_invoice_chunks|length %}<span class="text-muted dropdown-item">No PayPal invoices</span>{% endif %}
+        <a href="/blog/online-payments-suck/" class="dropdown-item">PayPal invoice help</a>
+      </div>
+    </span>
     <a href="{% url 'bulk_add_users' auction.slug %}" class="btn btn-sm mt-2  mb-2 btn-primary">Bulk add users</a>
+    <a href="#" class="btn btn-sm mt-2  mb-2 btn-primary"
+    hx-get="{% url 'auction_invoices_ready' auction.slug %}"
+    hx-target="#modals-here"
+    hx-trigger="click"
+    _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">Set open invoices to ready</a>
+    <a href="#" class="btn btn-sm mt-2  mb-2 btn-primary"
+    hx-get="{% url 'auction_invoices_paid' auction.slug %}"
+    hx-target="#modals-here"
+    hx-trigger="click"
+    _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">Set ready invoices to paid</a>
+    <span class="dropdown">
+      <button class="btn btn-sm mt-2 mb-2 btn-primary dropdown-toggle" type="button" id="dropdownMenuButton" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+        Filters
+      </button>
+      <div class="dropdown-menu" aria-labelledby="dropdownMenuButton">
+        <span class="text-muted dropdown-item"><small>Users with an invoice that is:</small></span>
+        <label class="dropdown-item ">
+          <input type="checkbox" class="invoice_filter" id="checkbox_open"> Open
+        </label>
+        <label class="dropdown-item ">
+          <input type="checkbox" class="invoice_filter" id="checkbox_ready"> Ready
+        </label>
+        <label class="dropdown-item ">
+          <input type="checkbox" class="invoice_filter" id="checkbox_paid"> Paid
+        </label>
+        <label class="dropdown-item ">
+          <input type="checkbox" class="invoice_filter" id="checkbox_owes_club"> Owes the club
+        </label>
+        <label class="dropdown-item ">
+          <input type="checkbox" class="invoice_filter" id="checkbox_club_owes"> Club owes
+        </label>
+        <label class="dropdown-item ">
+          <input type="checkbox" class="invoice_filter" id="checkbox_seen"> User has seen
+        </label>
+        <label class="dropdown-item ">
+          <input type="checkbox" class="invoice_filter" id="checkbox_unseen"> User has not seen
+        </label>
+      </div>
+    </span>
 <form class="col-sm-12 mt-2">
   {% crispy filter.form %}
   </form>
@@ -23,4 +75,49 @@
 {% endblock %}
 {% block extra_js %}
 <script type='text/javascript'>pageView();</script>
+<script type="text/javascript">
+$(document).ready(function(){
+  $("#id_query").blur(function(){
+    var value = this.value;
+    var idsToUncheck = [];
+    $(".invoice_filter").each(function() {
+        var cmd = this.id.replace("checkbox_", "").replace("_", " ");
+        var regex = new RegExp("(^|\\s)" + cmd + "(?=\\s|$)", "g");
+        if (regex.test(value)) {
+            $(this).prop("checked", true);
+        } else {
+            idsToUncheck.push(this.id);
+        }
+    });
+
+    // Loop through the list of ids to uncheck and uncheck them all
+    idsToUncheck.forEach(function(id) {
+        $("#" + id).prop("checked", false);
+    });
+  });
+    $(".invoice_filter").change(function(){
+        var cmd = this.id.replace("checkbox_", "").replace("_", " ");
+        if($(this).is(":checked")) {
+          update_cmd(cmd, true);
+        } else {
+          update_cmd(cmd, false);
+        }
+    });
+    function update_cmd(cmd, add_cmd) {
+      var queryValue = $("#id_query").val();
+      var regex = new RegExp("(^|\\s)" + cmd + "(?=\\s|$)", "g");
+      queryValue = queryValue.replace(regex, "");
+      if (add_cmd) {
+        queryValue += " " + cmd;
+      }
+      $("#id_query").val(queryValue);
+      // simulate keystroke to fire off htmx
+      document.getElementById("id_query").dispatchEvent(new KeyboardEvent("keyup", {
+        bubbles: true,
+        cancelable: true,
+        })
+      );
+    }
+});
+</script>
 {% endblock %}

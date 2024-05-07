@@ -698,23 +698,13 @@ class Auction(models.Model):
 	@property
 	def paypal_invoice_chunks(self):
 		"""
-		Needed to know how many chunks to split the inovice list to
-		https://www.paypal.com/invoice/batch
-		used by views.auctionInvoicesPaypalCSV
+		Needed to know how many chunks to split the invoice list to
+		chunk size 150 per https://www.paypal.com/invoice/batch
 		"""
-		invoices = self.paypal_invoices
-		chunks = 1
-		count = 0
-		chunkSize = 150
-		returnList = [1]
-		for invoice in invoices:
-			if not invoice.user_should_be_paid: # only include users that need to pay us
-				count += 1
-				if count > chunkSize:
-					chunks += 1
-					returnList.append(chunks)
-					count = 0
-		return returnList
+		invoices_count = self.paypal_invoices.filter(calculated_total__lt=0).count()
+		chunk_size = 150
+		chunks = (invoices_count + chunk_size - 1) // chunk_size
+		return list(range(1, chunks + 1))
 
 	@property
 	def set_location_link(self):
@@ -2458,7 +2448,7 @@ class Invoice(models.Model):
 	@property
 	def unsold_lot_warning(self):
 		if self.unsold_non_donation_lots:
-			return f"{self.unsold_non_donation_lots} unsold lot(s), sell these before marking this paid"
+			return f"{self.unsold_non_donation_lots} unsold lot(s), sell these before setting this paid"
 		return ""
 
 	def save(self, *args, **kwargs):

@@ -108,8 +108,8 @@ def bid_on_lot(lot, user, amount):
         if lot.auction:
             invoice = Invoice.objects.filter(auctiontos_user__user=user, auction=lot.auction).first()
             if invoice:
-                if invoice.status == "PAID":
-                    result['message'] = "Your invoice has already been paid for this auction.  You can't bid on anything unless it is reopened"
+                if invoice.status != "DRAFT":
+                    result['message'] = "Your invoice for this auction is not open.  An administrator can reopen it and allow you to bid."
                     return result
         originalHighBidder = lot.high_bidder
         originalBid = lot.high_bid

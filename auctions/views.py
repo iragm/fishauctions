@@ -1145,7 +1145,7 @@ def auctionInvoicesPaypalCSV(request, slug, chunk):
             'Currency Code', 'Note to Customer', 'Terms and Conditions', 'Memo to Self'])
         invoices = auction.paypal_invoices
         count = 0
-        chunkSize = 150 # attention: this is also set in models.auction.
+        chunkSize = 150 # attention: this is also set in models.auction.paypal_invoice_chunks
         for invoice in invoices:
             invoice.recalculate
             # we loop through everything regardless of which chunk
@@ -1497,8 +1497,8 @@ class AuctionInvoices(DetailView, AuctionPermissionsMixin):
     def get_context_data(self, **kwargs):
         #user = User.objects.get(pk=self.request.user.pk)
         context = super().get_context_data(**kwargs)
-        invoices = Invoice.objects.filter(auction=self.auction).order_by('status','user__last_name')
-        invoices = sorted(invoices, key=lambda t: (str(t.location), t.pk) ) 
+        invoices = Invoice.objects.filter(auction=self.auction).order_by('status','auctiontos_user__name')
+        invoices = sorted(invoices, key=lambda t: (str(t.location), t.pk) )
         context['invoices'] = invoices
         context['active_tab'] = 'invoices'
         return context
@@ -2689,9 +2689,6 @@ class AuctionTOSAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
     form_class = CreateEditAuctionTOS
     model = AuctionTOS
 
-    def get_queryset(self):
-        return AuctionTOS.objects.all()
-
     def dispatch(self, request, *args, **kwargs):
         # this can be an int if we are updating, or a string (auction slug) if we are creating
         pk = kwargs.pop('pk')
@@ -3382,6 +3379,7 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
         context['print_label_link'] = None
         if invoice.auction.is_online:
             context['print_label_link'] = reverse("print_labels_by_bidder_number", kwargs={'slug': invoice.auction.slug, 'bidder_number': invoice.auctiontos_user.bidder_number})
+        context['is_auction_admin'] = self.is_auction_admin
         return context
    
     def get_success_url(self):
@@ -3416,6 +3414,9 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
         context = self.get_context_data(object=self.object)
         context['formset'] = invoice_adjustment_formset
         context['helper'] = helper
+        # recaluclating slows things down, 
+        # I am not sure if it's a good idea to have it here or not
+        self.object.recalculate
         return self.render_to_response(context)
 
 class InvoiceNoLoginView(InvoiceView):
@@ -3655,6 +3656,88 @@ def getClubs(request):
             Q(name__icontains=species) | Q(abbreviation__icontains=species)
             ).values('id','name', 'abbreviation')
         return JsonResponse(list(result), safe=False)
+
+class InvoiceBulkUpdateStatus(TemplateView, FormMixin, AuctionPermissionsMixin):
+    """Change invoice statuses in bulk"""
+    template_name = "auctions/generic_admin_form.html"
+    form_class = ChangeInvoiceStatusForm
+    show_checkbox = False
+
+    def get_queryset(self):
+        return Invoice.objects.filter(auctiontos_user__auction=self.auction, status=self.old_invoice_status)
+
+    def dispatch(self, request, *args, **kwargs):
+        self.auction = get_object_or_404(Auction, slug=kwargs.pop('slug'), is_deleted=False)
+        self.is_auction_admin
+        self.invoice_count = self.get_queryset().count()
+        return super().dispatch(request, *args, **kwargs)
+    
+    def get_form_kwargs(self):
+        form_kwargs = super().get_form_kwargs()
+        form_kwargs['auction'] = self.auction
+        form_kwargs['invoice_count'] = self.invoice_count
+        form_kwargs['show_checkbox'] = self.show_checkbox
+        return form_kwargs
+        
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        return context
+        
+    def post(self, request, *args, **kwargs):
+        invoices = self.get_queryset()
+        for invoice in invoices:
+            invoice.status = self.new_invoice_status
+            invoice.recalculate
+            invoice.save()
+        return HttpResponse("<script>location.reload();</script>", status=200)
+
+class MarkInvoicesReady(InvoiceBulkUpdateStatus):
+    old_invoice_status = "DRAFT"
+    new_invoice_status = "UNPAID"
+    show_checkbox = True
+
+    def post(self, request, *args, **kwargs):
+        form = self.get_form()
+        if form.is_valid():
+            self.auction.email_users_when_invoices_ready = form.cleaned_data.get("send_invoice_ready_notification_emails")
+            self.auction.save()
+        return super().post(request, *args, **kwargs)
+    
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['tooltip'] = f"Changing the invoice status to ready will block users from bidding.  You should make any needed adjustments before setting invoices to ready.  This will change the status of {self.invoice_count} invoices, and allow you to export them to PayPal."
+        if not self.auction.closed and self.auction.is_online:
+            context['unsold_lot_warning'] = "Don't set invoices ready yet!  This auction hasn't ended."
+            if not self.auction.minutes_to_end:
+                active_lot_count = self.auction.lots_qs.filter(active=True).count()
+                context['unsold_lot_warning'] += f" There are still {active_lot_count} lots with last-minute bids on them"
+        if not self.auction.is_online:
+            context['unsold_lot_warning'] = "You usually don't need to use this.  Set people's invoices to paid one at a time, as people leave the auction."
+        if not self.invoice_count:
+            context['modal_title'] = "No open invoices"
+        else:
+            context['modal_title'] = f"Set {self.invoice_count} open invoices to ready"
+        return context
+    
+class MarkInvoicesPaid(InvoiceBulkUpdateStatus):
+    old_invoice_status = "UNPAID"
+    new_invoice_status = "PAID"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        unchanged_invoices = Invoice.objects.filter(auctiontos_user__auction=self.auction, status="DRAFT").count()
+        context['unsold_lot_warning'] = "You probably don't need this.  Instead, set invoices to paid one at a time, as users pay them."
+        context['tooltip'] = ""
+        if unchanged_invoices:
+            context['tooltip'] += f" There are {unchanged_invoices} open invoices in this auction that will not be changed; set them ready first if you want to change them."
+        context['tooltip'] += f" This will set {self.invoice_count} ready invoices to paid."
+        if not self.invoice_count:
+            context['modal_title'] = "No open invoices"
+            if unchanged_invoices:
+                context['tooltip'] = f"There's {unchanged_invoices} invoices that are still open.  You should set open invoices to ready before using this."
+        else:
+            context['modal_title'] = f"Set {self.invoice_count} ready invoices to paid"
+        return context
 
 class UserView(DetailView):
     """View information about a single user"""
