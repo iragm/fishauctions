@@ -1482,27 +1482,6 @@ class AuctionUsers(SingleTableMixin, FilterView, AuctionPermissionsMixin):
         context['active_tab'] = 'users'
         return context
 
-class AuctionInvoices(DetailView, AuctionPermissionsMixin):
-    """List of invoices associated with an auction"""
-    model = Auction
-    template_name = 'auction_invoices.html'
-
-    def dispatch(self, request, *args, **kwargs):
-        self.auction = self.get_object()
-        self.is_auction_admin
-        if not self.auction.closed and self.auction.is_online:
-            messages.error(self.request, "This auction is still in progress, you probably shouldn't mark any invoices ready yet.")
-        return super().dispatch(request, *args, **kwargs)
-        
-    def get_context_data(self, **kwargs):
-        #user = User.objects.get(pk=self.request.user.pk)
-        context = super().get_context_data(**kwargs)
-        invoices = Invoice.objects.filter(auction=self.auction).order_by('status','auctiontos_user__name')
-        invoices = sorted(invoices, key=lambda t: (str(t.location), t.pk) )
-        context['invoices'] = invoices
-        context['active_tab'] = 'invoices'
-        return context
-
 class AuctionStats(DetailView, AuctionPermissionsMixin):
     """Fun facts about an auction"""
     model = Auction

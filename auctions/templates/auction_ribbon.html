@@ -31,11 +31,6 @@
         <li class="nav-item">
       <a class="nav-link {% if active_tab == 'lots'%}active{% endif %}" data-bs-toggle="tab" href="/auctions/{{auction.slug}}/lots">Lots</a>
     </li>
-    {% if auction.is_online %}
-    <li class="nav-item">
-      <a class="nav-link {% if active_tab == 'invoices'%}active{% endif %}" data-bs-toggle="tab" href="/auctions/{{auction.slug}}/invoices">Invoices</a>
-    </li>
-    {% endif %}
     <li class="nav-item dropdown">
         <a class="nav-link dropdown-toggle" data-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">More</a>
         <div class="dropdown-menu">
@@ -46,9 +41,6 @@
           <!-- <h6 class="dropdown-header">Other</h6> -->
           <a class="dropdown-item" href="{{ auction.set_lot_winners_link }}">Set lot winners</a>
           <a class="dropdown-item" href="/auctions/{{auction.slug}}/chat/">Chat messages</a>
-          {% if not auction.is_online %}
-          <a class="dropdown-item" href="/auctions/{{auction.slug}}/invoices">Invoices</a>
-          {% endif %}
           <a class="dropdown-item" href="/auctions/new?copy={{auction.slug}}">Copy to new auction</a>
           <a class="dropdown-item" href="/auctions/{{auction.slug}}/stats/">Stats</a>
           <a class="dropdown-item" href="/auctions/{{auction.slug}}/delete/">Delete auction</a>
