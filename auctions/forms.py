@@ -51,7 +51,7 @@ class QuickAddTOS(forms.ModelForm):
         self.fields['pickup_location'].queryset = self.auction.location_qs
         if not self.auction.multi_location:
             self.fields['pickup_location'].initial = self.auction.location_qs.first()
-
+            self.fields['pickup_location'].widget = HiddenInput()
     def clean(self):
         cleaned_data = super().clean()
         bidder_number = cleaned_data.get("bidder_number")
@@ -273,7 +273,7 @@ class WinnerLot(forms.Form):
         'data-container-css-class': '',
         })
         )
-    winning_price = forms.IntegerField(label="Sell price", min_value=0)
+    winning_price = forms.IntegerField(label="Sell price", min_value=0, required=False)
     invoice = forms.CharField(label='Invoice', max_length=100)
     auction = forms.CharField(label='Auction', max_length=100)
 
@@ -320,8 +320,8 @@ class WinnerLot(forms.Form):
 
 class WinnerLotSimple(WinnerLot):
     """Simplified form using char fields instead of autocomplete fields"""
-    lot = forms.CharField(max_length=20)
-    winner = forms.CharField(max_length=20)
+    lot = forms.CharField(max_length=20, required=False)
+    winner = forms.CharField(max_length=20, required=False)
 
 class WinnerLotSimpleImages(WinnerLotSimple):
     """Horizontal layout"""
@@ -351,7 +351,25 @@ class WinnerLotSimpleImages(WinnerLotSimple):
                 Div(PrependedAppendedText('winning_price', '$', '.00'), css_class='col-md-4'),
                 Div('winner', css_class='col-md-3'),
                 Div(
-                    HTML('<button type="submit" class="btn btn-success form-control mt-4">Save</button>'),
+                    HTML("""
+                         <div class="btn-group mt-4" role="group" aria-label="Save">
+                            <button type="submit" class="btn btn-success form-control">Save</button>
+                            <div class="btn-group" role="group">
+                                <button id="btnGroupDrop2" type="button" class="btn btn-success dropdown-toggle" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false"></button>
+                                <div class="dropdown-menu" aria-labelledby="btnGroupDrop2" style="">
+                                <a id='mark_unsold' class="dropdown-item" href="#">Mark unsold</a>
+                                <script>
+                                    $(document).ready(function() {
+                                        $('#mark_unsold').click(function(event) {
+                                            $('#id_winning_price').val(0);
+                                            $(this).closest('form').submit();
+                                        });
+                                    });
+                                </script>
+                                </div>
+                            </div>
+                            </div>
+                         """),
                     css_class='col-md-2 form-group'
                 ),
                 css_class='row',
@@ -637,6 +655,8 @@ class CreateEditAuctionTOS(forms.ModelForm):
             self.fields['is_admin'].widget = HiddenInput()
             if auction.location_qs.count() == 1:
                 self.fields['pickup_location'].initial = auction.location_qs.first()
+        if auction.location_qs.count() == 1:
+            self.fields['pickup_location'].widget = HiddenInput()
         if not auction.only_approved_sellers and not self.auctiontos:
             self.fields['selling_allowed'].widget = HiddenInput()
         if not auction.only_approved_sellers and self.auctiontos and self.auctiontos.selling_allowed:
@@ -1053,7 +1073,7 @@ class AuctionEditForm(forms.ModelForm):
         fields = ['notes', 'lot_entry_fee','unsold_lot_fee','winning_bid_percent_to_club', 'date_start', 'date_end', 'lot_submission_start_date',\
             'lot_submission_end_date', 'sealed_bid','use_categories', 'promote_this_auction', 'max_lots_per_user', 'allow_additional_lots_as_donation',
             'email_users_when_invoices_ready', 'pre_register_lot_entry_fee_discount', 'pre_register_lot_discount_percent', 'allow_bidding_on_lots','only_approved_sellers',
-            'invoice_payment_instructions', 'minimum_bid', 'winning_bid_percent_to_club_for_club_members', 'lot_entry_fee_for_club_members', 'require_phone_number', 'set_lot_winners_url',
+            'invoice_payment_instructions', 'minimum_bid', 'winning_bid_percent_to_club_for_club_members', 'lot_entry_fee_for_club_members', 'require_phone_number',
             'reserve_price', 'buy_now', 'tax',
             ]
         widgets = {
@@ -1083,7 +1103,7 @@ class AuctionEditForm(forms.ModelForm):
             self.fields['allow_bidding_on_lots'].help_text = "Leave this checked or people won't be able to bid!"
             self.fields['pre_register_lot_entry_fee_discount'].widget=forms.HiddenInput()
             self.fields['pre_register_lot_discount_percent'].widget=forms.HiddenInput()
-            self.fields['set_lot_winners_url'].widget=forms.HiddenInput()
+            #self.fields['set_lot_winners_url'].widget=forms.HiddenInput()
         else:
             self.fields['allow_bidding_on_lots'].help_text = "Check to allow people to place bids on this website."
             self.fields['date_end'].help_text = "You should probably leave this blank so that you can manually set winners. This field has been indefinitely set to hidden - see https://github.com/iragm/fishauctions/issues/116"
@@ -1171,7 +1191,7 @@ class AuctionEditForm(forms.ModelForm):
                 Div('minimum_bid',css_class='col-md-3',),
                 Div('reserve_price', css_class='col-md-3',),
                 Div('buy_now', css_class='col-md-3',),
-                Div('set_lot_winners_url', css_class='col-md-3',),
+                #Div('set_lot_winners_url', css_class='col-md-3',),
                 Div('promote_this_auction', css_class='col-md-3',),
                 PrependedAppendedText('tax', '', '%',wrapper_class='col-md-3', ),
                 css_class='row',

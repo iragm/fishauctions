@@ -25,5 +25,4 @@ $(window).on("load", function() {
 {#        {% include 'auction_ribbon.html' %} #}
 {% crispy form form.helper %}
 <div id="result"></div>
-<small>Press Tab to move the to next field, F11 for full screen, control + or control - to zoom.  <a href="{% url 'auction_main' slug=auction.slug %}">{{auction}} home</a>.</small>
 {% endblock %}

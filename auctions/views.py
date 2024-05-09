@@ -1518,7 +1518,7 @@ class QuickSetLotWinner(FormView, AuctionPermissionsMixin):
     template_name = "auctions/quick_set_winner.html"
     form_class = WinnerLot
     model = Lot
-    
+
     def get_success_url(self):
         return reverse('auction_lot_winners_autocomplete', kwargs={'slug': self.auction.slug})
 
@@ -1535,8 +1535,11 @@ class QuickSetLotWinner(FormView, AuctionPermissionsMixin):
                 undo_lot.winner = None
                 undo_lot.auctiontos_winner = None
                 undo_lot.winning_price = None
+                if not self.auction.is_online:
+                    undo_lot.date_end = None
+                undo_lot.active = False
                 undo_lot.save()
-                messages.info(request, f"{undo_lot.custom_lot_number} {undo_lot.lot_name} has been marked as unsold") 
+                messages.info(request, f"{undo_lot.custom_lot_number} {undo_lot.lot_name} now has no winner and can be sold") 
         return super().dispatch(request, *args, **kwargs)
 
     def get_form_kwargs(self):
@@ -1557,21 +1560,29 @@ class QuickSetLotWinner(FormView, AuctionPermissionsMixin):
         lot = Lot.objects.get(pk=lot, is_deleted=False)
         tos = AuctionTOS.objects.get(pk=winner)
         # check auction, find a lot that matches this one, confirm it belongs to this auction
-        if lot.auction and tos.auction:
-            if lot.auction == tos.auction:
-                if tos.auction == self.auction:
-                    lot.auctiontos_winner = tos
-                    lot.winning_price = winning_price
-                    lot.date_end = timezone.now()
-                    lot.save()
-                    lot.add_winner_message(self.request.user, tos, winning_price)
-                    if lot.custom_lot_number:
-                        undo_url = self.get_success_url() + f"?undo={lot.custom_lot_number}"
-                        messages.success(self.request, f"{tos.name} is now the winner of lot {lot.lot_name}.  <a href='{undo_url}'>Undo</a>")
-                    else:
-                        messages.success(self.request, f"{tos.name} is now the winner of lot {lot.lot_name}")
-                    return super().form_valid(form)
+        if lot.auction and lot.auction == self.auction:
+            if (not tos and not winning_price) or (tos.auction and tos.auction == self.auction):
+                return self.set_winner(lot, tos, winning_price)
         return self.form_invalid(form)
+
+    def set_winner(self, lot, winning_tos, winning_price):
+        """Set the winner (or mark lot unsold), 
+            add a success message
+            This does not do permissions or validation checks, do those first
+            Call this once the form is valid"""
+        if not winning_price:
+            lot.date_end = timezone.now()
+            lot.save()
+            messages.success(self.request, f"Lot {lot.custom_lot_number} has been ended with no winner")
+        else:
+            lot.auctiontos_winner = winning_tos
+            lot.winning_price = winning_price
+            lot.date_end = timezone.now()
+            lot.save()
+            lot.add_winner_message(self.request.user, winning_tos, winning_price)
+            undo_url = self.get_success_url() + f"?undo={lot.custom_lot_number}"
+            messages.success(self.request, f"Bidder {winning_tos.bidder_number} is now the winner of lot {lot.custom_lot_number}.  <a href='{undo_url}'>Undo</a>")
+        return HttpResponseRedirect(self.get_success_url())
 
 class SetLotWinner(QuickSetLotWinner):
     """Same as QuickSetLotWinner but without the autocomplete, per user requests"""
@@ -1585,52 +1596,41 @@ class SetLotWinner(QuickSetLotWinner):
         lot = form.cleaned_data.get("lot")
         winner = form.cleaned_data.get("winner")
         winning_price = form.cleaned_data.get("winning_price")
+        if winning_price is None or winning_price < 0:
+            form.add_error('winning_price', "How much did the lot sell for?")
         qs = self.auction.lots_qs
         lot = qs.filter(custom_lot_number=lot).first()
-        undo_url = None
-        if lot:
-            undo_url = self.get_success_url() + f"?undo={lot.custom_lot_number}"
-        #undo_url = reverse("auction_lot_list", kwargs={'slug': self.auction.slug}) + f"?query={lot.lot_number_display}"
-        if not lot:
-            lot = form.cleaned_data.get("lot")
-            try:
-                lot = qs.filter(lot_number=lot).first()
-            except:
-                lot = None
+        tos = None
         if not lot:
             form.add_error('lot', "No lot found")
-        tos = AuctionTOS.objects.filter(auction=self.auction, bidder_number=winner)
-        if len(tos) > 1:
-            form.add_error('winner', f"{len(tos)} bidders found with this number!")
-        else:
-            tos = tos.first()
-        if not tos:
-            form.add_error('winner', "No bidder found")
-        else:
-            if tos.invoice and tos.invoice.status != "DRAFT":
-                form.add_error('winner', "This user's invoice is not open")
+        if winning_price is not None and winning_price > 0:
+            tos = AuctionTOS.objects.filter(auction=self.auction, bidder_number=winner)
+            if len(tos) > 1:
+                form.add_error('winner', f"{len(tos)} bidders found with this number!")
+            else:
+                tos = tos.first()
+            if not tos:
+                form.add_error('winner', "No bidder found")
+            else:
+                if tos.invoice and tos.invoice.status != "DRAFT":
+                    form.add_error('winner', "This user's invoice is not open")
         if lot:
-            if lot.auctiontos_winner and lot.winning_price:
-                error = f'Lot {lot.lot_number_display} has already been sold'
-                # there's probably quite a few edge cases missing here, not sure it's worth it to add hand holding for all of them
-                # specifically, separate errors for:
-                # seller invoice closed
-                # winner invoice closed
-                try:
-                    if tos.invoice.status == "DRAFT" and lot.auctiontos_seller and lot.auctiontos_seller.invoice.status == "DRAFT":
-                        form.add_error('lot', mark_safe(f"{error}.  <a href='{undo_url}'>Click here to mark unsold</a>."))
-                    else:
-                        form.add_error('lot', mark_safe(f"{error}.  The seller and winner invoices both need to be open to mark it unsold."))
-                except:
-                    pass
+            if lot.auctiontos_seller and lot.auctiontos_seller.invoice and lot.auctiontos_seller.invoice.status != "DRAFT":
+                form.add_error('lot', "The seller's invoice is not open")
+            else:
+                # right now we allow you to mark unsold lots that have already been sold, bad idea but it's what people want
+                if lot.auctiontos_winner and lot.winning_price and winning_price != 0:
+                #if lot.auctiontos_winner and lot.winning_price: # this would be better, but would confuse
+                    error = f'Lot {lot.lot_number_display} has already been sold'
+                    try:
+                        if tos.invoice.status == "DRAFT" and lot.auctiontos_seller and lot.auctiontos_seller.invoice.status == "DRAFT":
+                            undo_url = self.get_success_url() + f"?undo={lot.custom_lot_number}"
+                            form.add_error('lot', mark_safe(f"{error}.  <a href='{undo_url}'>Click here to mark unsold</a>."))
+                    except:
+                        # one invoice or the other doesn't exist, this only happens when the selling the first lot to a given tos
+                        form.add_error('lot', mark_safe(f"{error}"))
         if form.is_valid():
-            lot.auctiontos_winner = tos
-            lot.winning_price = winning_price
-            lot.date_end = timezone.now()
-            lot.save()
-            lot.add_winner_message(self.request.user, tos, winning_price)
-            messages.success(self.request, f"Bidder {tos.bidder_number} is now the winner of lot {lot.lot_number_display}.  <a href='{undo_url}'>Undo</a>")
-            return HttpResponseRedirect(self.get_success_url())
+            return self.set_winner(lot, tos, winning_price)
         return self.form_invalid(form)
 
 class SetLotWinnerImage(SetLotWinner):
@@ -1640,6 +1640,12 @@ class SetLotWinnerImage(SetLotWinner):
 
     def get_success_url(self):
         return reverse('auction_lot_winners_images', kwargs={'slug': self.auction.slug})
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['hide_navbar'] = True
+        context['menu_tip'] = mark_safe(f"Press Tab to move the to next field, F11 for full screen, control + or control - to zoom.  <a href='{reverse('auction_main', kwargs={'slug': self.auction.slug})}'>{self.auction} home</a>.")
+        return context
 
 class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
     """Add/edit lots of lots for a given auctiontos pk"""
@@ -3655,7 +3661,10 @@ class InvoiceBulkUpdateStatus(TemplateView, FormMixin, AuctionPermissionsMixin):
         form_kwargs = super().get_form_kwargs()
         form_kwargs['auction'] = self.auction
         form_kwargs['invoice_count'] = self.invoice_count
-        form_kwargs['show_checkbox'] = self.show_checkbox
+        if self.invoice_count:
+            form_kwargs['show_checkbox'] = self.show_checkbox
+        else:
+            form_kwargs['show_checkbox'] = False
         return form_kwargs
         
     def get_context_data(self, **kwargs):
@@ -3694,6 +3703,7 @@ class MarkInvoicesReady(InvoiceBulkUpdateStatus):
             context['unsold_lot_warning'] = "You usually don't need to use this.  Set people's invoices to paid one at a time, as people leave the auction."
         if not self.invoice_count:
             context['modal_title'] = "No open invoices"
+            context['tooltip'] = "There aren't any open invoices in this auction.  Invoices are created automatically whenever a user buys or sells a lot."
         else:
             context['modal_title'] = f"Set {self.invoice_count} open invoices to ready"
         return context
@@ -3711,7 +3721,7 @@ class MarkInvoicesPaid(InvoiceBulkUpdateStatus):
             context['tooltip'] += f" There are {unchanged_invoices} open invoices in this auction that will not be changed; set them ready first if you want to change them."
         context['tooltip'] += f" This will set {self.invoice_count} ready invoices to paid."
         if not self.invoice_count:
-            context['modal_title'] = "No open invoices"
+            context['modal_title'] = "No ready invoices"
             if unchanged_invoices:
                 context['tooltip'] = f"There's {unchanged_invoices} invoices that are still open.  You should set open invoices to ready before using this."
         else:

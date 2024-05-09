@@ -405,3 +405,139 @@ class InvoiceModelTests(TestCase):
         self.adjustment_discount_percent.amount=0
         self.adjustment_discount_percent.save()
         self.assertEqual(self.invoiceB.net, -37.5)
+
+
+class SetLotWinnerViewTest(TestCase):
+    def setUp(self):
+        time = timezone.now() - datetime.timedelta(days=2)
+        timeStart = timezone.now() - datetime.timedelta(days=3)
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        self.user = User.objects.create_user(username="testuser", password="testpassword")
+        self.user2 = User.objects.create_user(username="testuser2", password="password")
+        self.auction = Auction.objects.create(created_by=self.user, title="A test auction", date_end=time, date_start=timeStart, winning_bid_percent_to_club=25, lot_entry_fee=2, unsold_lot_fee=10, tax=25)
+        self.location = PickupLocation.objects.create(name='location', auction=self.auction, pickup_time=theFuture)
+        self.seller = AuctionTOS.objects.create(user=self.user, auction=self.auction, pickup_location=self.location, bidder_number='145')
+        self.bidder = AuctionTOS.objects.create(user=self.user2, auction=self.auction, pickup_location=self.location, bidder_number='225')
+        self.lot = Lot.objects.create(custom_lot_number='123', lot_name="A test lot", auction=self.auction, auctiontos_seller=self.seller, quantity=1, description="")
+        self.lot2 = Lot.objects.create(custom_lot_number='124', lot_name="Another test lot", auction=self.auction, auctiontos_seller=self.seller, quantity=1, description="")
+        #self.invoice = Invoice.objects.create(auctiontos_user=self.seller)    
+        #self.invoiceB = Invoice.objects.create(auctiontos_user=self.tosB)
+
+        # Create test client
+        self.client = Client()
+
+    def test_valid_form_submission_and_undo(self):
+        self.client.login(username='testuser', password='testpassword')
+        url = reverse('auction_lot_winners_images', kwargs={'slug': self.auction.slug})
+        response = self.client.post(url, {
+            'lot': self.lot.custom_lot_number,
+            'winner': self.bidder.bidder_number,
+            'winning_price': 100,
+            'invoice':True,
+            'auction':5, # this is not used anywhere, but still required
+        })
+        self.assertEqual(response.status_code, 302)  # Should redirect after successful form submission
+        updated_lot = Lot.objects.get(pk=self.lot.pk)
+        self.assertEqual(updated_lot.auctiontos_winner, self.bidder)
+        self.assertEqual(updated_lot.winning_price, 100)
+        response = self.client.get(url, {'undo': self.lot.custom_lot_number})
+        self.assertEqual(response.status_code, 200)
+        updated_lot = Lot.objects.get(pk=self.lot.pk)
+        self.assertIsNone(updated_lot.auctiontos_winner)
+        self.assertIsNone(updated_lot.winning_price)
+
+    def test_invalid_form_submission(self):
+        url = reverse('auction_lot_winners_images', kwargs={'slug': self.auction.slug})
+        self.client.login(username='testuser', password='testpassword')
+        response = self.client.post(url, {
+            'lot': self.lot.custom_lot_number,
+            'winner': self.bidder.bidder_number,
+            'winning_price': -10,  # Invalid winning price
+            'invoice':True,
+            'auction':5,
+        })
+        self.assertEqual(response.status_code, 200)  # Form should not be submitted successfully
+        updated_lot = Lot.objects.get(pk=self.lot.pk)
+        self.assertIsNone(updated_lot.auctiontos_winner)
+        self.assertIsNone(updated_lot.winning_price)
+
+    def test_seller_invoice_closed(self):
+        self.invoice = Invoice.objects.get(auctiontos_user=self.seller)
+        self.invoice.status = "READY"
+        self.invoice.save()
+        self.client.login(username='testuser', password='testpassword')
+        url = reverse('auction_lot_winners_images', kwargs={'slug': self.auction.slug})
+        response = self.client.post(url, {
+            'lot': self.lot.custom_lot_number,
+            'winner': self.bidder.bidder_number,
+            'winning_price': 100,
+            'invoice':True,
+            'auction':5,
+        })
+        self.assertEqual(response.status_code, 200)  # Form should not be submitted successfully
+        updated_lot = Lot.objects.get(pk=self.lot.pk)
+        self.assertIsNone(updated_lot.auctiontos_winner)
+        self.assertIsNone(updated_lot.winning_price)
+
+    def test_winner_invoice_closed(self):
+        self.invoice = Invoice.objects.create(auctiontos_user=self.bidder)
+        self.invoice.status = "READY"
+        self.invoice.save()
+        self.client.login(username='testuser', password='testpassword')
+        url = reverse('auction_lot_winners_images', kwargs={'slug': self.auction.slug})
+        response = self.client.post(url, {
+            'lot': self.lot.custom_lot_number,
+            'winner': self.bidder.bidder_number,
+            'winning_price': 100,
+            'invoice':True,
+            'auction':5,
+        })
+        self.assertEqual(response.status_code, 200)  # Form should not be submitted successfully
+        updated_lot = Lot.objects.get(pk=self.lot.pk)
+        self.assertIsNone(updated_lot.auctiontos_winner)
+        self.assertIsNone(updated_lot.winning_price)
+
+    def test_winner_not_found(self):
+        self.client.login(username='testuser', password='testpassword')
+        url = reverse('auction_lot_winners_images', kwargs={'slug': self.auction.slug})
+        response = self.client.post(url, {
+            'lot': self.lot.custom_lot_number,
+            'winner': '55665',  # Invalid winner number
+            'winning_price': 100,
+            'invoice':True,
+            'auction':5,
+        })
+        self.assertEqual(response.status_code, 200)  # Form should not be submitted successfully
+        updated_lot = Lot.objects.get(pk=self.lot.pk)
+        self.assertIsNone(updated_lot.auctiontos_winner)
+        self.assertIsNone(updated_lot.winning_price)
+
+    def test_lot_not_found(self):
+        self.client.login(username='testuser', password='testpassword')
+        url = reverse('auction_lot_winners_images', kwargs={'slug': self.auction.slug})
+        response = self.client.post(url, {
+            'lot': 'invalid_lot_number',  # Invalid lot number
+            'winner': self.bidder.bidder_number,
+            'winning_price': 100,
+            'invoice':True,
+            'auction':5,
+        })
+        self.assertEqual(response.status_code, 200)  # Form should not be submitted successfully
+
+    def test_lot_already_sold(self):
+        self.lot.auctiontos_winner = self.bidder
+        self.lot.winning_price = 100
+        self.lot.save()
+        self.client.login(username='testuser', password='testpassword')
+        url = reverse('auction_lot_winners_images', kwargs={'slug': self.auction.slug})
+        response = self.client.post(url, {
+            'lot': self.lot.custom_lot_number,
+            'winner': self.bidder.bidder_number,
+            'winning_price': 200,  # Attempting to set winner for already sold lot with a different price
+            'invoice':True,
+            'auction':5,
+        })
+        self.assertEqual(response.status_code, 200)  # Form should not be submitted successfully
+        updated_lot = Lot.objects.get(pk=self.lot.pk)
+        self.assertEqual(updated_lot.auctiontos_winner, self.bidder)  # Lot winner should remain unchanged
+        self.assertEqual(updated_lot.winning_price, 100)  # Winning price should remain unchanged

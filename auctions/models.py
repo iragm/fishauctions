@@ -120,8 +120,6 @@ def guess_category(text):
 	# attempting this as a single-shot query is extremely difficult to debug
 	categories = {}
 	for lot in lot_qs:
-		if lot.species_category.pk == 21:
-			print("lot!")
 		matches = 0
 		for keyword in keywords:
 			if keyword in lot.lot_name.lower():
@@ -1361,6 +1359,7 @@ class Lot(models.Model):
 	category_automatically_added = models.BooleanField(default=False)
 	category_checked = models.BooleanField(default=False)
 	label_printed = models.BooleanField(default=False)
+	partial_refund_percent = models.IntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(100)])
 
 	def save(self, *args, **kwargs):
 		"""
@@ -1399,6 +1398,7 @@ class Lot(models.Model):
 			search = self.lot_name.replace(" ","%20")
 			self.reference_link = f"https://www.google.com/search?q={search}&tbm=isch"
 		super().save(*args, **kwargs)
+
 		# chat history subscription for the owner
 		if self.user:
 			subscription, created = ChatSubscription.objects.get_or_create(
@@ -2377,7 +2377,7 @@ class Invoice(models.Model):
 		"""For non-online auctions only.  Return number of lots the user did not sell. This may be simply lots whose winner has not been set yet."""
 		if self.is_online:
 			return 0
-		return len(self.sold_lots_queryset.exclude(auctiontos_winner__isnull=False).filter(donation=False, banned=False))
+		return self.sold_lots_queryset.filter(active=True, auctiontos_winner__isnull=True, donation=False, banned=False).count()
 
 	@property
 	def total_sold(self):

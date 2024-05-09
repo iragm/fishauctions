@@ -207,6 +207,16 @@ window.onload = function() {
       height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
       <!-- End Google Tag Manager (noscript) -->
       <div class="bs-canvas-overlay bs-canvas-anim bg-dark position-fixed w-100 h-100"></div>
+      {% if hide_navbar %}
+        <script>
+          $(document).ready(function(){
+              $("#toggleLink").click(function(){
+                  $("#navbar_span").toggle();
+              });
+          });
+        </script>
+        <span id='navbar_span' style="display: none;">
+      {% endif %}
       <nav class="navbar navbar-expand-lg navbar-dark bg-primary navbar-static-top" role="navigation">
           <a class="navbar-brand" href="/">auction.fish</a>  
           <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#site_navbar" aria-controls="navbarColor02" aria-expanded="false" aria-label="Toggle navigation">
@@ -303,6 +313,7 @@ window.onload = function() {
               </div>
           </div>
         </nav>
+        {% if hide_navbar %}</span><small><a href="#" id="toggleLink">Show/Hide menu</a>. {{ menu_tip }}</small>{% endif %}
         {% if not hide_tos_banner %}
         <div class="alert alert-primary mb-0" role="alert" style="position:fixed; bottom: 0px; width: 100%; z-index:9999;">By using this site, you accept our <a href="/tos/">use of cookies and our terms and conditions</a> <button class="btn-sm btn-light" type="button" onclick="agreeTos()">Don't show again</button></button></div>
         <script>
