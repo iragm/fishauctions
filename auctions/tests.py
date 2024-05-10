@@ -346,9 +346,9 @@ class InvoiceModelTests(TestCase):
         self.userB = User.objects.create_user(username="no_tos", password='testpassword')
         self.tos = AuctionTOS.objects.create(user=self.user, auction=self.auction, pickup_location=self.location)
         self.tosB = AuctionTOS.objects.create(user=self.userB, auction=self.auction, pickup_location=self.location)
-        self.lot = Lot.objects.create(lot_name="A test lot", auction=self.auction, auctiontos_seller=self.tos, quantity=1, description="", winning_price=10, auctiontos_winner=self.tosB)
-        self.lotB = Lot.objects.create(lot_name="B test lot", auction=self.auction, auctiontos_seller=self.tos, quantity=1, description="", winning_price=10, auctiontos_winner=self.tosB)
-        self.lotC = Lot.objects.create(lot_name="C test lot", auction=self.auction, auctiontos_seller=self.tos, quantity=1, description="", winning_price=10, auctiontos_winner=self.tosB)
+        self.lot = Lot.objects.create(lot_name="A test lot", auction=self.auction, auctiontos_seller=self.tos, quantity=1, description="", winning_price=10, auctiontos_winner=self.tosB, active=False)
+        self.lotB = Lot.objects.create(lot_name="B test lot", auction=self.auction, auctiontos_seller=self.tos, quantity=1, description="", winning_price=10, auctiontos_winner=self.tosB, active=False)
+        self.lotC = Lot.objects.create(lot_name="C test lot", auction=self.auction, auctiontos_seller=self.tos, quantity=1, description="", winning_price=10, auctiontos_winner=self.tosB, active=False)
         self.unsoldLot = Lot.objects.create(lot_name="Unsold lot", reserve_price=10, description="", auction=self.auction, quantity=1, auctiontos_seller=self.tos, active=False)
         self.invoice = Invoice.objects.create(auctiontos_user=self.tos)    
         self.invoiceB = Invoice.objects.create(auctiontos_user=self.tosB)
@@ -406,6 +406,80 @@ class InvoiceModelTests(TestCase):
         self.adjustment_discount_percent.save()
         self.assertEqual(self.invoiceB.net, -37.5)
 
+class LotPricesTests(TestCase):  
+    def setUp(self):
+        time = timezone.now() - datetime.timedelta(days=2)
+        timeStart = timezone.now() - datetime.timedelta(days=3)
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        self.user = User.objects.create_user(username="my_lot", password='testpassword', email='test@example.com')
+        self.auction = Auction.objects.create(created_by=self.user, title="A test auction", date_end=time, date_start=timeStart, winning_bid_percent_to_club=25, lot_entry_fee=2, unsold_lot_fee=10, tax=25)
+        self.location = PickupLocation.objects.create(name='location', auction=self.auction, pickup_time=theFuture)
+        self.userB = User.objects.create_user(username="no_tos", password='testpassword')
+        self.tos = AuctionTOS.objects.create(user=self.user, auction=self.auction, pickup_location=self.location)
+        self.tosB = AuctionTOS.objects.create(user=self.userB, auction=self.auction, pickup_location=self.location)
+        self.lot = Lot.objects.create(lot_name="A test lot", auction=self.auction, auctiontos_seller=self.tos, quantity=1, description="", winning_price=10, auctiontos_winner=self.tosB, active=False)
+        self.unsold_lot = Lot.objects.create(lot_name="Unsold lot", reserve_price=10, description="", auction=self.auction, quantity=1, auctiontos_seller=self.tos, active=False)
+        self.sold_no_auction_lot = Lot.objects.create(lot_name="not in the auction", reserve_price=10, description="", auction=None, quantity=1, user=self.user, active=False, winning_price=10, date_end=time)
+        self.unsold_no_auction_lot = Lot.objects.create(lot_name="unsold not in the auction", reserve_price=10, description="", auction=None, quantity=1, user=self.user, active=True, date_end=time)
+    
+    def test_lot_prices(self):
+        lots = Lot.objects.all()
+        lots = add_price_info(lots)
+
+        lot = lots.filter(pk=self.lot.pk).first()
+        self.assertEqual(lot.your_cut, 5.5)
+        unsold_lot = lots.filter(pk=self.unsold_lot.pk).first()
+        self.assertEqual(unsold_lot.your_cut, -10)
+        sold_no_auction_lot = lots.filter(pk=self.sold_no_auction_lot.pk).first()
+        self.assertEqual(sold_no_auction_lot.your_cut, 10)
+        unsold_no_auction_lot = lots.filter(pk=self.unsold_no_auction_lot.pk).first()
+        self.assertEqual(unsold_no_auction_lot.your_cut, 0)
+        
+        self.auction.winning_bid_percent_to_club = 50
+        self.auction.winning_bid_percent_to_club_for_club_members = 0
+        self.auction.save()
+        lot = lots.filter(pk=self.lot.pk).first()
+        self.assertEqual(lot.your_cut, 3.0)
+        unsold_lot = lots.filter(pk=self.unsold_lot.pk).first()
+        self.assertEqual(unsold_lot.your_cut, -10)
+
+        self.tos.is_club_member = True
+        self.tos.save()
+        lot = lots.filter(pk=self.lot.pk).first()
+        self.assertEqual(lot.your_cut, 10)
+        #print(lot.winning_price, lot.your_cut)
+        unsold_lot = lots.filter(pk=self.unsold_lot.pk).first()
+        self.assertEqual(unsold_lot.your_cut, -10)
+        
+        self.auction.winning_bid_percent_to_club_for_club_members = 50
+        self.auction.pre_register_lot_discount_percent = 10
+        self.auction.save()
+        lot = lots.filter(pk=self.lot.pk).first()
+        self.assertEqual(lot.your_cut, 5)
+        unsold_lot = lots.filter(pk=self.unsold_lot.pk).first()
+        self.assertEqual(unsold_lot.your_cut, -10)
+        
+        self.auction.lot_entry_fee_for_club_members = 1
+        self.auction.save()
+        lot = lots.filter(pk=self.lot.pk).first()
+        self.assertEqual(lot.your_cut, 4)
+        unsold_lot = lots.filter(pk=self.unsold_lot.pk).first()
+        self.assertEqual(unsold_lot.your_cut, -10)
+
+        self.lot.partial_refund_percent = 25
+        self.lot.save()
+        self.unsold_lot.partial_refund_percent = 25
+        self.unsold_lot.save()
+
+        lot = lots.filter(pk=self.lot.pk).first()
+        self.assertEqual(lot.your_cut, 3.0)
+        unsold_lot = lots.filter(pk=self.unsold_lot.pk).first()
+        self.assertEqual(unsold_lot.your_cut, -10)
+
+        self.lot.donation = True
+        self.lot.save()
+        lot = lots.filter(pk=self.lot.pk).first()
+        self.assertEqual(lot.your_cut, 0)
 
 class SetLotWinnerViewTest(TestCase):
     def setUp(self):

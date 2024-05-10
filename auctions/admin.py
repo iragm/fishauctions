@@ -229,8 +229,8 @@ class BidAdmin(admin.ModelAdmin):
     search_fields = ("lot_number","user",)
 
 class SoldLotInline(admin.TabularInline):
-     fields = ['__str__', 'your_cut','club_cut']
-     readonly_fields = ['__str__','your_cut','club_cut']
+     fields = ['__str__']
+     readonly_fields = ['__str__']
      verbose_name = "Lot sold"
      verbose_name_plural = "Lots sold"
      fk_name = 'seller_invoice'

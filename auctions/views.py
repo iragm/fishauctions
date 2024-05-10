@@ -1019,7 +1019,7 @@ def invoicePaid(request, pk, **kwargs):
 @login_required
 def my_lot_report(request):
     """CSV file showing my lots"""
-    lots = Lot.objects.filter(Q(user=request.user)|Q(auctiontos_seller__email=request.user.email)).exclude(is_deleted=True)
+    lots = add_price_info(Lot.objects.filter(Q(user=request.user)|Q(auctiontos_seller__email=request.user.email)).exclude(is_deleted=True))
     current_site = Site.objects.get_current()
     response = HttpResponse(content_type='text/csv')
     response['Content-Disposition'] = f'attachment; filename="my_lots_from_{current_site.domain.replace(".","_")}.csv"'
@@ -2847,7 +2847,6 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 'lot_promotion_cost',
                 'code_to_add_lots',
                 'allow_bidding_on_lots',
-                'pre_register_lot_entry_fee_discount',
                 'pre_register_lot_discount_percent',
                 'only_approved_sellers',
                 'email_users_when_invoices_ready',

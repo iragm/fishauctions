@@ -4,7 +4,8 @@ import datetime
 from django.contrib.auth.models import *
 from django.db import models
 from django.core.validators import *
-from django.db.models import Count, Sum, Q, F
+from django.db.models import Count, Sum, Case, When, IntegerField, Avg, Q, F, OuterRef, Subquery, ExpressionWrapper, Value, FloatField, BooleanField
+from django.db.models.query import QuerySet
 from django.db.models.expressions import RawSQL
 from autoslug import AutoSlugField
 from django.urls import reverse
@@ -53,6 +54,66 @@ def nearby_auctions(latitude, longitude, distance=100, include_already_joined=Fa
 def median_value(queryset, term):
     count = queryset.count()
     return queryset.values_list(term, flat=True).order_by(term)[int(round(count/2))]
+
+def add_price_info(qs):
+	"""Add fields `pre_register_discount`, `your_cut` and `club_cut` to a given Lot queryset."""
+	if not (isinstance(qs, QuerySet) and qs.model == Lot):
+		raise TypeError("must be passed a queryset of the Lot model")
+	return qs.annotate(
+			pre_register_discount = Case(
+				When(auctiontos_seller__isnull=True, then=Value(0.0)),
+				When(added_by=F('user'), then=F('auctiontos_seller__auction__pre_register_lot_discount_percent')),
+				default=Value(0.0),
+				output_field=FloatField(),
+			),
+			your_cut=ExpressionWrapper(
+				Case(
+					When(Q(auctiontos_seller__isnull=True, winning_price__isnull=False), then=F('winning_price')),
+					When(Q(auctiontos_seller__isnull=True, winning_price__isnull=True), then=Value(0.0)),
+					When(donation=True, then=Value(0.0)),
+					When(
+						Q(winning_price__isnull=False, active=False),
+						then=(
+							(F('winning_price') *
+							Case(
+								When(auctiontos_seller__is_club_member=True, then=((100 - F('auctiontos_seller__auction__winning_bid_percent_to_club_for_club_members') - F('pre_register_discount')) / 100)),
+								default=((100 - F('auctiontos_seller__auction__winning_bid_percent_to_club') - F('pre_register_discount')) / 100),
+								output_field=FloatField(),
+							) ) -
+							Case(
+								When(auctiontos_seller__is_club_member=True, then=F('auction__lot_entry_fee_for_club_members')),
+								default=F('auction__lot_entry_fee'),
+								output_field=FloatField(),
+							)
+						) * (100 - F('partial_refund_percent')) / 100,
+					),
+					When(
+						Q(winning_price__isnull=True, active=False),
+						then=Case(
+							When(donation=True, then=Value(0.0)),
+							default=Value(0.0) - F('auctiontos_seller__auction__unsold_lot_fee')
+						)
+					),
+					default=Value(0.0),
+					output_field=FloatField(),
+				),
+				output_field=FloatField(),
+			),
+			club_cut = ExpressionWrapper(
+				Case(
+					When(
+						Q(active=False, winning_price__isnull=True),
+						then=Value(0.0)
+					),
+					When(
+						winning_price__isnull=True,
+						then=Value(0.0)
+					),
+					default=(F('winning_price') * (100 - F('partial_refund_percent')) / 100) - F('your_cut')
+				),
+				output_field=FloatField(),
+			)
+		)
 
 def distance_to(latitude, longitude, unit='miles', lat_field_name="latitude", lng_field_name="longitude", approximate_distance_to=10):
 	"""
@@ -501,34 +562,17 @@ class Auction(models.Model):
 	@property
 	def club_profit_raw(self):
 		"""Total amount made by the club in this auction.  This number does not take into account rounding in the invoices, nor any invoice adjustments"""
-		allLots = Lot.objects.exclude(is_deleted=True).filter(auction=self.pk)
-		total = 0
-		for lot in allLots:
-			total += lot.club_cut
-		return total
+		return add_price_info(self.lots_qs).aggregate(total_sold=Sum('club_cut'))['total_sold'] or 0
 
 	@property
 	def club_profit(self):
 		"""Total amount made by the club in this auction, including rounding in the customer's favor in invoices"""
-		try:
-			invoices = Invoice.objects.filter(auction=self.pk)
-			total = 0
-			for invoice in invoices:
-				total -= invoice.calculated_total
-			return total
-		except:
-			return 0
+		return abs(Invoice.objects.filter(auction=self.pk).aggregate(total_sold=Sum('calculated_total'))['total_sold']) or 0
 
 	@property
 	def gross(self):
 		"""Total value of all lots sold"""
-		try:
-			gross = Lot.objects.exclude(is_deleted=True).filter(auction=self.pk).aggregate(Sum('winning_price'))['winning_price__sum']
-			if gross is None:
-				gross = 0
-			return gross
-		except:
-			return 0
+		return self.lots_qs.aggregate(Sum('winning_price'))['winning_price__sum'] or 0
 
 	@property
 	def total_to_sellers(self):
@@ -1652,65 +1696,66 @@ class Lot(models.Model):
 						return True
 		return False
 
-	@property
-	def payout(self):
-		"""Used for invoicing"""
-		payout = {
-			"ended": False,
-			"sold": False,
-			"winning_price": 0,
-			"to_seller": 0,
-			"to_club": 0,
-			"to_site": 0,
-			}
-		if self.auction:
-			if self.winning_price or not self.active:
-			#if (self.auctiontos_winner and self.winning_price) or not self.active:
-				# bidding has officially closed
-				payout['ended'] = True
-				if self.banned:
-					return payout
-				auction = self.auction
-				#auction = Auction.objects.get(id=self.auction.pk)
-				if self.sold:
-					payout['sold'] = True
-					payout['winning_price'] = self.winning_price
-					if self.donation:
-						clubCut = self.winning_price
-						sellerCut = 0
-					else:
-						if self.auctiontos_seller and self.auctiontos_seller.is_club_member:
-							percent_field = 'winning_bid_percent_to_club_for_club_members'
-							fee_field = 'lot_entry_fee_for_club_members'
-						else:
-							percent_field = 'winning_bid_percent_to_club'
-							fee_field = 'lot_entry_fee'
-						if self.pre_registered:
-							clubCut = ( self.winning_price * (getattr(auction, percent_field) - auction.pre_register_lot_discount_percent) / 100 ) + getattr(auction, fee_field) - auction.pre_register_lot_entry_fee_discount
-						else:
-							clubCut = ( self.winning_price * getattr(auction, percent_field) / 100 ) + getattr(auction, fee_field)
-						sellerCut = self.winning_price - clubCut
-					payout['to_club'] = clubCut
-					payout['to_seller'] = sellerCut
-				else:
-					# did not sell
-					if not self.donation:
-						payout['to_club'] = auction.unsold_lot_fee # bill the seller even if the item didn't sell
-						payout['to_seller'] = 0 - auction.unsold_lot_fee
-					else:
-						payout['to_club'] = 0 # don't bill for donations
-						payout['to_seller'] = 0
-				if self.promoted:
-					payout['to_club'] += auction.lot_promotion_cost					
-		return payout
+	# @property
+	# def payout(self):
+	# 	"""Used for invoicing"""
+	# 	print('deprecated, wrap your queryset in `add_price_info`')
+	# 	payout = {
+	# 		"ended": False,
+	# 		"sold": False,
+	# 		"winning_price": 0,
+	# 		"to_seller": 0,
+	# 		"to_club": 0,
+	# 		"to_site": 0,
+	# 		}
+	# 	if self.auction:
+	# 		if self.winning_price or not self.active:
+	# 		#if (self.auctiontos_winner and self.winning_price) or not self.active:
+	# 			# bidding has officially closed
+	# 			payout['ended'] = True
+	# 			if self.banned:
+	# 				return payout
+	# 			auction = self.auction
+	# 			#auction = Auction.objects.get(id=self.auction.pk)
+	# 			if self.sold:
+	# 				payout['sold'] = True
+	# 				payout['winning_price'] = self.winning_price * (100 - self.partial_refund_percent) / 100
+	# 				if self.donation:
+	# 					clubCut = self.winning_price
+	# 					sellerCut = 0
+	# 				else:
+	# 					if self.auctiontos_seller and self.auctiontos_seller.is_club_member:
+	# 						percent_field = 'winning_bid_percent_to_club_for_club_members'
+	# 						fee_field = 'lot_entry_fee_for_club_members'
+	# 					else:
+	# 						percent_field = 'winning_bid_percent_to_club'
+	# 						fee_field = 'lot_entry_fee'
+	# 					if self.pre_registered:
+	# 						clubCut = ( self.winning_price * (getattr(auction, percent_field) - auction.pre_register_lot_discount_percent) / 100 ) + getattr(auction, fee_field) - auction.pre_register_lot_entry_fee_discount
+	# 					else:
+	# 						clubCut = ( self.winning_price * getattr(auction, percent_field) / 100 ) + getattr(auction, fee_field)
+	# 					sellerCut = self.winning_price - clubCut
+	# 				payout['to_club'] = clubCut * (100 - self.partial_refund_percent) / 100
+	# 				payout['to_seller'] = sellerCut * (100 - self.partial_refund_percent) / 100
+	# 			else:
+	# 				# did not sell
+	# 				if not self.donation:
+	# 					payout['to_club'] = auction.unsold_lot_fee # bill the seller even if the item didn't sell
+	# 					payout['to_seller'] = 0 - auction.unsold_lot_fee
+	# 				else:
+	# 					payout['to_club'] = 0 # don't bill for donations
+	# 					payout['to_seller'] = 0
+	# 			if self.promoted:
+	# 				payout['to_club'] += auction.lot_promotion_cost					
+	# 	return payout
 
-	@property
-	def your_cut(self):
-		return self.payout['to_seller']
+	#@property
+	#def your_cut(self):
+	#	return self.payout['to_seller']
 
-	@property
-	def club_cut(self):
-		return self.payout['to_club']
+	#@property
+	#def club_cut(self):
+	#	return self.payout['to_club']
 
 	@property
 	def number_of_watchers(self):
@@ -2330,7 +2375,7 @@ class Invoice(models.Model):
 	@property
 	def sold_lots_queryset(self):
 		"""Simple qs containing all lots SOLD by this user in this auction"""
-		return Lot.objects.filter(auctiontos_seller=self.auctiontos_user, auction=self.auction, is_deleted=False).order_by('lot_number')
+		return add_price_info(Lot.objects.filter(auctiontos_seller=self.auctiontos_user, auction=self.auction, is_deleted=False).order_by('lot_number'))
 
 	@property
 	def bought_lots_queryset(self):
@@ -2382,10 +2427,7 @@ class Invoice(models.Model):
 	@property
 	def total_sold(self):
 		"""Seller's cut of all lots sold"""
-		total_sold = 0
-		for lot in self.sold_lots_queryset:
-			total_sold += lot.your_cut
-		return total_sold
+		return self.sold_lots_queryset.aggregate(total_sold=Sum('your_cut'))['total_sold'] or 0
 
 	@property
 	def lots_bought(self):
