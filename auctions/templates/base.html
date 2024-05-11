@@ -217,6 +217,13 @@ window.onload = function() {
         </script>
         <span id='navbar_span' style="display: none;">
       {% endif %}
+      {% if not request.user.is_authenticated %}
+      <script src="//accounts.google.com/gsi/client" async></script>
+        <div id="g_id_onload"
+            data-client_id="{{ GOOGLE_OAUTH_LINK }}"
+            data-login_uri="{% url 'google_login_by_token' %}">
+        </div>
+      {% endif %}
       <nav class="navbar navbar-expand-lg navbar-dark bg-primary navbar-static-top" role="navigation">
           <a class="navbar-brand" href="/">auction.fish</a>  
           <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#site_navbar" aria-controls="navbarColor02" aria-expanded="false" aria-label="Toggle navigation">

@@ -116,6 +116,7 @@ TEMPLATES = [
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
                 'auctions.context_processors.google_analytics',
+                'auctions.context_processors.google_oauth',
                 'auctions.context_processors.theme',
                 'auctions.context_processors.add_location',
                 'auctions.context_processors.dismissed_cookies_tos',
@@ -263,6 +264,8 @@ THUMBNAIL_ALIASES = {
     },
 }
 
+SECURE_REFERRER_POLICY= "strict-origin-when-cross-origin"
+
 SOCIALACCOUNT_PROVIDERS = {
     'google': {
         'SCOPE': [
@@ -270,8 +273,10 @@ SOCIALACCOUNT_PROVIDERS = {
             'email',
         ],
         'AUTH_PARAMS': {
-            'access_type': 'offline',
-        }
+            'access_type': 'online',
+        },
+        'OAUTH_PKCE_ENABLED': True,
+        'FETCH_USERINFO': True
     }
 }
 
@@ -288,6 +293,8 @@ WEIGHT_AGAINST_TOP_INTEREST = 20
 GOOGLE_MEASUREMENT_ID=os.environ['GOOGLE_MEASUREMENT_ID']
 GOOGLE_TAG_ID = os.environ['GOOGLE_TAG_ID']
 GOOGLE_ADSENSE_ID = os.environ['GOOGLE_ADSENSE_ID']
+
+GOOGLE_OAUTH_LINK = os.environ['GOOGLE_OAUTH_LINK']
 
 LOCATION_FIELD_PATH = STATIC_URL + 'location_field'
 

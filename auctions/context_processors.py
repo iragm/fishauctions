@@ -5,6 +5,9 @@ def google_analytics(request):
     """Return google tracking codes from settings"""
     return {'GOOGLE_MEASUREMENT_ID': settings.GOOGLE_MEASUREMENT_ID, 'GOOGLE_TAG_ID': settings.GOOGLE_TAG_ID, 'GOOGLE_ADSENSE_ID': settings.GOOGLE_ADSENSE_ID}
 
+def google_oauth(request):
+    return {'GOOGLE_OAUTH_LINK': settings.GOOGLE_OAUTH_LINK}
+
 def theme(request):
     """return the theme from userdata"""
     theme = True # dark

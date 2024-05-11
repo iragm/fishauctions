@@ -3422,16 +3422,8 @@ class InvoiceNoLoginView(InvoiceView):
     def dispatch(self, request, *args, **kwargs):
         self.uuid = kwargs.get('uuid', None)
         invoice = self.get_object()
-        invoice.viewed = True
+        invoice.opened = True
         invoice.save()
-        tos = invoice.auctiontos_user
-        auctiontos_user_already_exists = User.objects.filter(email=invoice.auctiontos_user.email).first()
-        if not auctiontos_user_already_exists:
-            self.template_name = 'invoice_popup.html'
-            if tos.email.endswith("@gmail.com"):
-                self.button_link = f'/google/login/?process=login&next=/invoices/{self.uuid}/'
-            else:
-                self.button_link = f'/signup/?next=/invoices/{self.uuid}/'
         return super().dispatch(request, *args, **kwargs)
 
 class LotLabelView(View, AuctionPermissionsMixin):
@@ -3741,10 +3733,13 @@ class LotRefundDialog(DetailView, FormMixin, AuctionPermissionsMixin):
             refund = form.cleaned_data['partial_refund_percent']
             if not refund:
                 refund = 0
-            self.lot.partial_refund_percent = refund
-            self.lot.banned = form.cleaned_data['banned']
-            if refund:
+            if refund and refund != self.lot.partial_refund_percent:
                 LotHistory.objects.create(lot=self.lot, user=request.user, message=f"{self.request.user} has issued a {refund}% refund on this lot.", changed_price=True)
+            self.lot.partial_refund_percent = refund
+            banned = form.cleaned_data['banned']
+            if banned and banned != self.lot.banned:
+                LotHistory.objects.create(lot=self.lot, user=request.user, message=f"{self.request.user} removed this lot.", changed_price=True)
+            self.lot.banned = banned    
             self.lot.save()
             if self.seller_invoice:
                 self.seller_invoice.recalculate

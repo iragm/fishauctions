@@ -412,9 +412,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
             <button class="btn btn-primary" hx-get="{% url 'lot_refund' pk=lot.pk %}",
                 hx-target="#modals-here",
                 hx-trigger="click",
-                _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">Refund</button>                
-                
-
+                _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">Remove or refund</button>
             {% endif %}
         {% endif %}
         {% if request.user.is_superuser %}

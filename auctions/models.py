@@ -3373,16 +3373,16 @@ def update_lot_info(sender, instance, **kwargs):
 	# if invoice:
 	# 	if instance.winning_price:
 	# 		invoice.recalculate
-	if instance.pk:
-		original_instance = Lot.objects.get(pk=instance.pk)
-		if not original_instance.banned and instance.banned:
-			LotHistory.objects.create(
-				lot = instance,
-				user = None,
-				message = 'This lot has been removed',
-				changed_price = True,
-				current_price=instance.high_bid,
-				)
+	# if instance.pk:
+	# 	original_instance = Lot.objects.get(pk=instance.pk)
+	# 	if not original_instance.banned and instance.banned:
+	# 		LotHistory.objects.create(
+	# 			lot = instance,
+	# 			user = None,
+	# 			message = 'This lot has been removed',
+	# 			changed_price = True,
+	# 			current_price=instance.high_bid,
+	# 			)
 	if instance.auction and instance.reserve_price < instance.auction.minimum_bid:
 		instance.reserve_price = instance.auction.minimum_bid
 

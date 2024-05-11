@@ -466,25 +466,26 @@ class EditLot(forms.ModelForm):
         self.helper.layout = Layout(
             'auction',
             Div(
-                Div('custom_lot_number',css_class='col-sm-5',),
-                #Div('banned',css_class='col-sm-7',),
-                Div('species_category',css_class='col-sm-7',),
+                Div('custom_lot_number',css_class='col-sm-7',),
+                Div('quantity',css_class='col-sm-5',),
                 css_class='row',
             ),
-            'lot_name',
-            'description',
-            #'auctiontos_seller',
             Div(
-                Div('quantity',css_class='col-sm-3',),
+                Div('lot_name',css_class='col-sm-7',),
+                Div('species_category',css_class='col-sm-5',),
+                css_class='row',
+            ),
+            'description',
+            Div(
+                Div('i_bred_this_fish',css_class='col-sm-3',),
                 Div('donation',css_class='col-sm-3',),
                 Div('buy_now_price',css_class='col-sm-3',),
                 Div('reserve_price',css_class='col-sm-3',),
                 css_class='row',
             ),
             Div(
-                Div('i_bred_this_fish',css_class='col-sm-3',),
                 Div('auctiontos_winner',css_class='col-sm-6',),
-                Div('winning_price',css_class='col-sm-3',),
+                Div('winning_price',css_class='col-sm-6',),
                 css_class='row',
             ),
             Div(
@@ -515,7 +516,7 @@ class EditLot(forms.ModelForm):
         self.fields['banned'].initial = self.lot.banned
         self.fields['auctiontos_winner'].initial = self.lot.auctiontos_winner
         # and some housekeeping on labels and help text
-        self.fields['winning_price'].label = "Price"
+        self.fields['winning_price'].label = "Sell price"
         self.fields['winning_price'].help_text = ""
         self.fields['lot_name'].help_text = ""
         self.fields['species_category'].help_text = ""
