@@ -281,7 +281,7 @@ $(document).ready(function(){
             {% endif %}
           {% endif %}
         </td>
-        <td>${{ lot.club_cut|floatformat:2 }}</td>
+        <td>${{ lot.club_cut|floatformat:2 }}{% if lot.pre_register_discount %}*{% endif %}</td>
         <td>
           {% if lot.donation %}
             Donation
@@ -291,8 +291,9 @@ $(document).ready(function(){
         </td>
       </tr>
     {% endfor %}
-    </tbody>
-  </table>
+  </tbody>
+</table>
+<small><div class="float-right">{% if invoice.pre_register_used %}*Pre-registeration discount applied{% endif %}</small><br></div>
 <b>Total sold:</b> ${{ invoice.total_sold|floatformat:2 }}<br>         
 {% endif %}
 <br>

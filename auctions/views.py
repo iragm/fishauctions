@@ -2046,7 +2046,7 @@ class ViewLot(DetailView):
         context['amount'] = defaultBidAmount
         context['watched'] = Watch.objects.filter(lot_number=lot.lot_number, user=self.request.user.id)
         context['category'] = lot.species_category
-        context['form'] = CreateBid(initial={'user': self.request.user.id, 'lot_number':lot.pk, "amount":defaultBidAmount}, request=self.request)
+        #context['form'] = CreateBid(initial={'user': self.request.user.id, 'lot_number':lot.pk, "amount":defaultBidAmount}, request=self.request)
         context['user_tos'] = None
         context['user_tos_location'] = None
         if lot.auction and self.request.user.is_authenticated:

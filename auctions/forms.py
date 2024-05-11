@@ -1072,7 +1072,7 @@ class AuctionEditForm(forms.ModelForm):
         model = Auction
         fields = ['notes', 'lot_entry_fee','unsold_lot_fee','winning_bid_percent_to_club', 'date_start', 'date_end', 'lot_submission_start_date',\
             'lot_submission_end_date', 'sealed_bid','use_categories', 'promote_this_auction', 'max_lots_per_user', 'allow_additional_lots_as_donation',
-            'email_users_when_invoices_ready', 'pre_register_lot_discount_percent', 'allow_bidding_on_lots','only_approved_sellers',
+            'email_users_when_invoices_ready', 'pre_register_lot_discount_percent', 'only_approved_sellers',
             'invoice_payment_instructions', 'minimum_bid', 'winning_bid_percent_to_club_for_club_members', 'lot_entry_fee_for_club_members', 'require_phone_number',
             'reserve_price', 'buy_now', 'tax',
             ]
@@ -1100,12 +1100,12 @@ class AuctionEditForm(forms.ModelForm):
         #self.fields['notes'].help_text = "Foo"
         if self.instance.is_online:
             self.fields['lot_submission_end_date'].help_text = "This should be 1-24 hours before the end of your auction"
-            self.fields['allow_bidding_on_lots'].help_text = "Leave this checked or people won't be able to bid!"
+            #self.fields['allow_bidding_on_lots'].help_text = "Leave this checked or people won't be able to bid!"
             #self.fields['pre_register_lot_entry_fee_discount'].widget=forms.HiddenInput()
             self.fields['pre_register_lot_discount_percent'].widget=forms.HiddenInput()
             #self.fields['set_lot_winners_url'].widget=forms.HiddenInput()
         else:
-            self.fields['allow_bidding_on_lots'].help_text = "Check to allow people to place bids on this website."
+            #self.fields['allow_bidding_on_lots'].help_text = "Check to allow people to place bids on this website."
             self.fields['date_end'].help_text = "You should probably leave this blank so that you can manually set winners. This field has been indefinitely set to hidden - see https://github.com/iragm/fishauctions/issues/116"
             self.fields['date_end'].widget=forms.HiddenInput()
             self.fields['lot_submission_end_date'].help_text = 'This should probably be before bidding starts.  Admins (you) can add more lots at any time, this only restricts users.'
@@ -1178,7 +1178,7 @@ class AuctionEditForm(forms.ModelForm):
                 Div('max_lots_per_user', css_class='col-md-3',),
                 Div('allow_additional_lots_as_donation', css_class='col-md-3',),
                 Div('only_approved_sellers',css_class='col-md-3',),
-                Div('allow_bidding_on_lots', css_class='col-md-3',),
+                #Div('allow_bidding_on_lots', css_class='col-md-3',),
                 css_class='row',
             ),
 

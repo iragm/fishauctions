@@ -36,7 +36,7 @@
         <div class="dropdown-menu">
           <!-- <h6 class="dropdown-header">Rules and locations</h6> -->
           <a class="dropdown-item" href="/auctions/{{auction.slug}}/edit">Rules</a>
-          <a class="dropdown-item" href="/auctions/{{auction.slug}}/locations">Locations</a>
+          <a class="dropdown-item" href="{{ auction.location_link }}">Location{% if auction.location_qs|length > 1 %}s{% endif %}</a>
           <!-- <div class="dropdown-divider"></div> -->
           <!-- <h6 class="dropdown-header">Other</h6> -->
           <a class="dropdown-item" href="{{ auction.set_lot_winners_link }}">Set lot winners</a>

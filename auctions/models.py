@@ -753,7 +753,7 @@ class Auction(models.Model):
 		"""If there's a location without a lat and lng, this link will let you edit the first one found"""
 		location = self.location_qs.filter(latitude=0,longitude=0, pickup_by_mail=False).first()
 		if location:
-			return f"/locations/edit/{location.pk}"
+			return reverse("edit_pickup", kwargs = {'pk':location.pk})
 		return None
 
 	@property
@@ -815,6 +815,14 @@ class Auction(models.Model):
 		if AuctionTOS.objects.filter(auction__pk=self.pk).exclude(user=self.created_by).filter(is_admin=True).count() > 0:
 			return True
 		return False
+
+	@property
+	def location_link(self):
+		if not self.location_qs.count():
+			return reverse("create_auction_pickup_location", kwargs = {'slug':self.slug})
+		if self.location_qs.count() == 1 and not self.is_online:
+			return reverse("edit_pickup", kwargs = {'pk':self.location_qs.first().pk})
+		return reverse("auction_pickup_location", kwargs = {'slug':self.slug})
 
 class PickupLocation(models.Model):
 	"""
@@ -2492,6 +2500,10 @@ class Invoice(models.Model):
 		if self.unsold_non_donation_lots:
 			return f"{self.unsold_non_donation_lots} unsold lot(s), sell these before setting this paid"
 		return ""
+
+	@property
+	def pre_register_used(self):
+		return self.sold_lots_queryset.filter(pre_register_discount__gt=0).exists()
 
 	def save(self, *args, **kwargs):
 		if not self.auction:
