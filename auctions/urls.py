@@ -138,4 +138,5 @@ urlpatterns = [
     path('api/auctionstats/<slug:slug>/referrers', views.AuctionStatsReferrersJSONView.as_view(), name='auction_stats_referrers'),
     path('api/invoices/<slug:slug>/ready', views.MarkInvoicesReady.as_view(), name='auction_invoices_ready'),
     path('api/invoices/<slug:slug>/paid', views.MarkInvoicesPaid.as_view(), name='auction_invoices_paid'),
+    path('api/lots/<int:pk>/refund', views.LotRefundDialog.as_view(), name='lot_refund'),
 ]

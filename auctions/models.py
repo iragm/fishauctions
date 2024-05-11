@@ -1349,7 +1349,7 @@ class Lot(models.Model):
 	winning_price = models.PositiveIntegerField(null=True, blank=True)
 	refunded = models.BooleanField(default=False)
 	refunded.help_text = "Don't charge the winner or pay the seller for this lot."
-	banned = models.BooleanField(default=False, verbose_name="Removed")
+	banned = models.BooleanField(default=False, verbose_name="Removed", blank=True)
 	banned.help_text = "This lot will be hidden from views, and users won't be able to bid on it.  Removed lots are not charged in invoices."
 	ban_reason = models.CharField(max_length=100, blank=True, null=True)
 	deactivated = models.BooleanField(default=False)
@@ -1411,7 +1411,7 @@ class Lot(models.Model):
 	category_automatically_added = models.BooleanField(default=False)
 	category_checked = models.BooleanField(default=False)
 	label_printed = models.BooleanField(default=False)
-	partial_refund_percent = models.IntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(100)])
+	partial_refund_percent = models.IntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(100)], blank=True)
 
 	def save(self, *args, **kwargs):
 		"""
@@ -2388,7 +2388,9 @@ class Invoice(models.Model):
 	@property
 	def bought_lots_queryset(self):
 		"""Simple qs containing all lots BOUGHT by this user in this auction"""
-		return Lot.objects.filter(auctiontos_winner=self.auctiontos_user, auction=self.auction, is_deleted=False).order_by('lot_number')
+		return Lot.objects.filter(winning_price__isnull=False, active=False, auctiontos_winner=self.auctiontos_user, is_deleted=False).order_by('lot_number').annotate(
+			final_price = F("winning_price") * (100 - F('partial_refund_percent')) / 100
+		)
 
 	@property
 	def sold_lots_queryset_sorted(self):
@@ -2444,12 +2446,7 @@ class Invoice(models.Model):
 
 	@property
 	def total_bought(self):
-		#print(self.bought_lots_queryset.annotate(total=Sum('winning_price'))['total'])
-		total_bought = 0
-		for lot in self.bought_lots_queryset:
-			if lot.winning_price:
-				total_bought += lot.winning_price
-		return total_bought
+		return self.bought_lots_queryset.aggregate(total_bought=Sum('final_price'))['total_bought'] or 0
 
 	@property
 	def location(self):

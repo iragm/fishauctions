@@ -3,6 +3,7 @@ from datetime import datetime
 from random import randint, uniform, sample
 from itertools import chain
 from typing import Any, Dict
+from django.db.models.base import Model as Model
 from django.db.models.query import QuerySet
 from django.shortcuts import render,redirect, get_object_or_404
 from django.http import HttpResponse, JsonResponse, HttpResponseRedirect, Http404, FileResponse
@@ -3412,7 +3413,7 @@ class InvoiceNoLoginView(InvoiceView):
     def get_object(self):
         if not self.uuid:
             raise Http404
-        invoice = Invoice.objects.filter(auctiontos_user__isnull=False, no_login_link=self.uuid).first()
+        invoice = Invoice.objects.filter(no_login_link=self.uuid).first()
         if invoice:
             return invoice
         else:
@@ -3725,6 +3726,104 @@ class MarkInvoicesPaid(InvoiceBulkUpdateStatus):
                 context['tooltip'] = f"There's {unchanged_invoices} invoices that are still open.  You should set open invoices to ready before using this."
         else:
             context['modal_title'] = f"Set {self.invoice_count} ready invoices to paid"
+        return context
+
+class LotRefundDialog(DetailView, FormMixin, AuctionPermissionsMixin):
+    model = Lot
+    template_name = "auctions/generic_admin_form.html"
+    form_class = LotRefundForm
+    winner_invoice = None
+    seller_invoice = None
+
+    def post(self, request, *args, **kwargs):
+        form = self.get_form()
+        if form.is_valid():
+            refund = form.cleaned_data['partial_refund_percent']
+            if not refund:
+                refund = 0
+            self.lot.partial_refund_percent = refund
+            self.lot.banned = form.cleaned_data['banned']
+            if refund:
+                LotHistory.objects.create(lot=self.lot, user=request.user, message=f"{self.request.user} has issued a {refund}% refund on this lot.", changed_price=True)
+            self.lot.save()
+            if self.seller_invoice:
+                self.seller_invoice.recalculate
+            if self.winner_invoice:
+                self.winner_invoice.recalculate
+            return HttpResponse("<script>location.reload();</script>", status=200)
+        else:
+            return self.form_invalid(form)
+
+    def dispatch(self, request, *args, **kwargs):
+        pk = self.kwargs.get(self.pk_url_kwarg)
+        self.lot = get_object_or_404(Lot, is_deleted=False, auction__isnull=False, auctiontos_seller__isnull=False, pk=pk)
+        self.object = self.lot
+        self.auction = self.lot.auction
+        self.is_auction_admin
+        self.seller_invoice = Invoice.objects.filter(auctiontos_user=self.lot.auctiontos_seller).first()
+        if self.lot.auctiontos_winner:
+            self.winner_invoice = Invoice.objects.filter(auctiontos_user=self.lot.auctiontos_winner).first()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs['lot'] = self.lot
+        return kwargs
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['lot'] = self.lot
+        if self.lot.active or not self.lot.winning_price:
+            context['tooltip'] = "This lot has not sold, there's nothing to refund.  If there's a problem with this lot, remove it."
+        else:
+            # if a refund has already been issued for this lot, we need to calculate how much is unpaid by temporarily removing it
+            existing_refund = self.lot.partial_refund_percent
+            if existing_refund:
+                self.lot.partial_refund_percent = 0
+                self.lot.save()
+                full_seller_refund = add_price_info(Lot.objects.filter(pk=self.lot.pk)).first().your_cut
+                # if we removed a refund before for math purposes, put it back now
+                self.lot.partial_refund_percent = existing_refund
+                self.lot.save()
+                tooltip = "A refund has already been issued for this lot.  The refund percent is based on the original sale price.<br><br>"
+            else:
+                full_seller_refund = add_price_info(Lot.objects.filter(pk=self.lot.pk)).first().your_cut
+                tooltip = "<small>This lot has sold.  If there's a problem with it, you should issue a refund which will show up on the seller and winner's invoices.</small><br><br>"
+            if self.lot.winning_price:
+                full_buyer_refund = self.lot.winning_price + (self.lot.winning_price * self.lot.auction.tax / 100)
+            else:
+                full_buyer_refund = 0
+            if self.seller_invoice and self.seller_invoice.status == "DRAFT":
+                tooltip += "Seller's invoice is open; $<span id='seller_refund'></span> will automatically be removed.<br>"
+            else:
+                tooltip += "Seller's invoice is not open.  <span class='text-warning'>Collect $<span id='seller_refund'></span> from the seller</span><br>"
+            if self.lot.winning_price and self.lot.auctiontos_winner:
+                if self.winner_invoice and self.winner_invoice.status == "DRAFT":
+                    tooltip += "Winner's invoice is open; refund of $<span id='buyer_refund'></span> will automatically be added<br>"
+                else:
+                    tooltip += "Winner's invoice is not open.  <span class='text-warning'>Refund the winner $<span id='buyer_refund'></span></span>"
+                    if self.lot.auction.tax:
+                        tooltip += f"<small> (includes {self.lot.auction.tax}% tax)</small><br>"
+                    else:
+                        tooltip += "<br>"
+            tooltip += "<br><br>"
+            extra_script = """
+            <script>$('#id_partial_refund_percent').on('change keyup', function(){recalculate()}); 
+            function recalculate(){
+                var refund = $('#id_partial_refund_percent').val();var tax = """
+            extra_script += f"{self.lot.auction.tax};var full_seller_refund = {full_seller_refund};var full_buyer_refund = {full_buyer_refund};"
+            extra_script += """
+                $('#seller_refund').text((full_seller_refund*refund/100).toFixed(2));
+                if (full_buyer_refund) {
+                    $('#buyer_refund').text((full_buyer_refund*refund/100).toFixed(2));
+                };
+            }
+            $(document).ready( function(){recalculate()});
+            </script>
+            """
+            context['extra_script'] = mark_safe(extra_script)
+            context['tooltip'] = mark_safe(tooltip)
+        context['modal_title'] = f"Remove or refund lot {self.lot.lot_number_display}"
         return context
 
 class UserView(DetailView):

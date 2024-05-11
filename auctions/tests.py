@@ -615,3 +615,52 @@ class SetLotWinnerViewTest(TestCase):
         updated_lot = Lot.objects.get(pk=self.lot.pk)
         self.assertEqual(updated_lot.auctiontos_winner, self.bidder)  # Lot winner should remain unchanged
         self.assertEqual(updated_lot.winning_price, 100)  # Winning price should remain unchanged
+
+
+class LotRefundDialogTests(TestCase):
+    def setUp(self):
+        time = timezone.now() - datetime.timedelta(days=2)
+        timeStart = timezone.now() - datetime.timedelta(days=3)
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        self.user = User.objects.create_user(username="testuser", password="testpassword")
+        self.user2 = User.objects.create_user(username="testuser2", password="password")
+        self.auction = Auction.objects.create(created_by=self.user, title="A test auction", date_end=time, date_start=timeStart, winning_bid_percent_to_club=25, lot_entry_fee=2, unsold_lot_fee=10, tax=25)
+        self.location = PickupLocation.objects.create(name='location', auction=self.auction, pickup_time=theFuture)
+        self.seller = AuctionTOS.objects.create(user=self.user, auction=self.auction, pickup_location=self.location, bidder_number='145')
+        self.bidder = AuctionTOS.objects.create(user=self.user2, auction=self.auction, pickup_location=self.location, bidder_number='225')
+        self.lot = Lot.objects.create(custom_lot_number='123', lot_name="A test lot", auction=self.auction, auctiontos_seller=self.seller, quantity=1, description="")
+        self.lot2 = Lot.objects.create(custom_lot_number='124', lot_name="Another test lot", auction=self.auction, auctiontos_seller=self.seller, quantity=1, description="")
+        self.client = Client()
+        self.client.login(username='testuser', password='testpassword')
+        self.lot_not_in_auction = Lot.objects.create(
+            lot_name='not in auction',
+            quantity=1,
+            reserve_price=10,
+            user=self.user,
+            active=True,
+            description = ""
+            )
+        self.lot_url = reverse('lot_refund', kwargs={'pk': self.lot.pk})
+
+    def test_lot_not_in_auction(self):
+        response = self.client.get(reverse('lot_refund', kwargs={'pk': self.lot_not_in_auction.pk}))
+        self.assertEqual(response.status_code, 404)
+
+    def test_get_lot_refund_dialog(self):
+        response = self.client.get(self.lot_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'auctions/generic_admin_form.html')
+
+    def test_post_lot_refund_dialog(self):
+        data = {
+            'partial_refund_percent': 50,
+            'banned': False
+        }
+        response = self.client.post(self.lot_url, data)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '<script>location.reload();</script>')
+
+        # Check if the lot was updated
+        updated_lot = Lot.objects.get(pk=self.lot.pk)
+        self.assertEqual(updated_lot.partial_refund_percent, 50)
+        self.assertEqual(updated_lot.banned, False)

@@ -467,11 +467,11 @@ class EditLot(forms.ModelForm):
             'auction',
             Div(
                 Div('custom_lot_number',css_class='col-sm-5',),
-                Div('banned',css_class='col-sm-7',),
+                #Div('banned',css_class='col-sm-7',),
+                Div('species_category',css_class='col-sm-7',),
                 css_class='row',
             ),
             'lot_name',
-            'species_category',
             'description',
             #'auctiontos_seller',
             Div(
@@ -818,6 +818,56 @@ class ChangeInvoiceStatusForm(forms.Form):
             'send_invoice_ready_notification_emails',
         ]
 
+class LotRefundForm(forms.ModelForm):
+    """Show the status of existing invoices and allow partial or full refunds"""
+    
+    class Meta:
+        model = Lot
+        fields = [
+            'partial_refund_percent',
+            'banned',
+        ]
+    
+    def clean(self):
+        cleaned_data = super().clean()
+        return cleaned_data
+
+    def __init__(self, *args, **kwargs):
+        self.lot = kwargs.pop('lot')
+        super().__init__(*args, **kwargs)
+        if self.lot.active or not self.lot.winning_price:
+            self.fields['partial_refund_percent'].widget = HiddenInput()
+        if self.lot.winning_price:
+            self.fields['banned'].widget = HiddenInput()
+        save_button_html = f'<button hx-post="{reverse("lot_refund", kwargs={"pk":self.lot.pk})}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Save</button>'
+        self.helper = FormHelper()
+        self.helper.form_method = 'post'
+        self.helper.form_class = 'form'
+        self.helper.form_id = 'invoices-form'
+        self.helper.form_tag = True        
+        self.helper.layout = Layout(
+            Div(
+                PrependedAppendedText('partial_refund_percent', '', '%',wrapper_class='col-lg-3', ),
+                css_class="col-md-6",
+            ),
+            Div(
+                Div('banned',css_class='col-md-12',),
+            ),
+            Div(
+                HTML(f'<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'),
+                HTML(save_button_html),
+                css_class="modal-footer",
+            )
+        )
+        self.fields['partial_refund_percent'].initial = self.lot.partial_refund_percent
+        self.fields['banned'].initial = self.lot.banned
+        self.fields['partial_refund_percent'].label = "Refund percent"
+        self.fields['banned'].label = "Remove this lot from the auction"
+        self.fields['banned'].help_text = "Users will no longer be able to see this lot, it will be set to unsold, and the seller will not be paid."
+
+
+            
+
 class AuctionJoin(forms.ModelForm):
     i_agree = forms.BooleanField(required = True)
 
@@ -1104,6 +1154,7 @@ class AuctionEditForm(forms.ModelForm):
             #self.fields['pre_register_lot_entry_fee_discount'].widget=forms.HiddenInput()
             self.fields['pre_register_lot_discount_percent'].widget=forms.HiddenInput()
             #self.fields['set_lot_winners_url'].widget=forms.HiddenInput()
+            self.fields['unsold_lot_fee'].widget=forms.HiddenInput()
         else:
             #self.fields['allow_bidding_on_lots'].help_text = "Check to allow people to place bids on this website."
             self.fields['date_end'].help_text = "You should probably leave this blank so that you can manually set winners. This field has been indefinitely set to hidden - see https://github.com/iragm/fishauctions/issues/116"

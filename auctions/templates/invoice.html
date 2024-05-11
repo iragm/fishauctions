@@ -247,6 +247,7 @@ $(document).ready(function(){
           {% else %}
             {{ lot.lot_name }}
           {% endif%}
+          {% if lot.partial_refund_percent %}<small>({{ lot.partial_refund_percent }}% refund)</small>{% endif %}
         </td>
         <td>
           {% if lot.winning_price %}
@@ -334,7 +335,8 @@ $(document).ready(function(){
               {%endif%}
             {% else %}
               {{ lot.lot_name }}
-              {% endif %}
+            {% endif %}
+            {% if lot.partial_refund_percent %}<small>({{ lot.partial_refund_percent }}% refund)</small>{% endif %}
           </td>
           {% if auction.multi_location %}
             <td>{{ lot.location }}</td>
@@ -351,7 +353,7 @@ $(document).ready(function(){
             {% endif %}
           </td>
           <td>
-            ${{ lot.winning_price|floatformat:2 }}
+            ${{ lot.final_price|floatformat:2 }}
           </td>
         </tr>
       {% endfor %}

@@ -319,7 +319,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
         <table class="table">
             <tr>
                 <td><b>Seller:</b><br></td><td>{% if is_auction_admin %}<a href="#" hx-get="/api/auctiontos/{{lot.auctiontos_seller.pk}}"
-                    hx-target="#modals-here" hx-trigger="click">{{ lot.seller_name }}</a> {% else %} {{ lot.seller_name }} {% endif %}({{ lot.seller_email | urlize }}) <small>(Paid: ${{lot.your_cut|floatformat:2}})</small><br> <small>{{ lot.location }}</small> <a href="{{ lot.seller_invoice_link }}">Seller's invoice</a></td>
+                    hx-target="#modals-here" hx-trigger="click">{{ lot.seller_name }}</a> {% else %} {{ lot.seller_name }} {% endif %}({{ lot.seller_email | urlize }})<br> <small>{{ lot.location }}</small> <a href="{{ lot.seller_invoice_link }}">Seller's invoice</a></td>
             </tr>
             <tr>
                 <td><b>Winner:</b></td><td>{% if is_auction_admin %}<a href="#" hx-get="/api/auctiontos/{{lot.auctiontos_winner.pk}}"
@@ -405,10 +405,16 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
         </span>
         {% if request.user.is_authenticated %}
             {% if is_auction_admin %}
-            <button class="btn btn-primary" hx-get="/api/lot/{{lot.pk}}/",
+            <button class="btn btn-primary" hx-get="{% url 'auctionlotadmin' pk=lot.pk %}",
                 hx-target="#modals-here",
                 hx-trigger="click",
                 _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">Manage this lot</button>
+            <button class="btn btn-primary" hx-get="{% url 'lot_refund' pk=lot.pk %}",
+                hx-target="#modals-here",
+                hx-trigger="click",
+                _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">Refund</button>                
+                
+
             {% endif %}
         {% endif %}
         {% if request.user.is_superuser %}
