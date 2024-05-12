@@ -60,7 +60,7 @@ class Command(BaseCommand):
                             'tos': tos,
                             }
                         )
-        in_person_auction_welcome = welcome_email_qs.filter(auction__is_online=False, auction__date_start__gte=timezone.now())
+        in_person_auction_welcome = welcome_email_qs.filter(auction__is_online=False, auction__lot_submission_start_date__lte=timezone.now(), auction__date_start__gte=timezone.now())
         for tos in in_person_auction_welcome:
             tos.confirm_email_sent = True
             tos.save()

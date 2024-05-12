@@ -1155,8 +1155,8 @@ class AuctionEditForm(forms.ModelForm):
             #self.fields['pre_register_lot_entry_fee_discount'].widget=forms.HiddenInput()
             self.fields['pre_register_lot_discount_percent'].widget=forms.HiddenInput()
             #self.fields['set_lot_winners_url'].widget=forms.HiddenInput()
-            self.fields['unsold_lot_fee'].widget=forms.HiddenInput()
         else:
+            self.fields['unsold_lot_fee'].widget=forms.HiddenInput()
             #self.fields['allow_bidding_on_lots'].help_text = "Check to allow people to place bids on this website."
             self.fields['date_end'].help_text = "You should probably leave this blank so that you can manually set winners. This field has been indefinitely set to hidden - see https://github.com/iragm/fishauctions/issues/116"
             self.fields['date_end'].widget=forms.HiddenInput()

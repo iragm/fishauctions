@@ -1333,7 +1333,8 @@ class PickupLocationForm():
         try:
             return data['next']
         except:
-            return reverse('auction_pickup_location', kwargs={'slug': self.auction.slug})    
+            return self.auction.location_link
+            #return reverse('auction_pickup_location', kwargs={'slug': self.auction.slug})    
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -3085,6 +3086,7 @@ def aboutSite(request):
 def promoSite(request):
     context = {
         'contact_email': User.objects.get(pk=1).email,
+        'hide_google_login': True,
     }
     return render(request,'promo.html', context=context)
 

@@ -217,7 +217,7 @@ window.onload = function() {
         </script>
         <span id='navbar_span' style="display: none;">
       {% endif %}
-      {% if not request.user.is_authenticated %}
+      {% if not request.user.is_authenticated and not hide_google_login %}
       <script src="//accounts.google.com/gsi/client" async></script>
         <div id="g_id_onload"
             data-client_id="{{ GOOGLE_OAUTH_LINK }}"

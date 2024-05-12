@@ -11,6 +11,26 @@
 
     <a id='sign-in-google' class='btn btn-primary' href="/google/login/?process=login&next={{ redirect_field_value }}">Sign in with your Google account</a>
 
+    <!-- <html>
+      <body>
+        <script src="https://accounts.google.com/gsi/client" async></script>
+        <div id="g_id_onload"
+            data-client_id="1028419796918-pao3l1te57kkskl7l3udmd026tbe3nbj"
+            data-login_uri="/google/login/?process=login&next={{ redirect_field_value }}"
+            data-auto_prompt="false">
+        </div>
+        <div class="g_id_signin"
+            data-type="standard"
+            data-size="large"
+            data-theme="outline"
+            data-text="sign_in_with"
+            data-shape="rectangular"
+            data-logo_alignment="left">
+        </div>
+      <body>
+    </html> -->
+    
+
       <br><br><h5>Don't have a Google account?  Sign in with your account on this site:</h5>
      
     <form class="login" method="POST" action="{% url 'account_login' %}">
