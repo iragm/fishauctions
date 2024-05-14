@@ -1333,8 +1333,10 @@ class PickupLocationForm():
         try:
             return data['next']
         except:
-            return self.auction.location_link
-            #return reverse('auction_pickup_location', kwargs={'slug': self.auction.slug})    
+            if self.auction.is_online:
+                return reverse('auction_pickup_location', kwargs={'slug': self.auction.slug})    
+            else:
+                return self.auction.get_absolute_url()
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -3732,17 +3734,10 @@ class LotRefundDialog(DetailView, FormMixin, AuctionPermissionsMixin):
     def post(self, request, *args, **kwargs):
         form = self.get_form()
         if form.is_valid():
-            refund = form.cleaned_data['partial_refund_percent']
-            if not refund:
-                refund = 0
-            if refund and refund != self.lot.partial_refund_percent:
-                LotHistory.objects.create(lot=self.lot, user=request.user, message=f"{self.request.user} has issued a {refund}% refund on this lot.", changed_price=True)
-            self.lot.partial_refund_percent = refund
+            refund = form.cleaned_data['partial_refund_percent'] or 0
+            self.lot.refund(refund, request.user)
             banned = form.cleaned_data['banned']
-            if banned and banned != self.lot.banned:
-                LotHistory.objects.create(lot=self.lot, user=request.user, message=f"{self.request.user} removed this lot.", changed_price=True)
-            self.lot.banned = banned    
-            self.lot.save()
+            self.lot.remove(banned, request.user)
             if self.seller_invoice:
                 self.seller_invoice.recalculate
             if self.winner_invoice:
@@ -4131,10 +4126,13 @@ class AdminDashboard(TemplateView):
 class UserMap(TemplateView):
     template_name = 'user_map.html'
 
-    def get_context_data(self, **kwargs):
+    def dispatch(self, request, *args, **kwargs):
         if not self.request.user.is_superuser:
             messages.error(self.request, "Only admins can view the user map")
             return redirect('/')
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['google_maps_api_key'] = settings.LOCATION_FIELD['provider.google.api_key']
         data = self.request.GET.copy()
@@ -4923,3 +4921,88 @@ class AddTosMemo(View, LoginRequiredMixin, AuctionPermissionsMixin):
             self.auctiontos.save()
             return JsonResponse({'result':"ok"})
         raise Http404
+    
+class AuctionNoShow(TemplateView, LoginRequiredMixin, AuctionPermissionsMixin):
+    """When someone doesn't show up for an auction, offer some tools to clean up the situation"""
+    template_name = "auctions/noshow.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        self.auction = get_object_or_404(Auction, slug=kwargs.pop('slug'), is_deleted=False)
+        self.is_auction_admin
+        self.tos = get_object_or_404(AuctionTOS, auction=self.auction, bidder_number=kwargs.pop('tos'))
+        print(self.auction)
+        print(self.tos)
+        return super().dispatch(request, *args, **kwargs)
+    
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['auction'] = self.auction
+        context['tos'] = self.tos
+        context['bought_lots'] = add_price_info(self.tos.bought_lots_qs)
+        context['sold_lots'] = self.tos.lots_qs.annotate(
+            full_buyer_refund=ExpressionWrapper(
+                F('winning_price') + (F('winning_price') * F('auction__tax') / 100),
+                output_field=FloatField()
+            )
+        )
+        print(context)
+        return context
+
+class AuctionNoShowAction(AuctionNoShow, FormMixin):
+    """Refund lots, leave feedback, and ban this user"""
+
+    template_name = "auctions/generic_admin_form.html"
+    form_class = AuctionNoShowForm
+    
+    def get_form_kwargs(self):
+        form_kwargs = super().get_form_kwargs()
+        form_kwargs['auction'] = self.auction
+        form_kwargs['tos'] = self.tos
+        return form_kwargs
+        
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['tooltip'] = f"Check any actions you wish to take against {self.tos.name}"
+        context['unsold_lot_warning'] = "These actions cannot be undone!"
+        context['modal_title'] = f"Take action against {self.tos.name}"
+        return context
+        
+    def post(self, request, *args, **kwargs):
+        form = self.get_form()
+        if form.is_valid():
+            refund_sold_lots = form.cleaned_data['refund_sold_lots']
+            refund_bought_lots = form.cleaned_data['refund_bought_lots']
+            leave_negative_feedback = form.cleaned_data['leave_negative_feedback']
+            ban_this_user = form.cleaned_data['ban_this_user']
+            if refund_sold_lots:
+                for lot in self.tos.lots_qs:
+                    if lot.winning_price:
+                       lot.refund(100, request.user)
+                    else:
+                       lot.remove(True, request.user)
+            if refund_bought_lots:
+                for lot in self.tos.bought_lots_qs:
+                    lot.refund(100, request.user)
+            if leave_negative_feedback:
+                for lot in self.tos.bought_lots_qs:
+                    lot.winner_feedback_rating = -1
+                    lot.winner_feedback_text = "Did not pay"
+                    lot.save()
+                for lot in self.tos.lots_qs:
+                    lot.feedback_rating -1
+                    lot.feedback_text = "Did not provide lot"
+                    lot.save()
+            if ban_this_user:
+                # we will ban the user whether or not the tos was manually added
+                # do not return any evidence to the caller of this request that the ban worked or didn't
+                # as that could be used to determine if someone has an account on the site
+                user = User.objects.filter(email=self.tos.email).first()
+                if self.tos.email and user:
+                    obj, created = UserBan.objects.update_or_create(
+                        banned_user=user,
+                        user=request.user,
+                        defaults={},
+                    )
+            return HttpResponse("<script>location.reload();</script>", status=200)
+        else:
+            return self.form_invalid(form)

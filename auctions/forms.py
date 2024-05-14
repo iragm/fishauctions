@@ -594,8 +594,11 @@ class CreateEditAuctionTOS(forms.ModelForm):
         self.auction = auction
         self.auctiontos = auctiontos
         super().__init__(*args, **kwargs)
+        problem_button_html = ""
         delete_button_html = ""
         if self.is_edit_form:
+            problems_url = reverse("auction_no_show", kwargs={'slug': self.auction.slug, 'tos': self.auctiontos.bidder_number})
+            problem_button_html = f"<a href={problems_url} class='btn btn-danger'>Problems</a>"
             post_url = f'/api/auctiontos/{self.auctiontos.pk}/'
             delete_url = reverse("auctiontosdelete", kwargs={'pk': self.auctiontos.pk})
             delete_button_html = f"<a href={delete_url} class='btn btn-warning'>Delete</a>"
@@ -627,7 +630,7 @@ class CreateEditAuctionTOS(forms.ModelForm):
                 css_class='row',
             ), 
             Div(
-                HTML(f'{delete_button_html}<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'),
+                HTML(f'{problem_button_html}{delete_button_html}<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'),
                 HTML(f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Save</button>'),
                 css_class="modal-footer",
             )
@@ -782,6 +785,53 @@ class CreateBid(forms.ModelForm):
 #             'memo',
 #         ]
 
+class AuctionNoShowForm(forms.Form):
+    """ban, refund lots.  Confirmation dialog for auction admins only"""
+    refund_sold_lots = forms.BooleanField(required=False)
+    refund_bought_lots = forms.BooleanField(required=False)
+    leave_negative_feedback = forms.BooleanField(required=False)
+    ban_this_user = forms.BooleanField(required=False)
+
+    def __init__(self, auction, tos, *args, **kwargs):
+        self.auction = auction
+        self.tos = tos
+        submit_button_html = f'<button hx-post="{reverse("auction_no_show_dialog", kwargs={"slug":self.auction.slug, "tos":self.tos.bidder_number})}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Take actions</button>'
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_method = 'post'
+        self.helper.form_class = 'form'
+        self.helper.form_id = 'ban-form'
+        self.helper.form_tag = True        
+        self.helper.layout = Layout(
+            Div(
+                Div('refund_sold_lots',css_class='col-sm-12',),
+                Div('refund_bought_lots',css_class='col-sm-12',),
+                Div('leave_negative_feedback',css_class='col-sm-12',),
+                Div('ban_this_user',css_class='col-sm-12',),
+                css_class='row',
+            ),  
+            Div(
+                HTML(f'<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'),
+                HTML(submit_button_html),
+                css_class="modal-footer",
+            )
+        )
+        sold_lot_count = self.tos.lots_qs.filter(winning_price__isnull=False).count()
+        unsold_lot_count = self.tos.lots_qs.filter(winning_price__isnull=True).count()
+        bought_lots_count = self.tos.bought_lots_qs.count()
+        self.fields['refund_sold_lots'].help_text = f"Issue a 100% refund to the buyers for {sold_lot_count} sold lot(s), and remove {unsold_lot_count} unsold lot(s).  You will need to send money to any users whose invoice is not open."
+        self.fields['refund_bought_lots'].help_text = f"Issue a 100% refund for to the sellers for {bought_lots_count} lots this user won.  You will need to send money to any users whose invoice is not open."
+        self.fields['leave_negative_feedback'].help_text = f"Leave negative feedback about this user on all lots this seller sold or won, to warn other people about them in the future."
+        self.fields['ban_this_user'].help_text = f"Block this user from joining any of your future auctions."
+
+    class Meta:
+        fields = [
+            'refund_sold_lots',
+            'refund_sold_lots',
+            'leave_negative_feedback',
+            'ban_this_user',
+        ]
+
 class ChangeInvoiceStatusForm(forms.Form):
     """confirmation dialog for auction admins only"""
     send_invoice_ready_notification_emails = forms.BooleanField(required=False)
@@ -849,7 +899,7 @@ class LotRefundForm(forms.ModelForm):
         self.helper.layout = Layout(
             Div(
                 PrependedAppendedText('partial_refund_percent', '', '%',wrapper_class='col-lg-3', ),
-                css_class="col-md-6",
+                css_class="col-md-12",
             ),
             Div(
                 Div('banned',css_class='col-md-12',),

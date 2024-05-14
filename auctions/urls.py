@@ -139,4 +139,6 @@ urlpatterns = [
     path('api/invoices/<slug:slug>/ready', views.MarkInvoicesReady.as_view(), name='auction_invoices_ready'),
     path('api/invoices/<slug:slug>/paid', views.MarkInvoicesPaid.as_view(), name='auction_invoices_paid'),
     path('api/lots/<int:pk>/refund', views.LotRefundDialog.as_view(), name='lot_refund'),
+    path('auctions/<slug:slug>/no-show/<str:tos>/', views.AuctionNoShow.as_view(), name='auction_no_show'),
+    path('api/auctions/<slug:slug>/no-show/<str:tos>/', views.AuctionNoShowAction.as_view(), name='auction_no_show_dialog'),
 ]

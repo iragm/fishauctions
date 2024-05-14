@@ -635,7 +635,6 @@ class UserLotFilter(LotFilter):
         self.regardingUser = self.request.user
         self.showDeactivated = True
         self.showBanned = True
-        self.showViewed = "yes"
 
 class UserWatchLotFilter(LotFilter):
     """A version of the lot filter that only shows lots watched by the current user"""

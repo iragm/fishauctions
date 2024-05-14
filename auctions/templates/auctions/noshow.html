@@ -1,0 +1,121 @@
+{% extends 'base.html' %}
+{% load crispy_forms_tags %}
+{% block title %} Invoice for {{ invoice.label }} {% endblock %}
+{% load static %}
+{% block extra_js %}
+{% endblock %}
+
+{% block content %}
+{% include 'auction_ribbon.html' %}
+
+<h3>Problems with {{ tos.name }}?</h3>
+<small>If this user won lots and didn't pay, broke rules, or caused issues for others in this auction, this page will allow you to take action against them.<br><br>
+  You can click Take Action to refund lots, leave negative feedback about this user, and/or ban them from future auctions.<br><br>
+When issuing a refund, if the invoice is open, no further action is needed.  If the invoice is paid, you should send money (the amount shown) back to the user who paid.</small>
+<br>
+<a href="#" class='btn btn-danger mt-2 mb-2' hx-get="{% url 'auction_no_show_dialog' slug=auction.slug tos=tos.bidder_number %}"
+                hx-target="#modals-here" 
+                hx-trigger="click">
+                Take Action
+              </a>
+<h3>Lots Sold</h3>
+  <table class="table">
+    <thead>
+      <tr>
+        <th scope="col">#</th>
+        <th scope="col">Lot</th>
+        <th scope="col">Pre-refund price (includes tax)</th>
+        <th scope="col">Refund</th>
+        <th scope="col">Winner</th>
+        <th scope="col">Winner's invoice status</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for lot in sold_lots %}
+      <tr>
+        <td>{{ lot.lot_number_display }}</td>
+        <td>
+            <a href="{{lot.lot_link}}?src=ban_page">{{ lot.lot_name }}</a>
+        </td>
+        <td>
+          {% if lot.winning_price %}
+            ${{ lot.full_buyer_refund|floatformat:2 }}
+          {% else %}
+            {% if lot.banned %}
+              Removed
+            {% else %}
+              Not sold
+            {% endif %}
+          {% endif %}
+        </td>
+        <td>
+          {% if lot.partial_refund_percent %}<small>({{ lot.partial_refund_percent }}% refund)</small>{% endif %}
+        </td>
+        <td>
+          {% if lot.winning_price %}
+              <a href="#" hx-get="/api/auctiontos/{{lot.auctiontos_winner.pk}}"
+                hx-target="#modals-here"
+                hx-trigger="click">
+                {{ lot.winner_name }}
+              </a>
+          {% else %}
+            Not sold
+          {% endif %}
+        </td>
+        <td>
+          {{ lot.auctiontos_winner.invoice.get_status_display }}
+        </td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<br>
+  <h3>Lots purchased</h3>
+  <table class="table">
+    <thead>
+      <tr>
+        <th scope="col">#</th>
+        <th scope="col">Lot</th>
+        <th scope="col">Seller</th>
+        <th scope="col">Seller's cut (includes refund)</th>
+        <th scope="col">Refund</th>
+        <th scope="col">Seller's invoice status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for lot in bought_lots %}
+        <tr>
+          <td>
+            {{ lot.lot_number_display }}
+          </td>
+          <td>
+            <a href="#" hx-get="/api/lot/{{lot.pk}}"
+            hx-target="#modals-here"
+            hx-trigger="click">
+            {{ lot.lot_name }}
+            </a>
+          </td>
+          <td>
+            <a href="#" hx-get="/api/auctiontos/{{lot.auctiontos_seller.pk}}"
+              hx-target="#modals-here" 
+              hx-trigger="click">
+              {{ lot.seller_name }}
+            </a>
+          </td>
+          <td>
+            ${{ lot.your_cut|floatformat:2 }}
+          </td>
+          <td>
+            {% if lot.partial_refund_percent %}<small>({{ lot.partial_refund_percent }}% refund)</small>{% endif %}
+          </td>
+          <td>
+            {{ lot.auctiontos_seller.invoice.get_status_display }}
+          </td>          
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+<div id="modals-here"></div>
+{% endblock %}
+
+

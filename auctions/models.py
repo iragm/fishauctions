@@ -567,7 +567,7 @@ class Auction(models.Model):
 	@property
 	def club_profit(self):
 		"""Total amount made by the club in this auction, including rounding in the customer's favor in invoices"""
-		return abs(Invoice.objects.filter(auction=self.pk).aggregate(total_sold=Sum('calculated_total'))['total_sold']) or 0
+		return abs(Invoice.objects.filter(auction=self.pk).aggregate(total_sold=Sum('calculated_total'))['total_sold'] or 0)
 
 	@property
 	def gross(self):
@@ -1478,6 +1478,24 @@ class Lot(models.Model):
 		)
 		invoice, created = Invoice.objects.get_or_create(auctiontos_user=tos, auction=self.auction, defaults={})
 		invoice.recalculate
+
+	def refund(self, amount, user, message=None):
+		"""Call this to add a message when refunding a lot"""
+		if amount and amount != self.partial_refund_percent:
+			if not message:
+				message = f"{user} has issued a {amount}% refund on this lot."
+			LotHistory.objects.create(lot=self, user=user, message=message, changed_price=True)
+		self.partial_refund_percent = amount
+		self.save()
+
+	def remove(self, banned, user, message=None):
+		"""Call this to add a message when banning (removing) a lot"""
+		if banned and banned != self.banned:
+			if not message:
+				message = f"{user} removed this lot."
+			LotHistory.objects.create(lot=self, user=user, message=message, changed_price=True)
+		self.banned = banned
+		self.save()
 
 	def delete(self, *args, **kwargs):
 		self.is_deleted=True
