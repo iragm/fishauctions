@@ -497,7 +497,10 @@ class EditLot(forms.ModelForm):
         #self.fields['species_category'].queryset = auction.location_qs #PickupLocation.objects.filter(auction=self.auction).order_by('name')
         self.fields['custom_lot_number'].initial = self.lot.custom_lot_number
         self.fields['auction'].initial = self.lot.auction
-        self.fields['custom_lot_number'].help_text = "Leave blank to automatically generate"
+        if self.lot.label_printed:
+            self.fields['custom_lot_number'].help_text = "<span class='text-warning'>Label already printed!</span> Make sure to reprint it if you change this"
+        else:
+            self.fields['custom_lot_number'].help_text = "Leave blank to automatically generate"
         self.fields['lot_name'].initial = self.lot.lot_name
         self.fields['description'].initial = self.lot.lot_name
         #self.fields['auctiontos_seller'].initial = self.lot.auctiontos_seller
