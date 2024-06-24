@@ -3389,11 +3389,16 @@ def on_save_auction(sender, instance, **kwargs):
 	if instance.is_online:
 		if instance.lot_submission_end_date > instance.date_end:
 			instance.lot_submission_end_date = instance.date_end
-		if instance.lot_submission_start_date > instance.date_start:
-			instance.lot_submission_start_date = instance.date_start
+	else:
+		if instance.lot_submission_end_date > instance.date_start:
+			instance.lot_submission_end_date = instance.date_start
+	if instance.lot_submission_start_date > instance.date_start:
+		instance.lot_submission_start_date = instance.date_start
 	# I don't see a problem submitting lots after the auction has started,
 	# or any need to restrict when people add lots to an in-person auction
 	# So I am not putting any new validation checks here
+	# OK, the above comment was not correct, this caused confusion.  A couple checks have been added.
+	# Admins can always override those, and they seem to be adding most of the lots for in person stuff anyway.
 	
 	# if this is an existing auction
 	if instance.pk:
