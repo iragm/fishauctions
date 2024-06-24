@@ -32,6 +32,14 @@ class AuctionTOSFilter(django_filters.FilterSet):
         """Pass this a queryset and a value (string) to filter, and it'll return a suitable queryset
         This is getting reused in a couple places now, just import it with `from .filters import AuctionTOSFilter` and then use `AuctionTOSFilter.generic(qs, filter)`
         """
+
+        # sketchy users
+        pattern = re.compile(f'^sus|\ssus\s|\ssus$')
+        if pattern.search(value):
+            value = pattern.sub('', value)
+            qs = add_tos_info(qs)
+            qs = qs.order_by('trust')
+
         RHYMING_NAMES = [
             ['alex','alexander','lex','lexi'],
             ['al','albert','bert'],
@@ -144,16 +152,6 @@ class AuctionTOSFilter(django_filters.FilterSet):
                 value = pattern.sub('', value)
                 qs = qs.filter(**filter_data)
 
-        value = value.strip()
-        normal_filter = Q(
-            Q(name__icontains=value) | 
-            Q(email=value) | 
-            #Q(phone_number__icontains=value) | 
-            #   Q(address__icontains=value) | 
-            Q(bidder_number=value) |
-            Q(user__username=value)
-        )
-
         # search by rhyming names
         qList = Q()
         parts = value.lower().split()
@@ -170,6 +168,16 @@ class AuctionTOSFilter(django_filters.FilterSet):
                 # got a match?  Add all possible matches as OR filters
                 for possible_matching_name in name_set:
                     qList |= Q(name__istartswith=possible_matching_name + " " + last_name)
+
+        value = value.strip()
+        normal_filter = Q(
+            Q(name__icontains=value) | 
+            Q(email=value) | 
+            #Q(phone_number__icontains=value) | 
+            #   Q(address__icontains=value) | 
+            Q(bidder_number=value) |
+            Q(user__username=value)
+        )   
         qs = qs.filter(Q(normal_filter|Q(qList)))
         return qs
 

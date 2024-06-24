@@ -63,6 +63,12 @@
         <label class="dropdown-item ">
           <input type="checkbox" class="invoice_filter" id="checkbox_unseen"> User has not seen
         </label>
+        {% if auction.is_online %}
+        <span class="text-muted dropdown-item"><small>Find problematic users:</small></span>
+        <label class="dropdown-item ">
+          <input type="checkbox" class="invoice_filter" id="checkbox_sus"> Least engagement first
+        </label>
+        {% endif %}
       </div>
     </span>
 <form class="col-sm-12 mt-2">
@@ -119,5 +125,13 @@ $(document).ready(function(){
       );
     }
 });
+// update url to allow bookmarking searches
+document.getElementById('id_query').addEventListener('input', function(event) {
+    let query = event.target.value;
+    let newUrl = new URL(window.location);
+    newUrl.searchParams.set('query', query);
+    history.replaceState({}, '', newUrl);
+    htmx.trigger('#filter-form', 'keyup');
+  });
 </script>
 {% endblock %}

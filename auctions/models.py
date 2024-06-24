@@ -4,9 +4,10 @@ import datetime
 from django.contrib.auth.models import *
 from django.db import models
 from django.core.validators import *
-from django.db.models import Count, Sum, Case, When, IntegerField, Avg, Q, F, OuterRef, Subquery, ExpressionWrapper, Value, FloatField, BooleanField
+from django.db.models import Count, Sum, Case, When, IntegerField, Func, Avg, Q, F, OuterRef, Subquery, ExpressionWrapper, Value, FloatField, BooleanField, DurationField
 from django.db.models.query import QuerySet
 from django.db.models.expressions import RawSQL
+from django.db.models.functions import Coalesce, ExtractDay
 from autoslug import AutoSlugField
 from django.urls import reverse
 from markdownfield.models import MarkdownField, RenderedMarkdownField
@@ -77,7 +78,7 @@ def add_price_info(qs):
 							(F('winning_price') *
 							Case(
 								When(auctiontos_seller__is_club_member=True, then=((100 - F('auctiontos_seller__auction__winning_bid_percent_to_club_for_club_members') - F('pre_register_discount')) / 100)),
-								default=((100 - F('auctiontos_seller__auction__winning_bid_percent_to_club') - F('pre_register_discount')) / 100),
+								default=((100 - F('auctiontos_seller__auction__winning_bid_percent_to_club') + F('pre_register_discount')) / 100),
 								output_field=FloatField(),
 							) ) -
 							Case(
@@ -159,6 +160,93 @@ def distance_to(latitude, longitude, unit='miles', lat_field_name="latitude", ln
 	#     (latitude, longitude, latitude, correction)
 	# )
 	return distance_raw_sql
+
+def add_tos_info(qs):
+	"""Add fields to a given AuctionTOS queryset."""
+	if not (isinstance(qs, QuerySet) and qs.model == AuctionTOS):
+		raise TypeError("must be passed a queryset of the AuctionTOS model")
+	return qs.annotate(
+		lots_bid_actual=Coalesce(Subquery(
+			 Bid.objects.filter(user=OuterRef('user'), lot_number__auction=OuterRef('auction')).values('user').annotate(count=Count('pk', distinct=True)).values('count')
+			, output_field=IntegerField()), 0
+		),
+		lots_bid=Case(
+			When(Q(manually_added=True), then=Value(0)),
+			default=F('lots_bid_actual')
+		),
+		lots_viewed_actual=Coalesce(Subquery(
+			 PageView.objects.filter(user=OuterRef('user'), lot_number__auction=OuterRef('auction')).values('user').annotate(count=Count('lot_number', distinct=True)).values('count')
+			, output_field=IntegerField()), 0
+		),
+		lots_viewed=Case(
+			When(Q(manually_added=True), then=Value(0)),
+			default=F('lots_viewed_actual')
+		),
+    	lots_won=Count(
+			'auctiontos_winner', distinct=True
+		),
+		lots_submitted=Count(
+			'auctiontos_seller', distinct=True
+		),
+		other_auctions=Coalesce(Subquery(
+			AuctionTOS.objects.filter(email=OuterRef('email')).exclude(id=OuterRef('id')).values('email').annotate(count=Count('*')).values('count')
+			, output_field=IntegerField()), 0
+		),
+		lots_outbid=Case(
+			When(lots_won__gt=F('lots_bid'), then=0),
+			default=F('lots_bid') - F('lots_won'),
+			output_field=IntegerField()
+		),
+		account_age_ms = Case(
+			When(Q(manually_added=True), then=ExpressionWrapper(
+				timezone.now() - F("createdon"),
+				output_field=IntegerField()
+			)),
+			default=ExpressionWrapper(
+				timezone.now() - F('user__date_joined'),
+				output_field=IntegerField()
+			)
+		),
+		account_age_days=ExpressionWrapper(
+			F('account_age_ms') / 86400000000,
+			output_field=IntegerField()
+		),
+		other_user_bans_actual=Coalesce(Subquery(
+			UserBan.objects.filter(banned_user=OuterRef('user')).values('pk').annotate(count=Count('*')).values('count')
+			, output_field=IntegerField()), 0
+		),
+		other_user_bans=Case(
+			When(Q(manually_added=True), then=Value(0)),
+			default=F('other_user_bans_actual')
+		),
+		trust=ExpressionWrapper(
+			1 * F('lots_bid')
+			+ .2 * F('lots_viewed')
+			+ 2 * F('lots_won')
+			+ 2 * F('lots_submitted')
+			+ 5 * F('other_auctions')
+			- 2 * F('lots_outbid')
+			+ .01 * F('account_age_days')
+			- 100 * F('other_user_bans'),
+			output_field=IntegerField()
+		),
+	)
+
+def add_tos_distance_info(qs):
+	"""Add a distance_traveled to an auctiontos query"""
+	if not (isinstance(qs, QuerySet) and qs.model == AuctionTOS):
+		raise TypeError("must be passed a queryset of the AuctionTOS model")
+	return qs.select_related('user__userdata').select_related('pickup_location').annotate(
+		new_distance_traveled=Case(
+			When(Q(manually_added=True), then=Value(-1)),
+			default=distance_to(
+			"""`auctions_userdata`.`latitude`""", """`auctions_userdata`.`longitude`""",
+			lat_field_name="""`auctions_pickuplocation`.`latitude`""",
+			lng_field_name="""`auctions_pickuplocation`.`longitude`""",
+			approximate_distance_to=1
+			), output_field=IntegerField()
+		),
+	)
 
 def guess_category(text):
 	"""Given some text, look up lots with similar names and make a guess at the category this `text` belongs to based on the category used there"""
@@ -2265,7 +2353,7 @@ class Lot(models.Model):
 	@property
 	def video_link(self):
 		if self.reference_link:
-			pattern = r'(?:https?://)?(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/)([\w-]{11})'
+			pattern = r'(?:https?://)?(?:www\.)?(?:youtube\.com/(?:watch\?v=|shorts/)|youtu\.be/)([\w-]{11})'
 			match = re.search(pattern, self.reference_link)
 			if match:
 				return match.group(1)

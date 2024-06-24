@@ -16,9 +16,39 @@ from collections import Counter
 from post_office import mail
 from auctions.views import clean_referrer
 
+def compare_model_instances(instance1, instance2):
+    """
+    Compare all fields of two Django model instances.
+    
+    :param instance1: First model instance
+    :param instance2: Second model instance
+    :return: Dictionary with field names as keys and tuples of (instance1 value, instance2 value) as values for differing fields.
+    """
+    if type(instance1) is not type(instance2):
+        raise ValueError("Instances are not of the same model.")
+    
+    differences = {}
+    for field in instance1._meta.fields:
+        field_name = field.name
+        value1 = getattr(instance1, field_name)
+        value2 = getattr(instance2, field_name)
+        
+        if value1 != value2:
+            differences[field_name] = (value1, value2)
+    
+    return differences
+
 class Command(BaseCommand):
     help = 'Just a scratchpad to do things'
     def handle(self, *args, **options):
+        prefsA = UserLabelPrefs.objects.get(user__username='L_Scottgoldie')
+        prefsB = UserLabelPrefs.objects.get(user__pk=1)
+        diffs = compare_model_instances(prefsA, prefsB)
+        for field, (value1, value2) in diffs.items():
+            print(f"Field '{field}' differs: {value1} != {value2}")
+
+
+
         # campaigns = AuctionCampaign.objects.all()
         # for campaign in campaigns:
         #    campaign.update

@@ -296,6 +296,7 @@ GOOGLE_TAG_ID = os.environ['GOOGLE_TAG_ID']
 GOOGLE_ADSENSE_ID = os.environ['GOOGLE_ADSENSE_ID']
 
 GOOGLE_OAUTH_LINK = os.environ['GOOGLE_OAUTH_LINK']
+SECURE_CROSS_ORIGIN_OPENER_POLICY="same-origin-allow-popups"
 
 LOCATION_FIELD_PATH = STATIC_URL + 'location_field'
 

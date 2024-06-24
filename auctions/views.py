@@ -3602,8 +3602,9 @@ class LotLabelView(View, AuctionPermissionsMixin):
                     labels_row += [[Paragraph('', style), Paragraph('', style), Paragraph('', style)]]*((num_cols*3) - len(labels_row))
                 table_data.append(labels_row)
                 labels_row = []
-            label.label_printed = True
-            label.save()
+            if label != "empty":
+                label.label_printed = True
+                label.save()
         col_widths = []
         for i in range(num_cols):
             col_widths += [qr_code_width,text_area_width,margin_right_width]
