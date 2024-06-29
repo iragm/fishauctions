@@ -187,15 +187,7 @@ function initMap() {
                     of the winning price per lot, for lots you submit yourself</li>
                 {% endif %}
             </ul>
-            {% if not auction.multi_location %}
-            {# this is for single location auctions only, still iterating because of how the context is set up #}
-            {% for location in pickup_locations %}
-            {% if view.is_auction_admin %}
-                    <a href="/locations/edit/{{ location.pk }}/?next=/auctions/{{auction.slug}}" class="btn btn-sm mt-2 mr-2 btn-warning">Edit pickup location</a>
-            {% endif %}
-            {% include 'location_fragment.html' %}
-            {% endfor %}
-            {% endif %}
+
             {% if not auction.no_location %}
             <br>
                 <div id="map_wrapper" style='height: 400px;'>
@@ -211,6 +203,15 @@ function initMap() {
                     {% crispy form form.helper %}
                 {% else %}
                     <a href="/login/?next={% firstof request.path '/' %}">Please login to confirm your pickup location</a><br><br>
+                {% endif %}
+                {% if not auction.multi_location %}
+                {# this is for single location auctions only, still iterating because of how the context is set up #}
+                {% for location in pickup_locations %}
+                {% include 'location_fragment.html' %}
+                {% if view.is_auction_admin %}
+                        <a href="/locations/edit/{{ location.pk }}/?next=/auctions/{{auction.slug}}" class="btn btn-sm mt-2 mr-2 btn-warning">Edit pickup location</a>
+                {% endif %}
+                {% endfor %}
                 {% endif %}
                 </div>
             {% endif %}
