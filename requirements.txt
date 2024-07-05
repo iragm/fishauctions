@@ -135,6 +135,7 @@ easy-thumbnails==2.8.5
     # via -r requirements.in
 gunicorn==22.0.0
     # via -r requirements.in
+uvicorn==0.30.1
 heif-image-plugin==0.6.1
     # via -r requirements.in
 hyperlink==21.0.0
