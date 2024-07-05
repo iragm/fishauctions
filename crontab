@@ -1,0 +1,33 @@
+# m h  dom mon dow   command
+# Set lots as ended and declare a winner
+* * * * * cd /home/user/python/auction_site_2022/ && /home/user/python/auction_site_2022/bin/python /home/user/python/auction_site_2022/fishauctions/manage.py endauctions >> /var/log/cron.log 2>&1 
+
+# Send reminder emails about watched items
+*/15 * * * * cd /home/user/python/auction_site_2022/ && /home/user/python/auction_site_2022/bin/python /home/user/python/auction_site_2022/fishauctions/manage.py sendnotifications >> /var/log/cron.log 2>&1
+
+# welcome and print erminder emails
+*/15 * * * * cd /home/user/python/auction_site_2022/ && /home/user/python/auction_site_2022/bin/python /home/user/python/auction_site_2022/fishauctions/manage.py auctiontos_notifications >> /var/log/cron.log 2>&1
+
+# Email users about invoices
+*/15 * * * * cd /home/user/python/auction_site_2022/ && /home/user/python/auction_site_2022/bin/python /home/user/python/auction_site_2022/fishauctions/manage.py email_invoice >> /var/log/cron.log 2>&1
+
+# Update leaderboard
+* 23 * * * cd /home/user/python/auction_site_2022/ && /home/user/python/auction_site_2022/bin/python /home/user/python/auction_site_2022/fishauctions/manage.py update_breederboard >> /var/log/cron.log 2>&1
+
+# send email
+* * * * * cd /home/user/python/auction_site_2022/ && /home/user/python/auction_site_2022/bin/python /home/user/python/auction_site_2022/fishauctions/manage.py send_queued_mail >> /var/log/cron.log 2>&1
+
+# send auction emails
+*/4 * * * * cd /home/user/python/auction_site_2022/ && /home/user/python/auction_site_2022/bin/python /home/user/python/auction_site_2022/fishauctions/manage.py auction_emails  >> /var/log/cron.log 2>&1
+
+# send notifications about unread chats
+0 10 * * * cd /home/user/python/auction_site_2022/ && /home/user/python/auction_site_2022/bin/python /home/user/python/auction_site_2022/fishauctions/manage.py email_unseen_chats >> /var/log/cron.log 2>&1
+
+# weekly promo email sent on Wednesday
+30 9 * * 3 cd /home/user/python/auction_site_2022/ && /home/user/python/auction_site_2022/bin/python /home/user/python/auction_site_2022/fishauctions/manage.py weekly_promo >> /var/log/cron.log 2>&1
+
+# set user locations
+0 0 * * * cd /home/user/python/auction_site_2022/ && /home/user/python/auction_site_2022/bin/python /home/user/python/auction_site_2022/fishauctions/manage.py set_user_location >> /var/log/cron.log 2>&1
+
+# check for duplicate page views
+*/15 * * * * cd /home/user/python/auction_site_2022/ && /home/user/python/auction_site_2022/bin/python /home/user/python/auction_site_2022/fishauctions/manage.py remove_duplicate_views >> /var/log/cron.log 2>&1

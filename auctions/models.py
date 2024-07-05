@@ -3316,7 +3316,9 @@ class LotImage(models.Model):
 	lot_number = models.ForeignKey(Lot, on_delete=models.CASCADE)
 	caption = models.CharField(max_length=60, blank=True, null=True)
 	caption.help_text = "Optional"
-	image = ThumbnailerImageField(upload_to='images/', blank=False, null=False)
+	image = ThumbnailerImageField(upload_to='images/', blank=False, null=False,
+							   # see https://github.com/iragm/fishauctions/issues/161
+							   )
 	image.help_text = "Select an image to upload"
 	image_source = models.CharField(
 		max_length=20,
@@ -3389,9 +3391,9 @@ def on_save_auction(sender, instance, **kwargs):
 	if instance.is_online:
 		if instance.lot_submission_end_date > instance.date_end:
 			instance.lot_submission_end_date = instance.date_end
-	else:
-		if instance.lot_submission_end_date > instance.date_start:
-			instance.lot_submission_end_date = instance.date_start
+	#else:
+		#if instance.lot_submission_end_date > instance.date_start:
+		#	instance.lot_submission_end_date = instance.date_start
 	if instance.lot_submission_start_date > instance.date_start:
 		instance.lot_submission_start_date = instance.date_start
 	# I don't see a problem submitting lots after the auction has started,
@@ -3399,7 +3401,8 @@ def on_save_auction(sender, instance, **kwargs):
 	# So I am not putting any new validation checks here
 	# OK, the above comment was not correct, this caused confusion.  A couple checks have been added.
 	# Admins can always override those, and they seem to be adding most of the lots for in person stuff anyway.
-	
+	# OK, third time's the charm, leave the lines above commented out
+
 	# if this is an existing auction
 	if instance.pk:
 		#print('updating date end on lots because this is an existing auction')

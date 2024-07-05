@@ -1,4 +1,5 @@
 *.pyc
+.env
 db.sqlite3
 set_env.sh
 fishauctions/customsettings.py

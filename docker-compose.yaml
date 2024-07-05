@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  web:
+    build: .
+    volumes:
+      #- .:/usr/src/app/
+      - static_volume:/home/app/web/staticfiles
+      - media_volume:/home/app/web/mediafiles
+    #ports:
+    #  - 8000:8000
+    expose:
+      - 8000
+    env_file:
+      - ./.env
+    network_mode: host
+    depends_on:
+      - db
+
+  db:
+    image: mariadb:latest
+    restart: always
+    environment:
+      MYSQL_DATABASE: ${DATABASE_NAME-auctions}
+      MYSQL_USER: ${DATABASE_USER-mysqluser}
+      MYSQL_PASSWORD: ${DATABASE_PASSWORD-unsecure}
+      MYSQL_ROOT_PASSWORD: ${DATABASE_ROOT_PASSWORD-unsecure}
+    ports:
+      - 3306:3306
+      #- ${DATABASE_PORT}:3306
+    volumes:
+      - mariadb_data:/var/lib/mysql
+
+  redis:
+    image: redis
+    environment:
+      # ALLOW_EMPTY_PASSWORD is recommended only for development.
+      #- ALLOW_EMPTY_PASSWORD=yes
+      - REDIS_DISABLE_COMMANDS=FLUSHDB,FLUSHALL
+    ports:
+      - 6379:6379
+    volumes:
+      - redis_data:/bitnami/redis/data
+    restart: always
+    command: redis-server --requirepass ${REDIS_PASSWORD-unsecure}
+  
+  nginx:
+    build: ./nginx
+    ports:
+      - 80:80
+    depends_on:
+      - web
+
+volumes:
+  redis_data:
+    driver: local
+  mariadb_data:
+  static_volume:
+  media_volume:

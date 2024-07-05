@@ -22,30 +22,30 @@ import datetime
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve(strict=True).parent.parent
 
-ADMINS = [('Admin', os.environ['ADMIN_EMAIL'])]
+ADMINS = [('Admin', os.environ.get('ADMIN_EMAIL', 'admin@example.com'))]
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/3.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ['SECRET_KEY']
+SECRET_KEY = os.environ.get('SECRET_KEY', 'unsecure')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-if os.environ['DEBUG'] == "True":
-    DEBUG = True
-else:
+if os.environ.get('DEBUG', '1') == "False":
     DEBUG = False
+else:
+    DEBUG = True
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', os.environ['ALLOWED_HOST_1'], os.environ['ALLOWED_HOST_2'], os.environ['ALLOWED_HOST_3']]
-CSRF_TRUSTED_ORIGINS = ['http://localhost', 'http://127.0.0.1', 'https://' + os.environ['ALLOWED_HOST_1'], 'https://' + os.environ['ALLOWED_HOST_2'], 'https://' + os.environ['ALLOWED_HOST_3']]
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', '0.0.0.0', os.environ.get('ALLOWED_HOST_1', ''), os.environ.get('ALLOWED_HOST_2', ''), os.environ.get('ALLOWED_HOST_3', '')]
+CSRF_TRUSTED_ORIGINS = ['http://localhost', 'http://127.0.0.1', 'https://' + os.environ.get('ALLOWED_HOST_1', ''), 'https://' + os.environ.get('ALLOWED_HOST_2', ''), 'https://' + os.environ.get('ALLOWED_HOST_3', '')]
 
 # Channels
 CHANNEL_LAYERS = {
     'default': {
         'BACKEND': 'channels_redis.core.RedisChannelLayer',
         'CONFIG': {
-            "hosts": [("redis://:" + os.environ['REDIS_PASS'] + "@127.0.0.1:6379/0")],
+            "hosts": [("redis://:" + os.environ.get('REDIS_PASSWORD', 'unsecure') + "@127.0.0.1:6379/0")],
             #"hosts": [('127.0.0.1', 6379)],
             "capacity": 2000,  # default 100
             "expiry": 20,  # default 60
@@ -130,7 +130,7 @@ WSGI_APPLICATION = 'fishauctions.wsgi.application'
 
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = os.environ['TIME_ZONE']
+TIME_ZONE = os.environ.get('TIME_ZONE', 'America/New_York')
 
 USE_I18N = False
 
@@ -156,14 +156,14 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 SITE_ID = 1
-SITE_DOMAIN = os.environ['SITE_DOMAIN']
+SITE_DOMAIN = os.environ.get('SITE_DOMAIN', '127.0.0.1')
 
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/3.1/howto/static-files/
 
 STATIC_URL = '/static/'
-STATIC_ROOT = os.environ['STATIC_ROOT']
+STATIC_ROOT = os.environ.get('STATIC_ROOT', os.path.join(BASE_DIR, "staticfiles"))
 
 AUTHENTICATION_BACKENDS = [
     # Needed to login by username in Django admin, regardless of `allauth`
@@ -187,19 +187,19 @@ if 'test' in sys.argv:
 else:
     DATABASES = {
         'default': {
-            'ENGINE': os.environ['DATABASE_ENGINE'],
-            'NAME': os.environ['DATABASE_NAME'],
-            'USER': os.environ['DATABASE_USER'],
-            'PASSWORD': os.environ['DATABASE_PASSWORD'],
-            'HOST': os.environ['DATABASE_HOST'],
-            'PORT': os.environ['DATABASE_PORT'],
+            'ENGINE': os.environ.get('DATABASE_ENGINE', 'django.db.backends.mysql'),
+            'NAME': os.environ.get('DATABASE_NAME', 'auctions'),
+            'USER': os.environ.get('DATABASE_USER', 'mysqluser'),
+            'PASSWORD': os.environ.get('DATABASE_PASSWORD', 'unsecure'),
+            'HOST': os.environ.get('DATABASE_HOST', '0.0.0.0'),
+            'PORT': os.environ.get('DATABASE_PORT', '3306'),
             'OPTIONS': {'charset': 'utf8mb4'},
         }
     }
 
 # Base URL to use when referring to full URLs within the Wagtail admin backend -
 # e.g. in notification emails. Don't include '/admin' or a trailing slash
-BASE_URL = os.environ['BASE_URL']
+#BASE_URL = os.environ.get('BASE_URL', 'http://127.0.0.1:8000')
 
 ACCOUNT_AUTHENTICATED_LOGIN_REDIRECTS = True
 LOGIN_REDIRECT_URL = "/"
@@ -230,19 +230,19 @@ POST_OFFICE = {
     'RETRY_INTERVAL': datetime.timedelta(minutes=15),  # Schedule to be retried 15 minutes later
 }
 
-if os.environ['EMAIL_USE_TLS'] == "True":
+if os.environ.get('EMAIL_USE_TLS', 'True') == "True":
     EMAIL_USE_TLS = True
 else:
     EMAIL_USE_TLS = False
-EMAIL_HOST = os.environ['EMAIL_HOST']
-EMAIL_PORT = os.environ['EMAIL_PORT']
-EMAIL_HOST_USER = os.environ['EMAIL_HOST_USER']
-EMAIL_HOST_PASSWORD = os.environ['EMAIL_HOST_PASSWORD']
-DEFAULT_FROM_EMAIL = os.environ['DEFAULT_FROM_EMAIL']
+EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp.gmail.com')
+EMAIL_PORT = os.environ.get('EMAIL_PORT', 587)
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', 'user@example.com')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', 'unsecure')
+DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'user@example.com')
 EMAIL_SUBJECT_PREFIX = ""
 
-RECAPTCHA_PUBLIC_KEY = os.environ['RECAPTCHA_PUBLIC_KEY']
-RECAPTCHA_PRIVATE_KEY = os.environ['RECAPTCHA_PRIVATE_KEY']
+RECAPTCHA_PUBLIC_KEY = os.environ.get('RECAPTCHA_PUBLIC_KEY', 'unsecure')
+RECAPTCHA_PRIVATE_KEY = os.environ.get('RECAPTCHA_PRIVATE_KEY', 'unsecure')
 
 CRISPY_TEMPLATE_PACK = 'bootstrap4'
 CRISPY_FAIL_SILENTLY = False
@@ -254,7 +254,7 @@ MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
 EL_PAGINATION_PER_PAGE = 20
-SITE_URL = os.environ['SITE_URL']
+#SITE_URL = os.environ.get('SITE_URL', BASE_URL)
 
 THUMBNAIL_ALIASES = {
     '': {
@@ -291,11 +291,11 @@ VIEW_WEIGHT = 1
 BID_WEIGHT = 10
 WEIGHT_AGAINST_TOP_INTEREST = 20
 
-GOOGLE_MEASUREMENT_ID=os.environ['GOOGLE_MEASUREMENT_ID']
-GOOGLE_TAG_ID = os.environ['GOOGLE_TAG_ID']
-GOOGLE_ADSENSE_ID = os.environ['GOOGLE_ADSENSE_ID']
+GOOGLE_MEASUREMENT_ID=os.environ.get('GOOGLE_MEASUREMENT_ID', 'unsecure')
+GOOGLE_TAG_ID = os.environ.get('GOOGLE_TAG_ID', 'unsecure')
+GOOGLE_ADSENSE_ID = os.environ.get('GOOGLE_ADSENSE_ID', 'unsecure')
 
-GOOGLE_OAUTH_LINK = os.environ['GOOGLE_OAUTH_LINK']
+GOOGLE_OAUTH_LINK = os.environ.get('GOOGLE_OAUTH_LINK', 'unsecure')
 SECURE_CROSS_ORIGIN_OPENER_POLICY="same-origin-allow-popups"
 
 LOCATION_FIELD_PATH = STATIC_URL + 'location_field'
@@ -309,7 +309,7 @@ LOCATION_FIELD = {
 
     # Google
     'provider.google.api': '//maps.google.com/maps/api/js?sensor=false',
-    'provider.google.api_key': os.environ['GOOGLE_MAPS_API_KEY'],
+    'provider.google.api_key': os.environ.get('GOOGLE_MAPS_API_KEY', 'unsecure'),
     'provider.google.api_libraries': '',
     'provider.google.map.type': 'ROADMAP',
 

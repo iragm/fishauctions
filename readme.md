@@ -49,3 +49,5 @@ python3 manage.py runserver
 
 ### Cron jobs
 Some cron jobs are used to manage models, and should be set up outside python's venv on your server. See crontab.md for more information on setting these up
+
+New packages can be added to requirements.in.  A simple `docker-compose build` will trigger pip-compile when building the Docker container and will update all files.

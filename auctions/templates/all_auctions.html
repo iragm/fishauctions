@@ -35,7 +35,7 @@
                     Starts: {{ auction.date_start }}
                     {% else %}
                     {% if not auction.is_online %}
-                    {{ auction.date_start }} <span class="badge badge-danger">Ended</span>
+                    {{ auction.date_start }} {% if not auction.allow_bidding_on_lots%}<span class="badge badge-danger">Ended</span>{% endif %}
                     {% else %}
                     {{ auction.date_start }}
                     {% endif %}
