@@ -11,7 +11,6 @@ asgiref==3.8.1
     #   -r requirements.in
     #   channels
     #   channels-redis
-    #   daphne
     #   django
     #   django-htmx
 async-timeout==4.0.3
@@ -23,9 +22,7 @@ attrs==23.2.0
     #   service-identity
     #   twisted
 autobahn==23.6.2
-    # via
-    #   -r requirements.in
-    #   daphne
+    # via -r requirements.in
 automat==22.10.0
     # via
     #   -r requirements.in
@@ -35,7 +32,7 @@ bleach[css]==6.1.0
     #   -r requirements.in
     #   django-markdownfield
     #   django-post-office
-certifi==2024.6.2
+certifi==2024.7.4
     # via
     #   -r requirements.in
     #   requests
@@ -56,6 +53,8 @@ chardet==5.2.0
     #   reportlab
 charset-normalizer==3.3.2
     # via requests
+click==8.1.7
+    # via uvicorn
 constantly==23.10.4
     # via
     #   -r requirements.in
@@ -68,13 +67,11 @@ cryptography==42.0.8
     #   autobahn
     #   pyopenssl
     #   service-identity
-daphne==4.1.2
-    # via -r requirements.in
 defusedxml==0.7.1
     # via
     #   -r requirements.in
     #   python3-openid
-django>=4.2.13
+django==5.0.6
     # via
     #   -r requirements.in
     #   channels
@@ -125,7 +122,7 @@ django-markdownfield==0.11.0
     # via -r requirements.in
 django-post-office==3.9.0
     # via -r requirements.in
-django-qr-code>=4.0.1
+django-qr-code==4.1.0
     # via -r requirements.in
 django-recaptcha==4.0.0
     # via -r requirements.in
@@ -135,7 +132,8 @@ easy-thumbnails==2.8.5
     # via -r requirements.in
 gunicorn==22.0.0
     # via -r requirements.in
-uvicorn==0.30.1
+h11==0.14.0
+    # via uvicorn
 heif-image-plugin==0.6.1
     # via -r requirements.in
 hyperlink==21.0.0
@@ -148,7 +146,6 @@ idna==3.7
     #   -r requirements.in
     #   hyperlink
     #   requests
-    #   twisted
 incremental==22.10.0
     # via
     #   -r requirements.in
@@ -209,9 +206,7 @@ pyjwt==2.8.0
 pymysql==1.1.1
     # via -r requirements.in
 pyopenssl==24.1.0
-    # via
-    #   -r requirements.in
-    #   twisted
+    # via -r requirements.in
 pyparsing==3.1.2
     # via -r requirements.in
 python3-openid==3.2.0
@@ -233,9 +228,7 @@ requests-oauthlib==2.0.0
 segno==1.6.1
     # via django-qr-code
 service-identity==24.1.0
-    # via
-    #   -r requirements.in
-    #   twisted
+    # via -r requirements.in
 shortuuid==1.0.13
     # via
     #   -r requirements.in
@@ -252,10 +245,8 @@ sqlparse==0.5.0
     #   django-debug-toolbar
 tinycss2==1.2.1
     # via bleach
-twisted[tls]==24.3.0
-    # via
-    #   -r requirements.in
-    #   daphne
+twisted==24.3.0
+    # via -r requirements.in
 txaio==23.1.1
     # via
     #   -r requirements.in
@@ -267,6 +258,7 @@ typing-extensions==4.12.2
     #   pydantic
     #   pydantic-core
     #   twisted
+    #   uvicorn
 ua-parser==0.18.0
     # via
     #   -r requirements.in
@@ -276,6 +268,8 @@ urllib3==2.2.2
     #   -r requirements.in
     #   requests
 user-agents==2.2.0
+    # via -r requirements.in
+uvicorn==0.30.1
     # via -r requirements.in
 webencodings==0.5.1
     # via
