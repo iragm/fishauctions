@@ -125,7 +125,7 @@ django-markdownfield==0.11.0
     # via -r requirements.in
 django-post-office==3.9.0
     # via -r requirements.in
-django-qr-code==4.1.0
+django-qr-code>=4.0.1
     # via -r requirements.in
 django-recaptcha==4.0.0
     # via -r requirements.in
