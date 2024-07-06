@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-until curl -s "http://web:8000" >/dev/null; do
+until curl -s "web:8000" >/dev/null; do
     >&2 echo "waiting for Django"
     sleep 1
 done
