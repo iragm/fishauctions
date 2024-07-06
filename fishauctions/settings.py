@@ -37,7 +37,7 @@ if os.environ.get('DEBUG', '1') == "False":
 else:
     DEBUG = True
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', '0.0.0.0', os.environ.get('ALLOWED_HOST_1', ''), os.environ.get('ALLOWED_HOST_2', ''), os.environ.get('ALLOWED_HOST_3', '')]
+ALLOWED_HOSTS = ['localhost', 'web', '127.0.0.1', '0.0.0.0', os.environ.get('ALLOWED_HOST_1', ''), os.environ.get('ALLOWED_HOST_2', ''), os.environ.get('ALLOWED_HOST_3', '')]
 CSRF_TRUSTED_ORIGINS = ['http://localhost', 'http://127.0.0.1', 'https://' + os.environ.get('ALLOWED_HOST_1', ''), 'https://' + os.environ.get('ALLOWED_HOST_2', ''), 'https://' + os.environ.get('ALLOWED_HOST_3', '')]
 
 # Channels
@@ -191,7 +191,7 @@ else:
             'NAME': os.environ.get('DATABASE_NAME', 'auctions'),
             'USER': os.environ.get('DATABASE_USER', 'mysqluser'),
             'PASSWORD': os.environ.get('DATABASE_PASSWORD', 'unsecure'),
-            'HOST': os.environ.get('DATABASE_HOST', '0.0.0.0'),
+            'HOST': os.environ.get('DATABASE_HOST', 'db'),
             'PORT': os.environ.get('DATABASE_PORT', '3306'),
             'OPTIONS': {'charset': 'utf8mb4'},
         }

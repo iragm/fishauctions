@@ -7,13 +7,10 @@ services:
       #- .:/usr/src/app/
       - static_volume:/home/app/web/staticfiles
       - media_volume:/home/app/web/mediafiles
-    #ports:
-    #  - 8000:8000
-    expose:
-      - 8000
+    ports:
+      - 8000:8000
     env_file:
       - ./.env
-    network_mode: host
     depends_on:
       - db
 
@@ -25,7 +22,7 @@ services:
       MYSQL_USER: ${DATABASE_USER-mysqluser}
       MYSQL_PASSWORD: ${DATABASE_PASSWORD-unsecure}
       MYSQL_ROOT_PASSWORD: ${DATABASE_ROOT_PASSWORD-unsecure}
-    expose:
+    ports:
       - ${DATABASE_PORT-3306}
     volumes:
       - mariadb_data:/var/lib/mysql
