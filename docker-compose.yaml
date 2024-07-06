@@ -1,5 +1,3 @@
-#version: '3.8'
-
 services:
   web:
     build: .
@@ -40,18 +38,34 @@ services:
     restart: always
     command: redis-server --requirepass ${REDIS_PASSWORD-unsecure}
   
-  nginx:
-    build: ./nginx
-    ports:
-      - 80:80
-    depends_on:
-      - web
+  swag:
+    image: lscr.io/linuxserver/swag:latest
+    container_name: swag
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Etc/UTC
+      - URL=${SITE_DOMAIN}
+      - VALIDATION=http
+      - EMAIL=${ADMIN_EMAIL}
     volumes:
+      - ./swag:/config
       - static_volume:/home/app/web/staticfiles
       - media_volume:/home/app/web/mediafiles
+      - ./nginx.conf:/config/nginx/site-confs/default.conf
+    ports:
+      - 443:443
+      - 80:80
+    restart: unless-stopped
+    depends_on:
+      - web
+
 volumes:
   redis_data:
     driver: local
   mariadb_data:
   static_volume:
   media_volume:
+  

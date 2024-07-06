@@ -9,16 +9,8 @@ from django.test.client import Client
 from io import StringIO
 from django.core.management import call_command
 from .models import *
-from channels.testing import HttpCommunicator
 from .consumers import LotConsumer
 from django.urls import reverse
-
-# class SocketTest(TestCase):
-#     async def test_my_consumer(self):
-#         communicator = HttpCommunicator(MyConsumer, "GET", "/test/")
-#         response = await communicator.get_response()
-#         self.assertEqual(response["body"], b"test response")
-#         self.assertEqual(response["status"], 200)
 
 class ViewLotTest(TestCase):
     def setUp(self):

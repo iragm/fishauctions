@@ -18,7 +18,6 @@ if [ "${DEBUG}" = "False" ]; then
     exec gunicorn fishauctions.asgi:application -k uvicorn.workers.UvicornWorker -w 8 -b 0.0.0.0:8000
 else
     echo Starting in development mode, cron jobs must be run manually
-    python manage.py createsuperuser --username admin --email admin@example.com --noinput
-    uvicorn fishauctions.asgi:application --reload --port 8000
-    #python manage.py runserver 0.0.0.0:8000
+    #uvicorn fishauctions.asgi:application --reload --port 8000
+    python manage.py runserver 0.0.0.0:8000
 fi
