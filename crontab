@@ -1,34 +1,34 @@
 # m h  dom mon dow   command
 * * * * * /home/app/web/task.sh info
-@REM # Set lots as ended and declare a winner
-@REM * * * * * /home/app/web/task.sh endauctions
-
-@REM # Send reminder emails about watched items
-@REM */15 * * * * /home/app/web/task.sh sendnotifications
-
-@REM # welcome and print erminder emails
-@REM */15 * * * * /home/app/web/task.sh auctiontos_notifications
-
-@REM # Email users about invoices
-@REM */15 * * * * /home/app/web/task.sh email_invoice
-
-@REM # Update leaderboard
-@REM * 23 * * * /home/app/web/task.sh update_breederboard
-
-@REM # send email
-@REM * * * * * /home/app/web/task.sh send_queued_mail
-
-@REM # send auction emails
-@REM */4 * * * * /home/app/web/task.sh auction_emails 
-
-@REM # send notifications about unread chats
-@REM 0 10 * * * /home/app/web/task.sh email_unseen_chats
-
-@REM # weekly promo email sent on Wednesday
-@REM 30 9 * * 3 /home/app/web/task.sh weekly_promo
-
-@REM # set user locations
-@REM 0 0 * * * /home/app/web/task.sh set_user_location
-
-@REM # check for duplicate page views
-@REM */15 * * * * /home/app/web/task.sh remove_duplicate_views
+## Set lots as ended and declare a winner
+#* * * * * /home/app/web/task.sh endauctions
+#
+## Send reminder emails about watched items
+#*/15 * * * * /home/app/web/task.sh sendnotifications
+#
+## welcome and print erminder emails
+#*/15 * * * * /home/app/web/task.sh auctiontos_notifications
+#
+## Email users about invoices
+#*/15 * * * * /home/app/web/task.sh email_invoice
+#
+## Update leaderboard
+#* 23 * * * /home/app/web/task.sh update_breederboard
+#
+## send email
+#* * * * * /home/app/web/task.sh send_queued_mail
+#
+## send auction emails
+#*/4 * * * * /home/app/web/task.sh auction_emails 
+#
+## send notifications about unread chats
+#0 10 * * * /home/app/web/task.sh email_unseen_chats
+#
+## weekly promo email sent on Wednesday
+#30 9 * * 3 /home/app/web/task.sh weekly_promo
+#
+## set user locations
+#0 0 * * * /home/app/web/task.sh set_user_location
+#
+## check for duplicate page views
+#*/15 * * * * /home/app/web/task.sh remove_duplicate_views
