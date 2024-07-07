@@ -522,7 +522,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
         {% endif %}
         var viewer_bid = '{{ lot.viewer_bid }}';
         const lotWebSocket = new WebSocket(
-            'ws{% if not debug %}s{% endif %}://'
+            (window.location.protocol === 'https:') ? 'wss://' : 'ws://'
             + window.location.host
             + '/ws/lots/{{ lot.lot_number }}/'
         );
