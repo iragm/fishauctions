@@ -12,6 +12,7 @@ constantly
 cryptography
 #daphne
 uvicorn
+uvicorn[standard]
 defusedxml
 Django
 django-allauth
