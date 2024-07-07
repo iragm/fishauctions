@@ -521,8 +521,9 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
         var high_bidder_pk = '{{ lot.high_bidder.pk }}';
         {% endif %}
         var viewer_bid = '{{ lot.viewer_bid }}';
+        var ws_protocol = (window.location.protocol === 'https:') ? 'wss://' : 'ws://'
         const lotWebSocket = new WebSocket(
-            (window.location.protocol === 'https:') ? 'wss://' : 'ws://'
+            ws_protocol
             + window.location.host
             + '/ws/lots/{{ lot.lot_number }}/'
         );
