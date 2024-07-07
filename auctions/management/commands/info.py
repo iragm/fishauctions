@@ -41,14 +41,6 @@ def compare_model_instances(instance1, instance2):
 class Command(BaseCommand):
     help = 'Just a scratchpad to do things'
     def handle(self, *args, **options):
-        prefsA = UserLabelPrefs.objects.get(user__username='L_Scottgoldie')
-        prefsB = UserLabelPrefs.objects.get(user__pk=1)
-        diffs = compare_model_instances(prefsA, prefsB)
-        for field, (value1, value2) in diffs.items():
-            print(f"Field '{field}' differs: {value1} != {value2}")
-
-
-
         # campaigns = AuctionCampaign.objects.all()
         # for campaign in campaigns:
         #    campaign.update

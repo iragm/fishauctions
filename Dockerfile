@@ -68,6 +68,8 @@ RUN apt-get update && \
 # cron setup
 COPY crontab /etc/cron.d/django-cron
 RUN chmod 0644 /etc/cron.d/django-cron
+RUN chmod gu+rw /var/run
+RUN chmod gu+s /usr/sbin/cron
 RUN crontab /etc/cron.d/django-cron
 RUN touch /var/log/cron.log
 

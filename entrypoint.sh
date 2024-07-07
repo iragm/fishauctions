@@ -13,7 +13,7 @@ python manage.py migrate --no-input
 python manage.py collectstatic --no-input
 
 if [ "${DEBUG}" = "False" ]; then
-    echo Starting fishauctions in productions mode
+    echo Starting fishauctions in production mode
     cron -f & # run cron in the foreground, but & allows the script to continue
     exec gunicorn fishauctions.asgi:application -k uvicorn.workers.UvicornWorker -w 8 -b 0.0.0.0:8000
 else
