@@ -41,6 +41,8 @@ def compare_model_instances(instance1, instance2):
 class Command(BaseCommand):
     help = 'Just a scratchpad to do things'
     def handle(self, *args, **options):
+        user = User.objects.get(pk=1)
+        print(user.email)
         # campaigns = AuctionCampaign.objects.all()
         # for campaign in campaigns:
         #    campaign.update
