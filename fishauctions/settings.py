@@ -46,7 +46,7 @@ CHANNEL_LAYERS = {
     'default': {
         'BACKEND': 'channels_redis.core.RedisChannelLayer',
         'CONFIG': {
-            "hosts": [("redis://:" + os.environ.get('REDIS_PASSWORD', 'unsecure') + "@127.0.0.1:6379/0")],
+            "hosts": [("redis://:" + os.environ.get('REDIS_PASSWORD', 'unsecure') + "@" + os.environ.get('REDIS_HOST', 'redis') + ":6379/0")],
             #"hosts": [('127.0.0.1', 6379)],
             "capacity": 2000,  # default 100
             "expiry": 20,  # default 60
