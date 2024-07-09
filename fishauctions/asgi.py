@@ -11,7 +11,7 @@ django_asgi_app = get_asgi_application()
 
 from channels.auth import AuthMiddlewareStack
 from channels.routing import ProtocolTypeRouter, URLRouter
-
+from channels.security.websocket import AllowedHostsOriginValidator
 from auctions.consumers import *
 
 application = ProtocolTypeRouter({
@@ -19,9 +19,11 @@ application = ProtocolTypeRouter({
     "http": django_asgi_app,
 
     # WebSocket chat handler
-    "websocket": AuthMiddlewareStack(
+    "websocket": AllowedHostsOriginValidator(
+        AuthMiddlewareStack(
         URLRouter([
             re_path(r'ws/lots/(?P<lot_number>\w+)/$', LotConsumer.as_asgi()),
         ])
+        )
     ),
 })

@@ -164,7 +164,7 @@ SITE_DOMAIN = os.environ.get('SITE_DOMAIN', '127.0.0.1')
 # https://docs.djangoproject.com/en/3.1/howto/static-files/
 
 STATIC_URL = 'static/'
-STATIC_ROOT = os.environ.get('STATIC_ROOT', os.path.join(BASE_DIR, "staticfiles"))
+STATIC_ROOT = '/home/app/web/staticfiles/'
 
 AUTHENTICATION_BACKENDS = [
     # Needed to login by username in Django admin, regardless of `allauth`
@@ -251,8 +251,8 @@ BOOTSTRAP4 = {
     'include_jquery': True,
 }
 
-MEDIA_URL = '/media/'
-MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+MEDIA_URL = 'media/'
+MEDIA_ROOT = '/home/app/web/mediafiles/'
 
 EL_PAGINATION_PER_PAGE = 20
 #SITE_URL = os.environ.get('SITE_URL', BASE_URL)

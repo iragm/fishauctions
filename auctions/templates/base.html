@@ -58,8 +58,8 @@ window.onload = function() {
         {% include 'base_page_view.html' %}
         {# handle the unread messages and auctions notification counter #}
         <script>
-          updateMessageCounter();
-          function updateMessageCounter() {
+          updateAuctionCounter();
+          function updateAuctionCounter() {
             $.ajax({
               type: "POST",
               beforeSend: function (request) {
@@ -353,7 +353,6 @@ window.onload = function() {
         <script>
         function setLocation(){ 
           if (navigator.geolocation) {
-            console.log('pre');
             navigator.geolocation.getCurrentPosition(function(data){
               document.cookie = "latitude=" + data.coords['latitude'] + "; SameSite=Strict; path=/";
               document.cookie = "longitude=" + data.coords['longitude'] + "; SameSite=Strict; path=/";
@@ -364,9 +363,6 @@ window.onload = function() {
             window.location = "/users/{{ request.user.pk }}/location/";
             {% endif %}
           }
-        }
-        function saveLocation(data) {
-
         }
         </script>
         {% if messages %}

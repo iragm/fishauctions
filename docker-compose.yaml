@@ -2,15 +2,18 @@ services:
   web:
     build: .
     volumes:
-      #- .:/usr/src/app/
       - static_volume:/home/app/web/staticfiles
       - media_volume:/home/app/web/mediafiles
-    ports:
-      - 8000:8000
+    expose:
+      - 8000
     env_file:
       - ./.env
+    # this will override whatever is set in the .env
+    environment:
+      - DEBUG: True
     depends_on:
       - db
+    restart: always
 
   db:
     image: mariadb:latest
@@ -20,7 +23,7 @@ services:
       MYSQL_USER: ${DATABASE_USER-mysqluser}
       MYSQL_PASSWORD: ${DATABASE_PASSWORD-unsecure}
       MYSQL_ROOT_PASSWORD: ${DATABASE_ROOT_PASSWORD-unsecure}
-    ports:
+    expose:
       - ${DATABASE_PORT-3306}
     volumes:
       - mariadb_data:/var/lib/mysql
@@ -28,37 +31,23 @@ services:
   redis:
     image: redis
     environment:
-      # ALLOW_EMPTY_PASSWORD is recommended only for development.
-      #- ALLOW_EMPTY_PASSWORD=yes
       - REDIS_DISABLE_COMMANDS=FLUSHDB,FLUSHALL
-    ports:
-      - 6379:6379
+    expose:
+      - 6379
     volumes:
       - redis_data:/bitnami/redis/data
     restart: always
     command: redis-server --requirepass ${REDIS_PASSWORD-unsecure}
   
-  swag:
-    image: lscr.io/linuxserver/swag:latest
-    container_name: swag
-    cap_add:
-      - NET_ADMIN
-    environment:
-      - PUID=1000
-      - PGID=1000
-      - TZ=Etc/UTC
-      - URL=${SITE_DOMAIN}
-      - VALIDATION=http
-      - EMAIL=${ADMIN_EMAIL}
+# this server will get overridden in production - see docker-compose.prod.yaml
+  nginx:
+    image: nginx:latest
     volumes:
-      - ./swag:/config
-      - static_volume:/home/app/web/staticfiles
-      - media_volume:/home/app/web/mediafiles
-      - ./nginx.conf:/config/nginx/site-confs/default.conf
+      - ./nginx.dev.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx_fishauctions.conf:/etc/nginx/nginx_fishauctions.conf:ro
     ports:
-      - 443:443
-      - 80:80
-    restart: unless-stopped
+      - ${HTTP_PORT-80}:80
+    restart: always
     depends_on:
       - web
 
