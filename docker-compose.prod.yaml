@@ -1,8 +1,7 @@
 services:
   web:
     environment:
-      - DEBUG: False
-
+      - DEBUG=False
   nginx:
     image: lscr.io/linuxserver/swag:latest
     container_name: swag

@@ -9,8 +9,8 @@ FROM python:3.11.4-slim-buster AS builder
 WORKDIR /usr/src/app
 
 # set environment variables
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
 # install system dependencies
 RUN apt-get update && \
@@ -76,7 +76,10 @@ RUN touch /var/log/cron.log
 COPY --from=builder /usr/src/app/wheels /wheels
 COPY --from=builder /usr/src/app/requirements.txt .
 RUN pip install --upgrade pip
-RUN pip install --no-cache /wheels/*
+# keep docker image smaller
+#RUN pip install --no-cache /wheels/*
+# faster
+RUN pip install /wheels/* 
 RUN pip install mysql-connector-python
 
 COPY . $APP_HOME

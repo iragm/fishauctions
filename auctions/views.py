@@ -975,6 +975,8 @@ def pageview(request):
             if auction and user:
                 if not source:
                     source = referrer
+                # there is a timing issue here that allows multiple campaigns to be created
+                # https://github.com/iragm/fishauctions/issues/168
                 campaign, created = AuctionCampaign.objects.get_or_create(
                     auction = auction,
                     user = user,

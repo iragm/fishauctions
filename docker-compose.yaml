@@ -4,13 +4,14 @@ services:
     volumes:
       - static_volume:/home/app/web/staticfiles
       - media_volume:/home/app/web/mediafiles
-    expose:
-      - 8000
-    env_file:
-      - ./.env
+    ports:
+      - 8000:8000
+    #expose:
+    #  - 8000
+    env_file: .env
     # this will override whatever is set in the .env
     environment:
-      - DEBUG: True
+      - DEBUG=True
     depends_on:
       - db
     restart: always

@@ -14,7 +14,9 @@ from auctions.filters import get_recommended_lots
 import re
 from collections import Counter
 from post_office import mail
+from post_office.models import Email
 from auctions.views import clean_referrer
+from django.db.models.functions import TruncDate
 
 def compare_model_instances(instance1, instance2):
     """
@@ -41,8 +43,6 @@ def compare_model_instances(instance1, instance2):
 class Command(BaseCommand):
     help = 'Just a scratchpad to do things'
     def handle(self, *args, **options):
-        user = User.objects.get(pk=1)
-        print(user.email)
         # campaigns = AuctionCampaign.objects.all()
         # for campaign in campaigns:
         #    campaign.update

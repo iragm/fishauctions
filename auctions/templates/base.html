@@ -307,7 +307,7 @@ window.onload = function() {
                     </div>
                   </li>
                   {% else %}
-                  <a href="/login/?next={% firstof request.path '/' %}" class='nav-link'>Sign in</a>
+                  <a href="{% url 'account_login' %}?next={% firstof request.path '/' %}" class='nav-link'>Sign in</a>
                 {% endif %}
                 </ul>
                 <!-- <form class="form-inline my-2 my-lg-0">
