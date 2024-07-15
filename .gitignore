@@ -6,3 +6,5 @@ fishauctions/customsettings.py
 media/
 auctions/templates/ads.txt
 swag/
+mediafiles/
+staticfiles/

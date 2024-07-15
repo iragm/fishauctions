@@ -25,7 +25,7 @@ RUN pip install --upgrade pip pip-tools
 COPY . /usr/src/app/
 
 # generate an updated requirements.txt file with the latest versions of all packages
-#RUN pip-compile requirements.in --upgrade # fixme
+RUN pip-compile requirements.in --upgrade
 
 # install python dependencies
 # COPY ./requirements.txt . # no need to copy this, we just generated it
@@ -76,13 +76,10 @@ RUN touch /var/log/cron.log
 COPY --from=builder /usr/src/app/wheels /wheels
 COPY --from=builder /usr/src/app/requirements.txt .
 RUN pip install --upgrade pip
-# keep docker image smaller
-#RUN pip install --no-cache /wheels/*
-# faster
-RUN pip install /wheels/* 
+RUN pip install --no-cache /wheels/*
 RUN pip install mysql-connector-python
 
-COPY . $APP_HOME
+#COPY . $APP_HOME
 
 # chown all the files to the app user
 RUN chown -R app:app $APP_HOME
