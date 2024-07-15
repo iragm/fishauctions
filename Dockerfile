@@ -61,7 +61,8 @@ RUN apt-get update && \
     build-essential \
     pkg-config \
     default-libmysqlclient-dev \
-    cron && \
+    cron \
+    nano && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -79,6 +80,12 @@ RUN pip install --upgrade pip
 RUN pip install --no-cache /wheels/*
 RUN pip install mysql-connector-python
 
+# this is a hack to overwrite Django's broken TZ stuff that causes errors (500 page) to fail.  See https://code.djangoproject.com/ticket/33674
+COPY fix_tz_hack.sh /tmp/fix_tz_hack.sh
+RUN chmod +x /tmp/fix_tz_hack.sh
+RUN /tmp/fix_tz_hack.sh
+
+# volume instead
 #COPY . $APP_HOME
 
 # chown all the files to the app user
