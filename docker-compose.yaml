@@ -1,10 +1,12 @@
 services:
   web:
     build: .
+    container_name: django
     volumes:
       - .:/home/app/web
       - static_volume:/home/app/web/staticfiles
       - media_volume:/home/app/web/mediafiles
+      - /etc/localtime:/etc/localtime:ro
     expose:
       - 8000
     env_file: .env
@@ -39,7 +41,10 @@ services:
   nginx:
     image: ${NGINX_IMAGE-nginx}:latest # default setting is for development, use lscr.io/linuxserver/swag for production
     volumes:
-      - ${NGINX_CONF-./nginx.dev.conf}:/etc/nginx/nginx.conf:ro
+      # the root conf file is set for dev, but for production use:
+      # NGINX_CONF='./nginx.prod.conf'
+      # NGINX_CONF_LOCATION='/config/nginx/site-confs/default.conf'
+      - ${NGINX_CONF-./nginx.dev.conf}:${NGINX_CONF_LOCATION-/etc/nginx/nginx.conf}
       - ./swag:/config
       - ./nginx_fishauctions.conf:/etc/nginx/nginx_fishauctions.conf:ro
       - static_volume:/home/app/web/staticfiles:ro
