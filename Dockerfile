@@ -50,7 +50,7 @@ ENV APP_HOME=/home/app/web
 RUN mkdir /home/user
 RUN mkdir $APP_HOME
 RUN mkdir $APP_HOME/staticfiles
-RUN mkdir $APP_HOME/media
+RUN mkdir $APP_HOME/mediafiles
 
 WORKDIR $APP_HOME
 
