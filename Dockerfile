@@ -92,6 +92,10 @@ RUN /tmp/fix_tz_hack.sh
 RUN chown -R app:app $APP_HOME
 RUN chown -R app:app /home/user
 RUN chown -R app:app /var/log/
+RUN chown -R app:app /var/log/
+RUN chown -R app:app /home/app/web/mediafiles
+RUN chown -R app:app /home/app/web/staticfiles
+
 USER app
 
 EXPOSE 8000
