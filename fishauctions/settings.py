@@ -195,6 +195,7 @@ else:
             'HOST': os.environ.get('DATABASE_HOST', 'db'),
             'PORT': os.environ.get('DATABASE_PORT', '3306'),
             'OPTIONS': {'charset': 'utf8mb4'},
+            'CONN_MAX_AGE': 3600,
         }
     }
 

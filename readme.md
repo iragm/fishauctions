@@ -52,3 +52,6 @@ Some cron jobs are used to manage models - these run automatically if you're in 
 
 #### Adding packages
 New packages can be added to requirements.in (in addition to the standard Django settings file).  A simple `docker-compose build` will trigger pip-compile when building the Docker container and will update all files.
+
+#### Management commands
+Run these with docker exec after docker compose is up.  For example: `docker exec -it django python3 manage.py makemigrations`

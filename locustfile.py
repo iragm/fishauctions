@@ -7,6 +7,8 @@ class QuickstartUser(HttpUser):
     wsurl = 'wss://example.com/ws/lots' # no trailing /
     wait_time = between(1, 10)
     lot_to_bid_on = 1234
+    lot_start_pk = 1110
+    lot_end_pk = 1115
 
     @task
     def lot_list(self):
@@ -14,8 +16,8 @@ class QuickstartUser(HttpUser):
 
     @task(3)
     def view_lot(self):
-        for lot in range(1110, 1115):
-            ws = create_connection(f"{wsurl}/{lot}/")
+        for lot in range(self.lot_start_pk, self.lot_end_pk):
+            ws = create_connection(f"{self.wsurl}/{lot}/")
             self.client.get(f"/lots/{self.lot}", name="/lot")
             time.sleep(1)
             ws.close()
@@ -23,7 +25,7 @@ class QuickstartUser(HttpUser):
     @task(10)
     def bid(self):
         self.client.post("/login", json={"username":"tester", "password":"1234"})
-        ws = create_connection(f"{self.wsurl}/{lot}/")
+        ws = create_connection(f"{self.wsurl}/{self.lot_to_bid_on}/")
         ws.send('{"bid":10}')
         result = ws.recv()
         ws.close()
