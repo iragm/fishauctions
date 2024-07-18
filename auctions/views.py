@@ -21,6 +21,7 @@ from django.views.generic.edit import UpdateView, CreateView, DeleteView, FormMi
 from django.db.models import Count, Case, When, IntegerField, Q, Avg
 from django.db.models.functions import TruncDay
 from django.contrib.messages.views import SuccessMessageMixin
+from django.core.files.base import ContentFile
 from allauth.account.models import EmailAddress
 from el_pagination.views import AjaxListView
 from easy_thumbnails.templatetags.thumbnail import thumbnail_url
@@ -763,7 +764,7 @@ def userUnban(request, pk):
 
 def imagesPrimary(request):
     """Make the specified image the default image for the lot
-    Takes pk of image and angle as post params
+    Takes pk of image as post param
     this does not check lot.can_add_images, which is deliberate (who cares if you rotate...)
     at some point, this function and the rotate function should be converted into classes
     """
@@ -796,27 +797,26 @@ def imagesRotate(request):
             user = request.user
             pk = int(request.POST['pk'])
             angle = int(request.POST['angle'])
-        except:
-            return HttpResponse("user, pk and angle are required")
+        except (KeyError, ValueError):
+            return HttpResponse("user, pk, and angle are required")
         try:
             lotImage = LotImage.objects.get(pk=pk)
-        except:
+        except LotImage.DoesNotExist:
             return HttpResponse(f"Image {pk} not found")
         if not lotImage.lot_number.image_permission_check(request.user):
             messages.error(request, "Only the lot creator can rotate images")
             return redirect('/')
         if not lotImage.image:
             return HttpResponse("No image")
-        thisImage = str(lotImage.image)
-        pilImage = Image.open(BytesIO(lotImage.image.read()))
-        pilImage = pilImage.rotate(angle, expand=True)
-        if pilImage.mode in ("RGBA", "P"):
-            pilImage = pilImage.convert("RGB")
+        temp_image = Image.open(BytesIO(lotImage.image.read()))
+        temp_image = temp_image.rotate(angle, expand=True)
+        if temp_image.mode in ("RGBA", "P"):
+            temp_image = temp_image.convert("RGB")
         output = BytesIO()
-        pilImage.save(output, format='JPEG', quality=100)
+        temp_image.save(output, format='JPEG', quality=85)
         output.seek(0)
-        lotImage.image = File(output, str(thisImage))
-        lotImage.save()
+        # Overwrite the original image
+        lotImage.image.save(lotImage.image.name.replace("images/", ""), ContentFile(output.read()), save=True)
         return HttpResponse("Success")
     messages.error(request, "Your account doesn't have permission to view this page")
     return redirect('/')

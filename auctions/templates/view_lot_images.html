@@ -151,7 +151,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                         {% endif %}
                         {% for image in lot.images %}
                         <div class="carousel-item {% if image.is_primary and not lot.video_link %}active{%endif%}">
-                            <img src="{{ image.image.lot_full.url }}" class="img-fluid">
+                            <img src="{{ image.image.url }}" class="img-fluid">
                             <div class='carousel-caption text-left'>
                                 <span class="text-muted"><small>{{ image.get_image_source_display }}</small></span>{%if image.caption%}<br>{{ image.caption }}{%endif%}
                             </div>

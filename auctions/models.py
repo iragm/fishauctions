@@ -3317,7 +3317,7 @@ class LotImage(models.Model):
 	caption = models.CharField(max_length=60, blank=True, null=True)
 	caption.help_text = "Optional"
 	image = ThumbnailerImageField(upload_to='images/', blank=False, null=False,
-							   # see https://github.com/iragm/fishauctions/issues/161
+							   resize_source=dict(size=(600, 600), quality=85),
 							   )
 	image.help_text = "Select an image to upload"
 	image_source = models.CharField(

@@ -262,7 +262,7 @@ THUMBNAIL_ALIASES = {
     '': {
         'ad': {'size': (250, 150), 'crop': False},
         'lot_list': {'size': (250, 150), 'crop': "smart"},
-        'lot_full': {'size': (600, 600), 'crop': False},
+        #'lot_full': {'size': (600, 600), 'crop': False},
     },
 }
 

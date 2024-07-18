@@ -43,7 +43,10 @@ FROM python:3.11.4-slim-buster
 RUN mkdir -p /home/app
 
 # create the app user
-RUN addgroup --system app && adduser --system --group app
+#RUN addgroup --system app && adduser --system --group app
+# specifying IDs to be the same as the nginx users, to set permissions correctly on images
+RUN groupadd -r -g ${PUID-1000} app && \
+    useradd -r -u ${PGID-1000} -g app -m -d /home/app -s /bin/bash app
 
 # create the appropriate directories
 ENV APP_HOME=/home/app/web
