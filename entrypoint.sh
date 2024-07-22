@@ -33,7 +33,7 @@ if [ "${DEBUG}" = "True" ]; then
     exec uvicorn fishauctions.asgi:application --host 0.0.0.0 --port 8000 --reload --reload-include '*.py' --reload-include '*.html' --reload-include '*.js'
 else
     echo Starting fishauctions in production mode
-    #cron -f & # run cron in the foreground, but & allows the script to continue
+    crontab /etc/cron.d/django-cron
     service cron start
     exec gunicorn fishauctions.asgi:application -k uvicorn.workers.UvicornWorker -w 8 -b 0.0.0.0:8000
 fi

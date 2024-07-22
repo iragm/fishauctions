@@ -8,7 +8,11 @@ if [ $# -eq 0 ]; then
 fi
 
 if [ -f /home/app/web/.env ]; then
-    export $(grep -v '^#' /home/app/web/.env | xargs)
+    while IFS= read -r line; do
+    if [ -n "$line" ] && [ "${line:0:1}" != "#" ]; then
+        eval "export $line"
+    fi
+    done < /home/app/web/.env
 else
     echo "No .env file found, env will not be set" > /proc/1/fd/1 2>&1
 fi
