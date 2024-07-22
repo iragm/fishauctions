@@ -12,5 +12,5 @@ if [ -f /home/app/web/.env ]; then
 else
     echo "No .env file found, env will not be set" > /proc/1/fd/1 2>&1
 fi
-
+echo running $1 > /proc/1/fd/1 2>&1
 /usr/local/bin/python /home/app/web/manage.py $1 > /proc/1/fd/1 2>&1
