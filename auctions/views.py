@@ -70,7 +70,6 @@ def bin_data(queryset, field_name,
             add_column_for_low_overflow=False,
             add_column_for_high_overflow=False,
             generate_labels=False,
-            debug=False,
             ):
     """Pass a queryset and this will spit out a count of how many `field_name`s there are in each `number_of_bins`
     Pass a datetime or an int for start_bin and end_bin, the default is the min/max value in the queryset.
@@ -103,20 +102,14 @@ def bin_data(queryset, field_name,
         bin_size = (end_bin - start_bin).total_seconds() / number_of_bins
     else:
         bin_size = (end_bin - start_bin ) / number_of_bins
-    if debug:
-        print(bin_size)
     bin_counts = Counter()
     low_overflow_count = 0
     high_overflow_count = 0
     for item in queryset:
         item_value = getattr(item, field_name)
         if item_value < start_bin:
-            if debug:
-                print(f"{item_value} is less than {start_bin}")
             low_overflow_count += 1
         elif item_value >= end_bin:
-            if debug:
-                print(f"{item_value} is more than {end_bin}")
             high_overflow_count += 1
         else:
             if working_with_date:
@@ -124,10 +117,6 @@ def bin_data(queryset, field_name,
             else:
                 diff = item_value - start_bin
             bin_index = int(diff // bin_size)
-            if bin_index > number_of_bins:
-                print('shouldnt ever get here', item_value, end_bin)
-            if debug:
-                print(f"{item_value} goes into bin {bin_index}")
             bin_counts[bin_index] += 1
 
     # Ensure all bins are represented (even those with 0)
@@ -158,8 +147,6 @@ def bin_data(queryset, field_name,
         
         if add_column_for_high_overflow:
             bin_labels.append("high overflow")
-        if debug:
-            print(bin_labels)
         return bin_labels, counts_list
     return counts_list
 
