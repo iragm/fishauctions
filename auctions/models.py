@@ -690,9 +690,14 @@ class Auction(models.Model):
 
 	@property
 	def number_of_sellers(self):
-		return AuctionTOS.objects.filter(auctiontos_seller__auction=self.pk, auctiontos_winner__isnull=False).distinct().count()
+		return AuctionTOS.objects.filter(auctiontos_seller__auction=self.pk).distinct().count()
+		#return AuctionTOS.objects.filter(auctiontos_seller__auction=self.pk, auctiontos_winner__isnull=False).distinct().count()
 		#users = User.objects.values('lot__user').annotate(Sum('lot')).filter(lot__auction=self.pk, lot__winner__isnull=False)
 		#users = User.objects.filter(lot__auction=self.pk, lot__winner__isnull=False).distinct()
+
+	@property
+	def number_of_sellers_who_didnt_buy(self):
+		return AuctionTOS.objects.filter(auctiontos_seller__auction=self.pk, auctiontos_winner__isnull=False).distinct().count()	
 
 	# @property
 	# def number_of_unsuccessful_sellers(self):
@@ -759,14 +764,6 @@ class Auction(models.Model):
 				return False
 		return True
 	
-	@property
-	def bin_size(self):
-		"""Used for auction stats graph - on the lot sell price chart, this is the the size of each bin"""
-		try:
-			return int(self.median_lot_price/5)
-		except:
-			return 2
-
 	@property
 	def number_of_participants(self):
 		"""
@@ -1294,7 +1291,7 @@ class AuctionTOS(models.Model):
 			)
 			if userData.latitude:
 				location = PickupLocation.objects.filter(pk=self.pickup_location.pk)\
-							.annotate(distance=distance_to(userData.latitude, userData.longitude))\
+							.annotate(distance=distance_to(userData.latitude, userData.longitude, approximate_distance_to=5))\
 							.order_by('distance').first()
 				return location.distance
 		return -1

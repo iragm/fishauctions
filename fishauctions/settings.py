@@ -223,8 +223,11 @@ ACCOUNT_CHANGE_EMAIL = True
 
 SESSION_COOKIE_AGE = 1209600*100
 
-EMAIL_BACKEND = 'post_office.EmailBackend'
-#EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend' # console
+if DEBUG:
+    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+else:
+    EMAIL_BACKEND = 'post_office.EmailBackend'
+
 #EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 
 POST_OFFICE = {

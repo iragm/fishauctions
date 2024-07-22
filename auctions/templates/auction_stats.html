@@ -12,15 +12,7 @@
   window.onload = function() {
     Chart.defaults.global.defaultFontColor = "#fff";
     $.ajax({
-      url: '/api/chart/auction/?auction={{auction.slug}}&chart=none',
-      success: function (data) {
-        $('#club_profit_raw').html(data.club_profit_raw.toFixed(2))
-        $('#club_profit').html(data.club_profit.toFixed(2))
-        $('#total_to_sellers').html(data.total_to_sellers.toFixed(2))
-        $('#percent_to_club').html(data.percent_to_club.toFixed(2))
-      }});
-    $.ajax({
-      url: '/api/chart/auction/?auction={{auction.slug}}&chart=funnel',
+      url: '{% url "auction_funnel_chart" slug=auction.slug %}',
       success: function (data) {
           var ctx = document.getElementById('funnel_chart').getContext('2d');
           var funnelChart = {
@@ -63,36 +55,9 @@
           new Chart(ctx, funnelChart);
       }
     });
-    $.ajax({
-      url: '/api/chart/auction/?auction={{auction.slug}}&chart=lotprice&bin={{auction.bin_size}}',
-      success: function (data) {
-          var ctx = document.getElementById('lot_prices').getContext('2d');
-          var lotPrices = {
-            type: 'bar',
-            data: {
-                labels: data.labels,
-                datasets: [{
-                label: 'Number of lots',
-                backgroundColor: 'rgba(52, 152, 219, 0.4)',
-                data: data.data
-                }]
-            },
-            options: {
-                legend: {
-                    display: false
-                },
-                title: {
-                    display: false,
-                    text: 'Bar chart'
-                }
-            }
-          }
-          new Chart(ctx, lotPrices);
-     }
-    });
     {% if auction.is_online %}
     $.ajax({
-      url: '/api/chart/auction/?auction={{auction.slug}}&chart=lotbids',
+      url: '{% url "auction_lot_bidders" slug=auction.slug %}',
       success: function (data) {
           var ctx = document.getElementById('lot_pie').getContext('2d');
           var pie = {
@@ -135,7 +100,7 @@
     {% endif %}
     {% if auction.is_online %}
     $.ajax({
-      url: '/api/chart/auction/?auction={{auction.slug}}&chart=categories&top=20',
+      url: '{% url "auction_lot_categories" slug=auction.slug %}',
       success: function (data) {
           var ctx = document.getElementById('categories').getContext('2d');
           var categories = {
@@ -193,17 +158,20 @@
                 </thead>
                 <tbody>
                   <tr>
-                    <td>Sellers</td><td>{{auction.number_of_sellers}}</td>
-                  </tr>
-                  <tr>
-                    <td>Buyers</td><td>{{auction.number_of_buyers}}</td>
+                    <td>Total users</td><td>{{auction.number_of_tos}}</td>
                   </tr>
                   <tr>
                     <td>Users who bought or sold at least one item</td><td>{{auction.number_of_participants}}</td>
+                  </tr>                  
+                  <tr>
+                    <td>Buyers</td><td>{{auction.number_of_buyers}}</td>
+                  </tr>                  
+                  <tr>
+                    <td>Sellers</td><td>{{auction.number_of_sellers}}</td>
                   </tr>
                   <tr>
-                    <td>Total users</td><td>{{auction.number_of_tos}}</td>
-                  </tr>
+                    <td>Sellers who did not buy anything</td><td>{{auction.number_of_sellers_who_didnt_buy}}</td>
+                  </tr>                  
                   <tr>
                     <td>Users who preregistered through this site</td><td>{{auction.preregistered_users}}</td>
                   </tr>
@@ -253,24 +221,39 @@ This graph shows overall engagement of people with your auction.  You can gauge 
         <td>Gross (value of all lots sold)</td><td>${{auction.gross|floatformat:2}}</td>
       </tr>
       <tr>
-        <td>Club profit (unrounded)</td><td>$<span id='club_profit_raw'> Loading </span></td>
+        <td>Club profit (unrounded)</td><td>${{auction.club_profit_raw|floatformat:2}}</td>
       </tr>
       <tr>
-        <td>Club profit <small>(includes adjustments, and invoices are rounded to the nearest dollar)</small></td><td>$<span id='club_profit'> Loading </span> (<span id='percent_to_club'> Loading </span>% of gross)</td>
+        <td>Club profit <small>(includes adjustments, and invoices are rounded to the nearest dollar)</small></td><td>${{auction.club_profit|floatformat:2}} ({{ auction.percent_to_club|floatformat:2 }}% of gross)</td>
       </tr>
       <tr>
-        <td>Seller payout</td><td>$<span id='total_to_sellers'> Loading </span></td>
+        <td>Seller payout</td><td>${{ auction.total_to_sellers|floatformat:2 }}</td>
       </tr>                  
   </tbody>
 </table>
 
             <br><br>
             <h4>Lot sell prices</h4>
-            How many lots sold at different price points.
+            <canvas id="lot_prices" width="500" height="400"></canvas>
+            <script type="text/javascript">
+              $.get('{% url "auction_sell_prices" slug=auction.slug %}', function(data) {
+                var ctx = $("#lot_prices").get(0).getContext("2d");
+                new Chart(ctx, {
+                  type: 'bar', data: data,
+                  options: {
+                    scales: {
+                        yAxes: [{
+                            ticks: {
+                                beginAtZero: true, // start the Y-axis scale at zero
+                            }
+                        }]
+                    }
+                  },
+                });
+              });
+            </script>
             <br>
-            <canvas id="lot_prices"></canvas>
-            <br>
-              Buyer's auctions have a distribution towards the left, seller's auctions towards the right.<br><br>
+            How many lots sold at different price points.  Buyer's auctions have a distribution towards the left, seller's auctions towards the right.<br><br>
               <br><br>
             {% if auction.is_online %}
             <h4>Competition for lots</h4>
@@ -326,7 +309,6 @@ This graph shows overall engagement of people with your auction.  You can gauge 
 <script type="text/javascript">
   $.get('{% url "auction_stats_pictures" slug=auction.slug %}', function(data) {
     var ctx = $("#pictures").get(0).getContext("2d");
-    console.log(data);
     new Chart(ctx, {
       type: 'bar', data: data,
       options: {
@@ -349,7 +331,6 @@ Generally, having an image makes a lot sell for more money, but more images don'
 <script type="text/javascript">
   $.get('{% url "auction_stats_distance_traveled" slug=auction.slug %}', function(data) {
     var ctx = $("#distances_traveled").get(0).getContext("2d");
-    console.log(data);
     new Chart(ctx, {
       type: 'bar', data: data,
       options: {
@@ -371,7 +352,6 @@ Use this information to add additional pickup locations to future auctions.  Not
 <script type="text/javascript">
   $.get('{% url "auction_stats_previous_auctions" slug=auction.slug %}', function(data) {
     var ctx = $("#auction_stats_previous_auctions").get(0).getContext("2d");
-    console.log(data);
     new Chart(ctx, {
       type: 'bar', data: data,
       options: {
@@ -394,7 +374,6 @@ You want a good mix of newbies and veterans.  This takes into account ALL auctio
 <script type="text/javascript">
   $.get('{% url "auction_stats_lots_submitted" slug=auction.slug %}', function(data) {
     var ctx = $("#auction_stats_lots_submitted").get(0).getContext("2d");
-    console.log(data);
     new Chart(ctx, {
       type: 'bar', data: data,
       options: {
@@ -409,7 +388,7 @@ You want a good mix of newbies and veterans.  This takes into account ALL auctio
     });
   });
 </script>
-Most people will add very few lots to an auction, but it's worth considering those people, as how their lots do will impact whether or not they come back.  Only people who actually bought or sold a lot are included here.
+Most people will add very few lots to an auction, but it's worth considering those people, as how their lots do will impact whether or not they come back.  Only people who actually bought or sold a lot are included here -- if someone joined your auction but didn't participate, they won't appear in any column of this graph.
 {% if auction.multi_location %}
 <p></p>
 <h4>How much volume does each location do?</h4>
@@ -417,7 +396,6 @@ Most people will add very few lots to an auction, but it's worth considering tho
 <script type="text/javascript">
   $.get('{% url "auction_stats_location_volume" slug=auction.slug %}', function(data) {
     var ctx = $("#auction_stats_location_volume").get(0).getContext("2d");
-    console.log(data);
     new Chart(ctx, {
       type: 'bar', data: data,
       options: {
@@ -440,7 +418,6 @@ Use this to spot low-volume locations to skip or advertise more at next time.
 <script type="text/javascript">
   $.get('{% url "auction_stats_feature_use" slug=auction.slug %}', function(data) {
     var ctx = $("#auction_stats_feature_use").get(0).getContext("2d");
-    console.log(data);
     new Chart(ctx, {
       type: 'bar', data: data,
       options: {
@@ -469,7 +446,6 @@ How many of your users are taking advantage of features on this webiste?
 <script type="text/javascript">
   $.get('{% url "auction_stats_referrers" slug=auction.slug %}', function(data) {
     var ctx = $("#auction_stats_referrers").get(0).getContext("2d");
-    console.log(data);
     new Chart(ctx, {
       type: 'bar', data: data,
       options: {
