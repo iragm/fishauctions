@@ -15,7 +15,7 @@ FAQ
           </div>
           <br><br>
         {% endfor %}
-        Still got questions? Email me: {{ contact | safe }}<br>
+        Still got questions? Email me: {% if request.user.is_authenticated %}{{admin_email|urlize}}{% else %}(Sign in to see email){% endif %}<br>
 {% endblock %}
 {% block extra_js %}
 <script type='text/javascript'>pageView();</script>

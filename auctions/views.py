@@ -149,7 +149,15 @@ def bin_data(queryset, field_name,
             bin_labels.append("high overflow")
         return bin_labels, counts_list
     return counts_list
+class AdminEmailMixin():
+    """Add an admin_email value from settings to the context of a request"""
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['admin_email'] = settings.ADMINS[0][1]
+        print(settings.ADMINS[0][1])
+        print("OK")
+        return context
 
 class AuctionPermissionsMixin():
     """For any auction-related views, adds view.is_auction_admin to be used for any kind of permissions-checking
@@ -3110,7 +3118,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
             #print(form.cleaned_data)
             return self.form_invalid(form)
 
-class FAQ(ListView):
+class FAQ(AdminEmailMixin, ListView):
     """Show all questions"""
     model = FAQ
     template_name = 'faq.html'
@@ -3118,11 +3126,6 @@ class FAQ(ListView):
     
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        if self.request.user.is_authenticated:
-            email = User.objects.get(pk=1).email
-            context['contact'] = f"<a href='mailto:{email}'>{email}</a>"
-        else:
-            context['contact'] = "Sign in to show contact information here"
         current_site = Site.objects.get_current()
         context['domain'] = current_site.domain
         return context
@@ -3131,12 +3134,13 @@ class FAQ(ListView):
 def aboutSite(request):
     return render(request,'about.html')
 
-def promoSite(request):
-    context = {
-        'contact_email': User.objects.get(pk=1).email,
-        'hide_google_login': True,
-    }
-    return render(request,'promo.html', context=context)
+class PromoSite(TemplateView):
+    template_name = "promo.html"
+    
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['hide_google_login'] = True
+        return context
 
 def toDefaultLandingPage(request):
     """
@@ -3148,7 +3152,7 @@ def toDefaultLandingPage(request):
                 return AllLots.as_view()(request)
             else:
                 # promo page for non-logged in users
-                return promoSite(request)
+                return PromoSite.as_view()(request)
         try:
             # Did the user sign the tos yet?
             AuctionTOS.objects.get(user=request.user, auction=auction)
@@ -4207,7 +4211,7 @@ class UserMap(TemplateView):
         context['users'] = qs
         return context
 
-class ClubMap(TemplateView):
+class ClubMap(AdminEmailMixin, TemplateView):
     template_name = 'clubs.html'
 
     def get_context_data(self, **kwargs):
@@ -4220,7 +4224,6 @@ class ClubMap(TemplateView):
             context['longitude'] = self.request.COOKIES['longitude']
         except:
             pass
-        context['contact_email'] = User.objects.get(pk=1).email
         return context
 
 class UserAgreement(TemplateView):

@@ -74,7 +74,5 @@ function initMap() {
             {% if not has_user_location %}
             <span><a href="#" onclick="setLocation()">{{ location_message }}</a></span>
             {% endif %}
-            <div>Something missing? {% if not request.user.is_authenticated %}<a href="/login/?next={% firstof request.path '/' %}">Sign in</a> to report an issue{% else %}Contact me at <a href='mailto:{{ contact_email }}'>{{ contact_email }}</a>{% endif %}.</div>
+            <div>Something missing? {% if not request.user.is_authenticated %}<a href="/login/?next={% firstof request.path '/' %}">Sign in</a> to report an issue{% else %}Contact me at {{ admin_email | urlize }}{% endif %}.</div>
 {% endblock %}
-
-

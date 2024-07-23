@@ -63,7 +63,7 @@ urlpatterns = [
     path('bids/delete/<int:pk>/', views.BidDelete.as_view()),
     path('', views.toDefaultLandingPage),
     path('old_about/', views.aboutSite, name='about'),
-    path('about/', views.promoSite, name='promo'),
+    path('about/', views.PromoSite.as_view(), name='promo'),
     path('account/', views.toAccount, name='account'),
     path('invoices/', login_required(views.Invoices.as_view()), name='my_invoices'),
     path('invoices/<int:pk>/', login_required(views.InvoiceView.as_view()), name='invoice_by_pk'),
