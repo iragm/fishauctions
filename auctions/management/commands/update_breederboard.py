@@ -31,20 +31,20 @@ class Command(BaseCommand):
             data.save()
             #self.stdout.write(f"Rank {rank}: {newData.user} with {newData.lots_sold} lots sold")
             rank = rank + 1
-        self.stdout.write("Updating total unique species sold")
-        sortedList = sorted(userData, key=lambda t: -t.species_sold)
-        rank = 1
-        for newData in sortedList:
-            data = UserData.objects.get(user_id=newData.user.pk)
-            if newData.species_sold:
-                data.rank_unique_species = rank
-                data.number_unique_species = newData.species_sold
-            else:
-                data.rank_unique_species = None
-                data.number_unique_species = None
-            data.save()
-            #self.stdout.write(f"Rank {rank}: {newData.user} with {newData.species_sold} species")
-            rank = rank + 1
+        # self.stdout.write("Updating total unique species sold")
+        # sortedList = sorted(userData, key=lambda t: -t.species_sold)
+        # rank = 1
+        # for newData in sortedList:
+        #     data = UserData.objects.get(user_id=newData.user.pk)
+        #     if newData.species_sold:
+        #         data.rank_unique_species = rank
+        #         data.number_unique_species = newData.species_sold
+        #     else:
+        #         data.rank_unique_species = None
+        #         data.number_unique_species = None
+        #     data.save()
+        #     #self.stdout.write(f"Rank {rank}: {newData.user} with {newData.species_sold} species")
+        #     rank = rank + 1
         self.stdout.write("Updating total spent")
         sortedList = sorted(userData, key=lambda t: -t.total_spent)
         rank = 1
