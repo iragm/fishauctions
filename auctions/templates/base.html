@@ -387,6 +387,7 @@ window.onload = function() {
             </div>
         </div>  
         {% block undiv_content %}{% endblock %}
+        {% if not hide_navbar %}<div class="d-flex justify-content-center"><small class="text-muted">Website copyright 2020-2024 <a href="https://tfcb.org">Tropical Fish Club of Burlington</a></small></div>{% endif %}
         {% block extra_js %}
             {# Override this in templates to add extra javascript #}
         {% endblock %}
