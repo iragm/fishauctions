@@ -126,15 +126,15 @@ class QuickAddLot(forms.ModelForm):
         self.fields['species_category'].initial = Category.objects.get(pk=21) # uncategorized
         self.fields['quantity'].initial = 1
 
-        if self.auction.reserve_price == "disable":
-            self.fields['reserve_price'].widget = HiddenInput()
+        #if self.auction.reserve_price == "disable":
+        #    self.fields['reserve_price'].widget = HiddenInput()
         # always required anyway...
         #if self.auction.reserve_price == "required":
         #    self.fields['reserve_price'].required = True
-        if self.auction.buy_now == "disable":
-            self.fields['buy_now_price'].widget = HiddenInput()
-        if self.auction.buy_now == "required":
-            self.fields['buy_now_price'].required = True            
+        #if self.auction.buy_now == "disable":
+        #    self.fields['buy_now_price'].widget = HiddenInput()
+        #if self.auction.buy_now == "required":
+        #    self.fields['buy_now_price'].required = True            
 
         if not self.auction.use_categories:
             self.fields['i_bred_this_fish'].widget = HiddenInput()
@@ -601,10 +601,10 @@ class CreateEditAuctionTOS(forms.ModelForm):
         delete_button_html = ""
         if self.is_edit_form:
             problems_url = reverse("auction_no_show", kwargs={'slug': self.auction.slug, 'tos': self.auctiontos.bidder_number})
-            problem_button_html = f"<a href={problems_url} class='btn btn-danger'>Problems</a>"
+            problem_button_html = f"<a href={problems_url} class='btn text-dark bg-warning'>Problems</a>"
             post_url = f'/api/auctiontos/{self.auctiontos.pk}/'
             delete_url = reverse("auctiontosdelete", kwargs={'pk': self.auctiontos.pk})
-            delete_button_html = f"<a href={delete_url} class='btn btn-warning text-dark'>Delete</a>"
+            delete_button_html = f"<a href={delete_url} class='btn bg-danger'>Delete</a>"
         else:
             post_url = f'/api/auctiontos/{self.auction.slug}/'
         self.helper = FormHelper()

@@ -102,6 +102,9 @@ $(document).ready(function() {
             $('#payment_pickup_info').hide();
         }
     });
+    $('#id_auction').change(function(data) {
+        setAuction(true);
+    });
     $('#id_lot_name').change(function(data) {
         if (!$('#id_species_category').val() || $('#id_species_category').val() == 21) {
             if ($('#div_id_species_category').is(':visible')) {

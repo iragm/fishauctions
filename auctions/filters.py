@@ -387,7 +387,7 @@ class LotFilter(django_filters.FilterSet):
         return [{"local_only":"local", "Local pickup":"title"}] + choices
 
     def generate_attrs(placeholder="", tooltip=""):
-        return {'class':" col-12", 'placeholder': placeholder, 'data-toggle':"tooltip", 'data-placement':"bottom", 'title':tooltip}
+        return {'class':" col-12", 'placeholder': placeholder, 'data-bs-toggle':"tooltip", 'data-placement':"bottom", 'title':tooltip}
 
     q = django_filters.CharFilter(label='', method='text_filter',
         widget=TextInput(attrs=generate_attrs("Search here","")),

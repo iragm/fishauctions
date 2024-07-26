@@ -222,7 +222,7 @@ function initMap() {
             <ul class="nav nav-tabs">
                 {% for location in pickup_locations %}
                 <li class="nav-item">
-                  <a class="nav-link {% if hasChosenLocation == location.pk%}active{% endif %}" data-toggle="tab" href="#location_{{location.pk}}{{location.short_name}}">{{ location.name }}</a>
+                  <a class="nav-link {% if hasChosenLocation == location.pk%}active{% endif %}" data-bs-toggle="tab" href="#location_{{location.pk}}{{location.short_name}}">{{ location.name }}</a>
                 </li>
                 {% endfor %}
             </ul>

@@ -1118,7 +1118,7 @@ class AuctionTOS(models.Model):
 			result = f"<a href='{url}'>Print labels</a>"
 			if self.unprinted_label_count and self.unprinted_label_count != self.print_labels_qs.count():
 				result += f"""
-				<button type="button" class="btn btn-sm btn-secondary dropdown-toggle dropdown-toggle-split" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+				<button type="button" class="btn btn-sm btn-secondary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
 					<span class="sr-only">Toggle Dropdown</span>
 				</button>
 				<div class="dropdown-menu">

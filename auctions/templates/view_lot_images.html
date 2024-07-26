@@ -134,7 +134,8 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
     <div class="col-md-10 offset-md1">
         <h3>{{ lot.lot_name }}</h3>
             {{ lot.species_category }}{% if lot.category_automatically_added and lot.can_be_edited and lot.user == request.user %}<span class="badge bg-secondary">Cateogry automatically set.  Wrong?  <a href="/lots/edit/{{lot.pk}}">Fix it here</a></span><br>{% else %}, {% endif %}lot number {{lot.lot_number_display }}<br>
-            {% if lot.species %}<span class='text-muted'>{% if lot.species.scientific_name %}<i>{{ lot.species.scientific_name }}</i>{% else %}{{lot.species.common_name}}{%endif%}</span>{%endif%} {% if lot.i_bred_this_fish %}<span class="badge bg-light">Bred by this user</span>{%endif%} {% if lot.pre_registered and lot.user == request.user %}<span class="badge bg-light">Pre-registered</span>{%endif%}
+            {% if lot.i_bred_this_fish %}<span class="badge text-dark bg-light">Bred by this user</span>{%endif%}
+            {% if lot.pre_registered and lot.user == request.user %}<span class="badge text-dark bg-light" data-toggle="tooltip" data-placement="bottom" title="You'll get a {{ lot.auction.pre_register_lot_discount_percent }}% discount on your selling fees for this lot">Pre-registered</span>{%endif%}
             {% if lot.image_count or lot.video_link %}
                 <div>
                 <div id="image_carousel" class="carousel slide">
@@ -345,14 +346,14 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
             {% if lot.can_be_edited %}
             href="{% url 'edit_lot' pk=lot.pk %}"
             {% else %}
-            href="javascript:void(0);" data-toggle="tooltip" data-placement="top" data-original-title="{{ lot.cannot_edit_reason }}"
+            href="javascript:void(0);" data-toggle="tooltip" data-placement="top" title="{{ lot.cannot_edit_reason }}"
             {% endif %}
             class="text-dark btn btn-warning">Edit lot</a>
             <a
             {% if lot.can_be_deleted %}
             href="{% url 'delete_lot' pk=lot.pk %}"
             {% else %}
-            href="javascript:void(0);" data-toggle="tooltip" data-placement="top" data-original-title="{{ lot.cannot_be_deleted_reason }}"
+            href="javascript:void(0);" data-toggle="tooltip" data-placement="top" title="{{ lot.cannot_be_deleted_reason }}"
             {% endif %}
             class="btn btn-danger">Delete</a>
         {% endif %}
