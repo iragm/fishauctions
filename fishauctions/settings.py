@@ -254,9 +254,9 @@ RECAPTCHA_PRIVATE_KEY = os.environ.get('RECAPTCHA_PRIVATE_KEY', 'unsecure')
 CRISPY_ALLOWED_TEMPLATE_PACKS = "bootstrap5"
 CRISPY_TEMPLATE_PACK = 'bootstrap5'
 CRISPY_FAIL_SILENTLY = False
-BOOTSTRAP4 = {
-    'include_jquery': True,
-}
+# BOOTSTRAP4 = {
+#     'include_jquery': True,
+# }
 
 MEDIA_URL = 'media/'
 MEDIA_ROOT = '/home/app/web/mediafiles/'

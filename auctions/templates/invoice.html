@@ -17,8 +17,8 @@ function cloneMore(selector, type) {
     newElement.find(':input').each(function() {
         var name = $(this).attr('name').replace('-' + (total-1) + '-','-' + total + '-');
         var id = 'id_' + name;
-        //$(this).attr({'name': name, 'id': id}).removeAttr('checked'); // keep last row's values 
-        $(this).attr({'name': name, 'id': id}).val('').removeAttr('checked'); // blank rows 
+        $(this).attr({'name': name, 'id': id}).removeAttr('checked'); // keep last row's values 
+        //$(this).attr({'name': name, 'id': id}).val('').removeAttr('checked'); // blank rows 
     });
     newElement.find('label').each(function() {
         var newFor = $(this).attr('for').replace('-' + (total-1) + '-','-' + total + '-');
@@ -121,8 +121,8 @@ $(document).ready(function(){
     {{ link_formset.management_form }}
     <form id="form-container" method="POST" action="{% url 'invoice_by_pk' pk=invoice.pk%}">
       {% crispy formset helper %}
-      <button class='btn btn-info' id="add-form" type="button">Add row</button>
-      <input type="submit" class='btn btn-success float-right submit-button ms-2 ml-2' name='save' id='save' value="Save adjustments">
+      <button class='btn bg-info' id="add-form" type="button">Add row</button>
+      <input type="submit" class='btn bg-success submit-button ms-2 ml-2' name='save' id='save' value="Save adjustments">
     </form>
     </span>
   {% endif %}
