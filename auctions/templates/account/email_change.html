@@ -5,6 +5,8 @@
     {% trans "Email Address" %}
 {% endblock head_title %}
 {% block content %}
+{% include "preferences_ribbon.html" %}
+    
     {% element h1 %}
         {% trans "Email Address" %}
     {% endelement %}
@@ -50,8 +52,8 @@
                 {% endslot %}
             {% endelement %}
         {% endslot %}
-        {% slot actions %}
-            {% element button name="action_add" type="submit" %}
+        {% slot actions class="btn bg-success" %}
+            {% element button name="action_add" type="submit"%}
                 {% trans "Change Email" %}
             {% endelement %}
         {% endslot %}

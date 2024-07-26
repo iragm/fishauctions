@@ -298,7 +298,7 @@ class WinnerLot(forms.Form):
             #     css_class='row',
             # ),
             Div(
-                HTML(f'<button type="submit" class="btn btn-success float-right">Save</button>'),
+                HTML(f'<button type="submit" class="btn bg-success float-right ms-2">Save</button>'),
                 css_class='row',
             )
         )
@@ -355,7 +355,7 @@ class WinnerLotSimpleImages(WinnerLotSimple):
                          <div class="btn-group mt-4" role="group" aria-label="Save">
                             <button type="submit" class="btn btn-success form-control">Save</button>
                             <div class="btn-group" role="group">
-                                <button id="btnGroupDrop2" type="button" class="btn btn-success dropdown-toggle" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false"></button>
+                                <button id="btnGroupDrop2" type="button" class="btn btn-success dropdown-toggle" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false"></button>
                                 <div class="dropdown-menu" aria-labelledby="btnGroupDrop2" style="">
                                 <a id='mark_unsold' class="dropdown-item" href="#">Mark unsold</a>
                                 <script>
@@ -414,7 +414,7 @@ class DeleteAuctionTOS(forms.Form):
             ),
             Div(
                 HTML('<a class="btn btn-secondary" href="javascript:window.history.back();">Keep this user</a>'),
-                HTML(f'<button type="submit" class="btn btn-warning float-right">Delete</button>'),
+                HTML(f'<button type="submit" class="text-dark btn btn-warning float-right">Delete</button>'),
                 css_class="modal-footer",
             )
         )
@@ -490,7 +490,7 @@ class EditLot(forms.ModelForm):
             ),
             Div(
                 HTML('<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'),
-                HTML(f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Save</button>'),
+                HTML(f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn bg-success float-right ms-2">Save</button>'),
                 css_class="modal-footer",
             )
         )
@@ -604,7 +604,7 @@ class CreateEditAuctionTOS(forms.ModelForm):
             problem_button_html = f"<a href={problems_url} class='btn btn-danger'>Problems</a>"
             post_url = f'/api/auctiontos/{self.auctiontos.pk}/'
             delete_url = reverse("auctiontosdelete", kwargs={'pk': self.auctiontos.pk})
-            delete_button_html = f"<a href={delete_url} class='btn btn-warning'>Delete</a>"
+            delete_button_html = f"<a href={delete_url} class='btn btn-warning text-dark'>Delete</a>"
         else:
             post_url = f'/api/auctiontos/{self.auction.slug}/'
         self.helper = FormHelper()
@@ -634,7 +634,7 @@ class CreateEditAuctionTOS(forms.ModelForm):
             ), 
             Div(
                 HTML(f'{problem_button_html}{delete_button_html}<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'),
-                HTML(f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Save</button>'),
+                HTML(f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn bg-success float-right ms-2">Save</button>'),
                 css_class="modal-footer",
             )
         )
@@ -893,7 +893,7 @@ class LotRefundForm(forms.ModelForm):
             self.fields['partial_refund_percent'].widget = HiddenInput()
         if self.lot.winning_price:
             self.fields['banned'].widget = HiddenInput()
-        save_button_html = f'<button hx-post="{reverse("lot_refund", kwargs={"pk":self.lot.pk})}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Save</button>'
+        save_button_html = f'<button hx-post="{reverse("lot_refund", kwargs={"pk":self.lot.pk})}" hx-target="#modals-here" type="submit" class="btn bg-success float-right ms-2">Save</button>'
         self.helper = FormHelper()
         self.helper.form_method = 'post'
         self.helper.form_class = 'form'
@@ -1016,7 +1016,7 @@ class PickupLocationForm(forms.ModelForm):
         self.fields['contact_person'].label_from_instance = lambda obj: "%s" % obj.name
         delete_button_html = ""
         if self.is_edit_form:
-            delete_button_html = f"<a href='{reverse('delete_pickup', kwargs={'pk': self.pickup_location.pk})}' class='btn btn-warning mr-2'>Delete this location</a>"
+            delete_button_html = f"<a href='{reverse('delete_pickup', kwargs={'pk': self.pickup_location.pk})}' class='btn bg-danger ms-2 '>Delete this location</a>"
         self.helper = FormHelper()
         self.helper.form_method = 'post'
         self.helper.form_id = 'location-form'
@@ -1056,8 +1056,8 @@ class PickupLocationForm(forms.ModelForm):
             css_id='non-mail',
             ),
             'description',
-            HTML(f'<a class="btn btn-secondary mr-2" href="javascript:window.history.back();">Cancel</a>{delete_button_html}'),
-            Submit('submit', 'Save', css_class='btn-success'),
+            HTML(f'<a class="btn bg-secondary ms-2" href="javascript:window.history.back();">Cancel</a>{delete_button_html}'),
+            Submit('submit', 'Save', css_class='bg-success ms-2'),
         )
     
     def clean(self):
@@ -1729,20 +1729,12 @@ class UserLabelPrefsForm(forms.ModelForm):
 class ChangeUserPreferencesForm(forms.ModelForm):
     class Meta:
         model = UserData
-        fields = ('email_visible', 'use_dark_theme', 'show_ads', 'email_me_about_new_auctions','email_me_about_new_auctions_distance',
+        fields = ('email_visible', 'show_ads', 'email_me_about_new_auctions','email_me_about_new_auctions_distance',
             'email_me_about_new_local_lots','local_distance', 'email_me_about_new_lots_ship_to_location', 'email_me_when_people_comment_on_my_lots',
             'email_me_about_new_chat_replies',
             'email_me_about_new_in_person_auctions', 'email_me_about_new_in_person_auctions_distance', 'send_reminder_emails_about_joining_auctions', 'username_visible',
             )
-        # exclude = (
-        #     'user','phone_number','address','location','location_coordinates',\
-        #     'last_auction_used','last_activity','latitude','longitude',\
-        #     'paypal_email_address','unsubscribe_link',\
-        #     'has_unsubscribed','rank_unique_species','number_unique_species','rank_total_lots',\
-        #     'number_total_lots','rank_total_spent','number_total_spent','rank_total_bids','number_total_bids',\
-        #     'number_total_sold','rank_total_sold','total_volume',\
-        #     'rank_volume','seller_percentile','buyer_percentile','volume_percentile','club',
-        # )
+        
     def __init__(self, user, *args, **kwargs):
         self.user = user
         super().__init__(*args, **kwargs)
@@ -1758,7 +1750,7 @@ class ChangeUserPreferencesForm(forms.ModelForm):
                 Div('email_visible',css_class='col-md-4',),
                 Div('username_visible',css_class='col-md-4',),
                 #Div('use_list_view',css_class='col-md-4',),
-                Div('use_dark_theme',css_class='col-md-4',),
+                #Div('use_dark_theme',css_class='col-md-4',),
                 #Div('show_ads',css_class='col-md-3',),
                 css_class='row',
             ),

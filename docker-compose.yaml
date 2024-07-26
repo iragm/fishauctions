@@ -12,11 +12,12 @@ services:
     depends_on:
       - db
     restart: always
-
+    
   db:
     container_name: db
     image: mariadb:latest
     restart: always
+    command: [ "--max_connections=1000" ]
     environment:
       MYSQL_DATABASE: ${DATABASE_NAME-auctions}
       MYSQL_USER: ${DATABASE_USER-mysqluser}

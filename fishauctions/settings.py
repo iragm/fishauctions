@@ -85,7 +85,7 @@ INSTALLED_APPS = [
     'qr_code',
     'django_tables2',
     'django_htmx',
-    'crispy_bootstrap4',
+    'crispy_bootstrap5',
     'django_recaptcha',
     'chartjs',
 ]
@@ -197,7 +197,7 @@ else:
             'OPTIONS': {
                 'charset': 'utf8mb4',
             },
-            'CONN_MAX_AGE': 20,
+            'CONN_MAX_AGE': None,
         }
     }
 
@@ -251,7 +251,8 @@ EMAIL_SUBJECT_PREFIX = ""
 RECAPTCHA_PUBLIC_KEY = os.environ.get('RECAPTCHA_PUBLIC_KEY', 'unsecure')
 RECAPTCHA_PRIVATE_KEY = os.environ.get('RECAPTCHA_PRIVATE_KEY', 'unsecure')
 
-CRISPY_TEMPLATE_PACK = 'bootstrap4'
+CRISPY_ALLOWED_TEMPLATE_PACKS = "bootstrap5"
+CRISPY_TEMPLATE_PACK = 'bootstrap5'
 CRISPY_FAIL_SILENTLY = False
 BOOTSTRAP4 = {
     'include_jquery': True,

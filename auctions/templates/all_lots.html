@@ -29,12 +29,13 @@ Your lots{% else %}
 {% load static %}
 {% block content %}
 {% if routeByLastAuction and auction %}
-<div class="alert alert-secondary alert-dismissible fade show" role="alert">{{ auction }} is the last auction you joined.  <a href="/lots/">View all lots instead</a>  <button type="button" class="close" data-dismiss="alert" aria-label="Close">
-  <span aria-hidden="true">&times;</span>
-</button></div>
+<div class="alert alert-secondary alert-dismissible fade show" role="alert">{{ auction }} is the last auction you joined.  <a href="/lots/">View all lots instead</a>
+  <button type="button" class="btn-close bg-info" data-bs-dismiss="alert"></button>  
+  </div>
 {% endif %}
 <h3>
-        <button class="btn btn-info" type="button" id='search-form-toggle' data-toggle="canvas" data-target="#search-form" aria-expanded="false" aria-controls="bs-canvas-left">&#9776;</button>
+        <button class="btn btn-info" type="button" data-bs-toggle="offcanvas" data-bs-target="#search-form" aria-controls="search-form">&#9776;</button>
+        <!-- <button class="btn btn-info" type="button" id='search-form-toggle' data-toggle="canvas" data-target="#search-form" aria-expanded="false" aria-controls="bs-canvas-left">&#9776;</button> -->
         {% if auction %}{% include 'auction_ribbon.html' %}{%endif%}
     {% if not auction %}
     {% if view == "all" %}
@@ -57,13 +58,13 @@ Your lots{% else %}
       {% endif %}
       {% endif %}</h3>
     
-    <!-- Off-canvas sidebar markup, left/right or both. -->
-    <div id="search-form" class="bs-canvas bs-canvas-anim bs-canvas-left position-fixed bg-dark h-100">
-        <header class="bs-canvas-header p-3 bg-dark">
-            <h4 class="d-inline-block mb-0">Search and filter</h4>
-            <button type="button" class="bs-canvas-close close" aria-label="Close"><span aria-hidden="true" class="">&times;</span></button>
-        </header>
-        <div class="bs-canvas-content px-3 py-5 bg-dark">
+    <div class="offcanvas offcanvas-start" tabindex="-1" id="search-form" aria-labelledby="search-form">
+      <div class="offcanvas-header">
+        <h5 class="offcanvas-title" id="offcanvasExampleLabel">Search and filter</h5>
+        <button type="button" class="btn-close text-reset bg-light" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+      </div> 
+        <div class="offcanvas-body">
+        <!-- <div class="bs-canvas-content px-3 py-5 bg-dark"> -->
           {% if view == "user" %}
           <a href="{% url 'userpage' slug=user %}">View user info for {{ user }} </a><p>
         {% endif %}

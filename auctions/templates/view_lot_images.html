@@ -134,7 +134,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
     <div class="col-md-10 offset-md1">
         <h3>{{ lot.lot_name }}</h3>
             {{ lot.species_category }}{% if lot.category_automatically_added and lot.can_be_edited and lot.user == request.user %}<span class="badge bg-secondary">Cateogry automatically set.  Wrong?  <a href="/lots/edit/{{lot.pk}}">Fix it here</a></span><br>{% else %}, {% endif %}lot number {{lot.lot_number_display }}<br>
-            {% if lot.species %}<span class='text-muted'>{% if lot.species.scientific_name %}<i>{{ lot.species.scientific_name }}</i>{% else %}{{lot.species.common_name}}{%endif%}</span>{%endif%} {% if lot.i_bred_this_fish %}<span class="badge badge-light">Bred by this user</span>{%endif%} {% if lot.pre_registered and lot.user == request.user %}<span class="badge badge-light">Pre-registered</span>{%endif%}
+            {% if lot.species %}<span class='text-muted'>{% if lot.species.scientific_name %}<i>{{ lot.species.scientific_name }}</i>{% else %}{{lot.species.common_name}}{%endif%}</span>{%endif%} {% if lot.i_bred_this_fish %}<span class="badge bg-light">Bred by this user</span>{%endif%} {% if lot.pre_registered and lot.user == request.user %}<span class="badge bg-light">Pre-registered</span>{%endif%}
             {% if lot.image_count or lot.video_link %}
                 <div>
                 <div id="image_carousel" class="carousel slide">
@@ -151,20 +151,33 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                         {% endif %}
                         {% for image in lot.images %}
                         <div class="carousel-item {% if image.is_primary and not lot.video_link %}active{%endif%}">
-                            <img src="{{ image.image.url }}" class="img-fluid">
+                            <img src="{{ image.image.url }}" class="img-fluid rounded">
                             <div class='carousel-caption text-left'>
                                 <span class="text-muted"><small>{{ image.get_image_source_display }}</small></span>{%if image.caption%}<br>{{ image.caption }}{%endif%}
                             </div>
                                 {% if show_image_add_button %}
                                 <div class="container">
-                                <div class='row mb-3'>
-                                    <button class="btn btn-primary mr-1" name="rotate-left" onclick="rotate('{{image.pk}}', 90)">Rotate ↶</button>
-                                    {% if not image.is_primary %}<button class="btn btn-info mr-1" name="make-primary" onclick="make_primary('{{image.pk}}')">Make primary</button>{% endif %}
-                                    <a href="{% url 'edit_image' pk=image.pk %}" class="btn btn-primary mr-1">Edit image</a>
-                                    <a href="{% url 'delete_image' pk=image.pk %}" class="btn btn-danger mr-1">Delete image</a>
-                                    <button class="btn btn-primary" name="rotate-right" onclick="rotate('{{image.pk}}', -90)">Rotate ↷</button>
+                                    <div class='row mb-3'>
+                                        <div class="col-auto">
+                                            <button class="btn btn-primary name="rotate-left" onclick="rotate('{{image.pk}}', 90)">Rotate ↶</button>
+                                        </div>
+                                        {% if not image.is_primary %}
+                                        <div class="col-auto">
+                                            <button class="btn btn-info" name="make-primary" onclick="make_primary('{{image.pk}}')">Make primary</button>
+                                        </div>
+                                        {% endif %}
+                                        <div class="col-auto">
+                                            <a href="{% url 'edit_image' pk=image.pk %}" class="btn text-dark bg-warning">Edit image</a>
+                                        </div>
+                                        <div class="col-auto">
+                                            <a href="{% url 'delete_image' pk=image.pk %}" class="btn btn-danger">Delete image</a>
+                                        </div>
+                                        <div class="col-auto">
+                                            <button class="btn btn-primary" name="rotate-right" onclick="rotate('{{image.pk}}', -90)">Rotate ↷</button>
+                                        </div>
+                                    </div>
                                 </div>
-                                </div>
+                                
                                 {% endif %}
                         </div>
                         {% endfor %}
@@ -203,7 +216,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
             </tr>
             <tr>
                 <td><b>Seller:</b></td><td>{% if lot.donation %} A donation from {% endif %}{% if lot.user %}<a href="{% url 'userpage' slug=lot.user %}">{{ lot.user }}</a> (<a href="/lots/user/?user={{lot.user}}">All lots from {{ lot.user }}</a>){% if not lot.auction %}
-                    <span class='badge badge-light'>Lots sold: {{ lot.user.userdata.lots_sold }}</span> <span class='badge badge-success'>+{{ lot.user.userdata.positive_feedback_as_seller }}</span> <span class='badge badge-danger'>-{{ lot.user.userdata.negative_feedback_as_seller }}</span>
+                    <span class='badge bg-light'>Lots sold: {{ lot.user.userdata.lots_sold }}</span> <span class='badge bg-success'>+{{ lot.user.userdata.positive_feedback_as_seller }}</span> <span class='badge bg-danger'>-{{ lot.user.userdata.negative_feedback_as_seller }}</span>
                     {% endif %}{% else %}{{lot.auctiontos_seller}}{% endif %}</td>
             </tr>
             <tr>
@@ -260,17 +273,17 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
             </tr>
             {% if not lot.auction %}
             <tr>
-                <td><b>Distance from you:</b></td><td>{{ distance }} {% if lot.local_pickup %}<span class="badge badge-light">Local pickup available</span>{% endif %}
+                <td><b>Distance from you:</b></td><td>{{ distance }} {% if lot.local_pickup %}<span class="badge bg-light">Local pickup available</span>{% endif %}
                     {% if request.user.userdata.location in lot.shipping_locations.all %}
-                    <span class="badge badge-light">Ships to {{ request.user.userdata.location }}</span>
+                    <span class="badge bg-light">Ships to {{ request.user.userdata.location }}</span>
                     {% endif %}
                 </td>
             </tr>
             <tr>
                 <td><b>Payment:</b></td><td>
                     {% if lot.payment_other_method %}{{ lot.payment_other_method }}{% endif %} 
-                    {% if lot.payment_paypal %}<span class="badge badge-light">Paypal OK</span>{% endif %} 
-                    {% if lot.payment_cash %}<span class="badge badge-light">Cash OK</span>{% endif %}
+                    {% if lot.payment_paypal %}<span class="badge bg-light">Paypal OK</span>{% endif %} 
+                    {% if lot.payment_cash %}<span class="badge bg-light">Cash OK</span>{% endif %}
                 </td>
             </tr>
             {% if lot.other_text %}
@@ -281,7 +294,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
             {% endif %}
 
             <tr>
-                <td><b>Ends:</b></td><td><span id="end_date" class="{% if lot.ended %} {% endif %}">{{ lot.calculated_end_for_templates }}</span>{% if lot.ended %}<span class='badge-pill badge badge-danger'>Ended</span>{% endif %}</td>
+                <td><b>Ends:</b></td><td><span id="end_date" class="{% if lot.ended %} {% endif %}">{{ lot.calculated_end_for_templates }}</span>{% if lot.ended %}<span class='badge-pill badge bg-danger'>Ended</span>{% endif %}</td>
             </tr>
             
             {% if lot.auction and lot.auction.multi_location and lot.location %}
@@ -334,7 +347,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
             {% else %}
             href="javascript:void(0);" data-toggle="tooltip" data-placement="top" data-original-title="{{ lot.cannot_edit_reason }}"
             {% endif %}
-            class="btn btn-warning">Edit lot</a>
+            class="text-dark btn btn-warning">Edit lot</a>
             <a
             {% if lot.can_be_deleted %}
             href="{% url 'delete_lot' pk=lot.pk %}"
@@ -349,19 +362,25 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                 {% elif lot.ended or lot.winner %}
                     <span>Bidding has ended on this lot<br></span>
                 {% else %}
-                            <div class="form-group">
-                                <div class="input-group mb-3">
-                                    <div class="input-group-prepend">
-                                        <span class="input-group-text">$</span>
-                                    </div>
-                                        <input type="number" id='bid_amount' min="1" value="{{ amount }}" class="form-control col-sm-3" aria-label="Amount (to the nearest dollar)">
-                                    <div class="input-group-append">
-                                        <span class="input-group-text mr-1">.00</span>
-                                        <button class='btn-sm btn-success' id='bid_button' style='min-width: 150px;' >Place bid</button>
-                                    </div>
-                                <div class="invalid-feedback">Enter a number</div>
+                <div class="form-group">
+                    <div class="row mb-3 justify-content-center justify-content-lg-start">
+                        <div class="col-auto">
+                            <div class="input-group">
+                                <div class="input-group-prepend">
+                                    <span class="input-group-text">$</span>
+                                </div>
+                                <input type="number" id='bid_amount' min="1" value="{{ amount }}" class="form-control" aria-label="Amount (to the nearest dollar)">
+                                <div class="input-group-append">
+                                    <span class="input-group-text">.00</span>
                                 </div>
                             </div>
+                        </div>
+                        <div class="col-auto">
+                            <button class='btn btn-success' id='bid_button' style='min-width: 150px;'>Place bid</button>
+                        </div>
+                    </div>
+                    <div class="invalid-feedback">Enter a number</div>
+                </div>
                             {% if not lot.auction %}Remember to check the seller's feedback before bidding.  This site will not get involved in disputes.<br>{%endif%}
                             <script>
                                 //$('#bid_amount').focus(); // scrolls page down
@@ -489,8 +508,9 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
 <!-- Chat -->
 <div class="container-fluid col-md-offset-1 col-xl-4 mt-1 mb-1 mt-xl-5">
     {% if request.user.is_authenticated %} {# chats only shown if you are logged in #}
-    <div class="mt-xl-5 col-md-11 bg-secondary rounded pb-1" style="box-shadow: 5px 5px 8px 2px rgba(121, 121, 121, 0.2);"> 
-    <br><h4>Chat</h4>
+    <div class="col-md-11 bg-secondary rounded pb-1 border border-secondary bg-gradient" style="box-shadow: 5px 5px 8px 2px rgba(121, 121, 121, 0.2);">
+        <div class="mt-3 ms-3 mb-2 ms-2 ">
+    <h4>Chat</h4>
     <div class="panel" id="chat" style='min-height: 100px; max-height: 30vh; {# calc(100vh - 200px) #}
     overflow-y: scroll;'></div>
     <span id="send_chat_area" class='' >
@@ -498,7 +518,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
     <div class="input-group mt-1 mb-3 ">
         <input class="form-control form-control-sm mr-1 " id='chat_input' spellcheck="true" placeholder="Ask questions or comment on this lot.  Be respectful." type="text">
         <div class="input-group-append">
-            <button class='btn-sm btn-info' id="chat_send" >Send</button>
+            <button class='btn btn-sm bg-info' id="chat_send" >Send</button>
         </div>
     </div>
 
@@ -677,6 +697,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
         {% endif %}
         //{% endif %}
     </script>
+    </div>
     </div>
     {% endif %}
 <!-- Chart -->

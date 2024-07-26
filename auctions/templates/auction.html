@@ -137,7 +137,7 @@ function initMap() {
             <a href='{% url "bulk_add_lots_for_myself" slug=auction.slug %}' class="btn btn-sm btn-info mr-1 mt-1">Add lots</a>{% endif %}
             <a href='{% url "print_my_labels" slug=auction.slug %}' class="btn btn-primary btn-sm mr-1 mt-1">Print your lot labels</a>
             <a href='{% url "my_auction_invoice" slug=auction.slug %}' class="btn btn-primary btn-sm mr-1 mt-1">View your invoice</a>
-            {% if view.is_auction_admin %}<a href='/auctions/{{auction.slug}}/edit' class="btn btn-sm btn-warning mr-1 mt-1">Edit these rules</a>{% endif %}
+            {% if view.is_auction_admin %}<a href='/auctions/{{auction.slug}}/edit' class="text-dark btn btn-sm btn-warning mr-1 mt-1">Edit these rules</a>{% endif %}
             {% if view.is_auction_admin %}<a href='{% url "all_my_users" %}' data-toggle="tooltip" title="All contacts for all auctions where you're an admin" class="btn btn-sm btn-primary mr-1 mt-1">Download marketing list</a>
             {% if not auction.multi_location %}
             {% for location in pickup_locations %}
@@ -209,7 +209,7 @@ function initMap() {
                 {% for location in pickup_locations %}
                 {% include 'location_fragment.html' %}
                 {% if view.is_auction_admin %}
-                        <a href="/locations/edit/{{ location.pk }}/?next=/auctions/{{auction.slug}}" class="btn btn-sm mt-2 mr-2 btn-warning">Edit pickup location</a>
+                        <a href="/locations/edit/{{ location.pk }}/?next=/auctions/{{auction.slug}}" class="btn btn-sm mt-2 ms-2 text-dark btn-warning">Edit pickup location</a>
                 {% endif %}
                 {% endfor %}
                 {% endif %}
@@ -231,12 +231,12 @@ function initMap() {
                 {# location content for multi-location auction ONLY here #}
                 <div class="tab-pane fade {% if hasChosenLocation == location.pk%}active show {% endif %}" id="location_{{location.pk}}{{location.short_name}}" role="tabpanel">
                     {% if view.is_auction_admin %}
-                    <a href="/locations/edit/{{ location.pk }}/?next=/auctions/{{auction.slug}}" class="btn btn-sm mt-2 mr-2 btn-warning">Edit this location</a>
+                    <a href="/locations/edit/{{ location.pk }}/?next=/auctions/{{auction.slug}}" class="btn btn-sm mt-2 ms-2 text-dark btn-warning">Edit this location</a>
                     {% if auction.all_location_count > 1 %}
-                    <a href='{% url "location_incoming" pk=location.pk %}' class="btn btn-sm mt-2 mr-2 btn-primary">Incoming lot list</a>
-                    <a href='{% url "location_outgoing" pk=location.pk %}' class="btn btn-sm mt-2 mr-2 btn-primary">Outgoing lot list</a>
+                    <a href='{% url "location_incoming" pk=location.pk %}' class="btn btn-sm mt-2 ms-2 btn-primary">Incoming lot list</a>
+                    <a href='{% url "location_outgoing" pk=location.pk %}' class="btn btn-sm mt-2 ms-2 btn-primary">Outgoing lot list</a>
                     {% endif %}
-                    <a href="mailto:?bcc={{location.email_list}}&subject={{auction}} - {{location.name}}" class="btn btn-sm mt-2 mr-2 btn-primary">Email {{location.number_of_users}} people</a>
+                    <a href="mailto:?bcc={{location.email_list}}&subject={{auction}} - {{location.name}}" class="btn btn-sm mt-2 ms-2 btn-primary">Email {{location.number_of_users}} people</a>
                     <br>
                     {% endif %}
                     {% if hasChosenLocation == location.pk%}<span class="badge bg-success">Your confirmed location</span><br>{% endif %}
@@ -255,7 +255,7 @@ function initMap() {
             <div class="input-group mb-3 mr-3 has-success" style="float:left !important;">
                 <input class="form-control form-control-sm" id='copyShareLink' style='max-width: 35%' type="text" value="https://{{ domain }}/?{{ auction.slug }}" readonly="">
                 <div class="input-group-append">
-                    <button class='btn-sm btn-primary' onclick="copyLink()">Copy</button>
+                    <button class='btn btn-sm bg-primary' onclick="copyLink()">Copy</button>
                 </div>
                 <span class='input-group-append ml-1 mr-1'>
                 <a href="https://twitter.com/share?ref_src=twsrc%5Etfw" class="twitter-share-button" data-text="Check out the {{ auction.title }}" data-url="https://{{ domain }}/?{{ auction.slug }}" data-dnt="true" data-show-count="false">Tweet</a><script async src="https://platform.twitter.com/widgets.js" charset="utf-8"></script>

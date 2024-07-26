@@ -1317,9 +1317,9 @@ class AuctionChatDeleteUndelete(View, AuctionPermissionsMixin):
         self.history.removed = not self.history.removed
         self.history.save()
         if not self.history.removed:
-            result = f'<span id="message_{self.history.pk}" class="badge badge-info">Delete</span>'
+            result = f'<span id="message_{self.history.pk}" class="badge bg-info">Delete</span>'
         else:
-            result = f'<span id="message_{self.history.pk}" class="badge badge-danger">Deleted</span>'
+            result = f'<span id="message_{self.history.pk}" class="badge bg-danger">Deleted</span>'
         return HttpResponse(result)
 
 class PickupLocations(ListView, AuctionPermissionsMixin):
@@ -4679,7 +4679,7 @@ class AuctionStatsLotsSubmittedJSONView(AuctionStatsBarChartJSONView):
     def get_data(self):
         invoices = Invoice.objects.filter(auction=self.auction)
         histogram = bin_data(invoices, 'lots_sold', number_of_bins=4, start_bin=1, end_bin=9,
-                              add_column_for_low_overflow=True, add_column_for_high_overflow=True, debug=True)
+                              add_column_for_low_overflow=True, add_column_for_high_overflow=True)
         return [histogram]
 
 class AuctionStatsLocationVolumeJSONView(AuctionStatsBarChartJSONView):

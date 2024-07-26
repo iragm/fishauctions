@@ -9,7 +9,7 @@
 
         <h3>Auctions</h3>
         <div class='mb-3'>This is a listing of club auctions which have been created on this site.</div>
-        <a href="/auctions/new/" class='btn btn-info mb-3'>Create a new auction</a><br>
+        <a href="/auctions/new/" class='btn bg-info mb-3'>Create a new auction</a><br>
         <table class="table table-responsive">
           <thead>
             <tr>
@@ -26,7 +26,7 @@
                 {% if not location_message and auction.number_of_locations %}<span class='badge bg-primary'>{{ auction.distance | floatformat:0 }} miles from you</span>{% endif %}
               </td>
               <td>{% if auction.closed %}
-                  {{ auction.date_end }} <span class="badge badge-danger">Ended</span>
+                  {{ auction.date_end }} <span class="badge bg-danger">Ended</span>
                   {% else %}
                   {% if auction.started and auction.date_end %}
                     Ends: {{ auction.date_end }}
@@ -35,7 +35,7 @@
                     Starts: {{ auction.date_start }}
                     {% else %}
                     {% if not auction.is_online %}
-                    {{ auction.date_start }} {% if not auction.allow_bidding_on_lots%}<span class="badge badge-danger">Ended</span>{% endif %}
+                    {{ auction.date_start }} {% if not auction.allow_bidding_on_lots%}<span class="badge bg-danger">Ended</span>{% endif %}
                     {% else %}
                     {{ auction.date_start }}
                     {% endif %}

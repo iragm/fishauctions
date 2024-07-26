@@ -24,11 +24,11 @@
 
   {{ emailaddress.email }}
       {% if emailaddress.verified %}
-      <span class="badge badge-success verified">{% trans "Verified" %}</span>
+      <span class="badge bg-success verified">{% trans "Verified" %}</span>
       {% else %}
-      <span class="badge badge-warning unverified">{% trans "Unverified" %}</span>
+      <span class="badge bg-warning unverified">{% trans "Unverified" %}</span>
       {% endif %}
-        {% if emailaddress.primary %}<span class="badge badge-info primary">{% trans "Primary" %}</span>{% endif %}
+        {% if emailaddress.primary %}<span class="badge bg-info primary">{% trans "Primary" %}</span>{% endif %}
   </label>
   </div>
     {% endfor %}
@@ -36,7 +36,7 @@
   <div class="buttonHolder">
         <button class="btn btn-sm btn-primary secondaryAction" type="submit" name="action_primary" >{% trans 'Make Primary' %}</button>
         <button class="btn btn-sm btn-primary secondaryAction" type="submit" name="action_send" >{% trans 'Re-send Verification' %}</button>
-        <button class="btn btn-sm btn-warning primaryAction" type="submit" name="action_remove" >{% trans 'Remove' %}</button>
+        <button class="btn btn-sm text-dark btn-danger primaryAction" type="submit" name="action_remove" >{% trans 'Remove' %}</button>
   </div>
 
   </fieldset>

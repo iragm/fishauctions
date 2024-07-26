@@ -133,17 +133,17 @@
 <div style='background:transparent !important' class="jumbotron jumbotron-fluid bg-dark">
   <div class="container">
     <h1 class="display-4">Make a splash with your next club auction.</h1>
-    <h2 class="text-right"><span class='text-info'>Completely free.</span></h2>
+    <h2 class="text-end"><span class='text-info'>Completely free.</span></h2>
   </div>
 </div>
-<h5>This site provides all the tools you need to run traditional, in-person auctions.  Or, run your auctions online without the need to reserve an auction hall or pay an auctioneer.</h5><h4 class="text-right">No paperwork.  No math.  Simple enough to use on your phone.</h4>
+<h5>This site provides all the tools you need to run traditional, in-person auctions.  Or, run your auctions online without the need to reserve an auction hall or pay an auctioneer.</h5><h4 class="text-end">No paperwork.  No math.  Simple enough to use on your phone.</h4>
 <div><h3>Click below to learn more about:</h3>
     <ul class="nav nav-pills">
       <li class="nav-item">
-        <a class="nav-link " data-toggle="tab" href="#runAuction">Online auctions</a>
+        <a class="nav-link " data-bs-toggle="tab" href="#runAuction">Online auctions</a>
       </li>
       <li class="nav-item">
-        <a class="nav-link " data-toggle="tab" href="#runInPersonAuction">In-person auctions</a>
+        <a class="nav-link " data-bs-toggle="tab" href="#runInPersonAuction">In-person auctions</a>
       </li>
       <!-- <li class="nav-item">
         <a class="nav-link " data-toggle="tab" href="#nonauctionlots">Buying or selling without an auction</a>
@@ -206,7 +206,7 @@
         <div class="card border-secondary mb-3" style="max-width: 20rem;">
           <div class="card-header">Your auction, your way</div>
           <div class="card-body">
-            <h4 class="card-title">Pants optional*</h4>
+            <h4 class="card-title">Pants optional</h4>
             <p class="card-text"></p>
             Bid from the comfort of your home<br>
             <h3><img style='max-width:1em' src="{% static 'glass.svg' %}" class="card-img-top" alt="Don't drink and bid"></h3>
@@ -217,30 +217,40 @@
         </div>
       </div>
     </div>
-    <h1 class="text-right"><span class='magic'>Awesome.</span></h1>
+    <h1 class="text-end"><span class='magic'>Awesome.</span></h1>
   </div>
 </div>
 <div class="jumbotron jumbotron-fluid">
     <div class="container">
       <div class="row">
-        <div class="col-lg-4">
-          <blockquote class="blockquote text-right">
-            <p class="mb-0">I was reluctant at first, but after buying and selling, I am convinced this is the next generation of fish auctions.  I love the fact my fish don't sit on a cold table all day long.</p>
-            <footer class="blockquote-footer">rob.vermont</footer>
-          </blockquote>
-        </div>
-        <div class="col-lg-4">
-          <blockquote class="blockquote text-right">
-            <p class="mb-0">Amazing! The best auction software I've ever seen</p>
-            <footer class="blockquote-footer">Janine Banks</footer>
-          </blockquote>
-        </div>
-        <div class="col-lg-4">
-          <blockquote class="blockquote text-right">
-            <p class="mb-0">this electronic age shit sucks !!!</p>
-            <footer class="blockquote-footer">John Krol</footer>
-          </blockquote>
-        </div>
+        <div class="row">
+          <div class="col-lg-4">
+              <figure class="text-end">
+                  <blockquote class="blockquote">
+                      <p class="mb-0">I was reluctant at first, but after buying and selling, I am convinced this is the next generation of fish auctions. I love the fact my fish don't sit on a cold table all day long.</p>
+                  </blockquote>
+                  <figcaption class="blockquote-footer">rob.vermont</figcaption>
+              </figure>
+          </div>
+          <div class="col-lg-4">
+              <figure class="text-end">
+                  <blockquote class="blockquote">
+                      <p class="mb-0">Amazing! The best auction software I've ever seen</p>
+                  </blockquote>
+                  <figcaption class="blockquote-footer">Janine Banks</figcaption>
+              </figure>
+          </div>
+          <div class="col-lg-4">
+              <figure class="text-end">
+                  <blockquote class="blockquote">
+                      <p class="mb-0">This electronic age shit sucks !!!</p>
+                  </blockquote>
+                  <figcaption class="blockquote-footer">John Krol</figcaption>
+              </figure>
+          </div>
+      </div>
+      
+
       </div>
     </div>
 </div>
@@ -279,7 +289,7 @@
 <div style="background:transparent !important" class="jumbotron jumbotron-fluid bg-primary">
   <div class="container">
     <h2 class="display-4">Ready to get started?</h2>
-    <h3 class='text-right'>Head to the <a href='/auctions/'>list of club auctions</a> and add yours today!</h3>
+    <h3 class='text-end'>Head to the <a href='/auctions/'>list of club auctions</a> and add yours today!</h3>
     </div>
 </div>
 {% endblock %}

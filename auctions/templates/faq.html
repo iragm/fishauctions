@@ -10,7 +10,7 @@ FAQ
           <div><a name="{{q.slug}}"></a>
           <h4>{{q.question}}</h4>
           {{q.answer_rendered | safe }}
-          {% if request.user.is_superuser %}<small><button class="btn btn-sm btn-primary" onclick="copyLink('https://{{domain}}/faq#{{q.slug}}')">Copy link</button>
+          {% if request.user.is_superuser %}<small><button class="btn btn-sm bg-primary" onclick="copyLink('https://{{domain}}/faq#{{q.slug}}')">Copy link</button>
           <a class="btn btn-sm btn-danger" href="/admin/auctions/faq/{{q.pk}}/change/">Admin</a></small> {% endif %}
           </div>
           <br><br>

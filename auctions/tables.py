@@ -100,10 +100,10 @@ class LotHTMxTableForUsers(tables.Table):
     def render_actions(self, value, record):
         result = ""
         if not record.image_count:
-            result += f' <a href="{reverse("add_image", kwargs={"lot": record.pk})}" class="badge badge-primary">Add image</a>'
+            result += f' <a href="{reverse("add_image", kwargs={"lot": record.pk})}" class="badge bg-primary">Add image</a>'
         if record.can_be_edited:
-            result += f' <a href="{reverse("edit_lot", kwargs={"pk": record.pk})}" class="badge badge-warning">Edit</a>'
-        result += f' <a href="{reverse("new_lot")}?copy={record.pk}" class="badge badge-info text-dark">Copy to new lot</a>'
+            result += f' <a href="{reverse("edit_lot", kwargs={"pk": record.pk})}" class="badge text-dark bg-warning">Edit</a>'
+        result += f' <a href="{reverse("new_lot")}?copy={record.pk}" class="badge bg-info">Copy to new lot</a>'
         return mark_safe(result)
 
     def render_lot_name(self, value, record):

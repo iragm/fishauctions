@@ -63,7 +63,7 @@ txaio
 urllib3
 webencodings
 zope.interface
-crispy-bootstrap4
+crispy-bootstrap5
 reportlab
 channels_redis
 pyyaml

@@ -6,7 +6,7 @@
             <form method="post">{% csrf_token %}
                 <p>Are you sure you want to delete {{ object }}?</p>
                 <span class="text-warning">This cannot be undone!</span><br>
-                <a href="/auctions/{{object.slug}}/" class='btn btn-primary mr-2'>Cancel</a>
-                <input type="submit" class='btn btn-warning' value="Delete">
+                <a href="/auctions/{{object.slug}}/" class='btn btn-secondary ms-2'>Cancel</a>
+                <input type="submit" class='text-dark btn btn-warning' value="Delete">
             </form>
 {% endblock %}

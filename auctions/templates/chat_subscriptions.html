@@ -50,10 +50,10 @@ document.querySelectorAll('.chat_subscribe_checkbox').forEach(function(element) 
                 <td>{{ sub.lot.lot_number_display }}
                 </td>
                 <td>
-                  <a href='{{ sub.lot.lot_link }}?src=chat'>{{sub.lot.lot_name}}</a> {% if sub.lot.user == request.user %}<span class="badge badge-pill text-dark badge-info">Your lot</span>{% endif %}
+                  <a href='{{ sub.lot.lot_link }}?src=chat'>{{sub.lot.lot_name}}</a> {% if sub.lot.user == request.user %}<span class="badge badge-pill text-dark bg-info">Your lot</span>{% endif %}
                 </td>
                 <td>
-                  {% if sub.new_message_count %}<span class="badge badge-pill badge-warning text-dark">{{ sub.new_message_count }}</span>{% endif %}
+                  {% if sub.new_message_count %}<span class="badge badge-pill bg-warning text-dark">{{ sub.new_message_count }}</span>{% endif %}
                 </td>
             </tr>
         {% endfor %}

@@ -122,7 +122,7 @@ $(document).ready(function(){
     <form id="form-container" method="POST" action="{% url 'invoice_by_pk' pk=invoice.pk%}">
       {% crispy formset helper %}
       <button class='btn btn-info' id="add-form" type="button">Add row</button>
-      <input type="submit" class='btn btn-success float-right submit-button mr-2 ml-2' name='save' id='save' value="Save adjustments">
+      <input type="submit" class='btn btn-success float-right submit-button ms-2 ml-2' name='save' id='save' value="Save adjustments">
     </form>
     </span>
   {% endif %}

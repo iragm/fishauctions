@@ -51,7 +51,7 @@ In keeping with 12 Factor, all configuration is done from the .env file and the 
 Some cron jobs are used to manage models - these run automatically if you're in production (debug=False), but will need to be run manually in development.  These can be found in the crontab file in the same folder as this readme.
 
 #### Adding packages
-New packages can be added to requirements.in (in addition to the standard Django settings file).  A simple `docker-compose build` will trigger pip-compile when building the Docker container and will update all files.
+New packages can be added to requirements.in (in addition to the standard Django settings file).  After docker compose is up, run `docker exec django pip-compile ./requirements.in` to generate an updated requirements.txt file.
 
 #### Management commands
 Run these with docker exec after docker compose is up.  For example: `docker exec -it django python3 manage.py makemigrations`

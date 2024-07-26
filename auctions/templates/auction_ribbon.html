@@ -23,28 +23,26 @@
 {% endif %}
 <ul class="nav nav-tabs">
     <li class="nav-item">
-      <a class="nav-link {% if active_tab == 'main'%}active{% endif %}" data-bs-toggle="tab" href="/auctions/{{auction.slug}}/">Main</a>
+      <a class="nav-link {% if active_tab == 'main'%}active{% endif %}" href="/auctions/{{auction.slug}}/">Main</a>
     </li>
     <li class="nav-item">
-      <a class="nav-link {% if active_tab == 'users'%}active{% endif %}" data-bs-toggle="tab" href="/auctions/{{auction.slug}}/users">Users</a>
+      <a class="nav-link {% if active_tab == 'users'%}active{% endif %}" href="/auctions/{{auction.slug}}/users">Users</a>
     </li>
-        <li class="nav-item">
-      <a class="nav-link {% if active_tab == 'lots'%}active{% endif %}" data-bs-toggle="tab" href="/auctions/{{auction.slug}}/lots">Lots</a>
+    <li class="nav-item">
+      <a class="nav-link {% if active_tab == 'lots'%}active{% endif %}" href="/auctions/{{auction.slug}}/lots">Lots</a>
     </li>
     <li class="nav-item dropdown">
-        <a class="nav-link dropdown-toggle" data-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">More</a>
-        <div class="dropdown-menu">
-          <!-- <h6 class="dropdown-header">Rules and locations</h6> -->
+        <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">More</a>
+        <ul class="dropdown-menu">
           <a class="dropdown-item" href="/auctions/{{auction.slug}}/edit">Rules</a>
           <a class="dropdown-item" href="{{ auction.location_link }}">Location{% if auction.location_qs|length > 1 %}s{% endif %}</a>
-          <!-- <div class="dropdown-divider"></div> -->
-          <!-- <h6 class="dropdown-header">Other</h6> -->
           <a class="dropdown-item" href="{{ auction.set_lot_winners_link }}">Set lot winners</a>
           <a class="dropdown-item" href="/auctions/{{auction.slug}}/chat/">Chat messages</a>
           <a class="dropdown-item" href="/auctions/new?copy={{auction.slug}}">Copy to new auction</a>
           <a class="dropdown-item" href="/auctions/{{auction.slug}}/stats/">Stats</a>
           <a class="dropdown-item" href="/auctions/{{auction.slug}}/delete/">Delete auction</a>
-        </div>
-      </li>
+        </ul>
+    </li>
 </ul>
+
 {% endif %}

@@ -27,7 +27,7 @@ window.onload = function() {
 }
 </script>
 {% endif %}
-  <html class="no-js" lang="en">
+  <html class="no-js" lang="en" data-bs-theme="dark">
     <head>
         <meta charset="utf-8" />
         {% if GOOGLE_ADSENSE_ID != 'None' %}
@@ -52,9 +52,13 @@ window.onload = function() {
         <script type="text/javascript" src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script> 
         {# 3.5.1 needed for focus to go to select2 dropdowns https://github.com/select2/select2/issues/5993 #}
         <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.11.0/umd/popper.min.js"></script>
-        <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/js/bootstrap.min.js"></script>
-        <script type="text/javascript" src="{% static 'js/auction_site.js' %}"></script>
+        <!-- <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/js/bootstrap.min.js"></script> -->
+        <!-- <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootswatch@4.5.2/dist/cerulean/bootstrap.min.css" integrity="sha384-3fdgwJw17Bi87e1QQ4fsLn4rUFqWw//KU0g8TvV6quvahISRewev6/EocKNuJmEw" crossorigin="anonymous"> -->
         
+        
+        <!-- <link rel="stylesheet" href="https://bootswatch.com/5/darkly/bootstrap.css" integrity="" crossorigin="anonymous"> -->
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
+        <script type="text/javascript" src="{% static 'js/auction_site.js' %}"></script>
         {% include 'base_page_view.html' %}
         {# handle the unread messages and auctions notification counter #}
         <script>
@@ -93,11 +97,12 @@ window.onload = function() {
         </script>
         {% endif %}
         {# Global stylesheets #}
-        {% if theme %}
+        <link rel="stylesheet" href="https://bootswatch.com/5/darkly/bootstrap.css" integrity="" crossorigin="anonymous">
+        <!-- {% if theme %}
         <link rel="stylesheet" type="text/css" href="{% static 'css/bootstrap.min.css' %}">
         {% else %}
         <link rel="stylesheet" type="text/css" href="{% static 'css/c.min.css' %}">
-        {% endif %}
+        {% endif %} -->
         <link rel="stylesheet" type="text/css" href="{% static 'css/auction_site.css' %}">
         <style>
 .bs-canvas-overlay {
@@ -224,9 +229,10 @@ window.onload = function() {
             data-login_uri="{% url 'google_login_by_token' %}">
         </div>
       {% endif %}
-      <nav class="navbar navbar-expand-lg navbar-dark bg-primary navbar-static-top" role="navigation">
+      <nav class="navbar navbar-expand-lg bg-primary bg-gradient bg-opacity-75" data-bs-theme="dark">
+        <div class="container-fluid">
           <a class="navbar-brand" href="/">auction.fish</a>  
-          <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#site_navbar" aria-controls="navbarColor02" aria-expanded="false" aria-label="Toggle navigation">
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#site_navbar" aria-controls="navbarColor02" aria-expanded="false" aria-label="Toggle navigation">
             <span class="navbar-toggler-icon"></span>
           </button>
             <div class="collapse navbar-collapse" id="site_navbar">
@@ -235,7 +241,7 @@ window.onload = function() {
                     <a class="nav-link" target="_blank" href="https://tfcb.org">TFCB homepage</a>
                   </li>-->
                   <!-- <li class="nav-item dropdown">
-                    <a class="nav-link dropdown-toggle" data-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">Nifty numbers</a>
+                    <a class="nav-link dropdown-toggle" data-bs-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">Nifty numbers</a>
                     <div class="dropdown-menu">
                       <a class="dropdown-item" href="/leaderboard/">Leaderboard</a>
                       <a class="dropdown-item" href="/blog/encouraging-participation/">Encouraging participation</a>
@@ -246,13 +252,13 @@ window.onload = function() {
                     </div>
                   </li> -->
                   <li class="nav-item">
-                    <a class="nav-link" href="/auctions/">Auctions <span id="new_auctions" class='badge-pill badge badge-warning' style='color:black;font-weight:900'></span></a>
+                    <a class="nav-link" href="/auctions/">Auctions <span id="new_auctions" class='badge-pill badge bg-warning' style='color:black;font-weight:900'></span></a>
                   </li>
                   <li class="nav-item">
                     <a class="nav-link" href="/lots/">Lots</a>
                   </li>
                   <li class="nav-item">
-                  <a class="nav-link" href="{% url 'selling' %}">Selling <span id="total_unread_lot_messages" class='badge-pill badge badge-warning' style='color:black;font-weight:900'></span></a>
+                  <a class="nav-link" href="{% url 'selling' %}">Selling <span id="total_unread_lot_messages" class='badge-pill badge bg-warning' style='color:black;font-weight:900'></span></a>
                   </li>
                   <li class="nav-item">
                     <a class="nav-link" href="{% url 'watched' %}">Watched lots</a>
@@ -265,12 +271,10 @@ window.onload = function() {
                   <li class="nav-item"><a class="nav-link" href="{% url 'admin_user_map' %}?view=recent&filter=24">User Map</a></li>
                   {% endif %}
                   <li class="nav-item dropdown">
-                    <a class="nav-link dropdown-toggle" data-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">About</a>
+                    <a class="nav-link dropdown-toggle" data-bs-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">About</a>
                     <div class="dropdown-menu">
                       <a class="dropdown-item" href="/about/">About site</a>
                       <a class="dropdown-item" href="/faq/">FAQ</a>
-                      <!-- <a class="dropdown-item" href="/auctions/tfcb-annual-auction/">Example auction rules</a>
-                      <a class="dropdown-item" href="/lots/?auction=tfcb-annual-auction">Example auction lots</a> -->
                       <a class="dropdown-item" href="/tos/">Terms and Conditions</a>
                       </div>
                   </li>
@@ -279,7 +283,7 @@ window.onload = function() {
                   </li>  
                   {% if request.user.is_authenticated %}
                   <li class="nav-item dropdown">
-                    <a class="nav-link dropdown-toggle" data-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">{{ request.user.username }}</a>
+                    <a class="nav-link dropdown-toggle" data-bs-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">{{ request.user.username }}</a>
                     <div class="dropdown-menu">
                       <h6 class="dropdown-header">Lots</h6>
                       <a class="dropdown-item" href="{% url 'selling' %}">Selling</a>
@@ -303,26 +307,19 @@ window.onload = function() {
                         {% endif %}
                         <button class="dropdown-item" type="submit">Sign out</button>
                       </form>
-                      <!--<a class="dropdown-item" href="/logout/">Sign out with confirmation page</a>-->
                     </div>
                   </li>
                   {% else %}
                   <a href="{% url 'account_login' %}?next={% firstof request.path '/' %}" class='nav-link'>Sign in</a>
                 {% endif %}
                 </ul>
-                <!-- <form class="form-inline my-2 my-lg-0">
-                  
-                  <input class="form-control mr-sm-2" type="text" placeholder="Search">
-                  <button class="btn btn-secondary my-2 my-sm-0" type="submit">Search</button>
-                  
-
-                </form> -->
               </div>
           </div>
+        </div>
         </nav>
         {% if hide_navbar %}</span><small><a href="#" id="toggleLink">Show/Hide menu</a>. {{ menu_tip }}</small>{% endif %}
         {% if not hide_tos_banner %}
-        <div class="alert alert-primary mb-0" role="alert" style="position:fixed; bottom: 0px; width: 100%; z-index:9999;">By using this site, you accept our <a href="/tos/">use of cookies and our terms and conditions</a> <button class="btn-sm btn-light" type="button" onclick="agreeTos()">Don't show again</button></button></div>
+        <div class="alert alert-primary mb-0" role="alert" style="position:fixed; bottom: 0px; width: 100%; z-index:9999;">By using this site, you accept our <a href="/tos/">use of cookies and our terms and conditions</a> <button class="btn btn-sm btn-dark" type="button" onclick="agreeTos()">Don't show again</button></button></div>
         <script>
           function agreeTos() {
             document.cookie = "hide_tos_banner=true; SameSite=Strict; path=/";
@@ -346,9 +343,9 @@ window.onload = function() {
         {% endif %}
         {# if the location is not set, we can ask for it with a simple location_message, or use custom logic on any element that calls the function setLocation #}
         {% if not has_user_location and location_message %}
-        <div class="alert alert-secondary mb-0 alert-dismissible fade show" role="alert"><a href="#" onclick="setLocation()">{{ location_message }}</a> <button type="button" class="close" data-dismiss="alert" aria-label="Close">
-          <span aria-hidden="t">&times;</span>
-        </button></div>
+        <div class="alert alert-secondary mb-0 alert-dismissible fade show" role="alert"><a href="#" onclick="setLocation()">{{ location_message }}</a>
+          <button type="button" class="btn-close bg-info" data-bs-dismiss="alert"></button>  
+        </div>
         {% endif %}
         <script>
         function setLocation(){ 
@@ -374,9 +371,7 @@ window.onload = function() {
             alert-{{ message.tags }}
             {% endif %}
             alert-dismissible fade show" role="alert">{{ message|safe }} 
-            <button type="button" class="close" data-dismiss="alert" aria-label="Close">
-              <span aria-hidden="true">&times;</span>
-            </button>
+            <button type="button" class="btn-close bg-info" data-bs-dismiss="alert"></button>  
             </div>
             {% endfor %}
         {% endif %}
@@ -387,7 +382,7 @@ window.onload = function() {
             </div>
         </div>  
         {% block undiv_content %}{% endblock %}
-        {% if not hide_navbar %}<div class="d-flex justify-content-center"><small class="text-muted">Website copyright 2020-2024 <a href="https://tfcb.org">Tropical Fish Club of Burlington</a></small></div>{% endif %}
+        {% if not hide_navbar %}<div class="mt-5 d-flex justify-content-center"><small class="text-muted">Website copyright 2020-2024 <a href="https://tfcb.org">Tropical Fish Club of Burlington</a>. A free and <a href="https://github.com/iragm/fishauctions">open source</a> project.</small></div>{% endif %}
         {% block extra_js %}
             {# Override this in templates to add extra javascript #}
         {% endblock %}

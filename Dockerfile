@@ -25,10 +25,10 @@ RUN pip install --upgrade pip pip-tools
 COPY . /usr/src/app/
 
 # generate an updated requirements.txt file with the latest versions of all packages
-RUN pip-compile requirements.in --upgrade
+#RUN pip-compile requirements.in --upgrade
 
 # install python dependencies
-# COPY ./requirements.txt . # no need to copy this, we just generated it
+#COPY ./requirements.txt . # no need to copy this, we just generated it
 RUN pip wheel --no-cache-dir --no-deps --wheel-dir /usr/src/app/wheels -r requirements.txt
 
 
@@ -54,6 +54,7 @@ RUN mkdir /home/user
 RUN mkdir $APP_HOME
 RUN mkdir $APP_HOME/staticfiles
 RUN mkdir $APP_HOME/mediafiles
+RUN mkdir /home/app/.cache
 
 WORKDIR $APP_HOME
 
@@ -68,6 +69,8 @@ RUN apt-get update && \
     nano && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
+
+RUN pip install pip-tools
 
 # cron setup
 COPY crontab /etc/cron.d/django-cron
@@ -98,7 +101,7 @@ RUN chown -R app:app /var/log/
 RUN chown -R app:app /var/log/
 RUN chown -R app:app /home/app/web/mediafiles
 RUN chown -R app:app /home/app/web/staticfiles
-
+RUN chown -R app:app /home/app/.cache
 USER app
 
 EXPOSE 8000

@@ -17,18 +17,18 @@ class QuickstartUser(HttpUser):
     @task(3)
     def view_lot(self):
         for lot in range(self.lot_start_pk, self.lot_end_pk):
-            ws = create_connection(f"{self.wsurl}/{lot}/")
-            self.client.get(f"/lots/{self.lot}", name="/lot")
+            #ws = create_connection(f"{self.wsurl}/{lot}/")
+            self.client.get(f"/lots/{lot}", name="/lot")
             time.sleep(1)
-            ws.close()
+            #ws.close()
     
-    @task(10)
-    def bid(self):
-        self.client.post("/login", json={"username":"tester", "password":"1234"})
-        ws = create_connection(f"{self.wsurl}/{self.lot_to_bid_on}/")
-        ws.send('{"bid":10}')
-        result = ws.recv()
-        ws.close()
+    # @task(10)
+    # def bid(self):
+    #     self.client.post("/login", json={"username":"tester", "password":"1234"})
+    #     ws = create_connection(f"{self.wsurl}/{self.lot_to_bid_on}/")
+    #     ws.send('{"bid":10}')
+    #     result = ws.recv()
+    #     ws.close()
 
     def on_start(self):
         pass

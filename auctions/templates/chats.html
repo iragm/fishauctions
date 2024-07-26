@@ -34,9 +34,9 @@
                           hx-target="#message_{{ history.pk }}"
                           hx-swap="outerHTML">
                           {% if not history.removed %}
-                            <span id="message_{{history.pk}}" class='badge badge-info'>Delete</span>
+                            <span id="message_{{history.pk}}" class='badge bg-info'>Delete</span>
                           {% else %}
-                            <span id="message_{{history.pk}}" class="badge badge-danger">Deleted</span>
+                            <span id="message_{{history.pk}}" class="badge bg-danger">Deleted</span>
                           {% endif %}</a><br>
                         <small>on <a href='{{history.lot.lot_link}}'>{{ history.lot.lot_name }}</a></small>
                   </td>
