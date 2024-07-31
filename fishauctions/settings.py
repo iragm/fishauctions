@@ -197,7 +197,7 @@ else:
             'OPTIONS': {
                 'charset': 'utf8mb4',
             },
-            'CONN_MAX_AGE': None,
+            'CONN_MAX_AGE': 2000,
         }
     }
 
@@ -306,7 +306,7 @@ GOOGLE_ADSENSE_ID = os.environ.get('GOOGLE_ADSENSE_ID', 'unsecure')
 GOOGLE_OAUTH_LINK = os.environ.get('GOOGLE_OAUTH_LINK', 'unsecure')
 SECURE_CROSS_ORIGIN_OPENER_POLICY="same-origin-allow-popups"
 
-LOCATION_FIELD_PATH = STATIC_URL + 'location_field'
+LOCATION_FIELD_PATH = '/static/location_field'
 
 LOCATION_FIELD = {
     'map.provider': 'google',

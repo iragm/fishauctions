@@ -4,8 +4,8 @@ services:
     container_name: django
     volumes:
       - .:/home/app/web
-      - static_volume:/home/app/web/staticfiles
-      - media_volume:/home/app/web/mediafiles
+      - ./auctions/static:/home/app/web/staticfiles
+      - ./mediafiles:/home/app/web/mediafiles
     expose:
       - 8000
     env_file: .env
@@ -50,8 +50,8 @@ services:
       - ${NGINX_CONF-./nginx.dev.conf}:${NGINX_CONF_LOCATION-/etc/nginx/nginx.conf}
       - ./swag:/config
       - ./nginx_fishauctions.conf:/etc/nginx/nginx_fishauctions.conf:ro
-      - static_volume:/home/app/web/staticfiles:ro
-      - media_volume:/home/app/web/mediafiles:ro
+      - ./auctions/static:/home/app/web/staticfiles:ro
+      - ./mediafiles:/home/app/web/mediafiles:ro
     ports:
       - ${HTTP_PORT-80}:80
       - ${SSL_PORT-443}:443 # this is only used in production
