@@ -188,7 +188,7 @@ if 'test' in sys.argv:
 else:
     DATABASES = {
         'default': {
-            'ENGINE': os.environ.get('DATABASE_ENGINE', 'django.db.backends.mysql'),
+            'ENGINE': os.environ.get('DATABASE_ENGINE', 'mysql_server_has_gone_away'),
             'NAME': os.environ.get('DATABASE_NAME', 'auctions'),
             'USER': os.environ.get('DATABASE_USER', 'mysqluser'),
             'PASSWORD': os.environ.get('DATABASE_PASSWORD', 'unsecure'),

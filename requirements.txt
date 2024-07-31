@@ -71,7 +71,7 @@ defusedxml==0.7.1
     # via
     #   -r ./requirements.in
     #   python3-openid
-django>=4.2.14
+django==5.0.7
     # via
     #   -r ./requirements.in
     #   channels
@@ -161,6 +161,8 @@ markdown==3.6
     #   django-markdownfield
 msgpack==1.0.8
     # via channels-redis
+mysql-server-has-gone-away==2.0.0
+    # via -r ./requirements.in
 mysqlclient==2.2.4
     # via -r ./requirements.in
 oauthlib==3.2.2
