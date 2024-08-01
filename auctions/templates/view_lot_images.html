@@ -153,7 +153,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                         {% for image in lot.images %}
                         <div class="carousel-item {% if image.is_primary and not lot.video_link %}active{%endif%}">
                             <img src="{{ image.image.url }}" class="img-fluid rounded">
-                            <div class='carousel-caption text-left'>
+                            <div class='carousel-caption text-light text-left'>
                                 <span class="text-muted"><small>{{ image.get_image_source_display }}</small></span>{%if image.caption%}<br>{{ image.caption }}{%endif%}
                             </div>
                                 {% if show_image_add_button %}
@@ -217,7 +217,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
             </tr>
             <tr>
                 <td><b>Seller:</b></td><td>{% if lot.donation %} A donation from {% endif %}{% if lot.user %}<a href="{% url 'userpage' slug=lot.user %}">{{ lot.user }}</a> (<a href="/lots/user/?user={{lot.user}}">All lots from {{ lot.user }}</a>){% if not lot.auction %}
-                    <span class='badge bg-light'>Lots sold: {{ lot.user.userdata.lots_sold }}</span> <span class='badge bg-success'>+{{ lot.user.userdata.positive_feedback_as_seller }}</span> <span class='badge bg-danger'>-{{ lot.user.userdata.negative_feedback_as_seller }}</span>
+                    <span class='badge text-dark bg-light'>Lots sold: {{ lot.user.userdata.lots_sold }}</span> <span class='badge text-dark bg-success'>+{{ lot.user.userdata.positive_feedback_as_seller }}</span> <span class='badge bg-danger'>-{{ lot.user.userdata.negative_feedback_as_seller }}</span>
                     {% endif %}{% else %}{{lot.auctiontos_seller}}{% endif %}</td>
             </tr>
             <tr>
@@ -274,7 +274,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
             </tr>
             {% if not lot.auction %}
             <tr>
-                <td><b>Distance from you:</b></td><td>{{ distance }} {% if lot.local_pickup %}<span class="badge bg-light">Local pickup available</span>{% endif %}
+                <td><b>Distance from you:</b></td><td>{{ distance }} {% if lot.local_pickup %}<span class="badge text-dark bg-light">Local pickup available</span>{% endif %}
                     {% if request.user.userdata.location in lot.shipping_locations.all %}
                     <span class="badge bg-light">Ships to {{ request.user.userdata.location }}</span>
                     {% endif %}
@@ -283,8 +283,8 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
             <tr>
                 <td><b>Payment:</b></td><td>
                     {% if lot.payment_other_method %}{{ lot.payment_other_method }}{% endif %} 
-                    {% if lot.payment_paypal %}<span class="badge bg-light">Paypal OK</span>{% endif %} 
-                    {% if lot.payment_cash %}<span class="badge bg-light">Cash OK</span>{% endif %}
+                    {% if lot.payment_paypal %}<span class="badge text-dark bg-light">Paypal OK</span>{% endif %} 
+                    {% if lot.payment_cash %}<span class="badge text-dark bg-light">Cash OK</span>{% endif %}
                 </td>
             </tr>
             {% if lot.other_text %}
