@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Print labels for {{ auction }}{% endblock %}
+{% load static %}
+{% block content %}
+  {% include 'auction_ribbon.html' %}
+  <p><small>This page will allow you to print all unprinted labels for your auction.
+    You generally don't need to use this page.
+    <br>Some tips:<br>
+    <ul>
+      <li>Print all labels, or all unprinted labels, for an individual user on the <a href="/auctions/{{auction.slug}}/users">users</a> tab</li>
+      <li>Encourage users to pre-register lots and print their own labels.  This saves you paper and a lot of time at the registration desk.</li>
+      <li>Reprint damaged labels by viewing the lot's page.</li>
+    </ul>
+    </small></p>
+    <p>You've printed {{ printed_labels_count }} out of {{ all_labels_count }} labels in your auction.  Note that labels won't be printed for removed lots, or for unsold lots in an online auction.</p>
+
+    <br>
+  <div><a href='{% url "auction_printing_pdf" slug=auction.slug %}' class="btn btn-primary">Print {{ unprinted_label_count}} labels</a></div>
+{% endblock %}
+{% block extra_js %}
+{% endblock %}

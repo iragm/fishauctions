@@ -4801,6 +4801,38 @@ class AuctionStatsAuctioneerSpeedJSONView(AuctionStatsAttritionJSONView):
                 data.append({'x': i, 'y':minutes})
         return [data]
 
+class AuctionBulkPrinting(DetailView, AuctionPermissionsMixin):
+    model = Auction
+    template_name = "auction_printing.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        self.auction = self.get_object()
+        self.is_auction_admin
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['all_labels_count'] = self.auction.labels_qs.count()
+        context['unprinted_label_count'] = self.auction.unprinted_labels_qs.count()
+        context['printed_labels_count'] = context['all_labels_count'] - context['unprinted_label_count']
+        return context
+
+class AuctionBulkPrintingPDF(LotLabelView):
+    """Only unprinted labels, for all users, in a given auction"""
+    allow_non_admins = False
+
+    def get_queryset(self):
+        return self.auction.unprinted_labels_qs
+
+    def dispatch(self, request, *args, **kwargs):
+        # check to make sure the user has permission to view this invoice
+        self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs['slug']).first()
+        self.is_auction_admin
+        if not self.get_queryset():
+            messages.error(request, "All labels have already been printed")
+            return redirect(self.auction.get_absolute_url())
+        return View.dispatch(self, request, *args, **kwargs)
+
 class PickupLocationsIncoming(View, AuctionPermissionsMixin):
     """All lots destined for this location"""
     def dispatch(self, request, *args, **kwargs):

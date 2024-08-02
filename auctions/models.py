@@ -738,6 +738,17 @@ class Auction(models.Model):
 		return self.lots_qs.exclude(banned=True).count()
 
 	@property
+	def labels_qs(self):
+		lots = self.lots_qs.exclude(banned=True)
+		if self.is_online:
+			lots = lots.filter(auctiontos_winner__isnull=False, winning_price__isnull=False)
+		return lots
+
+	@property
+	def unprinted_labels_qs(self):
+		return self.labels_qs.exclude(label_printed=True)
+
+	@property
 	def percent_unsold_lots(self):
 		try:
 			return self.total_unsold_lots / self.total_lots * 100
@@ -1119,7 +1130,6 @@ class AuctionTOS(models.Model):
 			if self.unprinted_label_count and self.unprinted_label_count != self.print_labels_qs.count():
 				result += f"""
 				<button type="button" class="btn btn-sm btn-secondary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-					<span class="sr-only">Toggle Dropdown</span>
 				</button>
 				<div class="dropdown-menu">
 					<a href='{unprinted_url}'>Print only {self.unprinted_label_count} unprinted labels</a>
