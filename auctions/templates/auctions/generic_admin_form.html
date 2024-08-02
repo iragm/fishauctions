@@ -28,5 +28,16 @@
 	}, 200)
 }
 </script>
+<script>
+htmx.on("htmx:afterSettle", (e) => {
+    setTimeout(() => {
+        if (typeof dal_init === 'undefined') {            
+            window.dispatchEvent(new Event('load'));
+            $('.js-services-multiselect').select2();
+            dal_init = true;
+        }
+    }, 200);
+});
+</script>
 {{ extra_script }}
 <script></script>

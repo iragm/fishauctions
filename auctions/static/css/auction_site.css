@@ -49,8 +49,13 @@ a.ad:hover {
   .modal {
     overflow-y:auto;
     overflow:auto;
+    z-index: 1050;
   }
 
   .modelselect2 {
     display: none !important;
+  }
+
+  .select2-dropdown {
+    z-index: 1060; 
   }
