@@ -3704,6 +3704,26 @@ class UnprintedLotLabelsView(LotLabelView):
     def get_queryset(self):
         return self.tos.unprinted_labels_qs
 
+class SingleLotLabelView(LotLabelView):
+    """Reprint labels for just one lot"""
+
+    def get_queryset(self):
+        return Lot.objects.filter(pk=self.lot.pk)
+
+    def dispatch(self, request, *args, **kwargs):
+        self.lot = get_object_or_404(Lot, pk=kwargs.pop('pk'), is_deleted=False)
+        if self.lot.auctiontos_seller and self.lot.auctiontos_seller.user is not request.user:
+            self.auction = self.lot.auctiontos_seller.auction
+            if not self.is_auction_admin:
+                messages.error(request, "You can't print lables for other people's lots unless you are an admin")
+                return redirect("/")
+        if not self.lot.auctiontos_seller:
+            if self.lot.user and self.lot.user is not request.user:
+                messages.error(request, "You can only print labels for your own lots")
+                return redirect("/")
+        # super() would try to find an auction
+        return View.dispatch(self, request, *args, **kwargs)
+
 @login_required
 def getClubs(request):
     if request.method == 'POST':

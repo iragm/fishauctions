@@ -55,6 +55,7 @@ urlpatterns = [
     path('lots/new/', login_required(views.LotCreateView.as_view()), name='new_lot'),
     path('lots/watched/', login_required(views.MyWatched.as_view()), name='watched'),
     path('lots/won/', login_required(views.MyWonLots.as_view()), name="won_lots"),
+    path('lots/print/<int:pk>/', login_required(views.SingleLotLabelView.as_view()), name="single_lot_label"),
     path('selling', login_required(views.MyLots.as_view()), name='selling'),
     path('lots/all/', views.AllLots.as_view(), name='allLots'),
     path('lots/user/', views.LotsByUser.as_view(), name="user_lots"),
