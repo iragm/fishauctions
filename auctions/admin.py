@@ -81,11 +81,18 @@ class UserdataInline(admin.StackedInline):
         'number_total_spent', 'rank_total_bids', 'number_total_bids', 'number_total_sold', \
         'rank_total_sold', 'total_volume', 'rank_volume', 'seller_percentile', 'buyer_percentile', 'volume_percentile', )
     readonly_fields = ('last_activity', 'dismissed_cookies_tos', 'last_auction_used', 'last_ip_address',)
+
+class UserLabelPrefsInline(admin.StackedInline):
+    model = UserLabelPrefs
+    can_delete = False
+    verbose_name_plural = 'User Label Preferences'
+
 # Extend Django's base user model
 class UserAdmin(BaseUserAdmin):
     list_display = ['username', 'first_name', 'last_name', 'email', 'last_activity', 'date_joined']
     inlines = [
         UserdataInline,
+        UserLabelPrefsInline,
         AuctionTOSInline, # too much noise, but important to have
         InterestInline, # too much noise
     ]
