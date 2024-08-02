@@ -400,7 +400,7 @@ class AuctionTOSAutocomplete(autocomplete.Select2QuerySetView):
                     )
         if self.q:
             qs = AuctionTOSFilter.generic(self, qs, self.q)
-        return qs
+        return qs.order_by('-name')
 
 class AllRecommendedLots(TemplateView):
     """
