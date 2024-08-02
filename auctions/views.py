@@ -3543,6 +3543,7 @@ class LotLabelView(View, AuctionPermissionsMixin):
         user_label_prefs, created = UserLabelPrefs.objects.get_or_create(user=self.request.user)
         context = {}
         context['empty_labels'] = user_label_prefs.empty_labels
+        context['print_qr']=True
         if user_label_prefs.preset == "sm":
             # Avery 5160 labels
             context['page_width'] = 8.5
@@ -3571,6 +3572,21 @@ class LotLabelView(View, AuctionPermissionsMixin):
             context['page_margin_right'] = 0.1
             context['font_size'] = 14
             context['unit'] = 'in'
+        elif user_label_prefs.preset == "thermal_sm":
+            # thermal label printer 3x2
+            context['page_width'] = 3
+            context['page_height'] = 2
+            context['label_width'] = 2.6
+            context['label_height'] = 1.4
+            context['label_margin_right'] = .1
+            context['label_margin_bottom'] = .1
+            context['page_margin_top'] = .1
+            context['page_margin_bottom'] = .1
+            context['page_margin_left'] = .1
+            context['page_margin_right'] = .1
+            context['font_size'] = 14
+            context['unit'] = 'in'
+            context['print_qr'] = False
         else:
             context.update({f'{field.name}': getattr(user_label_prefs, field.name) for field in UserLabelPrefs._meta.get_fields()})
         return context
@@ -3605,14 +3621,16 @@ class LotLabelView(View, AuctionPermissionsMixin):
         page_width = page_width*unit - page_margin_left*unit - page_margin_right*unit
         # each label is broken into 3 parts, with a seperate cell for each:
         # first cell
-        qr_code_width = label_width*unit/4
-        
-        if qr_code_width > label_height*unit:
-            qr_code_width = label_height*unit
-        if label_height*unit > qr_code_width:
-            qr_code_height = qr_code_width
+        if context['print_qr']:
+            qr_code_width = label_width*unit/4
+            if qr_code_width > label_height*unit:
+                qr_code_width = label_height*unit
+            if label_height*unit > qr_code_width:
+                qr_code_height = qr_code_width
+            else:
+                qr_code_height = label_height*unit
         else:
-            qr_code_height = label_height*unit
+            qr_code_width = 0
         # second cell
         text_area_width = label_width*unit - qr_code_width
         # third cell
@@ -3634,11 +3652,14 @@ class LotLabelView(View, AuctionPermissionsMixin):
                 # currently, we are not trimming the text to fit on a single row
                 # this means that lots with a long label_line_1 will spill over onto 2 rows
                 # we could trim the length to [:20] in the model or here to "fix" this, but it's not a huge problem IMHO
-                label_qr_code = qr_code.qrcode.maker.make_qr_code_image(label.qr_code, QRCodeOptions(size='T', border=4, error_correction='L', image_format="png",))
-                image_stream = BytesIO(label_qr_code)
-                label_qr_code_cell = PImage(image_stream, width=qr_code_width, height=qr_code_height, lazy=0, hAlign="LEFT")
+                if context['print_qr']:
+                    label_qr_code = qr_code.qrcode.maker.make_qr_code_image(label.qr_code, QRCodeOptions(size='T', border=4, error_correction='L', image_format="png",))
+                    image_stream = BytesIO(label_qr_code)
+                    label_qr_code_cell = PImage(image_stream, width=qr_code_width, height=qr_code_height, lazy=0, hAlign="LEFT")
+                    labels_row.append([label_qr_code_cell])
+                else:
+                    labels_row.append([Paragraph('', style)]) # margin left cell is empty
                 label_text_cell = Paragraph(f"{label.label_line_0}<br />{label.label_line_1}<br />{label.label_line_2}<br />{label.label_line_3}", style)
-                labels_row.append([label_qr_code_cell])
                 labels_row.append([label_text_cell])
                 labels_row.append([Paragraph('', style)]) # margin right cell is empty
             
@@ -3648,7 +3669,7 @@ class LotLabelView(View, AuctionPermissionsMixin):
                 # Check if the current label is the last label in the list and labels_row is not full
                 if i == len(labels) - 1 and len(labels_row) < num_cols*3:
                     # Add empty elements to the labels_row list until it is filled
-                    #print(f"adding {(num_cols*3) - len(labels_row)} extra labels, *3 total columns added")
+                    # print(f"adding {(num_cols*3) - len(labels_row)} extra labels, *3 total columns added")
                     labels_row += [[Paragraph('', style), Paragraph('', style), Paragraph('', style)]]*((num_cols*3) - len(labels_row))
                 table_data.append(labels_row)
                 labels_row = []
@@ -3658,6 +3679,7 @@ class LotLabelView(View, AuctionPermissionsMixin):
         col_widths = []
         for i in range(num_cols):
             col_widths += [qr_code_width,text_area_width,margin_right_width]
+            print(col_widths)
         table = Table(table_data, colWidths=col_widths, rowHeights=row_height)
         table.setStyle([
             #('GRID', (0, 0), (-1, -1), 1, colors.black),
@@ -3669,11 +3691,13 @@ class LotLabelView(View, AuctionPermissionsMixin):
         return response
 
     def get(self, request, *args, **kwargs):
-        try:
+        #try:
+        if True:
             return self.create_labels(request, *args, **kwargs)
-        except:
-            messages.error(request, "Unable to print labels, this is likely caused by an invalid custom setting here")
-            return redirect(reverse('printing'))
+        #except LayoutError: # some day I will track down all the possible error types and add them here
+        #except:
+        #    messages.error(request, "Unable to print labels, this is likely caused by an invalid custom setting here")
+        #    return redirect(reverse('printing'))
 
 class UnprintedLotLabelsView(LotLabelView):
     """Print lot labels, but only ones that haven't already been printed"""

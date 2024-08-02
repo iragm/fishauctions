@@ -2808,6 +2808,7 @@ class UserLabelPrefs(models.Model):
 	PRESETS = (
 		('sm', 'Small (Avery 5160)'),
 		('lg', 'Large (Avery 18262)'),
+		('thermal_sm', 'Thermal 3"x2"'),
 		('custom', 'Custom'),
 	)
 	preset = models.CharField(

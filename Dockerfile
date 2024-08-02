@@ -89,10 +89,11 @@ RUN pip install --upgrade pip
 RUN pip install --no-cache /wheels/*
 RUN pip install mysql-connector-python
 
-# this is a hack to overwrite Django's broken TZ stuff that causes errors (500 page) to fail.  See https://code.djangoproject.com/ticket/33674
-COPY fix_tz_hack.sh /tmp/fix_tz_hack.sh
-RUN chmod +x /tmp/fix_tz_hack.sh
-RUN /tmp/fix_tz_hack.sh
+# Sometimes we need customizations made to python packages
+# List changes in the .sh script, making sure it fails gracefully
+COPY python_file_hack.sh /tmp/python_file_hack.sh
+RUN chmod +x /tmp/python_file_hack.sh
+RUN /tmp/python_file_hack.sh
 
 # volume instead
 #COPY . $APP_HOME
