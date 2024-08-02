@@ -137,13 +137,13 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
             {% if lot.i_bred_this_fish %}<span class="badge text-dark bg-light">Bred by this user</span>{%endif%}
             {% if lot.pre_registered and lot.user == request.user %}<span class="badge text-dark bg-light" data-toggle="tooltip" data-placement="bottom" title="You'll get a {{ lot.auction.pre_register_lot_discount_percent }}% discount on your selling fees for this lot">Pre-registered</span>{%endif%}
             {% if lot.image_count or lot.video_link %}
-                <div>
+            <div>
                 <div id="image_carousel" class="carousel slide">
                     <div class="carousel-inner">
                         {% if lot.video_link %}
                         <div class="carousel-item active">
-                            <div class="embed-responsive embed-responsive-16by9">
-                                <iframe class="embed-responsive-item" src="https://www.youtube.com/embed/{{ lot.video_link }}" 
+                            <div class="ratio ratio-16x9">
+                                <iframe src="https://www.youtube.com/embed/{{ lot.video_link }}" 
                                         title="YouTube video player" frameborder="0"
                                         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                                         allowfullscreen></iframe>
@@ -160,7 +160,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                                 <div class="container">
                                     <div class='row mb-3'>
                                         <div class="col-auto">
-                                            <button class="btn btn-primary name="rotate-left" onclick="rotate('{{image.pk}}', 90)">Rotate ↶</button>
+                                            <button class="btn btn-primary" name="rotate-left" onclick="rotate('{{image.pk}}', 90)">Rotate ↶</button>
                                         </div>
                                         {% if not image.is_primary %}
                                         <div class="col-auto">
@@ -178,28 +178,26 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                                         </div>
                                     </div>
                                 </div>
-                                
                                 {% endif %}
                         </div>
                         {% endfor %}
-
                     </div>
                 </div>
                 {% if lot.multimedia_count > 1 %}
-                <ol class="carousel-indicators">
+                <div class="d-flex">
                     {% if lot.video_link %}
-                    <li data-target="#image_carousel" data-slide-to="0" class="active">
-                            <img src="{% static 'youtube.png' %}" class="d-block w-100">
-                    </li>  
+                    <button data-bs-target="#image_carousel" data-bs-slide-to="0" class="me-2 active thumbnail">
+                            <img style="min-width: 100px;" src="{% static 'youtube.png' %}" class="rounded">
+                    </button>  
                     {% endif %}                  
                     {% for image in lot.images %}
-                    <li data-target="#image_carousel" data-slide-to="{% if lot.video_link %}{{ forloop.counter }}{% else %}{{ forloop.counter0 }}{% endif %}" class="{% if image.is_primary and not image.video_link %}active{% endif %}"><img
-                            src="{{ image.image.lot_list.url }}" class="d-block w-100">
-                    </li>
+                    <a href="#" data-bs-target="#image_carousel" data-bs-slide-to="{% if lot.video_link %}{{ forloop.counter }}{% else %}{{ forloop.counter0 }}{% endif %}"  class="me-2 {% if image.is_primary and not lot.video_link %}active{% endif %}">
+                        <img style="min-width: 100px;" src="{{ image.image.lot_list.url }}" class="rounded">
+                    </a>
                     {% endfor %}
-                </ol>
-                {% endif %}
                 </div>
+                {% endif %}
+            </div>            
             {% else %}
                 {% if lot.user == request.user %}
                 <div>You haven't added any images to this lot yet.  <a href="/blog/whats-a-picture-worth/" target="_blank">Lots with images are more likely to sell</a></div>
