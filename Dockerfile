@@ -22,13 +22,16 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 RUN pip install --upgrade pip pip-tools
-COPY . /usr/src/app/
 
+# This is a lot of stuff, not really needed
+# COPY . /usr/src/app/
+
+COPY ./requirements.in .
 # generate an updated requirements.txt file with the latest versions of all packages
 #RUN pip-compile requirements.in --upgrade
 
 # install python dependencies
-#COPY ./requirements.txt . # no need to copy this, we just generated it
+COPY ./requirements.txt .
 RUN pip wheel --no-cache-dir --no-deps --wheel-dir /usr/src/app/wheels -r requirements.txt
 
 
