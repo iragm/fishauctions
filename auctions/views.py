@@ -3691,13 +3691,15 @@ class LotLabelView(View, AuctionPermissionsMixin):
         return response
 
     def get(self, request, *args, **kwargs):
-        #try:
-        if True:
+        if request.user.is_superuser:
             return self.create_labels(request, *args, **kwargs)
-        #except LayoutError: # some day I will track down all the possible error types and add them here
-        #except:
-        #    messages.error(request, "Unable to print labels, this is likely caused by an invalid custom setting here")
-        #    return redirect(reverse('printing'))
+        else:
+            try:
+                return self.create_labels(request, *args, **kwargs)
+            #except LayoutError: # some day I will track down all the possible error types and add them here
+            except:
+                messages.error(request, "Unable to print labels, this is likely caused by an invalid custom setting here")
+                return redirect(reverse('printing'))
 
 class UnprintedLotLabelsView(LotLabelView):
     """Print lot labels, but only ones that haven't already been printed"""
