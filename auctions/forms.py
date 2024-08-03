@@ -489,6 +489,7 @@ class EditLot(forms.ModelForm):
                 css_class='row',
             ),
             Div(
+                HTML(f'<a class="btn btn-primary me-2" href="{reverse("single_lot_label", kwargs={"pk": self.lot.pk})}">{"Reprint label" if self.lot.label_printed else "Print label"}</a>'),
                 HTML('<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'),
                 HTML(f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn bg-success float-right ms-2">Save</button>'),
                 css_class="modal-footer",

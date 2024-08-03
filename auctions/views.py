@@ -3679,7 +3679,6 @@ class LotLabelView(View, AuctionPermissionsMixin):
         col_widths = []
         for i in range(num_cols):
             col_widths += [qr_code_width,text_area_width,margin_right_width]
-            print(col_widths)
         table = Table(table_data, colWidths=col_widths, rowHeights=row_height)
         table.setStyle([
             #('GRID', (0, 0), (-1, -1), 1, colors.black),
