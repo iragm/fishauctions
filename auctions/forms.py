@@ -380,6 +380,42 @@ class WinnerLotSimpleImages(WinnerLotSimple):
         self.fields['invoice'].widget = HiddenInput()
         self.fields['invoice'].initial = "True"
 
+class MultiAuctionTOSPrintLabelForm(forms.Form):
+    print_only_unprinted = forms.BooleanField(required=False, initial=True, label="Print only unprinted labels", help_text="Uncheck if you hate trees")
+
+    def __init__(self, *args, **kwargs):
+        auctiontos = kwargs.pop('auctiontos', AuctionTOS.objects.none())
+        super().__init__(*args, **kwargs)
+        for tos in auctiontos:
+            if tos.unprinted_labels_count == 0:
+                help_text = f"All {tos.lots_count} label(s) printed"
+            elif tos.unprinted_labels_count == tos.lots_count:
+                help_text = f"{tos.lots_count} lot(s) added, <span class=\"text-warning\">no label(s) printed</span>"
+            else:
+                help_text = f"{tos.lots_count} lot(s) added, <span class=\"text-warning\">{tos.unprinted_labels_count}</span> label(s) unprinted"
+
+            self.fields[f'tos_{tos.pk}'] = forms.BooleanField(
+                required=False,
+                label=f"{tos.bidder_number} - {tos.name}",
+                help_text=help_text,
+            )
+        
+        self.helper = FormHelper()
+        self.helper.form_method = 'post'
+        self.helper.add_input(Submit('submit', 'Print'))
+        layout = [ 
+            'print_only_unprinted',
+            HTML('<h5>Check all the users you want to print labels for:</h5>'),
+        ]
+
+        # Dynamically add fields to layout
+        for field_name in self.fields:
+            if field_name != 'print_only_unprinted':
+                layout.append(Field(field_name, css_class='form-group'))
+
+        # Set the layout to FormHelper
+        self.helper.layout = Layout(*layout)
+
 class DeleteAuctionTOS(forms.Form):
     """For deleting auctionTOS and optionally merging lots, admins only"""
     delete_lots = forms.BooleanField(required = False)

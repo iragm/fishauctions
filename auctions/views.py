@@ -1,3 +1,4 @@
+import ast
 import csv
 from datetime import datetime
 from random import randint, uniform, sample
@@ -39,7 +40,7 @@ from .tables import *
 from io import BytesIO, TextIOWrapper
 from django.core.files import File
 import re
-from urllib.parse import unquote
+from urllib.parse import unquote, urlencode
 from django_tables2 import SingleTableMixin
 from django_filters.views import FilterView
 from dal import autocomplete
@@ -4802,12 +4803,13 @@ class AuctionStatsAuctioneerSpeedJSONView(AuctionStatsAttritionJSONView):
                 data.append({'x': i, 'y':minutes})
         return [data]
 
-class AuctionBulkPrinting(DetailView, AuctionPermissionsMixin):
+class AuctionBulkPrinting(FormView, AuctionPermissionsMixin):
     model = Auction
     template_name = "auction_printing.html"
+    form_class = MultiAuctionTOSPrintLabelForm
 
     def dispatch(self, request, *args, **kwargs):
-        self.auction = self.get_object()
+        self.auction = get_object_or_404(Auction, slug=kwargs.pop('slug'), is_deleted=False)
         self.is_auction_admin
         return super().dispatch(request, *args, **kwargs)
 
@@ -4816,23 +4818,63 @@ class AuctionBulkPrinting(DetailView, AuctionPermissionsMixin):
         context['all_labels_count'] = self.auction.labels_qs.count()
         context['unprinted_label_count'] = self.auction.unprinted_labels_qs.count()
         context['printed_labels_count'] = context['all_labels_count'] - context['unprinted_label_count']
+        context['auction'] = self.auction
         return context
+    
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs['auctiontos'] = AuctionTOS.objects.filter(auction=self.auction).annotate(
+            lots_count=Count('auctiontos_seller', filter=Q(auctiontos_seller__banned=False, auctiontos_seller__is_deleted=False)),
+            unprinted_labels_count=Count('auctiontos_seller', filter=Q(auctiontos_seller__banned=False, auctiontos_seller__label_printed=False, auctiontos_seller__is_deleted=False))
+        ).filter(lots_count__gt=0)
+        return kwargs
+
+    def form_valid(self, form):
+        print_only_unprinted = form.cleaned_data['print_only_unprinted']
+        selected_tos = []
+        for key, value in form.cleaned_data.items():
+            if key.startswith('tos_') and value:
+                pk = key.split('_')[1]
+                selected_tos.append(pk)
+        data = {
+            'selected_tos': selected_tos,
+            'print_only_unprinted': print_only_unprinted
+        }
+        url = reverse('auction_printing_pdf', kwargs={'slug': self.auction.slug})
+        url_with_params = f"{url}?{urlencode(data)}"
+        return HttpResponseRedirect(url_with_params)
 
 class AuctionBulkPrintingPDF(LotLabelView):
-    """Only unprinted labels, for all users, in a given auction"""
+    """Admin page to print labels for multiple users at once"""
     allow_non_admins = False
 
     def get_queryset(self):
-        return self.auction.unprinted_labels_qs
+        return self.queryset
 
     def dispatch(self, request, *args, **kwargs):
-        # check to make sure the user has permission to view this invoice
         self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs['slug']).first()
         self.is_auction_admin
+
+        self.selected_tos = request.GET.get('selected_tos', None)
+        self.print_only_unprinted = request.GET.get('print_only_unprinted', 'True') == 'True'
+        if not self.selected_tos:
+            self.queryset = self.auction.unprinted_labels_qs
+        else:
+            self.selected_tos = ast.literal_eval(self.selected_tos)
+            if self.print_only_unprinted:
+                self.queryset = self.auction.unprinted_labels_qs
+            else:
+                self.queryset = self.auction.labels_qs
+            for lot in self.queryset:
+                print(lot)
+            self.queryset = self.queryset.filter(auctiontos_seller__pk__in=self.selected_tos)
         if not self.get_queryset():
-            messages.error(request, "All labels have already been printed")
-            return redirect(self.auction.get_absolute_url())
-        return View.dispatch(self, request, *args, **kwargs)
+            if not self.selected_tos:
+                messages.error(request, "No users selected")
+            else:
+                messages.error(request, "Couldn't find any labels to print")
+            return redirect(reverse('auction_printing', kwargs={'slug':self.auction.slug}))
+        return super().dispatch(request, *args, **kwargs)
 
 class PickupLocationsIncoming(View, AuctionPermissionsMixin):
     """All lots destined for this location"""
