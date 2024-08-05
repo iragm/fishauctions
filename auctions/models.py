@@ -723,7 +723,8 @@ class Auction(models.Model):
 	@property
 	def lots_qs(self):
 		"""All lots in this auction"""
-		return Lot.objects.exclude(is_deleted=True).filter(auction=self.pk)
+		#return Lot.objects.exclude(is_deleted=True).filter(auction=self.pk)
+		return Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller__auction__pk=self.pk)
 	
 	@property
 	def total_sold_lots(self):
