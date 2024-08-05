@@ -34,4 +34,4 @@ fi
 sed -i "s/server_name _;/server_name $SITE_DOMAIN;/" "./nginx.prod.conf"
 
 docker compose build
-docker compose up -d
+docker compose restart -d
