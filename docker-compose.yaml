@@ -17,7 +17,7 @@ services:
     container_name: db
     image: mariadb:latest
     restart: always
-    command: [ "--max_connections=1000" ]
+    command: [ "--max_connections=10000 --max_allowed_packet=16M --wait_timeout=28800 --interactive_timeout=28800 --open_files_limit=100000" ]
     environment:
       MYSQL_DATABASE: ${DATABASE_NAME-auctions}
       MYSQL_USER: ${DATABASE_USER-mysqluser}
