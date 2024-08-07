@@ -197,7 +197,8 @@ else:
             'OPTIONS': {
                 'charset': 'utf8mb4',
             },
-            'CONN_MAX_AGE': 2000,
+            'CONN_MAX_AGE': os.environ.get('DATABASE_CONN_MAX_AGE', 2000),
+            'CONN_HEALTH_CHECKS': True,
         }
     }
 
