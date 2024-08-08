@@ -160,21 +160,21 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                                 <div class="container">
                                     <div class='row mb-3'>
                                         <div class="col-auto">
-                                            <button class="btn btn-primary" name="rotate-left" onclick="rotate('{{image.pk}}', 90)">Rotate ↶</button>
+                                            <button class="btn btn-primary" name="rotate-left" onclick="rotate('{{image.pk}}', 90)"><i class="bi bi-arrow-counterclockwise"></i> Rotate</button>
                                         </div>
                                         {% if not image.is_primary %}
                                         <div class="col-auto">
-                                            <button class="btn btn-info" name="make-primary" onclick="make_primary('{{image.pk}}')">Make primary</button>
+                                            <button class="btn btn-info" name="make-primary" onclick="make_primary('{{image.pk}}')"><i class="bi bi-file-image-fill"></i> Make primary</button>
                                         </div>
                                         {% endif %}
                                         <div class="col-auto">
-                                            <a href="{% url 'edit_image' pk=image.pk %}" class="btn text-dark bg-warning">Edit image</a>
+                                            <a href="{% url 'edit_image' pk=image.pk %}" class="btn text-dark bg-warning"><i class="bi bi-gear-fill"></i> Edit image</a>
                                         </div>
                                         <div class="col-auto">
-                                            <a href="{% url 'delete_image' pk=image.pk %}" class="btn btn-danger">Delete image</a>
+                                            <a href="{% url 'delete_image' pk=image.pk %}" class="btn btn-danger"><i class="bi bi-file-x"></i> Delete image</a>
                                         </div>
                                         <div class="col-auto">
-                                            <button class="btn btn-primary" name="rotate-right" onclick="rotate('{{image.pk}}', -90)">Rotate ↷</button>
+                                            <button class="btn btn-primary" name="rotate-right" onclick="rotate('{{image.pk}}', -90)"><i class="bi bi-arrow-clockwise"></i> Rotate</button>
                                         </div>
                                     </div>
                                 </div>
@@ -204,7 +204,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                 {% endif %}
             {% endif %}
             {% if show_image_add_button %}
-            <a href="{% url 'add_image' lot=lot.lot_number %}" class="btn btn-primary">Add image</a><br>
+            <a href="{% url 'add_image' lot=lot.lot_number %}" class="btn btn-primary"><i class="bi bi-file-image"></i> Add image</a><br>
             {% endif %}
         <br>
         {% if lot.description %}<div class="jumbotron">{{ lot.description_rendered | safe }}</div>{% endif %}
@@ -317,7 +317,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
             {% endif %}
         </table>
         
-        {% if lot.user == request.user %}<a href="/lots/new/?copy={{lot.pk}}" class="btn btn-info">Copy to new lot</a>{% endif %}
+        {% if lot.user == request.user %}<a href="/lots/new/?copy={{lot.pk}}" class="btn btn-info"><i class="bi bi-calendar-plus"></i> Copy to new lot</a>{% endif %}
         {% if not lot.auction %}
             {% if request.user.is_authenticated %}
                 {% if lot.user == request.user or request.user.is_superuser %}
@@ -346,14 +346,14 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
             {% else %}
             href="javascript:void(0);" data-toggle="tooltip" data-placement="top" title="{{ lot.cannot_edit_reason }}"
             {% endif %}
-            class="text-dark btn btn-warning">Edit lot</a>
+            class="text-dark btn btn-warning"><i class="bi bi-gear-fill"></i> Edit lot</a>
             <a
             {% if lot.can_be_deleted %}
             href="{% url 'delete_lot' pk=lot.pk %}"
             {% else %}
             href="javascript:void(0);" data-toggle="tooltip" data-placement="top" title="{{ lot.cannot_be_deleted_reason }}"
             {% endif %}
-            class="btn btn-danger">Delete</a>
+            class="btn btn-danger"><i class="bi bi-calendar-x"></i> Delete</a>
         {% endif %}
         <span id="bid_area">
                 {% if lot.bidding_error %}
@@ -426,14 +426,14 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
             <button class="btn btn-primary me-2" hx-get="{% url 'auctionlotadmin' pk=lot.pk %}",
                 hx-target="#modals-here",
                 hx-trigger="click",
-                _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">Manage this lot</button>
+                _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"><i class="bi bi-gear-fill"></i> Manage this lot</button>
             <button class="btn btn-primary me-2" hx-get="{% url 'lot_refund' pk=lot.pk %}",
                 hx-target="#modals-here",
                 hx-trigger="click",
-                _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">Remove or refund</button>
+                _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"><i class="bi bi-calendar-x"></i> Remove or refund</button>
             {% endif %}
             {% if is_auction_admin or lot.user.pk == request.user.pk%}
-            <a class="btn btn-primary me-2" href="{% url 'single_lot_label' pk=lot.pk %}">{% if lot.label_printed%}Reprint label{% else %}Print label{% endif %}</button>
+            <a class="btn btn-primary me-2" href="{% url 'single_lot_label' pk=lot.pk %}"><i class="bi bi-tag"></i> {% if lot.label_printed%}Reprint label{% else %}Print label{% endif %}</button>
             {% endif %}
         {% endif %}
         {% if request.user.is_superuser %}

@@ -10,63 +10,63 @@
     hx-get="/api/auctiontos/{{auction.slug}}/"
     hx-target="#modals-here"
     hx-trigger="click"
-    _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">Add user</button>
+    _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"><i class="bi bi-person-fill-add"></i>Add user</button>
     
     <span class="dropdown">
       <button class="btn btn-sm mt-2 mb-2 btn-primary dropdown-toggle" type="button" id="dropdownMenuButton" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-        Export
+        <i class="bi bi-download"></i> Export
       </button>
       <div class="dropdown-menu" aria-labelledby="dropdownMenuButton">
-        <a href="{% url 'user_list' slug=auction.slug %}" class="dropdown-item">Users CSV</a>
+        <a href="{% url 'user_list' slug=auction.slug %}" class="dropdown-item"><i class="bi bi-person-fill-down"></i> Users CSV</a>
         {% for chunk in auction.paypal_invoice_chunks %}
-        <a href="{% url 'paypal_csv' slug=auction.slug chunk=chunk %}" class="dropdown-item">PayPal Invoice CSV {% if auction.paypal_invoice_chunks|length > 1 %} #{{chunk}}{% endif %}</a>
+        <a href="{% url 'paypal_csv' slug=auction.slug chunk=chunk %}" class="dropdown-item"><i class="bi bi-paypal"></i> PayPal Invoice CSV {% if auction.paypal_invoice_chunks|length > 1 %} #{{chunk}}{% endif %}</a>
         {% endfor %}
-        {% if not auction.paypal_invoice_chunks|length %}<span class="text-muted dropdown-item">No PayPal invoices</span>{% endif %}
-        <a href="/blog/online-payments-suck/" class="dropdown-item">PayPal invoice help</a>
+        {% if not auction.paypal_invoice_chunks|length %}<span class="text-muted dropdown-item"><i class="bi bi-paypal"></i> No PayPal invoices</span>{% endif %}
+        <a href="/blog/online-payments-suck/" class="dropdown-item"><i class="bi bi-info-circle"></i> PayPal invoice help</a>
       </div>
     </span>
-    <a href="{% url 'bulk_add_users' auction.slug %}" class="btn btn-sm mt-2  mb-2 btn-primary">Bulk add users</a>
+    <a href="{% url 'bulk_add_users' auction.slug %}" class="btn btn-sm mt-2  mb-2 btn-primary"><i class="bi bi-node-plus"></i> Bulk add users</a>
     <a href="#" class="btn btn-sm mt-2  mb-2 btn-primary"
     hx-get="{% url 'auction_invoices_ready' auction.slug %}"
     hx-target="#modals-here"
     hx-trigger="click"
-    _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">Set open invoices to ready</a>
+    _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"><i class="bi bi-bag-check"></i> Set open invoices to ready</a>
     <a href="#" class="btn btn-sm mt-2  mb-2 btn-primary"
     hx-get="{% url 'auction_invoices_paid' auction.slug %}"
     hx-target="#modals-here"
     hx-trigger="click"
-    _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">Set ready invoices to paid</a>
+    _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"><i class="bi bi-bag-heart"></i> Set ready invoices to paid</a>
     <span class="dropdown">
       <button class="btn btn-sm mt-2 mb-2 btn-primary dropdown-toggle" type="button" id="dropdownMenuButton" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-        Filters
+        <i class="bi bi-filter"></i> Filters
       </button>
       <div class="dropdown-menu" aria-labelledby="dropdownMenuButton">
         <span class="text-muted dropdown-item"><small>Users with an invoice that is:</small></span>
         <label class="dropdown-item ">
-          <input type="checkbox" class="invoice_filter" id="checkbox_open"> Open
+          <input type="checkbox" class="invoice_filter" id="checkbox_open"> <i class="bi bi-bag"></i> Open
         </label>
         <label class="dropdown-item ">
-          <input type="checkbox" class="invoice_filter" id="checkbox_ready"> Ready
+          <input type="checkbox" class="invoice_filter" id="checkbox_ready"> <i class="bi bi-bag-check"></i> Ready
         </label>
         <label class="dropdown-item ">
-          <input type="checkbox" class="invoice_filter" id="checkbox_paid"> Paid
+          <input type="checkbox" class="invoice_filter" id="checkbox_paid"> <i class="bi bi-bag-heart"></i> Paid
         </label>
         <label class="dropdown-item ">
-          <input type="checkbox" class="invoice_filter" id="checkbox_owes_club"> Owes the club
+          <input type="checkbox" class="invoice_filter" id="checkbox_owes_club"> <i class="bi bi-bag-dash"></i> Owes the club
         </label>
         <label class="dropdown-item ">
-          <input type="checkbox" class="invoice_filter" id="checkbox_club_owes"> Club owes
+          <input type="checkbox" class="invoice_filter" id="checkbox_club_owes"> <i class="bi bi-bag-plus"></i> Club owes
         </label>
         <label class="dropdown-item ">
-          <input type="checkbox" class="invoice_filter" id="checkbox_seen"> User has seen
+          <input type="checkbox" class="invoice_filter" id="checkbox_seen"> <i class="bi bi-eye-fill"></i> User has seen
         </label>
         <label class="dropdown-item ">
-          <input type="checkbox" class="invoice_filter" id="checkbox_unseen"> User has not seen
+          <input type="checkbox" class="invoice_filter" id="checkbox_unseen"> <i class="bi bi-eye-slash-fill"></i> User has not seen
         </label>
         {% if auction.is_online %}
         <span class="text-muted dropdown-item"><small>Find problematic users:</small></span>
         <label class="dropdown-item ">
-          <input type="checkbox" class="invoice_filter" id="checkbox_sus"> Least engagement first
+          <input type="checkbox" class="invoice_filter" id="checkbox_sus"> <i class="bi bi-exclamation-circle"></i> Least engagement first
         </label>
         {% endif %}
       </div>

@@ -525,7 +525,7 @@ class EditLot(forms.ModelForm):
                 css_class='row',
             ),
             Div(
-                HTML(f'<a class="btn btn-primary me-2" href="{reverse("single_lot_label", kwargs={"pk": self.lot.pk})}">{"Reprint label" if self.lot.label_printed else "Print label"}</a>'),
+                HTML(f'<a class="btn btn-primary me-2" href="{reverse("single_lot_label", kwargs={"pk": self.lot.pk})}"><i class="bi bi-tag"></i> {"Reprint label" if self.lot.label_printed else "Print label"}</a>'),
                 HTML('<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'),
                 HTML(f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn bg-success float-right ms-2">Save</button>'),
                 css_class="modal-footer",
@@ -638,10 +638,10 @@ class CreateEditAuctionTOS(forms.ModelForm):
         delete_button_html = ""
         if self.is_edit_form:
             problems_url = reverse("auction_no_show", kwargs={'slug': self.auction.slug, 'tos': self.auctiontos.bidder_number})
-            problem_button_html = f"<a href={problems_url} class='btn text-dark bg-warning'>Problems</a>"
+            problem_button_html = f"<a href={problems_url} class='btn text-dark bg-warning'><i class='bi bi-exclamation-circle'></i> Problems</a>"
             post_url = f'/api/auctiontos/{self.auctiontos.pk}/'
             delete_url = reverse("auctiontosdelete", kwargs={'pk': self.auctiontos.pk})
-            delete_button_html = f"<a href={delete_url} class='btn bg-danger'>Delete</a>"
+            delete_button_html = f"<a href={delete_url} class='btn bg-danger'><i class='bi bi-person-fill-x'></i> Delete</a>"
         else:
             post_url = f'/api/auctiontos/{self.auction.slug}/'
         self.helper = FormHelper()
@@ -975,7 +975,7 @@ class AuctionJoin(forms.ModelForm):
             'i_agree',
             'time_spent_reading_rules',
             'pickup_location',
-            Submit('submit', 'Confirm pickup location', css_class='agree_tos btn-success'),
+            Submit('submit', 'Confirm pickup location', css_class='agree_tos btn-success text-dark'),
         )
         self.fields['pickup_location'].queryset = auction.location_qs #PickupLocation.objects.filter(auction=self.auction).order_by('name')
         self.fields['time_spent_reading_rules'].widget = HiddenInput()

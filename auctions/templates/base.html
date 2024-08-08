@@ -282,27 +282,27 @@ window.onload = function() {
                   <li class="nav-item dropdown">
                     <a class="nav-link dropdown-toggle" data-bs-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">{{ request.user.username }}</a>
                     <div class="dropdown-menu">
-                      <h6 class="dropdown-header">Lots</h6>
-                      <a class="dropdown-item" href="{% url 'selling' %}">Selling</a>
-                      <a class="dropdown-item" href="{% url 'watched' %}">Watched lots</a>
-                      <a class="dropdown-item" href="{% url 'my_bids' %}">Bids</a>
-                      <a class="dropdown-item" href="{% url 'won_lots' %}">Won lots</a>
+                      <h6 class="dropdown-header"><i class="bi bi-calendar"></i> Lots</h6>
+                      <a class="dropdown-item" href="{% url 'selling' %}"><i class="bi bi-cash-coin"></i> Selling</a>
+                      <a class="dropdown-item" href="{% url 'watched' %}"><i class="bi bi-heart-fill"></i> Watched lots</a>
+                      <a class="dropdown-item" href="{% url 'my_bids' %}"><i class="bi bi-coin"></i> Bids</a>
+                      <a class="dropdown-item" href="{% url 'won_lots' %}"><i class="bi bi-calendar-check"></i> Won lots</a>
                       <div class="dropdown-divider"></div>
-                      <h6 class="dropdown-header">Account</h6>
-                      <a class="dropdown-item" href="{% url 'account' %}">Account information</a>
-                      <a class="dropdown-item" href="{% url 'feedback' %}">Feedback</a>
-                      <a class="dropdown-item" href="{% url 'my_invoices' %}">Invoices</a>
-                      <a class="dropdown-item" href="{% url 'contact_info' %}">Contact info</a>
-                      <a class="dropdown-item" href="{% url 'preferences' %}">Preferences</a>
-                      <a class="dropdown-item" href="{% url 'printing' %}">Label printing</a>
-                      <a class="dropdown-item" href="{% url 'ignore_categories' %}">Ignore categories</a>
-                      <a class="dropdown-item" href="{% url 'messages' %}">Messages</a>
+                      <h6 class="dropdown-header"><i class="bi bi-person-fill"></i> Account</h6>
+                      <a class="dropdown-item" href="{% url 'account' %}"><i class="bi bi-info-circle"></i> Account information</a>
+                      <a class="dropdown-item" href="{% url 'feedback' %}"><i class="bi bi-chat-heart"></i> Feedback</a>
+                      <a class="dropdown-item" href="{% url 'my_invoices' %}"><i class="bi bi-bag"></i> Invoices</a>
+                      <a class="dropdown-item" href="{% url 'contact_info' %}"><i class="bi bi-telephone-fill"></i> Contact info</a>
+                      <a class="dropdown-item" href="{% url 'preferences' %}"><i class="bi bi-sliders"></i> Preferences</a>
+                      <a class="dropdown-item" href="{% url 'printing' %}"><i class="bi bi-tag"></i> Label printing</a>
+                      <a class="dropdown-item" href="{% url 'ignore_categories' %}"><i class="bi bi-ban"></i> Ignore categories</a>
+                      <a class="dropdown-item" href="{% url 'messages' %}"><i class="bi bi-chat"></i> Messages</a>
                       <form method="post" action="{% url 'account_logout' %}">
                         {% csrf_token %}
                         {% if redirect_field_value %}
                           <input type="hidden" name="{{ redirect_field_name }}" value="{{ redirect_field_value }}"/>
                         {% endif %}
-                        <button class="dropdown-item" type="submit">Sign out</button>
+                        <button class="dropdown-item" type="submit"><i class="bi bi-box-arrow-right"></i> Sign out</button>
                       </form>
                     </div>
                   </li>

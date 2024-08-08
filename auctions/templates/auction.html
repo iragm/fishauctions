@@ -132,17 +132,17 @@ function initMap() {
 <div id="fb-root"></div>
 
             {% include 'auction_ribbon.html' %}
-            <div><a href='{{ auction.view_lot_link }}' class="btn btn-primary btn-sm mr-1 mt-1">View lots</a>
-            {% if auction.is_online %}<a href='{{auction.add_lot_link}}' class="btn btn-sm btn-info mr-1 mt-1">Add a lot</a>{% else %}
-            <a href='{% url "bulk_add_lots_for_myself" slug=auction.slug %}' class="btn btn-sm btn-info mr-1 mt-1">Add lots</a>{% endif %}
-            <a href='{% url "print_my_labels" slug=auction.slug %}' class="btn btn-primary btn-sm mr-1 mt-1">Print your lot labels</a>
-            <a href='{% url "my_auction_invoice" slug=auction.slug %}' class="btn btn-primary btn-sm mr-1 mt-1">View your invoice</a>
-            {% if view.is_auction_admin %}<a href='/auctions/{{auction.slug}}/edit' class="text-dark btn btn-sm btn-warning mr-1 mt-1">Edit these rules</a>{% endif %}
-            {% if view.is_auction_admin %}<a href='{% url "all_my_users" %}' data-toggle="tooltip" title="All contacts for all auctions where you're an admin" class="btn btn-sm btn-primary mr-1 mt-1">Download marketing list</a>
+            <div><a href='{{ auction.view_lot_link }}' class="btn btn-primary btn-sm mr-1 mt-1"><i class="bi bi-calendar"></i> View lots</a>
+            {% if auction.is_online %}<a href='{{auction.add_lot_link}}' class="btn btn-sm btn-info mr-1 mt-1"><i class="bi bi-calendar-plus"></i> Add a lot</a>{% else %}
+            <a href='{% url "bulk_add_lots_for_myself" slug=auction.slug %}' class="btn btn-sm btn-info mr-1 mt-1"><i class="bi bi-calendar-plus"></i> Add lots</a>{% endif %}
+            <a href='{% url "print_my_labels" slug=auction.slug %}' class="btn btn-primary btn-sm mr-1 mt-1"><i class="bi bi-tags"></i> Print your lot labels</a>
+            <a href='{% url "my_auction_invoice" slug=auction.slug %}' class="btn btn-primary btn-sm mr-1 mt-1"><i class="bi bi-bag"></i> View your invoice</a>
+            {% if view.is_auction_admin %}<a href='/auctions/{{auction.slug}}/edit' class="text-dark btn btn-sm btn-warning mr-1 mt-1"><i class="bi bi-gear-fill"></i> Edit these rules</a>{% endif %}
+            {% if view.is_auction_admin %}<a href='{% url "all_my_users" %}' data-toggle="tooltip" title="All contacts for all auctions where you're an admin" class="btn btn-sm btn-primary mr-1 mt-1"><i class="bi bi-person-fill-down"></i> Download marketing list</a>
             {% if not auction.multi_location %}
             {% for location in pickup_locations %}
             {% if view.is_auction_admin %}
-                <a href="mailto:?bcc={{location.email_list}}&subject={{auction}}" class="btn btn-sm mt-1 mr-1 btn-primary">Email {{location.number_of_users}} people</a>
+                <a href="mailto:?bcc={{location.email_list}}&subject={{auction}}" class="btn btn-sm mt-1 mr-1 btn-primary"><i class="bi bi-envelope-at"></i> Email {{location.number_of_users}} people</a>
             {%endif%}
             {% endfor %}
             {% endif %}
@@ -209,7 +209,7 @@ function initMap() {
                 {% for location in pickup_locations %}
                 {% include 'location_fragment.html' %}
                 {% if view.is_auction_admin %}
-                        <a href="/locations/edit/{{ location.pk }}/?next=/auctions/{{auction.slug}}" class="btn btn-sm mt-2 ms-2 text-dark btn-warning">Edit pickup location</a>
+                        <a href="/locations/edit/{{ location.pk }}/?next=/auctions/{{auction.slug}}" class="btn btn-sm mt-2 ms-2 text-dark btn-warning"><i class="bi bi-gear-fill"></i> Edit pickup location</a>
                 {% endif %}
                 {% endfor %}
                 {% endif %}
@@ -231,15 +231,15 @@ function initMap() {
                 {# location content for multi-location auction ONLY here #}
                 <div class="tab-pane fade {% if hasChosenLocation == location.pk%}active show {% endif %}" id="location_{{location.pk}}{{location.short_name}}" role="tabpanel">
                     {% if view.is_auction_admin %}
-                    <a href="/locations/edit/{{ location.pk }}/?next=/auctions/{{auction.slug}}" class="btn btn-sm mt-2 ms-2 text-dark btn-warning">Edit this location</a>
+                    <a href="/locations/edit/{{ location.pk }}/?next=/auctions/{{auction.slug}}" class="btn btn-sm mt-2 ms-2 text-dark btn-warning"><i class="bi bi-gear-fill"></i> Edit this location</a>
                     {% if auction.all_location_count > 1 %}
-                    <a href='{% url "location_incoming" pk=location.pk %}' class="btn btn-sm mt-2 ms-2 btn-primary">Incoming lot list</a>
-                    <a href='{% url "location_outgoing" pk=location.pk %}' class="btn btn-sm mt-2 ms-2 btn-primary">Outgoing lot list</a>
+                    <a href='{% url "location_incoming" pk=location.pk %}' class="btn btn-sm mt-2 ms-2 btn-primary"><i class="bi bi-box-arrow-in-down-right"></i> Incoming lot list</a>
+                    <a href='{% url "location_outgoing" pk=location.pk %}' class="btn btn-sm mt-2 ms-2 btn-primary"><i class="bi bi-box-arrow-down-right"></i> Outgoing lot list</a>
                     {% endif %}
-                    <a href="mailto:?bcc={{location.email_list}}&subject={{auction}} - {{location.name}}" class="btn btn-sm mt-2 ms-2 btn-primary">Email {{location.number_of_users}} people</a>
+                    <a href="mailto:?bcc={{location.email_list}}&subject={{auction}} - {{location.name}}" class="btn btn-sm mt-2 ms-2 btn-primary"><i class="bi bi-envelope-at"></i> Email {{location.number_of_users}} people</a>
                     <br>
                     {% endif %}
-                    {% if hasChosenLocation == location.pk%}<span class="badge bg-success">Your confirmed location</span><br>{% endif %}
+                    {% if hasChosenLocation == location.pk%}<span class="badge bg-success text-dark">Your confirmed location</span><br>{% endif %}
                     {% include 'location_fragment.html' %}
                     {% if location.contact_person and hasChosenLocation == location.pk or view.is_auction_admin %}Contact for this location: <b>{{location.contact_person.name | default:""}}</b><br>
                         {{location.contact_person.email | default:"" | urlize}}<br>
@@ -255,7 +255,7 @@ function initMap() {
             <div class="input-group mb-3 mr-3 has-success" style="float:left !important;">
                 <input class="form-control form-control-sm" id='copyShareLink' style='max-width: 35%' type="text" value="https://{{ domain }}/?{{ auction.slug }}" readonly="">
                 <div class="input-group-append">
-                    <button class='btn btn-sm bg-primary' onclick="copyLink()">Copy</button>
+                    <button class='btn btn-sm bg-primary' onclick="copyLink()"><i class="bi bi-copy"></i> Copy</button>
                 </div>
                 <span class='input-group-append ml-1 mr-1'>
                 <a href="https://twitter.com/share?ref_src=twsrc%5Etfw" class="twitter-share-button" data-text="Check out the {{ auction.title }}" data-url="https://{{ domain }}/?{{ auction.slug }}" data-dnt="true" data-show-count="false">Tweet</a><script async src="https://platform.twitter.com/widgets.js" charset="utf-8"></script>

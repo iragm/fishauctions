@@ -24,13 +24,13 @@ $.ajax({
     {% if not userdata.email_me_when_people_comment_on_my_lots and not userdata.email_visible %}With both options turned off, <span class='text-warning'>people have no way to contact you on this site</span> and your sales will probably suffer.{% endif %}
     
     <small><span class='text-warning' id="last-auction-special"></span></small><br>
-    <a href="{% url 'new_lot' %}" class="btn btn-sm ms-2 mt-2 mb-2 btn-info">Create new lot</a>
+    <a href="{% url 'new_lot' %}" class="btn btn-sm ms-2 mt-2 mb-2 btn-info"><i class="bi bi-calendar-plus"></i> Create new lot</a>
     {% if userdata.last_auction_used %}
     {% if not userdata.last_auction_used.is_online %}
-      <a href="{% url 'bulk_add_lots_for_myself' slug=userdata.last_auction_used.slug %}" class="btn btn-sm ms-2 mt-2 mb-2 btn-info">Bulk add lots to {{userdata.last_auction_used}}</a>
+      <a href="{% url 'bulk_add_lots_for_myself' slug=userdata.last_auction_used.slug %}" class="btn btn-sm ms-2 mt-2 mb-2 btn-info"><i class="bi bi-calendar-plus"></i> Bulk add lots to {{userdata.last_auction_used}}</a>
     {% endif %}
-    <a href="{% url 'my_auction_invoice' slug=userdata.last_auction_used.slug %}" class="btn btn-sm ms-2 mt-2 mb-2 btn-primary">Invoice for {{userdata.last_auction_used}}</a>
-    <a href="{% url 'print_my_labels' slug=userdata.last_auction_used.slug %}" class="btn btn-sm ms-2 mt-2 mb-2 btn-primary">Print labels for {{userdata.last_auction_used}}</a>
+    <a href="{% url 'my_auction_invoice' slug=userdata.last_auction_used.slug %}" class="btn btn-sm ms-2 mt-2 mb-2 btn-primary"><i class="bi bi-bag"></i> Invoice for {{userdata.last_auction_used}}</a>
+    <a href="{% url 'print_my_labels' slug=userdata.last_auction_used.slug %}" class="btn btn-sm ms-2 mt-2 mb-2 btn-primary"><i class="bi bi-tags"></i> Print labels for {{userdata.last_auction_used}}</a>
     {% endif %}
   <form class="col-sm-12 mt-2">
     {% crispy filter.form %}
@@ -40,5 +40,5 @@ $.ajax({
   {# The actual table #}
   {% render_table table %}
   <div id="modals-here"></div>
-  <a href="{% url 'my_lot_report' %}" class="btn btn-primary">Export CSV</a>
+  <a href="{% url 'my_lot_report' %}" class="btn btn-primary"><i class="bi bi-download"></i> Export CSV</a>
 {% endblock %}

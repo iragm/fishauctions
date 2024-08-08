@@ -23,25 +23,25 @@
 {% endif %}
 <ul class="nav nav-tabs">
     <li class="nav-item">
-      <a class="nav-link {% if active_tab == 'main'%}active{% endif %}" href="/auctions/{{auction.slug}}/">Main</a>
+      <a class="nav-link {% if active_tab == 'main'%}active{% endif %}" href="/auctions/{{auction.slug}}/"><i class="bi bi-house-fill"></i> Main</a>
     </li>
     <li class="nav-item">
-      <a class="nav-link {% if active_tab == 'users'%}active{% endif %}" href="/auctions/{{auction.slug}}/users">Users</a>
+      <a class="nav-link {% if active_tab == 'users'%}active{% endif %}" href="/auctions/{{auction.slug}}/users"><i class="bi bi-people-fill"></i> Users</a>
     </li>
     <li class="nav-item">
-      <a class="nav-link {% if active_tab == 'lots'%}active{% endif %}" href="/auctions/{{auction.slug}}/lots">Lots</a>
+      <a class="nav-link {% if active_tab == 'lots'%}active{% endif %}" href="/auctions/{{auction.slug}}/lots"><i class="bi bi-calendar"></i> Lots</a>
     </li>
     <li class="nav-item dropdown">
         <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">More</a>
         <ul class="dropdown-menu">
-          <a class="dropdown-item" href="/auctions/{{auction.slug}}/edit">Rules</a>
-          <a class="dropdown-item" href="{{ auction.location_link }}">Location{% if auction.location_qs|length > 1 %}s{% endif %}</a>
-          <a class="dropdown-item" href="{{ auction.set_lot_winners_link }}">Set lot winners</a>
-          <a class="dropdown-item" href="/auctions/{{auction.slug}}/chat/">Chat messages</a>
-          <a class="dropdown-item" href="/auctions/new?copy={{auction.slug}}">Copy to new auction</a>
-          <a class="dropdown-item" href="/auctions/{{auction.slug}}/stats/">Stats</a>
-          {% if not auction.is_online %}<a class="dropdown-item" href='{% url "auction_printing" slug=auction.slug %}'>Print labels</a>{% endif %}
-          <a class="dropdown-item" href="/auctions/{{auction.slug}}/delete/">Delete auction</a>
+          <a class="dropdown-item" href="/auctions/{{auction.slug}}/edit"><i class="bi bi-gear-fill"></i> Rules</a>
+          <a class="dropdown-item" href="{{ auction.location_link }}"><i class="bi bi-geo-alt-fill"></i> Location{% if auction.location_qs|length > 1 %}s{% endif %}</a>
+          <a class="dropdown-item" href="{{ auction.set_lot_winners_link }}"><i class="bi bi-calendar-check"></i> Set lot winners</a>
+          <a class="dropdown-item" href="/auctions/{{auction.slug}}/chat/"><i class="bi bi-chat-fill"></i> Chat messages</a>
+          <a class="dropdown-item" href="/auctions/new?copy={{auction.slug}}"><i class="bi bi-plus-circle"></i> Copy to new auction</a>
+          <a class="dropdown-item" href="/auctions/{{auction.slug}}/stats/"><i class="bi bi-graph-up"></i> Stats</a>
+          {% if not auction.is_online %}<a class="dropdown-item" href='{% url "auction_printing" slug=auction.slug %}'><i class="bi bi-tags"></i> Print labels</a>{% endif %}
+          <a class="dropdown-item" href="/auctions/{{auction.slug}}/delete/"><i class="bi bi-x-circle"></i> Delete auction</a>
         </ul>
     </li>
 </ul>

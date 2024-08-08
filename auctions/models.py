@@ -1085,7 +1085,7 @@ class AuctionTOS(models.Model):
 	def bulk_add_link_html(self):
 		"""Link to add multiple lots at once for this user"""
 		url = reverse("bulk_add_lots", kwargs = {'bidder_number':self.bidder_number, 'slug':self.auction.slug})
-		return html.format_html(f"<a href='{url}' hx-noget>Add lots</a>")
+		return html.format_html(f"<a href='{url}' hx-noget><i class='bi bi-calendar-plus me-1'></i>Add lots</a>")
 
 	@property
 	def bought_lots_qs(self):
@@ -1127,7 +1127,7 @@ class AuctionTOS(models.Model):
 		if self.unbanned_lot_count:
 			url = reverse("print_labels_by_bidder_number", kwargs = {'bidder_number':self.bidder_number, 'slug':self.auction.slug})
 			unprinted_url = reverse("print_unprinted_labels_by_bidder_number", kwargs = {'bidder_number':self.bidder_number, 'slug':self.auction.slug})
-			result = f"<a href='{url}'>Print labels</a>"
+			result = f"<a href='{url}'><i class='bi bi-tags me-1'></i>Print labels</a>"
 			if self.unprinted_label_count and self.unprinted_label_count != self.print_labels_qs.count():
 				result += f"""
 				<button type="button" class="btn btn-sm btn-secondary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
@@ -1146,8 +1146,12 @@ class AuctionTOS(models.Model):
 	def invoice_link_html(self):
 		"""HTML snippet with a link to the invoice for this auctionTOS, if set.  Otherwise, empty"""
 		if self.invoice:
-			result = html.format_html(f"<a href='{self.invoice.get_absolute_url()}' hx-noget>View</a>")
-			return result
+			status = 'bag'
+			if self.invoice.status == 'UNPAID':
+				status = 'bag-check'
+			if self.invoice.status == 'PAID':
+				status = 'bag-heart'
+			return html.format_html(f"<a href='{self.invoice.get_absolute_url()}' hx-noget><i class='bi bi-{status} me-1'></i>View</a>")
 		else:
 			return "None"
 

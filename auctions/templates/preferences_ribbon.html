@@ -1,25 +1,25 @@
 {# this is the tabs that are shown on many preferences pages #}
 <ul class="nav nav-tabs">
   <li class="nav-item">
-    <a class="nav-link {% if active_tab == 'preferences'%}active{% endif %}" href="{% url 'preferences' %}">Preferences</a>
+    <a class="nav-link {% if active_tab == 'preferences'%}active{% endif %}" href="{% url 'preferences' %}"><i class="bi bi-sliders"></i> Preferences</a>
   </li>
   <li class="nav-item">
-    <a class="nav-link {% if active_tab == 'contact'%}active{% endif %}" href="{% url 'contact_info' %}">Contact info</a>
+    <a class="nav-link {% if active_tab == 'contact'%}active{% endif %}" href="{% url 'contact_info' %}"><i class="bi bi-telephone-fill"></i> Contact info</a>
   </li>
   <li class="nav-item">
-    <a class="nav-link {% if active_tab == 'printing'%}active{% endif %}" href="{% url 'printing' %}">Label printing</a>
+    <a class="nav-link {% if active_tab == 'printing'%}active{% endif %}" href="{% url 'printing' %}"><i class="bi bi-tag"></i> Label printing</a>
   </li>
   <li class="nav-item">
-    <a class="nav-link {% if active_tab == 'ignore'%}active{% endif %}" href="{% url 'ignore_categories' %}">Ignore categories</a>
+    <a class="nav-link {% if active_tab == 'ignore'%}active{% endif %}" href="{% url 'ignore_categories' %}"><i class="bi bi-ban"></i> Ignore categories</a>
   </li>
   <li class="nav-item dropdown">
-      <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">Advanced</a>
+      <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">More</a>
       <ul class="dropdown-menu">
-        <li><a class="dropdown-item" href="{% url 'change_username' %}">Change username</a></li>
-        <li><a class="dropdown-item" href="/password/change/">Change password</a></li>
-        <li><a class="dropdown-item" href="/email/">Change email</a></li>
-        <li><a class="dropdown-item" href="/social/connections/">Sign in with Google</a></li>
-        <li><a class="dropdown-item" href="/account/">My account</a></li>
+        <li><a class="dropdown-item" href="{% url 'change_username' %}"><i class="bi bi-person-lines-fill"></i> Change username</a></li>
+        <li><a class="dropdown-item" href="/password/change/"><i class="bi bi-person-fill-lock"></i> Change password</a></li>
+        <li><a class="dropdown-item" href="/email/"><i class="bi bi-envelope"></i> Change email</a></li>
+        <li><a class="dropdown-item" href="/social/connections/"><i class="bi bi-google"></i> Sign in with Google</a></li>
+        <li><a class="dropdown-item" href="/account/"><i class="bi bi-person-fill"></i> My account</a></li>
       </ul>
   </li>
 </ul>

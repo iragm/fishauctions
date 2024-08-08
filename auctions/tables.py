@@ -13,7 +13,7 @@ class AuctionTOSHTMxTable(tables.Table):
         # as a button, looks awful
         #result = f"<span class='btn btn-secondary btn-sm' style='cursor:pointer;' hx-get='/api/auctiontos/{record.pk}' hx-target='#modals-here' hx-trigger='click'>{value}</span>"
         # as a link, looks better
-        result = f"<a href='' hx-noget hx-get='/api/auctiontos/{record.pk}' hx-target='#modals-here' hx-trigger='click'>{value}</a>"
+        result = f"<a href='' hx-noget hx-get='/api/auctiontos/{record.pk}' hx-target='#modals-here' hx-trigger='click'><i class='bi bi-person-fill-gear me-1'></i>{value}</a>"
         if record.is_club_member:
             return mark_safe(f'{result} <span class="badge bg-info">Member</span>')
         return mark_safe(result)
@@ -45,7 +45,7 @@ class LotHTMxTable(tables.Table):
     lot_number = tables.Column(accessor='lot_number_display', verbose_name="Lot number", orderable=False)
 
     def render_lot_name(self, value, record):
-        result = f"<a href='' hx-noget hx-get='/api/lot/{record.pk}' hx-target='#modals-here' hx-trigger='click'>{value}</a> (<a href='{record.lot_link}?src=admin'>View</a>)"
+        result = f"<a href='' hx-noget hx-get='/api/lot/{record.pk}' hx-target='#modals-here' hx-trigger='click'><i class='bi bi-calendar-fill me-1'></i>{value}</a> (<a href='{record.lot_link}?src=admin'>View</a>)"
         return mark_safe(result)
 
     class Meta:
@@ -100,10 +100,10 @@ class LotHTMxTableForUsers(tables.Table):
     def render_actions(self, value, record):
         result = ""
         if not record.image_count:
-            result += f' <a href="{reverse("add_image", kwargs={"lot": record.pk})}" class="badge bg-primary">Add image</a>'
+            result += f' <a href="{reverse("add_image", kwargs={"lot": record.pk})}" class="badge bg-primary"><i class="bi bi-file-image"></i> Add image</a>'
         if record.can_be_edited:
-            result += f' <a href="{reverse("edit_lot", kwargs={"pk": record.pk})}" class="badge text-dark bg-warning">Edit</a>'
-        result += f' <a href="{reverse("new_lot")}?copy={record.pk}" class="badge bg-info">Copy to new lot</a>'
+            result += f' <a href="{reverse("edit_lot", kwargs={"pk": record.pk})}" class="badge text-dark bg-warning"><i class="bi bi-calendar"></i> Edit</a>'
+        result += f' <a href="{reverse("new_lot")}?copy={record.pk}" class="badge bg-info"><i class="bi bi-calendar-plus"></i> Copy to new lot</a>'
         return mark_safe(result)
 
     def render_lot_name(self, value, record):
