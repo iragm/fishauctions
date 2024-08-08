@@ -5,7 +5,7 @@
 
 {% block extra_js %}
 <script
-src="https://maps.googleapis.com/maps/api/js?key={{google_maps_api_key}}&callback=initMap&libraries=&v=weekly"
+src="https://maps.googleapis.com/maps/api/js?key={{google_maps_api_key}}&callback=initMap&libraries=&v=weekly&libraries=marker"
 async
 ></script>
 <script type='text/javascript'>pageView();</script>
@@ -21,7 +21,8 @@ async
 function initMap() {
     var map;
     var bounds = new google.maps.LatLngBounds();
-    map = new google.maps.Map(document.getElementById("map_canvas"));
+    var mapOptions = {mapId:"club_map"};
+    map = new google.maps.Map(document.getElementById("map_canvas"), mapOptions);
     {% if has_user_location %}
     map.setZoom(8);
     map.setCenter({lat:{{ latitude }}, lng:{{ longitude }}});
@@ -51,7 +52,7 @@ function initMap() {
     for( i = 0; i < markers.length; i++ ) {
         var position = new google.maps.LatLng(markers[i][1], markers[i][2]);
         bounds.extend(position);
-        marker = new google.maps.Marker({
+        marker = new google.maps.marker.AdvancedMarkerElement({
             position: position,
             map: map,
             title: markers[i][0]
