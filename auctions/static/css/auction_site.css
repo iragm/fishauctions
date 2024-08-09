@@ -59,3 +59,7 @@ a.ad:hover {
   .select2-dropdown {
     z-index: 1060; 
   }
+
+.modal-backdrop {
+    z-index: 1040 !important;
+}

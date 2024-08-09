@@ -398,7 +398,14 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                                     } else {
                                         $('#bid_amount').removeClass('is-invalid');
                                         $('#confirmBid').modal('show');
-                                        $('#confirmDialgoText').html("Bid $" + bid + " on {{ lot.lot_name }}<br><small>All bids are final</small>");
+                                        var dialogText = "Bid $" + bid + " on {{ lot.lot_name }}<br><br><small>All bids are final</small>";
+                                        {% if not lot.auction %}
+                                            dialogText += "<br><div>This lot is sold directly by {{ lot.user }}.  Make sure to check the user's feedback.</div>";
+                                            {% if request.user.is_authenticated and request.user.userdata.last_auction_used and not request.user.userdata.last_auction_used.closed %}
+                                                dialogText += "<br><div class='text-warning'>This lot is not part of {{ request.user.userdata.last_auction_used }}</div>";
+                                            {% endif %}
+                                        {% endif %}
+                                        $('#confirmDialogText').html(dialogText);
                                         document.querySelector('#finalize-bid').onclick = function(e) {
                                             lotWebSocket.send(JSON.stringify({
                                                 'bid': bid
@@ -413,7 +420,7 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
                                                 $('#bid_amount').val(bid + 1);
                                             }
                                             $('#confirmBid').modal('hide');
-                                            $('#confirmDialgoText').html("Enter an amount");
+                                            $('#confirmDialogText').html("Enter an amount");
                                         }
                                     }
                                     {% endif %}
@@ -461,17 +468,15 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
 <div class="modal fade" id="confirmBid" tabindex="-1" role="dialog" aria-labelledby="label" aria-hidden="true">
     <div class="modal-dialog" role="document">
         <div class="modal-content">
-        <div class="modal-header">
-            <h5 class="modal-title" id="label">Confirm bid</h5>
-            <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-            <span aria-hidden="true">&times;</span>
-            </button>
-        </div>
-        <div id='confirmDialgoText' class="modal-body">Enter an amount</div>
-        <div class="modal-footer">
-            <button type="button" id='finalize-bid' class="btn btn-success">Place bid</button>
-            <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
-        </div>
+            <div class="modal-header">
+                <h5 class="modal-title" id="label">Confirm bid</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div id='confirmDialogText' class="modal-body">Enter an amount</div>
+            <div class="modal-footer">
+                <button type="button" id='finalize-bid' class="btn btn-success">Place bid</button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+            </div>
         </div>
     </div>
 </div>
@@ -479,31 +484,29 @@ a+='<span aria-hidden="true" class="'+f+'">&times;</span>';a+="</button>";a+="</
 <div class="modal fade" id="bidError" tabindex="-1" role="dialog" aria-labelledby="label" aria-hidden="true">
     <div class="modal-dialog" role="document">
         <div class="modal-content">
-        <div class="modal-header bg-danger">
-            <h5 class="modal-title" id="label">Bid failed!</h5>
-            <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-            <span aria-hidden="true">&times;</span>
-            </button>
-        </div>
-        <div id='confirmDialgoText' class="modal-body">
-            {% if not user.is_authenticated %}
-                You have to <a href='/login/?next={{ lot.lot_link }}'>sign in</a> to place bids.
-            {% elif not user_tos %}
-                This lot is part of <b>{{ lot.auction }}</b>.  Please <a href='/auctions/{{lot.auction.slug}}/?next=/lots/{{ lot.pk }}/#join'>read the auction's rules and confirm your pickup location</a> to bid<br>
-            {% elif lot.user.pk == request.user.id %} You can't bid on your own lot.
-            {% else %}
-            An unknown error occurred.
-            {% endif %}
-        </div>
-        <div class="modal-footer">
-            {% if not user.is_authenticated %}
-            <a href="/login/?next={{ lot.lot_link }}" role="button" class="btn btn-primary">Sign in</a>
-            <a href="/signup/?next={{ lot.lot_link }}" role="button" class="btn btn-primary">Create an account</a>
-            {% elif not user_tos %}
-            <a href="/auctions/{{lot.auction.slug}}/?next={{ lot.lot_link }}#join" role="button" class="btn btn-primary">Read auction rules</a>
-            {% endif %}
-            <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
-        </div>
+            <div class="modal-header bg-danger">
+                <h5 class="modal-title" id="label">Bid failed!</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div id='confirmDialogText' class="modal-body">
+                {% if not user.is_authenticated %}
+                    You have to <a href='/login/?next={{ lot.lot_link }}'>sign in</a> to place bids.
+                {% elif not user_tos %}
+                    This lot is part of <b>{{ lot.auction }}</b>. Please <a href='/auctions/{{lot.auction.slug}}/?next=/lots/{{ lot.pk }}/#join'>read the auction's rules and confirm your pickup location</a> to bid<br>
+                {% elif lot.user.pk == request.user.id %} You can't bid on your own lot.
+                {% else %}
+                    An unknown error occurred.
+                {% endif %}
+            </div>
+            <div class="modal-footer">
+                {% if not user.is_authenticated %}
+                    <a href="/login/?next={{ lot.lot_link }}" role="button" class="btn btn-primary">Sign in</a>
+                    <a href="/signup/?next={{ lot.lot_link }}" role="button" class="btn btn-primary">Create an account</a>
+                {% elif not user_tos %}
+                    <a href="/auctions/{{lot.auction.slug}}/?next={{ lot.lot_link }}#join" role="button" class="btn btn-primary">Read auction rules</a>
+                {% endif %}
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+            </div>
         </div>
     </div>
 </div>
