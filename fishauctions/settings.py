@@ -188,7 +188,7 @@ if 'test' in sys.argv:
 else:
     DATABASES = {
         'default': {
-            'ENGINE': os.environ.get('DATABASE_ENGINE', 'mysql_server_has_gone_away'),
+            'ENGINE': os.environ.get('DATABASE_ENGINE', 'django.db.backends.mysql'), #mysql_server_has_gone_away does not appear to resolve this issue
             'NAME': os.environ.get('DATABASE_NAME', 'auctions'),
             'USER': os.environ.get('DATABASE_USER', 'mysqluser'),
             'PASSWORD': os.environ.get('DATABASE_PASSWORD', 'unsecure'),
@@ -197,7 +197,7 @@ else:
             'OPTIONS': {
                 'charset': 'utf8mb4',
             },
-            'CONN_MAX_AGE': os.environ.get('DATABASE_CONN_MAX_AGE', 2000),
+            'CONN_MAX_AGE': 0, # don't reuse connections for ASGI
             'CONN_HEALTH_CHECKS': True,
         }
     }

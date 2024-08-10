@@ -417,6 +417,8 @@ class Auction(models.Model):
 	allow_bidding_on_lots = models.BooleanField(default=True)
 	only_approved_sellers = models.BooleanField(default=False)
 	only_approved_sellers.help_text = "Require admin approval before users can add lots.  This will not change permissions for users that have already joined."
+	only_approved_bidders = models.BooleanField(default=False)
+	only_approved_bidders.help_text = "Require admin approval before users can bid.  This will not change permissions for users that have already joined."
 	require_phone_number = models.BooleanField(default=False)
 	require_phone_number.help_text = "Require users to have entered a phone number before they can join this auction"
 	email_users_when_invoices_ready = models.BooleanField(default=True)
