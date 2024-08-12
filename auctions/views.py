@@ -1815,6 +1815,7 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
         total_tos = 0
         total_skipped = 0
         initial_formset_data = []
+        print('about to read csv')
         for row in csv_reader:
             bidder_number = extract_info(row, bidder_number_fields)
             email = extract_info(row, email_field_names)
