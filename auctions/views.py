@@ -156,8 +156,6 @@ class AdminEmailMixin():
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['admin_email'] = settings.ADMINS[0][1]
-        print(settings.ADMINS[0][1])
-        print("OK")
         return context
 
 class AuctionPermissionsMixin():
@@ -1716,13 +1714,10 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
     def get(self, *args, **kwargs):
         # first, try to read in a CSV file stored in session 
         initial_formset_data = self.request.session.get('initial_formset_data', [])
-        print(initial_formset_data)
         if initial_formset_data:
             self.extra_rows = len(initial_formset_data) + 1
-            print('found initial formset data')
             del self.request.session['initial_formset_data']
         else:
-            print('no formset data found')
             # next, check GET to see if they're asking for an import from a past auction
             import_from_auction = self.request.GET.get('import')
             if import_from_auction:
@@ -1752,7 +1747,6 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
                         messages.info(self.request, f"{total_skipped} users are already in this auction (matched by email, or name if email not set) and do not appear below")
                     if total_tos:
                         self.extra_rows = total_tos + 1
-        print('instantiating')
         self.instantiate_formset()
         self.tos_formset = self.AuctionTOSFormSet(form_kwargs={'auction': self.auction, 'bidder_numbers_on_this_form':[]}, queryset=self.queryset, initial=initial_formset_data)
         context = self.get_context_data(**kwargs)
@@ -1815,7 +1809,6 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
         total_tos = 0
         total_skipped = 0
         initial_formset_data = []
-        print('about to read csv')
         for row in csv_reader:
             bidder_number = extract_info(row, bidder_number_fields)
             email = extract_info(row, email_field_names)
@@ -1837,9 +1830,7 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
                         'is_club_member':is_club_member
                     })
         # this needs to be added to the session in order to persist when moving from POST (this csv processing) to GET
-        print("about to add to session")
         self.request.session['initial_formset_data'] = initial_formset_data
-        print('added to session')
         if total_tos >= self.max_users_that_can_be_added_at_once:
             messages.error(self.request, f"You can only add {self.max_users_that_can_be_added_at_once} users at once; run this again to add additional users.")
         if total_skipped:
@@ -4644,7 +4635,6 @@ class AuctionStatsLotSellPricesJSONView(AuctionStatsBarChartJSONView):
     
     def get_data(self):
         sold_lots = self.auction.lots_qs.filter(winning_price__isnull=False)
-        print("started")
         histogram = bin_data(sold_lots, 'winning_price', number_of_bins=19, start_bin=1, end_bin=39, add_column_for_high_overflow=True)
         return [[self.auction.total_unsold_lots] + histogram]
 
