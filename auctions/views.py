@@ -1718,6 +1718,7 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
         initial_formset_data = self.request.session.get('initial_formset_data', [])
         if initial_formset_data:
             self.extra_rows = len(initial_formset_data) + 1
+            print('found initial formset data')
             del self.request.session['initial_formset_data']
         else:
             # next, check GET to see if they're asking for an import from a past auction
@@ -1812,6 +1813,7 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
         total_skipped = 0
         initial_formset_data = []
         for row in csv_reader:
+            print(row)
             bidder_number = extract_info(row, bidder_number_fields)
             email = extract_info(row, email_field_names)
             name = extract_info(row, name_field_names)
@@ -1833,6 +1835,7 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
                     })
         # this needs to be added to the session in order to persist when moving from POST (this csv processing) to GET
         self.request.session['initial_formset_data'] = initial_formset_data
+        print('added to session')
         if total_tos >= self.max_users_that_can_be_added_at_once:
             messages.error(self.request, f"You can only add {self.max_users_that_can_be_added_at_once} users at once; run this again to add additional users.")
         if total_skipped:
@@ -1845,8 +1848,10 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
         return redirect(reverse("bulk_add_users", kwargs={'slug': self.auction.slug}))
 
     def post(self, request, *args, **kwargs):
+        print('post started')
         csv_file = request.FILES.get('csv_file', None)
         if csv_file:
+            print("csv file found")
             return self.handle_csv_file(csv_file)
         self.instantiate_formset()
         tos_formset = self.AuctionTOSFormSet(self.request.POST, form_kwargs={'auction': self.auction, 'bidder_numbers_on_this_form':[]}, queryset=self.queryset)
