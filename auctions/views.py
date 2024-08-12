@@ -1716,11 +1716,13 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
     def get(self, *args, **kwargs):
         # first, try to read in a CSV file stored in session 
         initial_formset_data = self.request.session.get('initial_formset_data', [])
+        print(initial_formset_data)
         if initial_formset_data:
             self.extra_rows = len(initial_formset_data) + 1
             print('found initial formset data')
             del self.request.session['initial_formset_data']
         else:
+            print('no formset data found')
             # next, check GET to see if they're asking for an import from a past auction
             import_from_auction = self.request.GET.get('import')
             if import_from_auction:
@@ -1750,6 +1752,7 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
                         messages.info(self.request, f"{total_skipped} users are already in this auction (matched by email, or name if email not set) and do not appear below")
                     if total_tos:
                         self.extra_rows = total_tos + 1
+        print('instantiating')
         self.instantiate_formset()
         self.tos_formset = self.AuctionTOSFormSet(form_kwargs={'auction': self.auction, 'bidder_numbers_on_this_form':[]}, queryset=self.queryset, initial=initial_formset_data)
         context = self.get_context_data(**kwargs)
@@ -1813,7 +1816,6 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
         total_skipped = 0
         initial_formset_data = []
         for row in csv_reader:
-            print(row)
             bidder_number = extract_info(row, bidder_number_fields)
             email = extract_info(row, email_field_names)
             name = extract_info(row, name_field_names)
@@ -1834,6 +1836,7 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
                         'is_club_member':is_club_member
                     })
         # this needs to be added to the session in order to persist when moving from POST (this csv processing) to GET
+        print("about to add to session")
         self.request.session['initial_formset_data'] = initial_formset_data
         print('added to session')
         if total_tos >= self.max_users_that_can_be_added_at_once:
@@ -1848,10 +1851,8 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
         return redirect(reverse("bulk_add_users", kwargs={'slug': self.auction.slug}))
 
     def post(self, request, *args, **kwargs):
-        print('post started')
         csv_file = request.FILES.get('csv_file', None)
         if csv_file:
-            print("csv file found")
             return self.handle_csv_file(csv_file)
         self.instantiate_formset()
         tos_formset = self.AuctionTOSFormSet(self.request.POST, form_kwargs={'auction': self.auction, 'bidder_numbers_on_this_form':[]}, queryset=self.queryset)
