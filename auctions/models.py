@@ -678,6 +678,10 @@ class Auction(models.Model):
 			return 0
 
 	@property
+	def total_donations(self):
+		return self.lots_qs.filter(winning_price__isnull=False, donation=True).aggregate(total=Sum('winning_price'))['total'] or 0
+
+	@property
 	def invoice_recalculate(self):
 		"""Force update of all invoice totals in this auction"""
 		invoices = Invoice.objects.filter(auction=self.pk)
@@ -2566,6 +2570,7 @@ class Invoice(models.Model):
 		"""For non-online auctions only.  Return number of lots the user did not sell. This may be simply lots whose winner has not been set yet."""
 		if self.is_online:
 			return 0
+		# leave active = True here, this is used for the warning on the invoice page.  If you mark a lot unsold, it'll be set not active
 		return self.sold_lots_queryset.filter(active=True, auctiontos_winner__isnull=True, donation=False, banned=False).count()
 
 	@property
@@ -2591,6 +2596,11 @@ class Invoice(models.Model):
 	@property
 	def total_bought(self):
 		return self.bought_lots_queryset.aggregate(total_bought=Sum('final_price'))['total_bought'] or 0
+
+	@property
+	def total_donations(self):
+		"""Total value of all donated lots"""
+		return self.sold_lots_queryset.filter(winning_price__isnull=False, donation=True).aggregate(total=Sum('winning_price'))['total'] or 0
 
 	@property
 	def location(self):

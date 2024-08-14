@@ -179,7 +179,7 @@ $(document).ready(function(){
     </td>
   </tr>
   <tr>
-    <td>Total sold</td>
+    <td>Total payout</td>
     <td>${{ invoice.total_sold|floatformat:2 }}</td>
   </tr>
   <tr>
@@ -295,7 +295,8 @@ $(document).ready(function(){
   </tbody>
 </table>
 <small><div class="float-right">{% if invoice.pre_register_used %}*Pre-registeration discount applied{% endif %}</small><br></div>
-<b>Total sold:</b> ${{ invoice.total_sold|floatformat:2 }}<br>         
+<b>Total donations:</b> ${{ invoice.total_donations|floatformat:2 }}<br>         
+<b>Total payout:</b> ${{ invoice.total_sold|floatformat:2 }}<br>         
 {% endif %}
 <br>
 <br>
