@@ -1159,7 +1159,7 @@ class AuctionTOS(models.Model):
 				status = 'bag-heart'
 			return html.format_html(f"<a href='{self.invoice.get_absolute_url()}' hx-noget><i class='bi bi-{status} me-1'></i>View</a>")
 		else:
-			return "None"
+			return ""
 
 	@property
 	def gross_sold(self):
@@ -1257,6 +1257,8 @@ class AuctionTOS(models.Model):
 		if not self.bidder_number:
 			# I don't ever want this to be null
 			self.bidder_number = 999
+		if str(self.memo) == "None":
+			self.memo = ""
 		super().save(*args, **kwargs) 
 
 	@property
