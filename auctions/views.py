@@ -1099,7 +1099,7 @@ def auctionReport(request, slug):
         end = timezone.now().strftime("%Y-%m-%d")
         response['Content-Disposition'] = 'attachment; filename="' + slug + "-report-" + end + '.csv"'
         writer = csv.writer(response)
-        writer.writerow(['Join date', 'Bidder number', 'Username', 'Name', 'Email', 'Phone', 'Address', 'Location', 'Miles to pickup location', 'Club', 'Lots viewed', 'Lots bid', 'Lots submitted', 'Lots won', 'Invoice', 'Total bought', 'Total sold', 'Invoice total due', 'Breeder points', "Number of lots sold outside auction", "Total value of lots sold outside auction", "Seconds spent reading rules", "Other auctions joined", "Users who have banned this user", "Account created on",
+        writer.writerow(['Join date', 'Bidder number', 'Username', 'Name', 'Email', 'Phone', 'Address', 'Location', 'Miles to pickup location', 'Club', 'Lots viewed', 'Lots bid', 'Lots submitted', 'Lots won', 'Invoice', 'Total bought', 'Gross sold', 'Total payout', 'Total club cut', 'Invoice total due', 'Breeder points', "Number of lots sold outside auction", "Total value of lots sold outside auction", "Seconds spent reading rules", "Other auctions joined", "Users who have banned this user", "Account created on",
                          'Memo', ])
         users = AuctionTOS.objects.filter(auction=auction).select_related('user__userdata').select_related('pickup_location').order_by('createdon')
                 #.annotate(distance_traveled=distance_to(\
@@ -1160,7 +1160,7 @@ def auctionReport(request, slug):
             writer.writerow([data.createdon.strftime("%m-%d-%Y"), data.bidder_number, username, data.name, data.email, \
                 data.phone_as_string, address, data.pickup_location, distance,\
                 club, len(lotsViewed), len(lotsBid), len(lotsSumbitted), \
-                len(lotsWon), invoiceStatus, totalSpent, totalPaid, invoiceTotal, len(breederPoints),\
+                len(lotsWon), invoiceStatus, totalSpent, data.gross_sold, totalPaid, data.total_club_cut, invoiceTotal, len(breederPoints),\
                 numberLotsOutsideAuction, profitOutsideAuction, data.time_spent_reading_rules, previous_auctions, number_of_userbans, account_age, data.memo])
         return response    
     messages.error(request, "Your account doesn't have permission to view this page")

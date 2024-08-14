@@ -1157,6 +1157,20 @@ class AuctionTOS(models.Model):
 		else:
 			return "None"
 
+	@property
+	def gross_sold(self):
+		"""Before club cut"""
+		if self.invoice:
+			return self.invoice.total_sold_gross or 0
+		return 0
+
+	@property
+	def total_club_cut(self):
+		"""Total amount of profit this user brought to the club"""
+		if self.invoice:
+			return self.invoice.total_sold_club_cut
+		return 0
+
 	def save(self, *args, **kwargs):
 		def check_number_in_auction(number):
 			"""See if any other auctiontos are currently using a given bidder number"""
@@ -2555,9 +2569,19 @@ class Invoice(models.Model):
 		return self.sold_lots_queryset.filter(active=True, auctiontos_winner__isnull=True, donation=False, banned=False).count()
 
 	@property
+	def total_sold_gross(self):
+		"""Total winning price of all lots sold"""
+		return self.sold_lots_queryset.aggregate(total=Sum('winning_price'))['total'] or 0
+
+	@property
 	def total_sold(self):
 		"""Seller's cut of all lots sold"""
 		return self.sold_lots_queryset.aggregate(total_sold=Sum('your_cut'))['total_sold'] or 0
+
+	@property
+	def total_sold_club_cut(self):
+		"""Club's cut of all lots sold"""
+		return self.sold_lots_queryset.aggregate(total=Sum('club_cut'))['total'] or 0
 
 	@property
 	def lots_bought(self):
