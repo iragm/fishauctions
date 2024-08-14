@@ -63,3 +63,10 @@ a.ad:hover {
 .modal-backdrop {
     z-index: 1040 !important;
 }
+
+/* a:hover, .btn:hover, .form-control:hover, .form-check-label:hover  {
+  background-color: rgba(255, 0, 0, 0.7) !important;
+  box-shadow: 0 0 10px rgba(255, 0, 0, 0.9)!important;
+  border-radius: 5px;
+  color: white !important;
+} */
