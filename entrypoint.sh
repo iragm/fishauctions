@@ -30,10 +30,12 @@ python manage.py collectstatic --no-input > /dev/null 2>&1
 
 if [ "${DEBUG}" = "True" ]; then
     echo Starting in development mode, cron jobs must be run manually
+    #exec daphne -b 0.0.0.0 -p 8000 fishauctions.asgi:application
     exec uvicorn fishauctions.asgi:application --host 0.0.0.0 --port 8000 --reload --reload-include '*.py' --reload-include '*.html' --reload-include '*.js'
 else
     echo Starting fishauctions in production mode
     crontab /etc/cron.d/django-cron
     service cron start
+    #exec daphne -b 0.0.0.0 -p 8000 fishauctions.asgi:application
     exec gunicorn fishauctions.asgi:application -k uvicorn.workers.UvicornWorker -w 8 -b 0.0.0.0:8000
 fi

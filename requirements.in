@@ -10,7 +10,7 @@ channels
 chardet
 constantly
 cryptography
-#daphne
+daphne
 uvicorn
 uvicorn[standard]
 defusedxml
@@ -71,4 +71,3 @@ ua-parser
 user-agents
 heif-image-plugin
 gunicorn
-mysql_server_has_gone_away

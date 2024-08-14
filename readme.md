@@ -30,8 +30,11 @@ This tool is built with Python3, Django, Bootstrap and a bit of JQuery.  Some of
 This project has now been packaged in Docker, so assuming you have docker installed, you should be able to just:
 ```
 git clone https://github.com/iragm/fishauctions
+cd fishauctions
+cp .env.example .env
+[...edit your .env file as needed...]
 docker compose build
-docker compose up
+docker compose up -d
 ```
 You should now be able to access a development site at 127.0.0.1 (Note: don't use port 8000)
 

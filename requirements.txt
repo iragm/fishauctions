@@ -13,6 +13,7 @@ asgiref==3.8.1
     #   -r ./requirements.in
     #   channels
     #   channels-redis
+    #   daphne
     #   django
     #   django-htmx
 attrs==23.2.0
@@ -22,7 +23,9 @@ attrs==23.2.0
     #   service-identity
     #   twisted
 autobahn==23.6.2
-    # via -r ./requirements.in
+    # via
+    #   -r ./requirements.in
+    #   daphne
 automat==22.10.0
     # via
     #   -r ./requirements.in
@@ -67,11 +70,13 @@ cryptography==42.0.8
     #   autobahn
     #   pyopenssl
     #   service-identity
+daphne==4.1.2
+    # via -r ./requirements.in
 defusedxml==0.7.1
     # via
     #   -r ./requirements.in
     #   python3-openid
-django>=4.2.14
+django>=4.2.14,<5.1
     # via
     #   -r ./requirements.in
     #   channels
@@ -149,6 +154,7 @@ idna==3.7
     #   anyio
     #   hyperlink
     #   requests
+    #   twisted
 incremental==22.10.0
     # via
     #   -r ./requirements.in
@@ -161,8 +167,6 @@ markdown==3.6
     #   django-markdownfield
 msgpack==1.0.8
     # via channels-redis
-mysql-server-has-gone-away==2.0.0
-    # via -r ./requirements.in
 mysqlclient==2.2.4
     # via -r ./requirements.in
 oauthlib==3.2.2
@@ -211,7 +215,9 @@ pyjwt==2.8.0
 pymysql==1.1.1
     # via -r ./requirements.in
 pyopenssl==24.2.1
-    # via -r ./requirements.in
+    # via
+    #   -r ./requirements.in
+    #   twisted
 pyparsing==3.1.2
     # via -r ./requirements.in
 python-dotenv==1.0.1
@@ -237,7 +243,9 @@ requests-oauthlib==2.0.0
 segno==1.6.1
     # via django-qr-code
 service-identity==24.1.0
-    # via -r ./requirements.in
+    # via
+    #   -r ./requirements.in
+    #   twisted
 shortuuid==1.0.13
     # via
     #   -r ./requirements.in
@@ -256,8 +264,10 @@ sqlparse==0.5.1
     #   django-debug-toolbar
 tinycss2==1.2.1
     # via bleach
-twisted==24.3.0
-    # via -r ./requirements.in
+twisted[tls]==24.3.0
+    # via
+    #   -r ./requirements.in
+    #   daphne
 txaio==23.1.1
     # via
     #   -r ./requirements.in
