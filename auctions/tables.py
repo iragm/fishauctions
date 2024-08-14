@@ -3,11 +3,13 @@ import django_tables2 as tables
 from .models import *
 
 class AuctionTOSHTMxTable(tables.Table):
+    hide_string = "d-md-table-cell d-none"
     id = tables.Column(accessor='display_name_for_admins', verbose_name="ID", orderable=False)
     #phone = tables.Column(accessor='phone_as_string', verbose_name="Phone", orderable=False)
     invoice_link = tables.Column(accessor='invoice_link_html', verbose_name="Invoice", orderable=False)
     add_lot_link = tables.Column(accessor='bulk_add_link_html', verbose_name="Add lots", orderable=False)
     print_invoice_link = tables.Column(accessor='print_invoice_link_html', verbose_name="Lot labels", orderable=False)
+    email = tables.Column(attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}})
 
     def render_name(self, value, record):
         # as a button, looks awful
@@ -19,11 +21,11 @@ class AuctionTOSHTMxTable(tables.Table):
         return mark_safe(result)
 
     def render_email(self, value, record):
-        #email_string = f'<a href="mailto:{value}">{value}</a>'
-        email_string = value
+        email_string = f'<a href="mailto:{value}">{value}</a>'
+        #email_string = value
         if record.user:
             email_string += "✅"
-        return email_string
+        return mark_safe(email_string)
 
     class Meta:
         model = AuctionTOS
