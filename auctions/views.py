@@ -1154,13 +1154,13 @@ def auctionReport(request, slug):
                 invoiceTotal = invoice.rounded_net
             except:
                 invoiceStatus = ""
-                totalSpent = "0" 
-                totalPaid = "0"
-                invoiceTotal = ""
+                totalSpent = 0
+                totalPaid = 0
+                invoiceTotal = 0
             writer.writerow([data.createdon.strftime("%m-%d-%Y"), data.bidder_number, username, data.name, data.email, \
                 data.phone_as_string, address, data.pickup_location, distance,\
                 club, len(lotsViewed), len(lotsBid), len(lotsSumbitted), \
-                len(lotsWon), invoiceStatus, totalSpent, data.gross_sold, totalPaid, data.total_club_cut, invoiceTotal, len(breederPoints),\
+                len(lotsWon), invoiceStatus, f"{totalSpent:.2f}", f"{data.gross_sold:.2f}", f"{totalPaid:.2f}", f"{data.total_club_cut:.2f}", f"{invoiceTotal:.2f}", len(breederPoints),\
                 numberLotsOutsideAuction, profitOutsideAuction, data.time_spent_reading_rules, previous_auctions, number_of_userbans, account_age, data.memo])
         return response    
     messages.error(request, "Your account doesn't have permission to view this page")
