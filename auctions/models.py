@@ -25,6 +25,7 @@ import re
 from django.contrib.auth.signals import user_logged_in
 from dal import autocomplete
 from pytz import timezone as pytz_timezone
+from django.core.exceptions import ValidationError
 
 def nearby_auctions(latitude, longitude, distance=100, include_already_joined=False, user=None, return_slugs=False):
 	"""Return a list of auctions or auction slugs that are within a specified distance of the given location"""
@@ -3356,6 +3357,20 @@ class AuctionCampaign(models.Model):
 				self.result = "JOINED"
 			if pageview or tos:
 				self.save()
+
+	def save(self, *args, **kwargs):
+		# duplicate check on initial creation
+		if not self.pk:
+			duplicate = AuctionCampaign.objects.filter(auction=self.auction)
+			if self.user:
+				duplicate = duplicate.filter(user=self.user)
+			if self.email:
+				duplicate = duplicate.filter(email=self.email)
+			if self.user or self.email:
+				duplicate = duplicate.first()
+				if duplicate:
+					raise ValidationError("A campaign with this auction and user/email already exists.")
+		super().save(*args, **kwargs)
 
 class LotImage(models.Model):
 	"""An image that belongs to a lot.  Each lot can have multiple images"""

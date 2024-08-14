@@ -1025,16 +1025,16 @@ def pageview(request):
             if auction and user:
                 if not source:
                     source = referrer
-                # there is a timing issue here that allows multiple campaigns to be created
-                # https://github.com/iragm/fishauctions/issues/168
-                campaign, created = AuctionCampaign.objects.get_or_create(
-                    auction = auction,
-                    user = user,
-                    defaults={ 
-                        'email': user.email, 
-                        'source': source
-                    }
-                )
+                try:
+                    campaign = AuctionCampaign.objects.create(
+                        auction = auction,
+                        user = user,
+                        email = user.email,
+                        source = source,
+                    )
+                except ValidationError:
+                    # campaign already exists
+                    pass
         # code below would run on subsequent pageviews.  Not worth the extra server effort for an update every 10 seconds.
         # some corresponding js on base_page_view.html is also commented out
         # else:
