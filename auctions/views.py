@@ -1252,9 +1252,9 @@ def auctionLotList(request, slug):
             lot.auctiontos_winner.phone_as_string,
             lot.winner_location,
             lot.i_bred_this_fish_display,
-            lot.winning_price,
-            lot.club_cut,
-            lot.your_cut,
+            f"{lot.winning_price:.2f}",
+            f"{lot.club_cut:.2f}",
+            f"{lot.your_cut:.2f}",
             ])
         return response    
     messages.error(request, "Your account doesn't have permission to view this page")
