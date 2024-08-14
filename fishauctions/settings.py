@@ -340,7 +340,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.AutoField'
 
 SEND_WELCOME_EMAIL = True # when a user adds an unverified email address to their auction, send an email about the site
 
-DATA_UPLOAD_MAX_NUMBER_FIELDS = 2000
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 20000
 
 # the following words are very common and should not be used when generating recommended lots or assigning categories
 IGNORE_WORDS = ['albino','red','blue','pair','super','fish','black','breeding','group','fry','female','water','male','trio','green','lot','fin','yellow','gold','large','donation','young','filter','white','fire','blood','and','orange','bag','qty','juvies','starter','adult','hardy','with','small','size','breeders','brown','breeder','pack','two','pink','proven','better','than','more','adults','inch','from','wild','bunch','superb','the','double','reverse','new', 'test']
