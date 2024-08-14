@@ -1235,9 +1235,10 @@ def auctionLotList(request, slug):
         response = HttpResponse(content_type='text/csv')
         response['Content-Disposition'] = 'attachment; filename="' + slug + '-lot-list.csv"'
         writer = csv.writer(response)
-        writer.writerow(['Lot number', 'Lot', 'Seller', 'Seller email', 'Seller phone', 'Seller location', 'Winner', 'Winner email', 'Winner phone',  'Winner location', 'Breeder points'])
+        writer.writerow(['Lot number', 'Lot', 'Seller', 'Seller email', 'Seller phone', 'Seller location', 'Winner', 'Winner email', 'Winner phone',  'Winner location', 'Breeder points', 'Sell price', 'Club Cut', 'Seller cut'])
         #lots = Lot.objects.exclude(is_deleted=True).filter(auction__slug=slug, auctiontos_winner__isnull=False).select_related('user', 'winner')
         lots = auction.lots_qs.filter(winning_price__isnull=False).select_related('user', 'winner')
+        lots = add_price_info(lots)
         for lot in lots:
             lot_number = lot.custom_lot_number or lot.lot_number
             writer.writerow([lot_number,\
@@ -1250,7 +1251,10 @@ def auctionLotList(request, slug):
             lot.auctiontos_winner.email,
             lot.auctiontos_winner.phone_as_string,
             lot.winner_location,
-            lot.i_bred_this_fish_display
+            lot.i_bred_this_fish_display,
+            lot.winning_price,
+            lot.club_cut,
+            lot.your_cut,
             ])
         return response    
     messages.error(request, "Your account doesn't have permission to view this page")
