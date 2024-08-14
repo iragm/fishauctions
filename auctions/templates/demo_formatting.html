@@ -1,0 +1,37 @@
+{# Press alt-R to make things red when you hover over them #}
+<script>
+function getCookie(name) {
+    const value = `; ${document.cookie}`;
+    const parts = value.split(`; ${name}=`);
+    if (parts.length === 2) return parts.pop().split(';').shift();
+}
+
+function applyDemoFormatting() {
+    if (!document.getElementById('dynamic-hover-css')) {
+        const style = document.createElement('style');
+        style.id = 'dynamic-hover-css';
+        style.innerHTML = `
+        a:hover, .btn:hover, .form-control:hover, .form-check-label:hover  {
+          background-color: rgba(255, 0, 0, 0.7) !important;
+          box-shadow: 0 0 10px rgba(255, 0, 0, 0.9)!important;
+          border-radius: 5px;
+          color: white !important;
+        }
+        `;
+        document.head.appendChild(style);
+    }
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    if (getCookie('use_demo_formatting') === 'true') {
+        applyDemoFormatting();
+    }
+});
+
+document.addEventListener('keydown', function(event) {
+    if (event.altKey && event.key === 'r') {
+        document.cookie = "use_demo_formatting=true; path=/; expires=Fri, 31 Dec 9999 23:59:59 GMT";
+        applyDemoFormatting(); // Apply formatting immediately after setting the cookie
+    }
+});
+</script>

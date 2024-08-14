@@ -4,6 +4,7 @@
 {% load static %}
 {% load django_htmx %}
 <!DOCTYPE html>
+{% include 'demo_formatting.html' %}
 <!-- Global site tag (gtag.js) - Google Analytics -->
 {% if GOOGLE_MEASUREMENT_ID != "None" %}<script async src="https://www.googletagmanager.com/gtag/js?id={{ GOOGLE_MEASUREMENT_ID }}"></script>
 <script>
