@@ -723,7 +723,7 @@ def userBan(request, pk):
             lot = Lot.objects.get(pk=bid.lot_number.pk, is_deleted=False)
             if lot.user == user or lot.auction in auctionsList:
                 if not lot.ended:
-                    print('Deleting bid ' + str(bid))
+                    #print('Deleting bid ' + str(bid))
                     bid.delete()
         # ban all lots added by the banned user.  These are not deleted, just removed from the auction
         for auction in auctionsList:
@@ -735,7 +735,7 @@ def userBan(request, pk):
             lots = Lot.objects.exclude(is_deleted=True).filter(user=bannedUser, auction=auction.pk)
             for lot in lots:
                 if not lot.ended:
-                    print(f"User {str(user)} has banned lot {lot}")
+                    #print(f"User {str(user)} has banned lot {lot}")
                     lot.banned = True
                     lot.ban_reason = "This user has been banned from this auction"
                     lot.save()
@@ -2085,6 +2085,11 @@ class ViewLot(DetailView):
         except:
             defaultBidAmount = 0
             context['viewer_bid'] = None
+        if lot.auction and lot.auction.buy_now == "forced":
+            defaultBidAmount = lot.buy_now_price
+            context['force_buy_now'] = True
+        else:
+            context['force_buy_now'] = False
         if not lot.sealed_bid:
             # reserve price if there are no bids
             if not lot.high_bidder:
@@ -2338,7 +2343,7 @@ class LotValidation(LoginRequiredMixin):
                 lot.reserve_price = lot.auction.minimum_bid
             if lot.auction.buy_now == "disable" and lot.buy_now_price:
                 lot.buy_now_price = None
-            if lot.auction.buy_now == "require" and not lot.buy_now_price:
+            if (lot.auction.buy_now == "require" or lot.auction.buy_now == "forced") and not lot.buy_now_price:
                 lot.buy_now_price = lot.auction.minimum_bid
                 messages.error(self.request, f"You need to set a buy now price for this lot!")
             lot.date_end = lot.auction.date_end
@@ -2574,10 +2579,10 @@ class BidDelete(LoginRequiredMixin, DeleteView):
             return redirect(self.get_success_url())
         return super().dispatch(request, *args, **kwargs)
 
-    def delete(self, request, *args, **kwargs):
+    def form_valid(self, form):
         lot = self.get_object().lot_number
         success_url = self.get_success_url()
-        historyMessage = f"{request.user} has removed {self.get_object().user}'s bid"
+        historyMessage = f"{self.request.user} has removed {self.get_object().user}'s bid"
         if lot.ended:
             lot.winner = None
             lot.auctiontos_winner = None
@@ -2586,9 +2591,11 @@ class BidDelete(LoginRequiredMixin, DeleteView):
                 lot.date_end = lot.auction.date_end
             else:
                 lot.date_end = timezone.now() + datetime.timedelta(days=lot.lot_run_duration)
+            lot.active = True
+            lot.buy_now_used = False
             lot.save()
         self.get_object().delete()
-        LotHistory.objects.create(lot=lot, user=request.user, message=historyMessage, changed_price=True)
+        LotHistory.objects.create(lot=lot, user=self.request.user, message=historyMessage, changed_price=True)
         return HttpResponseRedirect(success_url)
 
     def get_success_url(self):

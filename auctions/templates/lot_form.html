@@ -64,7 +64,7 @@ function setAuctionRequiredFields(val) {
                     } else {
                         $('#div_id_buy_now_price').show();
                     }
-                    if (result.buy_now == 'required') {
+                    if (result.buy_now == 'required' || result.buy_now == 'forced') {
                         $('#id_buy_now_price').attr('required', true);
                     }
                 } else {
@@ -184,21 +184,18 @@ $(document).ready(function() {
 {% block title %}{{ title }}{% endblock %}
 {% block content %}
             {% crispy form form.helper %}
-<!-- confirm bid dialog -->
-<div class="modal fade" id="joinAuction" tabindex="-1" role="dialog" aria-labelledby="label" aria-hidden="true">
-    <div class="modal-dialog" role="document">
+<div class="modal fade" id="joinAuction" tabindex="-1" aria-labelledby="label" aria-hidden="true">
+    <div class="modal-dialog">
         <div class="modal-content">
-        <div class="modal-header">
-            <h5 class="modal-title" id="label">Join club auction?</h5>
-            <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-            <span aria-hidden="true">&times;</span>
-            </button>
-        </div>
-        <div id='auctionText' class="modal-body"></div>
-        <div class="modal-footer">
-            <button type="button" id='join-auction' class="btn btn-primary">View rules</button>
-            <button type="button" id='ignore-auction' class="btn btn-secondary" data-dismiss="modal">Not interested</button>
-        </div>
+            <div class="modal-header">
+                <h5 class="modal-title" id="label">Join club auction?</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div id='auctionText' class="modal-body"></div>
+            <div class="modal-footer">
+                <button type="button" id='join-auction' class="btn btn-primary">View rules</button>
+                <button type="button" id='ignore-auction' class="btn btn-secondary" data-bs-dismiss="modal">Not interested</button>
+            </div>
         </div>
     </div>
 </div>

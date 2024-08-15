@@ -156,7 +156,7 @@ class QuickAddLot(forms.ModelForm):
                 cleaned_data['reserve_price'] = self.auction.minimum_bid
             if self.auction.buy_now == "disable" and cleaned_data.get("buy_now_price"):
                 cleaned_data['buy_now_price'] = None
-            if self.auction.buy_now == "require" and not cleaned_data.get("buy_now_price"):
+            if (self.auction.buy_now == "require" or self.auction.buy_now == "forced") and not cleaned_data.get("buy_now_price"):
                 self.add_error('buy_now_price', "Buy Now price is required in this auction")
         # we need to make sure users can't add extra lots
         if not self.is_admin and self.auction.max_lots_per_user:

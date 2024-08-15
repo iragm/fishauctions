@@ -399,7 +399,7 @@ class Auction(models.Model):
 	promote_this_auction = models.BooleanField(default=True)
 	promote_this_auction.help_text = "Show this to everyone in the list of auctions. <span class='text-warning'>Uncheck if this is a test or private auction</span>."
 	is_chat_allowed = models.BooleanField(default=True)
-	max_lots_per_user = models.PositiveIntegerField(null=True, blank=True)
+	max_lots_per_user = models.PositiveIntegerField(null=True, blank=True, validators=[MaxValueValidator(100)])
 	max_lots_per_user.help_text = "A user won't be able to add more than this many lots to this auction"
 	allow_additional_lots_as_donation = models.BooleanField(default=True)
 	allow_additional_lots_as_donation.help_text = "If you don't set max lots per user, this has no effect"
@@ -445,20 +445,26 @@ class Auction(models.Model):
 	)
 	set_lot_winners_url.verbose_name = "Set lot winners"
 
-	RESERVE_BUY_NOW_CHOICES = (
+	BUY_NOW_CHOICES = (
 		('disable', "Don't allow"),
 		('allow', 'Allow'),
 		('required', 'Required for all lots'),
+		('forced', 'Required, and disable bidding'),
 	)
 	buy_now = models.CharField(
 		max_length=20,
-		choices=RESERVE_BUY_NOW_CHOICES,
+		choices=BUY_NOW_CHOICES,
 		default="allow"
 	)
-	buy_now.help_text = "Allow lots to be sold without bidding, for a user-specified price"
+	buy_now.help_text = "Allow lots to be sold without bidding, for a user-specified price.  If required with bidding disabled, people will only buy now and won't be able to bid against each other."
+	RESERVE_CHOICES = (
+		('disable', "Don't allow"),
+		('allow', 'Allow'),
+		('required', 'Required for all lots'),
+	)	
 	reserve_price = models.CharField(
 		max_length=20,
-		choices=RESERVE_BUY_NOW_CHOICES,
+		choices=RESERVE_CHOICES,
 		default="allow"
 	)
 	reserve_price.help_text = "Allow users to set a minimum bid on their lots"
@@ -1572,6 +1578,8 @@ class Lot(models.Model):
 		if not self.reference_link: 
 			search = self.lot_name.replace(" ","%20")
 			self.reference_link = f"https://www.google.com/search?q={search}&tbm=isch"
+		if self.auction and self.auction.buy_now == "forced":
+			self.reserve_price = self.buy_now_price
 		super().save(*args, **kwargs)
 
 		# chat history subscription for the owner
