@@ -2106,9 +2106,9 @@ class ViewLot(DetailView):
             context['submitter_pk'] = 0
         context['user_specific_bidding_error'] = False
         if not self.request.user.is_authenticated:
-            context['user_specific_bidding_error'] = True
+            context['user_specific_bidding_error'] = f"You have to <a href='/login/?next={lot.lot_link}'>sign in</a> to place bids."
         if context['viewer_pk'] == context['submitter_pk']:
-            context['user_specific_bidding_error'] = True
+            context['user_specific_bidding_error'] = "You can't bid on your own lot"
         context['amount'] = defaultBidAmount
         context['watched'] = Watch.objects.filter(lot_number=lot.lot_number, user=self.request.user.id)
         context['category'] = lot.species_category
@@ -2116,12 +2116,14 @@ class ViewLot(DetailView):
         context['user_tos'] = None
         context['user_tos_location'] = None
         if lot.auction and self.request.user.is_authenticated:
-            tos = AuctionTOS.objects.filter(user=self.request.user, auction=lot.auction).first()
+            tos = AuctionTOS.objects.filter(Q(user=self.request.user)|Q(email=self.request.user.email), auction=lot.auction).first()
             if tos:
                 context['user_tos'] = True
                 context['user_tos_location'] = tos.pickup_location
+                if not tos.bidding_allowed:
+                    context['user_specific_bidding_error'] = "This auction requires admin approval before you can bid"
             else:
-                context['user_specific_bidding_error'] = True
+                context['user_specific_bidding_error'] = f"This lot is part of <b>{lot.auction}</b>. Please <a href='/auctions/{lot.auction.slug}/?next={lot.lot_link}#join'>read the auction's rules and confirm your pickup location</a> to bid<br>"
         if lot.within_dynamic_end_time and lot.minutes_to_end > 0 and not lot.sealed_bid:
             messages.info(self.request, f"Bidding is ending soon.  Bids placed now will extend the end time of this lot.  This page will update automatically, you don't need to reload it")
         if not context['user_tos'] and not lot.ended and lot.auction:
@@ -2820,6 +2822,7 @@ class AuctionTOSAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
             obj.phone_number = form.cleaned_data['phone_number']
             obj.address = form.cleaned_data['address']
             obj.is_admin = form.cleaned_data['is_admin']
+            obj.bidding_allowed = form.cleaned_data['bidding_allowed']
             obj.selling_allowed = form.cleaned_data['selling_allowed']
             obj.is_club_member = form.cleaned_data['is_club_member']
             obj.memo = form.cleaned_data['memo']
@@ -2925,6 +2928,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 'allow_bidding_on_lots',
                 'pre_register_lot_discount_percent',
                 'only_approved_sellers',
+                'only_approved_bidders',
                 'email_users_when_invoices_ready',
                 'invoice_payment_instructions',
                 'minimum_bid', 

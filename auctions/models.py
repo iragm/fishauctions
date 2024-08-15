@@ -419,7 +419,7 @@ class Auction(models.Model):
 	only_approved_sellers = models.BooleanField(default=False)
 	only_approved_sellers.help_text = "Require admin approval before users can add lots.  This will not change permissions for users that have already joined."
 	only_approved_bidders = models.BooleanField(default=False)
-	only_approved_bidders.help_text = "Require admin approval before users can bid.  This will not change permissions for users that have already joined."
+	only_approved_bidders.help_text = "Require admin approval before users can bid.  This only applies to new users: Users that you manually add and users who have a paid invoice in a past auctions will be allowed to bid."
 	require_phone_number = models.BooleanField(default=False)
 	require_phone_number.help_text = "Require users to have entered a phone number before they can join this auction"
 	email_users_when_invoices_ready = models.BooleanField(default=True)
@@ -1098,7 +1098,11 @@ class AuctionTOS(models.Model):
 	def bulk_add_link_html(self):
 		"""Link to add multiple lots at once for this user"""
 		url = reverse("bulk_add_lots", kwargs = {'bidder_number':self.bidder_number, 'slug':self.auction.slug})
-		return html.format_html(f"<a href='{url}' hx-noget><i class='bi bi-calendar-plus me-1'></i>Add lots</a>")
+		if not self.selling_allowed:
+			icon = '<i class="text-danger me-1 bi bi-cash-coin" title="Selling not allowed"></i>'
+		else:
+			icon = "<i class='bi bi-calendar-plus me-1'></i>"
+		return html.format_html(f"<a href='{url}' hx-noget>{icon} Add lots</a>")
 
 	@property
 	def bought_lots_qs(self):
@@ -1191,6 +1195,18 @@ class AuctionTOS(models.Model):
 			#print("new instance of auctionTOS")
 			if self.auction.only_approved_sellers:
 				self.selling_allowed = False
+			if self.auction.only_approved_bidders:
+				# default
+				self.bidding_allowed = False
+				if self.manually_added:
+					# anyone manually added can bid
+					self.bidding_allowed = True
+				else:
+					if self.user:
+						auction_admins = AuctionTOS.objects.filter(is_admin=True, auction=self.auction).values_list('user__pk', flat=True)
+						user_has_participated_before = AuctionTOS.objects.filter(user=self.user, auction__created_by__pk__in=auction_admins, auctiontos__status='PAID').first()
+						if user_has_participated_before:
+							self.bidding_allowed = True
 			# no emails for in-person auctions, thankyouverymuch
 			if not self.auction.is_online:
 				pass

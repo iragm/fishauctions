@@ -17,14 +17,18 @@ class AuctionTOSHTMxTable(tables.Table):
         # as a link, looks better
         result = f"<a href='' hx-noget hx-get='/api/auctiontos/{record.pk}' hx-target='#modals-here' hx-trigger='click'><i class='bi bi-person-fill-gear me-1'></i>{value}</a>"
         if record.is_club_member:
-            return mark_safe(f'{result} <span class="badge bg-info">Member</span>')
+            result += '<span class="badge bg-info ms-1 me-1" title="Alternate selling fees will be applied">Member</span>'
+        if not record.bidding_allowed:
+            result += '<i class="text-danger bi bi-exclamation-octagon-fill" title="Bidding not allowed"></i>'
+        # if not record.bidding_allowed:
+        #     result += '<i class="text-danger ms-1 bi bi-cash-coin" title="Selling not allowed"></i>'            
         return mark_safe(result)
 
     def render_email(self, value, record):
         email_string = f'<a href="mailto:{value}">{value}</a>'
         #email_string = value
         if record.user:
-            email_string += "✅"
+            email_string += "<i class='bi bi-check me-1' title='Verified email'></i>"
         return mark_safe(email_string)
 
     class Meta:

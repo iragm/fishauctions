@@ -18,6 +18,13 @@ def check_bidding_permissions(lot, user):
         return "Bidding on this lot has ended"
     if lot.user and lot.user.pk == user.pk:
         return "You can't bid on your own lot"
+    if lot.auction:
+        tos = AuctionTOS.objects.filter(Q(user=user)|Q(email=user.email), auction=lot.auction).first()
+        if not tos:
+            return "You haven't joined this auction"
+        else:
+            if not tos.bidding_allowed:
+                return "This auction requires admin approval before you can bid"
     return False
 
 def check_chat_permissions(lot, user):
@@ -43,18 +50,12 @@ def check_chat_permissions(lot, user):
 
 def check_all_permissions(lot, user):
     """Returns false if everything is OK, or a string error message"""
-    try:
-        ban = UserBan.objects.get(banned_user=user.pk, user=lot.user.pk)
+    if UserBan.objects.filter(banned_user=user.pk, user=lot.user.pk).first():
         return "This user has banned you from bidding on their lots"
-    except:
-        pass
-    try:
-        ban = UserBan.objects.get(banned_user=user.pk, user=lot.auction.created_by.pk)
-        return "The owner of this auction has banned you from bidding"
-    except:
-        pass
     if lot.banned:
         return "This lot has been removed"
+    if lot.auction and UserBan.objects.filter(banned_user=user.pk, user=lot.auction.created_by.pk).first():
+            return "You don't have permission to bid in this auction"
     return False
 
 def reset_lot_end_time(lot):
@@ -102,15 +103,15 @@ def bid_on_lot(lot, user, amount):
         if lot.bidding_error:
             result['message'] = lot.bidding_error
             return result
-        if lot.winner:
+        if lot.winner or lot.auctiontos_winner:
             result['message'] = "This lot has already been sold"
             return result
         if lot.auction:
             invoice = Invoice.objects.filter(auctiontos_user__user=user, auction=lot.auction).first()
-            if invoice:
-                if invoice.status != "DRAFT":
-                    result['message'] = "Your invoice for this auction is not open.  An administrator can reopen it and allow you to bid."
-                    return result
+            if invoice and invoice.status != "DRAFT":
+                result['message'] = "Your invoice for this auction is not open.  An administrator can reopen it and allow you to bid."
+                return result
+            
         originalHighBidder = lot.high_bidder
         originalBid = lot.high_bid
         originalMaxBid = lot.max_bid
@@ -396,14 +397,13 @@ class LotConsumer(WebsocketConsumer):
             try:
                 error = check_all_permissions(self.lot, self.user)
                 if error:
-                    if error:
-                        async_to_sync(self.channel_layer.group_send)(
-                            self.user_room_name,
-                            {
-                                'type': 'error_message',
-                                'error': error
-                            }
-                        )
+                    async_to_sync(self.channel_layer.group_send)(
+                        self.user_room_name,
+                        {
+                            'type': 'error_message',
+                            'error': error
+                        }
+                    )
                 else:                
                     try:
                         message = text_data_json['message']

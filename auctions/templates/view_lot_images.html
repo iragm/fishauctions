@@ -263,7 +263,7 @@ f=e=d="text-white";break;case "success":c="bg-success";f=e=d="text-white";break;
                                     <span id="your_bid">{% if viewer_bid %}Your max bid is $<span id='your_bid_price'>{{ viewer_bid }}</span>{% endif %}</span>
                                 </span>
                                 {% else %}
-                                    $<span id="price">{{ lot.reserve_price }} {% if lot.buy_now_price and not lot.bidding_error %}<button type="button" class='btn btn-sm btn-info' id="buy-now">Buy now: ${{lot.buy_now_price}}</button>{% endif %}</span> <span id="high_bidder_name"></span><span id="your_bid"></span>
+                                    $<span id="price">{{ lot.reserve_price }} {% if lot.buy_now_price and not lot.bidding_error %}<button type="button" class='btn btn-sm btn-success text-black' id="buy-now">Buy now: ${{lot.buy_now_price}}</button>{% endif %}</span> <span id="high_bidder_name"></span><span id="your_bid"></span>
                                 {% endif %}
                             {% endif %}
                         {% endif %}
@@ -487,19 +487,12 @@ f=e=d="text-white";break;case "success":c="bg-success";f=e=d="text-white";break;
 <div class="modal fade" id="bidError" tabindex="-1" role="dialog" aria-labelledby="label" aria-hidden="true">
     <div class="modal-dialog" role="document">
         <div class="modal-content">
-            <div class="modal-header bg-danger">
-                <h5 class="modal-title" id="label">Bid failed!</h5>
+            <div class="modal-header">
+                <h5 class="modal-title text-danger" id="label"><i class="bi bi-exclamation-circle-fill"></i> Bid failed!</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div id='confirmDialogText' class="modal-body">
-                {% if not user.is_authenticated %}
-                    You have to <a href='/login/?next={{ lot.lot_link }}'>sign in</a> to place bids.
-                {% elif not user_tos %}
-                    This lot is part of <b>{{ lot.auction }}</b>. Please <a href='/auctions/{{lot.auction.slug}}/?next=/lots/{{ lot.pk }}/#join'>read the auction's rules and confirm your pickup location</a> to bid<br>
-                {% elif lot.user.pk == request.user.id %} You can't bid on your own lot.
-                {% else %}
-                    An unknown error occurred.
-                {% endif %}
+                {{ user_specific_bidding_error|safe }}
             </div>
             <div class="modal-footer">
                 {% if not user.is_authenticated %}

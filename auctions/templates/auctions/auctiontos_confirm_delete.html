@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% load crispy_forms_tags %}
-{% block title %} Delete user {% endblock %}
+{% block title %} Remove user {% endblock %}
 {% load static %}
 {% block extra_js %}
 <script>
@@ -29,8 +29,8 @@ $(document).ready(function() {
 </script>
 {% endblock %}
 {% block content %}
-    <h4>Delete user</h4>
-    <p>Are you sure you want to delete {{ auctiontos.name }}?</p>
+    <h4>Remove {{ auctiontos.name }}</h4>
+    <p>Are you sure you want to remove {{ auctiontos.name }} from {{ auctiontos.auction }}?</p>
     <span class="text-warning">This cannot be undone!</span><br><br>
     {% crispy form form.helper %}
 {% endblock %}

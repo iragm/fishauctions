@@ -41,6 +41,14 @@
         <i class="bi bi-filter"></i> Filters
       </button>
       <div class="dropdown-menu" aria-labelledby="dropdownMenuButton">
+        {% if auction.is_online %}
+        <label class="dropdown-item ">
+          <input type="checkbox" class="invoice_filter" id="checkbox_no_bid"> <i class="bi bi-exclamation-octagon-fill"></i> Can't bid
+        </label>
+        {% endif %}
+        <label class="dropdown-item ">
+          <input type="checkbox" class="invoice_filter" id="checkbox_no_sell"> <i class="bi bi-exclamation-octagon-fill"></i> Can't sell
+        </label>
         <span class="text-muted dropdown-item"><small>Users with an invoice that is:</small></span>
         <label class="dropdown-item ">
           <input type="checkbox" class="invoice_filter" id="checkbox_open"> <i class="bi bi-bag"></i> Open

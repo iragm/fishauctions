@@ -68,7 +68,7 @@ class AuctionTOSFilter(django_filters.FilterSet):
             ['frank','franklin','frankie'],
             ['fred','frederick','freddy'],
             ['gary','gareth'],
-            ['george','georgie'],
+            ['george','georgie', 'geo'],
             ['greg','gregory','gregg'],
             ['hank','henry'],
             ['jack','jackson','jackie'],
@@ -143,6 +143,8 @@ class AuctionTOSFilter(django_filters.FilterSet):
             'club owes': {'auctiontos__calculated_total__gt': 0},
             'seen': {'auctiontos__opened': True},
             'unseen': {'auctiontos__opened': False},
+            'no bid': {'bidding_allowed': False},
+            'no sell': {'selling_allowed': False},
         }
 
         # Apply filters based on patterns

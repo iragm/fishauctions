@@ -1,6 +1,6 @@
 {# invoice status buttons #}
 {% if invoice %}
-<div class="btn-group" id='invoice-buttons' role="group" aria-label="Invoice status selection">
+<div class="btn-group ms-1 me-1" id='invoice-buttons' role="group" aria-label="Invoice status selection">
   <button type="button" id="{{invoice.pk}}_DRAFT" hx-post="/api/payinvoice/{{ invoice.pk }}/DRAFT" hx-target="#invoice-buttons" hx-swap="outerHTML" class="btn {% if invoice.status == 'DRAFT'%}btn-info{% else %}btn-secondary{% endif %}"><i class="bi bi-bag"></i> Open</button>
   <button type="button" id="{{invoice.pk}}_UNPAID" hx-post="/api/payinvoice/{{ invoice.pk }}/UNPAID" hx-target="#invoice-buttons" hx-swap="outerHTML" class="btn {% if invoice.status == 'UNPAID'%}btn-info{% else %}btn-secondary{% endif %}"><i class="bi bi-bag-plus"></i> Ready</button>
   <button type="button" id="{{invoice.pk}}_PAID" hx-post="/api/payinvoice/{{ invoice.pk }}/PAID" hx-target="#invoice-buttons" hx-swap="outerHTML" class="btn {% if invoice.status == 'PAID'%}btn-success{% else %}btn-secondary{% endif %}"><i class="bi bi-bag-heart"></i> Paid</button>
