@@ -2655,7 +2655,15 @@ class LotAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
             obj.banned = form.cleaned_data['banned']
             obj.auctiontos_winner = form.cleaned_data['auctiontos_winner']
             obj.winning_price = form.cleaned_data['winning_price']
+            # need to make sure the winner matches the auctiontos_winner
+            if obj.pk and obj.winner:
+                if not obj.auctiontos_winner:
+                    obj.winner = None
+                elif obj.auctiontos_winner.user:
+                    obj.winner = obj.auctiontos_winner.user
+                # winner not set if auctiontos_winner is set for the first time...don't see a real downside here, winner is generally not set as part of an auction anyway
             obj.save()
+            # add message if the winner changed
             if obj.auctiontos_winner:
                 if self.lot_initial_winner != obj.auctiontos_winner:
                     obj.add_winner_message(self.request.user, obj.auctiontos_winner, obj.winning_price)
