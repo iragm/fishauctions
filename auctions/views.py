@@ -3138,6 +3138,7 @@ class FAQ(AdminEmailMixin, ListView):
         context = super().get_context_data(**kwargs)
         current_site = Site.objects.get_current()
         context['domain'] = current_site.domain
+        context['hide_google_login'] = True
         return context
         
 
@@ -3270,6 +3271,7 @@ class allAuctions(ListView):
                 context['location_message'] = "Set your location to get notifications about new auctions near you"
             else:
                 context['location_message'] = "Set your location to see how far away auctions are"
+        context['hide_google_login'] = True
         return context
 
 class Leaderboard(ListView):
@@ -3336,6 +3338,7 @@ class AllLots(LotListView, AuctionPermissionsMixin):
                 SearchHistory.objects.create(user=user, search=data['q'], auction=self.auction)
         context['view'] = 'all'
         context['filter'] = LotFilter(data, queryset=self.get_queryset(), request=self.request, ignore=True, regardingAuction = self.auction)
+        context['hide_google_login'] = True
         return context
 
 class Invoices(ListView, LoginRequiredMixin):
@@ -4279,10 +4282,17 @@ class ClubMap(AdminEmailMixin, TemplateView):
             context['longitude'] = self.request.COOKIES['longitude']
         except:
             pass
+        context['hide_google_login'] = True
         return context
 
 class UserAgreement(TemplateView):
     template_name = 'tos.html'
+    
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['hide_google_login'] = True
+        return context
+
 
 class IgnoreCategoriesView(TemplateView):
     template_name = 'ignore_categories.html'
