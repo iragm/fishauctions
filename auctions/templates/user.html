@@ -73,7 +73,7 @@
                     </td>
                 </tr>{%endif%}
                 {% if data.percent_success %}<tr>
-                    <td>Bid success:</td>
+                    <td>Bid success:<br><small class="text-muted">Only for online auctions</small></td>
                     <td>When you bid, you win <b>{{data.percent_success|floatformat:0}}%</b> of the time.
                     </td>
                 </tr>{%endif%}

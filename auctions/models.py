@@ -3026,6 +3026,11 @@ class UserData(models.Model):
 		return self.my_won_lots_qs.count()
 	
 	@property
+	def lots_bought_online(self):
+		"""Total number of lots this user has purchased only in online auctions"""
+		return self.my_won_lots_qs.filter(auction__is_online=True).count()
+
+	@property
 	def total_spent(self):
 		"""Total amount this user has spent on this site"""
 		total = 0
@@ -3075,9 +3080,9 @@ class UserData(models.Model):
 
 	@property
 	def dedication(self):
-		"""Ratio of bids to won lots"""
-		if self.lots_bought and self.total_bids:
-			return self.lots_bought / self.total_bids
+		"""Ratio of bids to won lots, only for online auctions"""
+		if self.lots_bought_online and self.total_bids:
+			return self.lots_bought_online / self.total_bids
 		else:
 			return 0
 	
