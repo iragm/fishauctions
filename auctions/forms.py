@@ -126,13 +126,13 @@ class QuickAddLot(forms.ModelForm):
         self.fields['species_category'].initial = Category.objects.get(pk=21) # uncategorized
         self.fields['quantity'].initial = 1
 
-        #if self.auction.reserve_price == "disable":
-        #    self.fields['reserve_price'].widget = HiddenInput()
+        if self.auction.reserve_price == "disable":
+           self.fields['reserve_price'].widget = HiddenInput()
         # always required anyway...
         #if self.auction.reserve_price == "required":
         #    self.fields['reserve_price'].required = True
-        #if self.auction.buy_now == "disable":
-        #    self.fields['buy_now_price'].widget = HiddenInput()
+        if self.auction.buy_now == "disable":
+           self.fields['buy_now_price'].widget = HiddenInput()
         #if self.auction.buy_now == "required":
         #    self.fields['buy_now_price'].required = True            
 
