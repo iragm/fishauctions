@@ -249,9 +249,24 @@ window.onload = function() {
                       <a class="dropdown-item" href="/blog/optimal-lot-submission-time/">The best time to add lots</a>
                     </div>
                   </li> -->
-                  <li class="nav-item">
-                    <a class="nav-link" href="/auctions/">Auctions <span id="new_auctions" class='badge-pill badge bg-warning' style='color:black;font-weight:900'></span></a>
+                  {% if request.user.is_authenticated and request.user.userdata.last_auction_used %}
+                  <li class="nav-item dropdown">
+                    <a class="nav-link dropdown-toggle" href="#" id="auctionDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                      Auctions <span id="new_auctions" class="badge-pill badge bg-warning" style="color:black;font-weight:900"></span>
+                    </a>
+                    <ul class="dropdown-menu" aria-labelledby="auctionDropdown">
+                      <li><a class="dropdown-item" href="{{ user.userdata.last_auction_used.url }}">{{ user.userdata.last_auction_used }}</a></li>
+                      <li><a class="dropdown-item" href="/auctions/">View All Auctions</a></li>
+                    </ul>
                   </li>
+                {% else %}
+                  <li class="nav-item">
+                    <a class="nav-link" href="/auctions/">Auctions 
+                      <span id="new_auctions" class="badge-pill badge bg-warning" style="color:black;font-weight:900"></span>
+                    </a>
+                  </li>
+                {% endif %}
+                
                   <li class="nav-item">
                     <a class="nav-link" href="/lots/">Lots</a>
                   </li>

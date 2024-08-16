@@ -543,11 +543,15 @@ class Auction(models.Model):
 		return "unknown auction type"							
 
 	def get_absolute_url(self):
-		return f'/auctions/{self.slug}/'
+		return self.url
 
 	def get_edit_url(self):
 		return f'/auctions/{self.slug}/edit/'
 	
+	@property
+	def url(self):
+		return f'/auctions/{self.slug}/'
+
 	@property
 	def label_print_link(self):
 		return f"{self.get_absolute_url()}?printredirect={reverse('print_my_labels', kwargs={'slug': self.slug})}"
