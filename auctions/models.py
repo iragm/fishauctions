@@ -426,7 +426,7 @@ class Auction(models.Model):
 	invoice_payment_instructions = models.CharField(max_length=255, blank=True, null=True, default="")
 	invoice_payment_instructions.help_text = "Shown to the user on their invoice.  For example, 'You will receive a seperate PayPal invoice with payment instructions'"
 	# partial for #139
-	minimum_bid = models.PositiveIntegerField(default=2, validators=[MinValueValidator(2)])
+	minimum_bid = models.PositiveIntegerField(default=2, validators=[MinValueValidator(1)])
 	minimum_bid.help_text = "Lowest price a lot can sell for."
 	lot_entry_fee_for_club_members = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(10)])
 	lot_entry_fee_for_club_members.help_text = "Used instead of the standard entry fee, when you designate someone as a club member"
