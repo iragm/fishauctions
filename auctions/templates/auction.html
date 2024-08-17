@@ -165,11 +165,11 @@ function initMap() {
                 {% if auction.lot_submission_start_date != auction.date_start %}<li>You can submit lots starting {{ auction.lot_submission_start_date }}</li>{% endif %}
                 {% if auction.lot_submission_end_date != auction.date_start %}<li>You can submit lots until {{ auction.lot_submission_end_date }}</li>{% endif %}
                 {% endif %}
-                {% if auction.sealed_bid %}<li>This is a sealed bid auction - you won't be able to see how much others have bid on an item.</li>{% endif %}
+                {% if auction.sealed_bid %}<li>This is a sealed bid auction - you won't be able to see how much others have bid on a lot.</li>{% endif %}
                 {% if auction.max_lots_per_user %}<li>You can submit up to {{ auction.max_lots_per_user }} lots.{% if auction.allow_additional_lots_as_donation %} Additional lots accepted only as a donation.{% endif %}</li>{% endif %}
                 {% if auction.winning_bid_percent_to_club and auction.lot_entry_fee %} <li>You will be charged ${{ auction.lot_entry_fee }} plus {{ auction.winning_bid_percent_to_club }}%  of the winning price per lot you sell</li>
                 {% else %} {% if auction.winning_bid_percent_to_club %} <li>You will be charged {{ auction.winning_bid_percent_to_club }}% of the winning price per lot you sell</li> {% endif %} 
-                {% if auction.lot_entry_fee %} <li>You will be charged a flat rate of ${{ auction.lot_entry_fee }} per item you sell</li> {% endif %}
+                {% if auction.lot_entry_fee %} <li>You will be charged a flat rate of ${{ auction.lot_entry_fee }} per lot you sell</li> {% endif %}
                 {% endif %}
                 {% if auction.unsold_lot_fee %}<li>If your lot does not sell, you will be charged ${{ auction.unsold_lot_fee }}</li>{% endif %}
                 
@@ -180,12 +180,11 @@ function initMap() {
                         {% if auction.pre_register_lot_discount_percent %}
                             {{ auction.pre_register_lot_discount_percent }}%
                         {% endif %} 
-                        {% if auction.lot_entry_fee %}
-                            ${{ auction.pre_register_lot_entry_fee_discount }}
-                        {% endif %}
                     {% endif %}
                     of the winning price per lot, for lots you submit yourself</li>
                 {% endif %}
+                {% if auction.minimum_bid > 2 %} <li>There will be a minimum bid of ${{auction.minimum_bid}} on all lots{% if auction.reserve_price != "disable" %}, and sellers can set their own minimum bids{% endif %}</li> {% endif %}
+                {% if auction.buy_now != 'disable' %} <li>Sellers can set a buy now price on their lots, which will allow a lot to be sold without bidding</li> {% endif %}
             </ul>
 
             {% if not auction.no_location %}
@@ -202,7 +201,7 @@ function initMap() {
                         If you want to participate in this auction, you must confirm that you've read these rules
                     {% crispy form form.helper %}
                 {% else %}
-                    <a href="/login/?next={% firstof request.path '/' %}">Please login to confirm your pickup location</a><br><br>
+                    <a href="/login/?next={% firstof request.path '/' %}">Please login to join the auction</a><br><br>
                 {% endif %}
                 {% if not auction.multi_location %}
                 {# this is for single location auctions only, still iterating because of how the context is set up #}

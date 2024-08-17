@@ -2123,12 +2123,12 @@ class ViewLot(DetailView):
                 if not tos.bidding_allowed:
                     context['user_specific_bidding_error'] = "This auction requires admin approval before you can bid"
             else:
-                context['user_specific_bidding_error'] = f"This lot is part of <b>{lot.auction}</b>. Please <a href='/auctions/{lot.auction.slug}/?next={lot.lot_link}#join'>read the auction's rules and confirm your pickup location</a> to bid<br>"
+                context['user_specific_bidding_error'] = f"This lot is part of <b>{lot.auction}</b>. Please <a href='/auctions/{lot.auction.slug}/?next={lot.lot_link}#join'>read the auction's rules and join the auction</a> to bid<br>"
         if lot.within_dynamic_end_time and lot.minutes_to_end > 0 and not lot.sealed_bid:
             messages.info(self.request, f"Bidding is ending soon.  Bids placed now will extend the end time of this lot.  This page will update automatically, you don't need to reload it")
         if not context['user_tos'] and not lot.ended and lot.auction:
             if lot.auction.allow_bidding_on_lots:
-                messages.info(self.request, f"Please <a href='/auctions/{lot.auction.slug}/?next=/lots/{ lot.pk }/'>read the auction's rules and confirm your pickup location</a> to bid")
+                messages.info(self.request, f"Please <a href='/auctions/{lot.auction.slug}/?next=/lots/{ lot.pk }/'>read the auction's rules and join the auction</a> to bid")
         if self.request.user.is_authenticated:
             userData, created = UserData.objects.get_or_create(
                 user = self.request.user,
@@ -2336,7 +2336,7 @@ class LotValidation(LoginRequiredMixin):
         if lot.buy_now_price:
             if lot.buy_now_price < lot.reserve_price:
                 lot.buy_now_price = lot.reserve_price
-                messages.error(self.request, f"Buy now price can't be lower than the reserve price")
+                messages.error(self.request, f"Buy now price can't be lower than the minimum bid.  Buy now price has been set to the minimum bid, but you should probably edit this lot and change the buy now price.")
         if lot.auction:
             #if not lot.auction.is_online:
             #    if lot.buy_now_price or lot.reserve_price > lot.auction.minimum_bid:

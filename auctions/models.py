@@ -428,7 +428,7 @@ class Auction(models.Model):
 	invoice_payment_instructions.help_text = "Shown to the user on their invoice.  For example, 'You will receive a seperate PayPal invoice with payment instructions'"
 	# partial for #139
 	minimum_bid = models.PositiveIntegerField(default=2, validators=[MinValueValidator(1)])
-	minimum_bid.help_text = "Lowest price a lot can sell for."
+	minimum_bid.help_text = "Lowest price any lot will be sold for"
 	lot_entry_fee_for_club_members = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(10)])
 	lot_entry_fee_for_club_members.help_text = "Used instead of the standard entry fee, when you designate someone as a club member"
 	winning_bid_percent_to_club_for_club_members = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(100)])
@@ -467,7 +467,7 @@ class Auction(models.Model):
 		max_length=20,
 		choices=RESERVE_CHOICES,
 		default="allow"
-	)
+	, verbose_name="Seller set minimum bid")
 	reserve_price.help_text = "Allow users to set a minimum bid on their lots"
 	tax = models.PositiveIntegerField(default = 0, validators=[MinValueValidator(0)])
 	tax.help_text = 'Added to invoices for all won lots'
@@ -510,6 +510,12 @@ class Auction(models.Model):
 	def all_location_count(self):
 		"""All locations, even mail"""
 		return self.location_qs.count()
+
+	@property
+	def allow_mailing_lots(self):
+		if self.location_qs.filter(pickup_by_mail=True).first():
+			return True
+		return False
 
 	@property
 	def auction_type(self):
@@ -917,6 +923,8 @@ class Auction(models.Model):
 	def set_location_link(self):
 		"""If there's a location without a lat and lng, this link will let you edit the first one found"""
 		location = self.location_qs.filter(latitude=0,longitude=0, pickup_by_mail=False).first()
+		if self.all_location_count == 1:
+			location = self.location_qs.first()
 		if location:
 			return reverse("edit_pickup", kwargs = {'pk':location.pk})
 		return None
@@ -925,6 +933,7 @@ class Auction(models.Model):
 	def admin_checklist_mostly_completed(self):
 		if self.admin_checklist_location_set and self.admin_checklist_rules_updated and self.admin_checklist_joined \
 			and self.admin_checklist_others_joined:
+			#if self.is_online or (not self.is_online and self.admin_checklist_lots_added):
 			return True
 		return False
 
@@ -937,7 +946,7 @@ class Auction(models.Model):
 	
 	@property
 	def admin_checklist_location_set(self):
-		if not self.set_location_link and self.all_location_count:
+		if self.allow_mailing_lots or self.location_with_location_qs.count():
 			return True
 		return False
 	
@@ -1013,7 +1022,7 @@ class PickupLocation(models.Model):
 	latitude = models.FloatField(blank=True, default=0)
 	longitude = models.FloatField(blank=True, default=0)
 	address = models.CharField(max_length=500, blank=True, null=True)
-	address.help_text = "Search Google maps with this address"
+	address.help_text = "Enter an address to search the map below.  What you enter here won't be shown to users."
 	location_coordinates = PlainLocationField(based_fields=['address'], blank=True, null=True, verbose_name="Map")
 	allow_selling_by_default = models.BooleanField(default=True)
 	allow_selling_by_default.help_text = "This is not used"
@@ -1528,8 +1537,8 @@ class Lot(models.Model):
 	reference_link.help_text = "A URL with additional information about this lot.  YouTube videos will be automatically embedded."
 	quantity = models.PositiveIntegerField(validators=[MinValueValidator(1)])
 	quantity.help_text = "How many of this item are in this lot?"
-	reserve_price = models.PositiveIntegerField(default=2, validators=[MinValueValidator(1), MaxValueValidator(2000)])
-	reserve_price.help_text = "The minimum bid for this lot. Lot will not be sold unless someone bids at least this much"
+	reserve_price = models.PositiveIntegerField(default=2, validators=[MinValueValidator(1), MaxValueValidator(2000)], verbose_name="Minimum bid")
+	reserve_price.help_text = "Also called a reserve price. Lot will not be sold unless someone bids at least this much"
 	buy_now_price = models.PositiveIntegerField(default=None, validators=[MinValueValidator(1), MaxValueValidator(1000)], blank=True, null=True)
 	buy_now_price.help_text = "This lot will be sold instantly for this price if someone is willing to pay this much.  Leave blank unless you know exactly what you're doing"
 	species = models.ForeignKey(Product, null=True, blank=True, on_delete=models.SET_NULL)
@@ -3566,6 +3575,12 @@ def on_save_auction(sender, instance, **kwargs):
 				for lot in lots:
 					lot.date_end = instance.date_end
 					lot.save()
+		if not instance.is_online and instance.number_of_locations == 1:
+			# don't make the users set the pickup time seperately for simple auctions
+			location = instance.location_qs.first()
+			location.pickup_time = instance.date_start
+			location.save()
+
 	else:
 		# logic for new auctions goes here
 		pass

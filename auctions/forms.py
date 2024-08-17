@@ -983,7 +983,7 @@ class AuctionJoin(forms.ModelForm):
             'i_agree',
             'time_spent_reading_rules',
             'pickup_location',
-            Submit('submit', 'Confirm pickup location', css_class='agree_tos btn-success text-dark'),
+            Submit('submit', 'Join auction', css_class='agree_tos btn-success text-dark'),
         )
         self.fields['pickup_location'].queryset = auction.location_qs #PickupLocation.objects.filter(auction=self.auction).order_by('name')
         self.fields['time_spent_reading_rules'].widget = HiddenInput()
@@ -1052,6 +1052,13 @@ class PickupLocationForm(forms.ModelForm):
         if self.instance.pk:
             if self.instance.pickup_by_mail:
                 self.fields['mail_or_not'].initial = "True"
+        if not self.auction.is_online:
+            # hide several fields for in-person auctions
+            self.fields['mail_or_not'].widget=forms.HiddenInput()
+            self.fields['users_must_coordinate_pickup'].widget=forms.HiddenInput()
+            self.fields['pickup_time'].widget=forms.HiddenInput()
+            self.fields['description'].help_text="Directions or notes about this location.  This text will be shown to users."
+            
         # if self.user.is_superuser:
         #     self.fields['auction'].queryset = Auction.objects.filter(date_end__gte=timezone.now()).order_by('date_end')
         # else:
@@ -1198,13 +1205,13 @@ class CreateAuctionForm(forms.ModelForm):
             'date_start',
             'title',
             HTML("<div id='auction_type_fields'><h5>What kind of auction is this?</h5>"),
-            Submit('online', 'Create online auction', css_id='auction-online', css_class='submit-button create-auction btn-success'),
+            Submit('online', 'Create online auction', css_id='auction-online', css_class='submit-button create-auction bg-success text-black'),
             Div(
             HTML("<span class='text-muted'><ul><li>An auction where bidding ends automatically at a specified time.</li><li>Users will create an account on this site to join your auction.</li><li>Lots will be brought to one or more locations for exchange after bidding ends.</li></span>"),
             ),
-            Submit('offline', value='Create in-person auction', css_id='auction-offline', css_class='submit-button btn-success'),
+            Submit('offline', value='Create in-person auction', css_id='auction-offline', css_class='submit-button bg-success text-black'),
             Div(
-            HTML("<span class='text-muted'><ul><li>You or your auctioneer will manually set the winners of lots.</li><li>Lots will be brought to a central location before bidding starts.</li></ul></span></div>"),
+            HTML("<span class='text-muted'><ul><li>You or your auctioneer will manually set the winners of lots.</li><li>All lots will be brought to your auction's location before bidding starts.</li></ul></span></div>"),
             ),
             Submit('clone', 'Copy ' + last_auction, css_id='auction-copy', css_class='submit-button btn-info ' + last_auction_state),
             Div(
@@ -1262,6 +1269,7 @@ class AuctionEditForm(forms.ModelForm):
             self.fields['date_end'].widget=forms.HiddenInput()
             self.fields['lot_submission_end_date'].help_text = 'This should probably be before bidding starts.  Admins (you) can add more lots at any time, this only restricts users.'
             self.fields['email_users_when_invoices_ready'].help_text = "Only works if you enter the user's email address when adding them to your auction"
+        self.fields['date_start'].help_text = "When the auction actually starts"
         self.fields['user_cut'].initial = 100 - self.instance.winning_bid_percent_to_club
         self.fields['club_member_cut'].initial = 100 - self.instance.winning_bid_percent_to_club_for_club_members
         if self.instance.pk:

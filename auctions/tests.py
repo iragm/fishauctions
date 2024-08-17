@@ -35,7 +35,7 @@ class ViewLotTest(TestCase):
         # Log in the user
         self.client.login(username='testuser', password='testpassword')
         response = self.client.get(self.url)
-        self.assertContains(response, "read the auction's rules and confirm your pickup location")
+        self.assertContains(response, "read the auction's rules and join the auction")
     
     def test_no_bidding_on_your_own_lots(self):
         # Log in the user
