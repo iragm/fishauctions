@@ -471,6 +471,8 @@ class Auction(models.Model):
 	reserve_price.help_text = "Allow users to set a minimum bid on their lots"
 	tax = models.PositiveIntegerField(default = 0, validators=[MinValueValidator(0)])
 	tax.help_text = 'Added to invoices for all won lots'
+	advanced_lot_adding = models.BooleanField(default=False)
+	advanced_lot_adding.help_text = "Show lot number, quantity and description fields when bulk adding lots"
 
 	def __str__(self):
 		result = self.title

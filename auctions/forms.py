@@ -88,6 +88,7 @@ class QuickAddLot(forms.ModelForm):
         fields = [
             'custom_lot_number',
             'lot_name',
+            'description',
             'species_category',
             'i_bred_this_fish',
             'quantity',
@@ -124,8 +125,12 @@ class QuickAddLot(forms.ModelForm):
         self.fields['reserve_price'].help_text = ""
         self.fields['buy_now_price'].help_text = ""
         self.fields['species_category'].initial = Category.objects.get(pk=21) # uncategorized
-        self.fields['quantity'].initial = 1
-
+        if not self.auction.advanced_lot_adding:
+            self.fields['quantity'].initial = 1
+            self.fields['quantity'].widget = HiddenInput()
+            self.fields['description'].widget = HiddenInput()
+            self.fields['custom_lot_number'].widget = HiddenInput()
+        self.fields['description'].help_text = ""
         if self.auction.reserve_price == "disable":
            self.fields['reserve_price'].widget = HiddenInput()
         # always required anyway...
@@ -539,7 +544,7 @@ class EditLot(forms.ModelForm):
         else:
             self.fields['custom_lot_number'].help_text = "Leave blank to automatically generate"
         self.fields['lot_name'].initial = self.lot.lot_name
-        self.fields['description'].initial = self.lot.lot_name
+        self.fields['description'].initial = self.lot.description
         #self.fields['auctiontos_seller'].initial = self.lot.auctiontos_seller
         self.fields['quantity'].initial = self.lot.quantity
         self.fields['donation'].initial = self.lot.donation
@@ -1230,7 +1235,7 @@ class AuctionEditForm(forms.ModelForm):
             'lot_submission_end_date', 'sealed_bid','use_categories', 'promote_this_auction', 'max_lots_per_user', 'allow_additional_lots_as_donation',
             'email_users_when_invoices_ready', 'pre_register_lot_discount_percent', 'only_approved_sellers', 'only_approved_bidders',
             'invoice_payment_instructions', 'minimum_bid', 'winning_bid_percent_to_club_for_club_members', 'lot_entry_fee_for_club_members', 'require_phone_number',
-            'reserve_price', 'buy_now', 'tax', 
+            'reserve_price', 'buy_now', 'tax', 'advanced_lot_adding',
             ]
         widgets = {
             'date_start': DateTimePickerInput(),
@@ -1349,6 +1354,7 @@ class AuctionEditForm(forms.ModelForm):
                 Div('email_users_when_invoices_ready', css_class='col-md-3',),
                 Div('invoice_payment_instructions', css_class='col-md-6',),
                 Div('use_categories',css_class='col-md-3',),
+                Div('advanced_lot_adding',css_class='col-md-3',),
                 Div('minimum_bid',css_class='col-md-3',),
                 Div('reserve_price', css_class='col-md-3',),
                 Div('buy_now', css_class='col-md-3',),

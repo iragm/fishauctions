@@ -443,7 +443,7 @@ f=e=d="text-white";break;case "success":c="bg-success";f=e=d="text-white";break;
                 _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"><i class="bi bi-calendar-x"></i> Remove or refund</button>
             {% endif %}
             {% if is_auction_admin or lot.user.pk == request.user.pk%}
-            <a class="btn btn-primary me-2" href="{% url 'single_lot_label' pk=lot.pk %}"><i class="bi bi-tag"></i> {% if lot.label_printed%}Reprint label{% else %}Print label{% endif %}</button>
+            <a class="btn btn-primary me-2" href="{% url 'single_lot_label' pk=lot.pk %}"><i class="bi bi-tag"></i> {% if lot.label_printed%}Reprint label{% else %}Print label{% endif %}</a>
             {% endif %}
         {% endif %}
         {% if request.user.is_superuser %}

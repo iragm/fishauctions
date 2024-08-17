@@ -2013,6 +2013,7 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
         self.LotFormSet = modelformset_factory(Lot, extra=extra, fields = (
             'custom_lot_number',
             'lot_name',
+            'description',
             'species_category',
             'i_bred_this_fish',
             'quantity',
@@ -2939,6 +2940,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 'buy_now',
                 'reserve_price',
                 'tax',
+                'advanced_lot_adding',
                 ]
             for field in fields_to_clone:
                 setattr(auction, field, getattr(original_auction, field))
