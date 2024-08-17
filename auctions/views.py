@@ -3264,15 +3264,20 @@ class allAuctions(ListView):
             qs = qs.annotate(
                 distance=Subquery(closest_pickup_location_subquery)
                 )
-        if self.request.user.is_superuser:
-            return qs
+        #if self.request.user.is_superuser:
+        #    return qs
         if not self.request.user.is_authenticated:
             return qs.filter(standard_filter)
-        return qs.filter(Q(auctiontos__user=self.request.user)|
+        qs = qs.filter(Q(auctiontos__user=self.request.user)|
             Q(auctiontos__email=self.request.user.email)|
             Q(created_by=self.request.user)|
             standard_filter
             ).distinct()
+        if self.request.user.userdata.last_auction_used:
+            # union messes with ordering
+            qs = qs.exclude(pk=self.request.user.userdata.last_auction_used.pk)
+        return qs
+
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -3284,6 +3289,8 @@ class allAuctions(ListView):
             else:
                 context['location_message'] = "Set your location to see how far away auctions are"
         context['hide_google_login'] = True
+        if self.request.user.is_authenticated:
+            context['last_auction_used'] = self.request.user.userdata.last_auction_used
         return context
 
 class Leaderboard(ListView):

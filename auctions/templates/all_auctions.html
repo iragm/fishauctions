@@ -15,37 +15,36 @@
             <tr>
               <th scope="col">Auction</th>
               <th scope="col">Date</th>
-              <th scope="col">Lots</th>
+              <th scope="col" class="d-none d-md-block">Lots</th>
             </tr>
           </thead>
           <tbody>
+            {% if last_auction_used %}
+            <tr>
+              <td><a href='/auctions/{{last_auction_used.slug}}'>{{ last_auction_used.title }}</a><br class="d-md-none"><span class='ms-1 badge bg-light text-black'>Your last auction</span>
+                {{ last_auction_used.template_lot_link_first_column }}
+              </td>
+              <td>
+                {{ last_auction_used.template_status }}
+                {{ last_auction_used.template_date_timestamp }}
+                {{ last_auction_used.ended_badge }}
+              </td>
+              {{ last_auction_used.template_lot_link_seperate_column }}
+            </tr>
+              {% endif %}
             {% for auction in object_list %}
             <tr>
-              <td><a href='/auctions/{{auction.slug}}'>{{ auction.title }}</a> {% if auction.is_online %}<span class="badge bg-info">Online</span>{% endif %}
+              <td><a href='/auctions/{{auction.slug}}'>{{ auction.title }}</a><br class="d-md-none"> {% if auction.is_online %}<span class="badge bg-info">Online</span>{% endif %}
                 {% if not auction.promote_this_auction %}<span class='badge bg-dark'>Not promoted</span>{% endif %}
                 {% if not location_message and auction.number_of_locations %}<span class='badge bg-primary'>{{ auction.distance | floatformat:0 }} miles from you</span>{% endif %}
+                {{ auction.template_lot_link_first_column }}
               </td>
-              <td>{% if auction.closed %}
-                  {{ auction.date_end }} <span class="badge bg-danger">Ended</span>
-                  {% else %}
-                  {% if auction.started and auction.date_end %}
-                    Ends: {{ auction.date_end }}
-                  {% else %}
-                    {% if not auction.started %}
-                    Starts: {{ auction.date_start }}
-                    {% else %}
-                    {% if not auction.is_online %}
-                    {{ auction.date_start }} {% if not auction.allow_bidding_on_lots%}<span class="badge bg-danger">Ended</span>{% endif %}
-                    {% else %}
-                    {{ auction.date_start }}
-                    {% endif %}
-                    {% endif %}
-                    {% endif %}
-                {% endif %}
               <td>
-                {% if auction.show_lot_link_on_auction_list %}
-                <a href='{{ auction.view_lot_link }}'>View lots</a>{% else %}Lots open: {{auction.lot_submission_start_date}} {% endif %}</td>
+                {{ auction.template_status }}
+                {{ auction.template_date_timestamp }}
+                {{ auction.ended_badge }}
               </td>
+              {{ auction.template_lot_link_seperate_column }}
             </tr>
             {% endfor %}
         </tbody>

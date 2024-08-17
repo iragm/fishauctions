@@ -26,6 +26,7 @@ from django.contrib.auth.signals import user_logged_in
 from dal import autocomplete
 from pytz import timezone as pytz_timezone
 from django.core.exceptions import ValidationError
+from django.utils.safestring import mark_safe
 
 def nearby_auctions(latitude, longitude, distance=100, include_already_joined=False, user=None, return_slugs=False):
 	"""Return a list of auctions or auction slugs that are within a specified distance of the given location"""
@@ -542,6 +543,22 @@ class Auction(models.Model):
 			return "in person auction with lot delivery to additional locations"
 		return "unknown auction type"							
 
+	@property
+	def template_date_timestamp(self):
+		"""For use in all auctions list"""
+		if self.closed or self.in_progress:
+			return self.date_end
+		return self.date_start
+	
+	@property
+	def template_status(self):
+		"""What's the `template_date_timestamp` for this auction?"""
+		if self.in_progress:
+			return "Now until:"
+		if not self.started:
+			return "Starts:"
+		return ""
+
 	def get_absolute_url(self):
 		return self.url
 
@@ -653,12 +670,33 @@ class Auction(models.Model):
 		return False
 
 	@property
+	def in_person_closed(self):
+		"""Maybe we can combine this with the above `closed`, but I'm not sure where else that is used"""
+		if not self.is_online and timezone.now() > self.date_start and not self.allow_bidding_on_lots:
+			return True
+		# otherwise not online
+		return False
+
+	@property
+	def ended_badge(self):
+		if self.closed or self.in_person_closed:
+			return mark_safe('<span class="badge bg-danger">Ended</span>')
+		return ""
+
+	@property
 	def started(self):
 		"""For display on the main auctions list"""
 		if timezone.now() > self.date_start:
 			return True
 		else:
 			return False
+
+	@property
+	def in_progress(self):
+		"""For display on the main auctions list"""
+		if self.is_online and self.started and not self.closed:
+			return True
+		return False
 
 	@property
 	def club_profit_raw(self):
@@ -774,10 +812,23 @@ class Auction(models.Model):
 			return 100
 	
 	@property
-	def show_lot_link_on_auction_list(self):
+	def template_lot_link(self):
+		"""Not directly used in templates, use template_lot_link_first_column and template_lot_link_seperate_column instead"""
 		if timezone.now() > self.lot_submission_start_date:
-			return True
-		return False
+			result = f"<a href='{ self.view_lot_link }'>View lots</a>"
+		else:
+			result = "<small class='text-muted'>Lot submission not yet open</small>"
+		return result
+	
+	@property
+	def template_lot_link_first_column(self):
+		"""Shown on small screens only"""
+		return mark_safe(f'<span class="d-md-none"><br>{self.template_lot_link}</span>')
+	
+	@property
+	def template_lot_link_seperate_column(self):
+		"""Shown on big screens only"""
+		return mark_safe(f'<td class="d-none d-md-block">{self.template_lot_link}</td>')
 
 	@property
 	def can_submit_lots(self):
