@@ -251,6 +251,7 @@ AWS_SES_REGION_NAME = os.environ.get('AWS_SES_REGION_NAME', 'us-east-1')
 AWS_SES_REGION_ENDPOINT = os.environ.get('AWS_SES_REGION_ENDPOINT', 'email.us-east-1.amazonaws.com"')
 USE_SES_V2 = True
 AWS_SES_CONFIGURATION_SET = os.environ.get('AWS_SES_CONFIGURATION_SET', '')
+AWS_SES_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'user@example.com')
 
 if os.environ.get('EMAIL_USE_TLS', 'True') == "True":
     EMAIL_USE_TLS = True
