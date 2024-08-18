@@ -238,7 +238,7 @@ POST_OFFICE = {
     'MAX_RETRIES': 4,
     'RETRY_INTERVAL': datetime.timedelta(minutes=15),  # Schedule to be retried 15 minutes later
     'BACKENDS': {
-        'default': 'django_ses.SESBackend',
+        'default': os.environ.get('POST_OFFICE_EMAIL_BACKEND', 'django_ses.SESBackend'),
     }
 }
 # django-ses configuration
