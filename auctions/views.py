@@ -4393,16 +4393,7 @@ class UnsubscribeView(TemplateView):
         if not userData:
             raise Http404
         else:
-            userData.email_me_about_new_auctions = False
-            userData.email_me_about_new_local_lots = False
-            userData.email_me_about_new_lots_ship_to_location = False
-            userData.email_me_when_people_comment_on_my_lots = False
-            userData.email_me_about_new_chat_replies = False
-            userData.send_reminder_emails_about_joining_auctions = False
-            userData.email_me_about_new_in_person_auctions = False
-            userData.has_unsubscribed = True
-            userData.last_activity = timezone.now()
-            userData.save()
+            userData.unsubscribe_from_all
         context = super().get_context_data(**kwargs)
         return context
 

@@ -1145,6 +1145,17 @@ class AuctionTOS(models.Model):
 	selling_allowed = models.BooleanField(default=True, blank=True)
 	name = models.CharField(max_length=181, null=True, blank=True)
 	email = models.EmailField(null=True, blank=True)
+	EMAIL_ADDRESS_STATUSES = (
+		('BAD', 'Invalid'),
+		('UNKNOWN', "Unknown"),
+		('VALID', 'Verified'),
+	)
+	email_address_status = models.CharField(
+		max_length=20,
+		choices=EMAIL_ADDRESS_STATUSES,
+		default="UNKNOWN",
+		blank=True
+	)
 	phone_number = models.CharField(max_length=20, blank=True, null=True)
 	address = models.CharField(max_length=500, blank=True, null=True)
 	manually_added = models.BooleanField(default=False, blank=True, null=True)
@@ -3275,6 +3286,19 @@ class UserData(models.Model):
 				subscription.save()
 		super().save(*args, **kwargs)
 
+	@property
+	def unsubscribe_from_all(self):
+		self.email_me_about_new_auctions = False
+		self.email_me_about_new_local_lots = False
+		self.email_me_about_new_lots_ship_to_location = False
+		self.email_me_when_people_comment_on_my_lots = False
+		self.email_me_about_new_chat_replies = False
+		self.send_reminder_emails_about_joining_auctions = False
+		self.email_me_about_new_in_person_auctions = False
+		self.has_unsubscribed = True
+		self.last_activity = timezone.now()
+		self.save()
+
 class UserInterestCategory(models.Model):
 	"""
 	How interested is a user in a given category
@@ -3689,18 +3713,29 @@ def bounce_handler(sender, mail_obj, bounce_obj, raw_message, *args, **kwargs):
 	#message_id = mail_obj['messageId']
 	recipient_list = mail_obj['destination']
 	print("Mail bounced")
-	try:
-		print(recipient_list[0])
-	except:
-		print(recipient_list)
 	print(mail_obj)
+	try:
+		email = recipient_list[0]
+		print(email)
+		auctiontos = AuctionTOS.objects.filter(email=email)
+		for tos in auctiontos:
+			tos.email_address_status="BAD"
+			tos.save()
+	except Exception as e:
+		print(e)
+		print(recipient_list)
 
 @receiver(complaint_received)
 def complaint_handler(sender, mail_obj, complaint_obj, raw_message,  *args, **kwargs):
 	recipient_list = mail_obj['destination']
 	print("Mail complaint")
-	try:
-		print(recipient_list[0])
-	except:
-		print(recipient_list)
 	print(mail_obj)
+	try:
+		email = recipient_list[0]
+		print(email)
+		#user = User.objects.filter(email=email).first()
+		#if user:
+		#	user.userdata.unsubscribe_from_all
+	except Exception as e:
+		print(e)
+		print(recipient_list)
