@@ -71,3 +71,4 @@ ua-parser
 user-agents
 heif-image-plugin
 gunicorn
+django-ses[events]

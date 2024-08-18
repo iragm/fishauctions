@@ -4,6 +4,8 @@ from django.contrib import admin
 from . import views
 from django.contrib.auth.decorators import login_required
 from django.views.generic.base import TemplateView
+from django_ses.views import SESEventWebhookView
+from django.views.decorators.csrf import csrf_exempt
 
 urlpatterns = [
     path('api/auctiontos-autocomplete/', views.AuctionTOSAutocomplete.as_view(), name='auctiontos-autocomplete'),
@@ -147,4 +149,5 @@ urlpatterns = [
     path('api/lots/<int:pk>/refund', views.LotRefundDialog.as_view(), name='lot_refund'),
     path('auctions/<slug:slug>/no-show/<str:tos>/', views.AuctionNoShow.as_view(), name='auction_no_show'),
     path('api/auctions/<slug:slug>/no-show/<str:tos>/', views.AuctionNoShowAction.as_view(), name='auction_no_show_dialog'),
+    re_path(r'^ses/event-webhook/$', SESEventWebhookView.as_view(), name='handle-event-webhook'),
 ]

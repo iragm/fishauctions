@@ -35,6 +35,12 @@ bleach[css]==6.1.0
     #   -r ./requirements.in
     #   django-markdownfield
     #   django-post-office
+boto3==1.35.0
+    # via django-ses
+botocore==1.35.0
+    # via
+    #   boto3
+    #   s3transfer
 certifi==2024.7.4
     # via
     #   -r ./requirements.in
@@ -68,6 +74,7 @@ cryptography==42.0.8
     # via
     #   -r ./requirements.in
     #   autobahn
+    #   django-ses
     #   pyopenssl
     #   service-identity
 daphne==4.1.2
@@ -94,6 +101,7 @@ django>=4.2.14,<5.1
     #   django-post-office
     #   django-qr-code
     #   django-recaptcha
+    #   django-ses
     #   django-tables2
     #   easy-thumbnails
     #   jsonfield
@@ -131,6 +139,8 @@ django-qr-code>=4.0.1
     # via -r ./requirements.in
 django-recaptcha==4.0.0
     # via -r ./requirements.in
+django-ses[events]==4.1.0
+    # via -r ./requirements.in
 django-tables2==2.7.0
     # via -r ./requirements.in
 easy-thumbnails==2.8.5
@@ -159,6 +169,10 @@ incremental==22.10.0
     # via
     #   -r ./requirements.in
     #   twisted
+jmespath==1.0.1
+    # via
+    #   boto3
+    #   botocore
 jsonfield==3.1.0
     # via -r ./requirements.in
 markdown==3.6
@@ -220,12 +234,16 @@ pyopenssl==24.2.1
     #   twisted
 pyparsing==3.1.2
     # via -r ./requirements.in
+python-dateutil==2.9.0.post0
+    # via botocore
 python-dotenv==1.0.1
     # via uvicorn
 python3-openid==3.2.0
     # via -r ./requirements.in
 pytz==2024.1
-    # via -r ./requirements.in
+    # via
+    #   -r ./requirements.in
+    #   django-ses
 pyyaml==6.0.1
     # via
     #   -r ./requirements.in
@@ -237,9 +255,12 @@ reportlab==4.2.2
 requests==2.32.3
     # via
     #   -r ./requirements.in
+    #   django-ses
     #   requests-oauthlib
 requests-oauthlib==2.0.0
     # via -r ./requirements.in
+s3transfer==0.10.2
+    # via boto3
 segno==1.6.1
     # via django-qr-code
 service-identity==24.1.0
@@ -255,6 +276,7 @@ six==1.16.0
     #   -r ./requirements.in
     #   automat
     #   bleach
+    #   python-dateutil
 sniffio==1.3.1
     # via anyio
 sqlparse==0.5.1
@@ -285,6 +307,7 @@ ua-parser==0.18.0
 urllib3==2.2.2
     # via
     #   -r ./requirements.in
+    #   botocore
     #   requests
 user-agents==2.2.0
     # via -r ./requirements.in

@@ -27,6 +27,7 @@ from dal import autocomplete
 from pytz import timezone as pytz_timezone
 from django.core.exceptions import ValidationError
 from django.utils.safestring import mark_safe
+from django_ses.signals import bounce_received, complaint_received
 
 def nearby_auctions(latitude, longitude, distance=100, include_already_joined=False, user=None, return_slugs=False):
 	"""Return a list of auctions or auction slugs that are within a specified distance of the given location"""
@@ -3681,3 +3682,25 @@ def user_logged_in_callback(sender, user, request, **kwargs):
 def create_user_userdata(sender, instance, created, **kwargs):
     if created:
         UserData.objects.create(user=instance)
+
+@receiver(bounce_received)
+def bounce_handler(sender, mail_obj, bounce_obj, raw_message, *args, **kwargs):
+    # you can then use the message ID and/or recipient_list(email address) to identify any problematic email messages that you have sent
+	#message_id = mail_obj['messageId']
+	recipient_list = mail_obj['destination']
+	print("Mail bounced")
+	try:
+		print(recipient_list[0])
+	except:
+		print(recipient_list)
+	print(mail_obj)
+
+@receiver(complaint_received)
+def complaint_handler(sender, mail_obj, complaint_obj, raw_message,  *args, **kwargs):
+	recipient_list = mail_obj['destination']
+	print("Mail complaint")
+	try:
+		print(recipient_list[0])
+	except:
+		print(recipient_list)
+	print(mail_obj)

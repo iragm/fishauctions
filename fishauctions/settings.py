@@ -88,6 +88,7 @@ INSTALLED_APPS = [
     'crispy_bootstrap5',
     'django_recaptcha',
     'chartjs',
+    'django_ses',
 ]
 ASGI_APPLICATION = "fishauctions.asgi.application"
 MIDDLEWARE = [
@@ -236,7 +237,20 @@ else:
 POST_OFFICE = {
     'MAX_RETRIES': 4,
     'RETRY_INTERVAL': datetime.timedelta(minutes=15),  # Schedule to be retried 15 minutes later
+    'BACKENDS': {
+        'default': 'django_ses.SESBackend',
+    }
 }
+# django-ses configuration
+AWS_SES_AUTO_THROTTLE = 0.5
+AWS_ACCESS_KEY_ID = os.environ.get('AWS_ACCESS_KEY_ID', '')
+AWS_SECRET_ACCESS_KEY = os.environ.get('AWS_SECRET_ACCESS_KEY', '')
+# https://docs.aws.amazon.com/cli/v1/userguide/cli-configure-files.html
+AWS_SESSION_PROFILE = os.environ.get('AWS_SESSION_PROFILE', 'default')
+AWS_SES_REGION_NAME = os.environ.get('AWS_SES_REGION_NAME', 'us-east-1')
+AWS_SES_REGION_ENDPOINT = os.environ.get('AWS_SES_REGION_ENDPOINT', 'email.us-east-1.amazonaws.com"')
+USE_SES_V2 = True
+AWS_SES_CONFIGURATION_SET = os.environ.get('AWS_SES_CONFIGURATION_SET', '')
 
 if os.environ.get('EMAIL_USE_TLS', 'True') == "True":
     EMAIL_USE_TLS = True
