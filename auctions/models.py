@@ -1360,6 +1360,15 @@ class AuctionTOS(models.Model):
 			self.bidder_number = 999
 		if str(self.memo) == "None":
 			self.memo = ""
+		# update the email address as appropriate
+		if self.email and self.email_address_status == "UNKNOWN":
+			existing_instance = AuctionTOS.objects.filter(
+                email=self.email,
+                auction__created_by=self.auction.created_by,
+                email_address_status__ne="UNKNOWN"
+            ).order_by('-createdon').first()
+			if existing_instance:
+				self.email_address_status = existing_instance.email_address_status
 		super().save(*args, **kwargs) 
 
 	@property
@@ -3712,30 +3721,16 @@ def bounce_handler(sender, mail_obj, bounce_obj, raw_message, *args, **kwargs):
     # you can then use the message ID and/or recipient_list(email address) to identify any problematic email messages that you have sent
 	#message_id = mail_obj['messageId']
 	recipient_list = mail_obj['destination']
-	print("Mail bounced")
-	print(mail_obj)
-	try:
-		email = recipient_list[0]
-		print(email)
-		auctiontos = AuctionTOS.objects.filter(email=email)
-		for tos in auctiontos:
-			tos.email_address_status="BAD"
-			tos.save()
-	except Exception as e:
-		print(e)
-		print(recipient_list)
+	email = recipient_list[0]
+	auctiontos = AuctionTOS.objects.filter(email=email)
+	for tos in auctiontos:
+		tos.email_address_status="BAD"
+		tos.save()
 
 @receiver(complaint_received)
 def complaint_handler(sender, mail_obj, complaint_obj, raw_message,  *args, **kwargs):
 	recipient_list = mail_obj['destination']
-	print("Mail complaint")
-	print(mail_obj)
-	try:
-		email = recipient_list[0]
-		print(email)
-		#user = User.objects.filter(email=email).first()
-		#if user:
-		#	user.userdata.unsubscribe_from_all
-	except Exception as e:
-		print(e)
-		print(recipient_list)
+	email = recipient_list[0]
+	user = User.objects.filter(email=email).first()
+	if user:
+		user.userdata.unsubscribe_from_all

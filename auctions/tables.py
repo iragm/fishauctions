@@ -27,8 +27,10 @@ class AuctionTOSHTMxTable(tables.Table):
     def render_email(self, value, record):
         email_string = f'<a href="mailto:{value}">{value}</a>'
         #email_string = value
-        if record.user:
-            email_string += "<i class='bi bi-check me-1' title='Verified email'></i>"
+        if record.email_address_status == "BAD":
+            email_string += "<i class='bi bi-envelope-exclamation-fill text-danger ms-1' title='Unable to send email to this address'></i>"
+        if record.email_address_status == "VALID":
+            email_string += "<i class='bi bi-envelope-check-fill ms-1' title='Verified email'></i>"
         return mark_safe(email_string)
 
     class Meta:

@@ -1175,7 +1175,7 @@ def userReport(request):
     found = []
     writer.writerow(['Name', 'Email', 'Phone'])
     auctions = Auction.objects.filter(Q(created_by=request.user)|Q(auctiontos__is_admin=True, auctiontos__user=request.user))
-    users = AuctionTOS.objects.filter(auction__in=auctions)
+    users = AuctionTOS.objects.filter(auction__in=auctions).exclude(email_address_status="BAD")
     for user in users:
         if user.email not in found:
             writer.writerow([user.name, user.email, user.phone_as_string])
@@ -3123,6 +3123,9 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
                 obj.time_spent_reading_rules = form.cleaned_data['time_spent_reading_rules']
             # even if an auctiontos was originally manually added, if the user clicked join, mark them as not manually added
             obj.manually_added = False
+            if obj.email_address_status == "UNKNOWN":
+                # if it bounced in the past, the user may have a full inbox or something
+                obj.email_address_status = "VALID"
             # fill out some information in the tos if not already filled out
             if not obj.name:
                 obj.name = self.request.user.first_name + " " + self.request.user.last_name
@@ -3266,8 +3269,8 @@ class allAuctions(ListView):
             qs = qs.annotate(
                 distance=Subquery(closest_pickup_location_subquery)
                 )
-        #if self.request.user.is_superuser:
-        #    return qs
+        if self.request.user.is_superuser:
+            return qs
         if not self.request.user.is_authenticated:
             return qs.filter(standard_filter)
         qs = qs.filter(Q(auctiontos__user=self.request.user)|
@@ -3512,6 +3515,8 @@ class InvoiceNoLoginView(InvoiceView):
         invoice = self.get_object()
         invoice.opened = True
         invoice.save()
+        invoice.auctiontos_user.email_address_status = "VALID"
+        invoice.auctiontos_user.save()
         return super().dispatch(request, *args, **kwargs)
 
 class LotLabelView(View, AuctionPermissionsMixin):
