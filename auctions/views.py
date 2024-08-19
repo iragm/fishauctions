@@ -1356,6 +1356,7 @@ class PickupLocationsDelete(DeleteView, AuctionPermissionsMixin):
         self.auction = self.get_object().auction
         self.success_url = reverse("auction_pickup_location", kwargs={'slug': self.auction.slug})
         if self.get_object().auction.location_qs.count() < 2:
+            self.success_url = reverse("auction_main", kwargs={'slug': self.auction.slug})
             messages.error(request, "You can't delete the only pickup location in this auction")
             return redirect(self.success_url)
         if self.get_object().number_of_users:

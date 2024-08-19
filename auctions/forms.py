@@ -1003,7 +1003,7 @@ class AuctionJoin(forms.ModelForm):
                 location = auction.location_qs[0]
                 self.fields['pickup_location'].initial = location
                 if location.pickup_by_mail:
-                    self.fields['i_agree'].label = f"Yes, {location}"
+                    self.fields['i_agree'].label = f"Yes, mail me my lots"
                 else:
                     self.fields['i_agree'].label = f"Yes, I will be at {location}"
 

@@ -1362,10 +1362,9 @@ class AuctionTOS(models.Model):
 			self.memo = ""
 		# update the email address as appropriate
 		if self.email and self.email_address_status == "UNKNOWN":
-			existing_instance = AuctionTOS.objects.filter(
+			existing_instance = AuctionTOS.objects.exclude(email_address_status="UNKNOWN").filter(
                 email=self.email,
                 auction__created_by=self.auction.created_by,
-                email_address_status__ne="UNKNOWN"
             ).order_by('-createdon').first()
 			if existing_instance:
 				self.email_address_status = existing_instance.email_address_status
