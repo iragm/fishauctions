@@ -1068,7 +1068,7 @@ class PickupLocationForm(forms.ModelForm):
         #     self.fields['auction'].queryset = Auction.objects.filter(date_end__gte=timezone.now()).order_by('date_end')
         # else:
         #     self.fields['auction'].queryset = Auction.objects.filter(created_by=self.user).filter(date_end__gte=timezone.now()).order_by('date_end')
-        contact_queryset = AuctionTOS.objects.filter(auction=self.auction, is_admin=True).order_by('-createdon')
+        contact_queryset = AuctionTOS.objects.filter(auction=self.auction, is_admin=True).order_by('name')
         self.fields['contact_person'].queryset = contact_queryset
         self.fields['contact_person'].label_from_instance = lambda obj: "%s" % obj.name
         delete_button_html = ""
@@ -1113,7 +1113,7 @@ class PickupLocationForm(forms.ModelForm):
             css_id='non-mail',
             ),
             'description',
-            HTML(f'<a class="btn bg-secondary ms-2" href="javascript:window.history.back();">Cancel</a>{delete_button_html}'),
+            HTML(f'{delete_button_html}'),
             Submit('submit', 'Save', css_class='bg-success ms-2'),
         )
     
