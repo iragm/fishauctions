@@ -145,8 +145,8 @@ class AuctionTOSFilter(django_filters.FilterSet):
             'unseen': {'auctiontos__opened': False},
             'no bid': {'bidding_allowed': False},
             'no sell': {'selling_allowed': False},
-            'email good': {'email_address_status': 'BAD'},
-            'email bad': {'email_address_status': 'VALID'},
+            'email bad': {'email_address_status': 'BAD'},
+            'email good': {'email_address_status': 'VALID'},
         }
 
         # Apply filters based on patterns
