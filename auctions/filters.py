@@ -71,7 +71,7 @@ class AuctionTOSFilter(django_filters.FilterSet):
             ['george','georgie', 'geo'],
             ['greg','gregory','gregg'],
             ['hank','henry'],
-            ['jack','jackson','jackie'],
+            ['jack','jackson','jackie', 'john'],
             ['james','jamie','jim','jimmy'],
             ['jason','jay','jase'],
             ['jeff','jeffrey','jeffry'],
@@ -79,7 +79,7 @@ class AuctionTOSFilter(django_filters.FilterSet):
             ['jesse','jess','jessie'],
             ['jim','james','jimmy'],
             ['joe','joseph','joey'],
-            ['john','jonathan','jon','johnny'],
+            ['john','jonathan','jon','johnny', 'jack'],
             ['josh','joshua','joshie'],
             ['justin','justine','jussi'],
             ['keith','keithan'],
@@ -164,14 +164,14 @@ class AuctionTOSFilter(django_filters.FilterSet):
         else:
             first_name = ""
         if len(parts) >= 2:
-            last_name = parts[1]
+            last_name = " " + parts[1]
         else:
             last_name = ""
         for name_set in RHYMING_NAMES:
             if first_name in name_set:
                 # got a match?  Add all possible matches as OR filters
                 for possible_matching_name in name_set:
-                    qList |= Q(name__istartswith=possible_matching_name + " " + last_name)
+                    qList |= Q(name__istartswith=possible_matching_name + last_name)
 
         value = value.strip()
         normal_filter = Q(
