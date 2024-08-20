@@ -691,6 +691,8 @@ class CreateEditAuctionTOS(forms.ModelForm):
             self.fields['memo'].initial = self.auctiontos.memo
             self.fields['name'].initial = self.auctiontos.name
             self.fields['email'].initial = self.auctiontos.email
+            if self.auctiontos.pk and self.auctiontos.email_address_status == "BAD":
+                self.fields['email'].help_text = f"<span class='text-warning'>Emails sent to {self.auctiontos.email} have bounced</span>, try to get an updated email from this user."
             try:
                 self.fields['phone_number'].initial = self.auctiontos.phone_as_string
             except:
