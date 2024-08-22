@@ -60,7 +60,10 @@ class LotHTMxTable(tables.Table):
 				</button>
 				<div class="dropdown-menu">
 					<div><a href='{record.lot_link}?src=admin'><i class="bi bi-calendar ms-1 me-1"></i>Lot page</a></div>
-					<div><a href='#' hx-get="{reverse('lot_refund', kwargs={'pk':record.pk})}",
+		"""
+        if not record.image_count:
+            result += f"""<a href="{reverse("add_image", kwargs={"lot": record.pk})}?next={reverse("auction_lot_list", kwargs={"slug":record.auction.slug})}"<i class="bi bi-file-image ms-1 me-1"></i>Add image</a>"""
+        result += f"""<div><a href='#' hx-get="{reverse('lot_refund', kwargs={'pk':record.pk})}",
                 hx-target="#modals-here",
                 hx-trigger="click",
                 _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"><i class="bi bi-calendar-x ms-1 me-1"></i>Remove or refund</a></div>

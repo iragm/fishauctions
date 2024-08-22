@@ -2238,7 +2238,10 @@ class ImageCreateView(LoginRequiredMixin, CreateView):
         return super().dispatch(request, *args, **kwargs)
 
     def get_success_url(self):
-        return f'/lots/{self.lot.lot_number}/{self.lot.slug}/'
+        data = self.request.GET.copy()
+        if len(data) == 0:
+            data['next'] = self.lot.lot_link
+        return data['next'] 
     
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
