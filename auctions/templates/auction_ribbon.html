@@ -38,6 +38,7 @@
           <a class="dropdown-item" href="{{ auction.location_link }}"><i class="bi bi-geo-alt-fill"></i> Location{% if auction.location_qs|length > 1 %}s{% endif %}</a>
           <a class="dropdown-item" href="{{ auction.set_lot_winners_link }}"><i class="bi bi-calendar-check"></i> Set lot winners</a>
           <a class="dropdown-item" href="/auctions/{{auction.slug}}/chat/"><i class="bi bi-chat-fill"></i> Chat messages</a>
+          <a class="dropdown-item" href="/faq"><i class="bi bi-question-circle-fill"></i> Help and Support</a>
           <a class="dropdown-item" href="/auctions/new?copy={{auction.slug}}"><i class="bi bi-plus-circle"></i> Copy to new auction</a>
           <a class="dropdown-item" href="/auctions/{{auction.slug}}/stats/"><i class="bi bi-graph-up"></i> Stats</a>
           {% if not auction.is_online %}<a class="dropdown-item" href='{% url "auction_printing" slug=auction.slug %}'><i class="bi bi-tags"></i> Print labels</a>{% endif %}
