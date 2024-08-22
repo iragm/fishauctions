@@ -311,6 +311,7 @@ window.onload = function() {
                   </li>
                   {% else %}
                   <a href="{% url 'account_login' %}?next={% firstof request.path '/' %}" class='nav-link'>Sign in</a>
+                  <a href="/signup?next={% firstof request.path '/' %}" class='nav-link'>Create account</a>
                 {% endif %}
                 </ul>
               </div>
