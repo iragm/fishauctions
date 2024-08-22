@@ -116,11 +116,12 @@ class UserInline(admin.TabularInline):
 
 class ClubAdmin(admin.ModelAdmin):
     model = Club 
-    list_display = ("name", "contact_email", "date_contacted")
+    list_display = ("name", "contact_email", "date_contacted_for_in_person_auctions")
     search_fields = ("name",'abbreviation', 'contact_email', 'homepage',)
     list_filter =  (
         "active",
         ("date_contacted", admin.EmptyFieldListFilter),
+        ("date_contacted_for_in_person_auctions", admin.EmptyFieldListFilter),
         ("contact_email", admin.EmptyFieldListFilter),
         ("notes", admin.EmptyFieldListFilter),
         ("latitude", admin.EmptyFieldListFilter),

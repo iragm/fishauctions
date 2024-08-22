@@ -3901,7 +3901,7 @@ class LotRefundDialog(DetailView, FormMixin, AuctionPermissionsMixin):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['lot'] = self.lot
-        if self.lot.active or not self.lot.winning_price:
+        if not self.lot.sold:
             context['tooltip'] = "This lot has not sold, there's nothing to refund.  If there's a problem with this lot, remove it."
         else:
             # if a refund has already been issued for this lot, we need to calculate how much is unpaid by temporarily removing it

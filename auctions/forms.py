@@ -941,9 +941,9 @@ class LotRefundForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         self.lot = kwargs.pop('lot')
         super().__init__(*args, **kwargs)
-        if self.lot.active or not self.lot.winning_price:
+        if not self.lot.sold:
             self.fields['partial_refund_percent'].widget = HiddenInput()
-        if self.lot.winning_price:
+        else:
             self.fields['banned'].widget = HiddenInput()
         save_button_html = f'<button hx-post="{reverse("lot_refund", kwargs={"pk":self.lot.pk})}" hx-target="#modals-here" type="submit" class="btn bg-success float-right ms-2">Save</button>'
         self.helper = FormHelper()

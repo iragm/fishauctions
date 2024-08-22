@@ -7,7 +7,7 @@
 {% block content %}
   {% include 'auction_ribbon.html' %}
   <small>This is a list of items for sale in your auction.  Click a lot name to edit it.  To add new lots, go to the <a href="{% url 'auction_tos_list' slug=auction.slug %}">users page</a> and click add lots under the appropriate user.<br></small>
-    <a class='btn btn-sm btn-primary' href="{{ auction.set_lot_winners_link }}"><i class="bi bi-calendar-check"></i> Set lot winners</a>
+    {% if not auction.is_online %}<a class='btn btn-sm btn-primary' href="{{ auction.set_lot_winners_link }}"><i class="bi bi-calendar-check"></i> Set lot winners</a>{% endif %}
     <a id='all_lot_list' href="{% url 'lot_list' slug=auction.slug %}" class="btn btn-sm mt-2 mb-2 btn-primary"><i class="bi bi-download"></i> Export CSV</a> 
     <a href="{{auction.view_lot_link}}" class="btn btn-sm btn-primary"><i class="bi bi-calendar"></i> See lots as users see them</a>
 

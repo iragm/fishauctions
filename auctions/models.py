@@ -320,6 +320,7 @@ class Club(models.Model):
 	facebook_page = models.CharField(max_length=255, blank=True, null=True)
 	contact_email = models.CharField(max_length=255, blank=True, null=True)
 	date_contacted = models.DateTimeField(blank=True, null=True)
+	date_contacted_for_in_person_auctions = models.DateTimeField(blank=True, null=True)
 	notes = models.CharField(max_length=300, blank=True, null=True)
 	notes.help_text = "Only visible in the admin site, never made public"
 	interests = models.ManyToManyField(GeneralInterest, blank=True)

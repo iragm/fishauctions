@@ -54,7 +54,21 @@ class LotHTMxTable(tables.Table):
     lot_number = tables.Column(accessor='lot_number_display', verbose_name="Lot number", orderable=False)
 
     def render_lot_name(self, value, record):
-        result = f"<a href='' hx-noget hx-get='/api/lot/{record.pk}' hx-target='#modals-here' hx-trigger='click'><i class='bi bi-calendar-fill me-1'></i>{value}</a> (<a href='{record.lot_link}?src=admin'>View</a>)"
+        result = f"""
+        <a href='' hx-noget hx-get='/api/lot/{record.pk}' hx-target='#modals-here' hx-trigger='click'><i class='bi bi-calendar-fill me-1'></i>{value}</a>
+        <button type="button" class="btn btn-sm bg-secondary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+				</button>
+				<div class="dropdown-menu">
+					<div><a href='{record.lot_link}?src=admin'><i class="bi bi-calendar ms-1 me-1"></i>Lot page</a></div>
+					<div><a href='#' hx-get="{reverse('lot_refund', kwargs={'pk':record.pk})}",
+                hx-target="#modals-here",
+                hx-trigger="click",
+                _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"><i class="bi bi-calendar-x ms-1 me-1"></i>Remove or refund</a></div>
+                <div><a class="" href="{reverse("single_lot_label", kwargs={"pk": record.pk})}"><i class="bi bi-tag ms-1 me-1"></i>{"Reprint label" if record.label_printed else "Print label"}</a></div>
+				</div>
+        """
+        if record.banned:
+            result += '<span class="badge bg-danger">Removed</span>'
         return mark_safe(result)
 
     class Meta:
