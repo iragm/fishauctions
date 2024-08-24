@@ -68,8 +68,14 @@ class LotHTMxTable(tables.Table):
                 hx-trigger="click",
                 _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"><i class="bi bi-calendar-x ms-1 me-1"></i>Remove or refund</a></div>
                 <div><a class="" href="{reverse("single_lot_label", kwargs={"pk": record.pk})}"><i class="bi bi-tag ms-1 me-1"></i>{"Reprint label" if record.label_printed else "Print label"}</a></div>
-				</div>
+                <div><a href="{ record.seller_invoice_link }"><i class="bi bi-bag-fill ms-1 me-1"></i>Seller's invoice</a></div>
+
         """
+        if record.winner_invoice_link:
+            result += f"""
+            <div><a href="{ record.winner_invoice_link }"><i class="bi bi-bag ms-1 me-1"></i>Winner's invoice</a></div>
+			"""
+        result += "</div>"
         if record.banned:
             result += '<span class="badge bg-danger">Removed</span>'
         return mark_safe(result)

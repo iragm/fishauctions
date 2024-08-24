@@ -362,7 +362,7 @@ class WinnerLotSimpleImages(WinnerLotSimple):
                             <div class="btn-group" role="group">
                                 <button id="btnGroupDrop2" type="button" class="btn btn-success dropdown-toggle" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false"></button>
                                 <div class="dropdown-menu" aria-labelledby="btnGroupDrop2" style="">
-                                <a id='mark_unsold' class="dropdown-item" href="#">Mark unsold</a>
+                                <a id='mark_unsold' class="dropdown-item" href="#">End lot unsold</a>
                                 <script>
                                     $(document).ready(function() {
                                         $('#mark_unsold').click(function(event) {
