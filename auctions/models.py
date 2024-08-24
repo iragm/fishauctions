@@ -1847,10 +1847,10 @@ class Lot(models.Model):
 	@property
 	def seller_name(self):
 		"""Full name of the seller of this lot"""
-		if self.user:
-			return self.user.first_name + " " + self.user.last_name
 		if self.auctiontos_seller:
 			return self.auctiontos_seller.name
+		if self.user:
+			return self.user.first_name + " " + self.user.last_name
 		return "Unknown"
 
 	@property
