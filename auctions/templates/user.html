@@ -62,16 +62,6 @@
                     <td>{{ data.lots_viewed }}
                     </td>
                 </tr>
-                {% if data.rank_total_sold %}<tr>
-                    <td>Seller rank:</td>
-                    <td>{{data.rank_total_sold}} (Top {{ data.seller_percentile }}%)
-                    </td>
-                </tr>{%endif%}
-                {% if data.rank_volume %}<tr>
-                    <td>Total volume rank:</td>
-                    <td>{{data.rank_volume}} (Top {{ data.volume_percentile }}%)
-                    </td>
-                </tr>{%endif%}
                 {% if data.percent_success %}<tr>
                     <td>Bid success:<br><small class="text-muted">Only for online auctions</small></td>
                     <td>When you bid, you win <b>{{data.percent_success|floatformat:0}}%</b> of the time.

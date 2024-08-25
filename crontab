@@ -11,9 +11,6 @@
 # Email users about invoices
 */15 * * * * /home/app/web/task.sh email_invoice
 
-# Update leaderboard
-* 23 * * * /home/app/web/task.sh update_breederboard
-
 # send email
 * * * * * /home/app/web/task.sh send_queued_mail
 
