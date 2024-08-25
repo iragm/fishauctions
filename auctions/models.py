@@ -560,8 +560,8 @@ class Auction(models.Model):
 		if not self.extra_promo_text or self.closed or self.in_person_closed:
 			return ""
 		if self.extra_promo_link:
-			return mark_safe(f"<br><a class='magic' href='{self.extra_promo_link}'>{self.extra_promo_text}</a>")
-		return mark_safe(f"<br><span class='magic'>{self.extra_promo_text}</span>")
+			return mark_safe(f"<br><a class='magic text-warning' href='{self.extra_promo_link}'>{self.extra_promo_text}</a>")
+		return mark_safe(f"<br><span class='magic text-warning'>{self.extra_promo_text}</span>")
 	
 	@property
 	def template_date_timestamp(self):
