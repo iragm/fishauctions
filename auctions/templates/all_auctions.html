@@ -23,7 +23,8 @@
             <tr>
               <td><a href='/auctions/{{last_auction_used.slug}}'>{{ last_auction_used.title }}</a><br class="d-md-none"><span class='ms-1 badge bg-light text-black'>Your last auction</span>
                 {{ last_auction_used.template_lot_link_first_column }}
-              </td>
+                {{ last_auction_used.template_promo_info }}
+            </td>
               <td>
                 {{ last_auction_used.template_status }}
                 {{ last_auction_used.template_date_timestamp }}
@@ -38,7 +39,8 @@
                 {% if not auction.promote_this_auction %}<span class='badge bg-dark'>Not promoted</span>{% endif %}
                 {% if not location_message and auction.number_of_locations %}<span class='badge bg-primary'>{{ auction.distance | floatformat:0 }} miles from you</span>{% endif %}
                 {{ auction.template_lot_link_first_column }}
-              </td>
+                {{ auction.template_promo_info }}
+            </td>
               <td>
                 {{ auction.template_status }}
                 {{ auction.template_date_timestamp }}

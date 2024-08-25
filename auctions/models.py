@@ -475,6 +475,8 @@ class Auction(models.Model):
 	tax.help_text = 'Added to invoices for all won lots'
 	advanced_lot_adding = models.BooleanField(default=False)
 	advanced_lot_adding.help_text = "Show lot number, quantity and description fields when bulk adding lots"
+	extra_promo_text = models.CharField(max_length=50, default="", blank=True, null=True)
+	extra_promo_link = models.URLField(blank=True, null=True)
 
 	def __str__(self):
 		result = self.title
@@ -553,6 +555,14 @@ class Auction(models.Model):
 			return "in person auction with lot delivery to additional locations"
 		return "unknown auction type"							
 
+	@property
+	def template_promo_info(self):
+		if not self.extra_promo_text:
+			return ""
+		if self.extra_promo_link:
+			return mark_safe(f"<br><a class='magic' href='{self.extra_promo_link}'>{self.extra_promo_text}</a>")
+		return mark_safe(f"<br><span class='magic'>{self.extra_promo_text}</span>")
+	
 	@property
 	def template_date_timestamp(self):
 		"""For use in all auctions list"""

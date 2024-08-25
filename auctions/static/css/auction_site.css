@@ -63,3 +63,14 @@ a.ad:hover {
 .modal-backdrop {
     z-index: 1040 !important;
 }
+
+.magic {
+  animation: magic_animation 1s linear infinite .5s;
+}
+
+@keyframes magic_animation {
+  70% {
+    text-shadow: 0 0 10px rgba(180, 157, 26, 0.907);
+  }
+  
+}
