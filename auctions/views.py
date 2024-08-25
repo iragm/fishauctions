@@ -3274,7 +3274,7 @@ class allAuctions(ListView):
                 distance=Subquery(closest_pickup_location_subquery)
                 )
         if self.request.user.is_superuser:
-            return qs
+            return qs.exclude(pk=self.request.user.userdata.last_auction_used.pk)
         if not self.request.user.is_authenticated:
             return qs.filter(standard_filter)
         qs = qs.filter(Q(auctiontos__user=self.request.user)|

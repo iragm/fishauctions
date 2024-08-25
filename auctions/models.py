@@ -557,7 +557,7 @@ class Auction(models.Model):
 
 	@property
 	def template_promo_info(self):
-		if not self.extra_promo_text:
+		if not self.extra_promo_text or self.closed or self.in_person_closed:
 			return ""
 		if self.extra_promo_link:
 			return mark_safe(f"<br><a class='magic' href='{self.extra_promo_link}'>{self.extra_promo_text}</a>")
