@@ -62,7 +62,7 @@ $(document).ready(function(){
 {% if print_label_link and not invoice.printed and not is_admin %}
 <script>
 $(document).ready(function(){
-  $('#printomatic-9000').attr('data-original-title', "Print on regular paper in portrait mode, no label maker required.").tooltip('show');  
+  $('#printomatic-9000').attr('data-bs-title', "Print on regular paper in portrait mode, no label maker required.").tooltip('show');  
 });
 </script>
 {% endif %}

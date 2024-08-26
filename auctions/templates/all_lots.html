@@ -119,7 +119,7 @@ Your lots{% else %}
       // {% endif %}
       {% if search_button_tooltip %}
       $(document).ready(function(){
-          $('#search-form-toggle').attr('data-original-title', "{{ search_button_tooltip }}").tooltip('show');  
+          $('#search-form-toggle').attr('data-bs-title', "{{ search_button_tooltip }}").tooltip('show');  
         });
         {% endif %}
       </script>

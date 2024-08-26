@@ -51,7 +51,7 @@ $("#submit-id-submit").click(function(event){
             if (elementInViewport(joinButton)) {
                 $('#join-message').tooltip('hide');
                 clearTimeout(message);
-                $('#submit-id-submit').attr('data-original-title', "Join this auction and you'll be able to bid").tooltip('show');
+                $('#submit-id-submit').attr('data-bs-title', "Join this auction and you'll be able to bid").tooltip('show');
                 message = setTimeout(function(){ $('#submit-id-submit').tooltip('hide'); }, 3000);
             } else {
                 clearTimeout(message);
