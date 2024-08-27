@@ -87,6 +87,7 @@ class Command(BaseCommand):
                                                         user__isnull=False,
                                                         email_sent=False,
                                                         auction__isnull=False,
+                                                        auction__is_deleted=False,
                                                         user__userdata__send_reminder_emails_about_joining_auctions=True)
         for campaign in join_auction_reminder:
             email = campaign.user.email
