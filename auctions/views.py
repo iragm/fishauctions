@@ -4706,59 +4706,59 @@ class AuctionStatsReferrersJSONView(AuctionStatsBarChartJSONView):
         result.append(other)
         return [result]
 
-# this view and the following collect specific data for the tutorial videos
-class AdminStatsImages(AuctionStatsBarChartJSONView):
-    def get_labels(self):
-        return ['No images', 'Has image']
+# # this view and the following collect specific data for the tutorial videos
+# class AdminStatsImages(AuctionStatsBarChartJSONView):
+#     def get_labels(self):
+#         return ['No images', 'Has image']
     
-    def get_providers(self):
-        return ['Median sell price', "Average sell price"]
+#     def get_providers(self):
+#         return ['Median sell price', "Average sell price"]
 
-    def get_data(self):
-        lots = Lot.objects.filter(auction__slug__in=['njas-in-person-spring-auction-april-2024','nec-2024-auction'], winning_price__isnull=False).annotate(num_images=Count('lotimage'))
-        lots_with_no_images = lots.filter(num_images=0)
-        lots_with_one_image = lots.filter(num_images__gt=0)
-        medians = []
-        averages = []
-        counts = []
-        for lots in [lots_with_no_images, lots_with_one_image]:
-            try:
-                medians.append(median_value(lots, 'winning_price'))
-            except:
-                medians.append(0)
-            averages.append(lots.aggregate(avg_value=Avg('winning_price'))['avg_value'])
-        return [medians, averages ]
+#     def get_data(self):
+#         lots = Lot.objects.filter(auction__slug__in=['njas-in-person-spring-auction-april-2024','nec-2024-auction'], winning_price__isnull=False).annotate(num_images=Count('lotimage'))
+#         lots_with_no_images = lots.filter(num_images=0)
+#         lots_with_one_image = lots.filter(num_images__gt=0)
+#         medians = []
+#         averages = []
+#         counts = []
+#         for lots in [lots_with_no_images, lots_with_one_image]:
+#             try:
+#                 medians.append(median_value(lots, 'winning_price'))
+#             except:
+#                 medians.append(0)
+#             averages.append(lots.aggregate(avg_value=Avg('winning_price'))['avg_value'])
+#         return [medians, averages ]
 
-    def dispatch(self, request, *args, **kwargs):
-        # little hack for permissions
-        return super().dispatch(request, *args, slug="tfcb-2023-annual-auction", **kwargs)
+#     def dispatch(self, request, *args, **kwargs):
+#         # little hack for permissions
+#         return super().dispatch(request, *args, slug="tfcb-2023-annual-auction", **kwargs)
 
-class AdminStatsDistanceTraveled(AuctionStatsBarChartJSONView):
-    def get_labels(self):
-        return ['Less than 10 miles', '10-20 miles', '21-30 miles', '31-40 miles', '41-50 miles', '51+ miles']
+# class AdminStatsDistanceTraveled(AuctionStatsBarChartJSONView):
+#     def get_labels(self):
+#         return ['Less than 10 miles', '10-20 miles', '21-30 miles', '31-40 miles', '41-50 miles', '51+ miles']
     
-    def get_providers(self):
-        return ['Number of people']
-        return ['Sellers', 'Buyers']
+#     def get_providers(self):
+#         return ['Number of people']
+#         return ['Sellers', 'Buyers']
 
-    def get_data(self):
-        slugs_list = ['tfcb-annual', 'acm', 'ovas', 'njas', 'nec', 'scas']
-        q_object = Q()
-        for slug in slugs_list:
-            q_object |= Q(auction__slug__icontains=slug)
+#     def get_data(self):
+#         slugs_list = ['tfcb-annual', 'acm', 'ovas', 'njas', 'nec', 'scas']
+#         q_object = Q()
+#         for slug in slugs_list:
+#             q_object |= Q(auction__slug__icontains=slug)
 
-        buyers = AuctionTOS.objects.filter(q_object, auctiontos_winner__isnull=False, auction__promote_this_auction=True)
-        #sellers = AuctionTOS.objects.filter(q_object, auctiontos_seller__isnull=False, auction__promote_this_auction=True)
-        #auctiontos = AuctionTOS.objects.filter(auction__promote_this_auction=True, user__isnull=False)
-        buyer_histogram = bin_data(buyers, 'distance_traveled', number_of_bins=5, start_bin=1, end_bin=51, add_column_for_high_overflow=True,)
-        #seller_histogram = bin_data(sellers, 'distance_traveled', number_of_bins=5, start_bin=1, end_bin=51, add_column_for_high_overflow=True,)
-        print(buyers.count())
-        return [buyer_histogram]
+#         buyers = AuctionTOS.objects.filter(q_object, auctiontos_winner__isnull=False, auction__promote_this_auction=True)
+#         #sellers = AuctionTOS.objects.filter(q_object, auctiontos_seller__isnull=False, auction__promote_this_auction=True)
+#         #auctiontos = AuctionTOS.objects.filter(auction__promote_this_auction=True, user__isnull=False)
+#         buyer_histogram = bin_data(buyers, 'distance_traveled', number_of_bins=5, start_bin=1, end_bin=51, add_column_for_high_overflow=True,)
+#         #seller_histogram = bin_data(sellers, 'distance_traveled', number_of_bins=5, start_bin=1, end_bin=51, add_column_for_high_overflow=True,)
+#         print(buyers.count())
+#         return [buyer_histogram]
 
-    def dispatch(self, request, *args, **kwargs):
-        # little hack for permissions
-        return super().dispatch(request, *args, slug="tfcb-2023-annual-auction", **kwargs)
-# the two previous views collect specific data for the tutorial videos
+#     def dispatch(self, request, *args, **kwargs):
+#         # little hack for permissions
+#         return super().dispatch(request, *args, slug="tfcb-2023-annual-auction", **kwargs)
+# # the two previous views collect specific data for the tutorial videos
 
 class AuctionStatsImagesJSONView(AuctionStatsBarChartJSONView):
     def get_labels(self):
