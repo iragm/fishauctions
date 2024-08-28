@@ -837,7 +837,7 @@ class Auction(models.Model):
 		if timezone.now() > self.lot_submission_start_date:
 			result = f"<a href='{ self.view_lot_link }'>View lots</a>"
 		else:
-			result = "<small class='text-muted'>Lot submission not yet open</small>"
+			result = "<small class='text-muted'>Lots not yet open</small>"
 		return result
 	
 	@property
@@ -848,7 +848,7 @@ class Auction(models.Model):
 	@property
 	def template_lot_link_seperate_column(self):
 		"""Shown on big screens only"""
-		return mark_safe(f'<td class="d-none d-md-block">{self.template_lot_link}</td>')
+		return mark_safe(f'<td class="d-none d-md-table-cell">{self.template_lot_link}</td>')
 
 	@property
 	def can_submit_lots(self):
