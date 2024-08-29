@@ -3086,6 +3086,8 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
             invalidPickups = self.get_object().pickup_locations_before_end
             if invalidPickups:
                 messages.info(self.request, f"<a href='{invalidPickups}'>Some pickup times</a> are set before the end date of the auction")
+            if self.get_object().time_start_is_at_night and not self.get_object().is_online:
+                messages.info(self.request, f"You know your auction is starting in the middle of the night, right? <a href='{reverse('edit_auction', kwargs={'slug': self.get_object().slug})}'>Click here to change when bidding opens</a> and remember that it's in 24 hour time")
         
         context['form'] = AuctionJoin(user=self.request.user, auction=self.get_object(), initial={'user': self.request.user.id, 'auction':self.get_object().pk, 'pickup_location':existingTos, "i_agree": i_agree})
         context['rewrite_url'] = self.rewrite_url

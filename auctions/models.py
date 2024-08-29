@@ -28,6 +28,7 @@ from pytz import timezone as pytz_timezone
 from django.core.exceptions import ValidationError
 from django.utils.safestring import mark_safe
 from django_ses.signals import bounce_received, complaint_received
+from datetime import time
 
 def nearby_auctions(latitude, longitude, distance=100, include_already_joined=False, user=None, return_slugs=False):
 	"""Return a list of auctions or auction slugs that are within a specified distance of the given location"""
@@ -643,7 +644,22 @@ class Auction(models.Model):
 			if error:
 				return reverse("edit_pickup", kwargs={'pk': location.pk})
 		return False
-		
+
+	@property
+	def timezone(self):
+		try:
+			return pytz_timezone(self.created_by.userdata.timezone)
+		except:
+			return pytz_timezone(settings.TIME_ZONE)
+
+	@property
+	def time_start_is_at_night(self):
+		date_start_local = self.date_start.astimezone(self.timezone)
+		start_time = date_start_local.time()
+		midnight = time(0, 0)
+		six_am = time(6, 0)
+		return midnight <= start_time <= six_am
+
 	@property
 	def dynamic_end(self):
 		"""The absolute latest a lot in this auction can end"""
@@ -1489,10 +1505,7 @@ class AuctionTOS(models.Model):
 		try:
 			return pytz_timezone(self.user.userdata.timezone)
 		except:
-			try:
-				return pytz_timezone(self.auction.created_by.userdata.timezone)
-			except:
-				return pytz_timezone(settings.TIME_ZONE)
+			return self.auction.timezone
 
 	@property
 	def pickup_time_as_localized_string(self):

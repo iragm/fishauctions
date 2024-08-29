@@ -78,7 +78,7 @@ urlpatterns = [
     path('auctions/all/', views.allAuctions.as_view()),
     #path('auctions/new/', views.createAuction, name='createAuction'),
     path('auctions/new/', login_required(views.AuctionCreateView.as_view())),
-    path('auctions/<slug:slug>/edit/', views.AuctionUpdate.as_view()),
+    path('auctions/<slug:slug>/edit/', views.AuctionUpdate.as_view(), name='edit_auction'),
     path('auctions/<slug:slug>/invoices/', login_required(views.AuctionUsers.as_view())),
     path('auctions/<slug:slug>/invoice/', login_required(views.InvoiceView.as_view()), name='my_auction_invoice'),
     path('auctions/<slug:slug>/print-my-labels/', login_required(views.LotLabelView.as_view()), name="print_my_labels"),
