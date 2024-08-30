@@ -580,6 +580,11 @@ class Auction(models.Model):
 			return "Starts:"
 		return ""
 
+	@property
+	def template_pre_register_fee(self):
+		"""only for templates, winning_bid_percent_to_club - pre_register_lot_discount_percent"""
+		return self.winning_bid_percent_to_club - self.pre_register_lot_discount_percent
+
 	def get_absolute_url(self):
 		return self.url
 
