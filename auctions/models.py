@@ -1781,6 +1781,8 @@ class Lot(models.Model):
 			tos = AuctionTOS.objects.filter(is_admin=True, user=user, user__isnull=False, auction=self.auction).first()
 			if tos:
 				return True
+			if self.auction.created_by == user:
+				return True
 		return False
 
 	@property
