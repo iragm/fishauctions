@@ -1775,8 +1775,8 @@ class Lot(models.Model):
 		if self.auctiontos_seller and self.auctiontos_seller.user:
 			if self.auctiontos_seller.user == user:
 				return True
-		if user.is_superuser:
-			return True
+		#if user.is_superuser:
+		#	return True
 		if self.auction:
 			tos = AuctionTOS.objects.filter(is_admin=True, user=user, user__isnull=False, auction=self.auction).first()
 			if tos:

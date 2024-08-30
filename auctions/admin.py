@@ -172,8 +172,9 @@ class LotAdmin(admin.ModelAdmin):
     list_filter = ("active","auction","banned")
     search_fields = ("lot_number","lot_name","description","species_category__name","user__first_name","user__last_name")
     exclude = ('slug', 'image', 'i_bred_this_fish','seller_invoice', 'winner_invoice', 'image_source','date_posted','last_bump_date',
-               'species', 'user', 'auctiontos_seller', 'auction', 'refunded', 'ban_reason', 'lot_run_duration', 'relist_countdown',
+               'species', 'auction', 'refunded', 'ban_reason', 'lot_run_duration', 'relist_countdown',
                'number_of_bumps', 'watch_warning_email_sent', 'transportable', 'promote_this_lot', 'promotion_budget', 'promotion_weight', 'added_by',)
+    readonly_fields = ('user', 'auctiontos_seller','auction', 'reference_link', )
     inlines = [
          BidInline,
          WatchInline,
