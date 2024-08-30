@@ -1768,8 +1768,8 @@ class Lot(models.Model):
 		"""See if `user` can add/edit images to this lot"""
 		if not self.can_add_images:
 			return False
-		#if not user.is_authenticated:
-		#	return False
+		if not user.is_authenticated:
+			return False
 		if self.user == user:
 			return True
 		if self.auctiontos_seller and self.auctiontos_seller.user:
