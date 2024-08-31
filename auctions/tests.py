@@ -12,6 +12,47 @@ from .models import *
 from .consumers import LotConsumer
 from django.urls import reverse
 
+class StandardTestCase(TestCase):  
+    """This is a base class that sets up some common stuff so other tests can be run without needing to write a lot of boilplate code
+    Give this class along with your view/model/etc., to ChatGPT and it can write the test subclass
+    In general, make sure that AuctionTOS.is_admin=True users can do what they need, users without an AuctionTOS are blocked, no data leaks to non-admins and non-logged in users
+
+    Tests can be run with with docker exec -it django python3 manage.py test
+
+    Tests are also run automatically on commit by github actions
+    """
+    def setUp(self):
+        time = timezone.now() - datetime.timedelta(days=2)
+        timeStart = timezone.now() - datetime.timedelta(days=3)
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        self.user = User.objects.create_user(username="my_lot", password='testpassword', email='test@example.com')
+        self.online_auction = Auction.objects.create(created_by=self.user, title="This auction is online", is_online=True, date_end=time, date_start=timeStart, winning_bid_percent_to_club=25, lot_entry_fee=2, unsold_lot_fee=10, tax=25)
+        self.in_person_auction = Auction.objects.create(created_by=self.user, title="This auction is in-person", is_online=False, date_end=time, date_start=timeStart, winning_bid_percent_to_club=25, lot_entry_fee=2, unsold_lot_fee=10, tax=25)
+        self.location = PickupLocation.objects.create(name='location', auction=self.online_auction, pickup_time=theFuture)
+        self.userB = User.objects.create_user(username="no_tos", password='testpassword')
+        self.tos = AuctionTOS.objects.create(user=self.user, auction=self.online_auction, pickup_location=self.location)
+        self.tosB = AuctionTOS.objects.create(user=self.userB, auction=self.online_auction, pickup_location=self.location)
+        self.lot = Lot.objects.create(lot_name="A test lot", auction=self.online_auction, auctiontos_seller=self.tos, quantity=1, description="", winning_price=10, auctiontos_winner=self.tosB, active=False)
+        self.lotB = Lot.objects.create(lot_name="B test lot", auction=self.online_auction, auctiontos_seller=self.tos, quantity=1, description="", winning_price=10, auctiontos_winner=self.tosB, active=False)
+        self.lotC = Lot.objects.create(lot_name="C test lot", auction=self.online_auction, auctiontos_seller=self.tos, quantity=1, description="", winning_price=10, auctiontos_winner=self.tosB, active=False)
+        self.unsoldLot = Lot.objects.create(lot_name="Unsold lot", reserve_price=10, description="", auction=self.online_auction, quantity=1, auctiontos_seller=self.tos, active=False)
+        self.invoice = Invoice.objects.create(auctiontos_user=self.tos)    
+        self.invoiceB = Invoice.objects.create(auctiontos_user=self.tosB)
+        self.adjustment_add = InvoiceAdjustment.objects.create(adjustment_type='ADD', amount=10, notes='test', invoice=self.invoiceB)
+        self.adjustment_discount = InvoiceAdjustment.objects.create(adjustment_type='DISCOUNT', amount=10, notes='test', invoice=self.invoiceB)
+        self.adjustment_add_percent = InvoiceAdjustment.objects.create(adjustment_type='ADD_PERCENT', amount=10, notes='test', invoice=self.invoiceB)
+        self.adjustment_discount_percent = InvoiceAdjustment.objects.create(adjustment_type='DISCOUNT_PERCENT', amount=10, notes='test', invoice=self.invoiceB)
+        # TODO: stuff to add here:
+        # a normal user that has joined no auctions
+        # a user that has joined self.online_auction
+        # a user that is an admin for both auctions (tos.is_admin=True)
+        # lots in the in-person auction
+        # a few more users and a userban or two
+        # an online auction that hasn't started yet
+        # an in-person auction that hasn't started yet
+        # an online auction that's ended
+        # an online auction with multiple pickup locations
+
 class ViewLotTest(TestCase):
     def setUp(self):
         time = timezone.now() - datetime.timedelta(days=2)
@@ -327,30 +368,9 @@ class ChatSubscriptionTests(TestCase):
         self.assertIs(data.my_lot_subscriptions_count, 1)
         self.assertIs(data.other_lot_subscriptions_count, 1)
 
-class InvoiceModelTests(TestCase):  
-    def setUp(self):
-        time = timezone.now() - datetime.timedelta(days=2)
-        timeStart = timezone.now() - datetime.timedelta(days=3)
-        theFuture = timezone.now() + datetime.timedelta(days=3)
-        self.user = User.objects.create_user(username="my_lot", password='testpassword', email='test@example.com')
-        self.auction = Auction.objects.create(created_by=self.user, title="A test auction", date_end=time, date_start=timeStart, winning_bid_percent_to_club=25, lot_entry_fee=2, unsold_lot_fee=10, tax=25)
-        self.location = PickupLocation.objects.create(name='location', auction=self.auction, pickup_time=theFuture)
-        self.userB = User.objects.create_user(username="no_tos", password='testpassword')
-        self.tos = AuctionTOS.objects.create(user=self.user, auction=self.auction, pickup_location=self.location)
-        self.tosB = AuctionTOS.objects.create(user=self.userB, auction=self.auction, pickup_location=self.location)
-        self.lot = Lot.objects.create(lot_name="A test lot", auction=self.auction, auctiontos_seller=self.tos, quantity=1, description="", winning_price=10, auctiontos_winner=self.tosB, active=False)
-        self.lotB = Lot.objects.create(lot_name="B test lot", auction=self.auction, auctiontos_seller=self.tos, quantity=1, description="", winning_price=10, auctiontos_winner=self.tosB, active=False)
-        self.lotC = Lot.objects.create(lot_name="C test lot", auction=self.auction, auctiontos_seller=self.tos, quantity=1, description="", winning_price=10, auctiontos_winner=self.tosB, active=False)
-        self.unsoldLot = Lot.objects.create(lot_name="Unsold lot", reserve_price=10, description="", auction=self.auction, quantity=1, auctiontos_seller=self.tos, active=False)
-        self.invoice = Invoice.objects.create(auctiontos_user=self.tos)    
-        self.invoiceB = Invoice.objects.create(auctiontos_user=self.tosB)
-        self.adjustment_add = InvoiceAdjustment.objects.create(adjustment_type='ADD', amount=10, notes='test', invoice=self.invoiceB)
-        self.adjustment_discount = InvoiceAdjustment.objects.create(adjustment_type='DISCOUNT', amount=10, notes='test', invoice=self.invoiceB)
-        self.adjustment_add_percent = InvoiceAdjustment.objects.create(adjustment_type='ADD_PERCENT', amount=10, notes='test', invoice=self.invoiceB)
-        self.adjustment_discount_percent = InvoiceAdjustment.objects.create(adjustment_type='DISCOUNT_PERCENT', amount=10, notes='test', invoice=self.invoiceB)
-
+class InvoiceModelTests(StandardTestCase):  
     def test_invoices(self):
-        self.assertEqual(self.invoice.auction, self.auction)
+        self.assertEqual(self.invoice.auction, self.online_auction)
         
         self.assertEqual(self.invoiceB.flat_value_adjustments, 0)
         self.assertEqual(self.invoiceB.percent_value_adjustments, 0)
