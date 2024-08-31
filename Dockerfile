@@ -3,7 +3,7 @@
 ###########
 
 # pull official base image
-FROM python:3.11.4-slim-buster AS builder
+FROM python:3.11.9 AS builder
 
 # set work directory
 WORKDIR /usr/src/app
@@ -16,8 +16,16 @@ ENV PYTHONUNBUFFERED=1
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     build-essential \
+    # mysqlclient dependencies
     pkg-config \
-    default-libmysqlclient-dev && \
+    default-libmysqlclient-dev \
+    # TODO: Remove libheif dependencies. They are only necssary because
+    # pyheif doesn't yet release an ARM compatible wheel. Once a compatible
+    # wheel is published on pypi, these dependencies should be removed from
+    # both the builder and final images.
+    libheif-dev \
+    # end libheif dependencies
+    && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -40,7 +48,7 @@ RUN pip wheel --no-cache-dir --no-deps --wheel-dir /usr/src/app/wheels -r requir
 #########
 
 # pull official base image
-FROM python:3.11.4-slim-buster
+FROM python:3.11.9-slim
 
 # create directory for the app user
 RUN mkdir -p /home/app
@@ -64,12 +72,15 @@ WORKDIR $APP_HOME
 # install dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    netcat \
+    netcat-traditional \
     build-essential \
     pkg-config \
     default-libmysqlclient-dev \
     cron \
-    nano && \
+    nano \
+    # libheif dependencies
+    libheif-dev \
+    && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
