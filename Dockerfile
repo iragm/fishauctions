@@ -64,7 +64,7 @@ WORKDIR $APP_HOME
 # install dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    netcat \
+    netcat-traditional \
     build-essential \
     pkg-config \
     default-libmysqlclient-dev \
