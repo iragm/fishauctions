@@ -1,0 +1,2 @@
+[format]
+exclude = ["get-pip.py"]
