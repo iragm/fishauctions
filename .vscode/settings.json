@@ -1,5 +1,18 @@
 {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnPaste": true,
+    "editor.formatOnSave": true,
+    "editor.formatOnType": true,
+    "files.insertFinalNewline": true,
+    "files.trimFinalNewlines": true,
+    "files.trimTrailingWhitespace": true,
     "python.linting.pylintEnabled": false,
     "python.linting.banditEnabled": true,
-    "python.linting.enabled": true
+    "python.linting.enabled": true,
+    "ruff.enable": true,
+    "ruff.codeAction.fixViolation": {
+        "enable": true
+    },
+    "ruff.lint.enable": true,
+    "ruff.lint.run": "onType",
 }
