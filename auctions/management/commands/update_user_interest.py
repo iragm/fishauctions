@@ -1,5 +1,6 @@
 from django.core.management.base import BaseCommand, CommandError
-from auctions.models import UserData, User, Bid, PageView, UserInterestCategory
+from auctions.models import Bid, PageView, UserInterestCategory
+from django.contrib.auth.models import User
 from django.conf import settings
 
 

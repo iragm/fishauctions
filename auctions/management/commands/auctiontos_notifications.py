@@ -1,6 +1,14 @@
 from django.utils import timezone
 from django.core.management.base import BaseCommand, CommandError
-from auctions.models import *
+from auctions.models import (
+    AuctionTOS,
+    PickupLocation,
+    Auction,
+    distance_to,
+    UserData,
+    Lot,
+    AuctionCampaign,
+)
 from django.core.mail import send_mail
 from django.db.models import Count, Case, When, IntegerField, Avg, OuterRef, Subquery
 from django.core.files import File

@@ -12,7 +12,7 @@ django_asgi_app = get_asgi_application()
 from channels.auth import AuthMiddlewareStack
 from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.security.websocket import AllowedHostsOriginValidator
-from auctions.consumers import *
+from auctions.consumers import LotConsumer
 
 application = ProtocolTypeRouter(
     {

@@ -1,6 +1,7 @@
 from django.utils.safestring import mark_safe
 import django_tables2 as tables
-from .models import *
+from .models import AuctionTOS, Lot
+from django.urls import reverse
 
 
 class AuctionTOSHTMxTable(tables.Table):

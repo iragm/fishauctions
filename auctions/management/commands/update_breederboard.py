@@ -1,5 +1,6 @@
 from django.core.management.base import BaseCommand, CommandError
-from auctions.models import UserData, User
+from auctions.models import UserData
+from django.contrib.auth.models import User
 # from models import User
 
 

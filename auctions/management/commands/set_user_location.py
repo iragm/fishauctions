@@ -1,5 +1,5 @@
 from django.utils import timezone
-from auctions.models import *
+from auctions.models import UserData, PageView
 from django.core.management.base import BaseCommand, CommandError
 import datetime
 import requests

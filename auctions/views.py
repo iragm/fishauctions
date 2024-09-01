@@ -1,11 +1,12 @@
 import ast
 import csv
-from datetime import datetime
+from datetime import datetime, timedelta
 from random import randint, uniform, sample
 from itertools import chain
 from typing import Any, Dict
 from django.db.models.base import Model as Model
 from django.db.models.query import QuerySet
+from django.core.exceptions import ValidationError
 from django.shortcuts import render, redirect, get_object_or_404
 from django.http import (
     HttpResponse,
@@ -14,6 +15,7 @@ from django.http import (
     Http404,
     FileResponse,
 )
+from django.utils.safestring import mark_safe
 from django.utils import timezone
 from django.contrib import messages
 from django.contrib.auth.models import User
@@ -22,10 +24,10 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.sites.models import Site
 from django.views.generic import ListView, DetailView, View, TemplateView, RedirectView
 from django.views.generic.edit import FormView
-from django.views.generic.base import TemplateView, ContextMixin
+from django.views.generic.base import ContextMixin
 from django.urls import reverse
 from django.views.generic.edit import UpdateView, CreateView, DeleteView, FormMixin
-from django.db.models import Count, Case, When, IntegerField, Q, Avg
+from django.db.models import Count, Case, When, IntegerField, Q, Avg, Exists
 from django.db.models.functions import TruncDay
 from django.contrib.messages.views import SuccessMessageMixin
 from django.core.files.base import ContentFile
@@ -39,10 +41,81 @@ from asgiref.sync import sync_to_async
 import HeifImagePlugin  # noqa: F401 Importing this plugin enables HEIF image support, even though it's not used
 import os
 from django.conf import settings
-from .models import *
-from .filters import *
-from .forms import *
-from .tables import *
+from django.db.models import OuterRef, Subquery, ExpressionWrapper, FloatField
+from .models import (
+    UserBan,
+    add_price_info,
+    AuctionTOS,
+    Auction,
+    ChatSubscription,
+    Lot,
+    guess_category,
+    PickupLocation,
+    Invoice,
+    LotHistory,
+    UserData,
+    Watch,
+    SearchHistory,
+    median_value,
+    PageView,
+    Bid,
+    Category,
+    BlogPost,
+    UserIgnoreCategory,
+    Club,
+    UserLabelPrefs,
+    InvoiceAdjustment,
+    distance_to,
+    FAQ,
+    LotImage,
+    Product,
+    AuctionCampaign,
+    UserInterestCategory,
+    nearby_auctions,
+    AuctionIgnore,
+    AdCampaignResponse,
+    AdCampaign,
+)
+from django.db.models import Sum, F
+from .filters import (
+    LotFilter,
+    AuctionTOSFilter,
+    LotAdminFilter,
+    UserBidLotFilter,
+    UserWatchLotFilter,
+    get_recommended_lots,
+    UserWonLotFilter,
+    UserLotFilter,
+)
+from .forms import (
+    AuctionNoShowForm,
+    MultiAuctionTOSPrintLabelForm,
+    UserLocation,
+    ChangeUserPreferencesForm,
+    UserLabelPrefsForm,
+    ChangeUsernameForm,
+    LotRefundForm,
+    ChangeInvoiceStatusForm,
+    InvoiceAdjustmentFormSetHelper,
+    InvoiceAdjustmentForm,
+    AuctionJoin,
+    CreateAuctionForm,
+    CreateEditAuctionTOS,
+    DeleteAuctionTOS,
+    EditLot,
+    CreateLotForm,
+    CreateImageForm,
+    QuickAddLot,
+    LotFormSetHelper,
+    QuickAddTOS,
+    TOSFormSetHelper,
+    WinnerLotSimpleImages,
+    WinnerLotSimple,
+    WinnerLot,
+    AuctionEditForm,
+    PickupLocationForm,
+)
+from .tables import AuctionTOSHTMxTable, LotHTMxTable, LotHTMxTableForUsers
 from io import BytesIO, TextIOWrapper
 from django.core.files import File
 import re
@@ -159,8 +232,8 @@ def bin_data(
             bin_labels.append("low overflow")
         for i in range(number_of_bins):
             if working_with_date:
-                bin_start = start_bin + datetime.timedelta(seconds=i * bin_size)
-                bin_end = start_bin + datetime.timedelta(seconds=(i + 1) * bin_size)
+                bin_start = start_bin + timedelta(seconds=i * bin_size)
+                bin_end = start_bin + timedelta(seconds=(i + 1) * bin_size)
             else:
                 bin_start = start_bin + i * bin_size
                 bin_end = start_bin + (i + 1) * bin_size
@@ -1351,15 +1424,15 @@ def auctionReport(request, slug):
                 lot_qs = Lot.objects.exclude(is_deleted=True).filter(
                     user=data.user,
                     auction__isnull=True,
-                    date_posted__gte=auction.date_start - datetime.timedelta(days=2),
+                    date_posted__gte=auction.date_start - timedelta(days=2),
                 )
                 if auction.is_online:
                     lotsOutsideAuction = lot_qs.filter(
-                        date_posted__lte=auction.date_end + datetime.timedelta(days=2)
+                        date_posted__lte=auction.date_end + timedelta(days=2)
                     )
                 else:
                     lotsOutsideAuction = lot_qs.filter(
-                        date_posted__lte=auction.date_start + datetime.timedelta(days=5)
+                        date_posted__lte=auction.date_start + timedelta(days=5)
                     )
                 numberLotsOutsideAuction = lotsOutsideAuction.count()
                 profitOutsideAuction = lotsOutsideAuction.aggregate(
@@ -1621,7 +1694,7 @@ class LeaveFeedbackView(LoginRequiredMixin, ListView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        cutoffDate = timezone.now() - datetime.timedelta(days=90)
+        cutoffDate = timezone.now() - timedelta(days=90)
         context["won_lots"] = (
             Lot.objects.exclude(is_deleted=True)
             .filter(
@@ -3052,7 +3125,7 @@ class LotValidation(LoginRequiredMixin):
                 run_duration = 10
             if not lot.date_posted:
                 lot.date_posted = timezone.now()
-            lot.date_end = lot.date_posted + datetime.timedelta(days=run_duration)
+            lot.date_end = lot.date_posted + timedelta(days=run_duration)
             lot.lot_run_duration = run_duration
             lot.donation = False
         # someday we may change this to be a field on the form, but for now we need to collect data
@@ -3328,9 +3401,7 @@ class BidDelete(LoginRequiredMixin, DeleteView):
             if lot.auction and lot.auction.date_end:
                 lot.date_end = lot.auction.date_end
             else:
-                lot.date_end = timezone.now() + datetime.timedelta(
-                    days=lot.lot_run_duration
-                )
+                lot.date_end = timezone.now() + timedelta(days=lot.lot_run_duration)
             lot.active = True
             lot.buy_now_used = False
             lot.save()
@@ -4093,8 +4164,8 @@ class allAuctions(ListView):
 
     def get_queryset(self):
         qs = Auction.objects.exclude(is_deleted=True).order_by("-date_start")
-        next_90_days = timezone.now() + datetime.timedelta(days=90)
-        two_years_ago = timezone.now() - datetime.timedelta(days=365 * 2)
+        next_90_days = timezone.now() + timedelta(days=90)
+        two_years_ago = timezone.now() - timedelta(days=365 * 2)
         standard_filter = Q(
             promote_this_auction=True,
             date_start__lte=next_90_days,
@@ -4989,7 +5060,7 @@ class LotRefundDialog(DetailView, FormMixin, AuctionPermissionsMixin):
                         tooltip += "<br>"
             tooltip += "<br><br>"
             extra_script = """
-            <script>$('#id_partial_refund_percent').on('change keyup', function(){recalculate()}); 
+            <script>$('#id_partial_refund_percent').on('change keyup', function(){recalculate()});
             function recalculate(){
                 var refund = $('#id_partial_refund_percent').val();var tax = """
             extra_script += f"{self.lot.auction.tax};var full_seller_refund = {full_seller_refund};var full_buyer_refund = {full_buyer_refund};"
@@ -5335,26 +5406,23 @@ class AdminDashboard(TemplateView):
         context["has_location"] = qs.exclude(latitude=0).count()
         context["new_lots_last_7_days"] = (
             Lot.objects.exclude(is_deleted=True)
-            .filter(date_posted__gte=timezone.now() - datetime.timedelta(days=7))
+            .filter(date_posted__gte=timezone.now() - timedelta(days=7))
             .count()
         )
         context["new_lots_last_30_days"] = (
             Lot.objects.exclude(is_deleted=True)
-            .filter(date_posted__gte=timezone.now() - datetime.timedelta(days=30))
+            .filter(date_posted__gte=timezone.now() - timedelta(days=30))
             .count()
         )
         context["bidders_last_30_days"] = (
-            qs.filter(
-                user__bid__last_bid_time__gte=timezone.now()
-                - datetime.timedelta(days=30)
-            )
+            qs.filter(user__bid__last_bid_time__gte=timezone.now() - timedelta(days=30))
             .values("user")
             .distinct()
             .count()
         )
         context["feedback_last_30_days"] = (
             Lot.objects.exclude(feedback_rating=0)
-            .filter(date_posted__gte=timezone.now() - datetime.timedelta(days=30))
+            .filter(date_posted__gte=timezone.now() - timedelta(days=30))
             .count()
         )
         invoiceqs = (
@@ -5372,7 +5440,7 @@ class AdminDashboard(TemplateView):
         )
         # source of lot images?
         activity = (
-            qs.filter(last_activity__gte=timezone.now() - datetime.timedelta(days=60))
+            qs.filter(last_activity__gte=timezone.now() - timedelta(days=60))
             .annotate(day=TruncDay("last_activity"))
             .order_by("-day")
             .values("day")
@@ -5384,7 +5452,7 @@ class AdminDashboard(TemplateView):
         for day in activity:
             context["last_activity_days"].append((timezone.now() - day["day"]).days)
             context["last_activity_count"].append(day["c"])
-        seven_days_ago = timezone.now() - datetime.timedelta(days=7)
+        seven_days_ago = timezone.now() - timedelta(days=7)
         page_view_qs = PageView.objects.filter(date_end__gte=seven_days_ago)
         context["page_views"] = (
             page_view_qs.values("url", "title")
@@ -5455,7 +5523,7 @@ class UserMap(TemplateView):
         elif view == "recent" and filter1:
             qs = qs.filter(
                 userdata__last_activity__gte=timezone.now()
-                - datetime.timedelta(hours=int(filter1))
+                - timedelta(hours=int(filter1))
             )
         context["users"] = qs
         return context

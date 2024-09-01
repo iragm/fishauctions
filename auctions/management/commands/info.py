@@ -1,6 +1,5 @@
 from django.utils import timezone
 from django.core.management.base import BaseCommand, CommandError
-from auctions.models import *
 from django.core.mail import send_mail
 from django.db.models import (
     Count,

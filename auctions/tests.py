@@ -8,7 +8,18 @@ from django.contrib.auth.models import User
 from django.test.client import Client
 from io import StringIO
 from django.core.management import call_command
-from .models import *
+from .models import (
+    Lot,
+    AuctionTOS,
+    PickupLocation,
+    Auction,
+    Invoice,
+    add_price_info,
+    LotHistory,
+    ChatSubscription,
+    Bid,
+    InvoiceAdjustment,
+)
 from .consumers import LotConsumer
 from django.urls import reverse
 

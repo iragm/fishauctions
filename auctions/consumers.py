@@ -2,7 +2,18 @@
 import json
 from asgiref.sync import async_to_sync
 from channels.generic.websocket import WebsocketConsumer
-from .models import *
+from django.db.models import Q
+from .models import (
+    AuctionTOS,
+    UserBan,
+    Invoice,
+    LotHistory,
+    ChatSubscription,
+    Lot,
+    UserData,
+    UserInterestCategory,
+    Bid,
+)
 from post_office import mail
 from django.contrib.sites.models import Site
 from django.conf import settings

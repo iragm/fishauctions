@@ -1,5 +1,6 @@
 from django.core.management.base import BaseCommand, CommandError
-from auctions.models import Lot, Auction, Watch, User, UserData
+from auctions.models import Lot, Auction, Watch, UserData
+from django.contrib.auth.models import User
 from post_office import mail
 from django.contrib.sites.models import Site
 

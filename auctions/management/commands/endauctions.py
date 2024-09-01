@@ -1,7 +1,7 @@
 import datetime
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
-from auctions.models import *
+from auctions.models import AuctionTOS, LotHistory, Invoice, LotImage, Lot
 import channels.layers
 from asgiref.sync import async_to_sync
 from easy_thumbnails.files import get_thumbnailer
