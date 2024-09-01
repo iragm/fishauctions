@@ -2356,7 +2356,7 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
             """returns True if any value in the list `columns` exists in the file"""
             first_row = next(csv_reader)
             result = extract_info(first_row, columns, None)
-            if result == None:
+            if result is None:
                 return False
             else:
                 return True
