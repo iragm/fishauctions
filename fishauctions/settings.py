@@ -287,6 +287,7 @@ THUMBNAIL_ALIASES = {
         #'lot_full': {'size': (600, 600), 'crop': False},
     },
 }
+THUMBNAIL_DEFAULT_STORAGE_ALIAS = "default"
 
 SECURE_REFERRER_POLICY= "strict-origin-when-cross-origin"
 

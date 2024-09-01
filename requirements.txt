@@ -143,7 +143,7 @@ django-ses[events]==4.1.0
     # via -r ./requirements.in
 django-tables2==2.7.0
     # via -r ./requirements.in
-easy-thumbnails==2.8.5
+easy-thumbnails==2.9
     # via -r ./requirements.in
 gunicorn==22.0.0
     # via -r ./requirements.in
