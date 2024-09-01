@@ -1,157 +1,155 @@
 import ast
 import csv
+import re
+from collections import Counter
 from datetime import datetime, timedelta
-from random import randint, uniform, sample
-from itertools import chain
-from typing import Any, Dict
-from django.db.models.base import Model as Model
-from django.db.models.query import QuerySet
-from django.core.exceptions import ValidationError
-from django.shortcuts import render, redirect, get_object_or_404
-from django.http import (
-    HttpResponse,
-    JsonResponse,
-    HttpResponseRedirect,
-    Http404,
-    FileResponse,
-)
-from django.utils.safestring import mark_safe
-from django.utils import timezone
+from io import BytesIO, TextIOWrapper
+from random import randint, sample, uniform
+from urllib.parse import unquote, urlencode
+
+import HeifImagePlugin  # noqa: F401 Importing this plugin enables HEIF image support, even though it's not used
+import qr_code
+from chartjs.colors import next_color
+from chartjs.views.columns import BaseColumnsHighChartsView
+from chartjs.views.lines import BaseLineChartView
+from dal import autocomplete
+from django.conf import settings
 from django.contrib import messages
-from django.contrib.auth.models import User
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.contrib.sites.models import Site
-from django.views.generic import ListView, DetailView, View, TemplateView, RedirectView
-from django.views.generic.edit import FormView
-from django.views.generic.base import ContextMixin
-from django.urls import reverse
-from django.views.generic.edit import UpdateView, CreateView, DeleteView, FormMixin
-from django.db.models import Count, Case, When, IntegerField, Q, Avg, Exists
-from django.db.models.functions import TruncDay
+from django.contrib.auth.models import User
 from django.contrib.messages.views import SuccessMessageMixin
+from django.contrib.sites.models import Site
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.files.base import ContentFile
-from allauth.account.models import EmailAddress
-from el_pagination.views import AjaxListView
-from easy_thumbnails.templatetags.thumbnail import thumbnail_url
-from easy_thumbnails.files import get_thumbnailer
-from post_office import mail
-from PIL import Image
-from asgiref.sync import sync_to_async
-import HeifImagePlugin  # noqa: F401 Importing this plugin enables HEIF image support, even though it's not used
-import os
-from django.conf import settings
-from django.db.models import OuterRef, Subquery, ExpressionWrapper, FloatField
-from .models import (
-    UserBan,
-    add_price_info,
-    AuctionTOS,
-    Auction,
-    ChatSubscription,
-    Lot,
-    guess_category,
-    PickupLocation,
-    Invoice,
-    LotHistory,
-    UserData,
-    Watch,
-    SearchHistory,
-    median_value,
-    PageView,
-    Bid,
-    Category,
-    BlogPost,
-    UserIgnoreCategory,
-    Club,
-    UserLabelPrefs,
-    InvoiceAdjustment,
-    distance_to,
-    FAQ,
-    LotImage,
-    Product,
-    AuctionCampaign,
-    UserInterestCategory,
-    nearby_auctions,
-    AuctionIgnore,
-    AdCampaignResponse,
-    AdCampaign,
+from django.db.models import (
+    Avg,
+    Count,
+    Exists,
+    ExpressionWrapper,
+    F,
+    FloatField,
+    IntegerField,
+    OuterRef,
+    Q,
+    Subquery,
+    Sum,
 )
-from django.db.models import Sum, F
-from .filters import (
-    LotFilter,
-    AuctionTOSFilter,
-    LotAdminFilter,
-    UserBidLotFilter,
-    UserWatchLotFilter,
-    get_recommended_lots,
-    UserWonLotFilter,
-    UserLotFilter,
-)
-from .forms import (
-    AuctionNoShowForm,
-    MultiAuctionTOSPrintLabelForm,
-    UserLocation,
-    ChangeUserPreferencesForm,
-    UserLabelPrefsForm,
-    ChangeUsernameForm,
-    LotRefundForm,
-    ChangeInvoiceStatusForm,
-    InvoiceAdjustmentFormSetHelper,
-    InvoiceAdjustmentForm,
-    AuctionJoin,
-    CreateAuctionForm,
-    CreateEditAuctionTOS,
-    DeleteAuctionTOS,
-    EditLot,
-    CreateLotForm,
-    CreateImageForm,
-    QuickAddLot,
-    LotFormSetHelper,
-    QuickAddTOS,
-    TOSFormSetHelper,
-    WinnerLotSimpleImages,
-    WinnerLotSimple,
-    WinnerLot,
-    AuctionEditForm,
-    PickupLocationForm,
-)
-from .tables import AuctionTOSHTMxTable, LotHTMxTable, LotHTMxTableForUsers
-from io import BytesIO, TextIOWrapper
-from django.core.files import File
-import re
-from urllib.parse import unquote, urlencode
-from django_tables2 import SingleTableMixin
-from django_filters.views import FilterView
-from dal import autocomplete
-from django.utils.html import format_html
-from django.core.exceptions import PermissionDenied
+from django.db.models.base import Model as Model
+from django.db.models.functions import TruncDay
 from django.forms import modelformset_factory
+from django.http import (
+    Http404,
+    HttpResponse,
+    HttpResponseRedirect,
+    JsonResponse,
+)
+from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
-from reportlab.lib import pagesizes, utils
-from reportlab.lib.units import inch, cm
-from reportlab.lib import colors
+from django.urls import reverse
+from django.utils import timezone
+from django.utils.html import format_html
+from django.utils.safestring import mark_safe
+from django.views.generic import DetailView, ListView, RedirectView, TemplateView, View
+from django.views.generic.base import ContextMixin
+from django.views.generic.edit import (
+    CreateView,
+    DeleteView,
+    FormMixin,
+    FormView,
+    UpdateView,
+)
+from django_filters.views import FilterView
+from django_tables2 import SingleTableMixin
+from easy_thumbnails.files import get_thumbnailer
+from el_pagination.views import AjaxListView
+from PIL import Image
+from qr_code.qrcode.utils import QRCodeOptions
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib.units import cm, inch
 from reportlab.platypus import (
-    BaseDocTemplate,
+    Image as PImage,
+)
+from reportlab.platypus import (
     Paragraph,
     SimpleDocTemplate,
     Table,
-    TableStyle,
-    Flowable,
-    Spacer,
-    ImageAndFlowables,
-    Image as PImage,
 )
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.pdfgen import canvas
-from reportlab.lib.enums import TA_JUSTIFY
-import qr_code
-from qr_code.qrcode.utils import QRCodeOptions
-import textwrap
 from user_agents import parse
-from chartjs.views.lines import BaseLineChartView
-from chartjs.views.columns import BaseColumnsHighChartsView
-from chartjs.colors import next_color
-from collections import Counter
+
+from .filters import (
+    AuctionTOSFilter,
+    LotAdminFilter,
+    LotFilter,
+    UserBidLotFilter,
+    UserLotFilter,
+    UserWatchLotFilter,
+    UserWonLotFilter,
+    get_recommended_lots,
+)
+from .forms import (
+    AuctionEditForm,
+    AuctionJoin,
+    AuctionNoShowForm,
+    ChangeInvoiceStatusForm,
+    ChangeUsernameForm,
+    ChangeUserPreferencesForm,
+    CreateAuctionForm,
+    CreateEditAuctionTOS,
+    CreateImageForm,
+    CreateLotForm,
+    DeleteAuctionTOS,
+    EditLot,
+    InvoiceAdjustmentForm,
+    InvoiceAdjustmentFormSetHelper,
+    LotFormSetHelper,
+    LotRefundForm,
+    MultiAuctionTOSPrintLabelForm,
+    PickupLocationForm,
+    QuickAddLot,
+    QuickAddTOS,
+    TOSFormSetHelper,
+    UserLabelPrefsForm,
+    UserLocation,
+    WinnerLot,
+    WinnerLotSimple,
+    WinnerLotSimpleImages,
+)
+from .models import (
+    FAQ,
+    AdCampaign,
+    AdCampaignResponse,
+    Auction,
+    AuctionCampaign,
+    AuctionIgnore,
+    AuctionTOS,
+    Bid,
+    BlogPost,
+    Category,
+    ChatSubscription,
+    Club,
+    Invoice,
+    InvoiceAdjustment,
+    Lot,
+    LotHistory,
+    LotImage,
+    PageView,
+    PickupLocation,
+    Product,
+    SearchHistory,
+    UserBan,
+    UserData,
+    UserIgnoreCategory,
+    UserInterestCategory,
+    UserLabelPrefs,
+    Watch,
+    add_price_info,
+    distance_to,
+    guess_category,
+    median_value,
+    nearby_auctions,
+)
+from .tables import AuctionTOSHTMxTable, LotHTMxTable, LotHTMxTableForUsers
 
 
 def bin_data(
@@ -427,7 +425,7 @@ class LotListView(AjaxListView):
             if "auction" in data.keys():
                 # now we have tried to search for something, so we should not override the auction
                 self.auction = None
-        except Exception as e:
+        except Exception:
             pass
         context["routeByLastAuction"] = self.routeByLastAuction
         context["filter"] = LotFilter(
@@ -887,7 +885,7 @@ def auctionNotifications(request):
                 distance = distances[0]
             except:
                 pass
-        except Exception as e:
+        except Exception:
             pass
         if not new:
             new = ""
@@ -2636,14 +2634,14 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
                 .first()
             )
         if not self.tos:
-            messages.error(request, f"You can't add lots until you join this auction")
+            messages.error(request, "You can't add lots until you join this auction")
             return redirect(
                 f"/auctions/{self.auction.slug}/?next={reverse('bulk_add_lots_for_myself', kwargs={'slug': self.auction.slug})}"
             )
         else:
             if not self.tos.selling_allowed and not self.is_admin:
                 messages.error(
-                    request, f"You don't have permission to add lots to this auction"
+                    request, "You don't have permission to add lots to this auction"
                 )
                 return redirect(f"/auctions/{self.auction.slug}/")
         if not self.is_admin and not self.auction.can_submit_lots:
@@ -2815,7 +2813,7 @@ class ViewLot(DetailView):
         ):
             messages.info(
                 self.request,
-                f"Bidding is ending soon.  Bids placed now will extend the end time of this lot.  This page will update automatically, you don't need to reload it",
+                "Bidding is ending soon.  Bids placed now will extend the end time of this lot.  This page will update automatically, you don't need to reload it",
             )
         if not context["user_tos"] and not lot.ended and lot.auction:
             if lot.auction.allow_bidding_on_lots:
@@ -2858,7 +2856,7 @@ class ViewLot(DetailView):
                         context["distance"] = f"less than {distance} miles away"
                         break
                 if lot.distance > 3000:
-                    context["distance"] = f"over 3000 miles away"
+                    context["distance"] = "over 3000 miles away"
         except:
             context["distance"] = 0
         # for lots that are part of an auction, it's very handy to show the exchange info right on the lot page
@@ -3040,7 +3038,7 @@ class LotValidation(LoginRequiredMixin):
             messages.error(
                 self.request, "Please fill out your contact info before creating a lot"
             )
-            return redirect(f"/contact_info?next=/lots/new/")
+            return redirect("/contact_info?next=/lots/new/")
             # return redirect(reverse("contact_info"))
         return super().dispatch(request, *args, **kwargs)
 
@@ -3073,7 +3071,7 @@ class LotValidation(LoginRequiredMixin):
                 lot.buy_now_price = lot.reserve_price
                 messages.error(
                     self.request,
-                    f"Buy now price can't be lower than the minimum bid.  Buy now price has been set to the minimum bid, but you should probably edit this lot and change the buy now price.",
+                    "Buy now price can't be lower than the minimum bid.  Buy now price has been set to the minimum bid, but you should probably edit this lot and change the buy now price.",
                 )
         if lot.auction:
             # if not lot.auction.is_online:
@@ -3088,7 +3086,7 @@ class LotValidation(LoginRequiredMixin):
             ) and not lot.buy_now_price:
                 lot.buy_now_price = lot.auction.minimum_bid
                 messages.error(
-                    self.request, f"You need to set a buy now price for this lot!"
+                    self.request, "You need to set a buy now price for this lot!"
                 )
             lot.date_end = lot.auction.date_end
             userData, created = UserData.objects.get_or_create(
@@ -3255,7 +3253,7 @@ class LotCreateView(LotValidation, CreateView):
                     user=self.request.user, auction=self.auction
                 ).first()
                 if not tos:
-                    error = f"You haven't joined this auction yet.  Click the green button at the bottom of this page to join the auction.</a>"
+                    error = "You haven't joined this auction yet.  Click the green button at the bottom of this page to join the auction.</a>"
                 if error:
                     messages.error(request, error)
                     return redirect(self.auction.get_absolute_url())
@@ -3309,7 +3307,7 @@ class AuctionDelete(DeleteView, AuctionPermissionsMixin):
         return super().dispatch(request, *args, **kwargs)
 
     def get_success_url(self):
-        return f"/auctions/"
+        return "/auctions/"
 
 
 class LotDelete(LoginRequiredMixin, DeleteView):
@@ -3427,7 +3425,7 @@ class LotAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
         pk = kwargs.pop("pk")
         try:
             self.lot = Lot.objects.get(pk=pk, is_deleted=False)
-        except Exception as e:
+        except Exception:
             raise Http404
         if self.lot.auction:
             self.auction = self.lot.auction
@@ -3590,7 +3588,7 @@ class AuctionTOSAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
         self.is_edit_form = True
         try:
             self.auctiontos = AuctionTOS.objects.get(pk=pk)
-        except Exception as e:
+        except Exception:
             self.auctiontos = None
         if self.auctiontos:
             self.auction = self.auctiontos.auction
@@ -3747,7 +3745,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                     # you still don't get to clone auctions that aren't yours...
                     if original_auction.permission_check(self.request.user):
                         clone_from_auction = original_auction
-            except Exception as e:
+            except Exception:
                 pass  # print(e)
         elif "online" in str(self.request.GET):
             is_online = True
@@ -3883,7 +3881,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
             if not data["next"]:
                 data["next"] = self.get_object().view_lot_link
             return data["next"]
-        except Exception as e:
+        except Exception:
             return self.get_object().view_lot_link
 
     def get_form_kwargs(self):
@@ -3980,7 +3978,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
             if auction.require_phone_number and not userData.phone_number:
                 messages.error(
                     self.request,
-                    f"This auction requires a phone number before you can join",
+                    "This auction requires a phone number before you can join",
                 )
                 return redirect(f"/contact_info?next={auction.get_absolute_url()}")
             find_by_email = AuctionTOS.objects.filter(
@@ -4004,7 +4002,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
                 if not userData.address:
                     messages.error(
                         self.request,
-                        f"You have to set your address before you can choose pickup by mail",
+                        "You have to set your address before you can choose pickup by mail",
                     )
                     return redirect(f"/contact_info?next={auction.get_absolute_url()}")
             if (
@@ -4090,7 +4088,7 @@ def toDefaultLandingPage(request):
                 auction=auction,
                 routeByLastAuction=routeByLastAuction,
             )(request)
-        except Exception as e:
+        except Exception:
             # No tos?  Take them there so they can sign
             return AuctionInfo.as_view(
                 rewrite_url=f"/?{auction.slug}", auction=auction
@@ -4114,7 +4112,7 @@ def toDefaultLandingPage(request):
             slug=list(data.keys())[0]
         )[0]
         # return tos_check(request, auction, routeByLastAuction)
-    except Exception as e:
+    except Exception:
         # if not, check and see if the user has been participating in an auction
         try:
             auction = UserData.objects.get(user=request.user).last_auction_used
@@ -4450,7 +4448,7 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
                 adjustment.user = request.user
                 adjustment.save()
             if adjustments:
-                messages.success(self.request, f"Invoice adjusted")
+                messages.success(self.request, "Invoice adjusted")
             for form in adjustment_formset.deleted_forms:
                 if form.instance.pk:
                     form.instance.delete()

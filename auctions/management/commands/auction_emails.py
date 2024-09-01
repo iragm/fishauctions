@@ -1,11 +1,12 @@
-import decimal
-from django.utils import timezone
-from django.core.management.base import BaseCommand, CommandError
-from auctions.models import Auction, User, UserData
-from django.db.models import Q
-from post_office import mail
-from django.contrib.sites.models import Site
 import datetime
+
+from django.contrib.sites.models import Site
+from django.core.management.base import BaseCommand
+from django.db.models import Q
+from django.utils import timezone
+from post_office import mail
+
+from auctions.models import Auction, UserData
 
 
 class Command(BaseCommand):

@@ -1,35 +1,4 @@
-from django.utils import timezone
-from django.core.management.base import BaseCommand, CommandError
-from django.core.mail import send_mail
-from django.db.models import (
-    Count,
-    Case,
-    When,
-    IntegerField,
-    Avg,
-    Q,
-    F,
-    OuterRef,
-    Subquery,
-    ExpressionWrapper,
-    Value,
-    FloatField,
-    BooleanField,
-)
-from django.core.files import File
-import datetime
-from django.template.loader import get_template
-import os
-import uuid
-from django.contrib.sites.models import Site
-import csv
-from auctions.filters import get_recommended_lots
-import re
-from collections import Counter
-from post_office import mail
-from post_office.models import Email
-from auctions.views import clean_referrer
-from django.db.models.functions import TruncDate
+from django.core.management.base import BaseCommand
 
 
 def compare_model_instances(instance1, instance2):

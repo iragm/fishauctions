@@ -1,11 +1,9 @@
-from django.conf import settings
-from django.urls import include, path, re_path
-from django.contrib import admin
-from . import views
 from django.contrib.auth.decorators import login_required
+from django.urls import path, re_path
 from django.views.generic.base import TemplateView
 from django_ses.views import SESEventWebhookView
-from django.views.decorators.csrf import csrf_exempt
+
+from . import views
 
 urlpatterns = [
     path(

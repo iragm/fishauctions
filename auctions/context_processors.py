@@ -1,4 +1,5 @@
 from django.conf import settings  # import the settings file
+
 from auctions.models import UserData
 
 

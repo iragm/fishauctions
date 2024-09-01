@@ -1,7 +1,8 @@
-from django.utils.safestring import mark_safe
 import django_tables2 as tables
-from .models import AuctionTOS, Lot
 from django.urls import reverse
+from django.utils.safestring import mark_safe
+
+from .models import AuctionTOS, Lot
 
 
 class AuctionTOSHTMxTable(tables.Table):

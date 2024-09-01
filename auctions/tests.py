@@ -1,27 +1,23 @@
-import time
-from django.test import TestCase
 import datetime
-from django.test import TestCase
-from django.utils import timezone
-from django.db import IntegrityError
+
 from django.contrib.auth.models import User
+from django.test import TestCase
 from django.test.client import Client
-from io import StringIO
-from django.core.management import call_command
-from .models import (
-    Lot,
-    AuctionTOS,
-    PickupLocation,
-    Auction,
-    Invoice,
-    add_price_info,
-    LotHistory,
-    ChatSubscription,
-    Bid,
-    InvoiceAdjustment,
-)
-from .consumers import LotConsumer
 from django.urls import reverse
+from django.utils import timezone
+
+from .models import (
+    Auction,
+    AuctionTOS,
+    Bid,
+    ChatSubscription,
+    Invoice,
+    InvoiceAdjustment,
+    Lot,
+    LotHistory,
+    PickupLocation,
+    add_price_info,
+)
 
 
 class StandardTestCase(TestCase):
@@ -181,7 +177,7 @@ class ViewLotTest(TestCase):
 
     def test_non_logged_in_user(self):
         response = self.client.get(self.url)
-        self.assertContains(response, f">sign in</a> to place bids.")
+        self.assertContains(response, ">sign in</a> to place bids.")
 
     def test_logged_in_user(self):
         # Log in the user

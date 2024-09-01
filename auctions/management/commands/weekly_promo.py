@@ -1,19 +1,14 @@
-from django.utils import timezone
-from django.core.management.base import BaseCommand, CommandError
-from django.db.models import Q
-from auctions.models import PickupLocation, distance_to
-from django.contrib.auth.models import User
-from django.core.mail import send_mail
-from django.db.models import Count, Case, When, IntegerField, Avg
-from django.core.files import File
 import datetime
-from post_office import mail
-from django.template.loader import get_template
-import os
-import uuid
+
+from django.contrib.auth.models import User
 from django.contrib.sites.models import Site
-import csv
+from django.core.management.base import BaseCommand
+from django.db.models import Q
+from django.utils import timezone
+from post_office import mail
+
 from auctions.filters import get_recommended_lots
+from auctions.models import PickupLocation, distance_to
 
 
 class Command(BaseCommand):

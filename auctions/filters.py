@@ -1,36 +1,35 @@
-import django_filters
 import datetime
-from django.utils import timezone
+import re
+
+import django_filters
 from crispy_forms.helper import FormHelper
 from django.contrib import messages
-from .models import (
-    AuctionTOS,
-    add_tos_info,
-    Lot,
-    Auction,
-    Location,
-    Category,
-    UserInterestCategory,
-    distance_to,
-    Watch,
-)
 from django.db.models import (
-    Q,
-    F,
-    Count,
     Case,
-    When,
-    Value,
+    Count,
+    Exists,
+    F,
     IntegerField,
     OuterRef,
+    Q,
     Subquery,
-    Exists,
     Sum,
-    IntegerField,
+    When,
 )
-from django.forms.widgets import TextInput, Select, NumberInput
-from django.forms import ModelChoiceField
-import re
+from django.forms.widgets import NumberInput, Select, TextInput
+from django.utils import timezone
+
+from .models import (
+    Auction,
+    AuctionTOS,
+    Category,
+    Location,
+    Lot,
+    UserInterestCategory,
+    Watch,
+    add_tos_info,
+    distance_to,
+)
 
 
 class AuctionTOSFilter(django_filters.FilterSet):
@@ -66,7 +65,7 @@ class AuctionTOSFilter(django_filters.FilterSet):
         """
 
         # sketchy users
-        pattern = re.compile(f"^sus|\ssus\s|\ssus$")
+        pattern = re.compile("^sus|\ssus\s|\ssus$")
         if pattern.search(value):
             value = pattern.sub("", value)
             qs = add_tos_info(qs)
@@ -769,7 +768,7 @@ class LotFilter(django_filters.FilterSet):
                 self.status = "all"
                 self.form.initial["status"] = "all"
             return queryset.filter(auction__slug=value)
-        except Exception as e:
+        except Exception:
             return queryset
 
     def filter_by_status(self, queryset, name, value):

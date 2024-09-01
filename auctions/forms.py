@@ -1,45 +1,39 @@
-from allauth.account.forms import SignupForm, ResetPasswordForm
-from crispy_forms.helper import FormHelper
-from crispy_forms.layout import Layout, Submit, HTML
-from crispy_forms.bootstrap import Div, Field, PrependedAppendedText
-from django import forms
-from django.contrib.auth.models import User
-from .models import (
-    Lot,
-    Bid,
-    Auction,
-    UserData,
-    Location,
-    Club,
-    PickupLocation,
-    AuctionTOS,
-    Invoice,
-    Category,
-    LotImage,
-    UserBan,
-    UserLabelPrefs,
-    ChatSubscription,
-    InvoiceAdjustment,
-)
-from django.forms import ModelForm, HiddenInput, RadioSelect, ModelChoiceField
+# from django.core.exceptions import ValidationError
+
+from allauth.account.forms import ResetPasswordForm, SignupForm
 
 # from bootstrap_datepicker_plus import DateTimePickerInput
 from bootstrap_datepicker_plus.widgets import (
     DateTimePickerInput,
 )  # https://github.com/monim67/django-bootstrap-datepicker-plus/issues/66
-from django.utils import timezone
-from location_field.models.plain import PlainLocationField
-
-# from django.core.exceptions import ValidationError
-import datetime
-import pytz
-from django.core.validators import MinValueValidator
+from crispy_forms.bootstrap import Div, Field, PrependedAppendedText
+from crispy_forms.helper import FormHelper
+from crispy_forms.layout import HTML, Layout, Submit
 from dal import autocomplete
+from django import forms
+from django.contrib.auth.models import User
+from django.forms import (
+    HiddenInput,
+)
 from django.urls import reverse
-from django.forms import BaseModelFormSet
-from django.template.loader import render_to_string
+from django.utils import timezone
 from django_recaptcha.fields import ReCaptchaField
 from django_recaptcha.widgets import ReCaptchaV2Invisible
+
+from .models import (
+    Auction,
+    AuctionTOS,
+    Bid,
+    Category,
+    ChatSubscription,
+    InvoiceAdjustment,
+    Lot,
+    LotImage,
+    PickupLocation,
+    UserBan,
+    UserData,
+    UserLabelPrefs,
+)
 
 # class DateInput(forms.DateInput):
 #     input_type = 'datetime-local'
@@ -359,7 +353,7 @@ class WinnerLot(forms.Form):
             # ),
             Div(
                 HTML(
-                    f'<button type="submit" class="btn bg-success float-right ms-2">Save</button>'
+                    '<button type="submit" class="btn bg-success float-right ms-2">Save</button>'
                 ),
                 css_class="row",
             ),
@@ -535,7 +529,7 @@ class DeleteAuctionTOS(forms.Form):
                     '<a class="btn btn-secondary" href="javascript:window.history.back();">Keep this user</a>'
                 ),
                 HTML(
-                    f'<button type="submit" class="text-dark btn btn-warning float-right">Delete</button>'
+                    '<button type="submit" class="text-dark btn btn-warning float-right">Delete</button>'
                 ),
                 css_class="modal-footer",
             ),
@@ -1092,7 +1086,7 @@ class AuctionNoShowForm(forms.Form):
             ),
             Div(
                 HTML(
-                    f'<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'
+                    '<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'
                 ),
                 HTML(submit_button_html),
                 css_class="modal-footer",
@@ -1109,10 +1103,10 @@ class AuctionNoShowForm(forms.Form):
         ].help_text = f"Issue a 100% refund for to the sellers for {bought_lots_count} lots this user won.  You will need to send money to any users whose invoice is not open."
         self.fields[
             "leave_negative_feedback"
-        ].help_text = f"Leave negative feedback about this user on all lots this seller sold or won, to warn other people about them in the future."
+        ].help_text = "Leave negative feedback about this user on all lots this seller sold or won, to warn other people about them in the future."
         self.fields[
             "ban_this_user"
-        ].help_text = f"Block this user from joining any of your future auctions."
+        ].help_text = "Block this user from joining any of your future auctions."
 
     class Meta:
         fields = [
@@ -1151,7 +1145,7 @@ class ChangeInvoiceStatusForm(forms.Form):
             ),
             Div(
                 HTML(
-                    f'<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'
+                    '<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'
                 ),
                 HTML(submit_button_html),
                 css_class="modal-footer",
@@ -1219,7 +1213,7 @@ class LotRefundForm(forms.ModelForm):
             ),
             Div(
                 HTML(
-                    f'<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'
+                    '<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'
                 ),
                 HTML(save_button_html),
                 css_class="modal-footer",
@@ -1273,7 +1267,7 @@ class AuctionJoin(forms.ModelForm):
                 location = auction.location_qs[0]
                 self.fields["pickup_location"].initial = location
                 if location.pickup_by_mail:
-                    self.fields["i_agree"].label = f"Yes, mail me my lots"
+                    self.fields["i_agree"].label = "Yes, mail me my lots"
                 else:
                     self.fields["i_agree"].label = f"Yes, I will be at {location}"
 

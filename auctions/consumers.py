@@ -1,24 +1,26 @@
 # chat/consumers.py
+import datetime
 import json
+
 from asgiref.sync import async_to_sync
 from channels.generic.websocket import WebsocketConsumer
+from django.conf import settings
+from django.contrib.sites.models import Site
 from django.db.models import Q
+from django.utils import timezone
+from post_office import mail
+
 from .models import (
     AuctionTOS,
-    UserBan,
-    Invoice,
-    LotHistory,
+    Bid,
     ChatSubscription,
+    Invoice,
     Lot,
+    LotHistory,
+    UserBan,
     UserData,
     UserInterestCategory,
-    Bid,
 )
-from post_office import mail
-from django.contrib.sites.models import Site
-from django.conf import settings
-from django.utils import timezone
-import datetime
 
 
 def check_bidding_permissions(lot, user):

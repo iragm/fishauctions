@@ -1,6 +1,6 @@
 import time
-from locust import HttpUser, task, between, User, TaskSet, events
-from websocket import create_connection
+
+from locust import HttpUser, between, task
 
 
 class QuickstartUser(HttpUser):

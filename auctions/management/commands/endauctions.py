@@ -1,13 +1,15 @@
 import datetime
-from django.core.management.base import BaseCommand, CommandError
-from django.utils import timezone
-from auctions.models import AuctionTOS, LotHistory, Invoice, LotImage, Lot
+
 import channels.layers
 from asgiref.sync import async_to_sync
+from django.contrib.sites.models import Site
+from django.core.management.base import BaseCommand
+from django.db.models import F
+from django.utils import timezone
 from easy_thumbnails.files import get_thumbnailer
 from post_office import mail
-from django.contrib.sites.models import Site
-from django.db.models import Count, Case, When, IntegerField, Avg, Q, F
+
+from auctions.models import AuctionTOS, Invoice, Lot, LotHistory, LotImage
 
 
 def sendWarning(lot_number, result):
@@ -78,7 +80,7 @@ def declare_winners_on_lots(lots):
                         high_bidder_pk = None
                         high_bidder_name = None
                         current_high_bid = None
-                        message = f"This lot did not sell"
+                        message = "This lot did not sell"
                         bidder = None
                         info = "ENDED_NO_WINNER"
                     result = {

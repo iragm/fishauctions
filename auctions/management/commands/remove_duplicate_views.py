@@ -1,7 +1,6 @@
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import BaseCommand
+
 from auctions.models import PageView
-from django.template.loader import get_template
-from django.contrib.sites.models import Site
 
 
 class Command(BaseCommand):

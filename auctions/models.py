@@ -1,51 +1,45 @@
-import decimal
-from django.utils import timezone, dateformat, html
 import datetime
-from django.contrib.auth.models import User
-from django.db import models
-from django.core.validators import MaxValueValidator, MinValueValidator
-from django.db.models import (
-    Count,
-    Sum,
-    Case,
-    When,
-    IntegerField,
-    Func,
-    Avg,
-    Q,
-    F,
-    OuterRef,
-    Subquery,
-    ExpressionWrapper,
-    Value,
-    FloatField,
-    BooleanField,
-    DurationField,
-)
-from django.db.models.query import QuerySet
-from django.db.models.expressions import RawSQL
-from django.db.models.functions import Coalesce, ExtractDay
-from autoslug import AutoSlugField
-from django.urls import reverse
-from markdownfield.models import MarkdownField, RenderedMarkdownField
-from markdownfield.validators import VALIDATOR_STANDARD
-from easy_thumbnails.fields import ThumbnailerImageField
-from location_field.models.plain import PlainLocationField
-from django.db.models.signals import pre_save, post_save
-from django.dispatch import receiver
-import uuid
-from random import randint
-from django.conf import settings
-from django.utils.formats import date_format
-from django.contrib.sites.models import Site
 import re
+import uuid
+from datetime import time
+from random import randint
+
+from autoslug import AutoSlugField
+from django.conf import settings
+from django.contrib.auth.models import User
 from django.contrib.auth.signals import user_logged_in
-from dal import autocomplete
-from pytz import timezone as pytz_timezone
+from django.contrib.sites.models import Site
 from django.core.exceptions import ValidationError
+from django.core.validators import MaxValueValidator, MinValueValidator
+from django.db import models
+from django.db.models import (
+    Case,
+    Count,
+    ExpressionWrapper,
+    F,
+    FloatField,
+    IntegerField,
+    OuterRef,
+    Q,
+    Subquery,
+    Sum,
+    Value,
+    When,
+)
+from django.db.models.expressions import RawSQL
+from django.db.models.functions import Coalesce
+from django.db.models.query import QuerySet
+from django.db.models.signals import post_save, pre_save
+from django.dispatch import receiver
+from django.urls import reverse
+from django.utils import html, timezone
 from django.utils.safestring import mark_safe
 from django_ses.signals import bounce_received, complaint_received
-from datetime import time
+from easy_thumbnails.fields import ThumbnailerImageField
+from location_field.models.plain import PlainLocationField
+from markdownfield.models import MarkdownField, RenderedMarkdownField
+from markdownfield.validators import VALIDATOR_STANDARD
+from pytz import timezone as pytz_timezone
 
 
 def nearby_auctions(
@@ -4065,7 +4059,7 @@ class UserInterestCategory(models.Model):
             )  # + 1 for the times maxInterest is 0
             if self.as_percent > 100:
                 self.as_percent = 100
-        except Exception as e:
+        except Exception:
             self.as_percent = 100
         super().save(*args, **kwargs)
 
