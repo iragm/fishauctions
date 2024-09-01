@@ -36,7 +36,7 @@ from easy_thumbnails.files import get_thumbnailer
 from post_office import mail
 from PIL import Image
 from asgiref.sync import sync_to_async
-import HeifImagePlugin
+import HeifImagePlugin  # noqa: F401 Importing this plugin enables HEIF image support, even though it's not used
 import os
 from django.conf import settings
 from .models import *
