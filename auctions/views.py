@@ -907,7 +907,6 @@ def auctionNotifications(request):
 @login_required
 def setCoordinates(request):
     if request.method == "POST":
-        user = request.user
         userData, created = UserData.objects.get_or_create(
             user=request.user,
             defaults={},
@@ -1044,7 +1043,6 @@ def imagesPrimary(request):
     """
     if request.method == "POST":
         try:
-            user = request.user
             pk = int(request.POST["pk"])
         except:
             return HttpResponse("user and pk are required")
@@ -1071,7 +1069,6 @@ def imagesRotate(request):
     """
     if request.method == "POST":
         try:
-            user = request.user
             pk = int(request.POST["pk"])
             angle = int(request.POST["angle"])
         except (KeyError, ValueError):
@@ -1241,7 +1238,7 @@ def pageview(request):
                     if tos:
                         campaign.result = "JOINED"
                         campaign.save()
-            pageview = PageView.objects.create(
+            PageView.objects.create(
                 lot_number=lot_number,
                 url=url_without_params,
                 auction=auction,
@@ -3048,7 +3045,7 @@ class LotValidation(LoginRequiredMixin):
         return super().dispatch(request, *args, **kwargs)
 
     def clean(self):
-        cleaned_data = super().clean()
+        super().clean()
 
     def form_valid(self, form, **kwargs):
         """

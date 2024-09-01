@@ -229,7 +229,6 @@ class AuctionModelTests(TestCase):
     def test_auction_start_and_end(self):
         timeStart = timezone.now() - datetime.timedelta(days=2)
         timeEnd = timezone.now() + datetime.timedelta(minutes=60)
-        theFuture = timezone.now() + datetime.timedelta(days=3)
         auction = Auction.objects.create(
             title="A test auction", date_end=timeEnd, date_start=timeStart
         )
@@ -285,7 +284,6 @@ class LotModelTests(TestCase):
 
     def test_lot_with_one_bids(self):
         time = timezone.now() + datetime.timedelta(days=30)
-        timeNow = timezone.now()
         lotuser = User.objects.create(username="thisismylot")
         lot = Lot.objects.create(
             lot_name="A test lot",
@@ -296,13 +294,12 @@ class LotModelTests(TestCase):
             quantity=1,
         )
         user = User.objects.create(username="Test user")
-        bidA = Bid.objects.create(user=user, lot_number=lot, amount=10)
+        Bid.objects.create(user=user, lot_number=lot, amount=10)
         self.assertIs(lot.high_bidder.pk, user.pk)
         self.assertIs(lot.high_bid, 5)
 
     def test_lot_with_two_bids(self):
         time = timezone.now() + datetime.timedelta(days=30)
-        timeNow = timezone.now()
         lotuser = User.objects.create(username="thisismylot")
         lot = Lot.objects.create(
             lot_name="A test lot",
@@ -314,14 +311,13 @@ class LotModelTests(TestCase):
         )
         userA = User.objects.create(username="Test user")
         userB = User.objects.create(username="Test user B")
-        bidA = Bid.objects.create(user=userA, lot_number=lot, amount=10)
-        bidB = Bid.objects.create(user=userB, lot_number=lot, amount=6)
+        Bid.objects.create(user=userA, lot_number=lot, amount=10)
+        Bid.objects.create(user=userB, lot_number=lot, amount=6)
         self.assertIs(lot.high_bidder.pk, userA.pk)
         self.assertIs(lot.high_bid, 7)
 
     def test_lot_with_two_changing_bids(self):
         time = timezone.now() + datetime.timedelta(days=30)
-        timeNow = timezone.now()
         lotuser = User.objects.create(username="thisismylot")
         lot = Lot.objects.create(
             lot_name="A test lot",
@@ -362,7 +358,6 @@ class LotModelTests(TestCase):
         time = timezone.now() + datetime.timedelta(days=30)
         tenDaysAgo = timezone.now() - datetime.timedelta(days=10)
         fiveDaysAgo = timezone.now() - datetime.timedelta(days=5)
-        timeNow = timezone.now()
         lotuser = User.objects.create(username="thisismylot")
         lot = Lot.objects.create(
             lot_name="A test lot",
@@ -389,7 +384,6 @@ class LotModelTests(TestCase):
         tenDaysAgo = timezone.now() - datetime.timedelta(days=10)
         fiveDaysAgo = timezone.now() - datetime.timedelta(days=5)
         oneDaysAgo = timezone.now() - datetime.timedelta(days=1)
-        timeNow = timezone.now()
         lotuser = User.objects.create(username="thisismylot")
         lot = Lot.objects.create(
             lot_name="A test lot",
@@ -417,7 +411,6 @@ class LotModelTests(TestCase):
 
     def test_lot_with_two_bids_one_after_end(self):
         time = timezone.now() + datetime.timedelta(days=30)
-        timeNow = timezone.now()
         afterEndTime = timezone.now() + datetime.timedelta(days=31)
         lotuser = User.objects.create(username="thisismylot")
         lot = Lot.objects.create(
@@ -433,13 +426,12 @@ class LotModelTests(TestCase):
         bidA = Bid.objects.create(user=userA, lot_number=lot, amount=10)
         bidA.last_bid_time = afterEndTime
         bidA.save()
-        bidB = Bid.objects.create(user=userB, lot_number=lot, amount=6)
+        Bid.objects.create(user=userB, lot_number=lot, amount=6)
         self.assertIs(lot.high_bidder.pk, userB.pk)
         self.assertIs(lot.high_bid, 5)
 
     def test_lot_with_one_bids_below_reserve(self):
         time = timezone.now() + datetime.timedelta(days=30)
-        timeNow = timezone.now()
         lotuser = User.objects.create(username="thisismylot")
         lot = Lot.objects.create(
             lot_name="A test lot",
@@ -450,7 +442,7 @@ class LotModelTests(TestCase):
             quantity=1,
         )
         user = User.objects.create(username="Test user")
-        bidA = Bid.objects.create(user=user, lot_number=lot, amount=2)
+        Bid.objects.create(user=user, lot_number=lot, amount=2)
         self.assertIs(lot.high_bidder, False)
         self.assertIs(lot.high_bid, 5)
 

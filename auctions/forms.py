@@ -2310,7 +2310,7 @@ class CreateLotForm(forms.ModelForm):
                         "You don't have permission to sell lots in this auction",
                     )
             try:
-                ban = UserBan.objects.get(
+                UserBan.objects.get(
                     banned_user=self.user.pk, user=auction.created_by.pk
                 )
                 self.add_error(
@@ -2706,7 +2706,7 @@ class ChangeUserPreferencesForm(forms.ModelForm):
         )
 
     def clean(self):
-        cleaned_data = super().clean()
+        super().clean()
         # image = cleaned_data.get("image")
         # image_source = cleaned_data.get("image_source")
         # if image and not image_source:

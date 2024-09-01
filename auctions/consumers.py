@@ -142,7 +142,6 @@ def bid_on_lot(lot, user, amount):
 
         originalHighBidder = lot.high_bidder
         originalBid = lot.high_bid
-        originalMaxBid = lot.max_bid
         bid, created = Bid.objects.get_or_create(
             user=user,
             lot_number=lot,
