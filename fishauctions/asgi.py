@@ -14,16 +14,21 @@ from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.security.websocket import AllowedHostsOriginValidator
 from auctions.consumers import *
 
-application = ProtocolTypeRouter({
-    # Django's ASGI application to handle traditional HTTP requests
-    "http": django_asgi_app,
-
-    # WebSocket chat handler
-    "websocket": AllowedHostsOriginValidator(
-        AuthMiddlewareStack(
-        URLRouter([
-            re_path(r'ws/lots/(?P<lot_number>\w+)/$', LotConsumer.as_asgi()),
-        ])
-        )
-    ),
-})
+application = ProtocolTypeRouter(
+    {
+        # Django's ASGI application to handle traditional HTTP requests
+        "http": django_asgi_app,
+        # WebSocket chat handler
+        "websocket": AllowedHostsOriginValidator(
+            AuthMiddlewareStack(
+                URLRouter(
+                    [
+                        re_path(
+                            r"ws/lots/(?P<lot_number>\w+)/$", LotConsumer.as_asgi()
+                        ),
+                    ]
+                )
+            )
+        ),
+    }
+)

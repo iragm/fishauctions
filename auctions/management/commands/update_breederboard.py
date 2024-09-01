@@ -1,9 +1,10 @@
 from django.core.management.base import BaseCommand, CommandError
 from auctions.models import UserData, User
-#from models import User
+# from models import User
+
 
 class Command(BaseCommand):
-    help = 'Sets rank of all users in the leaderboards'
+    help = "Sets rank of all users in the leaderboards"
 
     def handle(self, *args, **options):
         self.stdout.write("Creating userdata")
@@ -29,7 +30,7 @@ class Command(BaseCommand):
                 data.seller_percentile = None
                 data.number_total_lots = None
             data.save()
-            #self.stdout.write(f"Rank {rank}: {newData.user} with {newData.lots_sold} lots sold")
+            # self.stdout.write(f"Rank {rank}: {newData.user} with {newData.lots_sold} lots sold")
             rank = rank + 1
         # self.stdout.write("Updating total unique species sold")
         # sortedList = sorted(userData, key=lambda t: -t.species_sold)
@@ -59,7 +60,7 @@ class Command(BaseCommand):
                 data.buyer_percentile = None
                 data.number_total_spent = None
             data.save()
-            #self.stdout.write(f"Rank {rank}: {newData.user} with ${newData.total_spent} spent")
+            # self.stdout.write(f"Rank {rank}: {newData.user} with ${newData.total_spent} spent")
             rank = rank + 1
         self.stdout.write("Updating total sold")
         sortedList = sorted(userData, key=lambda t: -t.total_sold)
@@ -73,7 +74,7 @@ class Command(BaseCommand):
                 data.rank_total_sold = None
                 data.number_total_sold = None
             data.save()
-            #self.stdout.write(f"Rank {rank}: {newData.user} with ${newData.total_sold} sold")
+            # self.stdout.write(f"Rank {rank}: {newData.user} with ${newData.total_sold} sold")
             rank = rank + 1
         self.stdout.write("Updating total volume")
         sortedList = sorted(userData, key=lambda t: -t.calc_total_volume)
@@ -89,8 +90,8 @@ class Command(BaseCommand):
                 data.volume_percentile = None
                 data.total_volume = None
             data.save()
-            #self.stdout.write(f"Rank {rank}: {newData.user} with ${newData.total_spent} total volume")
-            rank = rank + 1                    
+            # self.stdout.write(f"Rank {rank}: {newData.user} with ${newData.total_spent} total volume")
+            rank = rank + 1
         self.stdout.write("Updating bids placed")
         sortedList = sorted(userData, key=lambda t: -t.total_bids)
         rank = 1
@@ -103,5 +104,5 @@ class Command(BaseCommand):
                 data.rank_total_bids = None
                 data.number_total_bids = None
             data.save()
-            #self.stdout.write(f"Rank {rank}: {newData.user} with ${newData.total_bids} bids")
+            # self.stdout.write(f"Rank {rank}: {newData.user} with ${newData.total_bids} bids")
             rank = rank + 1

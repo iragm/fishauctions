@@ -4,15 +4,17 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('auctions', '0137_alter_userlabelprefs_preset'),
+        ("auctions", "0137_alter_userlabelprefs_preset"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='auction',
-            name='only_approved_bidders',
-            field=models.BooleanField(default=False, help_text='Require admin approval before users can bid.  This will not change permissions for users that have already joined.'),
+            model_name="auction",
+            name="only_approved_bidders",
+            field=models.BooleanField(
+                default=False,
+                help_text="Require admin approval before users can bid.  This will not change permissions for users that have already joined.",
+            ),
         ),
     ]
