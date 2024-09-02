@@ -70,3 +70,13 @@ To check if code is formatted properly *without* modifying any files on disk, ru
 
 #### Management commands
 Run these with docker exec after docker compose is up.  For example: `docker exec -it django python3 manage.py makemigrations`
+
+### Developing in VSCode
+
+This project is optimized for development in [Visual Studio Code](https://code.visualstudio.com/).
+If you are using VSCode, begin by installing the ["Remote Development" extension pack](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.vscode-remote-extensionpack), and make sure Docker is also installed.
+
+Working in a VSCode development container will ensure that all project dependencies are installed--aiding in running the Python language server, IDE auto-completion, running tests automatically, etc.
+
+To begin, follow the VS Code prompt to `Reopen in Container`. The first time running this command will take a while as the remote development container is built.
+You can also open this project in a remote container by opening the command palette (CMD+Shift+P), and navigate to `Dev Containers: Reopen in Container`.

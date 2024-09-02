@@ -51,6 +51,16 @@ FROM python:3.11.9-slim AS test
 COPY ./requirements-test.txt .
 RUN pip install -r requirements-test.txt
 
+
+#########
+# Dev Container #
+#########
+
+
+FROM builder AS dev
+COPY ./requirements*.txt .
+RUN pip install -r requirements*.txt
+
 #########
 # FINAL #
 #########

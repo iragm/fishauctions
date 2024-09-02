@@ -6,9 +6,6 @@
     "files.insertFinalNewline": true,
     "files.trimFinalNewlines": true,
     "files.trimTrailingWhitespace": true,
-    "python.linting.pylintEnabled": false,
-    "python.linting.banditEnabled": true,
-    "python.linting.enabled": true,
     "ruff.enable": true,
     "ruff.codeAction.fixViolation": {
         "enable": true
