@@ -37,7 +37,7 @@ bleach[css]==6.1.0
     #   django-post-office
 boto3==1.35.0
     # via django-ses
-botocore>=1.35.0
+botocore==1.35.10
     # via
     #   boto3
     #   s3transfer
@@ -83,7 +83,7 @@ defusedxml==0.7.1
     # via
     #   -r ./requirements.in
     #   python3-openid
-django>=4.2.14,<5.1
+django==5.1
     # via
     #   -r ./requirements.in
     #   channels
@@ -135,7 +135,7 @@ django-markdownfield==0.11.0
     # via -r ./requirements.in
 django-post-office==3.9.0
     # via -r ./requirements.in
-django-qr-code>=4.0.1
+django-qr-code==4.1.0
     # via -r ./requirements.in
 django-recaptcha==4.0.0
     # via -r ./requirements.in
@@ -143,7 +143,7 @@ django-ses[events]==4.1.0
     # via -r ./requirements.in
 django-tables2==2.7.0
     # via -r ./requirements.in
-easy-thumbnails==2.8.5
+easy-thumbnails==2.9
     # via -r ./requirements.in
 gunicorn==22.0.0
     # via -r ./requirements.in
@@ -304,7 +304,7 @@ ua-parser==0.18.0
     # via
     #   -r ./requirements.in
     #   user-agents
-urllib3>=1.21.1
+urllib3==2.2.2
     # via
     #   -r ./requirements.in
     #   botocore

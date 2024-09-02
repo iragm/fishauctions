@@ -31,7 +31,7 @@ django_htmx
 django_debug_toolbar
 django-recaptcha
 django-chartjs
-easy-thumbnails
+easy-thumbnails>2.8.5
 hyperlink
 idna
 incremental
