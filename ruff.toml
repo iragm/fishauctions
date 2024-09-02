@@ -3,7 +3,10 @@ exclude = ["get-pip.py"]
 
 [lint]
 exclude = ["get-pip.py"]
-ignore = ["E722"]
+ignore = [
+    "E501",
+    "E722",
+]
 extend-select = [
     "A",    # flake8-builtins
     # "ARG",  # flake8-unused-arguments
@@ -13,7 +16,7 @@ extend-select = [
     # "D",    # pydocstyle
     # "DJ",   # flake8-django
     # "DTZ",  # flake8-datetimez
-    # "E",    # pycodestyle
+    "E",    # pycodestyle
     "EM",   # flake8-errmsg
     # "ERA",  # eradicate
     "DTZ",  # flake8-datetimez

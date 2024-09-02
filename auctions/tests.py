@@ -836,7 +836,9 @@ class SetLotWinnerViewTest(TestCase):
                 "auction": 5,  # this is not used anywhere, but still required
             },
         )
-        assert response.status_code == 302  # Should redirect after successful form submission
+        assert (
+            response.status_code == 302
+        )  # Should redirect after successful form submission
         updated_lot = Lot.objects.get(pk=self.lot.pk)
         assert updated_lot.auctiontos_winner == self.bidder
         assert updated_lot.winning_price == 100
@@ -957,7 +959,9 @@ class SetLotWinnerViewTest(TestCase):
         )
         assert response.status_code == 200  # Form should not be submitted successfully
         updated_lot = Lot.objects.get(pk=self.lot.pk)
-        assert updated_lot.auctiontos_winner == self.bidder  # Lot winner should remain unchanged
+        assert (
+            updated_lot.auctiontos_winner == self.bidder
+        )  # Lot winner should remain unchanged
         assert updated_lot.winning_price == 100  # Winning price should remain unchanged
 
 
