@@ -4,15 +4,24 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('auctions', '0136_alter_lot_banned_alter_lot_partial_refund_percent'),
+        ("auctions", "0136_alter_lot_banned_alter_lot_partial_refund_percent"),
     ]
 
     operations = [
         migrations.AlterField(
-            model_name='userlabelprefs',
-            name='preset',
-            field=models.CharField(choices=[('sm', 'Small (Avery 5160)'), ('lg', 'Large (Avery 18262)'), ('thermal_sm', 'Thermal 3"x2"'), ('custom', 'Custom')], default='lg', max_length=20, verbose_name='Label size'),
+            model_name="userlabelprefs",
+            name="preset",
+            field=models.CharField(
+                choices=[
+                    ("sm", "Small (Avery 5160)"),
+                    ("lg", "Large (Avery 18262)"),
+                    ("thermal_sm", 'Thermal 3"x2"'),
+                    ("custom", "Custom"),
+                ],
+                default="lg",
+                max_length=20,
+                verbose_name="Label size",
+            ),
         ),
     ]

@@ -13,8 +13,156 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
-    replaces = [('auctions', '0001_initial'), ('auctions', '0002_auction_test'), ('auctions', '0003_auto_20201004_1543'), ('auctions', '0004_auction_test'), ('auctions', '0005_remove_auction_test'), ('auctions', '0006_auto_20201004_1615'), ('auctions', '0007_auto_20201004_2107'), ('auctions', '0008_auto_20201004_2328'), ('auctions', '0009_auto_20201005_0027'), ('auctions', '0010_auto_20201005_0041'), ('auctions', '0011_pageview'), ('auctions', '0012_auto_20201005_0142'), ('auctions', '0013_auto_20201005_1231'), ('auctions', '0014_auto_20201008_1726'), ('auctions', '0015_userdata_email_visible'), ('auctions', '0016_auto_20201009_1255'), ('auctions', '0017_bid_was_high_bid'), ('auctions', '0018_auto_20201010_1429'), ('auctions', '0019_auto_20201010_2102'), ('auctions', '0020_userdata_last_auction_used'), ('auctions', '0021_auto_20201025_1232'), ('auctions', '0022_auto_20201031_2117'), ('auctions', '0023_userdata_use_list_view'), ('auctions', '0024_auto_20201102_0659'), ('auctions', '0025_bid_last_bid_time'), ('auctions', '0026_auto_20201102_2030'), ('auctions', '0027_auto_20201102_2040'), ('auctions', '0028_auto_20201103_0757'), ('auctions', '0029_auto_20201113_0929'), ('auctions', '0030_auto_20201113_0952'), ('auctions', '0031_auto_20201113_0953'), ('auctions', '0032_auto_20201115_1213'), ('auctions', '0033_auto_20201115_1355'), ('auctions', '0034_auto_20201116_1923'), ('auctions', '0035_userinterestcategory'), ('auctions', '0036_auto_20201120_1025'), ('auctions', '0037_auction_lot_promotion_cost'), ('auctions', '0038_auto_20201123_1138'), ('auctions', '0039_auto_20201124_0856'), ('auctions', '0040_auto_20201124_0857'), ('auctions', '0041_auto_20201124_0857'), ('auctions', '0042_auto_20201127_1627'), ('auctions', '0043_auto_20201128_1201'), ('auctions', '0044_auto_20201128_1407'), ('auctions', '0045_lot_slug'), ('auctions', '0046_auto_20201222_1728'), ('auctions', '0047_auto_20201227_1127'), ('auctions', '0048_auto_20201227_1129'), ('auctions', '0049_auto_20201228_1436'), ('auctions', '0050_auto_20201228_1506'), ('auctions', '0051_auto_20201230_0959'), ('auctions', '0052_auto_20201230_1425'), ('auctions', '0053_auto_20201231_0710'), ('auctions', '0054_auto_20201231_2144'), ('auctions', '0055_auto_20210103_0910'), ('auctions', '0056_auto_20210103_0932'), ('auctions', '0057_auto_20210103_1618'), ('auctions', '0058_auction_max_lots_per_user'), ('auctions', '0059_auto_20210107_2033'), ('auctions', '0060_auto_20210112_1635'), ('auctions', '0061_auto_20210116_1420'), ('auctions', '0062_auto_20210116_1938'), ('auctions', '0063_auto_20210117_1026'), ('auctions', '0064_auto_20210117_1401'), ('auctions', '0065_remove_invoice_paid'), ('auctions', '0066_auto_20210117_1621'), ('auctions', '0067_userdata_email_me_when_people_comment_on_my_lots'), ('auctions', '0068_auto_20210122_1322'), ('auctions', '0069_auto_20210122_1330'), ('auctions', '0070_club_abbreviation'), ('auctions', '0071_auto_20210123_1114'), ('auctions', '0072_auctiontos_createdon'), ('auctions', '0073_lothistory_notification_sent'), ('auctions', '0074_auto_20210205_1053'), ('auctions', '0075_auto_20210311_0849'), ('auctions', '0076_auto_20210314_1314'), ('auctions', '0077_adcampaign_adcampaignresponse'), ('auctions', '0078_adcampaign_body_html'), ('auctions', '0079_auto_20210320_0853'), ('auctions', '0080_remove_adcampaign_start_date'), ('auctions', '0081_auto_20210321_1125'), ('auctions', '0082_auto_20210326_0956'), ('auctions', '0083_auto_20210415_0941'), ('auctions', '0084_auto_20210415_1000'), ('auctions', '0085_auto_20210415_1114'), ('auctions', '0086_auto_20210415_1500'), ('auctions', '0087_auto_20210416_0845'), ('auctions', '0088_lot_lot_run_duration'), ('auctions', '0089_auto_20210419_1744'), ('auctions', '0090_auto_20210423_1409'), ('auctions', '0091_auto_20210423_1416'), ('auctions', '0092_auto_20210612_0659'), ('auctions', '0093_auto_20210612_1548'), ('auctions', '0094_auto_20210615_2109'), ('auctions', '0095_auto_20210622_1943'), ('auctions', '0096_userdata_last_ip_address_alter_auction_date_end'), ('auctions', '0097_auctiontos_confirm_email_sent_auctiontos_is_admin_and_more'), ('auctions', '0098_auction_is_deleted_auction_is_online_and_more'), ('auctions', '0099_pickuplocation_contact_person_alter_auction_date_end_and_more'), ('auctions', '0100_alter_auctiontos_user_alter_pickuplocation_latitude_and_more'), ('auctions', '0101_auctiontos_manually_added_and_more'), ('auctions', '0102_alter_auctiontos_manually_added'), ('auctions', '0103_invoice_no_login_link_lot_custom_lot_number_and_more'), ('auctions', '0104_invoice_calculated_total'), ('auctions', '0105_alter_invoice_status'), ('auctions', '0106_userlabelprefs'), ('auctions', '0107_alter_userlabelprefs_unit'), ('auctions', '0108_auction_allow_bidding_on_lots_and_more'), ('auctions', '0109_auctiontos_memo'), ('auctions', '0110_remove_auctiontos_memo_invoice_memo'), ('auctions', '0111_userdata_email_me_about_new_in_person_auctions_and_more'), ('auctions', '0112_lotautocategory_lot_category_checked'), ('auctions', '0113_alter_auctiontos_options_userlabelprefs_empty_labels_and_more'), ('auctions', '0114_alter_userlabelprefs_empty_labels_and_more'), ('auctions', '0115_auction_only_approved_sellers_and_more'), ('auctions', '0116_pageview_source'), ('auctions', '0117_pageview_auction_pageview_counter_and_more'), ('auctions', '0118_lot_reference_link_alter_pageview_source'), ('auctions', '0119_alter_lot_reference_link_searchhistory'), ('auctions', '0120_pageview_duplicate_check_completed_and_more'), ('auctions', '0121_alter_pageview_duplicate_check_completed'), ('auctions', '0122_alter_auction_date_start_and_more'), ('auctions', '0123_pageview_ip_address_pageview_latitude_and_more'), ('auctions', '0124_auction_invoice_payment_instructions_and_more'), ('auctions', '0125_auctioncampaign_email_sent_auctioncampaign_source_and_more'), ('auctions', '0126_alter_pageview_platform'), ('auctions', '0127_auction_lot_entry_fee_for_club_members_and_more'), ('auctions', '0128_userdata_send_reminder_emails_about_joining_auctions_and_more'), ('auctions', '0129_auction_require_phone_number_and_more'), ('auctions', '0130_auction_buy_now_auction_reserve_price_and_more'), ('auctions', '0131_alter_auction_buy_now_alter_auction_reserve_price'), ('auctions', '0132_rename_last_notificaiton_sent_chatsubscription_last_notification_sent_and_more'), ('auctions', '0133_invoiceadjustment')]
+    replaces = [
+        ("auctions", "0001_initial"),
+        ("auctions", "0002_auction_test"),
+        ("auctions", "0003_auto_20201004_1543"),
+        ("auctions", "0004_auction_test"),
+        ("auctions", "0005_remove_auction_test"),
+        ("auctions", "0006_auto_20201004_1615"),
+        ("auctions", "0007_auto_20201004_2107"),
+        ("auctions", "0008_auto_20201004_2328"),
+        ("auctions", "0009_auto_20201005_0027"),
+        ("auctions", "0010_auto_20201005_0041"),
+        ("auctions", "0011_pageview"),
+        ("auctions", "0012_auto_20201005_0142"),
+        ("auctions", "0013_auto_20201005_1231"),
+        ("auctions", "0014_auto_20201008_1726"),
+        ("auctions", "0015_userdata_email_visible"),
+        ("auctions", "0016_auto_20201009_1255"),
+        ("auctions", "0017_bid_was_high_bid"),
+        ("auctions", "0018_auto_20201010_1429"),
+        ("auctions", "0019_auto_20201010_2102"),
+        ("auctions", "0020_userdata_last_auction_used"),
+        ("auctions", "0021_auto_20201025_1232"),
+        ("auctions", "0022_auto_20201031_2117"),
+        ("auctions", "0023_userdata_use_list_view"),
+        ("auctions", "0024_auto_20201102_0659"),
+        ("auctions", "0025_bid_last_bid_time"),
+        ("auctions", "0026_auto_20201102_2030"),
+        ("auctions", "0027_auto_20201102_2040"),
+        ("auctions", "0028_auto_20201103_0757"),
+        ("auctions", "0029_auto_20201113_0929"),
+        ("auctions", "0030_auto_20201113_0952"),
+        ("auctions", "0031_auto_20201113_0953"),
+        ("auctions", "0032_auto_20201115_1213"),
+        ("auctions", "0033_auto_20201115_1355"),
+        ("auctions", "0034_auto_20201116_1923"),
+        ("auctions", "0035_userinterestcategory"),
+        ("auctions", "0036_auto_20201120_1025"),
+        ("auctions", "0037_auction_lot_promotion_cost"),
+        ("auctions", "0038_auto_20201123_1138"),
+        ("auctions", "0039_auto_20201124_0856"),
+        ("auctions", "0040_auto_20201124_0857"),
+        ("auctions", "0041_auto_20201124_0857"),
+        ("auctions", "0042_auto_20201127_1627"),
+        ("auctions", "0043_auto_20201128_1201"),
+        ("auctions", "0044_auto_20201128_1407"),
+        ("auctions", "0045_lot_slug"),
+        ("auctions", "0046_auto_20201222_1728"),
+        ("auctions", "0047_auto_20201227_1127"),
+        ("auctions", "0048_auto_20201227_1129"),
+        ("auctions", "0049_auto_20201228_1436"),
+        ("auctions", "0050_auto_20201228_1506"),
+        ("auctions", "0051_auto_20201230_0959"),
+        ("auctions", "0052_auto_20201230_1425"),
+        ("auctions", "0053_auto_20201231_0710"),
+        ("auctions", "0054_auto_20201231_2144"),
+        ("auctions", "0055_auto_20210103_0910"),
+        ("auctions", "0056_auto_20210103_0932"),
+        ("auctions", "0057_auto_20210103_1618"),
+        ("auctions", "0058_auction_max_lots_per_user"),
+        ("auctions", "0059_auto_20210107_2033"),
+        ("auctions", "0060_auto_20210112_1635"),
+        ("auctions", "0061_auto_20210116_1420"),
+        ("auctions", "0062_auto_20210116_1938"),
+        ("auctions", "0063_auto_20210117_1026"),
+        ("auctions", "0064_auto_20210117_1401"),
+        ("auctions", "0065_remove_invoice_paid"),
+        ("auctions", "0066_auto_20210117_1621"),
+        ("auctions", "0067_userdata_email_me_when_people_comment_on_my_lots"),
+        ("auctions", "0068_auto_20210122_1322"),
+        ("auctions", "0069_auto_20210122_1330"),
+        ("auctions", "0070_club_abbreviation"),
+        ("auctions", "0071_auto_20210123_1114"),
+        ("auctions", "0072_auctiontos_createdon"),
+        ("auctions", "0073_lothistory_notification_sent"),
+        ("auctions", "0074_auto_20210205_1053"),
+        ("auctions", "0075_auto_20210311_0849"),
+        ("auctions", "0076_auto_20210314_1314"),
+        ("auctions", "0077_adcampaign_adcampaignresponse"),
+        ("auctions", "0078_adcampaign_body_html"),
+        ("auctions", "0079_auto_20210320_0853"),
+        ("auctions", "0080_remove_adcampaign_start_date"),
+        ("auctions", "0081_auto_20210321_1125"),
+        ("auctions", "0082_auto_20210326_0956"),
+        ("auctions", "0083_auto_20210415_0941"),
+        ("auctions", "0084_auto_20210415_1000"),
+        ("auctions", "0085_auto_20210415_1114"),
+        ("auctions", "0086_auto_20210415_1500"),
+        ("auctions", "0087_auto_20210416_0845"),
+        ("auctions", "0088_lot_lot_run_duration"),
+        ("auctions", "0089_auto_20210419_1744"),
+        ("auctions", "0090_auto_20210423_1409"),
+        ("auctions", "0091_auto_20210423_1416"),
+        ("auctions", "0092_auto_20210612_0659"),
+        ("auctions", "0093_auto_20210612_1548"),
+        ("auctions", "0094_auto_20210615_2109"),
+        ("auctions", "0095_auto_20210622_1943"),
+        ("auctions", "0096_userdata_last_ip_address_alter_auction_date_end"),
+        ("auctions", "0097_auctiontos_confirm_email_sent_auctiontos_is_admin_and_more"),
+        ("auctions", "0098_auction_is_deleted_auction_is_online_and_more"),
+        (
+            "auctions",
+            "0099_pickuplocation_contact_person_alter_auction_date_end_and_more",
+        ),
+        (
+            "auctions",
+            "0100_alter_auctiontos_user_alter_pickuplocation_latitude_and_more",
+        ),
+        ("auctions", "0101_auctiontos_manually_added_and_more"),
+        ("auctions", "0102_alter_auctiontos_manually_added"),
+        ("auctions", "0103_invoice_no_login_link_lot_custom_lot_number_and_more"),
+        ("auctions", "0104_invoice_calculated_total"),
+        ("auctions", "0105_alter_invoice_status"),
+        ("auctions", "0106_userlabelprefs"),
+        ("auctions", "0107_alter_userlabelprefs_unit"),
+        ("auctions", "0108_auction_allow_bidding_on_lots_and_more"),
+        ("auctions", "0109_auctiontos_memo"),
+        ("auctions", "0110_remove_auctiontos_memo_invoice_memo"),
+        ("auctions", "0111_userdata_email_me_about_new_in_person_auctions_and_more"),
+        ("auctions", "0112_lotautocategory_lot_category_checked"),
+        (
+            "auctions",
+            "0113_alter_auctiontos_options_userlabelprefs_empty_labels_and_more",
+        ),
+        ("auctions", "0114_alter_userlabelprefs_empty_labels_and_more"),
+        ("auctions", "0115_auction_only_approved_sellers_and_more"),
+        ("auctions", "0116_pageview_source"),
+        ("auctions", "0117_pageview_auction_pageview_counter_and_more"),
+        ("auctions", "0118_lot_reference_link_alter_pageview_source"),
+        ("auctions", "0119_alter_lot_reference_link_searchhistory"),
+        ("auctions", "0120_pageview_duplicate_check_completed_and_more"),
+        ("auctions", "0121_alter_pageview_duplicate_check_completed"),
+        ("auctions", "0122_alter_auction_date_start_and_more"),
+        ("auctions", "0123_pageview_ip_address_pageview_latitude_and_more"),
+        ("auctions", "0124_auction_invoice_payment_instructions_and_more"),
+        ("auctions", "0125_auctioncampaign_email_sent_auctioncampaign_source_and_more"),
+        ("auctions", "0126_alter_pageview_platform"),
+        ("auctions", "0127_auction_lot_entry_fee_for_club_members_and_more"),
+        (
+            "auctions",
+            "0128_userdata_send_reminder_emails_about_joining_auctions_and_more",
+        ),
+        ("auctions", "0129_auction_require_phone_number_and_more"),
+        ("auctions", "0130_auction_buy_now_auction_reserve_price_and_more"),
+        ("auctions", "0131_alter_auction_buy_now_alter_auction_reserve_price"),
+        (
+            "auctions",
+            "0132_rename_last_notificaiton_sent_chatsubscription_last_notification_sent_and_more",
+        ),
+        ("auctions", "0133_invoiceadjustment"),
+    ]
 
     dependencies = [
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
@@ -22,712 +170,2735 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.CreateModel(
-            name='Auction',
+            name="Auction",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('title', models.CharField(help_text='This is the name people will see when joining your auction', max_length=255, verbose_name='Auction name')),
-                ('slug', autoslug.fields.AutoSlugField(editable=False, populate_from='title', unique=True)),
-                ('sealed_bid', models.BooleanField(default=False, help_text="Users won't be able to see what the current bid is")),
-                ('lot_entry_fee', models.PositiveIntegerField(default=0, help_text='The amount the seller will be charged if a lot sells', validators=[django.core.validators.MinValueValidator(0), django.core.validators.MaxValueValidator(10)])),
-                ('unsold_lot_fee', models.PositiveIntegerField(default=0, help_text="The amount the seller will be charged if their lot doesn't sell", validators=[django.core.validators.MinValueValidator(0), django.core.validators.MaxValueValidator(10)])),
-                ('winning_bid_percent_to_club', models.PositiveIntegerField(default=0, help_text='In addition to the Lot entry fee, this percent of the winning price will be taken by the club', validators=[django.core.validators.MinValueValidator(0), django.core.validators.MaxValueValidator(100)])),
-                ('date_start', models.DateTimeField(help_text='Bidding starts on this date', verbose_name='Auction start date')),
-                ('date_end', models.DateTimeField(blank=True, help_text='Bidding will end on this date.  If last-minute bids are placed, bidding can go up to 1 hour past this time on those lots.  Note: This will not change the end date of existing lots.', null=True, verbose_name='Bidding end date')),
-                ('watch_warning_email_sent', models.BooleanField(default=False)),
-                ('invoiced', models.BooleanField(default=False)),
-                ('notes', markdownfield.models.MarkdownField(blank=True, default='', help_text='To add a link: [Link text](https://www.google.com)', null=True, rendered_field='notes_rendered', verbose_name='Rules')),
-                ('code_to_add_lots', models.CharField(blank=True, help_text='This is like a password: People in your club will enter this code to put their lots in this auction', max_length=255, null=True)),
-                ('created_by', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to=settings.AUTH_USER_MODEL)),
-                ('location', models.CharField(blank=True, help_text='State or region of this auction', max_length=300, null=True)),
-                ('lot_submission_end_date', models.DateTimeField(blank=True, null=True, verbose_name='Lot submission ends')),
-                ('notes_rendered', markdownfield.models.RenderedMarkdownField(null=True)),
-                ('lot_promotion_cost', models.PositiveIntegerField(default=1, validators=[django.core.validators.MinValueValidator(1)])),
-                ('first_bid_payout', models.PositiveIntegerField(default=0, help_text="This is a feature to encourage bidding.  Give each bidder this amount, for free.  <a href='/blog/encouraging-participation/' target='_blank'>More information</a>", validators=[django.core.validators.MinValueValidator(0)])),
-                ('promote_this_auction', models.BooleanField(default=True, help_text="Show this to everyone in the list of auctions. <span class='text-warning'>Uncheck if this is a test or private auction</span>.")),
-                ('is_chat_allowed', models.BooleanField(default=True)),
-                ('max_lots_per_user', models.PositiveIntegerField(blank=True, help_text="A user won't be able to add more than this many lots to this auction", null=True)),
-                ('email_fifth_sent', models.BooleanField(default=False)),
-                ('email_first_sent', models.BooleanField(default=False)),
-                ('email_fourth_sent', models.BooleanField(default=False)),
-                ('email_second_sent', models.BooleanField(default=False)),
-                ('email_third_sent', models.BooleanField(default=False)),
-                ('date_posted', models.DateTimeField(auto_now_add=True, default=django.utils.timezone.now)),
-                ('allow_additional_lots_as_donation', models.BooleanField(default=True, help_text="If you don't set max lots per user, this has no effect")),
-                ('make_stats_public', models.BooleanField(default=True, help_text="Allow any user who has a link to this auction's stats to see them.  Uncheck to only allow the auction creator to view stats")),
-                ('lot_submission_start_date', models.DateTimeField(blank=True, help_text='Users can submit (but not bid on) lots on this date', null=True, verbose_name='Lot submission opens')),
-                ('bump_cost', models.PositiveIntegerField(blank=True, default=1, help_text='The amount a user will be charged each time they move a lot to the top of the list', validators=[django.core.validators.MinValueValidator(1)])),
-                ('is_deleted', models.BooleanField(default=False)),
-                ('is_online', models.BooleanField(default=True, help_text='Is this is an online auction with in-person pickup at one or more locations?')),
-                ('use_categories', models.BooleanField(default=True, help_text='Check to use categories like Cichlids, Livebearers, etc.', verbose_name='This is a fish auction')),
-                ('allow_bidding_on_lots', models.BooleanField(default=True)),
-                ('email_users_when_invoices_ready', models.BooleanField(default=True)),
-                ('pre_register_lot_discount_percent', models.PositiveIntegerField(default=0, help_text='Decrease the club cut if users add lots through this website', validators=[django.core.validators.MinValueValidator(0), django.core.validators.MaxValueValidator(100)])),
-                ('pre_register_lot_entry_fee_discount', models.PositiveIntegerField(default=0, help_text='Decrease the lot entry fee by this amount if users add lots through this website', validators=[django.core.validators.MinValueValidator(0), django.core.validators.MaxValueValidator(10)])),
-                ('only_approved_sellers', models.BooleanField(default=False, help_text='Require admin approval before users can add lots.  This will not change permissions for users that have already joined.')),
-                ('invoice_payment_instructions', models.CharField(blank=True, default='', help_text="Shown to the user on their invoice.  For example, 'You will receive a seperate PayPal invoice with payment instructions'", max_length=255, null=True)),
-                ('minimum_bid', models.PositiveIntegerField(default=2, help_text='Lowest price a lot can sell for.', validators=[django.core.validators.MinValueValidator(2)])),
-                ('lot_entry_fee_for_club_members', models.PositiveIntegerField(default=0, help_text='Used instead of the standard entry fee, when you designate someone as a club member', validators=[django.core.validators.MinValueValidator(0), django.core.validators.MaxValueValidator(10)])),
-                ('winning_bid_percent_to_club_for_club_members', models.PositiveIntegerField(default=0, help_text='Used instead of the standard split, when you designate someone as a club member', validators=[django.core.validators.MinValueValidator(0), django.core.validators.MaxValueValidator(100)])),
-                ('require_phone_number', models.BooleanField(default=False, help_text='Require users to have entered a phone number before they can join this auction')),
-                ('set_lot_winners_url', models.CharField(blank=True, choices=[('', 'Standard, bidder number/lot number only'), ('presentation', 'Show a picture of the lot'), ('autocomplete', 'Autocomplete, search by name or bidder number')], default='presentation', max_length=20)),
-                ('buy_now', models.CharField(choices=[('disable', "Don't allow"), ('allow', 'Allow'), ('required', 'Required for all lots')], default='allow', help_text='Allow lots to be sold without bidding, for a user-specified price', max_length=20)),
-                ('reserve_price', models.CharField(choices=[('disable', "Don't allow"), ('allow', 'Allow'), ('required', 'Required for all lots')], default='allow', help_text='Allow users to set a minimum bid on their lots', max_length=20)),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "title",
+                    models.CharField(
+                        help_text="This is the name people will see when joining your auction",
+                        max_length=255,
+                        verbose_name="Auction name",
+                    ),
+                ),
+                (
+                    "slug",
+                    autoslug.fields.AutoSlugField(
+                        editable=False, populate_from="title", unique=True
+                    ),
+                ),
+                (
+                    "sealed_bid",
+                    models.BooleanField(
+                        default=False,
+                        help_text="Users won't be able to see what the current bid is",
+                    ),
+                ),
+                (
+                    "lot_entry_fee",
+                    models.PositiveIntegerField(
+                        default=0,
+                        help_text="The amount the seller will be charged if a lot sells",
+                        validators=[
+                            django.core.validators.MinValueValidator(0),
+                            django.core.validators.MaxValueValidator(10),
+                        ],
+                    ),
+                ),
+                (
+                    "unsold_lot_fee",
+                    models.PositiveIntegerField(
+                        default=0,
+                        help_text="The amount the seller will be charged if their lot doesn't sell",
+                        validators=[
+                            django.core.validators.MinValueValidator(0),
+                            django.core.validators.MaxValueValidator(10),
+                        ],
+                    ),
+                ),
+                (
+                    "winning_bid_percent_to_club",
+                    models.PositiveIntegerField(
+                        default=0,
+                        help_text="In addition to the Lot entry fee, this percent of the winning price will be taken by the club",
+                        validators=[
+                            django.core.validators.MinValueValidator(0),
+                            django.core.validators.MaxValueValidator(100),
+                        ],
+                    ),
+                ),
+                (
+                    "date_start",
+                    models.DateTimeField(
+                        help_text="Bidding starts on this date",
+                        verbose_name="Auction start date",
+                    ),
+                ),
+                (
+                    "date_end",
+                    models.DateTimeField(
+                        blank=True,
+                        help_text="Bidding will end on this date.  If last-minute bids are placed, bidding can go up to 1 hour past this time on those lots.  Note: This will not change the end date of existing lots.",
+                        null=True,
+                        verbose_name="Bidding end date",
+                    ),
+                ),
+                ("watch_warning_email_sent", models.BooleanField(default=False)),
+                ("invoiced", models.BooleanField(default=False)),
+                (
+                    "notes",
+                    markdownfield.models.MarkdownField(
+                        blank=True,
+                        default="",
+                        help_text="To add a link: [Link text](https://www.google.com)",
+                        null=True,
+                        rendered_field="notes_rendered",
+                        verbose_name="Rules",
+                    ),
+                ),
+                (
+                    "code_to_add_lots",
+                    models.CharField(
+                        blank=True,
+                        help_text="This is like a password: People in your club will enter this code to put their lots in this auction",
+                        max_length=255,
+                        null=True,
+                    ),
+                ),
+                (
+                    "created_by",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                (
+                    "location",
+                    models.CharField(
+                        blank=True,
+                        help_text="State or region of this auction",
+                        max_length=300,
+                        null=True,
+                    ),
+                ),
+                (
+                    "lot_submission_end_date",
+                    models.DateTimeField(
+                        blank=True, null=True, verbose_name="Lot submission ends"
+                    ),
+                ),
+                (
+                    "notes_rendered",
+                    markdownfield.models.RenderedMarkdownField(null=True),
+                ),
+                (
+                    "lot_promotion_cost",
+                    models.PositiveIntegerField(
+                        default=1,
+                        validators=[django.core.validators.MinValueValidator(1)],
+                    ),
+                ),
+                (
+                    "first_bid_payout",
+                    models.PositiveIntegerField(
+                        default=0,
+                        help_text="This is a feature to encourage bidding.  Give each bidder this amount, for free.  <a href='/blog/encouraging-participation/' target='_blank'>More information</a>",
+                        validators=[django.core.validators.MinValueValidator(0)],
+                    ),
+                ),
+                (
+                    "promote_this_auction",
+                    models.BooleanField(
+                        default=True,
+                        help_text="Show this to everyone in the list of auctions. <span class='text-warning'>Uncheck if this is a test or private auction</span>.",
+                    ),
+                ),
+                ("is_chat_allowed", models.BooleanField(default=True)),
+                (
+                    "max_lots_per_user",
+                    models.PositiveIntegerField(
+                        blank=True,
+                        help_text="A user won't be able to add more than this many lots to this auction",
+                        null=True,
+                    ),
+                ),
+                ("email_fifth_sent", models.BooleanField(default=False)),
+                ("email_first_sent", models.BooleanField(default=False)),
+                ("email_fourth_sent", models.BooleanField(default=False)),
+                ("email_second_sent", models.BooleanField(default=False)),
+                ("email_third_sent", models.BooleanField(default=False)),
+                (
+                    "date_posted",
+                    models.DateTimeField(
+                        auto_now_add=True, default=django.utils.timezone.now
+                    ),
+                ),
+                (
+                    "allow_additional_lots_as_donation",
+                    models.BooleanField(
+                        default=True,
+                        help_text="If you don't set max lots per user, this has no effect",
+                    ),
+                ),
+                (
+                    "make_stats_public",
+                    models.BooleanField(
+                        default=True,
+                        help_text="Allow any user who has a link to this auction's stats to see them.  Uncheck to only allow the auction creator to view stats",
+                    ),
+                ),
+                (
+                    "lot_submission_start_date",
+                    models.DateTimeField(
+                        blank=True,
+                        help_text="Users can submit (but not bid on) lots on this date",
+                        null=True,
+                        verbose_name="Lot submission opens",
+                    ),
+                ),
+                (
+                    "bump_cost",
+                    models.PositiveIntegerField(
+                        blank=True,
+                        default=1,
+                        help_text="The amount a user will be charged each time they move a lot to the top of the list",
+                        validators=[django.core.validators.MinValueValidator(1)],
+                    ),
+                ),
+                ("is_deleted", models.BooleanField(default=False)),
+                (
+                    "is_online",
+                    models.BooleanField(
+                        default=True,
+                        help_text="Is this is an online auction with in-person pickup at one or more locations?",
+                    ),
+                ),
+                (
+                    "use_categories",
+                    models.BooleanField(
+                        default=True,
+                        help_text="Check to use categories like Cichlids, Livebearers, etc.",
+                        verbose_name="This is a fish auction",
+                    ),
+                ),
+                ("allow_bidding_on_lots", models.BooleanField(default=True)),
+                ("email_users_when_invoices_ready", models.BooleanField(default=True)),
+                (
+                    "pre_register_lot_discount_percent",
+                    models.PositiveIntegerField(
+                        default=0,
+                        help_text="Decrease the club cut if users add lots through this website",
+                        validators=[
+                            django.core.validators.MinValueValidator(0),
+                            django.core.validators.MaxValueValidator(100),
+                        ],
+                    ),
+                ),
+                (
+                    "pre_register_lot_entry_fee_discount",
+                    models.PositiveIntegerField(
+                        default=0,
+                        help_text="Decrease the lot entry fee by this amount if users add lots through this website",
+                        validators=[
+                            django.core.validators.MinValueValidator(0),
+                            django.core.validators.MaxValueValidator(10),
+                        ],
+                    ),
+                ),
+                (
+                    "only_approved_sellers",
+                    models.BooleanField(
+                        default=False,
+                        help_text="Require admin approval before users can add lots.  This will not change permissions for users that have already joined.",
+                    ),
+                ),
+                (
+                    "invoice_payment_instructions",
+                    models.CharField(
+                        blank=True,
+                        default="",
+                        help_text="Shown to the user on their invoice.  For example, 'You will receive a seperate PayPal invoice with payment instructions'",
+                        max_length=255,
+                        null=True,
+                    ),
+                ),
+                (
+                    "minimum_bid",
+                    models.PositiveIntegerField(
+                        default=2,
+                        help_text="Lowest price a lot can sell for.",
+                        validators=[django.core.validators.MinValueValidator(2)],
+                    ),
+                ),
+                (
+                    "lot_entry_fee_for_club_members",
+                    models.PositiveIntegerField(
+                        default=0,
+                        help_text="Used instead of the standard entry fee, when you designate someone as a club member",
+                        validators=[
+                            django.core.validators.MinValueValidator(0),
+                            django.core.validators.MaxValueValidator(10),
+                        ],
+                    ),
+                ),
+                (
+                    "winning_bid_percent_to_club_for_club_members",
+                    models.PositiveIntegerField(
+                        default=0,
+                        help_text="Used instead of the standard split, when you designate someone as a club member",
+                        validators=[
+                            django.core.validators.MinValueValidator(0),
+                            django.core.validators.MaxValueValidator(100),
+                        ],
+                    ),
+                ),
+                (
+                    "require_phone_number",
+                    models.BooleanField(
+                        default=False,
+                        help_text="Require users to have entered a phone number before they can join this auction",
+                    ),
+                ),
+                (
+                    "set_lot_winners_url",
+                    models.CharField(
+                        blank=True,
+                        choices=[
+                            ("", "Standard, bidder number/lot number only"),
+                            ("presentation", "Show a picture of the lot"),
+                            (
+                                "autocomplete",
+                                "Autocomplete, search by name or bidder number",
+                            ),
+                        ],
+                        default="presentation",
+                        max_length=20,
+                    ),
+                ),
+                (
+                    "buy_now",
+                    models.CharField(
+                        choices=[
+                            ("disable", "Don't allow"),
+                            ("allow", "Allow"),
+                            ("required", "Required for all lots"),
+                        ],
+                        default="allow",
+                        help_text="Allow lots to be sold without bidding, for a user-specified price",
+                        max_length=20,
+                    ),
+                ),
+                (
+                    "reserve_price",
+                    models.CharField(
+                        choices=[
+                            ("disable", "Don't allow"),
+                            ("allow", "Allow"),
+                            ("required", "Required for all lots"),
+                        ],
+                        default="allow",
+                        help_text="Allow users to set a minimum bid on their lots",
+                        max_length=20,
+                    ),
+                ),
             ],
         ),
         migrations.CreateModel(
-            name='Category',
+            name="Category",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('name', models.CharField(max_length=255)),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("name", models.CharField(max_length=255)),
             ],
             options={
-                'verbose_name_plural': 'Categories',
-                'ordering': ['name'],
+                "verbose_name_plural": "Categories",
+                "ordering": ["name"],
             },
         ),
         migrations.CreateModel(
-            name='Invoice',
+            name="Invoice",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('date', models.DateTimeField(auto_now_add=True)),
-                ('paid', models.BooleanField(default=False)),
-                ('email_sent', models.BooleanField(default=False)),
-                ('auction', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to='auctions.auction')),
-                ('user', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to=settings.AUTH_USER_MODEL)),
-                ('opened', models.BooleanField(default=False)),
-                ('adjustment', models.PositiveIntegerField(default=0, validators=[django.core.validators.MinValueValidator(0)])),
-                ('adjustment_direction', models.CharField(choices=[('PAY_SELLER', 'Discount'), ('PAY_CLUB', 'Charge extra')], default='PAY_CLUB', max_length=20)),
-                ('adjustment_notes', models.CharField(default='Corrected', max_length=150)),
-                ('status', models.CharField(choices=[('DRAFT', 'Draft'), ('UNPAID', 'Waiting for payment'), ('PAID', 'Paid')], default='DRAFT', max_length=20)),
-                ('seller', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='seller', to=settings.AUTH_USER_MODEL)),
-                ('seller_email_sent', models.BooleanField(default=False)),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("date", models.DateTimeField(auto_now_add=True)),
+                ("paid", models.BooleanField(default=False)),
+                ("email_sent", models.BooleanField(default=False)),
+                (
+                    "auction",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to="auctions.auction",
+                    ),
+                ),
+                (
+                    "user",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                ("opened", models.BooleanField(default=False)),
+                (
+                    "adjustment",
+                    models.PositiveIntegerField(
+                        default=0,
+                        validators=[django.core.validators.MinValueValidator(0)],
+                    ),
+                ),
+                (
+                    "adjustment_direction",
+                    models.CharField(
+                        choices=[
+                            ("PAY_SELLER", "Discount"),
+                            ("PAY_CLUB", "Charge extra"),
+                        ],
+                        default="PAY_CLUB",
+                        max_length=20,
+                    ),
+                ),
+                (
+                    "adjustment_notes",
+                    models.CharField(default="Corrected", max_length=150),
+                ),
+                (
+                    "status",
+                    models.CharField(
+                        choices=[
+                            ("DRAFT", "Draft"),
+                            ("UNPAID", "Waiting for payment"),
+                            ("PAID", "Paid"),
+                        ],
+                        default="DRAFT",
+                        max_length=20,
+                    ),
+                ),
+                (
+                    "seller",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="seller",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                ("seller_email_sent", models.BooleanField(default=False)),
             ],
         ),
         migrations.CreateModel(
-            name='Location',
+            name="Location",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('name', models.CharField(max_length=255)),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("name", models.CharField(max_length=255)),
             ],
         ),
         migrations.CreateModel(
-            name='Product',
+            name="Product",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('common_name', models.CharField(help_text='The name usually used to describe this species', max_length=255)),
-                ('scientific_name', models.CharField(blank=True, help_text='Latin name used to describe this species', max_length=255)),
-                ('breeder_points', models.BooleanField(default=True)),
-                ('category', models.ForeignKey(null=True, on_delete=django.db.models.deletion.SET_NULL, to='auctions.category')),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "common_name",
+                    models.CharField(
+                        help_text="The name usually used to describe this species",
+                        max_length=255,
+                    ),
+                ),
+                (
+                    "scientific_name",
+                    models.CharField(
+                        blank=True,
+                        help_text="Latin name used to describe this species",
+                        max_length=255,
+                    ),
+                ),
+                ("breeder_points", models.BooleanField(default=True)),
+                (
+                    "category",
+                    models.ForeignKey(
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to="auctions.category",
+                    ),
+                ),
             ],
             options={
-                'verbose_name_plural': 'Products and species',
+                "verbose_name_plural": "Products and species",
             },
         ),
         migrations.CreateModel(
-            name='Lot',
+            name="Lot",
             fields=[
-                ('lot_number', models.AutoField(primary_key=True, serialize=False)),
-                ('lot_name', models.CharField(help_text='Short description of this lot', max_length=40)),
-                ('image', easy_thumbnails.fields.ThumbnailerImageField(blank=True, help_text='Optional.  Add a picture of the item here.', upload_to='images/')),
-                ('image_source', models.CharField(blank=True, choices=[('ACTUAL', 'This picture is of the exact item'), ('REPRESENTATIVE', "This is my picture, but it's not of this exact item.  e.x. This is the parents of these fry"), ('RANDOM', 'This picture is from the internet')], help_text='Where did you get this image?', max_length=20)),
-                ('i_bred_this_fish', models.BooleanField(default=False, help_text='Check to get breeder points for this lot', verbose_name='I bred this fish/propagated this plant')),
-                ('description', markdownfield.models.MarkdownField(blank=True, help_text='To add a link: [Link text](https://www.google.com)', null=True, rendered_field='description_rendered')),
-                ('quantity', models.PositiveIntegerField(help_text='How many of this item are in this lot?', validators=[django.core.validators.MinValueValidator(1)])),
-                ('reserve_price', models.PositiveIntegerField(default=2, help_text='The minimum bid for this lot. Lot will not be sold unless someone bids at least this much', validators=[django.core.validators.MinValueValidator(1), django.core.validators.MaxValueValidator(2000)])),
-                ('date_posted', models.DateTimeField(auto_now_add=True)),
-                ('date_end', models.DateTimeField(blank=True, null=True)),
-                ('active', models.BooleanField(default=True)),
-                ('winning_price', models.PositiveIntegerField(blank=True, null=True)),
-                ('banned', models.BooleanField(default=False, help_text="This lot will be hidden from views, and users won't be able to bid on it.  Banned lots are not charged in invoices.")),
-                ('donation', models.BooleanField(default=False, help_text='All proceeds from this lot will go to the club')),
-                ('watch_warning_email_sent', models.BooleanField(default=False)),
-                ('transportable', models.BooleanField(default=True)),
-                ('auction', models.ForeignKey(blank=True, help_text="<span class='text-warning' id='last-auction-special'></span>Only auctions that you have <span class='text-warning'>selected a pickup location for</span> will be shown here. This lot must be brought to that location", null=True, on_delete=django.db.models.deletion.SET_NULL, to='auctions.auction')),
-                ('buyer_invoice', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='buyer_invoice', to='auctions.invoice')),
-                ('seller_invoice', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='seller_invoice', to='auctions.invoice')),
-                ('species', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to='auctions.product')),
-                ('species_category', models.ForeignKey(blank=True, help_text='An accurate category will help people find this lot more easily', null=True, on_delete=django.db.models.deletion.SET_NULL, to='auctions.category', verbose_name='Category')),
-                ('user', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to=settings.AUTH_USER_MODEL)),
-                ('winner', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='winner', to=settings.AUTH_USER_MODEL)),
-                ('description_rendered', markdownfield.models.RenderedMarkdownField(null=True)),
-                ('ban_reason', models.CharField(blank=True, max_length=100, null=True)),
-                ('promoted', models.BooleanField(default=False, help_text='This does nothing right now lol', verbose_name='Promote this lot')),
-                ('promotion_weight', models.PositiveIntegerField(default=0, validators=[django.core.validators.MinValueValidator(0), django.core.validators.MaxValueValidator(20)])),
-                ('feedback_rating', models.IntegerField(default=0, validators=[django.core.validators.MinValueValidator(-1), django.core.validators.MaxValueValidator(1)])),
-                ('feedback_text', models.CharField(blank=True, max_length=100, null=True)),
-                ('winner_feedback_rating', models.IntegerField(default=0, validators=[django.core.validators.MinValueValidator(-1), django.core.validators.MaxValueValidator(1)])),
-                ('winner_feedback_text', models.CharField(blank=True, max_length=100, null=True)),
-                ('slug', autoslug.fields.AutoSlugField(default='info', editable=False, populate_from='lot_name')),
-                ('address', models.CharField(blank=True, max_length=500, null=True)),
-                ('latitude', models.FloatField(blank=True, null=True)),
-                ('local_pickup', models.BooleanField(default=False, help_text="Check if you'll meet people in person to exchange this lot")),
-                ('longitude', models.FloatField(blank=True, null=True)),
-                ('other_text', models.CharField(blank=True, help_text='Shipping methods, temperature restrictions, etc.', max_length=200, null=True, verbose_name='Shipping notes')),
-                ('payment_cash', models.BooleanField(default=False, verbose_name='Cash accepted')),
-                ('payment_other', models.BooleanField(default=False, verbose_name='Other payment method accepted')),
-                ('payment_other_address', models.CharField(blank=True, help_text='The address or username you wish to get payment at', max_length=200, null=True, verbose_name='Payment address')),
-                ('payment_other_method', models.CharField(blank=True, max_length=80, null=True, verbose_name='Payment method')),
-                ('payment_paypal', models.BooleanField(default=False, verbose_name='Paypal accepted')),
-                ('shipping_locations', models.ManyToManyField(blank=True, help_text="Check all locations you're willing to ship to", to='auctions.location', verbose_name='I will ship to')),
-                ('buy_now_price', models.PositiveIntegerField(blank=True, default=None, help_text="This lot will be sold instantly for this price if someone is willing to pay this much.  Leave blank unless you know exactly what you're doing", null=True, validators=[django.core.validators.MinValueValidator(1), django.core.validators.MaxValueValidator(1000)])),
-                ('date_of_last_user_edit', models.DateTimeField(auto_now_add=True, default=django.utils.timezone.now)),
-                ('is_chat_allowed', models.BooleanField(default=True, help_text='Uncheck to prevent chatting on this lot.  This will not remove any existing chat messages')),
-                ('promotion_budget', models.PositiveIntegerField(default=2, help_text="The most money you're willing to spend on ads for this lot.", validators=[django.core.validators.MinValueValidator(0), django.core.validators.MaxValueValidator(5)])),
-                ('buy_now_used', models.BooleanField(default=False)),
-                ('deactivated', models.BooleanField(default=False, help_text="You can deactivate your own lots to remove all bids and stop bidding.  Lots can be reactivated at any time, but existing bids won't be kept")),
-                ('relist_countdown', models.PositiveIntegerField(default=4, validators=[django.core.validators.MinValueValidator(0), django.core.validators.MaxValueValidator(10)])),
-                ('relist_if_not_sold', models.BooleanField(default=False, help_text='When this lot ends without being sold, reopen bidding on it.  Lots can be automatically relisted up to 5 times.')),
-                ('relist_if_sold', models.BooleanField(default=False, help_text='When this lot sells, create a new copy of it.  Useful if you have many copies of something but only want to sell one at a time.')),
-                ('lot_run_duration', models.PositiveIntegerField(default=10, help_text='Days to run this lot for', validators=[django.core.validators.MinValueValidator(1), django.core.validators.MaxValueValidator(30)])),
-                ('last_bump_date', models.DateTimeField(blank=True, help_text="Any time a lot is bumped, this date gets changed.  It's used for sorting by newest lots.", null=True)),
-                ('number_of_bumps', models.PositiveIntegerField(blank=True, default=0, validators=[django.core.validators.MinValueValidator(0)])),
-                ('refunded', models.BooleanField(default=False, help_text="Don't charge the winner or pay the seller for this lot.")),
+                ("lot_number", models.AutoField(primary_key=True, serialize=False)),
+                (
+                    "lot_name",
+                    models.CharField(
+                        help_text="Short description of this lot", max_length=40
+                    ),
+                ),
+                (
+                    "image",
+                    easy_thumbnails.fields.ThumbnailerImageField(
+                        blank=True,
+                        help_text="Optional.  Add a picture of the item here.",
+                        upload_to="images/",
+                    ),
+                ),
+                (
+                    "image_source",
+                    models.CharField(
+                        blank=True,
+                        choices=[
+                            ("ACTUAL", "This picture is of the exact item"),
+                            (
+                                "REPRESENTATIVE",
+                                "This is my picture, but it's not of this exact item.  e.x. This is the parents of these fry",
+                            ),
+                            ("RANDOM", "This picture is from the internet"),
+                        ],
+                        help_text="Where did you get this image?",
+                        max_length=20,
+                    ),
+                ),
+                (
+                    "i_bred_this_fish",
+                    models.BooleanField(
+                        default=False,
+                        help_text="Check to get breeder points for this lot",
+                        verbose_name="I bred this fish/propagated this plant",
+                    ),
+                ),
+                (
+                    "description",
+                    markdownfield.models.MarkdownField(
+                        blank=True,
+                        help_text="To add a link: [Link text](https://www.google.com)",
+                        null=True,
+                        rendered_field="description_rendered",
+                    ),
+                ),
+                (
+                    "quantity",
+                    models.PositiveIntegerField(
+                        help_text="How many of this item are in this lot?",
+                        validators=[django.core.validators.MinValueValidator(1)],
+                    ),
+                ),
+                (
+                    "reserve_price",
+                    models.PositiveIntegerField(
+                        default=2,
+                        help_text="The minimum bid for this lot. Lot will not be sold unless someone bids at least this much",
+                        validators=[
+                            django.core.validators.MinValueValidator(1),
+                            django.core.validators.MaxValueValidator(2000),
+                        ],
+                    ),
+                ),
+                ("date_posted", models.DateTimeField(auto_now_add=True)),
+                ("date_end", models.DateTimeField(blank=True, null=True)),
+                ("active", models.BooleanField(default=True)),
+                ("winning_price", models.PositiveIntegerField(blank=True, null=True)),
+                (
+                    "banned",
+                    models.BooleanField(
+                        default=False,
+                        help_text="This lot will be hidden from views, and users won't be able to bid on it.  Banned lots are not charged in invoices.",
+                    ),
+                ),
+                (
+                    "donation",
+                    models.BooleanField(
+                        default=False,
+                        help_text="All proceeds from this lot will go to the club",
+                    ),
+                ),
+                ("watch_warning_email_sent", models.BooleanField(default=False)),
+                ("transportable", models.BooleanField(default=True)),
+                (
+                    "auction",
+                    models.ForeignKey(
+                        blank=True,
+                        help_text="<span class='text-warning' id='last-auction-special'></span>Only auctions that you have <span class='text-warning'>selected a pickup location for</span> will be shown here. This lot must be brought to that location",
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to="auctions.auction",
+                    ),
+                ),
+                (
+                    "buyer_invoice",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="buyer_invoice",
+                        to="auctions.invoice",
+                    ),
+                ),
+                (
+                    "seller_invoice",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="seller_invoice",
+                        to="auctions.invoice",
+                    ),
+                ),
+                (
+                    "species",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to="auctions.product",
+                    ),
+                ),
+                (
+                    "species_category",
+                    models.ForeignKey(
+                        blank=True,
+                        help_text="An accurate category will help people find this lot more easily",
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to="auctions.category",
+                        verbose_name="Category",
+                    ),
+                ),
+                (
+                    "user",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                (
+                    "winner",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="winner",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                (
+                    "description_rendered",
+                    markdownfield.models.RenderedMarkdownField(null=True),
+                ),
+                ("ban_reason", models.CharField(blank=True, max_length=100, null=True)),
+                (
+                    "promoted",
+                    models.BooleanField(
+                        default=False,
+                        help_text="This does nothing right now lol",
+                        verbose_name="Promote this lot",
+                    ),
+                ),
+                (
+                    "promotion_weight",
+                    models.PositiveIntegerField(
+                        default=0,
+                        validators=[
+                            django.core.validators.MinValueValidator(0),
+                            django.core.validators.MaxValueValidator(20),
+                        ],
+                    ),
+                ),
+                (
+                    "feedback_rating",
+                    models.IntegerField(
+                        default=0,
+                        validators=[
+                            django.core.validators.MinValueValidator(-1),
+                            django.core.validators.MaxValueValidator(1),
+                        ],
+                    ),
+                ),
+                (
+                    "feedback_text",
+                    models.CharField(blank=True, max_length=100, null=True),
+                ),
+                (
+                    "winner_feedback_rating",
+                    models.IntegerField(
+                        default=0,
+                        validators=[
+                            django.core.validators.MinValueValidator(-1),
+                            django.core.validators.MaxValueValidator(1),
+                        ],
+                    ),
+                ),
+                (
+                    "winner_feedback_text",
+                    models.CharField(blank=True, max_length=100, null=True),
+                ),
+                (
+                    "slug",
+                    autoslug.fields.AutoSlugField(
+                        default="info", editable=False, populate_from="lot_name"
+                    ),
+                ),
+                ("address", models.CharField(blank=True, max_length=500, null=True)),
+                ("latitude", models.FloatField(blank=True, null=True)),
+                (
+                    "local_pickup",
+                    models.BooleanField(
+                        default=False,
+                        help_text="Check if you'll meet people in person to exchange this lot",
+                    ),
+                ),
+                ("longitude", models.FloatField(blank=True, null=True)),
+                (
+                    "other_text",
+                    models.CharField(
+                        blank=True,
+                        help_text="Shipping methods, temperature restrictions, etc.",
+                        max_length=200,
+                        null=True,
+                        verbose_name="Shipping notes",
+                    ),
+                ),
+                (
+                    "payment_cash",
+                    models.BooleanField(default=False, verbose_name="Cash accepted"),
+                ),
+                (
+                    "payment_other",
+                    models.BooleanField(
+                        default=False, verbose_name="Other payment method accepted"
+                    ),
+                ),
+                (
+                    "payment_other_address",
+                    models.CharField(
+                        blank=True,
+                        help_text="The address or username you wish to get payment at",
+                        max_length=200,
+                        null=True,
+                        verbose_name="Payment address",
+                    ),
+                ),
+                (
+                    "payment_other_method",
+                    models.CharField(
+                        blank=True,
+                        max_length=80,
+                        null=True,
+                        verbose_name="Payment method",
+                    ),
+                ),
+                (
+                    "payment_paypal",
+                    models.BooleanField(default=False, verbose_name="Paypal accepted"),
+                ),
+                (
+                    "shipping_locations",
+                    models.ManyToManyField(
+                        blank=True,
+                        help_text="Check all locations you're willing to ship to",
+                        to="auctions.location",
+                        verbose_name="I will ship to",
+                    ),
+                ),
+                (
+                    "buy_now_price",
+                    models.PositiveIntegerField(
+                        blank=True,
+                        default=None,
+                        help_text="This lot will be sold instantly for this price if someone is willing to pay this much.  Leave blank unless you know exactly what you're doing",
+                        null=True,
+                        validators=[
+                            django.core.validators.MinValueValidator(1),
+                            django.core.validators.MaxValueValidator(1000),
+                        ],
+                    ),
+                ),
+                (
+                    "date_of_last_user_edit",
+                    models.DateTimeField(
+                        auto_now_add=True, default=django.utils.timezone.now
+                    ),
+                ),
+                (
+                    "is_chat_allowed",
+                    models.BooleanField(
+                        default=True,
+                        help_text="Uncheck to prevent chatting on this lot.  This will not remove any existing chat messages",
+                    ),
+                ),
+                (
+                    "promotion_budget",
+                    models.PositiveIntegerField(
+                        default=2,
+                        help_text="The most money you're willing to spend on ads for this lot.",
+                        validators=[
+                            django.core.validators.MinValueValidator(0),
+                            django.core.validators.MaxValueValidator(5),
+                        ],
+                    ),
+                ),
+                ("buy_now_used", models.BooleanField(default=False)),
+                (
+                    "deactivated",
+                    models.BooleanField(
+                        default=False,
+                        help_text="You can deactivate your own lots to remove all bids and stop bidding.  Lots can be reactivated at any time, but existing bids won't be kept",
+                    ),
+                ),
+                (
+                    "relist_countdown",
+                    models.PositiveIntegerField(
+                        default=4,
+                        validators=[
+                            django.core.validators.MinValueValidator(0),
+                            django.core.validators.MaxValueValidator(10),
+                        ],
+                    ),
+                ),
+                (
+                    "relist_if_not_sold",
+                    models.BooleanField(
+                        default=False,
+                        help_text="When this lot ends without being sold, reopen bidding on it.  Lots can be automatically relisted up to 5 times.",
+                    ),
+                ),
+                (
+                    "relist_if_sold",
+                    models.BooleanField(
+                        default=False,
+                        help_text="When this lot sells, create a new copy of it.  Useful if you have many copies of something but only want to sell one at a time.",
+                    ),
+                ),
+                (
+                    "lot_run_duration",
+                    models.PositiveIntegerField(
+                        default=10,
+                        help_text="Days to run this lot for",
+                        validators=[
+                            django.core.validators.MinValueValidator(1),
+                            django.core.validators.MaxValueValidator(30),
+                        ],
+                    ),
+                ),
+                (
+                    "last_bump_date",
+                    models.DateTimeField(
+                        blank=True,
+                        help_text="Any time a lot is bumped, this date gets changed.  It's used for sorting by newest lots.",
+                        null=True,
+                    ),
+                ),
+                (
+                    "number_of_bumps",
+                    models.PositiveIntegerField(
+                        blank=True,
+                        default=0,
+                        validators=[django.core.validators.MinValueValidator(0)],
+                    ),
+                ),
+                (
+                    "refunded",
+                    models.BooleanField(
+                        default=False,
+                        help_text="Don't charge the winner or pay the seller for this lot.",
+                    ),
+                ),
             ],
         ),
         migrations.CreateModel(
-            name='Bid',
+            name="Bid",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('bid_time', models.DateTimeField(auto_now_add=True)),
-                ('amount', models.PositiveIntegerField(validators=[django.core.validators.MinValueValidator(1)])),
-                ('lot_number', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='auctions.lot')),
-                ('user', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to=settings.AUTH_USER_MODEL)),
-                ('was_high_bid', models.BooleanField(default=False)),
-                ('last_bid_time', models.DateTimeField(auto_now_add=True)),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("bid_time", models.DateTimeField(auto_now_add=True)),
+                (
+                    "amount",
+                    models.PositiveIntegerField(
+                        validators=[django.core.validators.MinValueValidator(1)]
+                    ),
+                ),
+                (
+                    "lot_number",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE, to="auctions.lot"
+                    ),
+                ),
+                (
+                    "user",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                ("was_high_bid", models.BooleanField(default=False)),
+                ("last_bid_time", models.DateTimeField(auto_now_add=True)),
             ],
         ),
         migrations.CreateModel(
-            name='PickupLocation',
+            name="PickupLocation",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('name', models.CharField(default='', help_text='Location name shown to users.  e.x. University Mall in VT', max_length=50)),
-                ('description', models.CharField(blank=True, help_text='e.x. First floor of parking garage near Sears entrance', max_length=300, null=True)),
-                ('pickup_time', models.DateTimeField()),
-                ('second_pickup_time', models.DateTimeField(blank=True, help_text="If you'll have a dropoff for sellers in the morning and then a pickup for buyers in the afternoon at this location, this should be the pickup time.", null=True)),
-                ('auction', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, to='auctions.auction')),
-                ('user', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to=settings.AUTH_USER_MODEL)),
-                ('address', models.CharField(blank=True, help_text='Search Google maps with this address', max_length=500, null=True)),
-                ('latitude', models.FloatField(blank=True, default=0)),
-                ('location_coordinates', location_field.models.plain.PlainLocationField(max_length=63, null=True, verbose_name='Map')),
-                ('longitude', models.FloatField(blank=True, default=0)),
-                ('pickup_location_contact_email', models.CharField(blank=True, max_length=200, null=True, verbose_name="Contact person's email")),
-                ('pickup_location_contact_name', models.CharField(blank=True, help_text='Name of the person coordinating this pickup location.  Contact info is only shown to logged in users.', max_length=200, null=True, verbose_name="Contact person's name")),
-                ('pickup_location_contact_phone', models.CharField(blank=True, max_length=200, null=True, verbose_name="Contact person's phone")),
-                ('users_must_coordinate_pickup', models.BooleanField(default=False, help_text='The pickup time fields will not be used')),
-                ('allow_bidding_by_default', models.BooleanField(default=True, help_text='This is not used')),
-                ('allow_selling_by_default', models.BooleanField(default=True, help_text='This is not used')),
-                ('is_default', models.BooleanField(default=False, help_text='This was a default location added for an in-person auction.')),
-                ('pickup_by_mail', models.BooleanField(default=False, help_text='Special pickup location without an actual location')),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "name",
+                    models.CharField(
+                        default="",
+                        help_text="Location name shown to users.  e.x. University Mall in VT",
+                        max_length=50,
+                    ),
+                ),
+                (
+                    "description",
+                    models.CharField(
+                        blank=True,
+                        help_text="e.x. First floor of parking garage near Sears entrance",
+                        max_length=300,
+                        null=True,
+                    ),
+                ),
+                ("pickup_time", models.DateTimeField()),
+                (
+                    "second_pickup_time",
+                    models.DateTimeField(
+                        blank=True,
+                        help_text="If you'll have a dropoff for sellers in the morning and then a pickup for buyers in the afternoon at this location, this should be the pickup time.",
+                        null=True,
+                    ),
+                ),
+                (
+                    "auction",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.CASCADE,
+                        to="auctions.auction",
+                    ),
+                ),
+                (
+                    "user",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                (
+                    "address",
+                    models.CharField(
+                        blank=True,
+                        help_text="Search Google maps with this address",
+                        max_length=500,
+                        null=True,
+                    ),
+                ),
+                ("latitude", models.FloatField(blank=True, default=0)),
+                (
+                    "location_coordinates",
+                    location_field.models.plain.PlainLocationField(
+                        max_length=63, null=True, verbose_name="Map"
+                    ),
+                ),
+                ("longitude", models.FloatField(blank=True, default=0)),
+                (
+                    "pickup_location_contact_email",
+                    models.CharField(
+                        blank=True,
+                        max_length=200,
+                        null=True,
+                        verbose_name="Contact person's email",
+                    ),
+                ),
+                (
+                    "pickup_location_contact_name",
+                    models.CharField(
+                        blank=True,
+                        help_text="Name of the person coordinating this pickup location.  Contact info is only shown to logged in users.",
+                        max_length=200,
+                        null=True,
+                        verbose_name="Contact person's name",
+                    ),
+                ),
+                (
+                    "pickup_location_contact_phone",
+                    models.CharField(
+                        blank=True,
+                        max_length=200,
+                        null=True,
+                        verbose_name="Contact person's phone",
+                    ),
+                ),
+                (
+                    "users_must_coordinate_pickup",
+                    models.BooleanField(
+                        default=False,
+                        help_text="The pickup time fields will not be used",
+                    ),
+                ),
+                (
+                    "allow_bidding_by_default",
+                    models.BooleanField(default=True, help_text="This is not used"),
+                ),
+                (
+                    "allow_selling_by_default",
+                    models.BooleanField(default=True, help_text="This is not used"),
+                ),
+                (
+                    "is_default",
+                    models.BooleanField(
+                        default=False,
+                        help_text="This was a default location added for an in-person auction.",
+                    ),
+                ),
+                (
+                    "pickup_by_mail",
+                    models.BooleanField(
+                        default=False,
+                        help_text="Special pickup location without an actual location",
+                    ),
+                ),
             ],
         ),
         migrations.CreateModel(
-            name='BlogPost',
+            name="BlogPost",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('title', models.CharField(max_length=255)),
-                ('slug', autoslug.fields.AutoSlugField(editable=False, populate_from='title', unique=True)),
-                ('body', markdownfield.models.MarkdownField(blank=True, null=True, rendered_field='body_rendered')),
-                ('body_rendered', markdownfield.models.RenderedMarkdownField(null=True)),
-                ('date_posted', models.DateTimeField(auto_now_add=True)),
-                ('extra_js', models.TextField(blank=True, max_length=16000, null=True)),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("title", models.CharField(max_length=255)),
+                (
+                    "slug",
+                    autoslug.fields.AutoSlugField(
+                        editable=False, populate_from="title", unique=True
+                    ),
+                ),
+                (
+                    "body",
+                    markdownfield.models.MarkdownField(
+                        blank=True, null=True, rendered_field="body_rendered"
+                    ),
+                ),
+                (
+                    "body_rendered",
+                    markdownfield.models.RenderedMarkdownField(null=True),
+                ),
+                ("date_posted", models.DateTimeField(auto_now_add=True)),
+                ("extra_js", models.TextField(blank=True, max_length=16000, null=True)),
             ],
         ),
         migrations.AddField(
-            model_name='invoice',
-            name='lot',
-            field=models.ForeignKey(blank=True, help_text='not used', null=True, on_delete=django.db.models.deletion.SET_NULL, to='auctions.lot'),
+            model_name="invoice",
+            name="lot",
+            field=models.ForeignKey(
+                blank=True,
+                help_text="not used",
+                null=True,
+                on_delete=django.db.models.deletion.SET_NULL,
+                to="auctions.lot",
+            ),
         ),
         migrations.RemoveField(
-            model_name='invoice',
-            name='paid',
+            model_name="invoice",
+            name="paid",
         ),
         migrations.CreateModel(
-            name='GeneralInterest',
+            name="GeneralInterest",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('name', models.CharField(max_length=255)),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("name", models.CharField(max_length=255)),
             ],
         ),
         migrations.CreateModel(
-            name='Club',
+            name="Club",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('name', models.CharField(max_length=255)),
-                ('contact_email', models.CharField(blank=True, max_length=255, null=True)),
-                ('date_contacted', models.DateTimeField(blank=True, null=True)),
-                ('homepage', models.CharField(blank=True, max_length=255, null=True)),
-                ('facebook_page', models.CharField(blank=True, max_length=255, null=True)),
-                ('notes', models.CharField(blank=True, help_text='Only visible in the admin site, never made public', max_length=300, null=True)),
-                ('abbreviation', models.CharField(blank=True, max_length=255, null=True)),
-                ('active', models.BooleanField(default=True)),
-                ('latitude', models.FloatField(blank=True, null=True)),
-                ('location', models.CharField(blank=True, help_text='Search Google maps with this address', max_length=500, null=True)),
-                ('location_coordinates', location_field.models.plain.PlainLocationField(blank=True, max_length=63, null=True, verbose_name='Map')),
-                ('longitude', models.FloatField(blank=True, null=True)),
-                ('interests', models.ManyToManyField(blank=True, to='auctions.generalinterest')),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("name", models.CharField(max_length=255)),
+                (
+                    "contact_email",
+                    models.CharField(blank=True, max_length=255, null=True),
+                ),
+                ("date_contacted", models.DateTimeField(blank=True, null=True)),
+                ("homepage", models.CharField(blank=True, max_length=255, null=True)),
+                (
+                    "facebook_page",
+                    models.CharField(blank=True, max_length=255, null=True),
+                ),
+                (
+                    "notes",
+                    models.CharField(
+                        blank=True,
+                        help_text="Only visible in the admin site, never made public",
+                        max_length=300,
+                        null=True,
+                    ),
+                ),
+                (
+                    "abbreviation",
+                    models.CharField(blank=True, max_length=255, null=True),
+                ),
+                ("active", models.BooleanField(default=True)),
+                ("latitude", models.FloatField(blank=True, null=True)),
+                (
+                    "location",
+                    models.CharField(
+                        blank=True,
+                        help_text="Search Google maps with this address",
+                        max_length=500,
+                        null=True,
+                    ),
+                ),
+                (
+                    "location_coordinates",
+                    location_field.models.plain.PlainLocationField(
+                        blank=True, max_length=63, null=True, verbose_name="Map"
+                    ),
+                ),
+                ("longitude", models.FloatField(blank=True, null=True)),
+                (
+                    "interests",
+                    models.ManyToManyField(blank=True, to="auctions.generalinterest"),
+                ),
             ],
             options={
-                'ordering': ['name'],
+                "ordering": ["name"],
             },
         ),
         migrations.CreateModel(
-            name='UserInterestCategory',
+            name="UserInterestCategory",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('interest', models.PositiveIntegerField(default=0, validators=[django.core.validators.MinValueValidator(0)])),
-                ('category', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='auctions.category')),
-                ('user', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to=settings.AUTH_USER_MODEL)),
-                ('as_percent', models.PositiveIntegerField(default=0, validators=[django.core.validators.MinValueValidator(0), django.core.validators.MaxValueValidator(100)])),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "interest",
+                    models.PositiveIntegerField(
+                        default=0,
+                        validators=[django.core.validators.MinValueValidator(0)],
+                    ),
+                ),
+                (
+                    "category",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        to="auctions.category",
+                    ),
+                ),
+                (
+                    "user",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                (
+                    "as_percent",
+                    models.PositiveIntegerField(
+                        default=0,
+                        validators=[
+                            django.core.validators.MinValueValidator(0),
+                            django.core.validators.MaxValueValidator(100),
+                        ],
+                    ),
+                ),
             ],
         ),
         migrations.CreateModel(
-            name='AdCampaign',
+            name="AdCampaign",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('image', easy_thumbnails.fields.ThumbnailerImageField(blank=True, upload_to='images/')),
-                ('title', models.CharField(default='Click here', max_length=50)),
-                ('text', models.CharField(blank=True, max_length=40, null=True)),
-                ('external_url', models.URLField(max_length=300)),
-                ('end_date', models.DateTimeField(blank=True, null=True)),
-                ('max_ads', models.PositiveIntegerField(default=10000000, validators=[django.core.validators.MinValueValidator(0), django.core.validators.MaxValueValidator(10000000)])),
-                ('max_clicks', models.PositiveIntegerField(default=10000000, validators=[django.core.validators.MinValueValidator(0), django.core.validators.MaxValueValidator(10000000)])),
-                ('bid', models.FloatField(default=1, help_text="At the moment, this is not actually the cost per click, it's the percent chance of showing this ad.  If the top ad fails, the next one will be selected.  If there are none left, google ads will be loaded.  Expects 0-1")),
-                ('auction', models.ForeignKey(blank=True, help_text='If set, this campaign will only be run on a particular auction (leave blank for site-wide)', null=True, on_delete=django.db.models.deletion.SET_NULL, to='auctions.auction')),
-                ('category', models.ForeignKey(blank=True, help_text='If set, this ad will only be shown to users interested in this particular category', null=True, on_delete=django.db.models.deletion.SET_NULL, to='auctions.category', verbose_name='Category')),
-                ('body_html', models.CharField(default='', max_length=300)),
-                ('begin_date', models.DateTimeField(blank=True, null=True)),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "image",
+                    easy_thumbnails.fields.ThumbnailerImageField(
+                        blank=True, upload_to="images/"
+                    ),
+                ),
+                ("title", models.CharField(default="Click here", max_length=50)),
+                ("text", models.CharField(blank=True, max_length=40, null=True)),
+                ("external_url", models.URLField(max_length=300)),
+                ("end_date", models.DateTimeField(blank=True, null=True)),
+                (
+                    "max_ads",
+                    models.PositiveIntegerField(
+                        default=10000000,
+                        validators=[
+                            django.core.validators.MinValueValidator(0),
+                            django.core.validators.MaxValueValidator(10000000),
+                        ],
+                    ),
+                ),
+                (
+                    "max_clicks",
+                    models.PositiveIntegerField(
+                        default=10000000,
+                        validators=[
+                            django.core.validators.MinValueValidator(0),
+                            django.core.validators.MaxValueValidator(10000000),
+                        ],
+                    ),
+                ),
+                (
+                    "bid",
+                    models.FloatField(
+                        default=1,
+                        help_text="At the moment, this is not actually the cost per click, it's the percent chance of showing this ad.  If the top ad fails, the next one will be selected.  If there are none left, google ads will be loaded.  Expects 0-1",
+                    ),
+                ),
+                (
+                    "auction",
+                    models.ForeignKey(
+                        blank=True,
+                        help_text="If set, this campaign will only be run on a particular auction (leave blank for site-wide)",
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to="auctions.auction",
+                    ),
+                ),
+                (
+                    "category",
+                    models.ForeignKey(
+                        blank=True,
+                        help_text="If set, this ad will only be shown to users interested in this particular category",
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to="auctions.category",
+                        verbose_name="Category",
+                    ),
+                ),
+                ("body_html", models.CharField(default="", max_length=300)),
+                ("begin_date", models.DateTimeField(blank=True, null=True)),
             ],
         ),
         migrations.CreateModel(
-            name='AdCampaignResponse',
+            name="AdCampaignResponse",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('responseid', models.CharField(blank=True, default=uuid.uuid4, max_length=255)),
-                ('session', models.CharField(blank=True, max_length=250, null=True)),
-                ('text', models.CharField(blank=True, max_length=250, null=True)),
-                ('timestamp', models.DateTimeField(auto_now_add=True)),
-                ('clicked', models.BooleanField(default=False)),
-                ('campaign', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='auctions.adcampaign')),
-                ('user', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to=settings.AUTH_USER_MODEL)),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "responseid",
+                    models.CharField(blank=True, default=uuid.uuid4, max_length=255),
+                ),
+                ("session", models.CharField(blank=True, max_length=250, null=True)),
+                ("text", models.CharField(blank=True, max_length=250, null=True)),
+                ("timestamp", models.DateTimeField(auto_now_add=True)),
+                ("clicked", models.BooleanField(default=False)),
+                (
+                    "campaign",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        to="auctions.adcampaign",
+                    ),
+                ),
+                (
+                    "user",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
             ],
         ),
         migrations.CreateModel(
-            name='AdCampaignGroup',
+            name="AdCampaignGroup",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('title', models.CharField(default='Untitled campaign', max_length=100)),
-                ('paid', models.BooleanField(default=False)),
-                ('total_cost', models.FloatField(default=0)),
-                ('contact_user', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to=settings.AUTH_USER_MODEL)),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "title",
+                    models.CharField(default="Untitled campaign", max_length=100),
+                ),
+                ("paid", models.BooleanField(default=False)),
+                ("total_cost", models.FloatField(default=0)),
+                (
+                    "contact_user",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
             ],
         ),
         migrations.AddField(
-            model_name='adcampaign',
-            name='campaign_group',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to='auctions.adcampaigngroup'),
+            model_name="adcampaign",
+            name="campaign_group",
+            field=models.ForeignKey(
+                blank=True,
+                null=True,
+                on_delete=django.db.models.deletion.SET_NULL,
+                to="auctions.adcampaigngroup",
+            ),
         ),
         migrations.CreateModel(
-            name='LotHistory',
+            name="LotHistory",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('message', models.CharField(blank=True, max_length=400, null=True)),
-                ('timestamp', models.DateTimeField(auto_now_add=True)),
-                ('seen', models.BooleanField(default=False, help_text='Has the lot submitter seen this message?')),
-                ('changed_price', models.BooleanField(default=False, help_text='Was this a bid that changed the price?')),
-                ('lot', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, to='auctions.lot')),
-                ('user', models.ForeignKey(blank=True, help_text='The user who posted this message.', null=True, on_delete=django.db.models.deletion.SET_NULL, to=settings.AUTH_USER_MODEL)),
-                ('current_price', models.PositiveIntegerField(blank=True, help_text='Price of the lot immediately AFTER this message', null=True)),
-                ('notification_sent', models.BooleanField(default=False, help_text='Set to true automatically when the notification email is sent')),
-                ('bid_amount', models.PositiveIntegerField(blank=True, help_text='For any kind of debugging', null=True)),
-                ('removed', models.BooleanField(default=False)),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("message", models.CharField(blank=True, max_length=400, null=True)),
+                ("timestamp", models.DateTimeField(auto_now_add=True)),
+                (
+                    "seen",
+                    models.BooleanField(
+                        default=False,
+                        help_text="Has the lot submitter seen this message?",
+                    ),
+                ),
+                (
+                    "changed_price",
+                    models.BooleanField(
+                        default=False,
+                        help_text="Was this a bid that changed the price?",
+                    ),
+                ),
+                (
+                    "lot",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.CASCADE,
+                        to="auctions.lot",
+                    ),
+                ),
+                (
+                    "user",
+                    models.ForeignKey(
+                        blank=True,
+                        help_text="The user who posted this message.",
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                (
+                    "current_price",
+                    models.PositiveIntegerField(
+                        blank=True,
+                        help_text="Price of the lot immediately AFTER this message",
+                        null=True,
+                    ),
+                ),
+                (
+                    "notification_sent",
+                    models.BooleanField(
+                        default=False,
+                        help_text="Set to true automatically when the notification email is sent",
+                    ),
+                ),
+                (
+                    "bid_amount",
+                    models.PositiveIntegerField(
+                        blank=True, help_text="For any kind of debugging", null=True
+                    ),
+                ),
+                ("removed", models.BooleanField(default=False)),
             ],
             options={
-                'ordering': ['timestamp'],
-                'verbose_name': 'Chat history',
-                'verbose_name_plural': 'Chat history',
+                "ordering": ["timestamp"],
+                "verbose_name": "Chat history",
+                "verbose_name_plural": "Chat history",
             },
         ),
         migrations.CreateModel(
-            name='LotImage',
+            name="LotImage",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('caption', models.CharField(blank=True, help_text='Optional', max_length=60, null=True)),
-                ('image', easy_thumbnails.fields.ThumbnailerImageField(help_text='Select an image to upload', upload_to='images/')),
-                ('image_source', models.CharField(blank=True, choices=[('ACTUAL', 'This picture is of the exact item'), ('REPRESENTATIVE', "This is my picture, but it's not of this exact item.  e.x. This is the parents of these fry"), ('RANDOM', 'This picture is from the internet')], max_length=20)),
-                ('is_primary', models.BooleanField(blank=True, default=False)),
-                ('createdon', models.DateTimeField(auto_now_add=True)),
-                ('lot_number', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='auctions.lot')),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "caption",
+                    models.CharField(
+                        blank=True, help_text="Optional", max_length=60, null=True
+                    ),
+                ),
+                (
+                    "image",
+                    easy_thumbnails.fields.ThumbnailerImageField(
+                        help_text="Select an image to upload", upload_to="images/"
+                    ),
+                ),
+                (
+                    "image_source",
+                    models.CharField(
+                        blank=True,
+                        choices=[
+                            ("ACTUAL", "This picture is of the exact item"),
+                            (
+                                "REPRESENTATIVE",
+                                "This is my picture, but it's not of this exact item.  e.x. This is the parents of these fry",
+                            ),
+                            ("RANDOM", "This picture is from the internet"),
+                        ],
+                        max_length=20,
+                    ),
+                ),
+                ("is_primary", models.BooleanField(blank=True, default=False)),
+                ("createdon", models.DateTimeField(auto_now_add=True)),
+                (
+                    "lot_number",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE, to="auctions.lot"
+                    ),
+                ),
             ],
         ),
         migrations.CreateModel(
-            name='AuctionIgnore',
+            name="AuctionIgnore",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('createdon', models.DateTimeField(auto_now_add=True)),
-                ('auction', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='auctions.auction')),
-                ('user', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to=settings.AUTH_USER_MODEL)),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("createdon", models.DateTimeField(auto_now_add=True)),
+                (
+                    "auction",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        to="auctions.auction",
+                    ),
+                ),
+                (
+                    "user",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
             ],
             options={
-                'verbose_name': 'User ignoring auction',
-                'verbose_name_plural': 'User ignoring auction',
+                "verbose_name": "User ignoring auction",
+                "verbose_name_plural": "User ignoring auction",
             },
         ),
         migrations.AddField(
-            model_name='invoice',
-            name='printed',
+            model_name="invoice",
+            name="printed",
             field=models.BooleanField(default=False),
         ),
         migrations.CreateModel(
-            name='AuctionTOS',
+            name="AuctionTOS",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('auction', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='auctions.auction')),
-                ('pickup_location', models.ForeignKey(default=1, on_delete=django.db.models.deletion.CASCADE, to='auctions.pickuplocation')),
-                ('user', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to=settings.AUTH_USER_MODEL)),
-                ('createdon', models.DateTimeField(auto_now_add=True, default=django.utils.timezone.now)),
-                ('confirm_email_sent', models.BooleanField(blank=True, default=False)),
-                ('is_admin', models.BooleanField(blank=True, default=False, verbose_name='Grant admin permissions to help run this auction')),
-                ('address', models.CharField(blank=True, max_length=500, null=True)),
-                ('bidder_number', models.CharField(blank=True, default='', help_text='Must be unique, blank to automatically generate', max_length=20)),
-                ('bidding_allowed', models.BooleanField(blank=True, default=True)),
-                ('email', models.EmailField(blank=True, max_length=254, null=True)),
-                ('name', models.CharField(blank=True, max_length=181, null=True)),
-                ('phone_number', models.CharField(blank=True, max_length=20, null=True)),
-                ('print_reminder_email_sent', models.BooleanField(blank=True, default=False)),
-                ('second_confirm_email_sent', models.BooleanField(blank=True, default=False)),
-                ('selling_allowed', models.BooleanField(blank=True, default=True)),
-                ('time_spent_reading_rules', models.PositiveIntegerField(blank=True, default=0, validators=[django.core.validators.MinValueValidator(0)])),
-                ('manually_added', models.BooleanField(blank=True, default=False, null=True)),
-                ('is_club_member', models.BooleanField(blank=True, default=False, verbose_name='Club member')),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "auction",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        to="auctions.auction",
+                    ),
+                ),
+                (
+                    "pickup_location",
+                    models.ForeignKey(
+                        default=1,
+                        on_delete=django.db.models.deletion.CASCADE,
+                        to="auctions.pickuplocation",
+                    ),
+                ),
+                (
+                    "user",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                (
+                    "createdon",
+                    models.DateTimeField(
+                        auto_now_add=True, default=django.utils.timezone.now
+                    ),
+                ),
+                ("confirm_email_sent", models.BooleanField(blank=True, default=False)),
+                (
+                    "is_admin",
+                    models.BooleanField(
+                        blank=True,
+                        default=False,
+                        verbose_name="Grant admin permissions to help run this auction",
+                    ),
+                ),
+                ("address", models.CharField(blank=True, max_length=500, null=True)),
+                (
+                    "bidder_number",
+                    models.CharField(
+                        blank=True,
+                        default="",
+                        help_text="Must be unique, blank to automatically generate",
+                        max_length=20,
+                    ),
+                ),
+                ("bidding_allowed", models.BooleanField(blank=True, default=True)),
+                ("email", models.EmailField(blank=True, max_length=254, null=True)),
+                ("name", models.CharField(blank=True, max_length=181, null=True)),
+                (
+                    "phone_number",
+                    models.CharField(blank=True, max_length=20, null=True),
+                ),
+                (
+                    "print_reminder_email_sent",
+                    models.BooleanField(blank=True, default=False),
+                ),
+                (
+                    "second_confirm_email_sent",
+                    models.BooleanField(blank=True, default=False),
+                ),
+                ("selling_allowed", models.BooleanField(blank=True, default=True)),
+                (
+                    "time_spent_reading_rules",
+                    models.PositiveIntegerField(
+                        blank=True,
+                        default=0,
+                        validators=[django.core.validators.MinValueValidator(0)],
+                    ),
+                ),
+                (
+                    "manually_added",
+                    models.BooleanField(blank=True, default=False, null=True),
+                ),
+                (
+                    "is_club_member",
+                    models.BooleanField(
+                        blank=True, default=False, verbose_name="Club member"
+                    ),
+                ),
             ],
             options={
-                'verbose_name': 'User in auction',
-                'verbose_name_plural': 'Users in auction',
+                "verbose_name": "User in auction",
+                "verbose_name_plural": "Users in auction",
             },
         ),
         migrations.CreateModel(
-            name='FAQ',
+            name="FAQ",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('category_text', models.CharField(max_length=100)),
-                ('answer', markdownfield.models.MarkdownField(blank=True, help_text='To add a link: [Link text](https://www.google.com)', null=True, rendered_field='answer_rendered')),
-                ('answer_rendered', markdownfield.models.RenderedMarkdownField(null=True)),
-                ('question', models.CharField(max_length=200)),
-                ('slug', autoslug.fields.AutoSlugField(editable=False, populate_from='question', unique=True)),
-                ('createdon', models.DateTimeField(auto_now_add=True)),
-                ('include_in_auctiontos_confirm_email', models.BooleanField(blank=True, default=False)),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("category_text", models.CharField(max_length=100)),
+                (
+                    "answer",
+                    markdownfield.models.MarkdownField(
+                        blank=True,
+                        help_text="To add a link: [Link text](https://www.google.com)",
+                        null=True,
+                        rendered_field="answer_rendered",
+                    ),
+                ),
+                (
+                    "answer_rendered",
+                    markdownfield.models.RenderedMarkdownField(null=True),
+                ),
+                ("question", models.CharField(max_length=200)),
+                (
+                    "slug",
+                    autoslug.fields.AutoSlugField(
+                        editable=False, populate_from="question", unique=True
+                    ),
+                ),
+                ("createdon", models.DateTimeField(auto_now_add=True)),
+                (
+                    "include_in_auctiontos_confirm_email",
+                    models.BooleanField(blank=True, default=False),
+                ),
             ],
         ),
         migrations.AddField(
-            model_name='lot',
-            name='auctiontos_seller',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='auctiontos_seller', to='auctions.auctiontos'),
+            model_name="lot",
+            name="auctiontos_seller",
+            field=models.ForeignKey(
+                blank=True,
+                null=True,
+                on_delete=django.db.models.deletion.SET_NULL,
+                related_name="auctiontos_seller",
+                to="auctions.auctiontos",
+            ),
         ),
         migrations.AddField(
-            model_name='lot',
-            name='auctiontos_winner',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='auctiontos_winner', to='auctions.auctiontos'),
+            model_name="lot",
+            name="auctiontos_winner",
+            field=models.ForeignKey(
+                blank=True,
+                null=True,
+                on_delete=django.db.models.deletion.SET_NULL,
+                related_name="auctiontos_winner",
+                to="auctions.auctiontos",
+            ),
         ),
         migrations.AddField(
-            model_name='lot',
-            name='is_deleted',
+            model_name="lot",
+            name="is_deleted",
             field=models.BooleanField(default=False),
         ),
         migrations.CreateModel(
-            name='UserBan',
+            name="UserBan",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('banned_user', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='banned_user', to=settings.AUTH_USER_MODEL)),
-                ('user', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to=settings.AUTH_USER_MODEL)),
-                ('createdon', models.DateTimeField(auto_now_add=True, default=django.utils.timezone.now)),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "banned_user",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="banned_user",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                (
+                    "user",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                (
+                    "createdon",
+                    models.DateTimeField(
+                        auto_now_add=True, default=django.utils.timezone.now
+                    ),
+                ),
             ],
         ),
         migrations.CreateModel(
-            name='UserIgnoreCategory',
+            name="UserIgnoreCategory",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('category', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='auctions.category')),
-                ('user', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to=settings.AUTH_USER_MODEL)),
-                ('createdon', models.DateTimeField(auto_now_add=True, default=django.utils.timezone.now)),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "category",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        to="auctions.category",
+                    ),
+                ),
+                (
+                    "user",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                (
+                    "createdon",
+                    models.DateTimeField(
+                        auto_now_add=True, default=django.utils.timezone.now
+                    ),
+                ),
             ],
         ),
         migrations.CreateModel(
-            name='Watch',
+            name="Watch",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('lot_number', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='auctions.lot')),
-                ('user', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to=settings.AUTH_USER_MODEL)),
-                ('createdon', models.DateTimeField(auto_now_add=True, default=django.utils.timezone.now)),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "lot_number",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE, to="auctions.lot"
+                    ),
+                ),
+                (
+                    "user",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                (
+                    "createdon",
+                    models.DateTimeField(
+                        auto_now_add=True, default=django.utils.timezone.now
+                    ),
+                ),
             ],
             options={
-                'verbose_name_plural': 'Users watching',
+                "verbose_name_plural": "Users watching",
             },
         ),
         migrations.AddField(
-            model_name='invoice',
-            name='no_login_link',
-            field=models.CharField(blank=True, default=uuid.uuid4, max_length=255, verbose_name='This link will be emailed to the user, allowing them to view their invoice directly without logging in'),
+            model_name="invoice",
+            name="no_login_link",
+            field=models.CharField(
+                blank=True,
+                default=uuid.uuid4,
+                max_length=255,
+                verbose_name="This link will be emailed to the user, allowing them to view their invoice directly without logging in",
+            ),
         ),
         migrations.AddField(
-            model_name='lot',
-            name='custom_lot_number',
-            field=models.CharField(blank=True, help_text='You can override the default lot number with this', max_length=9, null=True, verbose_name='Lot number'),
+            model_name="lot",
+            name="custom_lot_number",
+            field=models.CharField(
+                blank=True,
+                help_text="You can override the default lot number with this",
+                max_length=9,
+                null=True,
+                verbose_name="Lot number",
+            ),
         ),
         migrations.AlterField(
-            model_name='lot',
-            name='banned',
-            field=models.BooleanField(default=False, help_text="This lot will be hidden from views, and users won't be able to bid on it.  Removed lots are not charged in invoices.", verbose_name='Removed'),
+            model_name="lot",
+            name="banned",
+            field=models.BooleanField(
+                default=False,
+                help_text="This lot will be hidden from views, and users won't be able to bid on it.  Removed lots are not charged in invoices.",
+                verbose_name="Removed",
+            ),
         ),
         migrations.AddField(
-            model_name='invoice',
-            name='calculated_total',
-            field=models.IntegerField(blank=True, help_text="This field is set automatically, you shouldn't need to manually change it", null=True),
+            model_name="invoice",
+            name="calculated_total",
+            field=models.IntegerField(
+                blank=True,
+                help_text="This field is set automatically, you shouldn't need to manually change it",
+                null=True,
+            ),
         ),
         migrations.AlterField(
-            model_name='invoice',
-            name='status',
-            field=models.CharField(choices=[('DRAFT', 'Open'), ('UNPAID', 'Waiting for payment'), ('PAID', 'Paid')], default='DRAFT', max_length=20),
+            model_name="invoice",
+            name="status",
+            field=models.CharField(
+                choices=[
+                    ("DRAFT", "Open"),
+                    ("UNPAID", "Waiting for payment"),
+                    ("PAID", "Paid"),
+                ],
+                default="DRAFT",
+                max_length=20,
+            ),
         ),
         migrations.AddField(
-            model_name='lot',
-            name='added_by',
-            field=models.ForeignKey(blank=True, help_text='User who added this lot -- used for pre-registration discounts', null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='added_by', to=settings.AUTH_USER_MODEL),
+            model_name="lot",
+            name="added_by",
+            field=models.ForeignKey(
+                blank=True,
+                help_text="User who added this lot -- used for pre-registration discounts",
+                null=True,
+                on_delete=django.db.models.deletion.SET_NULL,
+                related_name="added_by",
+                to=settings.AUTH_USER_MODEL,
+            ),
         ),
         migrations.AddField(
-            model_name='lot',
-            name='category_automatically_added',
+            model_name="lot",
+            name="category_automatically_added",
             field=models.BooleanField(default=False),
         ),
         migrations.AddField(
-            model_name='invoice',
-            name='memo',
-            field=models.CharField(blank=True, default='', help_text='Only other auction admins can see this', max_length=500, null=True),
+            model_name="invoice",
+            name="memo",
+            field=models.CharField(
+                blank=True,
+                default="",
+                help_text="Only other auction admins can see this",
+                max_length=500,
+                null=True,
+            ),
         ),
         migrations.CreateModel(
-            name='LotAutoCategory',
-            fields=[
-            ],
+            name="LotAutoCategory",
+            fields=[],
             options={
-                'proxy': True,
-                'indexes': [],
-                'constraints': [],
+                "proxy": True,
+                "indexes": [],
+                "constraints": [],
             },
-            bases=('auctions.lot',),
+            bases=("auctions.lot",),
         ),
         migrations.AddField(
-            model_name='lot',
-            name='category_checked',
+            model_name="lot",
+            name="category_checked",
             field=models.BooleanField(default=False),
         ),
         migrations.AddField(
-            model_name='invoice',
-            name='auctiontos_user',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='auctiontos', to='auctions.auctiontos'),
+            model_name="invoice",
+            name="auctiontos_user",
+            field=models.ForeignKey(
+                blank=True,
+                null=True,
+                on_delete=django.db.models.deletion.CASCADE,
+                related_name="auctiontos",
+                to="auctions.auctiontos",
+            ),
         ),
         migrations.CreateModel(
-            name='UserLabelPrefs',
+            name="UserLabelPrefs",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('page_width', models.FloatField(default=8.5, validators=[django.core.validators.MinValueValidator(1), django.core.validators.MaxValueValidator(100.0)])),
-                ('page_height', models.FloatField(default=11, validators=[django.core.validators.MinValueValidator(1), django.core.validators.MaxValueValidator(100.0)])),
-                ('label_width', models.FloatField(default=2.51, validators=[django.core.validators.MinValueValidator(1), django.core.validators.MaxValueValidator(100.0)])),
-                ('label_height', models.FloatField(default=0.98, validators=[django.core.validators.MinValueValidator(0.4), django.core.validators.MaxValueValidator(50.0)])),
-                ('label_margin_right', models.FloatField(default=0.2, validators=[django.core.validators.MinValueValidator(0.1), django.core.validators.MaxValueValidator(5.0)])),
-                ('label_margin_bottom', models.FloatField(default=0.02, validators=[django.core.validators.MinValueValidator(0.0), django.core.validators.MaxValueValidator(5.0)])),
-                ('page_margin_top', models.FloatField(default=0.55, validators=[django.core.validators.MinValueValidator(0.1)])),
-                ('page_margin_bottom', models.FloatField(default=0.45, validators=[django.core.validators.MinValueValidator(0.1)])),
-                ('page_margin_left', models.FloatField(default=0.18, validators=[django.core.validators.MinValueValidator(0.1)])),
-                ('page_margin_right', models.FloatField(default=0.18, validators=[django.core.validators.MinValueValidator(0.05)])),
-                ('font_size', models.FloatField(default=8, validators=[django.core.validators.MinValueValidator(5), django.core.validators.MaxValueValidator(25)])),
-                ('unit', models.CharField(choices=[('in', 'Inches'), ('cm', 'Centimeters')], default='in', max_length=20)),
-                ('user', models.OneToOneField(on_delete=django.db.models.deletion.CASCADE, to=settings.AUTH_USER_MODEL)),
-                ('empty_labels', models.IntegerField(default=0, help_text='To print on partially used label sheets, print this many blank labels before printing the actual labels.  Just remember to set this back to 0 when starting a new sheet of labels!', validators=[django.core.validators.MinValueValidator(0), django.core.validators.MaxValueValidator(100)])),
-                ('preset', models.CharField(choices=[('sm', 'Small (Avery 5160)'), ('lg', 'Large (Avery 18262)'), ('custom', 'Custom')], default='lg', max_length=20, verbose_name='Label size')),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "page_width",
+                    models.FloatField(
+                        default=8.5,
+                        validators=[
+                            django.core.validators.MinValueValidator(1),
+                            django.core.validators.MaxValueValidator(100.0),
+                        ],
+                    ),
+                ),
+                (
+                    "page_height",
+                    models.FloatField(
+                        default=11,
+                        validators=[
+                            django.core.validators.MinValueValidator(1),
+                            django.core.validators.MaxValueValidator(100.0),
+                        ],
+                    ),
+                ),
+                (
+                    "label_width",
+                    models.FloatField(
+                        default=2.51,
+                        validators=[
+                            django.core.validators.MinValueValidator(1),
+                            django.core.validators.MaxValueValidator(100.0),
+                        ],
+                    ),
+                ),
+                (
+                    "label_height",
+                    models.FloatField(
+                        default=0.98,
+                        validators=[
+                            django.core.validators.MinValueValidator(0.4),
+                            django.core.validators.MaxValueValidator(50.0),
+                        ],
+                    ),
+                ),
+                (
+                    "label_margin_right",
+                    models.FloatField(
+                        default=0.2,
+                        validators=[
+                            django.core.validators.MinValueValidator(0.1),
+                            django.core.validators.MaxValueValidator(5.0),
+                        ],
+                    ),
+                ),
+                (
+                    "label_margin_bottom",
+                    models.FloatField(
+                        default=0.02,
+                        validators=[
+                            django.core.validators.MinValueValidator(0.0),
+                            django.core.validators.MaxValueValidator(5.0),
+                        ],
+                    ),
+                ),
+                (
+                    "page_margin_top",
+                    models.FloatField(
+                        default=0.55,
+                        validators=[django.core.validators.MinValueValidator(0.1)],
+                    ),
+                ),
+                (
+                    "page_margin_bottom",
+                    models.FloatField(
+                        default=0.45,
+                        validators=[django.core.validators.MinValueValidator(0.1)],
+                    ),
+                ),
+                (
+                    "page_margin_left",
+                    models.FloatField(
+                        default=0.18,
+                        validators=[django.core.validators.MinValueValidator(0.1)],
+                    ),
+                ),
+                (
+                    "page_margin_right",
+                    models.FloatField(
+                        default=0.18,
+                        validators=[django.core.validators.MinValueValidator(0.05)],
+                    ),
+                ),
+                (
+                    "font_size",
+                    models.FloatField(
+                        default=8,
+                        validators=[
+                            django.core.validators.MinValueValidator(5),
+                            django.core.validators.MaxValueValidator(25),
+                        ],
+                    ),
+                ),
+                (
+                    "unit",
+                    models.CharField(
+                        choices=[("in", "Inches"), ("cm", "Centimeters")],
+                        default="in",
+                        max_length=20,
+                    ),
+                ),
+                (
+                    "user",
+                    models.OneToOneField(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                (
+                    "empty_labels",
+                    models.IntegerField(
+                        default=0,
+                        help_text="To print on partially used label sheets, print this many blank labels before printing the actual labels.  Just remember to set this back to 0 when starting a new sheet of labels!",
+                        validators=[
+                            django.core.validators.MinValueValidator(0),
+                            django.core.validators.MaxValueValidator(100),
+                        ],
+                    ),
+                ),
+                (
+                    "preset",
+                    models.CharField(
+                        choices=[
+                            ("sm", "Small (Avery 5160)"),
+                            ("lg", "Large (Avery 18262)"),
+                            ("custom", "Custom"),
+                        ],
+                        default="lg",
+                        max_length=20,
+                        verbose_name="Label size",
+                    ),
+                ),
             ],
         ),
         migrations.AddField(
-            model_name='lot',
-            name='reference_link',
-            field=models.URLField(blank=True, help_text='A URL with additional information about this lot.  YouTube videos will be automatically embedded.', null=True),
+            model_name="lot",
+            name="reference_link",
+            field=models.URLField(
+                blank=True,
+                help_text="A URL with additional information about this lot.  YouTube videos will be automatically embedded.",
+                null=True,
+            ),
         ),
         migrations.CreateModel(
-            name='SearchHistory',
+            name="SearchHistory",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('search', models.CharField(max_length=600)),
-                ('createdon', models.DateTimeField(auto_now_add=True)),
-                ('auction', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to='auctions.auction')),
-                ('user', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to=settings.AUTH_USER_MODEL)),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("search", models.CharField(max_length=600)),
+                ("createdon", models.DateTimeField(auto_now_add=True)),
+                (
+                    "auction",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to="auctions.auction",
+                    ),
+                ),
+                (
+                    "user",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
             ],
         ),
         migrations.AddField(
-            model_name='pickuplocation',
-            name='contact_person',
-            field=models.ForeignKey(blank=True, help_text='Only users that you have granted admin permissions to will show up here.  Their phone and email will be shown to users who select this location.', null=True, on_delete=django.db.models.deletion.SET_NULL, to='auctions.auctiontos'),
+            model_name="pickuplocation",
+            name="contact_person",
+            field=models.ForeignKey(
+                blank=True,
+                help_text="Only users that you have granted admin permissions to will show up here.  Their phone and email will be shown to users who select this location.",
+                null=True,
+                on_delete=django.db.models.deletion.SET_NULL,
+                to="auctions.auctiontos",
+            ),
         ),
         migrations.AlterField(
-            model_name='pickuplocation',
-            name='description',
-            field=models.CharField(blank=True, help_text="Notes, shipping charges, etc.  For example: 'Parking lot near Sears entrance'", max_length=300, null=True),
+            model_name="pickuplocation",
+            name="description",
+            field=models.CharField(
+                blank=True,
+                help_text="Notes, shipping charges, etc.  For example: 'Parking lot near Sears entrance'",
+                max_length=300,
+                null=True,
+            ),
         ),
         migrations.AlterField(
-            model_name='pickuplocation',
-            name='location_coordinates',
-            field=location_field.models.plain.PlainLocationField(blank=True, max_length=63, null=True, verbose_name='Map'),
+            model_name="pickuplocation",
+            name="location_coordinates",
+            field=location_field.models.plain.PlainLocationField(
+                blank=True, max_length=63, null=True, verbose_name="Map"
+            ),
         ),
         migrations.AlterField(
-            model_name='pickuplocation',
-            name='name',
-            field=models.CharField(blank=True, default='', help_text='Location name shown to users.  e.x. University Mall in VT', max_length=50, null=True),
+            model_name="pickuplocation",
+            name="name",
+            field=models.CharField(
+                blank=True,
+                default="",
+                help_text="Location name shown to users.  e.x. University Mall in VT",
+                max_length=50,
+                null=True,
+            ),
         ),
         migrations.AlterField(
-            model_name='pickuplocation',
-            name='pickup_time',
+            model_name="pickuplocation",
+            name="pickup_time",
             field=models.DateTimeField(blank=True, null=True),
         ),
         migrations.AlterField(
-            model_name='pickuplocation',
-            name='second_pickup_time',
-            field=models.DateTimeField(blank=True, help_text="Only for <a href='/blog/multiple-location-auctions/'>multi-location auctions</a>; people will return to pick up lots from other locations at this time.", null=True),
+            model_name="pickuplocation",
+            name="second_pickup_time",
+            field=models.DateTimeField(
+                blank=True,
+                help_text="Only for <a href='/blog/multiple-location-auctions/'>multi-location auctions</a>; people will return to pick up lots from other locations at this time.",
+                null=True,
+            ),
         ),
         migrations.AlterField(
-            model_name='pickuplocation',
-            name='users_must_coordinate_pickup',
-            field=models.BooleanField(default=False, help_text='You probably want this unchecked, to have everyone arrive at the same time.'),
+            model_name="pickuplocation",
+            name="users_must_coordinate_pickup",
+            field=models.BooleanField(
+                default=False,
+                help_text="You probably want this unchecked, to have everyone arrive at the same time.",
+            ),
         ),
         migrations.CreateModel(
-            name='PageView',
+            name="PageView",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('date_start', models.DateTimeField(auto_now_add=True)),
-                ('date_end', models.DateTimeField(blank=True, default=django.utils.timezone.now, null=True)),
-                ('total_time', models.PositiveIntegerField(default=0, help_text='The total time in seconds the user has spent on the lot page')),
-                ('lot_number', models.ForeignKey(blank=True, help_text="Only filled out when a user views a specific lot's page", null=True, on_delete=django.db.models.deletion.CASCADE, to='auctions.lot')),
-                ('user', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, to=settings.AUTH_USER_MODEL)),
-                ('source', models.CharField(blank=True, default='', max_length=200, null=True)),
-                ('auction', models.ForeignKey(blank=True, help_text="Only filled out when a user views an auction's rules page", null=True, on_delete=django.db.models.deletion.CASCADE, to='auctions.auction')),
-                ('counter', models.PositiveIntegerField(default=0)),
-                ('notification_sent', models.BooleanField(default=False)),
-                ('referrer', models.CharField(blank=True, max_length=600, null=True)),
-                ('session_id', models.CharField(blank=True, max_length=600, null=True)),
-                ('title', models.CharField(blank=True, max_length=600, null=True)),
-                ('url', models.CharField(blank=True, max_length=600, null=True)),
-                ('duplicate_check_completed', models.BooleanField(default=False)),
-                ('ip_address', models.CharField(blank=True, max_length=100, null=True)),
-                ('latitude', models.FloatField(default=0)),
-                ('longitude', models.FloatField(default=0)),
-                ('user_agent', models.CharField(blank=True, max_length=200, null=True)),
-                ('os', models.CharField(choices=[('UNKNOWN', 'Unknown'), ('ANDROID', 'Android'), ('IPHONE', 'iPhone'), ('WINDOWS', 'Windows'), ('OSX', 'OS X')], default='UNKNOWN', max_length=20)),
-                ('platform', models.CharField(blank=True, default='', max_length=200, null=True)),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("date_start", models.DateTimeField(auto_now_add=True)),
+                (
+                    "date_end",
+                    models.DateTimeField(
+                        blank=True, default=django.utils.timezone.now, null=True
+                    ),
+                ),
+                (
+                    "total_time",
+                    models.PositiveIntegerField(
+                        default=0,
+                        help_text="The total time in seconds the user has spent on the lot page",
+                    ),
+                ),
+                (
+                    "lot_number",
+                    models.ForeignKey(
+                        blank=True,
+                        help_text="Only filled out when a user views a specific lot's page",
+                        null=True,
+                        on_delete=django.db.models.deletion.CASCADE,
+                        to="auctions.lot",
+                    ),
+                ),
+                (
+                    "user",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.CASCADE,
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                (
+                    "source",
+                    models.CharField(blank=True, default="", max_length=200, null=True),
+                ),
+                (
+                    "auction",
+                    models.ForeignKey(
+                        blank=True,
+                        help_text="Only filled out when a user views an auction's rules page",
+                        null=True,
+                        on_delete=django.db.models.deletion.CASCADE,
+                        to="auctions.auction",
+                    ),
+                ),
+                ("counter", models.PositiveIntegerField(default=0)),
+                ("notification_sent", models.BooleanField(default=False)),
+                ("referrer", models.CharField(blank=True, max_length=600, null=True)),
+                ("session_id", models.CharField(blank=True, max_length=600, null=True)),
+                ("title", models.CharField(blank=True, max_length=600, null=True)),
+                ("url", models.CharField(blank=True, max_length=600, null=True)),
+                ("duplicate_check_completed", models.BooleanField(default=False)),
+                ("ip_address", models.CharField(blank=True, max_length=100, null=True)),
+                ("latitude", models.FloatField(default=0)),
+                ("longitude", models.FloatField(default=0)),
+                ("user_agent", models.CharField(blank=True, max_length=200, null=True)),
+                (
+                    "os",
+                    models.CharField(
+                        choices=[
+                            ("UNKNOWN", "Unknown"),
+                            ("ANDROID", "Android"),
+                            ("IPHONE", "iPhone"),
+                            ("WINDOWS", "Windows"),
+                            ("OSX", "OS X"),
+                        ],
+                        default="UNKNOWN",
+                        max_length=20,
+                    ),
+                ),
+                (
+                    "platform",
+                    models.CharField(blank=True, default="", max_length=200, null=True),
+                ),
             ],
         ),
         migrations.CreateModel(
-            name='AuctionCampaign',
+            name="AuctionCampaign",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('uuid', models.CharField(blank=True, default=uuid.uuid4, max_length=255)),
-                ('email', models.CharField(blank=True, default='', max_length=255)),
-                ('timestamp', models.DateTimeField(auto_now_add=True)),
-                ('result', models.CharField(choices=[('ERR', 'No email sent'), ('NONE', 'No response'), ('VIEWED', 'Clicked'), ('JOINED', 'Joined')], default='NONE', max_length=20)),
-                ('auction', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to='auctions.auction')),
-                ('user', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to=settings.AUTH_USER_MODEL)),
-                ('email_sent', models.BooleanField(default=False)),
-                ('source', models.CharField(blank=True, default='', max_length=200, null=True)),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "uuid",
+                    models.CharField(blank=True, default=uuid.uuid4, max_length=255),
+                ),
+                ("email", models.CharField(blank=True, default="", max_length=255)),
+                ("timestamp", models.DateTimeField(auto_now_add=True)),
+                (
+                    "result",
+                    models.CharField(
+                        choices=[
+                            ("ERR", "No email sent"),
+                            ("NONE", "No response"),
+                            ("VIEWED", "Clicked"),
+                            ("JOINED", "Joined"),
+                        ],
+                        default="NONE",
+                        max_length=20,
+                    ),
+                ),
+                (
+                    "auction",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to="auctions.auction",
+                    ),
+                ),
+                (
+                    "user",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                ("email_sent", models.BooleanField(default=False)),
+                (
+                    "source",
+                    models.CharField(blank=True, default="", max_length=200, null=True),
+                ),
             ],
         ),
         migrations.AddField(
-            model_name='lot',
-            name='label_printed',
+            model_name="lot",
+            name="label_printed",
             field=models.BooleanField(default=False),
         ),
         migrations.CreateModel(
-            name='ChatSubscription',
+            name="ChatSubscription",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('createdon', models.DateTimeField(auto_now_add=True)),
-                ('last_notification_sent', models.DateTimeField(blank=True, null=True)),
-                ('last_seen', models.DateTimeField(blank=True, null=True)),
-                ('unsubscribed', models.BooleanField(default=False)),
-                ('lot', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='auctions.lot')),
-                ('user', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to=settings.AUTH_USER_MODEL)),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("createdon", models.DateTimeField(auto_now_add=True)),
+                ("last_notification_sent", models.DateTimeField(blank=True, null=True)),
+                ("last_seen", models.DateTimeField(blank=True, null=True)),
+                ("unsubscribed", models.BooleanField(default=False)),
+                (
+                    "lot",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE, to="auctions.lot"
+                    ),
+                ),
+                (
+                    "user",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
             ],
         ),
         migrations.AlterField(
-            model_name='lot',
-            name='auction',
-            field=models.ForeignKey(blank=True, help_text="<span class='text-warning' id='last-auction-special'></span>Only auctions that you have <span class='text-warning'>joined</span> will be shown here. This lot must be brought to that auction", null=True, on_delete=django.db.models.deletion.SET_NULL, to='auctions.auction'),
+            model_name="lot",
+            name="auction",
+            field=models.ForeignKey(
+                blank=True,
+                help_text="<span class='text-warning' id='last-auction-special'></span>Only auctions that you have <span class='text-warning'>joined</span> will be shown here. This lot must be brought to that auction",
+                null=True,
+                on_delete=django.db.models.deletion.SET_NULL,
+                to="auctions.auction",
+            ),
         ),
         migrations.CreateModel(
-            name='UserData',
+            name="UserData",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('phone_number', models.CharField(blank=True, max_length=20, null=True)),
-                ('address', models.CharField(blank=True, help_text='Your complete mailing address.  If you sell lots in an auction, your check will be mailed here.', max_length=500, null=True)),
-                ('club', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to='auctions.club')),
-                ('location', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to='auctions.location')),
-                ('user', models.OneToOneField(on_delete=django.db.models.deletion.CASCADE, to=settings.AUTH_USER_MODEL)),
-                ('rank_total_lots', models.PositiveIntegerField(blank=True, null=True)),
-                ('rank_total_spent', models.PositiveIntegerField(blank=True, null=True)),
-                ('rank_unique_species', models.PositiveIntegerField(blank=True, null=True)),
-                ('number_total_lots', models.PositiveIntegerField(blank=True, null=True)),
-                ('number_total_spent', models.PositiveIntegerField(blank=True, null=True)),
-                ('number_unique_species', models.PositiveIntegerField(blank=True, null=True)),
-                ('email_visible', models.BooleanField(default=False, help_text="Show your email address on your user page.  This will be visible only to logged in users.  <a href='/blog/privacy/' target='_blank'>Privacy information</a>")),
-                ('number_total_bids', models.PositiveIntegerField(blank=True, null=True)),
-                ('rank_total_bids', models.PositiveIntegerField(blank=True, null=True)),
-                ('last_auction_used', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to='auctions.auction')),
-                ('buyer_percentile', models.PositiveIntegerField(blank=True, null=True)),
-                ('number_total_sold', models.PositiveIntegerField(blank=True, null=True)),
-                ('rank_total_sold', models.PositiveIntegerField(blank=True, null=True)),
-                ('rank_volume', models.PositiveIntegerField(blank=True, null=True)),
-                ('seller_percentile', models.PositiveIntegerField(blank=True, null=True)),
-                ('total_volume', models.PositiveIntegerField(blank=True, null=True)),
-                ('volume_percentile', models.PositiveIntegerField(blank=True, null=True)),
-                ('use_list_view', models.BooleanField(default=False, help_text='Show a list of all lots instead of showing pictures')),
-                ('last_activity', models.DateTimeField(auto_now_add=True)),
-                ('email_me_about_new_auctions', models.BooleanField(blank=True, default=True, help_text='When new online auctions are created with pickup locations near my location, notify me', verbose_name='Email me about new online auctions')),
-                ('email_me_about_new_auctions_distance', models.PositiveIntegerField(blank=True, default=100, help_text='miles, from your address', null=True, verbose_name='New online auction distance')),
-                ('email_me_about_new_local_lots', models.BooleanField(blank=True, default=True, help_text="When new nearby lots (that aren't part of an auction) are created, notify me")),
-                ('has_unsubscribed', models.BooleanField(blank=True, default=False)),
-                ('latitude', models.FloatField(default=0)),
-                ('local_distance', models.PositiveIntegerField(blank=True, default=60, help_text='miles, from your address', null=True, verbose_name='New local lot distance')),
-                ('location_coordinates', location_field.models.plain.PlainLocationField(blank=True, help_text='Make sure your map marker is correctly placed - you will get notifications about nearby auctions', max_length=63, null=True, verbose_name='Map')),
-                ('longitude', models.FloatField(default=0)),
-                ('paypal_email_address', models.CharField(blank=True, help_text='If different from your email address', max_length=200, null=True, verbose_name='Paypal Address')),
-                ('unsubscribe_link', models.CharField(blank=True, default=uuid.uuid4, max_length=255)),
-                ('email_me_about_new_lots_ship_to_location', models.BooleanField(blank=True, default=True, help_text='Email me when new lots are created that can be shipped to my location', verbose_name='Email me about lots that can be shipped')),
-                ('banned_from_chat_until', models.DateTimeField(blank=True, help_text='After this date, the user can post chats again.  Being banned from chatting does not block bidding', null=True)),
-                ('use_dark_theme', models.BooleanField(default=True, help_text='Uncheck to use the blindingly bright light theme')),
-                ('can_submit_standalone_lots', models.BooleanField(default=True)),
-                ('email_me_when_people_comment_on_my_lots', models.BooleanField(blank=True, default=True, help_text="Notifications will be sent once a day, only for messages you haven't seen")),
-                ('dismissed_cookies_tos', models.BooleanField(default=False)),
-                ('show_ads', models.BooleanField(blank=True, default=True, help_text="Ads have been disabled site-wide indefinitely, so this option doesn't do anything right now.")),
-                ('has_bid', models.BooleanField(default=False)),
-                ('has_used_proxy_bidding', models.BooleanField(default=False)),
-                ('credit', models.DecimalField(decimal_places=2, default=0, help_text='The total balance in your account', max_digits=6)),
-                ('show_ad_controls', models.BooleanField(blank=True, default=False, help_text='Show a tab for ads on all pages')),
-                ('last_ip_address', models.CharField(blank=True, max_length=100, null=True)),
-                ('preferred_bidder_number', models.CharField(blank=True, default='', max_length=4)),
-                ('timezone', models.CharField(blank=True, max_length=100, null=True)),
-                ('email_me_about_new_in_person_auctions', models.BooleanField(blank=True, default=True, help_text='When new in-person auctions are created near my location, notify me')),
-                ('email_me_about_new_in_person_auctions_distance', models.PositiveIntegerField(blank=True, default=100, help_text='miles, from your address', null=True, verbose_name='New in-person auction distance')),
-                ('show_email_warning_sent', models.BooleanField(blank=True, default=False, help_text='When a user has their email address hidden and sells a lot, this is checked')),
-                ('username_is_email_warning_sent', models.BooleanField(blank=True, default=False, help_text='Warning email has been sent because this user made their username an email')),
-                ('username_visible', models.BooleanField(blank=True, default=True, help_text="Uncheck to bid anonymously.  Your username will still be visible on lots you sell, chat messages, and to the people running any auctions you've joined.")),
-                ('send_reminder_emails_about_joining_auctions', models.BooleanField(blank=True, default=True, help_text="Get an annoying reminder email when you view an auction but don't join it")),
-                ('email_me_about_new_chat_replies', models.BooleanField(blank=True, default=True, help_text="When you comment on lots you don't own, send any new messages about that lot to your email")),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "phone_number",
+                    models.CharField(blank=True, max_length=20, null=True),
+                ),
+                (
+                    "address",
+                    models.CharField(
+                        blank=True,
+                        help_text="Your complete mailing address.  If you sell lots in an auction, your check will be mailed here.",
+                        max_length=500,
+                        null=True,
+                    ),
+                ),
+                (
+                    "club",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to="auctions.club",
+                    ),
+                ),
+                (
+                    "location",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to="auctions.location",
+                    ),
+                ),
+                (
+                    "user",
+                    models.OneToOneField(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                ("rank_total_lots", models.PositiveIntegerField(blank=True, null=True)),
+                (
+                    "rank_total_spent",
+                    models.PositiveIntegerField(blank=True, null=True),
+                ),
+                (
+                    "rank_unique_species",
+                    models.PositiveIntegerField(blank=True, null=True),
+                ),
+                (
+                    "number_total_lots",
+                    models.PositiveIntegerField(blank=True, null=True),
+                ),
+                (
+                    "number_total_spent",
+                    models.PositiveIntegerField(blank=True, null=True),
+                ),
+                (
+                    "number_unique_species",
+                    models.PositiveIntegerField(blank=True, null=True),
+                ),
+                (
+                    "email_visible",
+                    models.BooleanField(
+                        default=False,
+                        help_text="Show your email address on your user page.  This will be visible only to logged in users.  <a href='/blog/privacy/' target='_blank'>Privacy information</a>",
+                    ),
+                ),
+                (
+                    "number_total_bids",
+                    models.PositiveIntegerField(blank=True, null=True),
+                ),
+                ("rank_total_bids", models.PositiveIntegerField(blank=True, null=True)),
+                (
+                    "last_auction_used",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to="auctions.auction",
+                    ),
+                ),
+                (
+                    "buyer_percentile",
+                    models.PositiveIntegerField(blank=True, null=True),
+                ),
+                (
+                    "number_total_sold",
+                    models.PositiveIntegerField(blank=True, null=True),
+                ),
+                ("rank_total_sold", models.PositiveIntegerField(blank=True, null=True)),
+                ("rank_volume", models.PositiveIntegerField(blank=True, null=True)),
+                (
+                    "seller_percentile",
+                    models.PositiveIntegerField(blank=True, null=True),
+                ),
+                ("total_volume", models.PositiveIntegerField(blank=True, null=True)),
+                (
+                    "volume_percentile",
+                    models.PositiveIntegerField(blank=True, null=True),
+                ),
+                (
+                    "use_list_view",
+                    models.BooleanField(
+                        default=False,
+                        help_text="Show a list of all lots instead of showing pictures",
+                    ),
+                ),
+                ("last_activity", models.DateTimeField(auto_now_add=True)),
+                (
+                    "email_me_about_new_auctions",
+                    models.BooleanField(
+                        blank=True,
+                        default=True,
+                        help_text="When new online auctions are created with pickup locations near my location, notify me",
+                        verbose_name="Email me about new online auctions",
+                    ),
+                ),
+                (
+                    "email_me_about_new_auctions_distance",
+                    models.PositiveIntegerField(
+                        blank=True,
+                        default=100,
+                        help_text="miles, from your address",
+                        null=True,
+                        verbose_name="New online auction distance",
+                    ),
+                ),
+                (
+                    "email_me_about_new_local_lots",
+                    models.BooleanField(
+                        blank=True,
+                        default=True,
+                        help_text="When new nearby lots (that aren't part of an auction) are created, notify me",
+                    ),
+                ),
+                ("has_unsubscribed", models.BooleanField(blank=True, default=False)),
+                ("latitude", models.FloatField(default=0)),
+                (
+                    "local_distance",
+                    models.PositiveIntegerField(
+                        blank=True,
+                        default=60,
+                        help_text="miles, from your address",
+                        null=True,
+                        verbose_name="New local lot distance",
+                    ),
+                ),
+                (
+                    "location_coordinates",
+                    location_field.models.plain.PlainLocationField(
+                        blank=True,
+                        help_text="Make sure your map marker is correctly placed - you will get notifications about nearby auctions",
+                        max_length=63,
+                        null=True,
+                        verbose_name="Map",
+                    ),
+                ),
+                ("longitude", models.FloatField(default=0)),
+                (
+                    "paypal_email_address",
+                    models.CharField(
+                        blank=True,
+                        help_text="If different from your email address",
+                        max_length=200,
+                        null=True,
+                        verbose_name="Paypal Address",
+                    ),
+                ),
+                (
+                    "unsubscribe_link",
+                    models.CharField(blank=True, default=uuid.uuid4, max_length=255),
+                ),
+                (
+                    "email_me_about_new_lots_ship_to_location",
+                    models.BooleanField(
+                        blank=True,
+                        default=True,
+                        help_text="Email me when new lots are created that can be shipped to my location",
+                        verbose_name="Email me about lots that can be shipped",
+                    ),
+                ),
+                (
+                    "banned_from_chat_until",
+                    models.DateTimeField(
+                        blank=True,
+                        help_text="After this date, the user can post chats again.  Being banned from chatting does not block bidding",
+                        null=True,
+                    ),
+                ),
+                (
+                    "use_dark_theme",
+                    models.BooleanField(
+                        default=True,
+                        help_text="Uncheck to use the blindingly bright light theme",
+                    ),
+                ),
+                ("can_submit_standalone_lots", models.BooleanField(default=True)),
+                (
+                    "email_me_when_people_comment_on_my_lots",
+                    models.BooleanField(
+                        blank=True,
+                        default=True,
+                        help_text="Notifications will be sent once a day, only for messages you haven't seen",
+                    ),
+                ),
+                ("dismissed_cookies_tos", models.BooleanField(default=False)),
+                (
+                    "show_ads",
+                    models.BooleanField(
+                        blank=True,
+                        default=True,
+                        help_text="Ads have been disabled site-wide indefinitely, so this option doesn't do anything right now.",
+                    ),
+                ),
+                ("has_bid", models.BooleanField(default=False)),
+                ("has_used_proxy_bidding", models.BooleanField(default=False)),
+                (
+                    "credit",
+                    models.DecimalField(
+                        decimal_places=2,
+                        default=0,
+                        help_text="The total balance in your account",
+                        max_digits=6,
+                    ),
+                ),
+                (
+                    "show_ad_controls",
+                    models.BooleanField(
+                        blank=True,
+                        default=False,
+                        help_text="Show a tab for ads on all pages",
+                    ),
+                ),
+                (
+                    "last_ip_address",
+                    models.CharField(blank=True, max_length=100, null=True),
+                ),
+                (
+                    "preferred_bidder_number",
+                    models.CharField(blank=True, default="", max_length=4),
+                ),
+                ("timezone", models.CharField(blank=True, max_length=100, null=True)),
+                (
+                    "email_me_about_new_in_person_auctions",
+                    models.BooleanField(
+                        blank=True,
+                        default=True,
+                        help_text="When new in-person auctions are created near my location, notify me",
+                    ),
+                ),
+                (
+                    "email_me_about_new_in_person_auctions_distance",
+                    models.PositiveIntegerField(
+                        blank=True,
+                        default=100,
+                        help_text="miles, from your address",
+                        null=True,
+                        verbose_name="New in-person auction distance",
+                    ),
+                ),
+                (
+                    "show_email_warning_sent",
+                    models.BooleanField(
+                        blank=True,
+                        default=False,
+                        help_text="When a user has their email address hidden and sells a lot, this is checked",
+                    ),
+                ),
+                (
+                    "username_is_email_warning_sent",
+                    models.BooleanField(
+                        blank=True,
+                        default=False,
+                        help_text="Warning email has been sent because this user made their username an email",
+                    ),
+                ),
+                (
+                    "username_visible",
+                    models.BooleanField(
+                        blank=True,
+                        default=True,
+                        help_text="Uncheck to bid anonymously.  Your username will still be visible on lots you sell, chat messages, and to the people running any auctions you've joined.",
+                    ),
+                ),
+                (
+                    "send_reminder_emails_about_joining_auctions",
+                    models.BooleanField(
+                        blank=True,
+                        default=True,
+                        help_text="Get an annoying reminder email when you view an auction but don't join it",
+                    ),
+                ),
+                (
+                    "email_me_about_new_chat_replies",
+                    models.BooleanField(
+                        blank=True,
+                        default=True,
+                        help_text="When you comment on lots you don't own, send any new messages about that lot to your email",
+                    ),
+                ),
             ],
         ),
         migrations.CreateModel(
-            name='InvoiceAdjustment',
+            name="InvoiceAdjustment",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('createdon', models.DateTimeField(auto_now_add=True)),
-                ('adjustment_type', models.CharField(choices=[('ADD', 'Charge extra'), ('DISCOUNT', 'Discount'), ('ADD_PERCENT', 'Charge extra percent'), ('DISCOUNT_PERCENT', 'Discount percent')], default='ADD', max_length=20)),
-                ('amount', models.PositiveIntegerField(default=0, validators=[django.core.validators.MinValueValidator(0)])),
-                ('notes', models.CharField(default='Corrected', max_length=150)),
-                ('invoice', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, to='auctions.invoice')),
-                ('user', models.ForeignKey(blank=True, help_text='The auction admin who created this adjustment', null=True, on_delete=django.db.models.deletion.SET_NULL, to=settings.AUTH_USER_MODEL)),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("createdon", models.DateTimeField(auto_now_add=True)),
+                (
+                    "adjustment_type",
+                    models.CharField(
+                        choices=[
+                            ("ADD", "Charge extra"),
+                            ("DISCOUNT", "Discount"),
+                            ("ADD_PERCENT", "Charge extra percent"),
+                            ("DISCOUNT_PERCENT", "Discount percent"),
+                        ],
+                        default="ADD",
+                        max_length=20,
+                    ),
+                ),
+                (
+                    "amount",
+                    models.PositiveIntegerField(
+                        default=0,
+                        validators=[django.core.validators.MinValueValidator(0)],
+                    ),
+                ),
+                ("notes", models.CharField(default="Corrected", max_length=150)),
+                (
+                    "invoice",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.CASCADE,
+                        to="auctions.invoice",
+                    ),
+                ),
+                (
+                    "user",
+                    models.ForeignKey(
+                        blank=True,
+                        help_text="The auction admin who created this adjustment",
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
             ],
         ),
     ]

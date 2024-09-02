@@ -5,15 +5,20 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('auctions', '0134_remove_invoice_adjustment_and_more'),
+        ("auctions", "0134_remove_invoice_adjustment_and_more"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='lot',
-            name='partial_refund_percent',
-            field=models.IntegerField(default=0, validators=[django.core.validators.MinValueValidator(0), django.core.validators.MaxValueValidator(100)]),
+            model_name="lot",
+            name="partial_refund_percent",
+            field=models.IntegerField(
+                default=0,
+                validators=[
+                    django.core.validators.MinValueValidator(0),
+                    django.core.validators.MaxValueValidator(100),
+                ],
+            ),
         ),
     ]

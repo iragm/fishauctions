@@ -42,6 +42,14 @@ COPY ./requirements.in .
 COPY ./requirements.txt .
 RUN pip wheel --no-cache-dir --no-deps --wheel-dir /usr/src/app/wheels -r requirements.txt
 
+#########
+# Test and CI #
+#########
+
+# pull official base image
+FROM python:3.11.9-slim AS test
+COPY ./requirements-test.txt .
+RUN pip install -r requirements-test.txt
 
 #########
 # FINAL #

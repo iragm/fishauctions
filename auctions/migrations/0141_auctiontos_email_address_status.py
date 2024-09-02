@@ -4,15 +4,23 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('auctions', '0140_auction_advanced_lot_adding_alter_auction_buy_now_and_more'),
+        ("auctions", "0140_auction_advanced_lot_adding_alter_auction_buy_now_and_more"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='auctiontos',
-            name='email_address_status',
-            field=models.CharField(blank=True, choices=[('BAD', 'Invalid'), ('UNKNOWN', 'Unknown'), ('VALID', 'Verified')], default='UNKNOWN', max_length=20),
+            model_name="auctiontos",
+            name="email_address_status",
+            field=models.CharField(
+                blank=True,
+                choices=[
+                    ("BAD", "Invalid"),
+                    ("UNKNOWN", "Unknown"),
+                    ("VALID", "Verified"),
+                ],
+                default="UNKNOWN",
+                max_length=20,
+            ),
         ),
     ]

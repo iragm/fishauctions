@@ -33,7 +33,7 @@ git clone https://github.com/iragm/fishauctions
 cd fishauctions
 cp .env.example .env
 [...edit your .env file as needed...]
-docker compose build
+docker compose --profile "*" build
 docker compose up -d
 ```
 You should now be able to access a development site at 127.0.0.1 (Note: don't use port 8000)
@@ -54,7 +54,19 @@ In keeping with 12 Factor, all configuration is done from the .env file and the 
 Some cron jobs are used to manage models - these run automatically if you're in production (debug=False), but will need to be run manually in development.  These can be found in the crontab file in the same folder as this readme.
 
 #### Adding packages
-New packages can be added to requirements.in (in addition to the standard Django settings file).  After docker compose is up, run `docker exec django pip-compile ./requirements.in` to generate an updated requirements.txt file.
+New packages can be added to requirements.in (in addition to the standard Django settings file) for production dependencies, or requirements-test.in for test dependencies.  Then run `./.github/scripts/update-packages.sh` to generate updated requirements.txt files.
+
+If you would like to upgrade all packages to the latest supported version, run `./.github/scripts/update-packages.sh --upgrade`
+
+### Running tests and lints
+
+To run the same set of tests and lints that would be run in CI, run `docker compose run --rm test --ci`.
+This will fail if changes are required. There are additional commands below that can be used to run individual test/lint components and auto-fix issues where possible.
+
+#### Auto-formatting
+To format code, run `docker compose run --rm test --format`. This will attempt to auto-fix issues, if possible.
+
+To check if code is formatted properly *without* modifying any files on disk, run `docker compose run --rm test --format-check`. The command will output failures (if any) and exit with an error if changes need to be made.
 
 #### Management commands
 Run these with docker exec after docker compose is up.  For example: `docker exec -it django python3 manage.py makemigrations`

@@ -2,9 +2,10 @@ import time
 from locust import HttpUser, task, between, User, TaskSet, events
 from websocket import create_connection
 
+
 class QuickstartUser(HttpUser):
     # note: use ws:// for testing, wss requires ssl
-    wsurl = 'wss://example.com/ws/lots' # no trailing /
+    wsurl = "wss://example.com/ws/lots"  # no trailing /
     wait_time = between(1, 10)
     lot_to_bid_on = 1234
     lot_start_pk = 1110
@@ -17,11 +18,11 @@ class QuickstartUser(HttpUser):
     @task(3)
     def view_lot(self):
         for lot in range(self.lot_start_pk, self.lot_end_pk):
-            #ws = create_connection(f"{self.wsurl}/{lot}/")
+            # ws = create_connection(f"{self.wsurl}/{lot}/")
             self.client.get(f"/lots/{lot}", name="/lot")
             time.sleep(1)
-            #ws.close()
-    
+            # ws.close()
+
     # @task(10)
     # def bid(self):
     #     self.client.post("/login", json={"username":"tester", "password":"1234"})

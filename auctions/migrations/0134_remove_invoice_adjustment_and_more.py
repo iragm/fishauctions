@@ -7,98 +7,117 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('auctions', '0001_initial_squashed_0133_invoiceadjustment'),
+        ("auctions", "0001_initial_squashed_0133_invoiceadjustment"),
     ]
 
     operations = [
         migrations.RemoveField(
-            model_name='invoice',
-            name='adjustment',
+            model_name="invoice",
+            name="adjustment",
         ),
         migrations.RemoveField(
-            model_name='invoice',
-            name='adjustment_direction',
+            model_name="invoice",
+            name="adjustment_direction",
         ),
         migrations.RemoveField(
-            model_name='invoice',
-            name='adjustment_notes',
+            model_name="invoice",
+            name="adjustment_notes",
         ),
         migrations.RemoveField(
-            model_name='invoice',
-            name='lot',
+            model_name="invoice",
+            name="lot",
         ),
         migrations.RemoveField(
-            model_name='invoice',
-            name='seller',
+            model_name="invoice",
+            name="seller",
         ),
         migrations.RemoveField(
-            model_name='invoice',
-            name='seller_email_sent',
+            model_name="invoice",
+            name="seller_email_sent",
         ),
         migrations.RemoveField(
-            model_name='invoice',
-            name='user',
+            model_name="invoice",
+            name="user",
         ),
         migrations.AddField(
-            model_name='auction',
-            name='tax',
-            field=models.PositiveIntegerField(default=0, help_text='Added to invoices for all won lots', validators=[django.core.validators.MinValueValidator(0)]),
+            model_name="auction",
+            name="tax",
+            field=models.PositiveIntegerField(
+                default=0,
+                help_text="Added to invoices for all won lots",
+                validators=[django.core.validators.MinValueValidator(0)],
+            ),
         ),
         migrations.AddField(
-            model_name='auctiontos',
-            name='memo',
-            field=models.CharField(blank=True, default='', help_text='Only other auction admins can see this', max_length=500, null=True),
+            model_name="auctiontos",
+            name="memo",
+            field=models.CharField(
+                blank=True,
+                default="",
+                help_text="Only other auction admins can see this",
+                max_length=500,
+                null=True,
+            ),
         ),
         migrations.AlterField(
-            model_name='auction',
-            name='date_posted',
+            model_name="auction",
+            name="date_posted",
             field=models.DateTimeField(auto_now_add=True),
         ),
         migrations.AlterField(
-            model_name='auctiontos',
-            name='createdon',
+            model_name="auctiontos",
+            name="createdon",
             field=models.DateTimeField(auto_now_add=True),
         ),
         migrations.AlterField(
-            model_name='auctiontos',
-            name='pickup_location',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='auctions.pickuplocation'),
+            model_name="auctiontos",
+            name="pickup_location",
+            field=models.ForeignKey(
+                on_delete=django.db.models.deletion.CASCADE,
+                to="auctions.pickuplocation",
+            ),
         ),
         migrations.AlterField(
-            model_name='invoice',
-            name='auctiontos_user',
-            field=models.ForeignKey(blank=True, on_delete=django.db.models.deletion.CASCADE, related_name='auctiontos', to='auctions.auctiontos'),
+            model_name="invoice",
+            name="auctiontos_user",
+            field=models.ForeignKey(
+                blank=True,
+                on_delete=django.db.models.deletion.CASCADE,
+                related_name="auctiontos",
+                to="auctions.auctiontos",
+            ),
         ),
         migrations.AlterField(
-            model_name='invoiceadjustment',
-            name='notes',
-            field=models.CharField(default='', max_length=150),
+            model_name="invoiceadjustment",
+            name="notes",
+            field=models.CharField(default="", max_length=150),
         ),
         migrations.AlterField(
-            model_name='lot',
-            name='date_of_last_user_edit',
+            model_name="lot",
+            name="date_of_last_user_edit",
             field=models.DateTimeField(auto_now_add=True),
         ),
         migrations.AlterField(
-            model_name='lot',
-            name='slug',
-            field=autoslug.fields.AutoSlugField(editable=False, populate_from='lot_name'),
+            model_name="lot",
+            name="slug",
+            field=autoslug.fields.AutoSlugField(
+                editable=False, populate_from="lot_name"
+            ),
         ),
         migrations.AlterField(
-            model_name='userban',
-            name='createdon',
+            model_name="userban",
+            name="createdon",
             field=models.DateTimeField(auto_now_add=True),
         ),
         migrations.AlterField(
-            model_name='userignorecategory',
-            name='createdon',
+            model_name="userignorecategory",
+            name="createdon",
             field=models.DateTimeField(auto_now_add=True),
         ),
         migrations.AlterField(
-            model_name='watch',
-            name='createdon',
+            model_name="watch",
+            name="createdon",
             field=models.DateTimeField(auto_now_add=True),
         ),
     ]

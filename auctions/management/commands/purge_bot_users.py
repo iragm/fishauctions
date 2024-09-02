@@ -3,13 +3,15 @@ from django.core.management.base import BaseCommand, CommandError
 from auctions.models import *
 from allauth.account.models import EmailAddress
 
+
 class Command(BaseCommand):
-    help = 'Remove users with no verified email'
+    help = "Remove users with no verified email"
+
     def handle(self, *args, **options):
         emails = EmailAddress.objects.filter(verified=False, primary=True)
         for email in emails:
             userData, created = UserData.objects.get_or_create(
-                user = email.user,
+                user=email.user,
                 defaults={},
             )
             time_difference = email.user.userdata.last_activity - email.user.date_joined

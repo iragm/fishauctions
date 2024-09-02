@@ -6,6 +6,7 @@ It exposes the ASGI callable as a module-level variable named ``application``.
 For more information on this file, see
 https://docs.djangoproject.com/en/3.1/howto/deployment/asgi/
 """
+
 import os
 
 from channels.auth import AuthMiddlewareStack
@@ -15,11 +16,11 @@ import auctions.routing
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "fishauctions.settings")
 
-application = ProtocolTypeRouter({
-  "http": get_asgi_application(),
-  "websocket": AuthMiddlewareStack(
-        URLRouter(
-            auctions.routing.websocket_urlpatterns
-        )
-    ),
-})
+application = ProtocolTypeRouter(
+    {
+        "http": get_asgi_application(),
+        "websocket": AuthMiddlewareStack(
+            URLRouter(auctions.routing.websocket_urlpatterns)
+        ),
+    }
+)

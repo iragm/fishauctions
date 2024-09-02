@@ -4,20 +4,19 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('auctions', '0142_club_date_contacted_for_in_person_auctions'),
+        ("auctions", "0142_club_date_contacted_for_in_person_auctions"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='auction',
-            name='extra_promo_link',
+            model_name="auction",
+            name="extra_promo_link",
             field=models.URLField(blank=True, null=True),
         ),
         migrations.AddField(
-            model_name='auction',
-            name='extra_promo_text',
-            field=models.CharField(blank=True, default='', max_length=50, null=True),
+            model_name="auction",
+            name="extra_promo_text",
+            field=models.CharField(blank=True, default="", max_length=50, null=True),
         ),
     ]
