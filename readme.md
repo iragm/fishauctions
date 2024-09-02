@@ -85,3 +85,11 @@ Working in a VSCode development container will ensure that all project dependenc
 
 To begin, follow the VS Code prompt to `Reopen in Container`. The first time running this command will take a while as the remote development container is built.
 You can also open this project in a remote container by opening the command palette (CMD+Shift+P), and navigate to `Dev Containers: Reopen in Container`.
+
+### Pre-Commit Hook
+
+You can optionally enable a pre-commit hook that will ensure code auto-formatting and linting has run before you commit your change. While not necessary, it can help make sure a commit will pass CI before it is pushed.
+
+To install on your local machine, install via `pip install pre-commit`, then run `pre-commit install` to register this project's pre-commit hooks.
+
+By default, `pre-commit` only runs on files that were changed. When installing `pre-commit` for the first time, you can optionally run `pre-commit run --all-files` to run the hooks against all files.
