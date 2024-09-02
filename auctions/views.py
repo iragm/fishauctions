@@ -5631,7 +5631,7 @@ class BlogPostView(DetailView):
         blogpost = self.get_object()
         # this is to allow the chart# syntax
         context["formatted_contents"] = re.sub(
-            r"chart\d", "<canvas id=\g<0>></canvas>", blogpost.body_rendered
+            r"chart\d", r"<canvas id=\g<0>></canvas>", blogpost.body_rendered
         )
         return context
 

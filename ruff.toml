@@ -34,5 +34,5 @@ extend-select = [
     "TID",  # flake8-tidy-imports
     # "T20",  # flake8-print
     "UP",   # pyupgrade
-    # "W",    # pycodestyle warnings
+    "W",    # pycodestyle warnings
 ]

@@ -189,19 +189,19 @@ def distance_to(
     approximate_distance_to=10,
 ):
     """
-	GeoDjango has been fustrating with MySQL and Point objects.
-	This function is a workaound done using raw SQL.
+    GeoDjango has been fustrating with MySQL and Point objects.
+    This function is a workaound done using raw SQL.
 
-	Given a latitude and longitude, it will return raw SQL that can be used to annotate a queryset
+    Given a latitude and longitude, it will return raw SQL that can be used to annotate a queryset
 
-	The model being annotated must have fields named 'latitude' and 'longitude' for this to work
+    The model being annotated must have fields named 'latitude' and 'longitude' for this to work
 
-	For example:
+    For example:
 
-	qs = model.objects.all()\
-			.annotate(distance=distance_to(latitude, longitude))\
-			.order_by('distance')
-	"""
+    qs = model.objects.all()\
+            .annotate(distance=distance_to(latitude, longitude))\
+            .order_by('distance')
+    """
     if unit == "miles":
         correction = 0.6213712  # close enough
     else:
@@ -219,10 +219,10 @@ def distance_to(
             )
     # Great circle distance formula, CEILING is used to keep people from triangulating locations
     gcd_formula = f"CEILING( 6371 * acos(least(greatest( \
-		cos(radians({latitude})) * cos(radians({lat_field_name})) \
-		* cos(radians({lng_field_name}) - radians({longitude})) + \
-		sin(radians({latitude})) * sin(radians({lat_field_name})) \
-		, -1), 1)) * {correction} / {approximate_distance_to}) * {approximate_distance_to}"
+        cos(radians({latitude})) * cos(radians({lat_field_name})) \
+        * cos(radians({lng_field_name}) - radians({longitude})) + \
+        sin(radians({latitude})) * sin(radians({lat_field_name})) \
+        , -1), 1)) * {correction} / {approximate_distance_to}) * {approximate_distance_to}"
     distance_raw_sql = RawSQL(gcd_formula, ())
     # This one works fine when I print qs.query and run the output in SQL but does not work when Django runs the qs
     # Seems to be an issue with annotating on related entities
@@ -1591,11 +1591,11 @@ class AuctionTOS(models.Model):
                 and self.unprinted_label_count != self.print_labels_qs.count()
             ):
                 result += f"""
-				<button type="button" class="btn btn-sm btn-secondary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-				</button>
-				<div class="dropdown-menu">
-					<a href='{unprinted_url}'>Print only {self.unprinted_label_count} unprinted labels</a>
-				</div>"""
+                <button type="button" class="btn btn-sm btn-secondary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                </button>
+                <div class="dropdown-menu">
+                    <a href='{unprinted_url}'>Print only {self.unprinted_label_count} unprinted labels</a>
+                </div>"""
             return html.format_html(result)
         return ""
 
@@ -1707,10 +1707,10 @@ class AuctionTOS(models.Model):
                 dont_use_these = ["13", "14", "15", "16", "17", "18", "19"]
                 search = None
                 if self.phone_number:
-                    search = re.search("([\d]{3}$)|$", self.phone_number).group()
+                    search = re.search(r"([\d]{3}$)|$", self.phone_number).group()
                 if not search or str(search) in dont_use_these:
                     if self.address:
-                        search = re.search("([\d]{3}$)|$", self.address).group()
+                        search = re.search(r"([\d]{3}$)|$", self.address).group()
                 if self.user:
                     userData, created = UserData.objects.get_or_create(
                         user=self.user,
