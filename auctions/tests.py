@@ -220,7 +220,7 @@ class AuctionModelTests(TestCase):
             quantity=1,
             description="",
         )
-        self.assertIs(lot.ended, True)
+        assert lot.ended is True
 
     def test_auction_start_and_end(self):
         timeStart = timezone.now() - datetime.timedelta(days=2)
@@ -228,9 +228,9 @@ class AuctionModelTests(TestCase):
         auction = Auction.objects.create(
             title="A test auction", date_end=timeEnd, date_start=timeStart
         )
-        self.assertIs(auction.closed, False)
-        self.assertIs(auction.ending_soon, True)
-        self.assertIs(auction.started, True)
+        assert auction.closed is False
+        assert auction.ending_soon is True
+        assert auction.started is True
 
 
 class LotModelTests(TestCase):
@@ -248,7 +248,7 @@ class LotModelTests(TestCase):
             quantity=1,
             description="",
         )
-        self.assertIs(testLot.ended, False)
+        assert testLot.ended is False
 
     def test_calculated_end_bidding_open(self):
         """
@@ -264,7 +264,7 @@ class LotModelTests(TestCase):
             quantity=1,
             description="",
         )
-        self.assertIs(testLot.ended, True)
+        assert testLot.ended is True
 
     def test_lot_with_no_bids(self):
         time = timezone.now() + datetime.timedelta(days=30)
@@ -276,7 +276,7 @@ class LotModelTests(TestCase):
             user=user,
             description="",
         )
-        self.assertIs(lot.high_bid, 5)
+        assert lot.high_bid == 5
 
     def test_lot_with_one_bids(self):
         time = timezone.now() + datetime.timedelta(days=30)
@@ -291,8 +291,8 @@ class LotModelTests(TestCase):
         )
         user = User.objects.create(username="Test user")
         Bid.objects.create(user=user, lot_number=lot, amount=10)
-        self.assertIs(lot.high_bidder.pk, user.pk)
-        self.assertIs(lot.high_bid, 5)
+        assert lot.high_bidder.pk is user.pk
+        assert lot.high_bid == 5
 
     def test_lot_with_two_bids(self):
         time = timezone.now() + datetime.timedelta(days=30)
@@ -309,8 +309,8 @@ class LotModelTests(TestCase):
         userB = User.objects.create(username="Test user B")
         Bid.objects.create(user=userA, lot_number=lot, amount=10)
         Bid.objects.create(user=userB, lot_number=lot, amount=6)
-        self.assertIs(lot.high_bidder.pk, userA.pk)
-        self.assertIs(lot.high_bid, 7)
+        assert lot.high_bidder.pk is userA.pk
+        assert lot.high_bid == 7
 
     def test_lot_with_two_changing_bids(self):
         time = timezone.now() + datetime.timedelta(days=30)
@@ -326,29 +326,29 @@ class LotModelTests(TestCase):
         jeff = User.objects.create(username="Jeff")
         gary = User.objects.create(username="Gary")
         jeffBid = Bid.objects.create(user=jeff, lot_number=lot, amount=20)
-        self.assertIs(lot.high_bidder.pk, jeff.pk)
-        self.assertIs(lot.high_bid, 20)
+        assert lot.high_bidder.pk is jeff.pk
+        assert lot.high_bid == 20
         garyBid = Bid.objects.create(user=gary, lot_number=lot, amount=20)
-        self.assertIs(lot.high_bidder.pk, jeff.pk)
-        self.assertIs(lot.high_bid, 20)
+        assert lot.high_bidder.pk is jeff.pk
+        assert lot.high_bid == 20
         # check the order
         jeffBid.last_bid_time = timezone.now()
         jeffBid.save()
-        self.assertIs(lot.high_bidder.pk, gary.pk)
-        self.assertIs(lot.high_bid, 20)
+        assert lot.high_bidder.pk is gary.pk
+        assert lot.high_bid == 20
         garyBid.amount = 30
         garyBid.save()
-        self.assertIs(lot.high_bidder.pk, gary.pk)
-        self.assertIs(lot.high_bid, 21)
+        assert lot.high_bidder.pk is gary.pk
+        assert lot.high_bid == 21
         garyBid.last_bid_time = timezone.now()
         garyBid.save()
-        self.assertIs(lot.high_bidder.pk, gary.pk)
-        self.assertIs(lot.high_bid, 21)
+        assert lot.high_bidder.pk is gary.pk
+        assert lot.high_bid == 21
         jeffBid.amount = 30
         jeffBid.last_bid_time = timezone.now()
         jeffBid.save()
-        self.assertIs(lot.high_bidder.pk, gary.pk)
-        self.assertIs(lot.high_bid, 30)
+        assert lot.high_bidder.pk is gary.pk
+        assert lot.high_bid == 30
 
     def test_lot_with_tie_bids(self):
         time = timezone.now() + datetime.timedelta(days=30)
@@ -371,9 +371,9 @@ class LotModelTests(TestCase):
         bidA.save()
         bidB.last_bid_time = tenDaysAgo
         bidB.save()
-        self.assertIs(lot.high_bidder.pk, userB.pk)
-        self.assertIs(lot.high_bid, 6)
-        self.assertIs(lot.max_bid, 6)
+        assert lot.high_bidder.pk is userB.pk
+        assert lot.high_bid == 6
+        assert lot.max_bid == 6
 
     def test_lot_with_three_and_two_tie_bids(self):
         time = timezone.now() + datetime.timedelta(days=30)
@@ -401,9 +401,9 @@ class LotModelTests(TestCase):
         bidB.save()
         bidC.last_bid_time = oneDaysAgo
         bidC.save()
-        self.assertIs(lot.high_bidder.pk, userB.pk)
-        self.assertIs(lot.high_bid, 7)
-        self.assertIs(lot.max_bid, 7)
+        assert lot.high_bidder.pk is userB.pk
+        assert lot.high_bid == 7
+        assert lot.max_bid == 7
 
     def test_lot_with_two_bids_one_after_end(self):
         time = timezone.now() + datetime.timedelta(days=30)
@@ -423,8 +423,8 @@ class LotModelTests(TestCase):
         bidA.last_bid_time = afterEndTime
         bidA.save()
         Bid.objects.create(user=userB, lot_number=lot, amount=6)
-        self.assertIs(lot.high_bidder.pk, userB.pk)
-        self.assertIs(lot.high_bid, 5)
+        assert lot.high_bidder.pk is userB.pk
+        assert lot.high_bid == 5
 
     def test_lot_with_one_bids_below_reserve(self):
         time = timezone.now() + datetime.timedelta(days=30)
@@ -439,8 +439,8 @@ class LotModelTests(TestCase):
         )
         user = User.objects.create(username="Test user")
         Bid.objects.create(user=user, lot_number=lot, amount=2)
-        self.assertIs(lot.high_bidder, False)
-        self.assertIs(lot.high_bid, 5)
+        assert lot.high_bidder is False
+        assert lot.high_bid == 5
 
 
 class ChatSubscriptionTests(TestCase):
@@ -489,7 +489,7 @@ class ChatSubscriptionTests(TestCase):
         sub.save()
         ChatSubscription.objects.create(lot=someone_elses_lot, user=lotuser)
         data = lotuser.userdata
-        self.assertIs(data.unnotified_subscriptions_count, 0)
+        assert data.unnotified_subscriptions_count == 0
         ten_minutes_ago = timezone.now() - datetime.timedelta(minutes=10)
         ten_minutes_in_the_future = timezone.now() + datetime.timedelta(minutes=10)
         twenty_minutes_in_the_future = timezone.now() + datetime.timedelta(minutes=20)
@@ -509,10 +509,10 @@ class ChatSubscriptionTests(TestCase):
         )
         history.timestamp = ten_minutes_ago
         history.save()
-        self.assertIs(data.subscriptions.count(), 3)
-        self.assertIs(data.my_lot_subscriptions_count, 0)
-        self.assertIs(data.other_lot_subscriptions_count, 0)
-        self.assertIs(data.unnotified_subscriptions_count, 0)
+        assert data.subscriptions.count() == 3
+        assert data.my_lot_subscriptions_count == 0
+        assert data.other_lot_subscriptions_count == 0
+        assert data.unnotified_subscriptions_count == 0
         history = LotHistory.objects.create(
             user=chatuser,
             lot=my_lot,
@@ -521,7 +521,7 @@ class ChatSubscriptionTests(TestCase):
         )
         history.timestamp = ten_minutes_in_the_future
         history.save()
-        self.assertIs(data.unnotified_subscriptions_count, 0)
+        assert data.unnotified_subscriptions_count == 0
         history = LotHistory.objects.create(
             user=chatuser,
             lot=my_lot,
@@ -530,7 +530,7 @@ class ChatSubscriptionTests(TestCase):
         )
         history.timestamp = twenty_minutes_in_the_future
         history.save()
-        self.assertIs(data.unnotified_subscriptions_count, 1)
+        assert data.unnotified_subscriptions_count == 1
         history = LotHistory.objects.create(
             user=chatuser,
             lot=someone_elses_lot,
@@ -539,7 +539,7 @@ class ChatSubscriptionTests(TestCase):
         )
         history.timestamp = twenty_minutes_in_the_future
         history.save()
-        self.assertIs(data.other_lot_subscriptions_count, 1)
+        assert data.other_lot_subscriptions_count == 1
         history = LotHistory.objects.create(
             user=chatuser,
             lot=someone_elses_lot,
@@ -564,7 +564,7 @@ class ChatSubscriptionTests(TestCase):
         )
         history.timestamp = twenty_minutes_in_the_future
         history.save()
-        self.assertIs(data.my_lot_subscriptions_count, 1)
+        assert data.my_lot_subscriptions_count == 1
         history = LotHistory.objects.create(
             user=chatuser,
             lot=my_lot_that_is_unsubscribed,
@@ -581,61 +581,59 @@ class ChatSubscriptionTests(TestCase):
         )
         history.timestamp = twenty_minutes_in_the_future
         history.save()
-        self.assertIs(data.my_lot_subscriptions_count, 1)
-        self.assertIs(data.other_lot_subscriptions_count, 1)
+        assert data.my_lot_subscriptions_count == 1
+        assert data.other_lot_subscriptions_count == 1
 
 
 class InvoiceModelTests(StandardTestCase):
     def test_invoices(self):
-        self.assertEqual(self.invoice.auction, self.online_auction)
+        assert self.invoice.auction == self.online_auction
 
-        self.assertEqual(self.invoiceB.flat_value_adjustments, 0)
-        self.assertEqual(self.invoiceB.percent_value_adjustments, 0)
+        assert self.invoiceB.flat_value_adjustments == 0
+        assert self.invoiceB.percent_value_adjustments == 0
 
-        self.assertEqual(self.invoiceB.total_sold, 0)
-        self.assertEqual(self.invoiceB.total_bought, 30)
-        self.assertEqual(self.invoiceB.subtotal, -30)
-        self.assertEqual(self.invoiceB.tax, 7.5)
-        self.assertEqual(self.invoiceB.net, -37.5)
-        self.assertEqual(self.invoiceB.rounded_net, -37)
-        self.assertEqual(self.invoiceB.absolute_amount, 37)
-        self.assertEqual(self.invoiceB.lots_sold, 0)
-        self.assertEqual(self.invoiceB.lots_sold_successfully_count, 0)
-        self.assertEqual(self.invoiceB.unsold_lots, 0)
-        self.assertEqual(self.invoiceB.lots_bought, 3)
+        assert self.invoiceB.total_sold == 0
+        assert self.invoiceB.total_bought == 30
+        assert self.invoiceB.subtotal == -30
+        assert self.invoiceB.tax == 7.5
+        assert self.invoiceB.net == -37.5
+        assert self.invoiceB.rounded_net == -37
+        assert self.invoiceB.absolute_amount == 37
+        assert self.invoiceB.lots_sold == 0
+        assert self.invoiceB.lots_sold_successfully_count == 0
+        assert self.invoiceB.unsold_lots == 0
+        assert self.invoiceB.lots_bought == 3
 
-        self.assertEqual(self.invoice.total_sold, 6.5)
-        self.assertEqual(self.invoice.total_bought, 0)
-        self.assertEqual(self.invoice.subtotal, 6.5)
-        self.assertEqual(self.invoice.tax, 0)
-        self.assertEqual(self.invoice.net, 6.5)
-        self.assertEqual(self.invoice.rounded_net, 7)
-        self.assertEqual(self.invoice.absolute_amount, 7)
-        self.assertEqual(self.invoice.lots_sold, 4)
-        self.assertEqual(self.invoice.lots_sold_successfully_count, 3)
-        self.assertEqual(self.invoice.unsold_lots, 1)
-        self.assertEqual(self.invoice.lots_bought, 0)
-        self.assertEqual(self.invoiceB.location, self.location)
-        self.assertEqual(self.invoiceB.contact_email, "test@example.com")
-        self.assertTrue(self.invoiceB.is_online)
-        self.assertEqual(self.invoiceB.unsold_lot_warning, "")
-        self.assertEqual(
-            str(self.invoice), f"{self.tos.name}'s invoice for {self.tos.auction}"
-        )
+        assert self.invoice.total_sold == 6.5
+        assert self.invoice.total_bought == 0
+        assert self.invoice.subtotal == 6.5
+        assert self.invoice.tax == 0
+        assert self.invoice.net == 6.5
+        assert self.invoice.rounded_net == 7
+        assert self.invoice.absolute_amount == 7
+        assert self.invoice.lots_sold == 4
+        assert self.invoice.lots_sold_successfully_count == 3
+        assert self.invoice.unsold_lots == 1
+        assert self.invoice.lots_bought == 0
+        assert self.invoiceB.location == self.location
+        assert self.invoiceB.contact_email == "test@example.com"
+        assert self.invoiceB.is_online
+        assert self.invoiceB.unsold_lot_warning == ""
+        assert str(self.invoice) == f"{self.tos.name}'s invoice for {self.tos.auction}"
 
         # adjustments
         self.adjustment_add.amount = 0
         self.adjustment_add.save()
-        self.assertEqual(self.invoiceB.net, -27.5)
+        assert self.invoiceB.net == -27.5
         self.adjustment_discount.amount = 0
         self.adjustment_discount.save()
-        self.assertEqual(self.invoiceB.net, -37.5)
+        assert self.invoiceB.net == -37.5
         self.adjustment_add_percent.amount = 0
         self.adjustment_add_percent.save()
-        self.assertEqual(self.invoiceB.net, -34.5)
+        assert self.invoiceB.net == -34.5
         self.adjustment_discount_percent.amount = 0
         self.adjustment_discount_percent.save()
-        self.assertEqual(self.invoiceB.net, -37.5)
+        assert self.invoiceB.net == -37.5
 
 
 class LotPricesTests(TestCase):
@@ -714,44 +712,44 @@ class LotPricesTests(TestCase):
         lots = add_price_info(lots)
 
         lot = lots.filter(pk=self.lot.pk).first()
-        self.assertEqual(lot.your_cut, 5.5)
+        assert lot.your_cut == 5.5
         unsold_lot = lots.filter(pk=self.unsold_lot.pk).first()
-        self.assertEqual(unsold_lot.your_cut, -10)
+        assert unsold_lot.your_cut == -10
         sold_no_auction_lot = lots.filter(pk=self.sold_no_auction_lot.pk).first()
-        self.assertEqual(sold_no_auction_lot.your_cut, 10)
+        assert sold_no_auction_lot.your_cut == 10
         unsold_no_auction_lot = lots.filter(pk=self.unsold_no_auction_lot.pk).first()
-        self.assertEqual(unsold_no_auction_lot.your_cut, 0)
+        assert unsold_no_auction_lot.your_cut == 0
 
         self.auction.winning_bid_percent_to_club = 50
         self.auction.winning_bid_percent_to_club_for_club_members = 0
         self.auction.save()
         lot = lots.filter(pk=self.lot.pk).first()
-        self.assertEqual(lot.your_cut, 3.0)
+        assert lot.your_cut == 3.0
         unsold_lot = lots.filter(pk=self.unsold_lot.pk).first()
-        self.assertEqual(unsold_lot.your_cut, -10)
+        assert unsold_lot.your_cut == -10
 
         self.tos.is_club_member = True
         self.tos.save()
         lot = lots.filter(pk=self.lot.pk).first()
-        self.assertEqual(lot.your_cut, 10)
+        assert lot.your_cut == 10
         # print(lot.winning_price, lot.your_cut)
         unsold_lot = lots.filter(pk=self.unsold_lot.pk).first()
-        self.assertEqual(unsold_lot.your_cut, -10)
+        assert unsold_lot.your_cut == -10
 
         self.auction.winning_bid_percent_to_club_for_club_members = 50
         self.auction.pre_register_lot_discount_percent = 10
         self.auction.save()
         lot = lots.filter(pk=self.lot.pk).first()
-        self.assertEqual(lot.your_cut, 5)
+        assert lot.your_cut == 5
         unsold_lot = lots.filter(pk=self.unsold_lot.pk).first()
-        self.assertEqual(unsold_lot.your_cut, -10)
+        assert unsold_lot.your_cut == -10
 
         self.auction.lot_entry_fee_for_club_members = 1
         self.auction.save()
         lot = lots.filter(pk=self.lot.pk).first()
-        self.assertEqual(lot.your_cut, 4)
+        assert lot.your_cut == 4
         unsold_lot = lots.filter(pk=self.unsold_lot.pk).first()
-        self.assertEqual(unsold_lot.your_cut, -10)
+        assert unsold_lot.your_cut == -10
 
         self.lot.partial_refund_percent = 25
         self.lot.save()
@@ -759,14 +757,14 @@ class LotPricesTests(TestCase):
         self.unsold_lot.save()
 
         lot = lots.filter(pk=self.lot.pk).first()
-        self.assertEqual(lot.your_cut, 3.0)
+        assert lot.your_cut == 3.0
         unsold_lot = lots.filter(pk=self.unsold_lot.pk).first()
-        self.assertEqual(unsold_lot.your_cut, -10)
+        assert unsold_lot.your_cut == -10
 
         self.lot.donation = True
         self.lot.save()
         lot = lots.filter(pk=self.lot.pk).first()
-        self.assertEqual(lot.your_cut, 0)
+        assert lot.your_cut == 0
 
 
 class SetLotWinnerViewTest(TestCase):
@@ -838,17 +836,15 @@ class SetLotWinnerViewTest(TestCase):
                 "auction": 5,  # this is not used anywhere, but still required
             },
         )
-        self.assertEqual(
-            response.status_code, 302
-        )  # Should redirect after successful form submission
+        assert response.status_code == 302  # Should redirect after successful form submission
         updated_lot = Lot.objects.get(pk=self.lot.pk)
-        self.assertEqual(updated_lot.auctiontos_winner, self.bidder)
-        self.assertEqual(updated_lot.winning_price, 100)
+        assert updated_lot.auctiontos_winner == self.bidder
+        assert updated_lot.winning_price == 100
         response = self.client.get(url, {"undo": self.lot.custom_lot_number})
-        self.assertEqual(response.status_code, 200)
+        assert response.status_code == 200
         updated_lot = Lot.objects.get(pk=self.lot.pk)
-        self.assertIsNone(updated_lot.auctiontos_winner)
-        self.assertIsNone(updated_lot.winning_price)
+        assert updated_lot.auctiontos_winner is None
+        assert updated_lot.winning_price is None
 
     def test_invalid_form_submission(self):
         url = reverse("auction_lot_winners_images", kwargs={"slug": self.auction.slug})
@@ -863,12 +859,10 @@ class SetLotWinnerViewTest(TestCase):
                 "auction": 5,
             },
         )
-        self.assertEqual(
-            response.status_code, 200
-        )  # Form should not be submitted successfully
+        assert response.status_code == 200  # Form should not be submitted successfully
         updated_lot = Lot.objects.get(pk=self.lot.pk)
-        self.assertIsNone(updated_lot.auctiontos_winner)
-        self.assertIsNone(updated_lot.winning_price)
+        assert updated_lot.auctiontos_winner is None
+        assert updated_lot.winning_price is None
 
     def test_seller_invoice_closed(self):
         self.invoice = Invoice.objects.get(auctiontos_user=self.seller)
@@ -886,12 +880,10 @@ class SetLotWinnerViewTest(TestCase):
                 "auction": 5,
             },
         )
-        self.assertEqual(
-            response.status_code, 200
-        )  # Form should not be submitted successfully
+        assert response.status_code == 200  # Form should not be submitted successfully
         updated_lot = Lot.objects.get(pk=self.lot.pk)
-        self.assertIsNone(updated_lot.auctiontos_winner)
-        self.assertIsNone(updated_lot.winning_price)
+        assert updated_lot.auctiontos_winner is None
+        assert updated_lot.winning_price is None
 
     def test_winner_invoice_closed(self):
         self.invoice = Invoice.objects.create(auctiontos_user=self.bidder)
@@ -909,12 +901,10 @@ class SetLotWinnerViewTest(TestCase):
                 "auction": 5,
             },
         )
-        self.assertEqual(
-            response.status_code, 200
-        )  # Form should not be submitted successfully
+        assert response.status_code == 200  # Form should not be submitted successfully
         updated_lot = Lot.objects.get(pk=self.lot.pk)
-        self.assertIsNone(updated_lot.auctiontos_winner)
-        self.assertIsNone(updated_lot.winning_price)
+        assert updated_lot.auctiontos_winner is None
+        assert updated_lot.winning_price is None
 
     def test_winner_not_found(self):
         self.client.login(username="testuser", password="testpassword")
@@ -929,12 +919,10 @@ class SetLotWinnerViewTest(TestCase):
                 "auction": 5,
             },
         )
-        self.assertEqual(
-            response.status_code, 200
-        )  # Form should not be submitted successfully
+        assert response.status_code == 200  # Form should not be submitted successfully
         updated_lot = Lot.objects.get(pk=self.lot.pk)
-        self.assertIsNone(updated_lot.auctiontos_winner)
-        self.assertIsNone(updated_lot.winning_price)
+        assert updated_lot.auctiontos_winner is None
+        assert updated_lot.winning_price is None
 
     def test_lot_not_found(self):
         self.client.login(username="testuser", password="testpassword")
@@ -949,9 +937,7 @@ class SetLotWinnerViewTest(TestCase):
                 "auction": 5,
             },
         )
-        self.assertEqual(
-            response.status_code, 200
-        )  # Form should not be submitted successfully
+        assert response.status_code == 200  # Form should not be submitted successfully
 
     def test_lot_already_sold(self):
         self.lot.auctiontos_winner = self.bidder
@@ -969,16 +955,10 @@ class SetLotWinnerViewTest(TestCase):
                 "auction": 5,
             },
         )
-        self.assertEqual(
-            response.status_code, 200
-        )  # Form should not be submitted successfully
+        assert response.status_code == 200  # Form should not be submitted successfully
         updated_lot = Lot.objects.get(pk=self.lot.pk)
-        self.assertEqual(
-            updated_lot.auctiontos_winner, self.bidder
-        )  # Lot winner should remain unchanged
-        self.assertEqual(
-            updated_lot.winning_price, 100
-        )  # Winning price should remain unchanged
+        assert updated_lot.auctiontos_winner == self.bidder  # Lot winner should remain unchanged
+        assert updated_lot.winning_price == 100  # Winning price should remain unchanged
 
 
 class LotRefundDialogTests(TestCase):
@@ -1047,20 +1027,20 @@ class LotRefundDialogTests(TestCase):
         response = self.client.get(
             reverse("lot_refund", kwargs={"pk": self.lot_not_in_auction.pk})
         )
-        self.assertEqual(response.status_code, 404)
+        assert response.status_code == 404
 
     def test_get_lot_refund_dialog(self):
         response = self.client.get(self.lot_url)
-        self.assertEqual(response.status_code, 200)
+        assert response.status_code == 200
         self.assertTemplateUsed(response, "auctions/generic_admin_form.html")
 
     def test_post_lot_refund_dialog(self):
         data = {"partial_refund_percent": 50, "banned": False}
         response = self.client.post(self.lot_url, data)
-        self.assertEqual(response.status_code, 200)
+        assert response.status_code == 200
         self.assertContains(response, "<script>location.reload();</script>")
 
         # Check if the lot was updated
         updated_lot = Lot.objects.get(pk=self.lot.pk)
-        self.assertEqual(updated_lot.partial_refund_percent, 50)
-        self.assertEqual(updated_lot.banned, False)
+        assert updated_lot.partial_refund_percent == 50
+        assert updated_lot.banned is False

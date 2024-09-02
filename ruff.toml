@@ -25,7 +25,7 @@ extend-select = [
     "LOG",  # flake8-logging
     # "N",    # pep8-naming
     # "PL",   # pylint
-    # "PT",   # flake8-pytest-style
+    "PT",   # flake8-pytest-style
     "PTH",  # flake8-use-pathlib
     # "RET",  # flake8-return
     # "RUF",  # ruff-specific rules
