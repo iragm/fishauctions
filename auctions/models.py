@@ -4285,7 +4285,7 @@ class LotImage(models.Model):
         upload_to="images/",
         blank=False,
         null=False,
-        resize_source=dict(size=(600, 600), quality=85),
+        resize_source={"size": (600, 600), "quality": 85},
     )
     image.help_text = "Select an image to upload"
     image_source = models.CharField(max_length=20, choices=PIC_CATEGORIES, blank=True)

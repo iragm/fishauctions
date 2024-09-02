@@ -415,7 +415,7 @@ class LotFilter(django_filters.FilterSet):
             ).distinct()
         else:
             self.possibleAuctions = self.possibleAuctions.filter(specialAuctions)
-        auction_choices = list((o.slug, o.title) for o in self.possibleAuctions)
+        auction_choices = [(o.slug, o.title) for o in self.possibleAuctions]
         super().__init__(*args, **kwargs)  # this must go above filters
         self.filters["auction"].extra["choices"] = [
             {"no_auction": "noAuction", "No auction": "title"}
@@ -449,7 +449,7 @@ class LotFilter(django_filters.FilterSet):
     )
 
     def ships_choices(self):
-        choices = list((o.pk, o.name) for o in Location.objects.all().order_by("name"))
+        choices = [(o.pk, o.name) for o in Location.objects.all().order_by("name")]
         return [{"local_only": "local", "Local pickup": "title"}] + choices
 
     def generate_attrs(placeholder="", tooltip=""):
