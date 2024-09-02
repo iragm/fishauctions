@@ -6,12 +6,12 @@
 {% block content %}
   {% include 'auction_ribbon.html' %}
   <small>This is a list of people in your auction.  Click on a name to edit that user.<br></small>
-  <button class='btn btn-sm btn-info' 
+  <button class='btn btn-sm btn-info'
     hx-get="/api/auctiontos/{{auction.slug}}/"
     hx-target="#modals-here"
     hx-trigger="click"
     _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"><i class="bi bi-person-fill-add"></i>Add user</button>
-    
+
     <span class="dropdown">
       <button class="btn btn-sm mt-2 mb-2 btn-primary dropdown-toggle" type="button" id="dropdownMenuButton" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
         <i class="bi bi-download"></i> Export
@@ -54,7 +54,7 @@
         </label>
         <label class="dropdown-item ">
           <input type="checkbox" class="invoice_filter" id="checkbox_email_good"> <i class="bi bi-envelope-check-fill"></i> Only verified email
-        </label>                
+        </label>
         <span class="text-muted dropdown-item"><small>Users with an invoice that is:</small></span>
         <label class="dropdown-item ">
           <input type="checkbox" class="invoice_filter" id="checkbox_open"> <i class="bi bi-bag"></i> Open

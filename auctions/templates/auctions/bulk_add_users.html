@@ -6,7 +6,7 @@
 {% block content %}
   {% include 'auction_ribbon.html' %}
   <br>
-  
+
   <div class="btn-group">
   {% if request.user.is_superuser %}<input type="file" name="csv_file" id="csv_file" accept=".csv" hx-encoding="multipart/form-data" hx-post="{% url 'bulk_add_users' auction.slug %}" hx-swap="outerHTML" hx-target="body" style="display: none;">
   <button class="btn btn-primary btn-sm  ms-2 me-2" onclick="document.getElementById('csv_file').click()"><i class="bi bi-person-fill-up"></i> Import from CSV</button>{% endif %}
@@ -44,8 +44,8 @@ function cloneMore(selector, type) {
     newElement.find(':input').each(function() {
         var name = $(this).attr('name').replace('-' + (total-1) + '-','-' + total + '-');
         var id = 'id_' + name;
-        $(this).attr({'name': name, 'id': id}).removeAttr('checked'); // keep last row's values 
-        //$(this).attr({'name': name, 'id': id}).val('').removeAttr('checked'); // blank rows 
+        $(this).attr({'name': name, 'id': id}).removeAttr('checked'); // keep last row's values
+        //$(this).attr({'name': name, 'id': id}).val('').removeAttr('checked'); // blank rows
     });
     newElement.find('label').each(function() {
         var newFor = $(this).attr('for').replace('-' + (total-1) + '-','-' + total + '-');

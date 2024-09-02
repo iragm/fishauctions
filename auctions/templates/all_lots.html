@@ -30,7 +30,7 @@ Your lots{% else %}
 {% block content %}
 {% if routeByLastAuction and auction %}
 <div class="alert alert-secondary alert-dismissible fade show" role="alert">{{ auction }} is the last auction you joined.  <a href="/lots/">View all lots instead</a>
-  <button type="button" class="btn-close bg-info" data-bs-dismiss="alert"></button>  
+  <button type="button" class="btn-close bg-info" data-bs-dismiss="alert"></button>
   </div>
 {% endif %}
 <h3>
@@ -56,12 +56,12 @@ Your lots{% else %}
       Lots you've won
       {% endif %}
       {% endif %}</h3>
-    
+
     <div class="offcanvas offcanvas-start" tabindex="-1" id="search-form" aria-labelledby="search-form">
       <div class="offcanvas-header">
         <h5 class="offcanvas-title" id="offcanvasExampleLabel">Search and filter</h5>
         <button type="button" class="btn-close text-reset bg-light" data-bs-dismiss="offcanvas" aria-label="Close"></button>
-      </div> 
+      </div>
         <div class="offcanvas-body">
         <!-- <div class="bs-canvas-content px-3 py-5 bg-dark"> -->
           {% if view == "user" %}
@@ -83,15 +83,15 @@ Your lots{% else %}
                   Join this auction <a href="/auctions/{{auction.slug}}/">at the bottom of this page</a> to participate
                   {%endif%}
                 {%endif%}
-              {% else %} 
+              {% else %}
                 {# {% if not auction.started and not auction.closed %}This auction hasn't started yet.  You can add lots starting {{ auction.date_start }} {%endif%} #}
               {% endif %}
             {% endif %}
             {% endif %}
           </form>
         </div>
-    </div>       
-        
+    </div>
+
 {% include page_template %}
 {% endblock %}
 
@@ -102,7 +102,7 @@ Your lots{% else %}
     <script>$.endlessPaginate({
       onCompleted: function(context, fragment) {
         $('[data-toggle="tooltip"]').tooltip();
-        {% if show_ads %} 
+        {% if show_ads %}
         function displayGoogleAds(){
             // $('ins').each(function(){
             //     (adsbygoogle = window.adsbygoogle || []).push({});
@@ -119,7 +119,7 @@ Your lots{% else %}
       // {% endif %}
       {% if search_button_tooltip %}
       $(document).ready(function(){
-          $('#search-form-toggle').attr('data-bs-title', "{{ search_button_tooltip }}").tooltip('show');  
+          $('#search-form-toggle').attr('data-bs-title', "{{ search_button_tooltip }}").tooltip('show');
         });
         {% endif %}
       </script>

@@ -5,7 +5,7 @@
 
 {% block table.thead %}
   {% if table.show_header %}
-  <div class="table-responsive"> 
+  <div class="table-responsive">
     <thead {{ table.attrs.thead.as_html }}>
       <tr>
           {% for column in table.columns %}
@@ -42,7 +42,7 @@
 {% block pagination.range %}
     {% for p in table.page|table_page_range:table.paginator %}
         <li class="page-item{% if table.page.number == p %} active{% endif %}">
-            <div class="page-link" 
+            <div class="page-link"
                  {% if p != '...' %}hx-get="{% querystring table.prefixed_page_field=p %}"{% endif %}
                  hx-trigger="click"
                  hx-target="div.table-container"

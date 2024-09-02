@@ -48,7 +48,7 @@ function initMap() {
         '</div>'],
         {% endfor %}
     ];
-    var infoWindow = new google.maps.InfoWindow(), marker, i; 
+    var infoWindow = new google.maps.InfoWindow(), marker, i;
     for( i = 0; i < markers.length; i++ ) {
         var position = new google.maps.LatLng(markers[i][1], markers[i][2]);
         bounds.extend(position);
@@ -62,7 +62,7 @@ function initMap() {
                 infoWindow.setContent(infoWindowContent[i][0]);
                 infoWindow.open(map, marker);
             }
-        })(marker, i));       
+        })(marker, i));
     }
 }
 </script>

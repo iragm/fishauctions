@@ -12,14 +12,14 @@
     <a id='sign-in-google' class='btn btn-primary' href="/google/login/?process=login&next={{ redirect_field_value }}">Sign in with your Google account</a>
 
       <br><br><h5>Don't have a Google account?  Sign in with your account on this site:</h5>
-     
+
     <form class="login" method="POST" action="{% url 'account_login' %}">
       {% csrf_token %}
       {{ form | crispy }}
       {% if redirect_field_value %}
       <input type="hidden" name="{{ redirect_field_name }}" value="{{ redirect_field_value }}" />
       {% endif %}
-      
+
       <a class='btn btn-primary' href="{{ signup_url }}">Create a new account</a> <a class="btn btn-secondary" href="{% url 'account_reset_password' %}">{% trans "Forgot Password" %}</a> <button id='sign-in-local' class="btn btn-success" type="submit">{% trans "Sign In" %}</button>
     </form>
 

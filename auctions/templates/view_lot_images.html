@@ -10,7 +10,7 @@
 <script type="text/javascript">
 
 $( "#buy-now" ).click(function() {
-    $('#bid_amount').val(Number('{{ lot.buy_now_price }}'));    
+    $('#bid_amount').val(Number('{{ lot.buy_now_price }}'));
     $('#bid_button').click();
 });
 
@@ -143,7 +143,7 @@ f=e=d="text-white";break;case "success":c="bg-success";f=e=d="text-white";break;
                         {% if lot.video_link %}
                         <div class="carousel-item active">
                             <div class="ratio ratio-16x9">
-                                <iframe src="https://www.youtube.com/embed/{{ lot.video_link }}" 
+                                <iframe src="https://www.youtube.com/embed/{{ lot.video_link }}"
                                         title="YouTube video player" frameborder="0"
                                         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                                         allowfullscreen></iframe>
@@ -188,8 +188,8 @@ f=e=d="text-white";break;case "success":c="bg-success";f=e=d="text-white";break;
                     {% if lot.video_link %}
                     <button data-bs-target="#image_carousel" data-bs-slide-to="0" class="me-2 active thumbnail">
                             <img style="min-width: 100px;" src="{% static 'youtube.png' %}" class="rounded">
-                    </button>  
-                    {% endif %}                  
+                    </button>
+                    {% endif %}
                     {% for image in lot.images %}
                     <a href="#" data-bs-target="#image_carousel" data-bs-slide-to="{% if lot.video_link %}{{ forloop.counter }}{% else %}{{ forloop.counter0 }}{% endif %}"  class="me-2 {% if image.is_primary and not lot.video_link %}active{% endif %}">
                         <img style="min-width: 100px;" src="{{ image.image.lot_list.url }}" class="rounded">
@@ -197,7 +197,7 @@ f=e=d="text-white";break;case "success":c="bg-success";f=e=d="text-white";break;
                     {% endfor %}
                 </div>
                 {% endif %}
-            </div>            
+            </div>
             {% else %}
                 {% if lot.user == request.user %}
                 <div>You haven't added any images to this lot yet.  <a href="/blog/whats-a-picture-worth/" target="_blank">Lots with images are more likely to sell</a></div>
@@ -280,8 +280,8 @@ f=e=d="text-white";break;case "success":c="bg-success";f=e=d="text-white";break;
             </tr>
             <tr>
                 <td><b>Payment:</b></td><td>
-                    {% if lot.payment_other_method %}{{ lot.payment_other_method }}{% endif %} 
-                    {% if lot.payment_paypal %}<span class="badge text-dark bg-light">Paypal OK</span>{% endif %} 
+                    {% if lot.payment_other_method %}{{ lot.payment_other_method }}{% endif %}
+                    {% if lot.payment_paypal %}<span class="badge text-dark bg-light">Paypal OK</span>{% endif %}
                     {% if lot.payment_cash %}<span class="badge text-dark bg-light">Cash OK</span>{% endif %}
                 </td>
             </tr>
@@ -295,7 +295,7 @@ f=e=d="text-white";break;case "success":c="bg-success";f=e=d="text-white";break;
             <tr>
                 <td><b>Ends:</b></td><td><span id="end_date" class="{% if lot.ended %} {% endif %}">{{ lot.calculated_end_for_templates }}</span>{% if lot.ended %}<span class='badge-pill badge bg-danger'>Ended</span>{% endif %}</td>
             </tr>
-            
+
             {% if lot.auction and lot.auction.multi_location and lot.location %}
             <tr>
                 <td><b>Location:</b></td><td>{{ lot.location }}
@@ -316,7 +316,7 @@ f=e=d="text-white";break;case "success":c="bg-success";f=e=d="text-white";break;
             </tr>
             {% endif %}
         </table>
-        
+
         {% if lot.user == request.user %}<a href="/lots/new/?copy={{lot.pk}}" class="btn btn-info"><i class="bi bi-calendar-plus"></i> Copy to new lot</a>{% endif %}
         {% if not lot.auction %}
             {% if request.user.is_authenticated %}
@@ -453,8 +453,8 @@ f=e=d="text-white";break;case "success":c="bg-success";f=e=d="text-white";break;
         {% if request.user.is_authenticated %}
             <span id="watch" {% if watched %} class="watched text-warning">&#9733; Watching{% else %}>&#9734; Watch{% endif %}</span><br>
         {% endif %}
-        
-        
+
+
     {% if bids %}
         <h5>Remove bids</h5>
         {% for bid in bids %}
@@ -464,7 +464,7 @@ f=e=d="text-white";break;case "success":c="bg-success";f=e=d="text-white";break;
 
     </div>
   </div>
-</div>  
+</div>
 </div>
 
 <!-- confirm bid dialog -->
@@ -729,7 +729,7 @@ f=e=d="text-white";break;case "success":c="bg-success";f=e=d="text-white";break;
                         display: true,
                         text: 'User view durations (seconds) of this lot'
                     }
-                }    
+                }
             });
         }
     });

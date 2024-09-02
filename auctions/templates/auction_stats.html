@@ -21,13 +21,13 @@
                   datasets: [{
                       data: data.data,
                       backgroundColor: [
-                        'rgba(86, 53, 176, 0.4)', 
+                        'rgba(86, 53, 176, 0.4)',
                         'rgba(217, 211, 41, 0.4)',
                         'rgba(62, 184, 64, 0.4)',
-                        'rgba(166, 33, 27, 0.4)', 
+                        'rgba(166, 33, 27, 0.4)',
                       ],
                       hoverBackgroundColor: [
-                        'rgba(86, 53, 176, 0.8)',  
+                        'rgba(86, 53, 176, 0.8)',
                         'rgba(217, 211, 41, 0.8)',
                         'rgba(62, 184, 64, 0.8)',
                         'rgba(166, 33, 27, 0.8)',
@@ -66,7 +66,7 @@
               datasets: [{
                 data: data.data,
                 backgroundColor: [
-                  'rgba(86, 53, 176, 0.4)',  
+                  'rgba(86, 53, 176, 0.4)',
                   'rgba(53, 170, 176, 0.4)',
                   'rgba(53, 176, 106, 0.4)',
                   'rgba(73, 199, 48, 0.4)',
@@ -75,7 +75,7 @@
                   'rgba(235, 33, 33, 0.4)',
                 ],
                 hoverBackgroundColor: [
-                  'rgba(86, 53, 176, 0.8)',  
+                  'rgba(86, 53, 176, 0.8)',
                   'rgba(53, 170, 176, 0.8)',
                   'rgba(53, 176, 106, 0.8)',
                   'rgba(73, 199, 48, 0.8)',
@@ -162,16 +162,16 @@
                   </tr>
                   <tr>
                     <td>Users who bought or sold at least one item</td><td>{{auction.number_of_participants}}</td>
-                  </tr>                  
+                  </tr>
                   <tr>
                     <td>Buyers</td><td>{{auction.number_of_buyers}}</td>
-                  </tr>                  
+                  </tr>
                   <tr>
                     <td>Sellers</td><td>{{auction.number_of_sellers}}</td>
                   </tr>
                   <tr>
                     <td>Sellers who did not buy anything</td><td>{{auction.number_of_sellers_who_didnt_buy}}</td>
-                  </tr>                  
+                  </tr>
                   <tr>
                     <td>Users who preregistered through this site</td><td>{{auction.preregistered_users}}</td>
                   </tr>
@@ -190,7 +190,7 @@
 </script>
 This graph shows overall engagement of people with your auction.  You can gauge the effectiveness of advertising by tracking views and bids here.
 <p></p>
-            
+
             {% if auction.is_online %}
             <h4>User engagement</h4>
             Number of users who viewed lots, logged in, bid, and won lots in this auction.
@@ -231,7 +231,7 @@ This graph shows overall engagement of people with your auction.  You can gauge 
       </tr>
       <tr>
         <td>Seller payout</td><td>${{ auction.total_to_sellers|floatformat:2 }}</td>
-      </tr>                  
+      </tr>
   </tbody>
 </table>
 

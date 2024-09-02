@@ -1,5 +1,5 @@
 {% if not location.pickup_by_mail %}
-    {%if location.has_coordinates %}    
+    {%if location.has_coordinates %}
     <a href="{{location.directions_link}}">Get directions</a>
     {% endif %}
     {% if location.users_must_coordinate_pickup %}

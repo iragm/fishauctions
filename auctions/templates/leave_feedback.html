@@ -32,16 +32,16 @@ function feedback(pk, leave_as, rating, text) {
         if (text) {
           $("#text_" + pk + "_" + leave_as).addClass('is-valid');
         }
-        
-        if (rating === 1){ 
+
+        if (rating === 1){
           $("#1_" + pk + "_" + leave_as).addClass('btn-success');
           $("#-1_" + pk + "_" + leave_as).removeClass('btn-danger');
         }
-        if (rating === -1){ 
+        if (rating === -1){
           $("#-1_" + pk + "_" + leave_as).addClass('btn-danger');
           $("#1_" + pk + "_" + leave_as).removeClass('btn-success');
         }
-        if (rating === 0){ 
+        if (rating === 0){
           $("#-1_" + pk + "_" + leave_as).removeClass('btn-danger');
           $("#1_" + pk + "_" + leave_as).removeClass('btn-success');
         }
@@ -53,7 +53,7 @@ function feedback(pk, leave_as, rating, text) {
 {% block content %}
         <a href="{% url 'userpage' slug=request.user %}">See feedback that's been left for you on your account page</a>
         <br><br>
-        
+
         {% if not won_lots and not sold_lots%}
         <h5>Once you've bought or sold lots, you'll be able to leave feedback here</h5>
         {% endif %}

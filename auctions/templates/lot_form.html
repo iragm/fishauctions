@@ -33,7 +33,7 @@ function setAuction(setting) {
         $('#div_id_show_payment_pickup_info').show();
         setAuctionRequiredFields(false);
     }
-    
+
 }
 
 function setAuctionRequiredFields(val) {
@@ -80,14 +80,14 @@ function setAuctionRequiredFields(val) {
 
 $(document).ready(function() {
     if(document.getElementById('id_part_of_auction_0').checked) {
-        setAuction(true); 
+        setAuction(true);
     } else {
         setAuction(false);
     }
     if (document.getElementById('id_show_payment_pickup_info').checked) {
-        $('#payment_pickup_info').show(); 
+        $('#payment_pickup_info').show();
     } else {
-        $('#payment_pickup_info').hide(); 
+        $('#payment_pickup_info').hide();
     }
     $('#id_part_of_auction_0').change(function(data) {
         setAuction(true);
@@ -125,7 +125,7 @@ $(document).ready(function() {
             }
         }
     });
-    
+
 });
 </script>
 {% if new %}

@@ -17,8 +17,8 @@ function cloneMore(selector, type) {
     newElement.find(':input').each(function() {
         var name = $(this).attr('name').replace('-' + (total-1) + '-','-' + total + '-');
         var id = 'id_' + name;
-        $(this).attr({'name': name, 'id': id}).removeAttr('checked'); // keep last row's values 
-        //$(this).attr({'name': name, 'id': id}).val('').removeAttr('checked'); // blank rows 
+        $(this).attr({'name': name, 'id': id}).removeAttr('checked'); // keep last row's values
+        //$(this).attr({'name': name, 'id': id}).val('').removeAttr('checked'); // blank rows
     });
     newElement.find('label').each(function() {
         var newFor = $(this).attr('for').replace('-' + (total-1) + '-','-' + total + '-');
@@ -45,14 +45,14 @@ $('.form-control:not(#memo)').on('blur', function() {
   $('#invoice_control_buttons').hide()
   $('#form_dirty_warning').show()
 });
-$(document).ready(function(){  
+$(document).ready(function(){
   {% if invoice.status != "DRAFT" %}
     $('#adjustments_area').hide();
   {% endif %}
-  $(document).on('click', '#{{invoice.pk}}_UNPAID, #{{invoice.pk}}_PAID', function() {  
+  $(document).on('click', '#{{invoice.pk}}_UNPAID, #{{invoice.pk}}_PAID', function() {
     $('#adjustments_area').hide();
   });
-  $(document).on('click', '#{{invoice.pk}}_DRAFT', function() {  
+  $(document).on('click', '#{{invoice.pk}}_DRAFT', function() {
     $('#adjustments_area').show();
   });
 });
@@ -62,7 +62,7 @@ $(document).ready(function(){
 {% if print_label_link and not invoice.printed and not is_admin %}
 <script>
 $(document).ready(function(){
-  $('#printomatic-9000').attr('data-bs-title', "Print on regular paper in portrait mode, no label maker required.").tooltip('show');  
+  $('#printomatic-9000').attr('data-bs-title', "Print on regular paper in portrait mode, no label maker required.").tooltip('show');
 });
 </script>
 {% endif %}
@@ -126,11 +126,11 @@ $(document).ready(function(){
     </form>
     </span>
   {% endif %}
-</div> 
+</div>
 {{ auction.invoice_payment_instructions | default:""}}<br>
 {% if print_label_link %}
   <div>{% if show_links %}
-    Either <a href="{{ print_label_link }}">print your labels</a> or 
+    Either <a href="{{ print_label_link }}">print your labels</a> or
     <span class='font-weight-bold'>write
       {% else %}
     <span>Write
@@ -209,7 +209,7 @@ $(document).ready(function(){
     <td>{{ invoice.invoice_summary }}</td>
   </tr>
 </table>
-{%if invoice.lots_sold %}  
+{%if invoice.lots_sold %}
   <h3>Lots sold</h3>
   {% if invoice.auctiontos_user.is_club_member %}
     Note: Club member split has been applied<br>
@@ -229,7 +229,7 @@ $(document).ready(function(){
       </tr>
     </thead>
     <tbody>
-                  
+
     {% for lot in invoice.sold_lots_queryset_sorted %}
       <tr>
         <td>{{ lot.lot_number_display }}</td>
@@ -237,7 +237,7 @@ $(document).ready(function(){
           {% if show_links %}
             {% if is_admin %}
               <a href="#" hx-get="/api/lot/{{lot.pk}}"
-                hx-target="#modals-here" 
+                hx-target="#modals-here"
                 hx-trigger="click">
                 {{ lot.lot_name }}
               </a>
@@ -295,8 +295,8 @@ $(document).ready(function(){
   </tbody>
 </table>
 <small><div class="float-right">{% if invoice.pre_register_used %}*Pre-registeration discount applied{% endif %}</small><br></div>
-<b>Total donations:</b> ${{ invoice.total_donations|floatformat:2 }}<br>         
-<b>Total payout:</b> ${{ invoice.total_sold|floatformat:2 }}<br>         
+<b>Total donations:</b> ${{ invoice.total_donations|floatformat:2 }}<br>
+<b>Total payout:</b> ${{ invoice.total_sold|floatformat:2 }}<br>
 {% endif %}
 <br>
 <br>
@@ -345,7 +345,7 @@ $(document).ready(function(){
           <td>
             {% if show_links and is_admin %}
               <a href="#" hx-get="/api/auctiontos/{{lot.auctiontos_seller.pk}}"
-                hx-target="#modals-here" 
+                hx-target="#modals-here"
                 hx-trigger="click">
                 {{ lot.seller_name }}
               </a>
@@ -360,7 +360,7 @@ $(document).ready(function(){
       {% endfor %}
     </tbody>
   </table>
-  <b>Total bought:</b> ${{ invoice.total_bought|floatformat:2 }}     <br>       
+  <b>Total bought:</b> ${{ invoice.total_bought|floatformat:2 }}     <br>
   </div>
 {% endif %}
 {% if request.user.is_superuser and show_links %}

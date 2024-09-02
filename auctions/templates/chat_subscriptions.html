@@ -25,7 +25,7 @@ document.querySelectorAll('.chat_subscribe_checkbox').forEach(function(element) 
 {% block content %}
 <h4>Chat messages</h4>
 <small>Use this page to find new messages posted to your lots, as well as any lots on which you've posted messages.<br>
-  There are <a href="{% url 'preferences' %}">preferences</a> to send email notifications for <b>your lots</b> (currently turned {% if data.email_me_when_people_comment_on_my_lots %}on{% else %}off{% endif %} for your account), as well as for <b>lots you've commented on</b> (notifications are 
+  There are <a href="{% url 'preferences' %}">preferences</a> to send email notifications for <b>your lots</b> (currently turned {% if data.email_me_when_people_comment_on_my_lots %}on{% else %}off{% endif %} for your account), as well as for <b>lots you've commented on</b> (notifications are
   {% if data.email_me_about_new_chat_replies %}on{% else %}off{% endif %}).  If these settings are off, you won't get email notifications even if a lot is checked on this page.
 </small>
 <br><br>
