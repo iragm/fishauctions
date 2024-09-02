@@ -10,7 +10,8 @@ def compare_model_instances(instance1, instance2):
     :return: Dictionary with field names as keys and tuples of (instance1 value, instance2 value) as values for differing fields.
     """
     if type(instance1) is not type(instance2):
-        raise ValueError("Instances are not of the same model.")
+        msg = "Instances are not of the same model."
+        raise ValueError(msg)
 
     differences = {}
     for field in instance1._meta.fields:

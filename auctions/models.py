@@ -89,7 +89,8 @@ def median_value(queryset, term):
 def add_price_info(qs):
     """Add fields `pre_register_discount`, `your_cut` and `club_cut` to a given Lot queryset."""
     if not (isinstance(qs, QuerySet) and qs.model == Lot):
-        raise TypeError("must be passed a queryset of the Lot model")
+        msg = "must be passed a queryset of the Lot model"
+        raise TypeError(msg)
     return qs.annotate(
         pre_register_discount=Case(
             When(auctiontos_seller__isnull=True, then=Value(0.0)),
@@ -214,9 +215,8 @@ def distance_to(
         approximate_distance_to,
     ]:
         if '"' in str(i) or "'" in str(i):
-            raise TypeError(
-                "invalid character passed to distance_to, possible sql injection risk"
-            )
+            msg = "invalid character passed to distance_to, possible sql injection risk"
+            raise TypeError(msg)
     # Great circle distance formula, CEILING is used to keep people from triangulating locations
     gcd_formula = f"CEILING( 6371 * acos(least(greatest( \
         cos(radians({latitude})) * cos(radians({lat_field_name})) \
@@ -242,7 +242,8 @@ def distance_to(
 def add_tos_info(qs):
     """Add fields to a given AuctionTOS queryset."""
     if not (isinstance(qs, QuerySet) and qs.model == AuctionTOS):
-        raise TypeError("must be passed a queryset of the AuctionTOS model")
+        msg = "must be passed a queryset of the AuctionTOS model"
+        raise TypeError(msg)
     return qs.annotate(
         lots_bid_actual=Coalesce(
             Subquery(
@@ -337,7 +338,8 @@ def add_tos_info(qs):
 def add_tos_distance_info(qs):
     """Add a distance_traveled to an auctiontos query"""
     if not (isinstance(qs, QuerySet) and qs.model == AuctionTOS):
-        raise TypeError("must be passed a queryset of the AuctionTOS model")
+        msg = "must be passed a queryset of the AuctionTOS model"
+        raise TypeError(msg)
     return (
         qs.select_related("user__userdata")
         .select_related("pickup_location")
@@ -4260,9 +4262,8 @@ class AuctionCampaign(models.Model):
             if self.user or self.email:
                 duplicate = duplicate.first()
                 if duplicate:
-                    raise ValidationError(
-                        "A campaign with this auction and user/email already exists."
-                    )
+                    msg = "A campaign with this auction and user/email already exists."
+                    raise ValidationError(msg)
         super().save(*args, **kwargs)
 
 

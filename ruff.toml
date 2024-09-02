@@ -14,7 +14,7 @@ extend-select = [
     # "DJ",   # flake8-django
     # "DTZ",  # flake8-datetimez
     # "E",    # pycodestyle
-    # "EM",   # flake8-errmsg
+    "EM",   # flake8-errmsg
     # "ERA",  # eradicate
     "DTZ",  # flake8-datetimez
     "F",    # pyflakes
