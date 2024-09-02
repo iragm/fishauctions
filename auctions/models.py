@@ -379,7 +379,7 @@ def guess_category(text):
     )
     q_objects = Q()
     for keyword in keywords:
-        q_objects |= Q(lot_name__iregex=r"\b{}\b".format(re.escape(keyword)))
+        q_objects |= Q(lot_name__iregex=rf"\b{re.escape(keyword)}\b")
 
     lot_qs = lot_qs.filter(q_objects)
 
@@ -3341,7 +3341,7 @@ class Invoice(models.Model):
             result += "needs to be paid"
         else:
             result += "owes the club"
-        return result + " $" + "%.2f" % self.absolute_amount
+        return result + " $" + f"{self.absolute_amount:.2f}"
 
     @property
     def invoice_summary(self):
@@ -3408,7 +3408,7 @@ class InvoiceAdjustment(models.Model):
 
     @property
     def formatted_float_value(self):
-        return "{:.2f}".format(self.amount)
+        return f"{self.amount:.2f}"
 
     @property
     def display(self):

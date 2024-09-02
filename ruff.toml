@@ -33,6 +33,6 @@ extend-select = [
     # "SIM",  # flake8-simplify
     "TID",  # flake8-tidy-imports
     # "T20",  # flake8-print
-    # "UP",   # pyupgrade
+    "UP",   # pyupgrade
     # "W",    # pycodestyle warnings
 ]

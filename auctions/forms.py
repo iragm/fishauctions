@@ -1357,7 +1357,7 @@ class PickupLocationForm(forms.ModelForm):
             auction=self.auction, is_admin=True
         ).order_by("name")
         self.fields["contact_person"].queryset = contact_queryset
-        self.fields["contact_person"].label_from_instance = lambda obj: "%s" % obj.name
+        self.fields["contact_person"].label_from_instance = lambda obj: f"{obj.name}"
         delete_button_html = ""
         if self.is_edit_form:
             delete_button_html = f"<a href='{reverse('delete_pickup', kwargs={'pk': self.pickup_location.pk})}' class='btn bg-danger ms-2 '>Delete this location</a>"

@@ -5279,7 +5279,7 @@ class UserLocationUpdate(UpdateView, SuccessMessageMixin):
         user.save()
         userData.last_activity = timezone.now()
         userData.save()
-        return super(UserLocationUpdate, self).form_valid(form)
+        return super().form_valid(form)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
