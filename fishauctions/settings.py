@@ -10,16 +10,15 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/3.1/ref/settings/
 """
 
-from pathlib import Path
-import sys
-import os
-
 # try:
 #     from . import customsettings
 # except:
 #     pass
 #     #print("You can set your envionrment using a customsettings.py file.  No file found, or file is invalid, assuming the environment has been set some other way.")
 import datetime
+import os
+import sys
+from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve(strict=True).parent.parent

@@ -1,8 +1,10 @@
-from django.utils import timezone
-from auctions.models import *
-from django.core.management.base import BaseCommand, CommandError
 import datetime
+
 import requests
+from django.core.management.base import BaseCommand
+from django.utils import timezone
+
+from auctions.models import PageView, UserData
 
 
 class Command(BaseCommand):

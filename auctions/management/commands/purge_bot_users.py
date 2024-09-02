@@ -1,7 +1,8 @@
-from django.utils import timezone
-from django.core.management.base import BaseCommand, CommandError
-from auctions.models import *
 from allauth.account.models import EmailAddress
+from django.core.management.base import BaseCommand
+from django.utils import timezone
+
+from auctions.models import UserData
 
 
 class Command(BaseCommand):

@@ -1,9 +1,8 @@
-import decimal
-from django.utils import timezone
-from django.core.management.base import BaseCommand, CommandError
-from auctions.models import Auction, User, Lot, Invoice, AuctionTOS
-from post_office import mail
 from django.contrib.sites.models import Site
+from django.core.management.base import BaseCommand
+from post_office import mail
+
+from auctions.models import Invoice
 
 
 class Command(BaseCommand):

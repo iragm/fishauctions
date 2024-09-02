@@ -1,16 +1,8 @@
-from django.utils import timezone
-from django.core.management.base import BaseCommand, CommandError
-from auctions.models import *
-from django.core.mail import send_mail
-from django.db.models import Count, Case, When, IntegerField, Avg
-from django.core.files import File
-from datetime import datetime
-from post_office import mail
-from django.template.loader import get_template
-import os
-import uuid
+from django.contrib.auth.models import User
 from django.contrib.sites.models import Site
-from django.db.models import Count, Q
+from django.core.management.base import BaseCommand
+from django.db.models import Q
+from post_office import mail
 
 
 # import csv

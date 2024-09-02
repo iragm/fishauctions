@@ -13,6 +13,8 @@ Options:
                       Fail if changes are required
 -f, --format          Format the code
 -F, --format-check    Run the formatter and fail if changes would be made
+-l, --lint            Lint the code
+-L, --lint-check      Run the linter and fail if changes would be made
 -h, --help      Show this message and exit
 EOF
 }
@@ -27,6 +29,11 @@ process_args() {
               ;;
           --format-check | -F) RUFF_MODE='format'
               RUFF_FLAGS='--check'
+              ;;
+          --lint | -l) RUFF_MODE='check'
+              RUFF_FLAGS='--fix'
+              ;;
+          --lint-check | -L) RUFF_MODE='check'
               ;;
           --help | -h) usage;
               exit 0
@@ -45,4 +52,5 @@ if [ -z ${IS_CI+x} ]; then
   eval "ruff ${RUFF_MODE} /home/app/web ${RUFF_FLAGS}"
 else
   ruff format /home/app/web --check
+  ruff check /home/app/web
 fi

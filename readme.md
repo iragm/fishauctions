@@ -68,6 +68,11 @@ To format code, run `docker compose run --rm test --format`. This will attempt t
 
 To check if code is formatted properly *without* modifying any files on disk, run `docker compose run --rm test --format-check`. The command will output failures (if any) and exit with an error if changes need to be made.
 
+#### Linting
+To lint the code, run `docker compose run --rm test --lint`. This will run a full linting suite and attempt to auto-fix problems.
+
+To check if code passes the linting check *without* modifying any files on disk, run `docker compose run --rm test --lint-check`. The command will output failures (if any) and exit with an error if changes need to be made.
+
 #### Management commands
 Run these with docker exec after docker compose is up.  For example: `docker exec -it django python3 manage.py makemigrations`
 

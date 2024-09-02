@@ -1,2 +1,7 @@
 [format]
 exclude = ["get-pip.py"]
+
+[lint]
+exclude = ["get-pip.py"]
+ignore = ["E722"]
+extend-select = ["I"]

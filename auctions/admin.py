@@ -1,7 +1,35 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
-from .models import *
+
+from .models import (
+    FAQ,
+    AdCampaign,
+    AdCampaignGroup,
+    AdCampaignResponse,
+    Auction,
+    AuctionCampaign,
+    AuctionTOS,
+    Bid,
+    BlogPost,
+    Category,
+    Club,
+    GeneralInterest,
+    Invoice,
+    Location,
+    Lot,
+    LotHistory,
+    PageView,
+    PickupLocation,
+    Product,
+    SearchHistory,
+    UserBan,
+    UserData,
+    UserInterestCategory,
+    UserLabelPrefs,
+    Watch,
+    guess_category,
+)
 
 
 class FaqAdmin(admin.ModelAdmin):

@@ -1,13 +1,26 @@
 # chat/consumers.py
+import datetime
 import json
+
 from asgiref.sync import async_to_sync
 from channels.generic.websocket import WebsocketConsumer
-from .models import *
-from post_office import mail
-from django.contrib.sites.models import Site
 from django.conf import settings
+from django.contrib.sites.models import Site
+from django.db.models import Q
 from django.utils import timezone
-import datetime
+from post_office import mail
+
+from .models import (
+    AuctionTOS,
+    Bid,
+    ChatSubscription,
+    Invoice,
+    Lot,
+    LotHistory,
+    UserBan,
+    UserData,
+    UserInterestCategory,
+)
 
 
 def check_bidding_permissions(lot, user):
@@ -131,7 +144,6 @@ def bid_on_lot(lot, user, amount):
 
         originalHighBidder = lot.high_bidder
         originalBid = lot.high_bid
-        originalMaxBid = lot.max_bid
         bid, created = Bid.objects.get_or_create(
             user=user,
             lot_number=lot,
