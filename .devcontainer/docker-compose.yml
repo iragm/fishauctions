@@ -1,0 +1,9 @@
+services:
+  dev:
+    build:
+      context: ../
+      dockerfile: Dockerfile
+      target: dev
+    volumes:
+      - ${LOCAL_WORKSPACE_FOLDER:-../}:/workspace
+    command: sleep infinity
