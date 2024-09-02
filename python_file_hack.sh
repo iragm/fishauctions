@@ -26,4 +26,3 @@ else
     echo "Unable to find the text $SEARCH in $FILE, update or remove fix_tz_hack.sh"
     exit 1
 fi
-
