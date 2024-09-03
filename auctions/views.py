@@ -174,9 +174,8 @@ def bin_data(
         queryset = queryset.order_by(field_name)
     except:
         if start_bin is None or end_bin is None:
-            raise ValueError(
-                f"queryset cannot be ordered by '{field_name}', so start_bin and end_bin are required"
-            )
+            msg = f"queryset cannot be ordered by '{field_name}', so start_bin and end_bin are required"
+            raise ValueError(msg)
     working_with_date = False
     if queryset.count():
         value = getattr(queryset[0], field_name)
@@ -186,9 +185,8 @@ def bin_data(
             try:
                 float(value)
             except ValueError:
-                raise ValueError(
-                    f"{field_name} needs to be either a datetime or an integer value, got value {value}"
-                )
+                msg = f"{field_name} needs to be either a datetime or an integer value, got value {value}"
+                raise ValueError(msg)
     if start_bin is None:
         start_bin = value
     if end_bin is None:
@@ -272,9 +270,8 @@ class AuctionPermissionsMixin:
         """Helper function used to check and see if request.user is the creator of the auction or is someone who has been made an admin of the auction.
         Returns False on no permission or True if the user has permission to access the auction"""
         if not self.auction:
-            raise Exception(
-                "you must set self.auction (typically in dispatch) for self.is_auction_admin to be available"
-            )
+            msg = "you must set self.auction (typically in dispatch) for self.is_auction_admin to be available"
+            raise Exception(msg)
         result = self.auction.permission_check(self.request.user)
         if not result:
             if self.allow_non_admins:
@@ -296,9 +293,8 @@ class AuctionStatsPermissionsMixin:
         """Helper function used to check and see if request.user is the creator of the auction or is someone who has been made an admin of the auction.
         Returns False on no permission or True if the user has permission to access the auction"""
         if not self.auction:
-            raise Exception(
-                "you must set self.auction (typically in dispatch) for self.is_auction_admin to be available"
-            )
+            msg = "you must set self.auction (typically in dispatch) for self.is_auction_admin to be available"
+            raise Exception(msg)
         result = self.auction.permission_check(self.request.user)
         if not result:
             if not self.auction.make_stats_public:
@@ -1109,7 +1105,8 @@ def feedback(request, pk, leave_as):
         try:
             lot = Lot.objects.get(pk=pk, is_deleted=False)
         except:
-            raise Http404(f"No lot found with key {lot}")
+            msg = f"No lot found with key {lot}"
+            raise Http404(msg)
         winner_checks_pass = False
         seller_checks_pass = False
         if leave_as == "winner":
@@ -1295,7 +1292,8 @@ def invoicePaid(request, pk, **kwargs):
         try:
             invoice = Invoice.objects.get(pk=pk)
         except:
-            raise Http404(f"No invoice found with key {pk}")
+            msg = f"No invoice found with key {pk}"
+            raise Http404(msg)
         checksPass = False
         if invoice.auction:
             if invoice.auction.permission_check(request.user):
@@ -3873,7 +3871,8 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
                 self.auction = auction
                 return auction
             except:
-                raise Http404("No auctions found matching the query")
+                msg = "No auctions found matching the query"
+                raise Http404(msg)
 
     def get_success_url(self):
         data = self.request.GET.copy()
@@ -5279,7 +5278,7 @@ class UserLocationUpdate(UpdateView, SuccessMessageMixin):
         user.save()
         userData.last_activity = timezone.now()
         userData.save()
-        return super(UserLocationUpdate, self).form_valid(form)
+        return super().form_valid(form)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -5631,7 +5630,7 @@ class BlogPostView(DetailView):
         blogpost = self.get_object()
         # this is to allow the chart# syntax
         context["formatted_contents"] = re.sub(
-            r"chart\d", "<canvas id=\g<0>></canvas>", blogpost.body_rendered
+            r"chart\d", r"<canvas id=\g<0>></canvas>", blogpost.body_rendered
         )
         return context
 
@@ -5977,9 +5976,8 @@ class AuctionStatsBarChartJSONView(BaseColumnsHighChartsView, AuctionPermissions
         data = self.get_data()
         providers = self.get_providers()
         if len(data) is not len(providers):
-            raise ValueError(
-                f"self.get_data() return a {len(data)} long array, self.get_providers() returned a {len(providers)} long array.  These need to return the same length array."
-            )
+            msg = f"self.get_data() return a {len(data)} long array, self.get_providers() returned a {len(providers)} long array.  These need to return the same length array."
+            raise ValueError(msg)
         for i, entry in enumerate(data):
             color = tuple(next(color_generator))
             dataset = {
@@ -6604,7 +6602,8 @@ class LotChatSubscribe(View, LoginRequiredMixin):
         except ValueError:
             lot = None
         if not lot:
-            raise Http404(f"No lot found with key {lot}")
+            msg = f"No lot found with key {lot}"
+            raise Http404(msg)
         else:
             subscription, created = ChatSubscription.objects.get_or_create(
                 user=request.user,

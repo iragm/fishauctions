@@ -65,7 +65,7 @@ class AuctionTOSFilter(django_filters.FilterSet):
         """
 
         # sketchy users
-        pattern = re.compile("^sus|\ssus\s|\ssus$")
+        pattern = re.compile(r"^sus|\ssus\s|\ssus$")
         if pattern.search(value):
             value = pattern.sub("", value)
             qs = add_tos_info(qs)
@@ -182,7 +182,7 @@ class AuctionTOSFilter(django_filters.FilterSet):
 
         # Apply filters based on patterns
         for keyword, filter_data in invoice_patterns.items():
-            pattern = re.compile(f"^{keyword}|\s{keyword}\s|\s{keyword}$")
+            pattern = re.compile(rf"^{keyword}|\s{keyword}\s|\s{keyword}$")
             if pattern.search(value):
                 value = pattern.sub("", value)
                 qs = qs.filter(**filter_data)
@@ -415,7 +415,7 @@ class LotFilter(django_filters.FilterSet):
             ).distinct()
         else:
             self.possibleAuctions = self.possibleAuctions.filter(specialAuctions)
-        auction_choices = list((o.slug, o.title) for o in self.possibleAuctions)
+        auction_choices = [(o.slug, o.title) for o in self.possibleAuctions]
         super().__init__(*args, **kwargs)  # this must go above filters
         self.filters["auction"].extra["choices"] = [
             {"no_auction": "noAuction", "No auction": "title"}
@@ -449,7 +449,7 @@ class LotFilter(django_filters.FilterSet):
     )
 
     def ships_choices(self):
-        choices = list((o.pk, o.name) for o in Location.objects.all().order_by("name"))
+        choices = [(o.pk, o.name) for o in Location.objects.all().order_by("name")]
         return [{"local_only": "local", "Local pickup": "title"}] + choices
 
     def generate_attrs(placeholder="", tooltip=""):

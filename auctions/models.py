@@ -89,7 +89,8 @@ def median_value(queryset, term):
 def add_price_info(qs):
     """Add fields `pre_register_discount`, `your_cut` and `club_cut` to a given Lot queryset."""
     if not (isinstance(qs, QuerySet) and qs.model == Lot):
-        raise TypeError("must be passed a queryset of the Lot model")
+        msg = "must be passed a queryset of the Lot model"
+        raise TypeError(msg)
     return qs.annotate(
         pre_register_discount=Case(
             When(auctiontos_seller__isnull=True, then=Value(0.0)),
@@ -189,19 +190,19 @@ def distance_to(
     approximate_distance_to=10,
 ):
     """
-	GeoDjango has been fustrating with MySQL and Point objects.
-	This function is a workaound done using raw SQL.
+    GeoDjango has been fustrating with MySQL and Point objects.
+    This function is a workaound done using raw SQL.
 
-	Given a latitude and longitude, it will return raw SQL that can be used to annotate a queryset
+    Given a latitude and longitude, it will return raw SQL that can be used to annotate a queryset
 
-	The model being annotated must have fields named 'latitude' and 'longitude' for this to work
+    The model being annotated must have fields named 'latitude' and 'longitude' for this to work
 
-	For example:
+    For example:
 
-	qs = model.objects.all()\
-			.annotate(distance=distance_to(latitude, longitude))\
-			.order_by('distance')
-	"""
+    qs = model.objects.all()\
+            .annotate(distance=distance_to(latitude, longitude))\
+            .order_by('distance')
+    """
     if unit == "miles":
         correction = 0.6213712  # close enough
     else:
@@ -214,15 +215,14 @@ def distance_to(
         approximate_distance_to,
     ]:
         if '"' in str(i) or "'" in str(i):
-            raise TypeError(
-                "invalid character passed to distance_to, possible sql injection risk"
-            )
+            msg = "invalid character passed to distance_to, possible sql injection risk"
+            raise TypeError(msg)
     # Great circle distance formula, CEILING is used to keep people from triangulating locations
     gcd_formula = f"CEILING( 6371 * acos(least(greatest( \
-		cos(radians({latitude})) * cos(radians({lat_field_name})) \
-		* cos(radians({lng_field_name}) - radians({longitude})) + \
-		sin(radians({latitude})) * sin(radians({lat_field_name})) \
-		, -1), 1)) * {correction} / {approximate_distance_to}) * {approximate_distance_to}"
+        cos(radians({latitude})) * cos(radians({lat_field_name})) \
+        * cos(radians({lng_field_name}) - radians({longitude})) + \
+        sin(radians({latitude})) * sin(radians({lat_field_name})) \
+        , -1), 1)) * {correction} / {approximate_distance_to}) * {approximate_distance_to}"
     distance_raw_sql = RawSQL(gcd_formula, ())
     # This one works fine when I print qs.query and run the output in SQL but does not work when Django runs the qs
     # Seems to be an issue with annotating on related entities
@@ -242,7 +242,8 @@ def distance_to(
 def add_tos_info(qs):
     """Add fields to a given AuctionTOS queryset."""
     if not (isinstance(qs, QuerySet) and qs.model == AuctionTOS):
-        raise TypeError("must be passed a queryset of the AuctionTOS model")
+        msg = "must be passed a queryset of the AuctionTOS model"
+        raise TypeError(msg)
     return qs.annotate(
         lots_bid_actual=Coalesce(
             Subquery(
@@ -337,7 +338,8 @@ def add_tos_info(qs):
 def add_tos_distance_info(qs):
     """Add a distance_traveled to an auctiontos query"""
     if not (isinstance(qs, QuerySet) and qs.model == AuctionTOS):
-        raise TypeError("must be passed a queryset of the AuctionTOS model")
+        msg = "must be passed a queryset of the AuctionTOS model"
+        raise TypeError(msg)
     return (
         qs.select_related("user__userdata")
         .select_related("pickup_location")
@@ -379,7 +381,7 @@ def guess_category(text):
     )
     q_objects = Q()
     for keyword in keywords:
-        q_objects |= Q(lot_name__iregex=r"\b{}\b".format(re.escape(keyword)))
+        q_objects |= Q(lot_name__iregex=rf"\b{re.escape(keyword)}\b")
 
     lot_qs = lot_qs.filter(q_objects)
 
@@ -1591,11 +1593,11 @@ class AuctionTOS(models.Model):
                 and self.unprinted_label_count != self.print_labels_qs.count()
             ):
                 result += f"""
-				<button type="button" class="btn btn-sm btn-secondary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-				</button>
-				<div class="dropdown-menu">
-					<a href='{unprinted_url}'>Print only {self.unprinted_label_count} unprinted labels</a>
-				</div>"""
+                <button type="button" class="btn btn-sm btn-secondary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                </button>
+                <div class="dropdown-menu">
+                    <a href='{unprinted_url}'>Print only {self.unprinted_label_count} unprinted labels</a>
+                </div>"""
             return html.format_html(result)
         return ""
 
@@ -1707,10 +1709,10 @@ class AuctionTOS(models.Model):
                 dont_use_these = ["13", "14", "15", "16", "17", "18", "19"]
                 search = None
                 if self.phone_number:
-                    search = re.search("([\d]{3}$)|$", self.phone_number).group()
+                    search = re.search(r"([\d]{3}$)|$", self.phone_number).group()
                 if not search or str(search) in dont_use_these:
                     if self.address:
-                        search = re.search("([\d]{3}$)|$", self.address).group()
+                        search = re.search(r"([\d]{3}$)|$", self.address).group()
                 if self.user:
                     userData, created = UserData.objects.get_or_create(
                         user=self.user,
@@ -3341,7 +3343,7 @@ class Invoice(models.Model):
             result += "needs to be paid"
         else:
             result += "owes the club"
-        return result + " $" + "%.2f" % self.absolute_amount
+        return result + " $" + f"{self.absolute_amount:.2f}"
 
     @property
     def invoice_summary(self):
@@ -3408,7 +3410,7 @@ class InvoiceAdjustment(models.Model):
 
     @property
     def formatted_float_value(self):
-        return "{:.2f}".format(self.amount)
+        return f"{self.amount:.2f}"
 
     @property
     def display(self):
@@ -4260,9 +4262,8 @@ class AuctionCampaign(models.Model):
             if self.user or self.email:
                 duplicate = duplicate.first()
                 if duplicate:
-                    raise ValidationError(
-                        "A campaign with this auction and user/email already exists."
-                    )
+                    msg = "A campaign with this auction and user/email already exists."
+                    raise ValidationError(msg)
         super().save(*args, **kwargs)
 
 
@@ -4284,7 +4285,7 @@ class LotImage(models.Model):
         upload_to="images/",
         blank=False,
         null=False,
-        resize_source=dict(size=(600, 600), quality=85),
+        resize_source={"size": (600, 600), "quality": 85},
     )
     image.help_text = "Select an image to upload"
     image_source = models.CharField(max_length=20, choices=PIC_CATEGORIES, blank=True)

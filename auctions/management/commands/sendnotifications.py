@@ -22,7 +22,7 @@ class Command(BaseCommand):
                     banned=False, auction=auction
                 )
                 for lot in lots:
-                    self.stdout.write(f" +-\ {lot}")
+                    self.stdout.write(rf" +-\ {lot}")
                     watched = Watch.objects.filter(lot_number=lot.lot_number)
                     for watch in watched:
                         self.stdout.write(f" | +-- {watch}")
