@@ -180,7 +180,7 @@ def bin_data(
     working_with_date = False
     if queryset.count():
         value = getattr(queryset[0], field_name)
-        if isinstance(value, datetime.datetime):
+        if isinstance(value, datetime):
             working_with_date = True
         else:
             try:
@@ -2082,7 +2082,7 @@ class AuctionStats(DetailView, AuctionPermissionsMixin):
                 "This auction is still in progress, check back once it's finished for more complete stats",
             )
         if self.get_object().date_posted < timezone.make_aware(
-            datetime.datetime(year=2024, month=1, day=1)
+            datetime(year=2024, month=1, day=1)
         ):
             messages.info(self.request, "Not all stats are available for old auctions.")
         return context
@@ -5421,7 +5421,7 @@ class AdminDashboard(TemplateView):
             .count()
         )
         invoiceqs = (
-            Invoice.objects.filter(date__gte=datetime.datetime(2021, 6, 15))
+            Invoice.objects.filter(date__gte=datetime(2021, 6, 15))
             .filter(seller_invoice__winner__isnull=False)
             .distinct()
         )
