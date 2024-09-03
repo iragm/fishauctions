@@ -11,12 +11,12 @@
     Use this page to quickly add lots to {{ auction }}.  Enter one lot per row.  You can edit these lots, add images, or add lots one at a time from your <a href="/selling">selling dashboard</a>.
   {% endif %}
   </p>
-  
+
   {{ link_formset.management_form }}
   <form id="form-container" method="POST" action="{% url 'bulk_add_lots' slug=auction.slug bidder_number=tos.bidder_number%}">
     {% crispy formset helper %}
     <button class='btn btn-info' id="add-form" type="button">Add row</button>
-    
+
     <input type="submit" class='btn bg-info float-right submit-button ms-2 ml-2' name='save_print' id='save_print' value="Save and print labels">
     <input type="submit" class='btn bg-success float-right submit-button' name='save_submit' id='save_submit' value="Save lots for {% if is_admin%}{{ tos.name }}{% else %}{{ auction }}{% endif %}">
   </form>
@@ -35,8 +35,8 @@ function cloneMore(selector, type) {
     newElement.find(':input').each(function() {
         var name = $(this).attr('name').replace('-' + (total-1) + '-','-' + total + '-');
         var id = 'id_' + name;
-        $(this).attr({'name': name, 'id': id}).removeAttr('checked'); // keep last row's values 
-        //$(this).attr({'name': name, 'id': id}).val('').removeAttr('checked'); // blank rows 
+        $(this).attr({'name': name, 'id': id}).removeAttr('checked'); // keep last row's values
+        //$(this).attr({'name': name, 'id': id}).val('').removeAttr('checked'); // blank rows
     });
     newElement.find('label').each(function() {
         var newFor = $(this).attr('for').replace('-' + (total-1) + '-','-' + total + '-');

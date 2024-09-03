@@ -14,7 +14,7 @@
                   </tr>
                 </thead>
                 <tbody>
-                  
+
                 {% for data in unique_species|slice:":10" %}
                   <tr>
                     <td>{{ data.rank_unique_species }}</td>
@@ -34,7 +34,7 @@
                   </tr>
                 </thead>
                 <tbody>
-                  
+
                 {% for data in total_lots|slice:":10" %}
                   <tr>
                     <td>{{ data.rank_total_lots }}</td>
@@ -55,7 +55,7 @@
                   </tr>
                 </thead>
                 <tbody>
-                  
+
                 {% for data in total_bids|slice:":10" %}
                   <tr>
                     <td>{{ data.rank_total_bids }}</td>
@@ -66,5 +66,3 @@
               </tbody>
             </table><br>
 {% endblock %}
-
-

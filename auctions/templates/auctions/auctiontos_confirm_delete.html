@@ -7,7 +7,7 @@
 function show_hide_advanced() {
     var elem = document.getElementById('id_delete_lots')
     if (elem.type == "hidden") {
-        
+
         $('#merge_selection').hide();
     } else {
         console.log('not hid')
@@ -22,7 +22,7 @@ function show_hide_advanced() {
 $('#id_delete_lots').change(function(data){
     show_hide_advanced();
 });
-    
+
 $(document).ready(function() {
     show_hide_advanced();
 });

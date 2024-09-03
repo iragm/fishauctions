@@ -60,7 +60,7 @@ var Annotation = function () {
 	this.init.apply(this, arguments);
 };
 Annotation.prototype = {
-	/* 
+	/*
 	 * Initialize the annotation
 	 */
 	init: function (chart, options) {

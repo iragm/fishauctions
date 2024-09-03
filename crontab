@@ -15,7 +15,7 @@
 * * * * * /home/app/web/task.sh send_queued_mail
 
 # send auction emails
-*/4 * * * * /home/app/web/task.sh auction_emails 
+*/4 * * * * /home/app/web/task.sh auction_emails
 
 # send notifications about unread chats
 0 10 * * * /home/app/web/task.sh email_unseen_chats

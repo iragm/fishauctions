@@ -7,6 +7,7 @@
 	],
 	"service": "dev",
 	"workspaceFolder": "/workspace",
+	"postCreateCommand": ". /workspace/.devcontainer/post-create.sh",
 	// Features to add to the dev container. More info: https://containers.dev/features.
 	"features": {
 		"ghcr.io/devcontainers/features/common-utils:2": {},

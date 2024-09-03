@@ -34,7 +34,7 @@ window.onload = function() {
         {% if GOOGLE_ADSENSE_ID != 'None' %}
         <script data-ad-client="{{GOOGLE_ADSENSE_ID}}" async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script>
         {% endif %}
-        {% if show_ads %}<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script>{% endif %}     
+        {% if show_ads %}<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script>{% endif %}
         <title>
             {% block title %}
                 {% if self.seo_title %}{{ self.seo_title }}{% else %}{{ self.title }}{% endif %}
@@ -50,13 +50,13 @@ window.onload = function() {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         {# Global javascript #}
 
-        <script type="text/javascript" src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script> 
+        <script type="text/javascript" src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
         {# 3.5.1 needed for focus to go to select2 dropdowns https://github.com/select2/select2/issues/5993 #}
         <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.11.0/umd/popper.min.js"></script>
         <!-- <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/js/bootstrap.min.js"></script> -->
         <!-- <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootswatch@4.5.2/dist/cerulean/bootstrap.min.css" integrity="sha384-3fdgwJw17Bi87e1QQ4fsLn4rUFqWw//KU0g8TvV6quvahISRewev6/EocKNuJmEw" crossorigin="anonymous"> -->
-        
-        
+
+
         <!-- <link rel="stylesheet" href="https://bootswatch.com/5/darkly/bootstrap.css" integrity="" crossorigin="anonymous"> -->
         <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
         <script type="text/javascript" src="{% static 'js/auction_site.js' %}"></script>
@@ -165,7 +165,7 @@ window.onload = function() {
 
                 if (opts.width === '100%')
                   opts.offset = false;
-                
+
                 $(canvas).css('width', opts.width);
                 if (opts.offset && bsMain.length)
                   bsMain.css(prop, opts.width);
@@ -200,7 +200,7 @@ window.onload = function() {
                 return false;
             });
           });
-	
+
           </script>
       </head>
 
@@ -229,7 +229,7 @@ window.onload = function() {
       {% endif %}
       <nav class="navbar navbar-expand-lg bg-primary bg-gradient bg-opacity-75" data-bs-theme="dark">
         <div class="container-fluid">
-          <a class="navbar-brand" href="/">auction.fish</a>  
+          <a class="navbar-brand" href="/">auction.fish</a>
           <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#site_navbar" aria-controls="navbarColor02" aria-expanded="false" aria-label="Toggle navigation">
             <span class="navbar-toggler-icon"></span>
           </button>
@@ -250,7 +250,7 @@ window.onload = function() {
                     </div>
                   </li> -->
                   <li class="nav-item">
-                    <a class="nav-link" href="/auctions/">Auctions 
+                    <a class="nav-link" href="/auctions/">Auctions
                       <span id="new_auctions" class="badge-pill badge bg-warning" style="color:black;font-weight:900"></span>
                     </a>
                   </li>
@@ -262,7 +262,7 @@ window.onload = function() {
                   </li>
                   <li class="nav-item">
                     <a class="nav-link" href="{% url 'watched' %}">Watched lots</a>
-                  </li>  
+                  </li>
                   {% if request.user.is_superuser %}
                   <li class="nav-item">
                     <a class="nav-link" href="/admin/auth/user/?o=-5">Admin Site</a>
@@ -280,7 +280,7 @@ window.onload = function() {
                   </li>
                   <li class="nav-item">
                     <a class="nav-link" href="/clubs/">Clubs</a>
-                  </li>  
+                  </li>
                   {% if request.user.is_authenticated %}
                   <li class="nav-item dropdown">
                     <a class="nav-link dropdown-toggle" data-bs-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">{{ request.user.username }}</a>
@@ -345,18 +345,18 @@ window.onload = function() {
         {# if the location is not set, we can ask for it with a simple location_message, or use custom logic on any element that calls the function setLocation #}
         {% if not has_user_location and location_message %}
         <div class="alert alert-secondary mb-0 alert-dismissible fade show" role="alert"><a href="#" onclick="setLocation()">{{ location_message }}</a>
-          <button type="button" class="btn-close bg-info" data-bs-dismiss="alert"></button>  
+          <button type="button" class="btn-close bg-info" data-bs-dismiss="alert"></button>
         </div>
         {% endif %}
         <script>
-        function setLocation(){ 
+        function setLocation(){
           if (navigator.geolocation) {
             navigator.geolocation.getCurrentPosition(function(data){
               document.cookie = "latitude=" + data.coords['latitude'] + "; SameSite=Strict; path=/";
               document.cookie = "longitude=" + data.coords['longitude'] + "; SameSite=Strict; path=/";
               window.location.reload();
             });
-          } else { 
+          } else {
             {% if request.user.is_authenticated %}
             window.location = "/users/{{ request.user.pk }}/location/";
             {% endif %}
@@ -365,14 +365,14 @@ window.onload = function() {
         </script>
         {% if messages %}
             {% for message in messages %}
-            <div class="alert 
+            <div class="alert
             {% if "error" in message.tags %}
             alert-danger
             {% else %}
             alert-{{ message.tags }}
             {% endif %}
-            alert-dismissible fade show" role="alert">{{ message|safe }} 
-            <button type="button" class="btn-close bg-info" data-bs-dismiss="alert"></button>  
+            alert-dismissible fade show" role="alert">{{ message|safe }}
+            <button type="button" class="btn-close bg-info" data-bs-dismiss="alert"></button>
             </div>
             {% endfor %}
         {% endif %}
@@ -381,7 +381,7 @@ window.onload = function() {
               {% block content %}{% endblock %}
               {% block extra_content %}{% endblock %}
             </div>
-        </div>  
+        </div>
         {% block undiv_content %}{% endblock %}
         {% if not hide_navbar %}<div class="mt-5 d-flex justify-content-center"><small class="text-muted">Website copyright 2020-2024 <a href="https://tfcb.org">Tropical Fish Club of Burlington</a>. A free and <a href="https://github.com/iragm/fishauctions">open source</a> project.</small></div>{% endif %}
         {% block extra_js %}
@@ -393,7 +393,7 @@ window.onload = function() {
     <script>
       var urlParams = new URLSearchParams(window.location.search);
       var printredirect = urlParams.get('printredirect');
-      if (printredirect) { 
+      if (printredirect) {
         var a = document.createElement("a");
         a.href = printredirect;
         document.body.appendChild(a);
@@ -409,6 +409,6 @@ window.onload = function() {
         event.detail.headers['X-CSRFToken'] = '{{ csrf_token }}';
       })
     </script>
-      
+
 </html>
 {% endtimezone %}

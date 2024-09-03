@@ -14,7 +14,7 @@
 When issuing a refund, if the invoice is open, no further action is needed.  If the invoice is paid, you should send money (the amount shown) back to the user who paid.</small>
 <br>
 <a href="#" class='btn btn-danger mt-2 mb-2' hx-get="{% url 'auction_no_show_dialog' slug=auction.slug tos=tos.bidder_number %}"
-                hx-target="#modals-here" 
+                hx-target="#modals-here"
                 hx-trigger="click">
                 Take Action
               </a>
@@ -97,7 +97,7 @@ When issuing a refund, if the invoice is open, no further action is needed.  If 
           </td>
           <td>
             <a href="#" hx-get="/api/auctiontos/{{lot.auctiontos_seller.pk}}"
-              hx-target="#modals-here" 
+              hx-target="#modals-here"
               hx-trigger="click">
               {{ lot.seller_name }}
             </a>
@@ -110,12 +110,10 @@ When issuing a refund, if the invoice is open, no further action is needed.  If 
           </td>
           <td>
             {{ lot.auctiontos_seller.invoice.get_status_display }}
-          </td>          
+          </td>
         </tr>
       {% endfor %}
     </tbody>
   </table>
 <div id="modals-here"></div>
 {% endblock %}
-
-

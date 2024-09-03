@@ -5,7 +5,7 @@
  Use it if you like it
 
  canvg.js - Javascript SVG parser and renderer on Canvas
- MIT Licensed 
+ MIT Licensed
  Gabe Lerner (gabelerner@gmail.com)
  http://code.google.com/p/canvg/
 
