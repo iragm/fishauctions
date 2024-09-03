@@ -2080,7 +2080,7 @@ class AuctionStats(DetailView, AuctionPermissionsMixin):
                 "This auction is still in progress, check back once it's finished for more complete stats",
             )
         if self.get_object().date_posted < timezone.make_aware(
-            datetime(year=2024, month=1, day=1)
+            datetime(year=2024, month=1, day=1, tzinfo=datetime.timezone.utc)
         ):
             messages.info(self.request, "Not all stats are available for old auctions.")
         return context
@@ -5420,7 +5420,9 @@ class AdminDashboard(TemplateView):
             .count()
         )
         invoiceqs = (
-            Invoice.objects.filter(date__gte=datetime(2021, 6, 15))
+            Invoice.objects.filter(
+                date__gte=datetime(2021, 6, 15, tzinfo=datetime.timezone.utc)
+            )
             .filter(seller_invoice__winner__isnull=False)
             .distinct()
         )
