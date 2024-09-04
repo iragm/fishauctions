@@ -6,6 +6,9 @@
     "files.insertFinalNewline": true,
     "files.trimFinalNewlines": true,
     "files.trimTrailingWhitespace": true,
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.autoImportCompletions": true,
+    "python.defaultInterpreterPath": "/usr/local/bin/python",
     "ruff.enable": true,
     "ruff.codeAction.fixViolation": {
         "enable": true
