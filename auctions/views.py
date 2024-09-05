@@ -3,6 +3,7 @@ import csv
 import re
 from collections import Counter
 from datetime import datetime, timedelta
+from datetime import timezone as date_tz
 from io import BytesIO, TextIOWrapper
 from random import randint, sample, uniform
 from urllib.parse import unquote, urlencode
@@ -2098,8 +2099,8 @@ class AuctionStats(DetailView, AuctionPermissionsMixin):
                 self.request,
                 "This auction is still in progress, check back once it's finished for more complete stats",
             )
-        if self.get_object().date_posted < timezone.make_aware(
-            datetime(year=2024, month=1, day=1, tzinfo=datetime.timezone.utc)
+        if self.get_object().date_posted < datetime(
+            year=2024, month=1, day=1, tzinfo=date_tz.utc
         ):
             messages.info(self.request, "Not all stats are available for old auctions.")
         return context
@@ -5447,9 +5448,7 @@ class AdminDashboard(TemplateView):
             .count()
         )
         invoiceqs = (
-            Invoice.objects.filter(
-                date__gte=datetime(2021, 6, 15, tzinfo=datetime.timezone.utc)
-            )
+            Invoice.objects.filter(date__gte=datetime(2021, 6, 15, tzinfo=date_tz.utc))
             .filter(seller_invoice__winner__isnull=False)
             .distinct()
         )
