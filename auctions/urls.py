@@ -174,6 +174,11 @@ urlpatterns = [
         name="auction_tos_list",
     ),
     path(
+        "auctions/<slug:slug>/help/",
+        login_required(views.AuctionHelp.as_view()),
+        name="auction_help",
+    ),
+    path(
         "auctions/<slug:slug>/users/bulk-add/",
         login_required(views.BulkAddUsers.as_view()),
         name="bulk_add_users",

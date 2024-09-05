@@ -1317,6 +1317,20 @@ class Auction(models.Model):
             return reverse("edit_pickup", kwargs={"pk": self.location_qs.first().pk})
         return reverse("auction_pickup_location", kwargs={"slug": self.slug})
 
+    @property
+    def video_tutorial(self):
+        if self.is_online:
+            return settings.ONLINE_TUTORIAL_YOUTUBE_ID
+        else:
+            return settings.IN_PERSON_TUTORIAL_YOUTUBE_ID
+
+    @property
+    def video_tutorial_chapters(self):
+        if self.is_online:
+            return settings.ONLINE_TUTORIAL_CHAPTERS
+        else:
+            return settings.IN_PERSON_TUTORIAL_CHAPTERS
+
 
 class PickupLocation(models.Model):
     """

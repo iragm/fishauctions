@@ -1,0 +1,69 @@
+<div class="video-container">
+  <div id="player_{{videoId}}" class="embed-responsive"></div>
+</div>
+
+<script>
+  var tag = document.createElement('script');
+  tag.src = "https://www.youtube.com/iframe_api";
+  var firstScriptTag = document.getElementsByTagName('script')[0];
+  firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+
+  var players = {};
+
+  function onYouTubeIframeAPIReady() {
+    var videoElements = document.querySelectorAll('[id^=player_]');
+    videoElements.forEach(function(el) {
+      var videoId = el.id.replace('player_', '');
+      players[videoId] = new YT.Player(el.id, {
+        height: getPlayerHeight(),
+        width: getPlayerWidth(),
+        videoId: videoId,
+        playerVars: {
+          'playsinline': 1
+        },
+      });
+    });
+  }
+
+  function jumpToTime(videoId, seconds) {
+    if (players[videoId] && players[videoId].seekTo) {
+      players[videoId].seekTo(seconds, true);
+      players[videoId].playVideo();
+    }
+  }
+
+  // Helper functions to get responsive width and height
+  function getPlayerWidth() {
+    if (window.innerWidth >= 1024) {
+      return 875; // Larger width for tablets and desktops
+    } else {
+      return 583; // Default width for smaller screens (phones)
+    }
+  }
+
+  function getPlayerHeight() {
+    if (window.innerWidth >= 1024) {
+      return 531; // Corresponding height for the larger width
+    } else {
+      return 354; // Default height for smaller screens
+    }
+  }
+
+  // Recalculate the player sizes on window resize
+  window.addEventListener('resize', function() {
+    Object.keys(players).forEach(function(videoId) {
+      players[videoId].setSize(getPlayerWidth(), getPlayerHeight());
+    });
+  });
+</script>
+
+{% if chapters %}
+<div>
+    <h5>Jump to content in this video</h5>
+    <ul>
+      {% for seconds, chapter in chapters %}
+      <li><a href="javascript:void(0)" onclick="jumpToTime('{{videoId}}', {{seconds}})">{{ chapter }}</a></li>
+      {% endfor %}
+    </ul>
+</div>
+{% endif %}
