@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Help for {{ auction }}{% endblock %}
+{% load static %}
+{% block content %}
+  {% include 'auction_ribbon.html' %}
+  <h5>Help and support</h5>
+  <div>
+    This video will walk you through the entire process of running your auction.
+  </div>
+  {% include 'youtube_embed.html' with videoId=auction.video_tutorial chapters=auction.video_tutorial_chapters %}
+  <div>
+    <h5>Still got questions?</h5>
+    <a href="{% url 'faq' %}">The FAQ covers nearly all questions</a><p>
+  </div>
+  <div>
+    <h5>Found a bug?  Got a request for a new feature?</h5>
+    <a href="https://github.com/iragm/fishauctions/issues/">Open a GitHub issue</a><br>
+    <small><span class='text-muted'>Github is the best place to report issues and suggest features, as other uses can provide feedback.</span></small><p>
+  </div>
+  <div>
+    <h5>Still need help?</h5>
+    Contact me at {{ admin_email | urlize }}<br>
+    <small><span class='text-muted'>Please, watch the video and read the FAQ <span class='text-warning'>before</span> emailing.  This is a volunteer-run project and help is provided on a limited basis.</span></small>
+  </div>
+
+
+{% endblock %}
+{% block extra_js %}
+{% endblock %}

@@ -394,7 +394,8 @@ class LotListView(AjaxListView):
     model = Lot
     template_name = "all_lots.html"
     auction = None
-    routeByLastAuction = False  # to display the banner telling users why they are not seeing lots for all auctions
+    # to display the banner telling users why they are not seeing lots for all auctions
+    routeByLastAuction = False
 
     def get_page_template(self):
         try:
@@ -1398,7 +1399,7 @@ def auctionReport(request, slug):
             .order_by("createdon")
         )
         # .annotate(distance_traveled=distance_to(\
-        #'`auctions_userdata`.`latitude`', '`auctions_userdata`.`longitude`', \
+        # '`auctions_userdata`.`latitude`', '`auctions_userdata`.`longitude`', \
         # lat_field_name='`auctions_pickuplocation`.`latitude`',\
         # lng_field_name="`auctions_pickuplocation`.`longitude`",\
         # approximate_distance_to=1)\
@@ -2017,6 +2018,24 @@ class AuctionLots(SingleTableMixin, FilterView, AuctionPermissionsMixin):
         context["active_tab"] = "lots"
         context["auction"] = self.auction
         # context['filter'] = LotAdminFilter(auction = self.auction)
+        return context
+
+
+class AuctionHelp(AdminEmailMixin, TemplateView, AuctionPermissionsMixin):
+    template_name = "auction_help.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        self.auction = (
+            Auction.objects.exclude(is_deleted=True)
+            .filter(slug=kwargs.pop("slug"))
+            .first()
+        )
+        self.is_auction_admin
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["auction"] = self.auction
         return context
 
 
@@ -4063,6 +4082,10 @@ class PromoSite(TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["hide_google_login"] = True
+        context["online_tutorial"] = settings.ONLINE_TUTORIAL_YOUTUBE_ID
+        context["in_person_tutorial"] = settings.IN_PERSON_TUTORIAL_YOUTUBE_ID
+        context["in_person_tutorial_chapters"] = settings.IN_PERSON_TUTORIAL_CHAPTERS
+        context["online_tutorial_chapters"] = settings.ONLINE_TUTORIAL_CHAPTERS
         return context
 
 
@@ -4243,7 +4266,8 @@ class AllLots(LotListView, AuctionPermissionsMixin):
     """Show all lots"""
 
     rewrite_url = (
-        None  # use JS to rewrite the shown URL.  This is used only for auctions.
+        # use JS to rewrite the shown URL.  This is used only for auctions.
+        None
     )
     auction = None
     allow_non_admins = True
@@ -4339,7 +4363,8 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
     template_name = "invoice.html"
     model = Invoice
     # form_class = InvoiceUpdateForm
-    form_view = "opened"  # expects opened or printed, this field will be set to true when the user the invoice is for opens it
+    # expects opened or printed, this field will be set to true when the user the invoice is for opens it
+    form_view = "opened"
     allow_non_admins = True
     authorized_by_default = False
 
@@ -4749,7 +4774,8 @@ class LotLabelView(View, AuctionPermissionsMixin):
                     style,
                 )
                 labels_row.append([label_text_cell])
-                labels_row.append([Paragraph("", style)])  # margin right cell is empty
+                # margin right cell is empty
+                labels_row.append([Paragraph("", style)])
 
             # Check if the current label is the last label in the current row or the last label in the list
             if (i + 1) % num_cols == 0 or i == len(labels) - 1:
@@ -5149,7 +5175,8 @@ class UsernameUpdate(UpdateView, SuccessMessageMixin):
     def get_success_url(self):
         data = self.request.GET.copy()
         if len(data) == 0:
-            data["next"] = reverse("account")  # "/users/" + str(self.kwargs['pk'])
+            # "/users/" + str(self.kwargs['pk'])
+            data["next"] = reverse("account")
         return data["next"]
 
 
@@ -5922,7 +5949,7 @@ class AuctionStatsAttritionJSONView(BaseLineChartView, AuctionStatsPermissionsMi
             {
                 "x": (lot.date_end - self.end_date).total_seconds()
                 // 60,  # minutes after auction start
-                #'x': lot.date_end.timestamp() * 1000, # this one gives js timestamps and would need moment.js to convert to date
+                # 'x': lot.date_end.timestamp() * 1000, # this one gives js timestamps and would need moment.js to convert to date
                 "y": lot.winning_price,
             }
             for lot in self.lots

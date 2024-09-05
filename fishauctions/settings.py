@@ -90,7 +90,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "django_extensions",
-    #'site_settings',
+    # 'site_settings',
     "crispy_forms",
     "django.contrib.sites",
     "allauth",
@@ -104,7 +104,7 @@ INSTALLED_APPS = [
     "post_office",
     "location_field",
     "channels",
-    #'debug_toolbar', # having this enabled is handy for sql queries but silences errors in channels
+    # 'debug_toolbar', # having this enabled is handy for sql queries but silences errors in channels
     "markdownfield",
     "qr_code",
     "django_tables2",
@@ -312,7 +312,7 @@ THUMBNAIL_ALIASES = {
     "": {
         "ad": {"size": (250, 150), "crop": False},
         "lot_list": {"size": (250, 150), "crop": "smart"},
-        #'lot_full': {'size': (600, 600), 'crop': False},
+        # 'lot_full': {'size': (600, 600), 'crop': False},
     },
 }
 THUMBNAIL_DEFAULT_STORAGE_ALIAS = "default"
@@ -377,7 +377,8 @@ STATICFILES_FINDERS = [
 
 DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
 
-SEND_WELCOME_EMAIL = True  # when a user adds an unverified email address to their auction, send an email about the site
+# when a user adds an unverified email address to their auction, send an email about the site
+SEND_WELCOME_EMAIL = True
 
 DATA_UPLOAD_MAX_NUMBER_FIELDS = 20000
 
@@ -442,3 +443,53 @@ IGNORE_WORDS = [
     "new",
     "test",
 ]
+ONLINE_TUTORIAL_YOUTUBE_ID = "mNcOjAakC4c"
+ONLINE_TUTORIAL_CHAPTERS = (
+    (0, "Intro"),
+    (45, "Account creation"),
+    (1 * 60 + 25, "Auction creation"),
+    (1 * 60 + 49, "Setting the location to exchange lots"),
+    (2 * 60 + 37, "Rules"),
+    (4 * 60 + 2, "Joining the auction"),
+    (5 * 60 + 2, "Adding lots"),
+    (6 * 60 + 30, "Copying lots"),
+    (6 * 60 + 51, "Issues with joining your auction"),
+    (8 * 60 + 58, "Bidding and proxy bidding"),
+    (9 * 60 + 49, "Sniping and the end of the auction"),
+    (11 * 60 + 11, "Invoices"),
+    (12 * 60 + 9, "Paypal Batch Invoicing"),
+    (13 * 60 + 12, "What happens if someone doesn't pay?"),
+    (14 * 60 + 20, "Lot labels"),
+    (15 * 60 + 23, "Stats"),
+    (17 * 60 + 13, "Multi-location auctions"),
+    (19 * 60 + 29, "Help and support"),
+)
+IN_PERSON_TUTORIAL_YOUTUBE_ID = "BXnoMMU_aCQ"
+IN_PERSON_TUTORIAL_CHAPTERS = (
+    (0, "Intro"),
+    (36, "Account creation"),
+    (1 * 60 + 17, "Auction creation"),
+    (1 * 60 + 45, "Rules"),
+    (2 * 60 + 54, "Location"),
+    (3 * 60 + 22, "Joining the auction"),
+    (3 * 60 + 44, "Adding users manually"),
+    (4 * 60 + 31, "Users joining your auction"),
+    (4 * 60 + 47, "Auction administrators"),
+    (5 * 60 + 42, "Adding lots"),
+    (6 * 60 + 10, "Editing lots"),
+    (6 * 60 + 34, "Users adding lots"),
+    (7 * 60 + 38, "Lot labels"),
+    (8 * 60 + 37, "The auction itself: Set lot winners"),
+    (9 * 60 + 50, "Some common issues with selling lots"),
+    (11 * 60 + 1, "Invoices and payments"),
+    (13 * 60 + 3, "Auction hall layout"),
+    (14 * 60 + 5, "Images and lots"),
+    (14 * 60 + 45, "Selling fees discounts for club members"),
+    (15 * 60 + 52, "Changing bidder numbers"),
+    (16 * 60 + 38, "Stats"),
+    (18 * 60 + 54, "Attrition and Buy Now"),
+    (22 * 60 + 50, "Reusing rules in your next auction"),
+    (23 * 60 + 25, "Copying users between auctions"),
+    (24 * 60 + 00, "Advertising"),
+    (24 * 60 + 52, "Help and Support"),
+)
