@@ -223,7 +223,8 @@ class UserAdmin(BaseUserAdmin):
     def last_activity(self, obj):
         return obj.userdata.last_activity
 
-    last_activity.admin_order_field = "userdata__last_activity"  # this doesn't seem to work, but you can use this url: admin/auth/user/?o=-4
+    # this doesn't seem to work, but you can use this url: admin/auth/user/?o=-4
+    last_activity.admin_order_field = "userdata__last_activity"
     last_activity.short_description = "Last activity"
 
 

@@ -395,8 +395,8 @@ class WinnerLotSimpleImages(WinnerLotSimple):
         self.helper.layout = Layout(
             "invoice",
             "auction",
-            #'lot',
-            #'winner',
+            # 'lot',
+            # 'winner',
             # <div class="col-md-3">
             #     <div id="div_id_winning_price" class="form-group">
             #             <div class="">
@@ -729,7 +729,7 @@ class EditLot(forms.ModelForm):
             "auction",
             "species_category",
             "description",
-            #'auctiontos_seller',
+            # 'auctiontos_seller',
             "quantity",
             "donation",
             "i_bred_this_fish",
@@ -741,7 +741,7 @@ class EditLot(forms.ModelForm):
         ]
         widgets = {
             "description": forms.Textarea(attrs={"rows": 2}),
-            #'auctiontos_seller': autocomplete.ModelSelect2(url='auctiontos-autocomplete', forward=['auction'], attrs={'data-html': True, 'data-container-css-class': ''}),
+            # 'auctiontos_seller': autocomplete.ModelSelect2(url='auctiontos-autocomplete', forward=['auction'], attrs={'data-html': True, 'data-container-css-class': ''}),
             "auctiontos_winner": autocomplete.ModelSelect2(
                 url="auctiontos-autocomplete",
                 forward=["auction"],
@@ -1411,8 +1411,8 @@ class PickupLocationForm(forms.ModelForm):
                         "The pin on the map must be at the <span class='text-warning'>exact location of the pickup location!</span><br><small>People will get directions based on this pin, and will get lost if it's not in the right place</small>"
                     ),
                 ),
-                #'allow_selling_by_default',
-                #'allow_bidding_by_default',
+                # 'allow_selling_by_default',
+                # 'allow_bidding_by_default',
                 css_id="non-mail",
             ),
             "description",
@@ -1497,7 +1497,7 @@ class CreateAuctionForm(forms.ModelForm):
         ]
         widgets = {
             "date_start": DateTimePickerInput(),
-            #'is_online': HiddenInput(),
+            # 'is_online': HiddenInput(),
         }
 
     def __init__(self, *args, **kwargs):
@@ -1974,8 +1974,8 @@ class CreateLotForm(forms.ModelForm):
         exclude = ["user", "image", "image_source"]
         widgets = {
             "description": forms.Textarea(),
-            #'species': forms.HiddenInput(),
-            #'cloned_from': forms.HiddenInput(),
+            # 'species': forms.HiddenInput(),
+            # 'cloned_from': forms.HiddenInput(),
             "shipping_locations": forms.CheckboxSelectMultiple(),
         }
 

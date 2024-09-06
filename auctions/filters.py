@@ -45,7 +45,7 @@ class AuctionTOSFilter(django_filters.FilterSet):
                 "hx-target": "div.table-container",
                 "hx-trigger": "keyup changed delay:300ms",
                 "hx-swap": "outerHTML",
-                #'hx-indicator':".progress",
+                # 'hx-indicator':".progress",
             }
         ),
     )
@@ -234,7 +234,7 @@ class LotAdminFilter(django_filters.FilterSet):
                 "hx-target": "div.table-container",
                 "hx-trigger": "keyup changed delay:300ms",
                 "hx-swap": "outerHTML",
-                #'hx-indicator':".progress",
+                # 'hx-indicator':".progress",
             }
         ),
     )
@@ -309,7 +309,8 @@ class LotFilter(django_filters.FilterSet):
                 self.longitude = self.user.userdata.longitude
         except:
             pass
-        self.showLocal = True  # annotate lots with the distance to the request user, requires self.latitude and self.longitude
+        # annotate lots with the distance to the request user, requires self.latitude and self.longitude
+        self.showLocal = True
         try:
             if not self.latitude and not self.longitude:
                 self.showLocal = False
@@ -325,14 +326,17 @@ class LotFilter(django_filters.FilterSet):
         if self.user.is_superuser:
             self.showBanned = True
         else:
-            self.showBanned = False  # this is really only set to true if you are viewing your own lots
-        self.showViewed = "all"  # could be "yes" or "no", only matters for authenticated users, set to no to only see unseen things
+            # this is really only set to true if you are viewing your own lots
+            self.showBanned = False
+        # could be "yes" or "no", only matters for authenticated users, set to no to only see unseen things
+        self.showViewed = "all"
         try:
             if kwargs.pop("onlyUnviewed"):
                 self.showViewed = "no"
         except:
             pass
-        self.status = "open"  # "all", "open", "unsold", or "ended".  If regarding an auction, should default to all
+        # "all", "open", "unsold", or "ended".  If regarding an auction, should default to all
+        self.status = "open"
         self.showShipping = True
         self.shippingLocation = (
             52  # USA, later we might set this with a cookie like we do with lat and lng
@@ -357,7 +361,8 @@ class LotFilter(django_filters.FilterSet):
         try:
             self.regardingUser = kwargs.pop("regardingUser")
         except:
-            self.regardingUser = None  # force only displaying lots for a particular user (not necessarily the request user)
+            # force only displaying lots for a particular user (not necessarily the request user)
+            self.regardingUser = None
         try:
             self.order = kwargs.pop(
                 "order"
