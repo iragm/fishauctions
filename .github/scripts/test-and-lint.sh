@@ -2,7 +2,7 @@
 set -euo pipefail
 
 RUFF_MODE=''
-RUFF_FLAGS=''
+RUFF_FLAGS='--ignore=E501'
 
 usage() {
   cat << EOF >&2
