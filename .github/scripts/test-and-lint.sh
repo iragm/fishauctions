@@ -49,8 +49,8 @@ process_args() {
 process_args "$@"
 
 if [ -z ${IS_CI+x} ]; then
-  eval "ruff ${RUFF_MODE} /home/app/web ${RUFF_FLAGS} --ignore=E501"
+  eval "ruff ${RUFF_MODE} /home/app/web ${RUFF_FLAGS}"
 else
-  ruff format /home/app/web --check --ignore=E501
-  ruff check /home/app/web --ignore=E501
+  ruff format /home/app/web --check
+  ruff check /home/app/web
 fi
