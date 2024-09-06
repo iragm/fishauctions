@@ -34,9 +34,7 @@ class StandardTestCase(TestCase):
         time = timezone.now() - datetime.timedelta(days=2)
         timeStart = timezone.now() - datetime.timedelta(days=3)
         theFuture = timezone.now() + datetime.timedelta(days=3)
-        self.user = User.objects.create_user(
-            username="my_lot", password="testpassword", email="test@example.com"
-        )
+        self.user = User.objects.create_user(username="my_lot", password="testpassword", email="test@example.com")
         self.online_auction = Auction.objects.create(
             created_by=self.user,
             title="This auction is online",
@@ -62,12 +60,8 @@ class StandardTestCase(TestCase):
         self.location = PickupLocation.objects.create(
             name="location", auction=self.online_auction, pickup_time=theFuture
         )
-        self.userB = User.objects.create_user(
-            username="no_tos", password="testpassword"
-        )
-        self.tos = AuctionTOS.objects.create(
-            user=self.user, auction=self.online_auction, pickup_location=self.location
-        )
+        self.userB = User.objects.create_user(username="no_tos", password="testpassword")
+        self.tos = AuctionTOS.objects.create(user=self.user, auction=self.online_auction, pickup_location=self.location)
         self.tosB = AuctionTOS.objects.create(
             user=self.userB, auction=self.online_auction, pickup_location=self.location
         )
@@ -147,19 +141,11 @@ class ViewLotTest(TestCase):
         time = timezone.now() - datetime.timedelta(days=2)
         timeStart = timezone.now() - datetime.timedelta(days=3)
         theFuture = timezone.now() + datetime.timedelta(days=3)
-        self.auction = Auction.objects.create(
-            title="A test auction", date_end=time, date_start=timeStart
-        )
-        self.location = PickupLocation.objects.create(
-            name="location", auction=self.auction, pickup_time=theFuture
-        )
+        self.auction = Auction.objects.create(title="A test auction", date_end=time, date_start=timeStart)
+        self.location = PickupLocation.objects.create(name="location", auction=self.auction, pickup_time=theFuture)
         self.user = User.objects.create_user(username="my_lot", password="testpassword")
-        self.userB = User.objects.create_user(
-            username="no_tos", password="testpassword"
-        )
-        self.tos = AuctionTOS.objects.create(
-            user=self.user, auction=self.auction, pickup_location=self.location
-        )
+        self.userB = User.objects.create_user(username="no_tos", password="testpassword")
+        self.tos = AuctionTOS.objects.create(user=self.user, auction=self.auction, pickup_location=self.location)
         self.lot = Lot.objects.create(
             lot_name="A test lot",
             date_end=theFuture,
@@ -171,9 +157,7 @@ class ViewLotTest(TestCase):
         )
         self.url = reverse("lot_by_pk", kwargs={"pk": self.lot.pk})
         # Create a user for the logged-in scenario
-        self.userC = User.objects.create_user(
-            username="testuser", password="testpassword"
-        )
+        self.userC = User.objects.create_user(username="testuser", password="testpassword")
 
     def test_non_logged_in_user(self):
         response = self.client.get(self.url)
@@ -192,9 +176,7 @@ class ViewLotTest(TestCase):
         self.assertContains(response, "You can't bid on your own lot")
 
     def test_with_tos_on_new_lot(self):
-        AuctionTOS.objects.create(
-            user=self.userB, auction=self.auction, pickup_location=self.location
-        )
+        AuctionTOS.objects.create(user=self.userB, auction=self.auction, pickup_location=self.location)
         self.client.login(username="no_tos", password="testpassword")
         response = self.client.get(self.url)
         self.assertContains(response, "This lot is very new")
@@ -207,9 +189,7 @@ class AuctionModelTests(TestCase):
         time = timezone.now() - datetime.timedelta(days=2)
         timeStart = timezone.now() - datetime.timedelta(days=3)
         theFuture = timezone.now() + datetime.timedelta(days=3)
-        auction = Auction.objects.create(
-            title="A test auction", date_end=time, date_start=timeStart
-        )
+        auction = Auction.objects.create(title="A test auction", date_end=time, date_start=timeStart)
         user = User.objects.create(username="Test user")
         lot = Lot.objects.create(
             lot_name="A test lot",
@@ -225,9 +205,7 @@ class AuctionModelTests(TestCase):
     def test_auction_start_and_end(self):
         timeStart = timezone.now() - datetime.timedelta(days=2)
         timeEnd = timezone.now() + datetime.timedelta(minutes=60)
-        auction = Auction.objects.create(
-            title="A test auction", date_end=timeEnd, date_start=timeStart
-        )
+        auction = Auction.objects.create(title="A test auction", date_end=timeEnd, date_start=timeStart)
         assert auction.closed is False
         assert auction.ending_soon is True
         assert auction.started is True
@@ -482,9 +460,7 @@ class ChatSubscriptionTests(TestCase):
         sub = ChatSubscription.objects.get(lot=my_lot, user=lotuser)
         sub.last_seen = timezone.now() + datetime.timedelta(minutes=15)
         sub.save()
-        sub = ChatSubscription.objects.get(
-            lot=my_lot_that_is_unsubscribed, user=lotuser
-        )
+        sub = ChatSubscription.objects.get(lot=my_lot_that_is_unsubscribed, user=lotuser)
         sub.unsubscribed = True
         sub.save()
         ChatSubscription.objects.create(lot=someone_elses_lot, user=lotuser)
@@ -641,9 +617,7 @@ class LotPricesTests(TestCase):
         time = timezone.now() - datetime.timedelta(days=2)
         timeStart = timezone.now() - datetime.timedelta(days=3)
         theFuture = timezone.now() + datetime.timedelta(days=3)
-        self.user = User.objects.create_user(
-            username="my_lot", password="testpassword", email="test@example.com"
-        )
+        self.user = User.objects.create_user(username="my_lot", password="testpassword", email="test@example.com")
         self.auction = Auction.objects.create(
             created_by=self.user,
             title="A test auction",
@@ -654,18 +628,10 @@ class LotPricesTests(TestCase):
             unsold_lot_fee=10,
             tax=25,
         )
-        self.location = PickupLocation.objects.create(
-            name="location", auction=self.auction, pickup_time=theFuture
-        )
-        self.userB = User.objects.create_user(
-            username="no_tos", password="testpassword"
-        )
-        self.tos = AuctionTOS.objects.create(
-            user=self.user, auction=self.auction, pickup_location=self.location
-        )
-        self.tosB = AuctionTOS.objects.create(
-            user=self.userB, auction=self.auction, pickup_location=self.location
-        )
+        self.location = PickupLocation.objects.create(name="location", auction=self.auction, pickup_time=theFuture)
+        self.userB = User.objects.create_user(username="no_tos", password="testpassword")
+        self.tos = AuctionTOS.objects.create(user=self.user, auction=self.auction, pickup_location=self.location)
+        self.tosB = AuctionTOS.objects.create(user=self.userB, auction=self.auction, pickup_location=self.location)
         self.lot = Lot.objects.create(
             lot_name="A test lot",
             auction=self.auction,
@@ -772,9 +738,7 @@ class SetLotWinnerViewTest(TestCase):
         time = timezone.now() - datetime.timedelta(days=2)
         timeStart = timezone.now() - datetime.timedelta(days=3)
         theFuture = timezone.now() + datetime.timedelta(days=3)
-        self.user = User.objects.create_user(
-            username="testuser", password="testpassword"
-        )
+        self.user = User.objects.create_user(username="testuser", password="testpassword")
         self.user2 = User.objects.create_user(username="testuser2", password="password")
         self.auction = Auction.objects.create(
             created_by=self.user,
@@ -786,9 +750,7 @@ class SetLotWinnerViewTest(TestCase):
             unsold_lot_fee=10,
             tax=25,
         )
-        self.location = PickupLocation.objects.create(
-            name="location", auction=self.auction, pickup_time=theFuture
-        )
+        self.location = PickupLocation.objects.create(name="location", auction=self.auction, pickup_time=theFuture)
         self.seller = AuctionTOS.objects.create(
             user=self.user,
             auction=self.auction,
@@ -836,9 +798,7 @@ class SetLotWinnerViewTest(TestCase):
                 "auction": 5,  # this is not used anywhere, but still required
             },
         )
-        assert (
-            response.status_code == 302
-        )  # Should redirect after successful form submission
+        assert response.status_code == 302  # Should redirect after successful form submission
         updated_lot = Lot.objects.get(pk=self.lot.pk)
         assert updated_lot.auctiontos_winner == self.bidder
         assert updated_lot.winning_price == 100
@@ -959,9 +919,7 @@ class SetLotWinnerViewTest(TestCase):
         )
         assert response.status_code == 200  # Form should not be submitted successfully
         updated_lot = Lot.objects.get(pk=self.lot.pk)
-        assert (
-            updated_lot.auctiontos_winner == self.bidder
-        )  # Lot winner should remain unchanged
+        assert updated_lot.auctiontos_winner == self.bidder  # Lot winner should remain unchanged
         assert updated_lot.winning_price == 100  # Winning price should remain unchanged
 
 
@@ -970,9 +928,7 @@ class LotRefundDialogTests(TestCase):
         time = timezone.now() - datetime.timedelta(days=2)
         timeStart = timezone.now() - datetime.timedelta(days=3)
         theFuture = timezone.now() + datetime.timedelta(days=3)
-        self.user = User.objects.create_user(
-            username="testuser", password="testpassword"
-        )
+        self.user = User.objects.create_user(username="testuser", password="testpassword")
         self.user2 = User.objects.create_user(username="testuser2", password="password")
         self.auction = Auction.objects.create(
             created_by=self.user,
@@ -984,9 +940,7 @@ class LotRefundDialogTests(TestCase):
             unsold_lot_fee=10,
             tax=25,
         )
-        self.location = PickupLocation.objects.create(
-            name="location", auction=self.auction, pickup_time=theFuture
-        )
+        self.location = PickupLocation.objects.create(name="location", auction=self.auction, pickup_time=theFuture)
         self.seller = AuctionTOS.objects.create(
             user=self.user,
             auction=self.auction,
@@ -1028,9 +982,7 @@ class LotRefundDialogTests(TestCase):
         self.lot_url = reverse("lot_refund", kwargs={"pk": self.lot.pk})
 
     def test_lot_not_in_auction(self):
-        response = self.client.get(
-            reverse("lot_refund", kwargs={"pk": self.lot_not_in_auction.pk})
-        )
+        response = self.client.get(reverse("lot_refund", kwargs={"pk": self.lot_not_in_auction.pk}))
         assert response.status_code == 404
 
     def test_get_lot_refund_dialog(self):

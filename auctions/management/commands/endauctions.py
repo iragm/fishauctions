@@ -25,9 +25,7 @@ def fix_seller_info(part_of_auction):
         auctiontos_seller__isnull=True, auction__auctiontos__user=F("user")
     )
     for lot in needs_auctiontos_seller_filled_out:
-        auctionTOS = AuctionTOS.objects.filter(
-            user=lot.user, auction=lot.auction
-        ).first()
+        auctionTOS = AuctionTOS.objects.filter(user=lot.user, auction=lot.auction).first()
         lot.auctiontos_seller = auctionTOS
         lot.save()  # presave receiver will make an invoice for this lot/seller
 
@@ -65,7 +63,9 @@ def declare_winners_on_lots(lots):
                     pass
                 else:
                     info = None
-                    if lot.high_bidder:  # and not lot.sold: # not sure what that was here, we already filter this in the if above
+                    if (
+                        lot.high_bidder
+                    ):  # and not lot.sold: # not sure what that was here, we already filter this in the if above
                         lot.winner = lot.high_bidder
                         lot.winning_price = lot.high_bid
                         info = "LOT_END_WINNER"
@@ -106,9 +106,7 @@ def declare_winners_on_lots(lots):
                         auctiontos_winner = lot.auctiontos_winner
                     else:
                         # look for the TOS and create the invoice
-                        auctiontos_winner = AuctionTOS.objects.filter(
-                            auction=lot.auction, user=lot.high_bidder
-                        ).first()
+                        auctiontos_winner = AuctionTOS.objects.filter(auction=lot.auction, user=lot.high_bidder).first()
                         if auctiontos_winner:
                             lot.auctiontos_winner = auctiontos_winner
                             lot.save()
@@ -149,25 +147,15 @@ def declare_winners_on_lots(lots):
                 if not lot.auction:
                     if lot.winner and lot.relist_if_sold and (not lot.relist_countdown):
                         sendNoRelistWarning = True
-                    if (
-                        (not lot.winner)
-                        and lot.relist_if_not_sold
-                        and (not lot.relist_countdown)
-                    ):
+                    if (not lot.winner) and lot.relist_if_not_sold and (not lot.relist_countdown):
                         sendNoRelistWarning = True
                     if lot.winner and lot.relist_if_sold and lot.relist_countdown:
                         lot.relist_countdown -= 1
                         relist = True
-                    if (
-                        (not lot.winner)
-                        and lot.relist_if_not_sold
-                        and lot.relist_countdown
-                    ):
+                    if (not lot.winner) and lot.relist_if_not_sold and lot.relist_countdown:
                         # no need to relist unsold lots, just decrement the countdown
                         lot.relist_countdown -= 1
-                        lot.date_end = timezone.now() + datetime.timedelta(
-                            days=lot.lot_run_duration
-                        )
+                        lot.date_end = timezone.now() + datetime.timedelta(days=lot.lot_run_duration)
                         lot.active = True
                         lot.seller_invoice = None
                         lot.buyer_invoice = None
@@ -184,9 +172,7 @@ def declare_winners_on_lots(lots):
                     originalImages = LotImage.objects.filter(lot_number=lot.pk)
                     originalPk = lot.pk
                     lot.pk = None  # create a new, duplicate lot
-                    lot.date_end = timezone.now() + datetime.timedelta(
-                        days=lot.lot_run_duration
-                    )
+                    lot.date_end = timezone.now() + datetime.timedelta(days=lot.lot_run_duration)
                     lot.active = True
                     lot.winner = None
                     lot.winning_price = None
@@ -194,9 +180,7 @@ def declare_winners_on_lots(lots):
                     lot.buyer_invoice = None
                     lot.buy_now_used = False
                     lot.save()
-                    for location in Lot.objects.get(
-                        lot_number=originalPk
-                    ).shipping_locations.all():
+                    for location in Lot.objects.get(lot_number=originalPk).shipping_locations.all():
                         lot.shipping_locations.add(location)
                     for originalImage in originalImages:
                         newImage = LotImage.objects.create(
@@ -235,9 +219,7 @@ def fix_winner_info(part_of_auction):
         auction__auctiontos__user=F("winner"),
     )
     for lot in needs_auctiontos_winner_filled_out:
-        auctionTOS = AuctionTOS.objects.filter(
-            user=lot.winner, auction=lot.auction
-        ).first()
+        auctionTOS = AuctionTOS.objects.filter(user=lot.winner, auction=lot.auction).first()
         lot.auctiontos_winner = auctionTOS
         lot.save()
         invoice, created = Invoice.objects.get_or_create(

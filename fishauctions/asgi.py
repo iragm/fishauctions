@@ -27,9 +27,7 @@ application = ProtocolTypeRouter(
             AuthMiddlewareStack(
                 URLRouter(
                     [
-                        re_path(
-                            r"ws/lots/(?P<lot_number>\w+)/$", LotConsumer.as_asgi()
-                        ),
+                        re_path(r"ws/lots/(?P<lot_number>\w+)/$", LotConsumer.as_asgi()),
                     ]
                 )
             )

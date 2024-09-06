@@ -101,9 +101,7 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name="lot",
             name="slug",
-            field=autoslug.fields.AutoSlugField(
-                editable=False, populate_from="lot_name"
-            ),
+            field=autoslug.fields.AutoSlugField(editable=False, populate_from="lot_name"),
         ),
         migrations.AlterField(
             model_name="userban",

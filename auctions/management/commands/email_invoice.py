@@ -9,14 +9,9 @@ class Command(BaseCommand):
     help = "Email the winner to pay up on all invoices"
 
     def handle(self, *args, **options):
-        invoices = Invoice.objects.exclude(status="DRAFT").filter(
-            auction__isnull=False, email_sent=False
-        )
+        invoices = Invoice.objects.exclude(status="DRAFT").filter(auction__isnull=False, email_sent=False)
         for invoice in invoices:
-            if (
-                invoice.auction.email_users_when_invoices_ready
-                and invoice.auctiontos_user.email
-            ):
+            if invoice.auction.email_users_when_invoices_ready and invoice.auctiontos_user.email:
                 email = invoice.auctiontos_user.email
                 status = "is ready"
                 if invoice.status == "PAID":

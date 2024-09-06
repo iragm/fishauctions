@@ -7,23 +7,13 @@ from .models import AuctionTOS, Lot
 
 class AuctionTOSHTMxTable(tables.Table):
     hide_string = "d-md-table-cell d-none"
-    bidder_number = tables.Column(
-        accessor="bidder_number", verbose_name="ID", orderable=True
-    )
+    bidder_number = tables.Column(accessor="bidder_number", verbose_name="ID", orderable=True)
     # id = tables.Column(accessor='display_name_for_admins', verbose_name="ID", orderable=False)
     # phone = tables.Column(accessor='phone_as_string', verbose_name="Phone", orderable=False)
-    invoice_link = tables.Column(
-        accessor="invoice_link_html", verbose_name="Invoice", orderable=False
-    )
-    add_lot_link = tables.Column(
-        accessor="bulk_add_link_html", verbose_name="Add lots", orderable=False
-    )
-    print_invoice_link = tables.Column(
-        accessor="print_invoice_link_html", verbose_name="Lot labels", orderable=False
-    )
-    email = tables.Column(
-        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}}
-    )
+    invoice_link = tables.Column(accessor="invoice_link_html", verbose_name="Invoice", orderable=False)
+    add_lot_link = tables.Column(accessor="bulk_add_link_html", verbose_name="Add lots", orderable=False)
+    print_invoice_link = tables.Column(accessor="print_invoice_link_html", verbose_name="Lot labels", orderable=False)
+    email = tables.Column(attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}})
 
     def render_name(self, value, record):
         # as a button, looks awful
@@ -31,7 +21,9 @@ class AuctionTOSHTMxTable(tables.Table):
         # as a link, looks better
         result = f"<a href='' hx-noget hx-get='/api/auctiontos/{record.pk}' hx-target='#modals-here' hx-trigger='click'><i class='bi bi-person-fill-gear me-1'></i>{value}</a>"
         if record.is_club_member:
-            result += '<span class="badge bg-info ms-1 me-1" title="Alternate selling fees will be applied">Member</span>'
+            result += (
+                '<span class="badge bg-info ms-1 me-1" title="Alternate selling fees will be applied">Member</span>'
+            )
         if not record.bidding_allowed:
             result += '<i class="text-danger bi bi-exclamation-octagon-fill" title="Bidding not allowed"></i>'
         # if not record.bidding_allowed:
@@ -44,9 +36,7 @@ class AuctionTOSHTMxTable(tables.Table):
         if record.email_address_status == "BAD":
             email_string += "<i class='bi bi-envelope-exclamation-fill text-danger ms-1' title='Unable to send email to this address'></i>"
         if record.email_address_status == "VALID":
-            email_string += (
-                "<i class='bi bi-envelope-check-fill ms-1' title='Verified email'></i>"
-            )
+            email_string += "<i class='bi bi-envelope-check-fill ms-1' title='Verified email'></i>"
         return mark_safe(email_string)
 
     class Meta:
@@ -74,9 +64,7 @@ class LotHTMxTable(tables.Table):
     seller = tables.Column(accessor="auctiontos_seller", verbose_name="Seller")
     winner = tables.Column(accessor="auctiontos_winner", verbose_name="Winner")
     winning_price = tables.Column(accessor="winning_price", verbose_name="Price")
-    lot_number = tables.Column(
-        accessor="lot_number_display", verbose_name="Lot number", orderable=False
-    )
+    lot_number = tables.Column(accessor="lot_number_display", verbose_name="Lot number", orderable=False)
 
     def render_lot_name(self, value, record):
         result = f"""
@@ -149,9 +137,7 @@ class LotHTMxTableForUsers(tables.Table):
     # bids = tables.Column(accessor='number_of_bids', verbose_name="Bids")
     # chats = tables.Column(accessor='all_chats', verbose_name="Messages")
     actions = tables.Column(accessor="all_chats", verbose_name="Actions")
-    auction = tables.Column(
-        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}}
-    )
+    auction = tables.Column(attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}})
 
     def render_active(self, value, record):
         if value:

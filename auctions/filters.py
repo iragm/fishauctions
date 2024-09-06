@@ -316,13 +316,9 @@ class LotFilter(django_filters.FilterSet):
                 self.showLocal = False
         except:
             self.showLocal = False
-        self.showOwnLots = (
-            True  # show lots from the request user. I don't think this is used anywhere
-        )
+        self.showOwnLots = True  # show lots from the request user. I don't think this is used anywhere
         self.maxRange = 70  # only applies if self.showLocal = True
-        self.showDeactivated = (
-            False  # show lots that users have deliberately deactivated
-        )
+        self.showDeactivated = False  # show lots that users have deliberately deactivated
         if self.user.is_superuser:
             self.showBanned = True
         else:
@@ -338,9 +334,7 @@ class LotFilter(django_filters.FilterSet):
         # "all", "open", "unsold", or "ended".  If regarding an auction, should default to all
         self.status = "open"
         self.showShipping = True
-        self.shippingLocation = (
-            52  # USA, later we might set this with a cookie like we do with lat and lng
-        )
+        self.shippingLocation = 52  # USA, later we might set this with a cookie like we do with lat and lng
         if self.user.is_authenticated:
             # lots for local pickup
             if self.user.userdata.local_distance:
@@ -355,37 +349,27 @@ class LotFilter(django_filters.FilterSet):
         try:
             self.regardingAuction = kwargs.pop("regardingAuction")
         except:
-            self.regardingAuction = (
-                None  # force only displaying lots from a particular auction
-            )
+            self.regardingAuction = None  # force only displaying lots from a particular auction
         try:
             self.regardingUser = kwargs.pop("regardingUser")
         except:
             # force only displaying lots for a particular user (not necessarily the request user)
             self.regardingUser = None
         try:
-            self.order = kwargs.pop(
-                "order"
-            )  # default ordering is just the most recent on top
+            self.order = kwargs.pop("order")  # default ordering is just the most recent on top
         except:
-            self.order = (
-                "-lot_number"  # default ordering is just the most recent on top
-            )
+            self.order = "-lot_number"  # default ordering is just the most recent on top
         forceAuction = None
         try:
             forceAuction = kwargs.pop("auction")
             if self.listType == "auction":
-                self.regardingAuction = Auction.objects.get(
-                    slug=forceAuction, is_deleted=False
-                )
+                self.regardingAuction = Auction.objects.get(slug=forceAuction, is_deleted=False)
         except:
             pass
         try:
             forceAuction = self.request.GET["auction"]
             if forceAuction != "no_auction":
-                self.regardingAuction = Auction.objects.get(
-                    slug=forceAuction, is_deleted=False
-                )
+                self.regardingAuction = Auction.objects.get(slug=forceAuction, is_deleted=False)
             else:
                 self.regardingAuction = None
         except:
@@ -411,9 +395,7 @@ class LotFilter(django_filters.FilterSet):
                 self.showShipping = False
         # an extra filter
         specialAuctions = Q(slug=regardingAuctionSlug)
-        self.possibleAuctions = Auction.objects.exclude(is_deleted=True).order_by(
-            "title"
-        )
+        self.possibleAuctions = Auction.objects.exclude(is_deleted=True).order_by("title")
         if self.user.is_authenticated:
             self.possibleAuctions = self.possibleAuctions.filter(
                 Q(auctiontos__user=self.user) | specialAuctions
@@ -484,11 +466,7 @@ class LotFilter(django_filters.FilterSet):
         queryset=Category.objects.all().order_by("name"),
         method="filter_by_category",
         empty_label="Any category",
-        widget=Select(
-            attrs=generate_attrs(
-                None, "Picking something here overrides your ignored categories"
-            )
-        ),
+        widget=Select(attrs=generate_attrs(None, "Picking something here overrides your ignored categories")),
     )
     status = django_filters.ChoiceFilter(
         label="",
@@ -571,11 +549,7 @@ class LotFilter(django_filters.FilterSet):
         if self.user.is_authenticated:
             # watched lots
             primary_queryset = primary_queryset.annotate(
-                is_watched_by_req_user=Exists(
-                    Watch.objects.filter(
-                        lot_number=OuterRef("lot_number"), user=self.user
-                    )
-                )
+                is_watched_by_req_user=Exists(Watch.objects.filter(lot_number=OuterRef("lot_number"), user=self.user))
             )
         if self.user.is_authenticated:
             # messages for owner of lot
@@ -616,9 +590,7 @@ class LotFilter(django_filters.FilterSet):
                 )
             )
         if self.order == "-recommended":
-            primary_queryset = primary_queryset.annotate(
-                recommended=Sum(0, output_field=IntegerField())
-            )
+            primary_queryset = primary_queryset.annotate(recommended=Sum(0, output_field=IntegerField()))
             if self.keywords:
                 for word in self.keywords:
                     primary_queryset = primary_queryset.annotate(
@@ -631,13 +603,12 @@ class LotFilter(django_filters.FilterSet):
                     )
             if self.user.is_authenticated:
                 interest = Subquery(
-                    UserInterestCategory.objects.filter(
-                        category=OuterRef("species_category"), user=self.user
-                    ).values("interest")
+                    UserInterestCategory.objects.filter(category=OuterRef("species_category"), user=self.user).values(
+                        "interest"
+                    )
                 )
                 primary_queryset = primary_queryset.annotate(
-                    recommended=(((F("promotion_weight") + 1) / 10) * interest / 5)
-                    + F("recommended")
+                    recommended=(((F("promotion_weight") + 1) / 10) * interest / 5) + F("recommended")
                 )
             else:
                 # if not signed in, recommended = most viewed
@@ -687,24 +658,14 @@ class LotFilter(django_filters.FilterSet):
             # finally, filter by max range
             if self.maxRange:  # and not self.regardingAuction:
                 # if you specify both range and auction, range does nothing
-                local_qs = Q(
-                    distance__lte=self.maxRange, auction__isnull=True, local_pickup=True
-                )
+                local_qs = Q(distance__lte=self.maxRange, auction__isnull=True, local_pickup=True)
         if self.ignore and self.user.is_authenticated:
-            allowedCategories = Category.objects.exclude(
-                userignorecategory__user=self.user
-            )
-            primary_queryset = primary_queryset.filter(
-                species_category__in=allowedCategories
-            )
+            allowedCategories = Category.objects.exclude(userignorecategory__user=self.user)
+            primary_queryset = primary_queryset.filter(species_category__in=allowedCategories)
         if not self.showOwnLots and self.user.is_authenticated:
-            primary_queryset = primary_queryset.exclude(
-                user=self.user.pk
-            )  # don't show your own lots
+            primary_queryset = primary_queryset.exclude(user=self.user.pk)  # don't show your own lots
         if self.showShipping and self.shippingLocation:
-            shipping_qs = Q(
-                shipping_locations=self.shippingLocation, auction__isnull=True
-            )
+            shipping_qs = Q(shipping_locations=self.shippingLocation, auction__isnull=True)
         else:
             shipping_qs = Q(pk__isnull=True)
         if self.canShowAuction:
@@ -717,19 +678,13 @@ class LotFilter(django_filters.FilterSet):
                     # this shows any auction you've joined + any public auction.  Perhaps this should be a preference?
                     # auction_qs = Q(auction__pk__in=self.possibleAuctions)|Q(auction__promote_this_auction=True)
                     # this shows any auction you've joined.  See https://github.com/iragm/fishauctions/issues/66
-                    auction_qs = Q(auction__pk__in=self.possibleAuctions) | Q(
-                        auction__isnull=True
-                    )
+                    auction_qs = Q(auction__pk__in=self.possibleAuctions) | Q(auction__isnull=True)
                 else:
                     # anonymous users can see lots from all promoted auctions
-                    auction_qs = Q(auction__promote_this_auction=True) | Q(
-                        auction__isnull=True
-                    )
+                    auction_qs = Q(auction__promote_this_auction=True) | Q(auction__isnull=True)
                 # auction_qs = Q(auction__auctiontos__user=self.user, auction__promote_this_auction=False)|Q(auction__promote_this_auction=True)
         # putting them all together:
-        primary_queryset = primary_queryset.filter(
-            Q(local_qs) | Q(shipping_qs) | Q(auction_qs)
-        )
+        primary_queryset = primary_queryset.filter(Q(local_qs) | Q(shipping_qs) | Q(auction_qs))
         return primary_queryset.order_by(self.order)
 
     def filter_by_order(self, queryset, name, value):
@@ -833,9 +788,7 @@ class UserLotFilter(LotFilter):
     @property
     def qs(self):
         primary_queryset = super().qs
-        return primary_queryset.filter(
-            Q(user=self.request.user) | Q(auctiontos_seller__user=self.request.user)
-        )
+        return primary_queryset.filter(Q(user=self.request.user) | Q(auctiontos_seller__user=self.request.user))
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -878,9 +831,7 @@ class UserWonLotFilter(LotFilter):
     @property
     def qs(self):
         primary_queryset = super().qs
-        return primary_queryset.filter(
-            Q(winner=self.user) | Q(auctiontos_winner__user=self.user)
-        )
+        return primary_queryset.filter(Q(winner=self.user) | Q(auctiontos_winner__user=self.user))
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

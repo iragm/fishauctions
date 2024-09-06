@@ -20,8 +20,6 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "fishauctions.settings")
 application = ProtocolTypeRouter(
     {
         "http": get_asgi_application(),
-        "websocket": AuthMiddlewareStack(
-            URLRouter(auctions.routing.websocket_urlpatterns)
-        ),
+        "websocket": AuthMiddlewareStack(URLRouter(auctions.routing.websocket_urlpatterns)),
     }
 )

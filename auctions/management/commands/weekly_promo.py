@@ -45,15 +45,9 @@ class Command(BaseCommand):
                     .exclude(auction__use_categories=False)
                     .exclude(auction__promote_this_auction=False)
                     .exclude(auction__is_deleted=True)
-                    .annotate(
-                        distance=distance_to(
-                            user.userdata.latitude, user.userdata.longitude
-                        )
-                    )
+                    .annotate(distance=distance_to(user.userdata.latitude, user.userdata.longitude))
                     .order_by("distance")
-                    .filter(
-                        distance__lte=user.userdata.email_me_about_new_auctions_distance
-                    )
+                    .filter(distance__lte=user.userdata.email_me_about_new_auctions_distance)
                 )
                 auctions = []  # just the slugs of the auctions, to remove duplicates
                 distances = {}
@@ -89,15 +83,9 @@ class Command(BaseCommand):
                     .exclude(auction__use_categories=False)
                     .exclude(auction__promote_this_auction=False)
                     .exclude(auction__is_deleted=True)
-                    .annotate(
-                        distance=distance_to(
-                            user.userdata.latitude, user.userdata.longitude
-                        )
-                    )
+                    .annotate(distance=distance_to(user.userdata.latitude, user.userdata.longitude))
                     .order_by("distance")
-                    .filter(
-                        distance__lte=user.userdata.email_me_about_new_in_person_auctions_distance
-                    )
+                    .filter(distance__lte=user.userdata.email_me_about_new_in_person_auctions_distance)
                 )
                 auctions = []  # just the slugs of the auctions, to remove duplicates
                 distances = {}
@@ -123,13 +111,8 @@ class Command(BaseCommand):
             if user.userdata.email_me_about_new_local_lots:
                 template_nearby_lots = get_recommended_lots(user=user, listType="local")
             template_shippable_lots = []
-            if (
-                user.userdata.email_me_about_new_lots_ship_to_location
-                and user.userdata.location
-            ):
-                template_shippable_lots = get_recommended_lots(
-                    user=user, listType="shipping"
-                )
+            if user.userdata.email_me_about_new_lots_ship_to_location and user.userdata.location:
+                template_shippable_lots = get_recommended_lots(user=user, listType="shipping")
             current_site = Site.objects.get_current()
             if template_auctions or template_nearby_lots or template_shippable_lots:
                 # don't send an email if there's nothing of interest

@@ -38,9 +38,7 @@ class Command(BaseCommand):
             else:
                 if not auction.email_first_sent:
                     # first email is sent ~ an hour after the auction has started, regardless of how long it will run for
-                    if timezone.now() > auction.date_posted + datetime.timedelta(
-                        hours=1
-                    ):
+                    if timezone.now() > auction.date_posted + datetime.timedelta(hours=1):
                         mail.send(
                             auction.created_by.email,
                             template="auction_first",
@@ -55,9 +53,7 @@ class Command(BaseCommand):
                 if timezone.now() > auction.date_start:
                     runtime = auction.date_end - auction.date_start
                     percentComplete = timezone.now() - auction.date_start
-                    percentComplete = (
-                        percentComplete.total_seconds() / runtime.total_seconds() * 100
-                    )
+                    percentComplete = percentComplete.total_seconds() / runtime.total_seconds() * 100
                     if percentComplete > 70:
                         if not auction.email_second_sent:
                             # print(f'sending auction_second to {auction.created_by.email} ')

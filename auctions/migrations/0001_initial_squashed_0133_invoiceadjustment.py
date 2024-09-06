@@ -192,9 +192,7 @@ class Migration(migrations.Migration):
                 ),
                 (
                     "slug",
-                    autoslug.fields.AutoSlugField(
-                        editable=False, populate_from="title", unique=True
-                    ),
+                    autoslug.fields.AutoSlugField(editable=False, populate_from="title", unique=True),
                 ),
                 (
                     "sealed_bid",
@@ -294,9 +292,7 @@ class Migration(migrations.Migration):
                 ),
                 (
                     "lot_submission_end_date",
-                    models.DateTimeField(
-                        blank=True, null=True, verbose_name="Lot submission ends"
-                    ),
+                    models.DateTimeField(blank=True, null=True, verbose_name="Lot submission ends"),
                 ),
                 (
                     "notes_rendered",
@@ -340,9 +336,7 @@ class Migration(migrations.Migration):
                 ("email_third_sent", models.BooleanField(default=False)),
                 (
                     "date_posted",
-                    models.DateTimeField(
-                        auto_now_add=True, default=django.utils.timezone.now
-                    ),
+                    models.DateTimeField(auto_now_add=True, default=django.utils.timezone.now),
                 ),
                 (
                     "allow_additional_lots_as_donation",
@@ -676,9 +670,7 @@ class Migration(migrations.Migration):
                 ("lot_number", models.AutoField(primary_key=True, serialize=False)),
                 (
                     "lot_name",
-                    models.CharField(
-                        help_text="Short description of this lot", max_length=40
-                    ),
+                    models.CharField(help_text="Short description of this lot", max_length=40),
                 ),
                 (
                     "image",
@@ -881,9 +873,7 @@ class Migration(migrations.Migration):
                 ),
                 (
                     "slug",
-                    autoslug.fields.AutoSlugField(
-                        default="info", editable=False, populate_from="lot_name"
-                    ),
+                    autoslug.fields.AutoSlugField(default="info", editable=False, populate_from="lot_name"),
                 ),
                 ("address", models.CharField(blank=True, max_length=500, null=True)),
                 ("latitude", models.FloatField(blank=True, null=True)),
@@ -911,9 +901,7 @@ class Migration(migrations.Migration):
                 ),
                 (
                     "payment_other",
-                    models.BooleanField(
-                        default=False, verbose_name="Other payment method accepted"
-                    ),
+                    models.BooleanField(default=False, verbose_name="Other payment method accepted"),
                 ),
                 (
                     "payment_other_address",
@@ -962,9 +950,7 @@ class Migration(migrations.Migration):
                 ),
                 (
                     "date_of_last_user_edit",
-                    models.DateTimeField(
-                        auto_now_add=True, default=django.utils.timezone.now
-                    ),
+                    models.DateTimeField(auto_now_add=True, default=django.utils.timezone.now),
                 ),
                 (
                     "is_chat_allowed",
@@ -1067,15 +1053,11 @@ class Migration(migrations.Migration):
                 ("bid_time", models.DateTimeField(auto_now_add=True)),
                 (
                     "amount",
-                    models.PositiveIntegerField(
-                        validators=[django.core.validators.MinValueValidator(1)]
-                    ),
+                    models.PositiveIntegerField(validators=[django.core.validators.MinValueValidator(1)]),
                 ),
                 (
                     "lot_number",
-                    models.ForeignKey(
-                        on_delete=django.db.models.deletion.CASCADE, to="auctions.lot"
-                    ),
+                    models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to="auctions.lot"),
                 ),
                 (
                     "user",
@@ -1156,9 +1138,7 @@ class Migration(migrations.Migration):
                 ("latitude", models.FloatField(blank=True, default=0)),
                 (
                     "location_coordinates",
-                    location_field.models.plain.PlainLocationField(
-                        max_length=63, null=True, verbose_name="Map"
-                    ),
+                    location_field.models.plain.PlainLocationField(max_length=63, null=True, verbose_name="Map"),
                 ),
                 ("longitude", models.FloatField(blank=True, default=0)),
                 (
@@ -1235,15 +1215,11 @@ class Migration(migrations.Migration):
                 ("title", models.CharField(max_length=255)),
                 (
                     "slug",
-                    autoslug.fields.AutoSlugField(
-                        editable=False, populate_from="title", unique=True
-                    ),
+                    autoslug.fields.AutoSlugField(editable=False, populate_from="title", unique=True),
                 ),
                 (
                     "body",
-                    markdownfield.models.MarkdownField(
-                        blank=True, null=True, rendered_field="body_rendered"
-                    ),
+                    markdownfield.models.MarkdownField(blank=True, null=True, rendered_field="body_rendered"),
                 ),
                 (
                     "body_rendered",
@@ -1405,9 +1381,7 @@ class Migration(migrations.Migration):
                 ),
                 (
                     "image",
-                    easy_thumbnails.fields.ThumbnailerImageField(
-                        blank=True, upload_to="images/"
-                    ),
+                    easy_thumbnails.fields.ThumbnailerImageField(blank=True, upload_to="images/"),
                 ),
                 ("title", models.CharField(default="Click here", max_length=50)),
                 ("text", models.CharField(blank=True, max_length=40, null=True)),
@@ -1606,9 +1580,7 @@ class Migration(migrations.Migration):
                 ),
                 (
                     "bid_amount",
-                    models.PositiveIntegerField(
-                        blank=True, help_text="For any kind of debugging", null=True
-                    ),
+                    models.PositiveIntegerField(blank=True, help_text="For any kind of debugging", null=True),
                 ),
                 ("removed", models.BooleanField(default=False)),
             ],
@@ -1632,9 +1604,7 @@ class Migration(migrations.Migration):
                 ),
                 (
                     "caption",
-                    models.CharField(
-                        blank=True, help_text="Optional", max_length=60, null=True
-                    ),
+                    models.CharField(blank=True, help_text="Optional", max_length=60, null=True),
                 ),
                 (
                     "image",
@@ -1661,9 +1631,7 @@ class Migration(migrations.Migration):
                 ("createdon", models.DateTimeField(auto_now_add=True)),
                 (
                     "lot_number",
-                    models.ForeignKey(
-                        on_delete=django.db.models.deletion.CASCADE, to="auctions.lot"
-                    ),
+                    models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to="auctions.lot"),
                 ),
             ],
         ),
@@ -1743,9 +1711,7 @@ class Migration(migrations.Migration):
                 ),
                 (
                     "createdon",
-                    models.DateTimeField(
-                        auto_now_add=True, default=django.utils.timezone.now
-                    ),
+                    models.DateTimeField(auto_now_add=True, default=django.utils.timezone.now),
                 ),
                 ("confirm_email_sent", models.BooleanField(blank=True, default=False)),
                 (
@@ -1796,9 +1762,7 @@ class Migration(migrations.Migration):
                 ),
                 (
                     "is_club_member",
-                    models.BooleanField(
-                        blank=True, default=False, verbose_name="Club member"
-                    ),
+                    models.BooleanField(blank=True, default=False, verbose_name="Club member"),
                 ),
             ],
             options={
@@ -1835,9 +1799,7 @@ class Migration(migrations.Migration):
                 ("question", models.CharField(max_length=200)),
                 (
                     "slug",
-                    autoslug.fields.AutoSlugField(
-                        editable=False, populate_from="question", unique=True
-                    ),
+                    autoslug.fields.AutoSlugField(editable=False, populate_from="question", unique=True),
                 ),
                 ("createdon", models.DateTimeField(auto_now_add=True)),
                 (
@@ -1902,9 +1864,7 @@ class Migration(migrations.Migration):
                 ),
                 (
                     "createdon",
-                    models.DateTimeField(
-                        auto_now_add=True, default=django.utils.timezone.now
-                    ),
+                    models.DateTimeField(auto_now_add=True, default=django.utils.timezone.now),
                 ),
             ],
         ),
@@ -1936,9 +1896,7 @@ class Migration(migrations.Migration):
                 ),
                 (
                     "createdon",
-                    models.DateTimeField(
-                        auto_now_add=True, default=django.utils.timezone.now
-                    ),
+                    models.DateTimeField(auto_now_add=True, default=django.utils.timezone.now),
                 ),
             ],
         ),
@@ -1956,9 +1914,7 @@ class Migration(migrations.Migration):
                 ),
                 (
                     "lot_number",
-                    models.ForeignKey(
-                        on_delete=django.db.models.deletion.CASCADE, to="auctions.lot"
-                    ),
+                    models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to="auctions.lot"),
                 ),
                 (
                     "user",
@@ -1969,9 +1925,7 @@ class Migration(migrations.Migration):
                 ),
                 (
                     "createdon",
-                    models.DateTimeField(
-                        auto_now_add=True, default=django.utils.timezone.now
-                    ),
+                    models.DateTimeField(auto_now_add=True, default=django.utils.timezone.now),
                 ),
             ],
             options={
@@ -2354,9 +2308,7 @@ class Migration(migrations.Migration):
                 ("date_start", models.DateTimeField(auto_now_add=True)),
                 (
                     "date_end",
-                    models.DateTimeField(
-                        blank=True, default=django.utils.timezone.now, null=True
-                    ),
+                    models.DateTimeField(blank=True, default=django.utils.timezone.now, null=True),
                 ),
                 (
                     "total_time",
@@ -2508,9 +2460,7 @@ class Migration(migrations.Migration):
                 ("unsubscribed", models.BooleanField(default=False)),
                 (
                     "lot",
-                    models.ForeignKey(
-                        on_delete=django.db.models.deletion.CASCADE, to="auctions.lot"
-                    ),
+                    models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to="auctions.lot"),
                 ),
                 (
                     "user",

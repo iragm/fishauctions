@@ -36,9 +36,7 @@ urlpatterns = [
     path("api/chart/lots/<int:pk>/", views.LotChartView.as_view()),
     path("api/chart/users/<int:pk>/", views.UserChartView.as_view()),
     path("api/get_category/", views.CategoryFinder.as_view(), name="guess_category"),
-    path(
-        "api/get_auction_info/", views.AuctionFinder.as_view(), name="get_auction_info"
-    ),
+    path("api/get_auction_info/", views.AuctionFinder.as_view(), name="get_auction_info"),
     path("api/lot/<int:pk>/", views.LotAdmin.as_view(), name="auctionlotadmin"),
     path(
         "api/lot/chat_subscribe",
@@ -138,12 +136,8 @@ urlpatterns = [
     path("auctions/all/", views.allAuctions.as_view()),
     # path('auctions/new/', views.createAuction, name='createAuction'),
     path("auctions/new/", login_required(views.AuctionCreateView.as_view())),
-    path(
-        "auctions/<slug:slug>/edit/", views.AuctionUpdate.as_view(), name="edit_auction"
-    ),
-    path(
-        "auctions/<slug:slug>/invoices/", login_required(views.AuctionUsers.as_view())
-    ),
+    path("auctions/<slug:slug>/edit/", views.AuctionUpdate.as_view(), name="edit_auction"),
+    path("auctions/<slug:slug>/invoices/", login_required(views.AuctionUsers.as_view())),
     path(
         "auctions/<slug:slug>/invoice/",
         login_required(views.InvoiceView.as_view()),
@@ -208,9 +202,7 @@ urlpatterns = [
         views.QuickSetLotWinner.as_view(),
         name="auction_lot_winners_autocomplete",
     ),
-    path(
-        "auctions/<slug:slug>/lots/<slug:custom_lot_number>/", views.ViewLot.as_view()
-    ),
+    path("auctions/<slug:slug>/lots/<slug:custom_lot_number>/", views.ViewLot.as_view()),
     path(
         "auctions/<slug:slug>/lots/<slug:custom_lot_number>/<slug:lot_slug>/",
         views.ViewLot.as_view(),
@@ -269,12 +261,8 @@ urlpatterns = [
         login_required(views.UserPreferencesUpdate.as_view()),
         name="preferences",
     ),
-    path(
-        "messages/", login_required(views.ChatSubscriptions.as_view()), name="messages"
-    ),
-    path(
-        "printing/", login_required(views.UserLabelPrefsView.as_view()), name="printing"
-    ),
+    path("messages/", login_required(views.ChatSubscriptions.as_view()), name="messages"),
+    path("printing/", login_required(views.UserLabelPrefsView.as_view()), name="printing"),
     path("faq/", views.FAQ.as_view(), name="faq"),
     path(
         "auctions/<slug:slug>/locations/",
@@ -391,9 +379,7 @@ urlpatterns = [
         views.MarkInvoicesPaid.as_view(),
         name="auction_invoices_paid",
     ),
-    path(
-        "api/lots/<int:pk>/refund", views.LotRefundDialog.as_view(), name="lot_refund"
-    ),
+    path("api/lots/<int:pk>/refund", views.LotRefundDialog.as_view(), name="lot_refund"),
     path(
         "auctions/<slug:slug>/no-show/<str:tos>/",
         views.AuctionNoShow.as_view(),

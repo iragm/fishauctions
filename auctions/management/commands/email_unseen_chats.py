@@ -16,12 +16,8 @@ class Command(BaseCommand):
             | Q(userdata__email_me_about_new_chat_replies=True)
         )
         for user in users:
-            if (
-                user.userdata.email_me_when_people_comment_on_my_lots
-                and user.userdata.my_lot_subscriptions_count
-            ) or (
-                user.userdata.email_me_about_new_chat_replies
-                and user.userdata.other_lot_subscriptions_count
+            if (user.userdata.email_me_when_people_comment_on_my_lots and user.userdata.my_lot_subscriptions_count) or (
+                user.userdata.email_me_about_new_chat_replies and user.userdata.other_lot_subscriptions_count
             ):
                 mail.send(
                     user.email,

@@ -37,9 +37,9 @@ class Command(BaseCommand):
         # Fixes: https://github.com/iragm/fishauctions/issues/100
         # there are currently two confirmation emails sent.  A field for an additional one (second_confirm_email_sent) exists, but isn't used.
         # we will only send these when people join through the website, not when you manually add them to the auction
-        base_qs = AuctionTOS.objects.filter(
-            manually_added=False, user__isnull=False
-        ).exclude(pickup_location__pickup_by_mail=True)
+        base_qs = AuctionTOS.objects.filter(manually_added=False, user__isnull=False).exclude(
+            pickup_location__pickup_by_mail=True
+        )
         welcome_email_qs = base_qs.filter(confirm_email_sent=False)
         # there's an additional filter to make sure the tos is 24 hours old here -- this is to give a better chance of the user's location being set
         online_auction_welcome = welcome_email_qs.filter(
@@ -112,9 +112,7 @@ class Command(BaseCommand):
         )
         for campaign in join_auction_reminder:
             email = campaign.user.email
-            lots = Lot.objects.filter(
-                pageview__user=campaign.user, auction=campaign.auction
-            )
+            lots = Lot.objects.filter(pageview__user=campaign.user, auction=campaign.auction)
             campaign.email_sent = True
             campaign.save()
             send_email = True
@@ -135,17 +133,12 @@ class Command(BaseCommand):
                 )
                 qs = qs.annotate(distance=Subquery(closest_pickup_location_subquery))
                 auction = qs.first()
-                if (
-                    auction
-                    and auction.is_online
-                    and auction.distance > userData.email_me_about_new_auctions_distance
-                ):
+                if auction and auction.is_online and auction.distance > userData.email_me_about_new_auctions_distance:
                     send_email = False
                 if (
                     auction
                     and not auction.is_online
-                    and auction.distance
-                    > userData.email_me_about_new_in_person_auctions_distance
+                    and auction.distance > userData.email_me_about_new_in_person_auctions_distance
                 ):
                     send_email = False
             else:  # user has no location:
@@ -154,9 +147,7 @@ class Command(BaseCommand):
                 send_email = False
             if not campaign.auction.is_online and campaign.auction.started:
                 send_email = False
-            user_has_already_joined = AuctionTOS.objects.filter(
-                user=campaign.user, auction=campaign.auction
-            ).first()
+            user_has_already_joined = AuctionTOS.objects.filter(user=campaign.user, auction=campaign.auction).first()
             if user_has_already_joined:
                 send_email = False
             if not send_email:

@@ -235,9 +235,7 @@ def bin_data(
                 bin_start = start_bin + i * bin_size
                 bin_end = start_bin + (i + 1) * bin_size
 
-            label = (
-                f"{bin_start} - {bin_end if i == number_of_bins - 1 else bin_end - 1}"
-            )
+            label = f"{bin_start} - {bin_end if i == number_of_bins - 1 else bin_end - 1}"
             bin_labels.append(label)
 
         if add_column_for_high_overflow:
@@ -312,9 +310,7 @@ class AuctionStatsPermissionsMixin:
 class ClickAd(RedirectView):
     def get_redirect_url(self, *args, **kwargs):
         try:
-            campaignResponse = AdCampaignResponse.objects.get(
-                responseid=self.kwargs["uuid"]
-            )
+            campaignResponse = AdCampaignResponse.objects.get(responseid=self.kwargs["uuid"])
             campaignResponse.clicked = True
             campaignResponse.save()
             return campaignResponse.campaign.external_url
@@ -352,9 +348,7 @@ class RenderAd(DetailView):
         if user and not category:
             # there wasn't a category on this page, pick one of the user's interests instead
             try:
-                categories = UserInterestCategory.objects.filter(user=user).order_by(
-                    "-as_percent"
-                )[:5]
+                categories = UserInterestCategory.objects.filter(user=user).order_by("-as_percent")[:5]
                 category = sample(categories, 1)
             except:
                 pass
@@ -364,23 +358,16 @@ class RenderAd(DetailView):
             .order_by("-bid")
         )
         if auction:
-            adCampaigns = adCampaigns.filter(
-                Q(auction__isnull=True) | Q(auction=auction.pk)
-            )
+            adCampaigns = adCampaigns.filter(Q(auction__isnull=True) | Q(auction=auction.pk))
         total = adCampaigns.count()
         chanceOfGoogleAd = 50
         if uniform(0, 100) < chanceOfGoogleAd:
             return None
         for campaign in adCampaigns:
             if campaign.category == category:
-                campaign.bid = (
-                    campaign.bid * 2
-                )  # Better chance for matching category.  Don't save after this
+                campaign.bid = campaign.bid * 2  # Better chance for matching category.  Don't save after this
             if campaign.bid > uniform(0, total - 1):
-                if (
-                    campaign.number_of_clicks > campaign.max_clicks
-                    or campaign.number_of_impressions > campaign.max_ads
-                ):
+                if campaign.number_of_clicks > campaign.max_clicks or campaign.number_of_impressions > campaign.max_ads:
                     pass  # print("not selected -- limit exceeded")
                 else:
                     return AdCampaignResponse.objects.create(
@@ -435,29 +422,21 @@ class LotListView(AjaxListView):
         )
         context["embed"] = "all_lots"
         try:
-            context["lotsAreHidden"] = len(
-                UserIgnoreCategory.objects.filter(user=self.request.user)
-            )
+            context["lotsAreHidden"] = len(UserIgnoreCategory.objects.filter(user=self.request.user))
         except:
             # probably not signed in
             context["lotsAreHidden"] = -1
         try:
             context["lastView"] = (
-                PageView.objects.filter(user=self.request.user, lot__isnull=False)
-                .order_by("-date_start")[0]
-                .date_start
+                PageView.objects.filter(user=self.request.user, lot__isnull=False).order_by("-date_start")[0].date_start
             )
         except:
             context["lastView"] = timezone.now()
         try:
-            context["auction"] = Auction.objects.get(
-                slug=data["auction"], is_deleted=False
-            )
+            context["auction"] = Auction.objects.get(slug=data["auction"], is_deleted=False)
         except:
             try:
-                context["auction"] = Auction.objects.get(
-                    slug=data["a"], is_deleted=False
-                )
+                context["auction"] = Auction.objects.get(slug=data["a"], is_deleted=False)
             except:
                 context["auction"] = self.auction
                 context["no_filters"] = True
@@ -492,9 +471,7 @@ class LotAutocomplete(autocomplete.Select2QuerySetView):
                 result.high_bid,
             )
         else:
-            return format_html(
-                "<b>{}</b>: {}", result.lot_number_display, result.lot_name
-            )
+            return format_html("<b>{}</b>: {}", result.lot_number_display, result.lot_name)
 
     def dispatch(self, request, *args, **kwargs):
         # we are not using self.is_auction_admin and the AuctionPermissionsMixinMixin here because self.forwarded.get is not available in dispatch
@@ -599,9 +576,7 @@ class RecommendedLots(ListView):
                     keywords.append(word)
         except:
             keywords = []
-        return get_recommended_lots(
-            user=self.request.user, auction=auction, qty=qty, keywords=keywords
-        )
+        return get_recommended_lots(user=self.request.user, auction=auction, qty=qty, keywords=keywords)
 
     def get_context_data(self, **kwargs):
         data = self.request.GET.copy()
@@ -612,11 +587,7 @@ class RecommendedLots(ListView):
             # if not specified in get data, assume this will be viewed by itself
             context["embed"] = "standalone_page"
         try:
-            context["lastView"] = (
-                PageView.objects.filter(user=self.request.user)
-                .order_by("-date_start")[0]
-                .date_start
-            )
+            context["lastView"] = PageView.objects.filter(user=self.request.user).order_by("-date_start")[0].date_start
         except:
             context["lastView"] = timezone.now()
         context["src"] = "recommended"
@@ -631,9 +602,7 @@ class MyWonLots(LotListView):
         if len(data) == 0:
             data["status"] = "closed"
         context = super().get_context_data(**kwargs)
-        context["filter"] = UserWonLotFilter(
-            data, queryset=self.get_queryset(), request=self.request, ignore=False
-        )
+        context["filter"] = UserWonLotFilter(data, queryset=self.get_queryset(), request=self.request, ignore=False)
         context["view"] = "mywonlots"
         context["lotsAreHidden"] = -1
         return context
@@ -645,9 +614,7 @@ class MyBids(LotListView):
     def get_context_data(self, **kwargs):
         data = self.request.GET.copy()
         context = super().get_context_data(**kwargs)
-        context["filter"] = UserBidLotFilter(
-            data, queryset=self.get_queryset(), request=self.request, ignore=False
-        )
+        context["filter"] = UserBidLotFilter(data, queryset=self.get_queryset(), request=self.request, ignore=False)
         context["view"] = "mybids"
         context["lotsAreHidden"] = -1
         return context
@@ -686,7 +653,9 @@ class MyLots(SingleTableMixin, FilterView):
                 msg = f"You've got { self.request.user.userdata.unnotified_subscriptions_count } lot"
                 if self.request.user.userdata.unnotified_subscriptions_count > 1:
                     msg += "s"
-                msg += f""" with new messages.  <a href="{reverse('messages')}">Go to your messages page to see them</a>"""
+                msg += (
+                    f""" with new messages.  <a href="{reverse('messages')}">Go to your messages page to see them</a>"""
+                )
                 messages.info(self.request, msg)
         return super().get(*args, **kwargs)
 
@@ -760,9 +729,7 @@ def lotNotifications(request):
     if request.method == "POST":
         user = request.user
         new = (
-            LotHistory.objects.filter(
-                lot__user=user.pk, seen=False, changed_price=False
-            )
+            LotHistory.objects.filter(lot__user=user.pk, seen=False, changed_price=False)
             .exclude(user=request.user)
             .count()
         )
@@ -814,14 +781,10 @@ def no_lot_auctions(request):
                     if auction.date_end < now:
                         result = f"{auction} has ended"
                 if not result:
-                    tos = AuctionTOS.objects.filter(
-                        user=request.user, auction=auction
-                    ).first()
+                    tos = AuctionTOS.objects.filter(user=request.user, auction=auction).first()
                     if tos:
                         if not tos.selling_allowed:
-                            result = (
-                                f"You don't have permission to add lots to {auction}"
-                            )
+                            result = f"You don't have permission to add lots to {auction}"
                 if not result:
                     if auction.max_lots_per_user:
                         lot_list = Lot.objects.filter(
@@ -872,9 +835,7 @@ def auctionNotifications(request):
                 distance = request.user.userdata.email_me_about_new_auctions_distance
             if not distance:
                 distance = 100
-            auctions, distances = nearby_auctions(
-                latitude, longitude, distance, user=request.user
-            )
+            auctions, distances = nearby_auctions(latitude, longitude, distance, user=request.user)
             new = len(auctions)
             try:
                 name = str(auctions[0])
@@ -907,9 +868,7 @@ def setCoordinates(request):
             user=request.user,
             defaults={},
         )
-        userData.location_coordinates = (
-            f"{request.POST['latitude']},{request.POST['longitude']}"
-        )
+        userData.location_coordinates = f"{request.POST['latitude']},{request.POST['longitude']}"
         userData.last_activity = timezone.now()
         userData.save()
         return HttpResponse("Success")
@@ -926,9 +885,7 @@ def userBan(request, pk):
             user=user,
             defaults={},
         )
-        auctionsList = Auction.objects.exclude(is_deleted=True).filter(
-            created_by=user.pk
-        )
+        auctionsList = Auction.objects.exclude(is_deleted=True).filter(created_by=user.pk)
         # delete all bids the banned user has made on active lots or in active auctions created by the request user
         bids = Bid.objects.filter(user=bannedUser)
         for bid in bids:
@@ -939,16 +896,12 @@ def userBan(request, pk):
                     bid.delete()
         # ban all lots added by the banned user.  These are not deleted, just removed from the auction
         for auction in auctionsList:
-            buy_now_lots = Lot.objects.exclude(is_deleted=True).filter(
-                winner=bannedUser, auction=auction.pk
-            )
+            buy_now_lots = Lot.objects.exclude(is_deleted=True).filter(winner=bannedUser, auction=auction.pk)
             for lot in buy_now_lots:
                 lot.winner = None
                 lot.winning_price = None
                 lot.save()
-            lots = Lot.objects.exclude(is_deleted=True).filter(
-                user=bannedUser, auction=auction.pk
-            )
+            lots = Lot.objects.exclude(is_deleted=True).filter(user=bannedUser, auction=auction.pk)
             for lot in lots:
                 if not lot.ended:
                     # print(f"User {str(user)} has banned lot {lot}")
@@ -1049,9 +1002,7 @@ def imagesPrimary(request):
         if not lotImage.lot_number.image_permission_check(request.user):
             messages.error(request, "Only the lot creator can change images")
             return redirect("/")
-        LotImage.objects.filter(lot_number=lotImage.lot_number.pk).update(
-            is_primary=False
-        )
+        LotImage.objects.filter(lot_number=lotImage.lot_number.pk).update(is_primary=False)
         lotImage.is_primary = True
         lotImage.save()
         return HttpResponse("Success")
@@ -1150,9 +1101,7 @@ def feedback(request, pk, leave_as):
             except:
                 pass
         if not winner_checks_pass and not seller_checks_pass:
-            messages.error(
-                request, "Only the seller or winner of a lot can leave feedback"
-            )
+            messages.error(request, "Only the seller or winner of a lot can leave feedback")
             return redirect("/")
         return HttpResponse("Success")
     messages.error(request, "Your account doesn't have permission to view this page")
@@ -1224,14 +1173,8 @@ def pageview(request):
                 if campaign and campaign.result == "NONE":
                     campaign.result = "VIEWED"
                     campaign.save()
-                if (
-                    campaign
-                    and campaign.user is not None
-                    and campaign.auction is not None
-                ):
-                    tos = AuctionTOS.objects.filter(
-                        user=campaign.user, auction=campaign.auction
-                    ).first()
+                if campaign and campaign.user is not None and campaign.auction is not None:
+                    tos = AuctionTOS.objects.filter(user=campaign.user, auction=campaign.auction).first()
                     if tos:
                         campaign.result = "JOINED"
                         campaign.save()
@@ -1315,19 +1258,15 @@ def invoicePaid(request, pk, **kwargs):
 def my_lot_report(request):
     """CSV file showing my lots"""
     lots = add_price_info(
-        Lot.objects.filter(
-            Q(user=request.user) | Q(auctiontos_seller__email=request.user.email)
-        ).exclude(is_deleted=True)
+        Lot.objects.filter(Q(user=request.user) | Q(auctiontos_seller__email=request.user.email)).exclude(
+            is_deleted=True
+        )
     )
     current_site = Site.objects.get_current()
     response = HttpResponse(content_type="text/csv")
-    response["Content-Disposition"] = (
-        f'attachment; filename="my_lots_from_{current_site.domain.replace(".","_")}.csv"'
-    )
+    response["Content-Disposition"] = f'attachment; filename="my_lots_from_{current_site.domain.replace(".","_")}.csv"'
     writer = csv.writer(response)
-    writer.writerow(
-        ["Lot number", "Name", "Auction", "Status", "Winning price", "My cut"]
-    )
+    writer.writerow(["Lot number", "Name", "Auction", "Status", "Winning price", "My cut"])
     for lot in lots:
         status = "Unsold"
         if lot.banned:
@@ -1357,9 +1296,7 @@ def auctionReport(request, slug):
         # Create the HttpResponse object with the appropriate CSV header.
         response = HttpResponse(content_type="text/csv")
         end = timezone.now().strftime("%Y-%m-%d")
-        response["Content-Disposition"] = (
-            'attachment; filename="' + slug + "-report-" + end + '.csv"'
-        )
+        response["Content-Disposition"] = 'attachment; filename="' + slug + "-report-" + end + '.csv"'
         writer = csv.writer(response)
         writer.writerow(
             [
@@ -1410,29 +1347,19 @@ def auctionReport(request, slug):
             club = ""
             if data.user and not data.manually_added:
                 # these things will only be written out if the user wants you to have it
-                lotsViewed = PageView.objects.filter(
-                    lot_number__auction=auction, user=data.user
-                )
-                lotsBid = Bid.objects.filter(
-                    lot_number__auction=auction, user=data.user
-                )
+                lotsViewed = PageView.objects.filter(lot_number__auction=auction, user=data.user)
+                lotsBid = Bid.objects.filter(lot_number__auction=auction, user=data.user)
                 lot_qs = Lot.objects.exclude(is_deleted=True).filter(
                     user=data.user,
                     auction__isnull=True,
                     date_posted__gte=auction.date_start - timedelta(days=2),
                 )
                 if auction.is_online:
-                    lotsOutsideAuction = lot_qs.filter(
-                        date_posted__lte=auction.date_end + timedelta(days=2)
-                    )
+                    lotsOutsideAuction = lot_qs.filter(date_posted__lte=auction.date_end + timedelta(days=2))
                 else:
-                    lotsOutsideAuction = lot_qs.filter(
-                        date_posted__lte=auction.date_start + timedelta(days=5)
-                    )
+                    lotsOutsideAuction = lot_qs.filter(date_posted__lte=auction.date_start + timedelta(days=5))
                 numberLotsOutsideAuction = lotsOutsideAuction.count()
-                profitOutsideAuction = lotsOutsideAuction.aggregate(
-                    total=Sum("winning_price")
-                )["total"]
+                profitOutsideAuction = lotsOutsideAuction.aggregate(total=Sum("winning_price"))["total"]
                 if not profitOutsideAuction:
                     profitOutsideAuction = 0
                 distance = data.distance_traveled or ""
@@ -1441,11 +1368,7 @@ def auctionReport(request, slug):
                 except:
                     pass
                 username = data.user.username
-                previous_auctions = (
-                    AuctionTOS.objects.filter(user=data.user)
-                    .exclude(pk=data.pk)
-                    .count()
-                )
+                previous_auctions = AuctionTOS.objects.filter(user=data.user).exclude(pk=data.pk).count()
                 number_of_userbans = data.number_of_userbans
                 account_age = data.user.date_joined
             else:
@@ -1457,12 +1380,8 @@ def auctionReport(request, slug):
                 username = ""
                 number_of_userbans = 0
                 account_age = ""
-            lotsSumbitted = Lot.objects.exclude(is_deleted=True).filter(
-                auctiontos_seller=data, auction=auction
-            )
-            lotsWon = Lot.objects.exclude(is_deleted=True).filter(
-                auctiontos_winner=data, auction=auction
-            )
+            lotsSumbitted = Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller=data, auction=auction)
+            lotsWon = Lot.objects.exclude(is_deleted=True).filter(auctiontos_winner=data, auction=auction)
             breederPoints = Lot.objects.exclude(is_deleted=True).filter(
                 auctiontos_seller=data, auction=auction, i_bred_this_fish=True
             )
@@ -1524,12 +1443,9 @@ def userReport(request):
     found = []
     writer.writerow(["Name", "Email", "Phone"])
     auctions = Auction.objects.filter(
-        Q(created_by=request.user)
-        | Q(auctiontos__is_admin=True, auctiontos__user=request.user)
+        Q(created_by=request.user) | Q(auctiontos__is_admin=True, auctiontos__user=request.user)
     )
-    users = AuctionTOS.objects.filter(auction__in=auctions).exclude(
-        email_address_status="BAD"
-    )
+    users = AuctionTOS.objects.filter(auction__in=auctions).exclude(email_address_status="BAD")
     for user in users:
         if user.email not in found:
             writer.writerow([user.name, user.email, user.phone_as_string])
@@ -1546,9 +1462,7 @@ def auctionInvoicesPaypalCSV(request, slug, chunk):
         response = HttpResponse(content_type="text/csv")
         dueDate = timezone.now().strftime("%m/%d/%Y")
         current_site = Site.objects.get_current()
-        response["Content-Disposition"] = (
-            f'attachment; filename="{slug}-paypal-{chunk}.csv"'
-        )
+        response["Content-Disposition"] = f'attachment; filename="{slug}-paypal-{chunk}.csv"'
         writer = csv.writer(response)
         writer.writerow(
             [
@@ -1571,9 +1485,7 @@ def auctionInvoicesPaypalCSV(request, slug, chunk):
         )
         invoices = auction.paypal_invoices
         count = 0
-        chunkSize = (
-            150  # attention: this is also set in models.auction.paypal_invoice_chunks
-        )
+        chunkSize = 150  # attention: this is also set in models.auction.paypal_invoice_chunks
         for invoice in invoices:
             invoice.recalculate
             # we loop through everything regardless of which chunk
@@ -1591,9 +1503,7 @@ def auctionInvoicesPaypalCSV(request, slug, chunk):
                     shippingAmount = 0
                     discountAmount = 0
                     currencyCode = "USD"
-                    noteToCustomer = (
-                        f"https://{current_site.domain}/invoices/{invoice.pk}/"
-                    )
+                    noteToCustomer = f"https://{current_site.domain}/invoices/{invoice.pk}/"
                     termsAndConditions = ""
                     memoToSelf = invoice.auctiontos_user.memo
                     if itemAmount > 0 and email:
@@ -1628,9 +1538,7 @@ def auctionLotList(request, slug):
     if auction.permission_check(request.user):
         # Create the HttpResponse object with the appropriate CSV header.
         response = HttpResponse(content_type="text/csv")
-        response["Content-Disposition"] = (
-            'attachment; filename="' + slug + '-lot-list.csv"'
-        )
+        response["Content-Disposition"] = 'attachment; filename="' + slug + '-lot-list.csv"'
         writer = csv.writer(response)
         writer.writerow(
             [
@@ -1651,9 +1559,7 @@ def auctionLotList(request, slug):
             ]
         )
         # lots = Lot.objects.exclude(is_deleted=True).filter(auction__slug=slug, auctiontos_winner__isnull=False).select_related('user', 'winner')
-        lots = auction.lots_qs.filter(winning_price__isnull=False).select_related(
-            "user", "winner"
-        )
+        lots = auction.lots_qs.filter(winning_price__isnull=False).select_related("user", "winner")
         lots = add_price_info(lots)
         for lot in lots:
             lot_number = lot.custom_lot_number or lot.lot_number
@@ -1693,8 +1599,7 @@ class LeaveFeedbackView(LoginRequiredMixin, ListView):
         context["won_lots"] = (
             Lot.objects.exclude(is_deleted=True)
             .filter(
-                Q(winner=self.request.user)
-                | Q(auctiontos_winner__user=self.request.user),
+                Q(winner=self.request.user) | Q(auctiontos_winner__user=self.request.user),
                 date_posted__gte=cutoffDate,
             )
             .order_by("-date_posted")
@@ -1702,8 +1607,7 @@ class LeaveFeedbackView(LoginRequiredMixin, ListView):
         context["sold_lots"] = (
             Lot.objects.exclude(is_deleted=True)
             .filter(
-                Q(user=self.request.user)
-                | Q(auctiontos_seller__user=self.request.user),
+                Q(user=self.request.user) | Q(auctiontos_seller__user=self.request.user),
                 date_posted__gte=cutoffDate,
                 winning_price__isnull=False,
             )
@@ -1719,11 +1623,7 @@ class AuctionChats(LoginRequiredMixin, ListView, AuctionPermissionsMixin):
     template_name = "chats.html"
 
     def dispatch(self, request, *args, **kwargs):
-        self.auction = (
-            Auction.objects.exclude(is_deleted=True)
-            .filter(slug=kwargs.pop("slug"))
-            .first()
-        )
+        self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs.pop("slug")).first()
         if not self.auction:
             raise Http404
         self.is_auction_admin
@@ -1731,19 +1631,13 @@ class AuctionChats(LoginRequiredMixin, ListView, AuctionPermissionsMixin):
 
     def get_queryset(self):
         # get related auctiontos if the user has joined the auction
-        auctiontos_subquery = AuctionTOS.objects.filter(
-            user=OuterRef("user"), auction=self.auction
-        ).values("pk")[:1]
+        auctiontos_subquery = AuctionTOS.objects.filter(user=OuterRef("user"), auction=self.auction).values("pk")[:1]
         qs = (
             LotHistory.objects.filter(
                 lot__auction=self.auction,
                 changed_price=False,
             )
-            .annotate(
-                auctiontos_pk=Subquery(
-                    auctiontos_subquery, output_field=IntegerField(), null=True
-                )
-            )
+            .annotate(auctiontos_pk=Subquery(auctiontos_subquery, output_field=IntegerField(), null=True))
             .order_by("-timestamp")
         )
         return qs
@@ -1759,9 +1653,7 @@ class AuctionChatDeleteUndelete(View, AuctionPermissionsMixin):
 
     def dispatch(self, request, *args, **kwargs):
         pk = kwargs.get("pk")
-        self.history = get_object_or_404(
-            LotHistory, pk=pk, lot__auction__is_deleted=False
-        )
+        self.history = get_object_or_404(LotHistory, pk=pk, lot__auction__is_deleted=False)
         self.auction = self.history.lot.auction
         if not self.auction:
             raise Http404
@@ -1787,11 +1679,7 @@ class PickupLocations(ListView, AuctionPermissionsMixin):
     ordering = ["name"]
 
     def dispatch(self, request, *args, **kwargs):
-        self.auction = (
-            Auction.objects.exclude(is_deleted=True)
-            .filter(slug=kwargs.pop("slug"))
-            .first()
-        )
+        self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs.pop("slug")).first()
         if not self.auction:
             raise Http404
         self.is_auction_admin
@@ -1814,16 +1702,10 @@ class PickupLocationsDelete(DeleteView, AuctionPermissionsMixin):
 
     def dispatch(self, request, *args, **kwargs):
         self.auction = self.get_object().auction
-        self.success_url = reverse(
-            "auction_pickup_location", kwargs={"slug": self.auction.slug}
-        )
+        self.success_url = reverse("auction_pickup_location", kwargs={"slug": self.auction.slug})
         if self.get_object().auction.location_qs.count() < 2:
-            self.success_url = reverse(
-                "auction_main", kwargs={"slug": self.auction.slug}
-            )
-            messages.error(
-                request, "You can't delete the only pickup location in this auction"
-            )
+            self.success_url = reverse("auction_main", kwargs={"slug": self.auction.slug})
+            messages.error(request, "You can't delete the only pickup location in this auction")
             return redirect(self.success_url)
         if self.get_object().number_of_users:
             messages.error(
@@ -1832,9 +1714,7 @@ class PickupLocationsDelete(DeleteView, AuctionPermissionsMixin):
             )
             return redirect(self.success_url)
         if not self.is_auction_admin:
-            messages.error(
-                request, "You don't have permission to delete a pickup location"
-            )
+            messages.error(request, "You don't have permission to delete a pickup location")
             return redirect(self.success_url)
         return super().dispatch(request, *args, **kwargs)
 
@@ -1865,9 +1745,7 @@ class PickupLocationForm:
             return data["next"]
         except:
             if self.auction.is_online:
-                return reverse(
-                    "auction_pickup_location", kwargs={"slug": self.auction.slug}
-                )
+                return reverse("auction_pickup_location", kwargs={"slug": self.auction.slug})
             else:
                 return self.auction.get_absolute_url()
 
@@ -1925,11 +1803,7 @@ class PickupLocationsCreate(PickupLocationForm, CreateView, AuctionPermissionsMi
     """Create a new pickup location"""
 
     def dispatch(self, request, *args, **kwargs):
-        self.auction = (
-            Auction.objects.exclude(is_deleted=True)
-            .filter(slug=kwargs.pop("slug"))
-            .first()
-        )
+        self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs.pop("slug")).first()
         self.is_auction_admin
         return super().dispatch(request, *args, **kwargs)
 
@@ -1966,11 +1840,7 @@ class AuctionUpdate(UpdateView, AuctionPermissionsMixin):
         return kwargs
 
     def get_context_data(self, **kwargs):
-        existing_lots = (
-            Lot.objects.exclude(is_deleted=True)
-            .filter(auction=self.get_object())
-            .count()
-        )
+        existing_lots = Lot.objects.exclude(is_deleted=True).filter(auction=self.get_object()).count()
         if existing_lots:
             messages.info(
                 self.request,
@@ -2001,16 +1871,8 @@ class AuctionLots(SingleTableMixin, FilterView, AuctionPermissionsMixin):
         return template_name
 
     def dispatch(self, request, *args, **kwargs):
-        self.auction = (
-            Auction.objects.exclude(is_deleted=True)
-            .filter(slug=kwargs.pop("slug"))
-            .first()
-        )
-        self.queryset = (
-            Lot.objects.exclude(is_deleted=True)
-            .filter(auction=self.auction)
-            .order_by("lot_number")
-        )
+        self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs.pop("slug")).first()
+        self.queryset = Lot.objects.exclude(is_deleted=True).filter(auction=self.auction).order_by("lot_number")
         self.is_auction_admin
         return super().dispatch(request, *args, **kwargs)
 
@@ -2026,11 +1888,7 @@ class AuctionHelp(AdminEmailMixin, TemplateView, AuctionPermissionsMixin):
     template_name = "auction_help.html"
 
     def dispatch(self, request, *args, **kwargs):
-        self.auction = (
-            Auction.objects.exclude(is_deleted=True)
-            .filter(slug=kwargs.pop("slug"))
-            .first()
-        )
+        self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs.pop("slug")).first()
         self.is_auction_admin
         return super().dispatch(request, *args, **kwargs)
 
@@ -2056,11 +1914,7 @@ class AuctionUsers(SingleTableMixin, FilterView, AuctionPermissionsMixin):
         return template_name
 
     def dispatch(self, request, *args, **kwargs):
-        self.auction = (
-            Auction.objects.exclude(is_deleted=True)
-            .filter(slug=kwargs.pop("slug"))
-            .first()
-        )
+        self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs.pop("slug")).first()
         self.queryset = AuctionTOS.objects.filter(auction=self.auction).order_by("name")
         self.is_auction_admin
         return super().dispatch(request, *args, **kwargs)
@@ -2099,9 +1953,7 @@ class AuctionStats(DetailView, AuctionPermissionsMixin):
                 self.request,
                 "This auction is still in progress, check back once it's finished for more complete stats",
             )
-        if self.get_object().date_posted < datetime(
-            year=2024, month=1, day=1, tzinfo=date_tz.utc
-        ):
+        if self.get_object().date_posted < datetime(year=2024, month=1, day=1, tzinfo=date_tz.utc):
             messages.info(self.request, "Not all stats are available for old auctions.")
         return context
 
@@ -2118,9 +1970,7 @@ class QuickSetLotWinner(FormView, AuctionPermissionsMixin):
     model = Lot
 
     def get_success_url(self):
-        return reverse(
-            "auction_lot_winners_autocomplete", kwargs={"slug": self.auction.slug}
-        )
+        return reverse("auction_lot_winners_autocomplete", kwargs={"slug": self.auction.slug})
 
     def get_queryset(self):
         return self.auction.lots_qs
@@ -2130,9 +1980,7 @@ class QuickSetLotWinner(FormView, AuctionPermissionsMixin):
         self.is_auction_admin
         undo = self.request.GET.get("undo")
         if undo and request.method == "GET":
-            undo_lot = Lot.objects.filter(
-                custom_lot_number=undo, auction=self.auction
-            ).first()
+            undo_lot = Lot.objects.filter(custom_lot_number=undo, auction=self.auction).first()
             if undo_lot:
                 undo_lot.winner = None
                 undo_lot.auctiontos_winner = None
@@ -2166,9 +2014,7 @@ class QuickSetLotWinner(FormView, AuctionPermissionsMixin):
         tos = AuctionTOS.objects.get(pk=winner)
         # check auction, find a lot that matches this one, confirm it belongs to this auction
         if lot.auction and lot.auction == self.auction:
-            if (not tos and not winning_price) or (
-                tos.auction and tos.auction == self.auction
-            ):
+            if (not tos and not winning_price) or (tos.auction and tos.auction == self.auction):
                 return self.set_winner(lot, tos, winning_price)
         return self.form_invalid(form)
 
@@ -2247,15 +2093,10 @@ class SetLotWinner(QuickSetLotWinner):
                             and lot.auctiontos_seller
                             and lot.auctiontos_seller.invoice.status == "DRAFT"
                         ):
-                            undo_url = (
-                                self.get_success_url()
-                                + f"?undo={lot.custom_lot_number}"
-                            )
+                            undo_url = self.get_success_url() + f"?undo={lot.custom_lot_number}"
                             form.add_error(
                                 "lot",
-                                mark_safe(
-                                    f"{error}.  <a href='{undo_url}'>Click here to mark unsold</a>."
-                                ),
+                                mark_safe(f"{error}.  <a href='{undo_url}'>Click here to mark unsold</a>."),
                             )
                     except:
                         # one invoice or the other doesn't exist, this only happens when the selling the first lot to a given tos
@@ -2301,11 +2142,7 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
             # next, check GET to see if they're asking for an import from a past auction
             import_from_auction = self.request.GET.get("import")
             if import_from_auction:
-                other_auction = (
-                    Auction.objects.exclude(is_deleted=True)
-                    .filter(slug=import_from_auction)
-                    .first()
-                )
+                other_auction = Auction.objects.exclude(is_deleted=True).filter(slug=import_from_auction).first()
                 if not other_auction.permission_check(self.request.user):
                     messages.error(
                         self.request,
@@ -2316,9 +2153,7 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
                     total_skipped = 0
                     total_tos = 0
                     for tos in auctiontos:
-                        if not self.tos_is_in_auction(
-                            self.auction, tos.name, tos.email
-                        ):
+                        if not self.tos_is_in_auction(self.auction, tos.name, tos.email):
                             initial_formset_data.append(
                                 {
                                     "bidder_number": tos.bidder_number,
@@ -2418,9 +2253,7 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
             phone = extract_info(row, phone_field_names)
             address = extract_info(row, address_field_names)
             is_club_member = extract_info(row, is_club_member_fields)
-            if (
-                email or name or phone or address
-            ) and total_tos <= self.max_users_that_can_be_added_at_once:
+            if (email or name or phone or address) and total_tos <= self.max_users_that_can_be_added_at_once:
                 if self.tos_is_in_auction(self.auction, name, email):
                     total_skipped += 1
                 else:
@@ -2471,9 +2304,7 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
                 tos.manually_added = True
                 tos.save()
             messages.success(self.request, f"Added {len(auctiontos)} users")
-            return redirect(
-                reverse("auction_tos_list", kwargs={"slug": self.auction.slug})
-            )
+            return redirect(reverse("auction_tos_list", kwargs={"slug": self.auction.slug}))
         self.tos_formset = tos_formset
         context = self.get_context_data(**kwargs)
         return self.render_to_response(context)
@@ -2485,10 +2316,7 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
         context["auction"] = self.auction
         context["other_auctions"] = (
             Auction.objects.exclude(is_deleted=True)
-            .filter(
-                Q(created_by=self.request.user)
-                | Q(auctiontos__user=self.request.user, auctiontos__is_admin=True)
-            )
+            .filter(Q(created_by=self.request.user) | Q(auctiontos__user=self.request.user, auctiontos__is_admin=True))
             .distinct()
             .order_by("-date_posted")[:10]
         )
@@ -2506,11 +2334,7 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
         return qs.first()
 
     def dispatch(self, request, *args, **kwargs):
-        self.auction = (
-            Auction.objects.exclude(is_deleted=True)
-            .filter(slug=kwargs.pop("slug"))
-            .first()
-        )
+        self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs.pop("slug")).first()
         if not self.auction:
             raise Http404
         if not self.auction.permission_check(self.request.user):
@@ -2604,9 +2428,7 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
             else:
                 print_url = ""
             if self.is_admin:
-                redirect_url = reverse(
-                    "auction_tos_list", kwargs={"slug": self.auction.slug}
-                )
+                redirect_url = reverse("auction_tos_list", kwargs={"slug": self.auction.slug})
                 if print_url:
                     redirect_url += "?" + print_url
             else:
@@ -2628,20 +2450,14 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
         return context
 
     def dispatch(self, request, *args, **kwargs):
-        self.auction = (
-            Auction.objects.exclude(is_deleted=True)
-            .filter(slug=kwargs.pop("slug"))
-            .first()
-        )
+        self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs.pop("slug")).first()
         self.is_admin = False
         if not self.auction:
             raise Http404
         bidder_number = kwargs.pop("bidder_number", None)
         self.tos = None
         if bidder_number:
-            self.tos = AuctionTOS.objects.filter(
-                bidder_number=bidder_number, auction=self.auction
-            ).first()
+            self.tos = AuctionTOS.objects.filter(bidder_number=bidder_number, auction=self.auction).first()
         if self.is_auction_admin:
             self.is_admin = True
         if not self.tos:
@@ -2658,9 +2474,7 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
             )
         else:
             if not self.tos.selling_allowed and not self.is_admin:
-                messages.error(
-                    request, "You don't have permission to add lots to this auction"
-                )
+                messages.error(request, "You don't have permission to add lots to this auction")
                 return redirect(f"/auctions/{self.auction.slug}/")
         if not self.is_admin and not self.auction.can_submit_lots:
             messages.error(request, f"Lot submission has ended for {self.auction}")
@@ -2754,9 +2568,7 @@ class ViewLot(DetailView):
         context["is_auction_admin"] = False
         if lot.auction:
             context["auction"] = lot.auction
-            context["is_auction_admin"] = lot.auction.permission_check(
-                self.request.user
-            )
+            context["is_auction_admin"] = lot.auction.permission_check(self.request.user)
             if lot.auction.first_bid_payout and not lot.auction.invoiced:
                 if not self.request.user.is_authenticated or not Bid.objects.filter(
                     user=self.request.user, lot_number__auction=lot.auction
@@ -2766,9 +2578,7 @@ class ViewLot(DetailView):
                         f"Bid on (and win) any lot in the {lot.auction} and get ${lot.auction.first_bid_payout} back!",
                     )
         try:
-            defaultBidAmount = Bid.objects.get(
-                user=self.request.user, lot_number=lot.pk
-            ).amount
+            defaultBidAmount = Bid.objects.get(user=self.request.user, lot_number=lot.pk).amount
             context["viewer_bid"] = defaultBidAmount
             defaultBidAmount = defaultBidAmount + 1
         except:
@@ -2801,9 +2611,7 @@ class ViewLot(DetailView):
         if context["viewer_pk"] == context["submitter_pk"]:
             context["user_specific_bidding_error"] = "You can't bid on your own lot"
         context["amount"] = defaultBidAmount
-        context["watched"] = Watch.objects.filter(
-            lot_number=lot.lot_number, user=self.request.user.id
-        )
+        context["watched"] = Watch.objects.filter(lot_number=lot.lot_number, user=self.request.user.id)
         context["category"] = lot.species_category
         # context['form'] = CreateBid(initial={'user': self.request.user.id, 'lot_number':lot.pk, "amount":defaultBidAmount}, request=self.request)
         context["user_tos"] = None
@@ -2817,18 +2625,12 @@ class ViewLot(DetailView):
                 context["user_tos"] = True
                 context["user_tos_location"] = tos.pickup_location
                 if not tos.bidding_allowed:
-                    context["user_specific_bidding_error"] = (
-                        "This auction requires admin approval before you can bid"
-                    )
+                    context["user_specific_bidding_error"] = "This auction requires admin approval before you can bid"
             else:
                 context["user_specific_bidding_error"] = (
                     f"This lot is part of <b>{lot.auction}</b>. Please <a href='/auctions/{lot.auction.slug}/?next={lot.lot_link}#join'>read the auction's rules and join the auction</a> to bid<br>"
                 )
-        if (
-            lot.within_dynamic_end_time
-            and lot.minutes_to_end > 0
-            and not lot.sealed_bid
-        ):
+        if lot.within_dynamic_end_time and lot.minutes_to_end > 0 and not lot.sealed_bid:
             messages.info(
                 self.request,
                 "Bidding is ending soon.  Bids placed now will extend the end time of this lot.  This page will update automatically, you don't need to reload it",
@@ -2847,10 +2649,7 @@ class ViewLot(DetailView):
             userData.last_activity = timezone.now()
             userData.save()
             if userData.last_ip_address:
-                if (
-                    userData.last_ip_address != lot.seller_ip
-                    and lot.bidder_ip_same_as_seller
-                ):
+                if userData.last_ip_address != lot.seller_ip and lot.bidder_ip_same_as_seller:
                     messages.info(
                         self.request,
                         "Heads up: one of the bidders on this lot has the same IP address as the seller of this lot.  This can happen when someone is bidding on their own lots.  Never bid more than a lot is worth to you.",
@@ -2888,29 +2687,19 @@ class ViewLot(DetailView):
         if self.request.user.is_authenticated:
             context["show_chat_subscriptions_checkbox"] = True
             context["autocheck_chat_subscriptions"] = "false"
-            existing_subscription = ChatSubscription.objects.filter(
-                lot=lot, user=self.request.user
-            ).first()
+            existing_subscription = ChatSubscription.objects.filter(lot=lot, user=self.request.user).first()
             if (
                 lot.user
                 and lot.user == self.request.user
                 and not self.request.user.userdata.email_me_when_people_comment_on_my_lots
             ):
                 context["show_chat_subscriptions_checkbox"] = False
-            if (
-                lot.user != self.request.user
-                and not self.request.user.userdata.email_me_about_new_chat_replies
-            ):
+            if lot.user != self.request.user and not self.request.user.userdata.email_me_about_new_chat_replies:
                 context["show_chat_subscriptions_checkbox"] = False
-            if (
-                self.request.user.userdata.email_me_about_new_chat_replies
-                and not existing_subscription
-            ):
+            if self.request.user.userdata.email_me_about_new_chat_replies and not existing_subscription:
                 context["autocheck_chat_subscriptions"] = "true"
             if existing_subscription:
-                context[
-                    "chat_subscriptions_is_checked"
-                ] = not existing_subscription.unsubscribed
+                context["chat_subscriptions_is_checked"] = not existing_subscription.unsubscribed
                 context["autocheck_chat_subscriptions"] = "false"
             else:
                 context["chat_subscriptions_is_checked"] = False
@@ -3048,14 +2837,8 @@ class LotValidation(LoginRequiredMixin):
             user=request.user.pk,
             defaults={},
         )
-        if (
-            not userData.address
-            or not request.user.first_name
-            or not request.user.last_name
-        ):
-            messages.error(
-                self.request, "Please fill out your contact info before creating a lot"
-            )
+        if not userData.address or not request.user.first_name or not request.user.last_name:
+            messages.error(self.request, "Please fill out your contact info before creating a lot")
             return redirect("/contact_info?next=/lots/new/")
             # return redirect(reverse("contact_info"))
         return super().dispatch(request, *args, **kwargs)
@@ -3099,13 +2882,9 @@ class LotValidation(LoginRequiredMixin):
                 lot.reserve_price = lot.auction.minimum_bid
             if lot.auction.buy_now == "disable" and lot.buy_now_price:
                 lot.buy_now_price = None
-            if (
-                lot.auction.buy_now == "require" or lot.auction.buy_now == "forced"
-            ) and not lot.buy_now_price:
+            if (lot.auction.buy_now == "require" or lot.auction.buy_now == "forced") and not lot.buy_now_price:
                 lot.buy_now_price = lot.auction.minimum_bid
-                messages.error(
-                    self.request, "You need to set a buy now price for this lot!"
-                )
+                messages.error(self.request, "You need to set a buy now price for this lot!")
             lot.date_end = lot.auction.date_end
             userData, created = UserData.objects.get_or_create(
                 user=self.request.user.pk,
@@ -3114,9 +2893,7 @@ class LotValidation(LoginRequiredMixin):
             userData.last_auction_used = lot.auction
             userData.last_activity = timezone.now()
             userData.save()
-            auctiontos = AuctionTOS.objects.filter(
-                user=self.request.user, auction=lot.auction
-            ).first()
+            auctiontos = AuctionTOS.objects.filter(user=self.request.user, auction=lot.auction).first()
             if not auctiontos:
                 # it should not be possible to get here (famous last words...)
                 # remember that on form submit in CreateLotForm.clean(), we are validating that the user has an auctiontos
@@ -3153,15 +2930,9 @@ class LotValidation(LoginRequiredMixin):
             # if this was cloned from another lot, get the images from that lot
             if form.cleaned_data["cloned_from"]:
                 try:
-                    originalLot = Lot.objects.get(
-                        pk=form.cleaned_data["cloned_from"], is_deleted=False
-                    )
-                    if (
-                        originalLot.user.pk == self.request.user.pk
-                    ) or self.request.user.is_superuser:
-                        originalImages = LotImage.objects.filter(
-                            lot_number=originalLot.lot_number
-                        )
+                    originalLot = Lot.objects.get(pk=form.cleaned_data["cloned_from"], is_deleted=False)
+                    if (originalLot.user.pk == self.request.user.pk) or self.request.user.is_superuser:
+                        originalImages = LotImage.objects.filter(lot_number=originalLot.lot_number)
                         for originalImage in originalImages:
                             newImage = LotImage.objects.create(
                                 createdon=originalImage.createdon,
@@ -3171,10 +2942,7 @@ class LotValidation(LoginRequiredMixin):
                             )
                             newImage.image = get_thumbnailer(originalImage.image)
                             # if the original lot sold, this picture sure isn't of the actual item
-                            if (
-                                originalLot.winner
-                                and originalImage.image_source == "ACTUAL"
-                            ):
+                            if originalLot.winner and originalImage.image_source == "ACTUAL":
                                 newImage.image_source = "REPRESENTATIVE"
                             newImage.save()
                         # we are only cloning images here, not watchers, views, or other related models
@@ -3244,10 +3012,7 @@ class LotCreateView(LotValidation, CreateView):
             defaults={},
         )
         if userData.last_auction_used:
-            if (
-                userData.last_auction_used.can_submit_lots
-                and not userData.last_auction_used.is_online
-            ):
+            if userData.last_auction_used.can_submit_lots and not userData.last_auction_used.is_online:
                 messages.info(
                     request,
                     f"Sick of adding lots one at a time?  <a href='{reverse('bulk_add_lots_for_myself', kwargs={'slug': userData.last_auction_used.slug})}'>Add lots of lots to {userData.last_auction_used}</a>",
@@ -3255,11 +3020,7 @@ class LotCreateView(LotValidation, CreateView):
         data = self.request.GET.copy()
         auction_slug = data.get("auction", None)
         if auction_slug:
-            self.auction = (
-                Auction.objects.exclude(is_deleted=True)
-                .filter(slug=auction_slug)
-                .first()
-            )
+            self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=auction_slug).first()
             if self.auction:
                 error = None
                 if timezone.now() < self.auction.lot_submission_start_date:
@@ -3267,9 +3028,7 @@ class LotCreateView(LotValidation, CreateView):
                 if self.auction.lot_submission_end_date:
                     if self.auction.lot_submission_end_date < timezone.now():
                         error = "Lot submission has ended for this auction."
-                tos = AuctionTOS.objects.filter(
-                    user=self.request.user, auction=self.auction
-                ).first()
+                tos = AuctionTOS.objects.filter(user=self.request.user, auction=self.auction).first()
                 if not tos:
                     error = "You haven't joined this auction yet.  Click the green button at the bottom of this page to join the auction.</a>"
                 if error:
@@ -3289,9 +3048,7 @@ class LotUpdate(LotValidation, UpdateView):
     form_class = CreateLotForm
 
     def dispatch(self, request, *args, **kwargs):
-        if not (
-            request.user.is_superuser or self.get_object().user == self.request.user
-        ):
+        if not (request.user.is_superuser or self.get_object().user == self.request.user):
             messages.error(request, "Only the lot creator can edit a lot")
             return redirect("/")
         if not self.get_object().can_be_edited:
@@ -3315,9 +3072,7 @@ class AuctionDelete(DeleteView, AuctionPermissionsMixin):
     def dispatch(self, request, *args, **kwargs):
         self.auction = self.get_object()
         if not self.get_object().can_be_deleted:
-            messages.error(
-                request, "There are already lots in this auction, it can't be deleted"
-            )
+            messages.error(request, "There are already lots in this auction, it can't be deleted")
             return redirect("/")
         if not self.is_auction_admin:
             messages.error(request, "Only the auction creator can delete an auction")
@@ -3335,9 +3090,7 @@ class LotDelete(LoginRequiredMixin, DeleteView):
         if not self.get_object().can_be_deleted:
             messages.error(request, self.get_object().cannot_be_deleted_reason)
             return redirect("/")
-        if not (
-            request.user.is_superuser or self.get_object().user == self.request.user
-        ):
+        if not (request.user.is_superuser or self.get_object().user == self.request.user):
             messages.error(request, "Only the creator of a lot can delete it")
             return redirect("/")
         return super().dispatch(request, *args, **kwargs)
@@ -3359,9 +3112,7 @@ class ImageDelete(LoginRequiredMixin, DeleteView):
             auth = True
         if not auth:
             messages.error(request, "You can't change this image")
-            return redirect(
-                f"/lots/{self.get_object().lot_number.lot_number}/{self.get_object().lot_number.slug}/"
-            )
+            return redirect(f"/lots/{self.get_object().lot_number.lot_number}/{self.get_object().lot_number.slug}/")
         return super().dispatch(request, *args, **kwargs)
 
     def get_success_url(self):
@@ -3404,9 +3155,7 @@ class BidDelete(LoginRequiredMixin, DeleteView):
     def form_valid(self, form):
         lot = self.get_object().lot_number
         success_url = self.get_success_url()
-        historyMessage = (
-            f"{self.request.user} has removed {self.get_object().user}'s bid"
-        )
+        historyMessage = f"{self.request.user} has removed {self.get_object().user}'s bid"
         if lot.ended:
             lot.winner = None
             lot.auctiontos_winner = None
@@ -3419,9 +3168,7 @@ class BidDelete(LoginRequiredMixin, DeleteView):
             lot.buy_now_used = False
             lot.save()
         self.get_object().delete()
-        LotHistory.objects.create(
-            lot=lot, user=self.request.user, message=historyMessage, changed_price=True
-        )
+        LotHistory.objects.create(lot=lot, user=self.request.user, message=historyMessage, changed_price=True)
         return HttpResponseRedirect(success_url)
 
     def get_success_url(self):
@@ -3472,9 +3219,7 @@ class LotAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
             obj = self.lot
             obj.custom_lot_number = form.cleaned_data["custom_lot_number"]
             obj.lot_name = form.cleaned_data["lot_name"] or "Unknown lot"
-            obj.species_category = (
-                form.cleaned_data["species_category"] or 21
-            )  # uncategorized
+            obj.species_category = form.cleaned_data["species_category"] or 21  # uncategorized
             obj.description = form.cleaned_data["description"]
             # obj.auctiontos_seller = form.cleaned_data['auctiontos_seller'] or request.user
             obj.quantity = form.cleaned_data["quantity"] or 1
@@ -3496,9 +3241,7 @@ class LotAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
             # add message if the winner changed
             if obj.auctiontos_winner:
                 if self.lot_initial_winner != obj.auctiontos_winner:
-                    obj.add_winner_message(
-                        self.request.user, obj.auctiontos_winner, obj.winning_price
-                    )
+                    obj.add_winner_message(self.request.user, obj.auctiontos_winner, obj.winning_price)
             return HttpResponse("<script>location.reload();</script>", status=200)
             # return HttpResponse("<script>closeModal();</script>", status=200)
         else:
@@ -3537,15 +3280,9 @@ class AuctionTOSDelete(TemplateView, FormMixin, AuctionPermissionsMixin):
     def post(self, request, *args, **kwargs):
         form = self.get_form()
         if form.is_valid():
-            success_url = reverse(
-                "auction_tos_list", kwargs={"slug": self.auctiontos.auction.slug}
-            )
-            sold_lots = Lot.objects.exclude(is_deleted=True).filter(
-                auctiontos_seller=self.auctiontos
-            )
-            won_lots = Lot.objects.exclude(is_deleted=True).filter(
-                auctiontos_winner=self.auctiontos
-            )
+            success_url = reverse("auction_tos_list", kwargs={"slug": self.auctiontos.auction.slug})
+            sold_lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller=self.auctiontos)
+            won_lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_winner=self.auctiontos)
             if form.cleaned_data["delete_lots"]:
                 for lot in sold_lots:
                     lot.delete()
@@ -3565,9 +3302,7 @@ class AuctionTOSDelete(TemplateView, FormMixin, AuctionPermissionsMixin):
                     lot.save()
             else:
                 if form.cleaned_data["merge_with"]:
-                    new_auctiontos = AuctionTOS.objects.get(
-                        pk=form.cleaned_data["merge_with"]
-                    )
+                    new_auctiontos = AuctionTOS.objects.get(pk=form.cleaned_data["merge_with"])
                     invoice, created = Invoice.objects.get_or_create(
                         auctiontos_user=new_auctiontos,
                         auction=new_auctiontos.auction,
@@ -3579,9 +3314,7 @@ class AuctionTOSDelete(TemplateView, FormMixin, AuctionPermissionsMixin):
                     for lot in won_lots:
                         lot.auctiontos_winner = new_auctiontos
                         lot.save()
-                        lot.add_winner_message(
-                            request.user, new_auctiontos, lot.winning_price
-                        )
+                        lot.add_winner_message(request.user, new_auctiontos, lot.winning_price)
                     invoice.recalculate
             # not needed if we have models.CASCADE on Invoice
             # invoices = Invoice.objects.filter(auctiontos_user=self.auctiontos)
@@ -3642,9 +3375,7 @@ class AuctionTOSAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
             try:
                 invoice = self.auctiontos.invoice
                 invoice_string = invoice.invoice_summary_short
-                context["top_buttons"] = render_to_string(
-                    "invoice_buttons.html", {"invoice": invoice}
-                )
+                context["top_buttons"] = render_to_string("invoice_buttons.html", {"invoice": invoice})
                 context["unsold_lot_warning"] = invoice.unsold_lot_warning
             except:
                 invoice = None
@@ -3707,9 +3438,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 self.request,
                 "Auction created!  Now, create a location to exchange lots.",
             )
-            return reverse(
-                "create_auction_pickup_location", kwargs={"slug": self.object.slug}
-            )
+            return reverse("create_auction_pickup_location", kwargs={"slug": self.object.slug})
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -3756,9 +3485,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
         clone_from_auction = None
         if "clone" in str(self.request.GET):
             try:
-                original_auction = Auction.objects.get(
-                    slug=cloned_from, is_deleted=False
-                )
+                original_auction = Auction.objects.get(slug=cloned_from, is_deleted=False)
                 if original_auction:
                     # you still don't get to clone auctions that aren't yours...
                     if original_auction.permission_check(self.request.user):
@@ -3841,9 +3568,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
         if clone_from_auction:
             # because we will almost certainly have locations, we can simply default to the main auction page
             self.redirect_url = auction.get_absolute_url()
-            originalLocations = PickupLocation.objects.filter(
-                auction=clone_from_auction
-            )
+            originalLocations = PickupLocation.objects.filter(auction=clone_from_auction)
             for location in originalLocations:
                 location.pk = None  # duplicate all fields
                 if location.name == str(clone_from_auction):
@@ -3862,9 +3587,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                     if auction.date_end:
                         location.second_pickup_time = auction.date_end + secondTimeDiff
                     else:
-                        location.second_pickup_time = (
-                            auction.date_start + secondTimeDiff
-                        )
+                        location.second_pickup_time = auction.date_start + secondTimeDiff
                 location.save()
             # we are only cloning pickup locations here, no other models (AuctionTOS would be the first one that comes to mind)
         return super().form_valid(form)
@@ -3885,9 +3608,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
             return self.auction
         else:
             try:
-                auction = Auction.objects.get(
-                    slug=self.kwargs.get(self.slug_url_kwarg), is_deleted=False
-                )
+                auction = Auction.objects.get(slug=self.kwargs.get(self.slug_url_kwarg), is_deleted=False)
                 self.auction = auction
                 return auction
             except:
@@ -3921,9 +3642,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
         context["pickup_locations"] = self.get_object().location_qs
         current_site = Site.objects.get_current()
         context["domain"] = current_site.domain
-        context["google_maps_api_key"] = settings.LOCATION_FIELD[
-            "provider.google.api_key"
-        ]
+        context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
         if self.get_object().closed:
             context["ended"] = True
             messages.info(
@@ -3933,9 +3652,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
         else:
             context["ended"] = False
         try:
-            existingTos = AuctionTOS.objects.get(
-                user=self.request.user, auction=self.get_object()
-            )
+            existingTos = AuctionTOS.objects.get(user=self.request.user, auction=self.get_object())
             existingTos = existingTos.pickup_location
             i_agree = True
             context["hasChosenLocation"] = existingTos.pk
@@ -3950,9 +3667,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
                 i_agree = True
             else:
                 i_agree = False
-                existingTos = PickupLocation.objects.filter(
-                    auction=self.get_object()
-                ).first()
+                existingTos = PickupLocation.objects.filter(auction=self.get_object()).first()
             # if self.request.user.is_authenticated and not context['ended']:
             #     if not self.get_object().no_location:
             #         messages.add_message(self.request, messages.ERROR, "Please confirm you have read these rules by selecting your pickup location at the bottom of this page.")
@@ -3964,10 +3679,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
                     self.request,
                     f"<a href='{invalidPickups}'>Some pickup times</a> are set before the end date of the auction",
                 )
-            if (
-                self.get_object().time_start_is_at_night
-                and not self.get_object().is_online
-            ):
+            if self.get_object().time_start_is_at_night and not self.get_object().is_online:
                 messages.info(
                     self.request,
                     f"You know your auction is starting in the middle of the night, right? <a href='{reverse('edit_auction', kwargs={'slug': self.get_object().slug})}'>Click here to change when bidding opens</a> and remember that it's in 24 hour time",
@@ -4024,13 +3736,8 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
                         "You have to set your address before you can choose pickup by mail",
                     )
                     return redirect(f"/contact_info?next={auction.get_absolute_url()}")
-            if (
-                form.cleaned_data["time_spent_reading_rules"]
-                > obj.time_spent_reading_rules
-            ):
-                obj.time_spent_reading_rules = form.cleaned_data[
-                    "time_spent_reading_rules"
-                ]
+            if form.cleaned_data["time_spent_reading_rules"] > obj.time_spent_reading_rules:
+                obj.time_spent_reading_rules = form.cleaned_data["time_spent_reading_rules"]
             # even if an auctiontos was originally manually added, if the user clicked join, mark them as not manually added
             obj.manually_added = False
             if obj.email_address_status == "UNKNOWN":
@@ -4038,9 +3745,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
                 obj.email_address_status = "VALID"
             # fill out some information in the tos if not already filled out
             if not obj.name:
-                obj.name = (
-                    self.request.user.first_name + " " + self.request.user.last_name
-                )
+                obj.name = self.request.user.first_name + " " + self.request.user.last_name
             if not obj.email:
                 obj.email = self.request.user.email
             if not obj.phone_number:
@@ -4113,9 +3818,7 @@ def toDefaultLandingPage(request):
             )(request)
         except Exception:
             # No tos?  Take them there so they can sign
-            return AuctionInfo.as_view(
-                rewrite_url=f"/?{auction.slug}", auction=auction
-            )(request)
+            return AuctionInfo.as_view(rewrite_url=f"/?{auction.slug}", auction=auction)(request)
 
     data = request.GET.copy()
     routeByLastAuction = False
@@ -4131,9 +3834,7 @@ def toDefaultLandingPage(request):
         pass
     try:
         # if the slug was set in the URL
-        auction = Auction.objects.exclude(is_deleted=True).filter(
-            slug=list(data.keys())[0]
-        )[0]
+        auction = Auction.objects.exclude(is_deleted=True).filter(slug=list(data.keys())[0])[0]
         # return tos_check(request, auction, routeByLastAuction)
     except Exception:
         # if not, check and see if the user has been participating in an auction
@@ -4141,9 +3842,7 @@ def toDefaultLandingPage(request):
             auction = UserData.objects.get(user=request.user).last_auction_used
             if timezone.now() > auction.date_end:
                 try:
-                    invoice = Invoice.objects.get(
-                        auctiontos_user__user=request.user, auction=auction
-                    )
+                    invoice = Invoice.objects.get(auctiontos_user__user=request.user, auction=auction)
                     messages.info(
                         request,
                         f'{auction} has ended.  <a href="/invoices/{invoice.pk}">View your invoice</a>, <a href="/feedback/">leave feedback</a> on lots you bought or sold, or <a href="/lots?auction={auction.slug}">view lots</a>',
@@ -4155,9 +3854,7 @@ def toDefaultLandingPage(request):
             else:
                 try:
                     # in progress online auctions get routed
-                    AuctionTOS.objects.get(
-                        user=request.user, auction=auction, auction__is_online=True
-                    )
+                    AuctionTOS.objects.get(user=request.user, auction=auction, auction__is_online=True)
                     # only show the banner if the TOS is signed
                     # messages.add_message(request, messages.INFO, f'{auction} is the last auction you joined.  <a href="/lots/">View all lots instead</a>')
                     routeByLastAuction = True
@@ -4231,13 +3928,9 @@ class allAuctions(ListView):
             self.request.COOKIES["longitude"]
         except:
             if self.request.user.is_authenticated:
-                context["location_message"] = (
-                    "Set your location to get notifications about new auctions near you"
-                )
+                context["location_message"] = "Set your location to get notifications about new auctions near you"
             else:
-                context["location_message"] = (
-                    "Set your location to see how far away auctions are"
-                )
+                context["location_message"] = "Set your location to see how far away auctions are"
         context["hide_google_login"] = True
         if self.request.user.is_authenticated:
             context["last_auction_used"] = self.request.user.userdata.last_auction_used
@@ -4250,16 +3943,12 @@ class Leaderboard(ListView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["total_lots"] = UserData.objects.filter(
-            rank_total_lots__isnull=False
-        ).order_by("rank_total_lots")
-        context["unique_species"] = UserData.objects.filter(
-            number_unique_species__isnull=False
-        ).order_by("rank_unique_species")
+        context["total_lots"] = UserData.objects.filter(rank_total_lots__isnull=False).order_by("rank_total_lots")
+        context["unique_species"] = UserData.objects.filter(number_unique_species__isnull=False).order_by(
+            "rank_unique_species"
+        )
         # context['total_spent'] = UserData.objects.filter(rank_total_spent__isnull=False).order_by('rank_total_spent')
-        context["total_bids"] = UserData.objects.filter(
-            rank_total_bids__isnull=False
-        ).order_by("rank_total_bids")
+        context["total_bids"] = UserData.objects.filter(rank_total_bids__isnull=False).order_by("rank_total_bids")
         return context
 
 
@@ -4307,14 +3996,8 @@ class AllLots(LotListView, AuctionPermissionsMixin):
             self.auction = context["auction"]
         if self.auction:
             context["is_auction_admin"] = self.is_auction_admin
-            if (
-                self.auction.minutes_to_end < 1440
-                and self.auction.minutes_to_end > 0
-                and can_show_unloved_tip
-            ):
-                context["search_button_tooltip"] = (
-                    "Try sorting by least popular to find deals!"
-                )
+            if self.auction.minutes_to_end < 1440 and self.auction.minutes_to_end > 0 and can_show_unloved_tip:
+                context["search_button_tooltip"] = "Try sorting by least popular to find deals!"
         if self.rewrite_url:
             if "auction" not in data and "q" not in data:
                 context["rewrite_url"] = self.rewrite_url
@@ -4323,9 +4006,7 @@ class AllLots(LotListView, AuctionPermissionsMixin):
                 user = None
                 if self.request.user.is_authenticated:
                     user = self.request.user
-                SearchHistory.objects.create(
-                    user=user, search=data["q"], auction=self.auction
-                )
+                SearchHistory.objects.create(user=user, search=data["q"], auction=self.auction)
         context["view"] = "all"
         context["filter"] = LotFilter(
             data,
@@ -4347,8 +4028,7 @@ class Invoices(ListView, LoginRequiredMixin):
 
     def get_queryset(self):
         qs = Invoice.objects.filter(
-            Q(auctiontos_user__user=self.request.user)
-            | Q(auctiontos_user__email=self.request.user.email)
+            Q(auctiontos_user__user=self.request.user) | Q(auctiontos_user__email=self.request.user.email)
         ).order_by("-date")
         return qs
 
@@ -4387,11 +4067,7 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
         self.is_admin = False
         invoice = self.get_object()
         if not invoice:
-            auction = (
-                Auction.objects.exclude(is_deleted=True)
-                .filter(slug=self.kwargs["slug"])
-                .first()
-            )
+            auction = Auction.objects.exclude(is_deleted=True).filter(slug=self.kwargs["slug"]).first()
             if auction:
                 messages.error(
                     request,
@@ -4407,10 +4083,7 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
         if self.auction.invoice_payment_instructions and invoice.status == "UNPAID":
             messages.info(request, self.auction.invoice_payment_instructions)
         if request.user.is_authenticated:
-            if (
-                invoice.auctiontos_user.email == request.user.email
-                or invoice.auctiontos_user.user == request.user
-            ):
+            if invoice.auctiontos_user.email == request.user.email or invoice.auctiontos_user.user == request.user:
                 mark_invoice_viewed_by_user = True
                 auth = True
         if not auth:
@@ -4420,9 +4093,7 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
             )
             return redirect("/")
         if mark_invoice_viewed_by_user:
-            setattr(
-                invoice, self.form_view, True
-            )  # this will set printed or opened as appropriate
+            setattr(invoice, self.form_view, True)  # this will set printed or opened as appropriate
             invoice.save()
         self.InvoiceAdjustmentFormSet = modelformset_factory(
             InvoiceAdjustment, extra=1, can_delete=True, form=InvoiceAdjustmentForm
@@ -4477,9 +4148,7 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
             for form in adjustment_formset.deleted_forms:
                 if form.instance.pk:
                     form.instance.delete()
-            return redirect(
-                reverse("invoice_by_pk", kwargs={"pk": self.get_object().pk})
-            )
+            return redirect(reverse("invoice_by_pk", kwargs={"pk": self.get_object().pk}))
         context = self.get_context_data(**kwargs)
         context["formset"] = adjustment_formset
         context["helper"] = InvoiceAdjustmentFormSetHelper()
@@ -4546,24 +4215,16 @@ class LotLabelView(View, AuctionPermissionsMixin):
 
     def dispatch(self, request, *args, **kwargs):
         # check to make sure the user has permission to view this invoice
-        self.auction = (
-            Auction.objects.exclude(is_deleted=True).filter(slug=kwargs["slug"]).first()
-        )
+        self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs["slug"]).first()
         self.bidder_number = kwargs.pop("bidder_number", None)
         self.username = kwargs.pop("username", None)
         printing_for_self = False
         if self.bidder_number:
-            self.tos = AuctionTOS.objects.filter(
-                auction=self.auction, bidder_number=self.bidder_number
-            ).first()
+            self.tos = AuctionTOS.objects.filter(auction=self.auction, bidder_number=self.bidder_number).first()
         if self.username:
-            self.tos = AuctionTOS.objects.filter(
-                auction=self.auction, user__username=self.username
-            ).first()
+            self.tos = AuctionTOS.objects.filter(auction=self.auction, user__username=self.username).first()
         if not self.bidder_number and not self.username:
-            self.tos = AuctionTOS.objects.filter(
-                auction=self.auction, user=request.user
-            ).first()
+            self.tos = AuctionTOS.objects.filter(auction=self.auction, user=request.user).first()
         if not self.tos:
             if self.is_auction_admin:
                 # should never get here as long as admins are following links
@@ -4600,21 +4261,15 @@ class LotLabelView(View, AuctionPermissionsMixin):
                         "You don't have any lots with printable labels in this auction.",
                     )
                 else:
-                    messages.error(
-                        request, "There aren't any lots with printable labels"
-                    )
+                    messages.error(request, "There aren't any lots with printable labels")
                 return redirect(self.auction.get_absolute_url())
             return super().dispatch(request, *args, **kwargs)
         else:
-            messages.error(
-                request, "Your account doesn't have permission to view this page."
-            )
+            messages.error(request, "Your account doesn't have permission to view this page.")
             return redirect("/")
 
     def get_context_data(self, **kwargs):
-        user_label_prefs, created = UserLabelPrefs.objects.get_or_create(
-            user=self.request.user
-        )
+        user_label_prefs, created = UserLabelPrefs.objects.get_or_create(user=self.request.user)
         context = {}
         context["empty_labels"] = user_label_prefs.empty_labels
         context["print_qr"] = True
@@ -4663,10 +4318,7 @@ class LotLabelView(View, AuctionPermissionsMixin):
             context["print_qr"] = False
         else:
             context.update(
-                {
-                    f"{field.name}": getattr(user_label_prefs, field.name)
-                    for field in UserLabelPrefs._meta.get_fields()
-                }
+                {f"{field.name}": getattr(user_label_prefs, field.name) for field in UserLabelPrefs._meta.get_fields()}
             )
         return context
 
@@ -4704,9 +4356,7 @@ class LotLabelView(View, AuctionPermissionsMixin):
         )
         elements = []
         # remove margins from page width
-        page_width = (
-            page_width * unit - page_margin_left * unit - page_margin_right * unit
-        )
+        page_width = page_width * unit - page_margin_left * unit - page_margin_right * unit
         # each label is broken into 3 parts, with a seperate cell for each:
         # first cell
         if context["print_qr"]:
@@ -4740,9 +4390,7 @@ class LotLabelView(View, AuctionPermissionsMixin):
             labels = ["empty"] * empty_labels + list(labels)
         for i, label in enumerate(labels):
             if label == "empty":
-                labels_row += [
-                    [Paragraph("", style), Paragraph("", style), Paragraph("", style)]
-                ] * 3
+                labels_row += [[Paragraph("", style), Paragraph("", style), Paragraph("", style)]] * 3
             else:
                 # currently, we are not trimming the text to fit on a single row
                 # this means that lots with a long label_line_1 will spill over onto 2 rows
@@ -4767,9 +4415,7 @@ class LotLabelView(View, AuctionPermissionsMixin):
                     )
                     labels_row.append([label_qr_code_cell])
                 else:
-                    labels_row.append(
-                        [Paragraph("", style)]
-                    )  # margin left cell is empty
+                    labels_row.append([Paragraph("", style)])  # margin left cell is empty
                 label_text_cell = Paragraph(
                     f"{label.label_line_0}<br />{label.label_line_1}<br />{label.label_line_2}<br />{label.label_line_3}",
                     style,
@@ -4842,10 +4488,7 @@ class SingleLotLabelView(LotLabelView):
 
     def dispatch(self, request, *args, **kwargs):
         self.lot = get_object_or_404(Lot, pk=kwargs.pop("pk"), is_deleted=False)
-        if (
-            self.lot.auctiontos_seller
-            and self.lot.auctiontos_seller.user is not request.user
-        ):
+        if self.lot.auctiontos_seller and self.lot.auctiontos_seller.user is not request.user:
             self.auction = self.lot.auctiontos_seller.auction
             if not self.is_auction_admin:
                 messages.error(
@@ -4865,9 +4508,9 @@ class SingleLotLabelView(LotLabelView):
 def getClubs(request):
     if request.method == "POST":
         species = request.POST["search"]
-        result = Club.objects.filter(
-            Q(name__icontains=species) | Q(abbreviation__icontains=species)
-        ).values("id", "name", "abbreviation")
+        result = Club.objects.filter(Q(name__icontains=species) | Q(abbreviation__icontains=species)).values(
+            "id", "name", "abbreviation"
+        )
         return JsonResponse(list(result), safe=False)
 
 
@@ -4879,14 +4522,10 @@ class InvoiceBulkUpdateStatus(TemplateView, FormMixin, AuctionPermissionsMixin):
     show_checkbox = False
 
     def get_queryset(self):
-        return Invoice.objects.filter(
-            auctiontos_user__auction=self.auction, status=self.old_invoice_status
-        )
+        return Invoice.objects.filter(auctiontos_user__auction=self.auction, status=self.old_invoice_status)
 
     def dispatch(self, request, *args, **kwargs):
-        self.auction = get_object_or_404(
-            Auction, slug=kwargs.pop("slug"), is_deleted=False
-        )
+        self.auction = get_object_or_404(Auction, slug=kwargs.pop("slug"), is_deleted=False)
         self.is_auction_admin
         self.invoice_count = self.get_queryset().count()
         return super().dispatch(request, *args, **kwargs)
@@ -4934,9 +4573,7 @@ class MarkInvoicesReady(InvoiceBulkUpdateStatus):
             f"Changing the invoice status to ready will block users from bidding.  You should make any needed adjustments before setting invoices to ready.  This will change the status of {self.invoice_count} invoices, and allow you to export them to PayPal."
         )
         if not self.auction.closed and self.auction.is_online:
-            context["unsold_lot_warning"] = (
-                "Don't set invoices ready yet!  This auction hasn't ended."
-            )
+            context["unsold_lot_warning"] = "Don't set invoices ready yet!  This auction hasn't ended."
             if not self.auction.minutes_to_end:
                 active_lot_count = self.auction.lots_qs.filter(active=True).count()
                 context["unsold_lot_warning"] += (
@@ -4962,9 +4599,7 @@ class MarkInvoicesPaid(InvoiceBulkUpdateStatus):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        unchanged_invoices = Invoice.objects.filter(
-            auctiontos_user__auction=self.auction, status="DRAFT"
-        ).count()
+        unchanged_invoices = Invoice.objects.filter(auctiontos_user__auction=self.auction, status="DRAFT").count()
         context["unsold_lot_warning"] = (
             "You probably don't need this.  Instead, set invoices to paid one at a time, as users pay them."
         )
@@ -4973,9 +4608,7 @@ class MarkInvoicesPaid(InvoiceBulkUpdateStatus):
             context["tooltip"] += (
                 f" There are {unchanged_invoices} open invoices in this auction that will not be changed; set them ready first if you want to change them."
             )
-        context["tooltip"] += (
-            f" This will set {self.invoice_count} ready invoices to paid."
-        )
+        context["tooltip"] += f" This will set {self.invoice_count} ready invoices to paid."
         if not self.invoice_count:
             context["modal_title"] = "No ready invoices"
             if unchanged_invoices:
@@ -5021,13 +4654,9 @@ class LotRefundDialog(DetailView, FormMixin, AuctionPermissionsMixin):
         self.object = self.lot
         self.auction = self.lot.auction
         self.is_auction_admin
-        self.seller_invoice = Invoice.objects.filter(
-            auctiontos_user=self.lot.auctiontos_seller
-        ).first()
+        self.seller_invoice = Invoice.objects.filter(auctiontos_user=self.lot.auctiontos_seller).first()
         if self.lot.auctiontos_winner:
-            self.winner_invoice = Invoice.objects.filter(
-                auctiontos_user=self.lot.auctiontos_winner
-            ).first()
+            self.winner_invoice = Invoice.objects.filter(auctiontos_user=self.lot.auctiontos_winner).first()
         return super().dispatch(request, *args, **kwargs)
 
     def get_form_kwargs(self):
@@ -5048,26 +4677,22 @@ class LotRefundDialog(DetailView, FormMixin, AuctionPermissionsMixin):
             if existing_refund:
                 self.lot.partial_refund_percent = 0
                 self.lot.save()
-                full_seller_refund = (
-                    add_price_info(Lot.objects.filter(pk=self.lot.pk)).first().your_cut
-                )
+                full_seller_refund = add_price_info(Lot.objects.filter(pk=self.lot.pk)).first().your_cut
                 # if we removed a refund before for math purposes, put it back now
                 self.lot.partial_refund_percent = existing_refund
                 self.lot.save()
                 tooltip = "A refund has already been issued for this lot.  The refund percent is based on the original sale price.<br><br>"
             else:
-                full_seller_refund = (
-                    add_price_info(Lot.objects.filter(pk=self.lot.pk)).first().your_cut
-                )
+                full_seller_refund = add_price_info(Lot.objects.filter(pk=self.lot.pk)).first().your_cut
                 tooltip = "<small>This lot has sold.  If there's a problem with it, you should issue a refund which will show up on the seller and winner's invoices.</small><br><br>"
             if self.lot.winning_price:
-                full_buyer_refund = self.lot.winning_price + (
-                    self.lot.winning_price * self.lot.auction.tax / 100
-                )
+                full_buyer_refund = self.lot.winning_price + (self.lot.winning_price * self.lot.auction.tax / 100)
             else:
                 full_buyer_refund = 0
             if self.seller_invoice and self.seller_invoice.status == "DRAFT":
-                tooltip += "Seller's invoice is open; $<span id='seller_refund'></span> will automatically be removed.<br>"
+                tooltip += (
+                    "Seller's invoice is open; $<span id='seller_refund'></span> will automatically be removed.<br>"
+                )
             else:
                 tooltip += "Seller's invoice is not open.  <span class='text-warning'>Collect $<span id='seller_refund'></span> from the seller</span><br>"
             if self.lot.winning_price and self.lot.auctiontos_winner:
@@ -5113,20 +4738,14 @@ class UserView(DetailView):
             defaults={},
         )
         try:
-            context["banned"] = UserBan.objects.get(
-                user=self.request.user.pk, banned_user=self.object.pk
-            )
+            context["banned"] = UserBan.objects.get(user=self.request.user.pk, banned_user=self.object.pk)
         except:
             context["banned"] = False
         context["seller_feedback"] = (
-            context["data"]
-            .my_lots_qs.exclude(feedback_text__isnull=True)
-            .order_by("-date_posted")
+            context["data"].my_lots_qs.exclude(feedback_text__isnull=True).order_by("-date_posted")
         )
         context["buyer_feedback"] = (
-            context["data"]
-            .my_won_lots_qs.exclude(winner_feedback_text__isnull=True)
-            .order_by("-date_posted")
+            context["data"].my_won_lots_qs.exclude(winner_feedback_text__isnull=True).order_by("-date_posted")
         )
         return context
 
@@ -5167,9 +4786,7 @@ class UsernameUpdate(UpdateView, SuccessMessageMixin):
         if self.get_object().pk == request.user.pk:
             auth = True
         if not auth:
-            messages.error(
-                request, "Your account doesn't have permission to view this page."
-            )
+            messages.error(request, "Your account doesn't have permission to view this page.")
             return redirect("/")
         return super().dispatch(request, *args, **kwargs)
 
@@ -5191,9 +4808,7 @@ class UserLabelPrefsView(UpdateView, SuccessMessageMixin):
     def get_success_url(self):
         data = self.request.GET.copy()
         if len(data) == 0:
-            data["next"] = reverse(
-                "userpage", kwargs={"slug": self.request.user.username}
-            )
+            data["next"] = reverse("userpage", kwargs={"slug": self.request.user.username})
         return data["next"]
 
     def get_object(self, *args, **kwargs):
@@ -5228,18 +4843,14 @@ class UserPreferencesUpdate(UpdateView, SuccessMessageMixin):
         if self.get_object().user.pk == request.user.pk:
             auth = True
         if not auth:
-            messages.error(
-                request, "Your account doesn't have permission to view this page."
-            )
+            messages.error(request, "Your account doesn't have permission to view this page.")
             return redirect("/")
         return super().dispatch(request, *args, **kwargs)
 
     def get_success_url(self):
         data = self.request.GET.copy()
         if len(data) == 0:
-            data["next"] = reverse(
-                "userpage", kwargs={"slug": self.request.user.username}
-            )
+            data["next"] = reverse("userpage", kwargs={"slug": self.request.user.username})
             # data['next'] = "/users/" + str(self.kwargs['pk'])
         return data["next"]
 
@@ -5276,18 +4887,14 @@ class UserLocationUpdate(UpdateView, SuccessMessageMixin):
         if request.user.is_superuser:
             auth = True
         if not auth:
-            messages.error(
-                request, "Your account doesn't have permission to view this page."
-            )
+            messages.error(request, "Your account doesn't have permission to view this page.")
             return redirect("/")
         return super().dispatch(request, *args, **kwargs)
 
     def get_success_url(self):
         data = self.request.GET.copy()
         if len(data) == 0:
-            data["next"] = reverse(
-                "userpage", kwargs={"slug": self.request.user.username}
-            )
+            data["next"] = reverse("userpage", kwargs={"slug": self.request.user.username})
             # "/users/" + str(self.kwargs['pk'])
         return data["next"]
 
@@ -5321,9 +4928,9 @@ class UserChartView(View):
             allBids = Bid.objects.select_related("lot_number__species_category").filter(
                 user=user, lot_number__species_category__isnull=False
             )
-            pageViews = PageView.objects.select_related(
-                "lot_number__species_category"
-            ).filter(user=user, lot_number__species_category__isnull=False)
+            pageViews = PageView.objects.select_related("lot_number__species_category").filter(
+                user=user, lot_number__species_category__isnull=False
+            )
             # This is extremely inefficient
             # Almost all of it could be done in SQL with a more complex join and a count
             # However, I keep changing attributes (views, view duration, bids) and sorting here
@@ -5355,9 +4962,7 @@ class UserChartView(View):
                 bids.append(categories[item]["bids"])
                 views.append(categories[item]["views"])
             return JsonResponse(data={"labels": labels, "bids": bids, "views": views})
-        messages.error(
-            request, "Your account doesn't have permission to view this page."
-        )
+        messages.error(request, "Your account doesn't have permission to view this page.")
         return redirect("/")
 
 
@@ -5383,9 +4988,7 @@ class LotChartView(View):
                     "data": data,
                 }
             )
-        messages.error(
-            request, "Your account doesn't have permission to view this page."
-        )
+        messages.error(request, "Your account doesn't have permission to view this page.")
         return redirect("/")
 
 
@@ -5406,19 +5009,13 @@ class AdminDashboard(TemplateView):
         context["total_users"] = qs.count()
         context["unsubscribes"] = qs.filter(has_unsubscribed=True).count()
         context["anonymous"] = (
-            qs.filter(username_visible=False)
-            .exclude(user__username__icontains="@")
-            .count()
+            qs.filter(username_visible=False).exclude(user__username__icontains="@").count()
         )  # inactive users with an email as their username were set to anonymous Nov 2023
         context["light_theme"] = qs.filter(use_dark_theme=False).count()
         context["hide_ads"] = qs.filter(show_ads=False).count()
-        context["no_club_auction"] = (
-            qs.filter(user__auctiontos__isnull=True).distinct().count()
-        )
+        context["no_club_auction"] = qs.filter(user__auctiontos__isnull=True).distinct().count()
         context["no_participate"] = (
-            qs.exclude(Q(user__winner__isnull=False) | Q(user__lot__isnull=False))
-            .distinct()
-            .count()
+            qs.exclude(Q(user__winner__isnull=False) | Q(user__lot__isnull=False)).distinct().count()
         )
         context["using_watch"] = qs.exclude(user__watch__isnull=True).distinct().count()
         context["using_buy_now"] = qs.filter(user__winner__buy_now_used=True).count()
@@ -5427,14 +5024,10 @@ class AdminDashboard(TemplateView):
         context["sellers"] = qs.filter(user__lot__isnull=False).distinct().count()
         context["has_location"] = qs.exclude(latitude=0).count()
         context["new_lots_last_7_days"] = (
-            Lot.objects.exclude(is_deleted=True)
-            .filter(date_posted__gte=timezone.now() - timedelta(days=7))
-            .count()
+            Lot.objects.exclude(is_deleted=True).filter(date_posted__gte=timezone.now() - timedelta(days=7)).count()
         )
         context["new_lots_last_30_days"] = (
-            Lot.objects.exclude(is_deleted=True)
-            .filter(date_posted__gte=timezone.now() - timedelta(days=30))
-            .count()
+            Lot.objects.exclude(is_deleted=True).filter(date_posted__gte=timezone.now() - timedelta(days=30)).count()
         )
         context["bidders_last_30_days"] = (
             qs.filter(user__bid__last_bid_time__gte=timezone.now() - timedelta(days=30))
@@ -5443,9 +5036,7 @@ class AdminDashboard(TemplateView):
             .count()
         )
         context["feedback_last_30_days"] = (
-            Lot.objects.exclude(feedback_rating=0)
-            .filter(date_posted__gte=timezone.now() - timedelta(days=30))
-            .count()
+            Lot.objects.exclude(feedback_rating=0).filter(date_posted__gte=timezone.now() - timedelta(days=30)).count()
         )
         invoiceqs = (
             Invoice.objects.filter(date__gte=datetime(2021, 6, 15, tzinfo=date_tz.utc))
@@ -5454,12 +5045,8 @@ class AdminDashboard(TemplateView):
         )
         context["total_invoices"] = invoiceqs.count()
         context["printed_invoices"] = invoiceqs.filter(printed=True).count()
-        context["invoice_percent"] = (
-            context["printed_invoices"] / context["total_invoices"] * 100
-        )
-        context["users_with_search_history"] = (
-            User.objects.filter(searchhistory__isnull=False).distinct().count()
-        )
+        context["invoice_percent"] = context["printed_invoices"] / context["total_invoices"] * 100
+        context["users_with_search_history"] = User.objects.filter(searchhistory__isnull=False).distinct().count()
         # source of lot images?
         activity = (
             qs.filter(last_activity__gte=timezone.now() - timedelta(days=60))
@@ -5490,12 +5077,8 @@ class AdminDashboard(TemplateView):
             .exclude(referrer__startswith="http://127.0.0.1:8000")
         )
         # comment out next line to include internal referrers
-        referrers = referrers.exclude(
-            referrer__startswith="https://" + Site.objects.get_current().domain
-        )
-        referrers = referrers.exclude(
-            referrer__startswith="" + Site.objects.get_current().domain
-        )
+        referrers = referrers.exclude(referrer__startswith="https://" + Site.objects.get_current().domain)
+        referrers = referrers.exclude(referrer__startswith="" + Site.objects.get_current().domain)
         context["referrers"] = (
             referrers.values("referrer", "url", "title")
             .annotate(
@@ -5518,9 +5101,7 @@ class UserMap(TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["google_maps_api_key"] = settings.LOCATION_FIELD[
-            "provider.google.api_key"
-        ]
+        context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
         data = self.request.GET.copy()
         try:
             view = data["view"]
@@ -5530,9 +5111,9 @@ class UserMap(TemplateView):
             filter1 = data["filter"]
         except:
             filter1 = None
-        qs = User.objects.filter(
-            userdata__latitude__isnull=False, is_active=True
-        ).annotate(lots_sold=Count("lot"), lots_bought=Count("winner"))
+        qs = User.objects.filter(userdata__latitude__isnull=False, is_active=True).annotate(
+            lots_sold=Count("lot"), lots_bought=Count("winner")
+        )
         if view == "club" and filter1:
             # Users from a club
             qs = qs.filter(userdata__club__name=filter1)
@@ -5543,10 +5124,7 @@ class UserMap(TemplateView):
             # users by top volume_percentile
             qs = qs.filter(userdata__volume_percentile__lte=filter1)
         elif view == "recent" and filter1:
-            qs = qs.filter(
-                userdata__last_activity__gte=timezone.now()
-                - timedelta(hours=int(filter1))
-            )
+            qs = qs.filter(userdata__last_activity__gte=timezone.now() - timedelta(hours=int(filter1)))
         context["users"] = qs
         return context
 
@@ -5556,9 +5134,7 @@ class ClubMap(AdminEmailMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["google_maps_api_key"] = settings.LOCATION_FIELD[
-            "provider.google.api_key"
-        ]
+        context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
         context["clubs"] = Club.objects.filter(active=True, latitude__isnull=False)
         context["location_message"] = "Set your location to see clubs near you"
         try:
@@ -5597,9 +5173,7 @@ class CreateUserIgnoreCategory(View):
             return redirect("/")
         pk = self.kwargs.get("pk", None)
         category = Category.objects.get(pk=pk)
-        result, created = UserIgnoreCategory.objects.update_or_create(
-            category=category, user=self.request.user
-        )
+        result, created = UserIgnoreCategory.objects.update_or_create(category=category, user=self.request.user)
         return JsonResponse(data={"pk": result.pk})
 
 
@@ -5613,9 +5187,7 @@ class DeleteUserIgnoreCategory(View):
         pk = self.kwargs.get("pk", None)
         category = Category.objects.get(pk=pk)
         try:
-            exists = UserIgnoreCategory.objects.get(
-                category=category, user=self.request.user
-            )
+            exists = UserIgnoreCategory.objects.get(category=category, user=self.request.user)
             exists.delete()
             return JsonResponse(data={"result": "deleted"})
         except Exception as e:
@@ -5637,9 +5209,7 @@ class GetUserIgnoreCategory(View):
                 "text": category.name,
             }
             try:
-                UserIgnoreCategory.objects.get(
-                    user=self.request.user, category=category.pk
-                )
+                UserIgnoreCategory.objects.get(user=self.request.user, category=category.pk)
                 item["selected"] = True
             except:
                 pass
@@ -5657,9 +5227,7 @@ class BlogPostView(DetailView):
         context = super().get_context_data(**kwargs)
         blogpost = self.get_object()
         # this is to allow the chart# syntax
-        context["formatted_contents"] = re.sub(
-            r"chart\d", r"<canvas id=\g<0>></canvas>", blogpost.body_rendered
-        )
+        context["formatted_contents"] = re.sub(r"chart\d", r"<canvas id=\g<0>></canvas>", blogpost.body_rendered)
         return context
 
 
@@ -5696,26 +5264,12 @@ class AuctionFunnelChartData(AuctionChartView):
     """
 
     def get(self, *args, **kwargs):
-        all_views = PageView.objects.filter(
-            Q(auction=self.auction) | Q(lot_number__auction=self.auction)
-        )
-        anonymous_views = (
-            all_views.values("session_id")
-            .annotate(session_count=Count("session_id"))
-            .count()
-        )
+        all_views = PageView.objects.filter(Q(auction=self.auction) | Q(lot_number__auction=self.auction))
+        anonymous_views = all_views.values("session_id").annotate(session_count=Count("session_id")).count()
         user_views = all_views.values("user").annotate(user_count=Count("user")).count()
         total_views = anonymous_views + user_views
-        total_bidders = (
-            User.objects.filter(bid__lot_number__auction=self.auction)
-            .annotate(dcount=Count("id"))
-            .count()
-        )
-        total_winners = (
-            User.objects.filter(winner__auction=self.auction)
-            .annotate(dcount=Count("id"))
-            .count()
-        )
+        total_bidders = User.objects.filter(bid__lot_number__auction=self.auction).annotate(dcount=Count("id")).count()
+        total_winners = User.objects.filter(winner__auction=self.auction).annotate(dcount=Count("id")).count()
         labels = [
             "Total unique views",
             "Views from users with accounts",
@@ -5788,9 +5342,7 @@ class AuctionCategoriesChartData(AuctionChartView):
         lots = []
         volumes = []
         categories = (
-            Category.objects.filter(lot__auction=self.auction)
-            .annotate(num_lots=Count("lot"))
-            .order_by("-num_lots")
+            Category.objects.filter(lot__auction=self.auction).annotate(num_lots=Count("lot")).order_by("-num_lots")
         )
         lot_count = self.auction.lots_qs.count()
         allViews = PageView.objects.filter(lot_number__auction=self.auction).count()
@@ -5846,19 +5398,11 @@ class AuctionStatsActivityJSONView(BaseLineChartView, AuctionStatsPermissionsMix
         if not self.is_auction_admin:
             return redirect("/")
         if self.auction.is_online:
-            self.date_start = self.auction.date_end - timezone.timedelta(
-                days=self.days_before
-            )
-            self.date_end = self.auction.date_end + timezone.timedelta(
-                days=self.days_after
-            )
+            self.date_start = self.auction.date_end - timezone.timedelta(days=self.days_before)
+            self.date_end = self.auction.date_end + timezone.timedelta(days=self.days_after)
         else:  # in person
-            self.date_start = self.auction.date_start - timezone.timedelta(
-                days=self.days_before
-            )
-            self.date_end = self.auction.date_start + timezone.timedelta(
-                days=self.days_after
-            )
+            self.date_start = self.auction.date_start - timezone.timedelta(days=self.days_before)
+            self.date_end = self.auction.date_start + timezone.timedelta(days=self.days_after)
         # self.bin_size = (self.date_end - self.date_start).total_seconds() / self.bins
         # self.bin_edges = [self.date_start + timezone.timedelta(seconds=self.bin_size * i) for i in range(self.bins + 1)]
         return super().dispatch(request, *args, **kwargs)
@@ -5879,9 +5423,7 @@ class AuctionStatsActivityJSONView(BaseLineChartView, AuctionStatsPermissionsMix
         """Wonder if these qs should be properties of the Auction model...
         Might add invoice views here, but it would require updating the pageview model to have an invoice field similar to how auction and lot currently work"""
 
-        views = PageView.objects.filter(
-            Q(auction=self.auction) | Q(lot_number__auction=self.auction)
-        )
+        views = PageView.objects.filter(Q(auction=self.auction) | Q(lot_number__auction=self.auction))
         joins = AuctionTOS.objects.filter(auction=self.auction)
         new_lots = Lot.objects.filter(auction=self.auction)
         searches = SearchHistory.objects.filter(auction=self.auction)
@@ -5892,9 +5434,7 @@ class AuctionStatsActivityJSONView(BaseLineChartView, AuctionStatsPermissionsMix
         return [
             bin_data(views, "date_start", self.bins, self.date_start, self.date_end),
             bin_data(joins, "createdon", self.bins, self.date_start, self.date_end),
-            bin_data(
-                new_lots, "date_posted", self.bins, self.date_start, self.date_end
-            ),
+            bin_data(new_lots, "date_posted", self.bins, self.date_start, self.date_end),
             bin_data(searches, "createdon", self.bins, self.date_start, self.date_end),
             bin_data(bids, "timestamp", self.bins, self.date_start, self.date_end),
             bin_data(watches, "createdon", self.bins, self.date_start, self.date_end),
@@ -5921,17 +5461,13 @@ class AuctionStatsAttritionJSONView(BaseLineChartView, AuctionStatsPermissionsMi
         if self.total_lots > 0:
             self.start_date = self.lots[start_index].date_end
             self.end_date = (
-                self.lots[end_index].date_end
-                if self.total_lots > 1
-                else self.start_date
+                self.lots[end_index].date_end if self.total_lots > 1 else self.start_date
             )  # Handle case with only one lot
             self.total_runtime = self.end_date - self.start_date
             add_back_on = self.total_runtime / self.ignore_percent
             self.start_date = self.start_date - (add_back_on * 2)
             self.end_date = self.end_date + (add_back_on * 2)
-            self.lots = self.lots.filter(
-                date_end__lte=self.start_date, date_end__gte=self.end_date
-            )
+            self.lots = self.lots.filter(date_end__lte=self.start_date, date_end__gte=self.end_date)
         result = super().dispatch(request, *args, **kwargs)
         return result
 
@@ -5946,8 +5482,7 @@ class AuctionStatsAttritionJSONView(BaseLineChartView, AuctionStatsPermissionsMi
     def get_data(self):
         data = [
             {
-                "x": (lot.date_end - self.end_date).total_seconds()
-                // 60,  # minutes after auction start
+                "x": (lot.date_end - self.end_date).total_seconds() // 60,  # minutes after auction start
                 # 'x': lot.date_end.timestamp() * 1000, # this one gives js timestamps and would need moment.js to convert to date
                 "y": lot.winning_price,
             }
@@ -6053,9 +5588,7 @@ class AuctionStatsLotSellPricesJSONView(AuctionStatsBarChartJSONView):
 class AuctionStatsReferrersJSONView(AuctionStatsBarChartJSONView):
     def get_labels(self):
         self.views = (
-            PageView.objects.filter(
-                Q(auction=self.auction) | Q(lot_number__auction=self.auction)
-            )
+            PageView.objects.filter(Q(auction=self.auction) | Q(lot_number__auction=self.auction))
             .exclude(referrer__isnull=True)
             .exclude(referrer__startswith="auction.fish")
             .exclude(referrer__exact="")
@@ -6147,9 +5680,9 @@ class AuctionStatsImagesJSONView(AuctionStatsBarChartJSONView):
         return ["Median sell price", "Average sell price", "Number of lots"]
 
     def get_data(self):
-        lots = Lot.objects.filter(
-            auction=self.auction, winning_price__isnull=False
-        ).annotate(num_images=Count("lotimage"))
+        lots = Lot.objects.filter(auction=self.auction, winning_price__isnull=False).annotate(
+            num_images=Count("lotimage")
+        )
         lots_with_no_images = lots.filter(num_images=0)
         lots_with_one_image = lots.filter(num_images=1)
         lots_with_one_or_more_images = lots.filter(num_images__gt=1)
@@ -6205,9 +5738,7 @@ class AuctionStatsPreviousAuctionsJSONView(AuctionStatsBarChartJSONView):
         return ["Number of users"]
 
     def get_data(self):
-        auctiontos = AuctionTOS.objects.filter(
-            auction=self.auction, email__isnull=False
-        )
+        auctiontos = AuctionTOS.objects.filter(auction=self.auction, email__isnull=False)
         histogram = bin_data(
             auctiontos,
             "previous_auctions_count",
@@ -6286,26 +5817,16 @@ class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
         auctiontos = AuctionTOS.objects.filter(auction=self.auction)
         auctiontos_with_account = auctiontos.filter(user__isnull=False)
         searches = (
-            SearchHistory.objects.filter(user__isnull=False, auction=self.auction)
-            .values("user")
-            .distinct()
-            .count()
+            SearchHistory.objects.filter(user__isnull=False, auction=self.auction).values("user").distinct().count()
         )
         seach_percent = int(searches / auctiontos_with_account.count() * 100)
-        watches = (
-            Watch.objects.filter(lot_number__auction=self.auction)
-            .values("user")
-            .distinct()
-            .count()
-        )
+        watches = Watch.objects.filter(lot_number__auction=self.auction).values("user").distinct().count()
         watch_percent = int(watches / auctiontos_with_account.count() * 100)
         has_used_proxy_bidding = UserData.objects.filter(
             has_used_proxy_bidding=True,
             user__in=auctiontos_with_account.values_list("user"),
         ).count()
-        has_used_proxy_bidding_percent = int(
-            has_used_proxy_bidding / auctiontos_with_account.count() * 100
-        )
+        has_used_proxy_bidding_percent = int(has_used_proxy_bidding / auctiontos_with_account.count() * 100)
         chat = (
             LotHistory.objects.filter(
                 changed_price=False,
@@ -6326,9 +5847,7 @@ class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
             )
         else:
             lot_with_buy_now = (
-                Lot.objects.filter(
-                    auction=self.auction, winning_price=F("buy_now_price")
-                )
+                Lot.objects.filter(auction=self.auction, winning_price=F("buy_now_price"))
                 .values("auctiontos_winner")
                 .distinct()
                 .count()
@@ -6337,9 +5856,7 @@ class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
             lot_with_buy_now_percent = 0
             account_percent = 0
         else:
-            account_percent = int(
-                auctiontos_with_account.count() / auctiontos.count() * 100
-            )
+            account_percent = int(auctiontos_with_account.count() / auctiontos.count() * 100)
             lot_with_buy_now_percent = int(lot_with_buy_now / auctiontos.count() * 100)
         invoices = Invoice.objects.filter(auction=self.auction)
         viewed_invoices = invoices.filter(opened=True)
@@ -6347,15 +5864,8 @@ class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
             view_invoice_percent = int(viewed_invoices.count() / invoices.count() * 100)
         else:
             view_invoice_percent = 0
-        sold_lots = Lot.objects.filter(
-            auction=self.auction, auctiontos_winner__isnull=False
-        )
-        leave_feedback = (
-            sold_lots.filter(~Q(feedback_rating=0))
-            .values("auctiontos_winner")
-            .distinct()
-            .count()
-        )
+        sold_lots = Lot.objects.filter(auction=self.auction, auctiontos_winner__isnull=False)
+        leave_feedback = sold_lots.filter(~Q(feedback_rating=0)).values("auctiontos_winner").distinct().count()
         all_sold_lots = sold_lots.values("auctiontos_winner").distinct().count()
         if all_sold_lots == 0:
             leave_feedback_percent = 0
@@ -6383,9 +5893,7 @@ class AuctionStatsAuctioneerSpeedJSONView(AuctionStatsAttritionJSONView):
     def get_data(self):
         data = []
         for i in range(1, len(self.lots)):
-            minutes = (
-                self.lots[i - 1].date_end - self.lots[i].date_end
-            ).total_seconds() / 60
+            minutes = (self.lots[i - 1].date_end - self.lots[i].date_end).total_seconds() / 60
             ignore_if_more_than = 3  # minutes
             if minutes <= ignore_if_more_than:
                 data.append({"x": i, "y": minutes})
@@ -6398,9 +5906,7 @@ class AuctionBulkPrinting(FormView, AuctionPermissionsMixin):
     form_class = MultiAuctionTOSPrintLabelForm
 
     def dispatch(self, request, *args, **kwargs):
-        self.auction = get_object_or_404(
-            Auction, slug=kwargs.pop("slug"), is_deleted=False
-        )
+        self.auction = get_object_or_404(Auction, slug=kwargs.pop("slug"), is_deleted=False)
         self.is_auction_admin
         return super().dispatch(request, *args, **kwargs)
 
@@ -6408,9 +5914,7 @@ class AuctionBulkPrinting(FormView, AuctionPermissionsMixin):
         context = super().get_context_data(**kwargs)
         context["all_labels_count"] = self.auction.labels_qs.count()
         context["unprinted_label_count"] = self.auction.unprinted_labels_qs.count()
-        context["printed_labels_count"] = (
-            context["all_labels_count"] - context["unprinted_label_count"]
-        )
+        context["printed_labels_count"] = context["all_labels_count"] - context["unprinted_label_count"]
         context["auction"] = self.auction
         return context
 
@@ -6464,15 +5968,11 @@ class AuctionBulkPrintingPDF(LotLabelView):
         return self.queryset
 
     def dispatch(self, request, *args, **kwargs):
-        self.auction = (
-            Auction.objects.exclude(is_deleted=True).filter(slug=kwargs["slug"]).first()
-        )
+        self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs["slug"]).first()
         self.is_auction_admin
 
         self.selected_tos = request.GET.get("selected_tos", None)
-        self.print_only_unprinted = (
-            request.GET.get("print_only_unprinted", "True") == "True"
-        )
+        self.print_only_unprinted = request.GET.get("print_only_unprinted", "True") == "True"
         if not self.selected_tos:
             self.queryset = self.auction.unprinted_labels_qs
         else:
@@ -6481,21 +5981,15 @@ class AuctionBulkPrintingPDF(LotLabelView):
                 self.queryset = self.auction.unprinted_labels_qs
             else:
                 self.queryset = self.auction.lots_qs
-            self.queryset = self.queryset.filter(
-                auctiontos_seller__pk__in=self.selected_tos
-            )
+            self.queryset = self.queryset.filter(auctiontos_seller__pk__in=self.selected_tos)
         if not self.get_queryset():
             if not self.selected_tos:
                 messages.error(request, "No users selected")
             else:
                 messages.error(request, "Couldn't find any labels to print")
-            return redirect(
-                reverse("auction_printing", kwargs={"slug": self.auction.slug})
-            )
+            return redirect(reverse("auction_printing", kwargs={"slug": self.auction.slug}))
         if request.method.lower() in self.http_method_names:
-            handler = getattr(
-                self, request.method.lower(), self.http_method_not_allowed
-            )
+            handler = getattr(self, request.method.lower(), self.http_method_not_allowed)
         else:
             handler = self.http_method_not_allowed
         return handler(request, *args, **kwargs)
@@ -6515,9 +6009,7 @@ class PickupLocationsIncoming(View, AuctionPermissionsMixin):
         queryset = self.location.incoming_lots.order_by("-auctiontos_seller__name")
         response = HttpResponse(content_type="text/csv")
         name = self.location.name.lower().replace(" ", "_")
-        response["Content-Disposition"] = (
-            f'attachment; filename="incoming_lots_destined_for_{name}.csv"'
-        )
+        response["Content-Disposition"] = f'attachment; filename="incoming_lots_destined_for_{name}.csv"'
         csv_writer = csv.writer(response)
         csv_writer.writerow(
             [
@@ -6552,18 +6044,12 @@ class PickupLocationsOutgoing(View, AuctionPermissionsMixin):
             return super().dispatch(request, *args, **kwargs)
 
     def get(self, request):
-        queryset = self.location.outgoing_lots.order_by(
-            "-auctiontos_winner__pickup_location__name"
-        )
+        queryset = self.location.outgoing_lots.order_by("-auctiontos_winner__pickup_location__name")
         response = HttpResponse(content_type="text/csv")
         name = self.location.name.lower().replace(" ", "_")
-        response["Content-Disposition"] = (
-            f'attachment; filename="outgoing_lots_coming_from_{name}.csv"'
-        )
+        response["Content-Disposition"] = f'attachment; filename="outgoing_lots_coming_from_{name}.csv"'
         csv_writer = csv.writer(response)
-        csv_writer.writerow(
-            ["Lot number", "Seller name", "Lot name", "Destination", "Winner name"]
-        )
+        csv_writer.writerow(["Lot number", "Seller name", "Lot name", "Destination", "Winner name"])
         for lot in queryset:
             csv_writer.writerow(
                 [
@@ -6604,9 +6090,7 @@ class AuctionFinder(View, LoginRequiredMixin):
             self.auction = Auction.objects.filter(pk=request.POST["auction"]).first()
         except ValueError:
             self.auction = None
-        if not self.auction or not AuctionTOS.objects.filter(
-            user=request.user, auction=self.auction
-        ):
+        if not self.auction or not AuctionTOS.objects.filter(user=request.user, auction=self.auction):
             # you don't get to query auctions you haven't joined
             result = {}
         else:
@@ -6653,10 +6137,8 @@ class ChatSubscriptions(LoginRequiredMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["subscriptions"] = (
-            self.request.user.userdata.subscriptions_with_new_message_annotation.order_by(
-                "-new_message_count", "-lot__date_posted"
-            )
+        context["subscriptions"] = self.request.user.userdata.subscriptions_with_new_message_annotation.order_by(
+            "-new_message_count", "-lot__date_posted"
         )
         context["data"] = self.request.user.userdata
         return context
@@ -6692,13 +6174,9 @@ class AuctionNoShow(TemplateView, LoginRequiredMixin, AuctionPermissionsMixin):
     template_name = "auctions/noshow.html"
 
     def dispatch(self, request, *args, **kwargs):
-        self.auction = get_object_or_404(
-            Auction, slug=kwargs.pop("slug"), is_deleted=False
-        )
+        self.auction = get_object_or_404(Auction, slug=kwargs.pop("slug"), is_deleted=False)
         self.is_auction_admin
-        self.tos = get_object_or_404(
-            AuctionTOS, auction=self.auction, bidder_number=kwargs.pop("tos")
-        )
+        self.tos = get_object_or_404(AuctionTOS, auction=self.auction, bidder_number=kwargs.pop("tos"))
         return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
@@ -6729,9 +6207,7 @@ class AuctionNoShowAction(AuctionNoShow, FormMixin):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["tooltip"] = (
-            f"Check any actions you wish to take against {self.tos.name}"
-        )
+        context["tooltip"] = f"Check any actions you wish to take against {self.tos.name}"
         context["unsold_lot_warning"] = "These actions cannot be undone!"
         context["modal_title"] = f"Take action against {self.tos.name}"
         return context

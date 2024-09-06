@@ -22,21 +22,13 @@ class Command(BaseCommand):
         self.stdout.write("Creating userdata")
         users = User.objects.all()
         for user in users:
-            allBids = Bid.objects.select_related("lot_number__species_category").filter(
-                user=user
-            )
-            pageViews = PageView.objects.select_related(
-                "lot_number__species_category"
-            ).filter(user=user)
+            allBids = Bid.objects.select_related("lot_number__species_category").filter(user=user)
+            pageViews = PageView.objects.select_related("lot_number__species_category").filter(user=user)
             # remove all user interests
             UserInterestCategory.objects.filter(user=user).delete()
             # regenerate them
             for item in allBids:
                 # bids weigh more than views
-                updateInterest(
-                    item.lot_number.species_category, user, settings.BID_WEIGHT
-                )
+                updateInterest(item.lot_number.species_category, user, settings.BID_WEIGHT)
             for item in pageViews:
-                updateInterest(
-                    item.lot_number.species_category, user, settings.VIEW_WEIGHT
-                )
+                updateInterest(item.lot_number.species_category, user, settings.VIEW_WEIGHT)

@@ -12,15 +12,11 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         current_site = Site.objects.get_current()
         notificationEmails = []
-        auctions = Auction.objects.exclude(is_deleted=True).filter(
-            watch_warning_email_sent=False, is_online=True
-        )
+        auctions = Auction.objects.exclude(is_deleted=True).filter(watch_warning_email_sent=False, is_online=True)
         for auction in auctions:
             if auction.ending_soon:
                 self.stdout.write(f"{auction} is ending soon")
-                lots = Lot.objects.exclude(is_deleted=True).filter(
-                    banned=False, auction=auction
-                )
+                lots = Lot.objects.exclude(is_deleted=True).filter(banned=False, auction=auction)
                 for lot in lots:
                     self.stdout.write(rf" +-\ {lot}")
                     watched = Watch.objects.filter(lot_number=lot.lot_number)

@@ -38,9 +38,7 @@ class Command(BaseCommand):
                                     user.latitude = value["lat"]
                                     user.longitude = value["lon"]
                                     user.save()
-                                    print(
-                                        f"assigning {user.user.email} with IP {user.last_ip_address} a location"
-                                    )
+                                    print(f"assigning {user.user.email} with IP {user.last_ip_address} a location")
                                     break
                                 else:
                                     print(
@@ -61,9 +59,9 @@ class Command(BaseCommand):
 
         # now, we handle pageviews separately.  There is some duplicate code here that could get merged with the user lookup above
         # first check is to see if we've already got this IP address in the system somewhere
-        pageviews = PageView.objects.filter(
-            ip_address__isnull=False, latitude=0, longitude=0
-        ).order_by("-date_start")[:10000]
+        pageviews = PageView.objects.filter(ip_address__isnull=False, latitude=0, longitude=0).order_by("-date_start")[
+            :10000
+        ]
         for view in pageviews:
             other_view_with_same_ip = (
                 PageView.objects.exclude(latitude=0, longitude=0)
