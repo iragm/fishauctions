@@ -1,12 +1,9 @@
+# isort: skip_file
+# ruff: noqa: E402
 import os
 
-from channels.auth import AuthMiddlewareStack
-from channels.routing import ProtocolTypeRouter, URLRouter
-from channels.security.websocket import AllowedHostsOriginValidator
 from django.core.asgi import get_asgi_application
 from django.urls import re_path
-
-from auctions.consumers import LotConsumer
 
 # Fetch Django ASGI application early to ensure AppRegistry is populated
 # before importing consumers and AuthMiddlewareStack that may import ORM
@@ -15,6 +12,11 @@ from auctions.consumers import LotConsumer
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "fishauctions.settings")
 django_asgi_app = get_asgi_application()
 
+from channels.auth import AuthMiddlewareStack
+from channels.routing import ProtocolTypeRouter, URLRouter
+from channels.security.websocket import AllowedHostsOriginValidator
+
+from auctions.consumers import LotConsumer
 
 application = ProtocolTypeRouter(
     {
