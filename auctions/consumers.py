@@ -33,9 +33,7 @@ def check_bidding_permissions(lot, user):
     if lot.user and lot.user.pk == user.pk:
         return "You can't bid on your own lot"
     if lot.auction:
-        tos = AuctionTOS.objects.filter(
-            Q(user=user) | Q(email=user.email), auction=lot.auction
-        ).first()
+        tos = AuctionTOS.objects.filter(Q(user=user) | Q(email=user.email), auction=lot.auction).first()
         if not tos:
             return "You haven't joined this auction"
         else:
@@ -72,12 +70,7 @@ def check_all_permissions(lot, user):
         return "This user has banned you from bidding on their lots"
     if lot.banned:
         return "This lot has been removed"
-    if (
-        lot.auction
-        and UserBan.objects.filter(
-            banned_user=user.pk, user=lot.auction.created_by.pk
-        ).first()
-    ):
+    if lot.auction and UserBan.objects.filter(banned_user=user.pk, user=lot.auction.created_by.pk).first():
         return "You don't have permission to bid in this auction"
     return False
 
@@ -133,9 +126,7 @@ def bid_on_lot(lot, user, amount):
             result["message"] = "This lot has already been sold"
             return result
         if lot.auction:
-            invoice = Invoice.objects.filter(
-                auctiontos_user__user=user, auction=lot.auction
-            ).first()
+            invoice = Invoice.objects.filter(auctiontos_user__user=user, auction=lot.auction).first()
             if invoice and invoice.status != "DRAFT":
                 result["message"] = (
                     "Your invoice for this auction is not open.  An administrator can reopen it and allow you to bid."
@@ -174,9 +165,7 @@ def bid_on_lot(lot, user, amount):
             bid.last_bid_time = timezone.now()
             bid.save()
             result["type"] = "INFO"
-            result["message"] = (
-                "Bid placed!  You can change your bid at any time until the auction ends"
-            )
+            result["message"] = "Bid placed!  You can change your bid at any time until the auction ends"
             result["send_to"] = "user"
             # result["high_bidder_pk"] = user.pk
             # result["high_bidder_name"] = str(user)
@@ -198,9 +187,7 @@ def bid_on_lot(lot, user, amount):
                 if bid.amount >= lot.buy_now_price:
                     lot.winner = user
                     if lot.auction:
-                        auctiontos_winner = AuctionTOS.objects.filter(
-                            auction=lot.auction, user=user
-                        ).first()
+                        auctiontos_winner = AuctionTOS.objects.filter(auction=lot.auction, user=user).first()
                         if auctiontos_winner:
                             lot.auctiontos_winner = auctiontos_winner
                             invoice, created = Invoice.objects.get_or_create(
@@ -254,9 +241,7 @@ def bid_on_lot(lot, user, amount):
                 bid.last_bid_time = timezone.now()
                 bid.save()
                 return result
-            if (
-                bid.amount <= originalBid
-            ):  # changing this to < would allow bumping without being the high bidder
+            if bid.amount <= originalBid:  # changing this to < would allow bumping without being the high bidder
                 # there's a high bidder already
                 bid.save()  # save the current bid regardless
                 # print(f"{user_string} tried to bid on {lot} less than the current bid of ${originalBid}")
@@ -278,9 +263,7 @@ def bid_on_lot(lot, user, amount):
                     if originalHighBidder.pk == lot.high_bidder.pk:
                         # user is upping their own price, don't tell other people about it
                         result["type"] = "INFO"
-                        result["message"] = (
-                            f"You've raised your proxy bid to ${bid.amount}"
-                        )
+                        result["message"] = f"You've raised your proxy bid to ${bid.amount}"
                         # print(f"{user_string} has raised their bid on {lot} to ${bid.amount}")
                         return result
                 except:
@@ -288,9 +271,7 @@ def bid_on_lot(lot, user, amount):
                 # New high bidder!  If we get to this point, the user has bid against someone else and changed the price
                 result["date_end"] = reset_lot_end_time(lot)
                 result["type"] = "NEW_HIGH_BIDDER"
-                result["message"] = (
-                    f"{lot.high_bidder_display} is now the high bidder at ${lot.high_bid}"
-                )
+                result["message"] = f"{lot.high_bidder_display} is now the high bidder at ${lot.high_bid}"
                 if result["date_end"]:
                     result["message"] += ". End time extended!"
                 result["high_bidder_pk"] = lot.high_bidder.pk
@@ -351,19 +332,13 @@ class LotConsumer(WebsocketConsumer):
             self.lot = Lot.objects.get(pk=self.lot_number)
 
             # Join room group
-            async_to_sync(self.channel_layer.group_add)(
-                self.room_group_name, self.channel_name
-            )
+            async_to_sync(self.channel_layer.group_add)(self.room_group_name, self.channel_name)
 
             # Join private room for notifications only to this user
-            async_to_sync(self.channel_layer.group_add)(
-                self.user_room_name, self.channel_name
-            )
+            async_to_sync(self.channel_layer.group_add)(self.user_room_name, self.channel_name)
             self.accept()
             # send the most recent history
-            allHistory = LotHistory.objects.filter(
-                lot=self.lot, removed=False
-            ).order_by("-timestamp")[:200]
+            allHistory = LotHistory.objects.filter(lot=self.lot, removed=False).order_by("-timestamp")[:200]
             # send oldest first
             for history in reversed(allHistory):
                 try:
@@ -417,9 +392,7 @@ class LotConsumer(WebsocketConsumer):
 
     def disconnect(self, close_code):
         # Leave room group
-        async_to_sync(self.channel_layer.group_discard)(
-            self.room_group_name, self.channel_name
-        )
+        async_to_sync(self.channel_layer.group_discard)(self.room_group_name, self.channel_name)
         # bit redundant, but 'seen' is used for lot notifications for the owner of a given lot
         user_pk = None
         if self.lot.user:
@@ -431,13 +404,9 @@ class LotConsumer(WebsocketConsumer):
             LotHistory.objects.filter(lot=self.lot.pk, seen=False).update(seen=True)
         # this is for everyone else
         if self.user.pk:
-            existing_subscription = ChatSubscription.objects.filter(
-                lot=self.lot, user=self.user.pk
-            ).first()
+            existing_subscription = ChatSubscription.objects.filter(lot=self.lot, user=self.user.pk).first()
             if existing_subscription:
-                print(
-                    f"Marking all ChatSubscription seen last time now for user {self.user.pk}"
-                )
+                print(f"Marking all ChatSubscription seen last time now for user {self.user.pk}")
                 existing_subscription.last_seen = timezone.now()
                 existing_subscription.last_notification_sent = timezone.now()
                 existing_subscription.save()
@@ -516,12 +485,8 @@ class LotConsumer(WebsocketConsumer):
                                             "info": result["type"],
                                             "message": result["message"],
                                             "high_bidder_pk": result["high_bidder_pk"],
-                                            "high_bidder_name": result[
-                                                "high_bidder_name"
-                                            ],
-                                            "current_high_bid": result[
-                                                "current_high_bid"
-                                            ],
+                                            "high_bidder_name": result["high_bidder_name"],
+                                            "current_high_bid": result["current_high_bid"],
                                         },
                                     )
                             else:
