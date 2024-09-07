@@ -520,6 +520,8 @@ class Auction(models.Model):
     lot_submission_end_date = models.DateTimeField("Lot submission ends", null=True, blank=True)
     date_end = models.DateTimeField("Bidding end date", blank=True, null=True)
     date_end.help_text = "Bidding will end on this date.  If last-minute bids are placed, bidding can go up to 1 hour past this time on those lots."
+    date_online_bidding_starts = models.DateTimeField("Online bidding opens")
+    date_online_bidding_ends = models.DateTimeField("Online bidding ends")
     watch_warning_email_sent = models.BooleanField(default=False)
     invoiced = models.BooleanField(default=False)
     created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
@@ -1987,6 +1989,9 @@ class Lot(models.Model):
     partial_refund_percent = models.IntegerField(
         default=0, validators=[MinValueValidator(0), MaxValueValidator(100)], blank=True
     )
+    max_bid_revealed_by = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL, related_name="max_bid_revealed_by"
+    )
 
     def save(self, *args, **kwargs):
         """
@@ -2268,6 +2273,21 @@ class Lot(models.Model):
         if self.high_bidder:
             return str(self.high_bidder)
         return "No bids"
+
+    @property
+    def auction_show_high_bidder_template(self):
+        """A div that admins can click on to show the high bidder.  Include only if view is admin
+        Returns safe html for inclusion in a template"""
+        if self.auction and not self.auction.is_online and not self.ended and self.auction.allow_bidding_on_lots:
+            return mark_safe("""<a
+                hx-get="{% url 'auction_show_high_bidder' pk=lot.pk %}"
+                hx-swap="outerHTML"
+                hx-trigger="click"
+            >
+                Reveal max bid
+            </a>""")
+        else:
+            return ""
 
     @property
     def winner_as_str(self):
