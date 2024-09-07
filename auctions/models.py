@@ -519,7 +519,7 @@ class Auction(models.Model):
     lot_submission_start_date.help_text = "Users can submit (but not bid on) lots on this date"
     lot_submission_end_date = models.DateTimeField("Lot submission ends", null=True, blank=True)
     date_end = models.DateTimeField("Bidding end date", blank=True, null=True)
-    date_end.help_text = "Bidding will end on this date.  If last-minute bids are placed, bidding can go up to 1 hour past this time on those lots.  Note: This will not change the end date of existing lots."
+    date_end.help_text = "Bidding will end on this date.  If last-minute bids are placed, bidding can go up to 1 hour past this time on those lots."
     watch_warning_email_sent = models.BooleanField(default=False)
     invoiced = models.BooleanField(default=False)
     created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
