@@ -185,10 +185,10 @@ class LotHTMxTableForUsers(tables.Table):
             "views",
         )
         row_attrs = {
-            #'class': lambda record: str(record.table_class),
-            #'style':'cursor:pointer;',
-            #'hx-get': lambda record: "/api/lot/" + str(record.pk),
-            #'hx-target':"#modals-here",
-            #'hx-trigger':"click",
-            #'_':"on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"
+            # 'class': lambda record: str(record.table_class),
+            # 'style':'cursor:pointer;',
+            # 'hx-get': lambda record: "/api/lot/" + str(record.pk),
+            # 'hx-target':"#modals-here",
+            # 'hx-trigger':"click",
+            # '_':"on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"
         }
