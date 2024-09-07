@@ -520,8 +520,8 @@ class Auction(models.Model):
     lot_submission_end_date = models.DateTimeField("Lot submission ends", null=True, blank=True)
     date_end = models.DateTimeField("Bidding end date", blank=True, null=True)
     date_end.help_text = "Bidding will end on this date.  If last-minute bids are placed, bidding can go up to 1 hour past this time on those lots."
-    date_online_bidding_starts = models.DateTimeField("Online bidding opens")
-    date_online_bidding_ends = models.DateTimeField("Online bidding ends")
+    date_online_bidding_starts = models.DateTimeField("Online bidding opens", blank=True, null=True)
+    date_online_bidding_ends = models.DateTimeField("Online bidding ends", blank=True, null=True)
     watch_warning_email_sent = models.BooleanField(default=False)
     invoiced = models.BooleanField(default=False)
     created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
