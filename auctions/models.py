@@ -243,7 +243,8 @@ def add_tos_info(qs):
     return qs.annotate(
         lots_bid_actual=Coalesce(
             Subquery(
-                Bid.objects.filter(user=OuterRef("user"), lot_number__auction=OuterRef("auction"))
+                Bid.objects.exclude(is_deleted=True)
+                .filter(user=OuterRef("user"), lot_number__auction=OuterRef("auction"))
                 .values("user")
                 .annotate(count=Count("pk", distinct=True))
                 .values("count"),
@@ -624,6 +625,8 @@ class Auction(models.Model):
     advanced_lot_adding.help_text = "Show lot number, quantity and description fields when bulk adding lots"
     extra_promo_text = models.CharField(max_length=50, default="", blank=True, null=True)
     extra_promo_link = models.URLField(blank=True, null=True)
+    allow_deleting_bids = models.BooleanField(default=False, blank=True)
+    allow_deleting_bids.help_text = "Allow users to delete their own bids until the auction ends"
 
     def __str__(self):
         result = self.title
@@ -2412,6 +2415,13 @@ class Lot(models.Model):
             return True
         if self.ended:
             return False
+        if (
+            not self.auction.is_online
+            and self.auction.date_online_bidding_ends
+            and self.auction.allow_bidding_on_lots
+            and timezone.now() > self.auction.date_online_bidding_ends
+        ):
+            return False
         return True
 
     @property
@@ -2614,11 +2624,15 @@ class Lot(models.Model):
     @property
     def max_bid(self):
         """returns the highest bid amount for this lot - this number should not be visible to the public"""
-        allBids = Bid.objects.filter(
-            lot_number=self.lot_number,
-            last_bid_time__lte=self.calculated_end,
-            amount__gte=self.reserve_price,
-        ).order_by("-amount", "last_bid_time")[:2]
+        allBids = (
+            Bid.objects.exclude(is_deleted=True)
+            .filter(
+                lot_number=self.lot_number,
+                last_bid_time__lte=self.calculated_end,
+                amount__gte=self.reserve_price,
+            )
+            .order_by("-amount", "last_bid_time")[:2]
+        )
         try:
             # $1 more than the second highest bid
             bidPrice = allBids[0].amount
@@ -2631,11 +2645,15 @@ class Lot(models.Model):
     def bids(self):
         """Get all bids for this lot, highest bid first"""
         # bids = Bid.objects.filter(lot_number=self.lot_number, last_bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount', 'last_bid_time')
-        bids = Bid.objects.filter(
-            lot_number=self.lot_number,
-            last_bid_time__lte=self.calculated_end,
-            amount__gte=self.reserve_price,
-        ).order_by("-amount", "last_bid_time")
+        bids = (
+            Bid.objects.exclude(is_deleted=True)
+            .filter(
+                lot_number=self.lot_number,
+                last_bid_time__lte=self.calculated_end,
+                amount__gte=self.reserve_price,
+            )
+            .order_by("-amount", "last_bid_time")
+        )
         return bids
 
     @property
@@ -2695,7 +2713,7 @@ class Lot(models.Model):
     @property
     def number_of_bids(self):
         """How many users placed bids on this lot?"""
-        bids = Bid.objects.filter(
+        bids = Bid.objects.exclude(is_deleted=True).filter(
             lot_number=self.lot_number,
             bid_time__lte=self.calculated_end,
             amount__gte=self.reserve_price,
@@ -2838,7 +2856,11 @@ class Lot(models.Model):
     @property
     def bidder_ip_same_as_seller(self):
         if self.seller_ip:
-            bids = Bid.objects.filter(lot_number__pk=self.pk, user__userdata__last_ip_address=self.seller_ip).count()
+            bids = (
+                Bid.objects.exclude(is_deleted=True)
+                .filter(lot_number__pk=self.pk, user__userdata__last_ip_address=self.seller_ip)
+                .count()
+            )
             if bids:
                 return bids
         return None
@@ -3207,12 +3229,17 @@ class Bid(models.Model):
     last_bid_time = models.DateTimeField(auto_now_add=True, blank=True)
     amount = models.PositiveIntegerField(validators=[MinValueValidator(1)])
     was_high_bid = models.BooleanField(default=False)
+    is_deleted = models.BooleanField(default=False)
     # note: there is not AuctionTOS field here - this means that bids can only be placed by Users
     # AuctionTOSs CAN be declared the winners of lots without placing a single bid
     # time will tell if this is a mistake or not
 
     def __str__(self):
         return str(self.user) + " bid " + str(self.amount) + " on lot " + str(self.lot_number)
+
+    def delete(self, *args, **kwargs):
+        self.is_deleted = True
+        self.save()
 
 
 class Watch(models.Model):
@@ -3572,7 +3599,7 @@ class UserData(models.Model):
     def total_bids(self):
         """Total number of successful bids this user has placed (max one per lot)"""
         # return len(Bid.objects.filter(user=self.user, was_high_bid=True))
-        return len(Bid.objects.filter(user=self.user))
+        return len(Bid.objects.exclude(is_deleted=True).filter(user=self.user))
 
     @property
     def lots_viewed(self):

@@ -33,6 +33,7 @@ function change_bidding(value){
         $('#div_id_date_online_bidding_starts').show();
         $('#div_id_date_online_bidding_ends').show();
         $('#div_id_only_approved_bidders').show();
+        $('#div_id_allow_deleting_bids').show();
         {% if not auction.is_online %}
             $('#div_id_date_start label').html('In-person bidding opens<span class="asteriskField">*</span>');
             $('#id_date_start_helptext').html('Does not change online bidding');
@@ -41,6 +42,7 @@ function change_bidding(value){
         $('#div_id_date_online_bidding_starts').hide();
         $('#div_id_date_online_bidding_ends').hide();
         $('#div_id_only_approved_bidders').hide();
+        $('#div_id_allow_deleting_bids').hide();
         {% if not auction.is_online %}
             $('#div_id_date_start label').html('Bidding opens<span class="asteriskField">*</span>');
             $('#id_date_start_helptext').html('When the auction actually starts');
@@ -50,6 +52,7 @@ function change_bidding(value){
 {% if auction.is_online %}
 $(document).ready(function() {
     $('#div_id_only_approved_bidders').show();
+    $('#div_id_allow_deleting_bids').show();
 });
 {% endif %}
 </script>

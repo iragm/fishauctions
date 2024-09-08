@@ -260,7 +260,13 @@ f=e=d="text-white";break;case "success":c="bg-success";f=e=d="text-white";break;
                                     {% else %}
                                     <span id="high_bidder_name">{% if lot.high_bidder.userdata.username_visible %}<a href="{% url 'userpage' slug=lot.high_bidder %}">{{ lot.high_bidder }}</a>{% else %}Anonymous{%endif%}</span>
                                     {% endif %}
-                                    <span id="your_bid">{% if viewer_bid %}Your max bid is $<span id='your_bid_price'>{{ viewer_bid }}</span>{% endif %}</span>
+                                    <span id="your_bid">
+                                        {% if viewer_bid %}
+                                        Your max bid is $<span id='your_bid_price'>{{ viewer_bid }}</span>
+                                        {% if lot.bids_can_be_removed and lot.auction.allow_deleting_bids %}
+                                            <a href="{% url 'delete_bid' pk=viewer_bid_pk %}" class='btn btn-danger btn-sm'>Remove your bid</a>
+                                        {% endif %}
+                                        {% endif %}</span>
                                     {% if is_auction_admin %}{{ lot.auction_show_high_bidder_template }}{% endif %}
                                 </span>
                                 {% else %}
@@ -402,7 +408,7 @@ f=e=d="text-white";break;case "success":c="bg-success";f=e=d="text-white";break;
                                         {% if force_buy_now %}
                                         var dialogText = "Buy {{ lot.lot_name }} now for $" + bid + "?<br><br><small>All sales are final</small>";
                                         {% else %}
-                                        var dialogText = "Bid $" + bid + " on {{ lot.lot_name }}<br><br><small>All bids are final</small>";
+                                        var dialogText = "Bid $" + bid + " on {{ lot.lot_name }}<br><br><small>{% if not lot.auction.allow_deleting_bids %}All bids are final{% endif %}</small>";
                                         {% endif %}
                                         {% if not lot.auction %}
                                             dialogText += "<br><div>This lot is sold directly by {{ lot.user }}.  Make sure to check the user's feedback.</div>";
@@ -459,7 +465,7 @@ f=e=d="text-white";break;case "success":c="bg-success";f=e=d="text-white";break;
     {% if bids %}
         <h5>Remove bids</h5>
         {% for bid in bids %}
-        <a href="/bids/delete/{{ bid.pk }}/" class='btn btn-danger mt-1 mr-1'>Remove {{bid.user.first_name}} {{bid.user.last_name}} ({{ bid.user }})'s bid</a><br>
+        <a href="{% url 'delete_bid' pk=bid.pk %}" class='btn btn-danger mt-1 mr-1'>Remove {{bid.user.first_name}} {{bid.user.last_name}} ({{ bid.user }})'s bid</a><br>
         {% endfor %}
     {% endif %}
 

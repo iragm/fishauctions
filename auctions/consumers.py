@@ -138,6 +138,7 @@ def bid_on_lot(lot, user, amount):
         bid, created = Bid.objects.get_or_create(
             user=user,
             lot_number=lot,
+            is_deleted=False,
             defaults={"amount": amount},
         )
         # also update category interest, max one per bid

@@ -22,7 +22,9 @@ class Command(BaseCommand):
         self.stdout.write("Creating userdata")
         users = User.objects.all()
         for user in users:
-            allBids = Bid.objects.select_related("lot_number__species_category").filter(user=user)
+            allBids = (
+                Bid.objects.exclude(is_deleted=True).select_related("lot_number__species_category").filter(user=user)
+            )
             pageViews = PageView.objects.select_related("lot_number__species_category").filter(user=user)
             # remove all user interests
             UserInterestCategory.objects.filter(user=user).delete()

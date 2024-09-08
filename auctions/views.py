@@ -5,7 +5,7 @@ from collections import Counter
 from datetime import datetime, timedelta
 from datetime import timezone as date_tz
 from io import BytesIO, TextIOWrapper
-from random import randint, sample, uniform
+from random import choice, randint, sample, uniform
 from urllib.parse import unquote, urlencode
 
 import HeifImagePlugin  # noqa: F401 Importing this plugin enables HEIF image support, even though it's not used
@@ -887,7 +887,7 @@ def userBan(request, pk):
         )
         auctionsList = Auction.objects.exclude(is_deleted=True).filter(created_by=user.pk)
         # delete all bids the banned user has made on active lots or in active auctions created by the request user
-        bids = Bid.objects.filter(user=bannedUser)
+        bids = Bid.objects.exclude(is_deleted=True).filter(user=bannedUser)
         for bid in bids:
             lot = Lot.objects.get(pk=bid.lot_number.pk, is_deleted=False)
             if lot.user == user or lot.auction in auctionsList:
@@ -928,7 +928,7 @@ def lotDeactivate(request, pk):
             if lot.deactivated:
                 lot.deactivated = False
             else:
-                bids = Bid.objects.filter(lot_number=lot.lot_number)
+                bids = Bid.objects.exclude(is_deleted=True).filter(lot_number=lot.lot_number)
                 for bid in bids:
                     bid.delete()
                 lot.deactivated = True
@@ -1348,7 +1348,7 @@ def auctionReport(request, slug):
             if data.user and not data.manually_added:
                 # these things will only be written out if the user wants you to have it
                 lotsViewed = PageView.objects.filter(lot_number__auction=auction, user=data.user)
-                lotsBid = Bid.objects.filter(lot_number__auction=auction, user=data.user)
+                lotsBid = Bid.objects.exclude(is_deleted=True).filter(lot_number__auction=auction, user=data.user)
                 lot_qs = Lot.objects.exclude(is_deleted=True).filter(
                     user=data.user,
                     auction__isnull=True,
@@ -2601,7 +2601,7 @@ class ViewLot(DetailView):
             context["auction"] = lot.auction
             context["is_auction_admin"] = lot.auction.permission_check(self.request.user)
             if lot.auction.first_bid_payout and not lot.auction.invoiced:
-                if not self.request.user.is_authenticated or not Bid.objects.filter(
+                if not self.request.user.is_authenticated or not Bid.objects.exclude(is_deleted=True).filter(
                     user=self.request.user, lot_number__auction=lot.auction
                 ):
                     messages.info(
@@ -2609,7 +2609,8 @@ class ViewLot(DetailView):
                         f"Bid on (and win) any lot in the {lot.auction} and get ${lot.auction.first_bid_payout} back!",
                     )
         try:
-            defaultBidAmount = Bid.objects.get(user=self.request.user, lot_number=lot.pk).amount
+            defaultBidAmount = Bid.objects.get(user=self.request.user, lot_number=lot.pk, is_deleted=False).amount
+            context["viewer_bid_pk"] = Bid.objects.get(user=self.request.user, lot_number=lot.pk, is_deleted=False).pk
             context["viewer_bid"] = defaultBidAmount
             defaultBidAmount = defaultBidAmount + 1
         except:
@@ -2691,7 +2692,7 @@ class ViewLot(DetailView):
         context["bids"] = []
         if lot.auction:
             if context["is_auction_admin"]:
-                bids = Bid.objects.filter(lot_number=lot.pk)
+                bids = Bid.objects.exclude(is_deleted=True).filter(lot_number=lot.pk)
                 context["bids"] = bids
         context["debug"] = settings.DEBUG
         try:
@@ -3155,15 +3156,23 @@ class ImageDelete(LoginRequiredMixin, DeleteView):
 
 class BidDelete(LoginRequiredMixin, DeleteView):
     model = Bid
+    removing_own_bid = False
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["removing_own_bid"] = self.removing_own_bid
+        return context
 
     def dispatch(self, request, *args, **kwargs):
         auth = False
         if not self.get_object().lot_number.bids_can_be_removed:
             messages.error(request, "You can no longer remove bids from this lot.")
             return redirect(self.get_success_url())
-        if request.user.is_superuser:
-            auth = True
         if self.get_object().lot_number.auction:
+            if self.get_object().lot_number.auction.allow_deleting_bids and request.user == self.get_object().user:
+                if request.user == self.get_object().user:
+                    self.removing_own_bid = True
+                    auth = True
             if self.get_object().lot_number.auction.permission_check(self.request.user):
                 auth = True
         if not auth:
@@ -3177,7 +3186,18 @@ class BidDelete(LoginRequiredMixin, DeleteView):
     def form_valid(self, form):
         lot = self.get_object().lot_number
         success_url = self.get_success_url()
-        historyMessage = f"{self.request.user} has removed {self.get_object().user}'s bid"
+        if self.removing_own_bid:
+            own_bid_removal_messages = [
+                "{user} got cold feet and withdrew their bid!",
+                "{user} has bravely retreated from the bidding war!",
+                "And just like that, {user}'s bid vanished into thin air!",
+                "The elusive {user} has chickened out and removed their bid!",
+                "Looks like {user} couldn't handle the heat and pulled their bid!",
+                "{user} just remembered they haven't paid rent this month and removed their bid!",
+            ]
+            history_message = choice(own_bid_removal_messages).format(user=self.request.user)
+        else:
+            history_message = f"{self.request.user} has removed {self.get_object().user}'s bid"
         if lot.ended:
             lot.winner = None
             lot.auctiontos_winner = None
@@ -3190,7 +3210,7 @@ class BidDelete(LoginRequiredMixin, DeleteView):
             lot.buy_now_used = False
             lot.save()
         self.get_object().delete()
-        LotHistory.objects.create(lot=lot, user=self.request.user, message=historyMessage, changed_price=True)
+        LotHistory.objects.create(lot=lot, user=self.request.user, message=history_message, changed_price=True)
         return HttpResponseRedirect(success_url)
 
     def get_success_url(self):
@@ -4951,8 +4971,10 @@ class UserChartView(View):
     def get(self, request, *args, **kwargs):
         if request.user.is_superuser:
             user = self.kwargs.get("pk", None)
-            allBids = Bid.objects.select_related("lot_number__species_category").filter(
-                user=user, lot_number__species_category__isnull=False
+            allBids = (
+                Bid.objects.exclude(is_deleted=True)
+                .select_related("lot_number__species_category")
+                .filter(user=user, lot_number__species_category__isnull=False)
             )
             pageViews = PageView.objects.select_related("lot_number__species_category").filter(
                 user=user, lot_number__species_category__isnull=False
@@ -5335,7 +5357,7 @@ class AuctionLotBiddersChartData(AuctionChartView):
             if not lot.winning_price:
                 data[0] += 1
             else:
-                bids = len(Bid.objects.filter(lot_number=lot))
+                bids = len(Bid.objects.exclude(is_deleted=True).filter(lot_number=lot))
                 if bids > 6:
                     bids = 6
                 else:
@@ -5372,7 +5394,7 @@ class AuctionCategoriesChartData(AuctionChartView):
         )
         lot_count = self.auction.lots_qs.count()
         allViews = PageView.objects.filter(lot_number__auction=self.auction).count()
-        allBids = Bid.objects.filter(lot_number__auction=self.auction).count()
+        allBids = Bid.objects.exclude(is_deleted=True).filter(lot_number__auction=self.auction).count()
         allVolume = (
             Lot.objects.exclude(is_deleted=True)
             .filter(auction=self.auction)
@@ -5385,10 +5407,14 @@ class AuctionCategoriesChartData(AuctionChartView):
                     lot_number__auction=self.auction,
                     lot_number__species_category=category,
                 ).count()
-                thisBids = Bid.objects.filter(
-                    lot_number__auction=self.auction,
-                    lot_number__species_category=category,
-                ).count()
+                thisBids = (
+                    Bid.objects.exclude(is_deleted=True)
+                    .filter(
+                        lot_number__auction=self.auction,
+                        lot_number__species_category=category,
+                    )
+                    .count()
+                )
                 thisVolume = (
                     Lot.objects.exclude(is_deleted=True)
                     .filter(auction=self.auction, species_category=category)
