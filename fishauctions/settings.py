@@ -484,3 +484,13 @@ IN_PERSON_TUTORIAL_CHAPTERS = (
     (24 * 60 + 00, "Advertising"),
     (24 * 60 + 52, "Help and Support"),
 )
+HYBRID_TUTORIAL_YOUTUBE_ID = "tLR7l4Xsgtc"
+HYBRID_TUTORIAL_CHAPTERS = (
+    (0, "Intro"),
+    (13, "Enable online bidding"),
+    (33, "Bidding"),
+    (59, "Seeing the max bid"),
+    (1 * 60 + 27, "Setting winners"),
+    (2 * 60 + 3, "Buy Now"),
+    (2 * 60 + 45, "Payment"),
+)

@@ -66,7 +66,7 @@ def check_chat_permissions(lot, user):
 
 def check_all_permissions(lot, user):
     """Returns false if everything is OK, or a string error message"""
-    if UserBan.objects.filter(banned_user=user.pk, user=lot.user.pk).first():
+    if lot.user and UserBan.objects.filter(banned_user=user.pk, user=lot.user.pk).first():
         return "This user has banned you from bidding on their lots"
     if lot.banned:
         return "This lot has been removed"

@@ -1671,6 +1671,31 @@ class AuctionChatDeleteUndelete(View, AuctionPermissionsMixin):
         return HttpResponse(result)
 
 
+class AuctionShowHighBidder(View, AuctionPermissionsMixin):
+    """HTMX for auction admins only"""
+
+    def dispatch(self, request, *args, **kwargs):
+        pk = kwargs.get("pk")
+        self.lot = get_object_or_404(Lot, pk=pk, is_deleted=False, auction__isnull=False)
+        self.auction = self.lot.auction
+        self.is_auction_admin
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request, *args, **kwargs):
+        if not self.lot.max_bid_revealed_by:
+            self.lot.max_bid_revealed_by = request.user
+            self.lot.save()
+            LotHistory.objects.create(
+                lot=self.lot,
+                user=self.request.user,
+                message=f"{self.request.user} has looked at the max bid on this lot",
+                changed_price=True,
+            )
+        print(self.lot.max_bid)
+        return HttpResponse(f"Max bid: ${self.lot.max_bid}")
+        # return HttpResponse(f"Max bid: ${self.lot.max_bid: .2f}")
+
+
 class PickupLocations(ListView, AuctionPermissionsMixin):
     """Show all pickup locations belonging to the current auction"""
 
@@ -1733,10 +1758,7 @@ class PickupLocationForm:
         kwargs = super().get_form_kwargs()
         kwargs["user"] = self.request.user
         kwargs["auction"] = self.auction
-        try:
-            kwargs["user_timezone"] = self.request.COOKIES["user_timezone"]
-        except:
-            kwargs["user_timezone"] = settings.TIME_ZONE
+        kwargs["user_timezone"] = self.request.COOKIES.get("user_timezone", settings.TIME_ZONE)
         return kwargs
 
     def get_success_url(self):
@@ -1833,10 +1855,7 @@ class AuctionUpdate(UpdateView, AuctionPermissionsMixin):
         kwargs = super().get_form_kwargs(*args, **kwargs)
         kwargs["user"] = self.request.user
         kwargs["cloned_from"] = None
-        try:
-            kwargs["user_timezone"] = self.request.COOKIES["user_timezone"]
-        except:
-            kwargs["user_timezone"] = settings.TIME_ZONE
+        kwargs["user_timezone"] = self.request.COOKIES.get("user_timezone", settings.TIME_ZONE)
         return kwargs
 
     def get_context_data(self, **kwargs):
@@ -1850,6 +1869,14 @@ class AuctionUpdate(UpdateView, AuctionPermissionsMixin):
         context["title"] = f"{self.auction}"
         context["is_online"] = self.auction.is_online
         return context
+
+    def form_valid(self, form, **kwargs):
+        if not self.get_object().is_online and self.get_object().allow_bidding_on_lots:
+            messages.info(
+                self.request,
+                f"This auction allows online bidding -- make sure to <a href='{reverse('auction_help', kwargs={'slug':self.get_object().slug})}'>watch the tutorial in the help</a> to see how this works",
+            )
+        return super().form_valid(form)
 
 
 class AuctionLots(SingleTableMixin, FilterView, AuctionPermissionsMixin):
@@ -2101,6 +2128,10 @@ class SetLotWinner(QuickSetLotWinner):
                     except:
                         # one invoice or the other doesn't exist, this only happens when the selling the first lot to a given tos
                         form.add_error("lot", mark_safe(f"{error}"))
+                if lot.high_bidder and lot.auction.allow_bidding_on_lots:
+                    if winning_price <= lot.max_bid and winner != lot.high_bidder_for_admins:
+                        form.add_error("winning_price", "Lower than an online bid")
+                        form.add_error("winner", f"Bidder {lot.high_bidder_for_admins} has bid more than this")
         if form.is_valid():
             return self.set_winner(lot, tos, winning_price)
         return self.form_invalid(form)
@@ -2949,17 +2980,13 @@ class LotValidation(LoginRequiredMixin):
                 except Exception as e:
                     print(e)
                     # pass
-
-            # if there's another lot in the same category already with no bids, warn about it
-            # existingLot = Lot.objects.annotate(num_bids=Count('bid'))\
-            #     .filter(num_bids=0, species_category=lot.species_category, user=self.request.user.pk, active=True)\
-            #     .exclude(lot_number=lot.pk)
-            # if existingLot:
-            #     messages.info(self.request, "Tip: you've already got lots in this category with no bids.  Don't submit too many similar lots unless you're sure there's interest")
-            # messages.success(self.request, f"Created lot!  <a href='/lots/{lot.pk}'>View or edit your last lot</a> or fill out this form again to add another lot.  <a href='/lots/user/?user={self.request.user.pk}'>All submitted lots</a>")
+            msg = "Created lot!"
+            if not lot.image_count:
+                msg += f"You should probably <a href='/images/add_image/{lot.lot_number}/'>add an image</a>  to this lot.  Or, "
+            msg += "<a href='/lots/new'>create another lot</a>"
             messages.success(
                 self.request,
-                f"Created lot!  You should probably <a href='/images/add_image/{lot.lot_number}/'>add an image to this lot.</a>  Or, <a href='/lots/new'>create another lot</a>",
+                msg,
             )
         return super().form_valid(form)
 
@@ -2967,13 +2994,8 @@ class LotValidation(LoginRequiredMixin):
         kwargs = super().get_form_kwargs(*args, **kwargs)
         kwargs["auction"] = self.auction
         kwargs["user"] = self.request.user
-        kwargs["cloned_from"] = None
-        try:
-            data = self.request.GET.copy()
-            if data["copy"]:
-                kwargs["cloned_from"] = data["copy"]
-        except:
-            pass
+        data = self.request.GET.copy()
+        kwargs["cloned_from"] = data.get("copy", None)
         return kwargs
 
 
@@ -3460,18 +3482,10 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
     def get_form_kwargs(self, *args, **kwargs):
         kwargs = super().get_form_kwargs(*args, **kwargs)
         kwargs["user"] = self.request.user
-        try:
-            kwargs["user_timezone"] = self.request.COOKIES["user_timezone"]
-        except:
-            kwargs["user_timezone"] = settings.TIME_ZONE
-        kwargs["cloned_from"] = None
-        try:
-            data = self.request.GET.copy()
-            if data["copy"]:
-                kwargs["cloned_from"] = data["copy"]
-                self.cloned_from = kwargs["cloned_from"]
-        except:
-            pass
+        kwargs["user_timezone"] = self.request.COOKIES.get("user_timezone", settings.TIME_ZONE)
+        data = self.request.GET.copy()
+        self.cloned_from = data.get("copy", None)
+        kwargs["cloned_from"] = self.cloned_from
         return kwargs
 
     def form_valid(self, form, **kwargs):
@@ -3497,6 +3511,8 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
         else:
             is_online = False
         run_duration = timezone.timedelta(days=7)  # only set for is_online
+        online_bidding_start_diff = timezone.timedelta(days=7)
+        online_bidding_end_diff = timezone.timedelta(minutes=0)
         if clone_from_auction:
             fields_to_clone = [
                 "is_online",
@@ -3529,11 +3545,17 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "reserve_price",
                 "tax",
                 "advanced_lot_adding",
+                "date_online_bidding_starts",
+                "date_online_bidding_ends",
             ]
             for field in fields_to_clone:
                 setattr(auction, field, getattr(original_auction, field))
             if original_auction.date_end:
                 run_duration = original_auction.date_end - original_auction.date_start
+            if original_auction.date_online_bidding_starts:
+                online_bidding_start_diff = original_auction.date_start - original_auction.date_online_bidding_starts
+            if original_auction.date_online_bidding_ends:
+                online_bidding_end_diff = original_auction.date_start - original_auction.date_online_bidding_ends
             auction.cloned_from = original_auction
         else:
             auction.is_online = is_online
@@ -3555,6 +3577,10 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 auction.lot_submission_end_date = auction.date_start
             if not auction.lot_submission_start_date:
                 auction.lot_submission_start_date = auction.date_start - run_duration
+            if not auction.date_online_bidding_starts:
+                auction.date_online_bidding_starts = auction.date_start - online_bidding_start_diff
+            if not auction.date_online_bidding_ends:
+                auction.date_online_bidding_ends = auction.date_start - online_bidding_end_diff
         auction.save()
         # let's route in-person auctions to the rule page next
         if not auction.is_online and not clone_from_auction:

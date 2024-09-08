@@ -7,6 +7,12 @@
   <div>
     This video will walk you through the entire process of running your auction.
   </div>
+  {% if not auction.is_online and auction.allow_bidding_on_lots %}
+  <br><p>You've enabled online bidding on an in-person auction</p>
+  <span class="text-muted">Make sure to watch this video for details on how this process works!</span>
+  {% include 'youtube_embed.html' with videoId=auction.hybrid_tutorial chapters=auction.hybrid_tutorial_chapters %}
+  <span class="text-muted">The video below covers running a traditional in-person auction</span>
+  {% endif %}
   {% include 'youtube_embed.html' with videoId=auction.video_tutorial chapters=auction.video_tutorial_chapters %}
   <div>
     <h5>Still got questions?</h5>
@@ -15,7 +21,7 @@
   <div>
     <h5>Found a bug?  Got a request for a new feature?</h5>
     <a href="https://github.com/iragm/fishauctions/issues/">Open a GitHub issue</a><br>
-    <small><span class='text-muted'>Github is the best place to report issues and suggest features, as other uses can provide feedback.</span></small><p>
+    <small><span class='text-muted'>Github is the best place to report issues and suggest features, as other users can provide feedback.</span></small><p>
   </div>
   <div>
     <h5>Still need help?</h5>

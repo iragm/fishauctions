@@ -261,6 +261,7 @@ f=e=d="text-white";break;case "success":c="bg-success";f=e=d="text-white";break;
                                     <span id="high_bidder_name">{% if lot.high_bidder.userdata.username_visible %}<a href="{% url 'userpage' slug=lot.high_bidder %}">{{ lot.high_bidder }}</a>{% else %}Anonymous{%endif%}</span>
                                     {% endif %}
                                     <span id="your_bid">{% if viewer_bid %}Your max bid is $<span id='your_bid_price'>{{ viewer_bid }}</span>{% endif %}</span>
+                                    {% if is_auction_admin %}{{ lot.auction_show_high_bidder_template }}{% endif %}
                                 </span>
                                 {% else %}
                                     $<span id="price">{{ lot.reserve_price }} {% if lot.buy_now_price and not lot.bidding_error %}<button type="button" class='btn btn-sm btn-success text-black' id="buy-now">Buy now: ${{lot.buy_now_price}}</button>{% endif %}</span> <span id="high_bidder_name"></span><span id="your_bid"></span>
