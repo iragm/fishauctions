@@ -4508,15 +4508,15 @@ class LotLabelView(View, AuctionPermissionsMixin):
         if request.user.is_superuser:
             return self.create_labels(request, *args, **kwargs)
         else:
-            try:
-                return self.create_labels(request, *args, **kwargs)
+            # try:
+            return self.create_labels(request, *args, **kwargs)
             # except LayoutError: # some day I will track down all the possible error types and add them here
-            except:
-                messages.error(
-                    request,
-                    "Unable to print labels, this is likely caused by an invalid custom setting here",
-                )
-                return redirect(reverse("printing"))
+            # except:
+            #     messages.error(
+            #         request,
+            #         "Unable to print labels, this is likely caused by an invalid custom setting here",
+            #     )
+            #     return redirect(reverse("printing"))
 
 
 class UnprintedLotLabelsView(LotLabelView):

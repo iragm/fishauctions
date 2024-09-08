@@ -1045,7 +1045,7 @@ class LotLabelViewTestCase(StandardTestCase):
         assert "attachment; filename=" in response.headers["Content-Disposition"]
 
     def test_thermal_labels(self):
-        """Test hat a regular user can print their own labels."""
+        """Test that a regular user can print their own labels."""
         user_label_prefs, created = UserLabelPrefs.objects.get_or_create(user=self.user)
         user_label_prefs.preset = "thermal_sm"
         user_label_prefs.save()
