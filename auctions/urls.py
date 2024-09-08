@@ -392,6 +392,11 @@ urlpatterns = [
     ),
     # path('api/auctionstats/distance-traveled', views.AdminStatsDistanceTraveled.as_view(), name='distance_traveled'),
     # path('api/auctionstats/prices-with-images', views.AdminStatsImages.as_view(), name='prices_with_images'),
+    path(
+        "api/lots/<int:pk>/show-high-bidder",
+        views.AuctionShowHighBidder.as_view(),
+        name="auction_show_high_bidder",
+    ),
     re_path(
         r"^ses/event-webhook/$",
         SESEventWebhookView.as_view(),

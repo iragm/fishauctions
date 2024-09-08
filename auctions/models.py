@@ -863,7 +863,14 @@ class Auction(models.Model):
         """Maybe we can combine this with the above `closed`, but I'm not sure where else that is used"""
         if not self.is_online and timezone.now() > self.date_start and not self.allow_bidding_on_lots:
             return True
-        # otherwise not online
+        if (
+            self.date_online_bidding_ends
+            and not self.is_online
+            and self.allow_bidding_on_lots
+            and timezone.now() > self.date_online_bidding_ends
+            and timezone.now() > self.date_start
+        ):
+            return True
         return False
 
     @property
@@ -877,8 +884,14 @@ class Auction(models.Model):
         """For display on the main auctions list"""
         if timezone.now() > self.date_start:
             return True
-        else:
-            return False
+        if (
+            self.date_online_bidding_starts
+            and not self.is_online
+            and self.allow_bidding_on_lots
+            and timezone.now() > self.date_online_bidding_starts
+        ):
+            return True
+        return False
 
     @property
     def in_progress(self):
@@ -1224,6 +1237,14 @@ class Auction(models.Model):
             return settings.ONLINE_TUTORIAL_CHAPTERS
         else:
             return settings.IN_PERSON_TUTORIAL_CHAPTERS
+
+    @property
+    def hybrid_tutorial(self):
+        return settings.HYBRID_TUTORIAL_YOUTUBE_ID
+
+    @property
+    def hybrid_tutorial_chapters(self):
+        return settings.HYBRID_TUTORIAL_CHAPTERS
 
 
 class PickupLocation(models.Model):
@@ -2271,16 +2292,27 @@ class Lot(models.Model):
         if self.winner:
             return str(self.winner)
         if self.high_bidder:
-            return str(self.high_bidder)
+            tos = AuctionTOS.objects.filter(user=self.high_bidder, auction=self.auction).first()
+            if tos:
+                return tos.bidder_number
+            else:
+                # should never happen
+                return "Unknown bidder"
         return "No bids"
 
     @property
     def auction_show_high_bidder_template(self):
         """A div that admins can click on to show the high bidder.  Include only if view is admin
         Returns safe html for inclusion in a template"""
-        if self.auction and not self.auction.is_online and not self.ended and self.auction.allow_bidding_on_lots:
-            return mark_safe("""<a
-                hx-get="{% url 'auction_show_high_bidder' pk=lot.pk %}"
+        if (
+            self.auction
+            and self.high_bidder
+            and not self.auction.is_online
+            and not self.ended
+            and self.auction.allow_bidding_on_lots
+        ):
+            return mark_safe(f"""<a href='javascript:void(0);'
+                hx-get="{reverse('auction_show_high_bidder', kwargs={'pk':self.pk})}"
                 hx-swap="outerHTML"
                 hx-trigger="click"
             >
@@ -2322,67 +2354,6 @@ class Lot(models.Model):
                         return True
         return False
 
-    # @property
-    # def payout(self):
-    # 	"""Used for invoicing"""
-    # 	print('deprecated, wrap your queryset in `add_price_info`')
-    # 	payout = {
-    # 		"ended": False,
-    # 		"sold": False,
-    # 		"winning_price": 0,
-    # 		"to_seller": 0,
-    # 		"to_club": 0,
-    # 		"to_site": 0,
-    # 		}
-    # 	if self.auction:
-    # 		if self.winning_price or not self.active:
-    # 		#if (self.auctiontos_winner and self.winning_price) or not self.active:
-    # 			# bidding has officially closed
-    # 			payout['ended'] = True
-    # 			if self.banned:
-    # 				return payout
-    # 			auction = self.auction
-    # 			#auction = Auction.objects.get(id=self.auction.pk)
-    # 			if self.sold:
-    # 				payout['sold'] = True
-    # 				payout['winning_price'] = self.winning_price * (100 - self.partial_refund_percent) / 100
-    # 				if self.donation:
-    # 					clubCut = self.winning_price
-    # 					sellerCut = 0
-    # 				else:
-    # 					if self.auctiontos_seller and self.auctiontos_seller.is_club_member:
-    # 						percent_field = 'winning_bid_percent_to_club_for_club_members'
-    # 						fee_field = 'lot_entry_fee_for_club_members'
-    # 					else:
-    # 						percent_field = 'winning_bid_percent_to_club'
-    # 						fee_field = 'lot_entry_fee'
-    # 					if self.pre_registered:
-    # 						clubCut = ( self.winning_price * (getattr(auction, percent_field) - auction.pre_register_lot_discount_percent) / 100 ) + getattr(auction, fee_field) - auction.pre_register_lot_entry_fee_discount
-    # 					else:
-    # 						clubCut = ( self.winning_price * getattr(auction, percent_field) / 100 ) + getattr(auction, fee_field)
-    # 					sellerCut = self.winning_price - clubCut
-    # 				payout['to_club'] = clubCut * (100 - self.partial_refund_percent) / 100
-    # 				payout['to_seller'] = sellerCut * (100 - self.partial_refund_percent) / 100
-    # 			else:
-    # 				# did not sell
-    # 				if not self.donation:
-    # 					payout['to_club'] = auction.unsold_lot_fee # bill the seller even if the item didn't sell
-    # 					payout['to_seller'] = 0 - auction.unsold_lot_fee
-    # 				else:
-    # 					payout['to_club'] = 0 # don't bill for donations
-    # 					payout['to_seller'] = 0
-    # 			if self.promoted:
-    # 				payout['to_club'] += auction.lot_promotion_cost
-    # 	return payout
-
-    # @property
-    # def your_cut(self):
-    # return self.payout['to_seller']
-
-    # @property
-    # def club_cut(self):
-    # return self.payout['to_club']
-
     @property
     def number_of_watchers(self):
         return Watch.objects.filter(lot_number=self.lot_number).count()
@@ -2402,8 +2373,6 @@ class Lot(models.Model):
     @property
     def calculated_end(self):
         """Return datetime object for when this lot will end.
-
-        Important: in the case of a lot that is part of an in-person auction with no end time, this will return timezone.now()
 
         A good alternative is lot.calculated_end_for_templates which returns either a string or a datetime
         """
@@ -2505,8 +2474,14 @@ class Lot(models.Model):
         """bidding is not allowed on very new lots"""
         first_bid_date = self.date_posted + datetime.timedelta(minutes=20)
         if self.auction:
-            if self.auction.date_start > first_bid_date:
+            if self.auction.is_online and self.auction.date_start > first_bid_date:
                 return self.auction.date_start
+            if (
+                not self.auction.is_online
+                and self.auction.allow_bidding_on_lots
+                and self.auction.date_online_bidding_starts > first_bid_date
+            ):
+                return self.auction.date_online_bidding_starts
         return first_bid_date
 
     @property
@@ -2523,6 +2498,10 @@ class Lot(models.Model):
                 return "This auction doesn't allow online bidding"
             if not self.auction.started:
                 return "Bidding hasn't opened yet for this auction"
+            if not self.auction.is_online and timezone.now() > self.auction.date_online_bidding_ends:
+                return "Online bidding has ended for this auction"
+            if not self.auction.is_online and timezone.now() < self.auction.date_online_bidding_starts:
+                return "Online bidding hasn't started yet for this auction"
         if self.deactivated:
             return "This lot has been deactivated by its owner"
         if self.bidding_allowed_on > timezone.now():
@@ -2625,6 +2604,9 @@ class Lot(models.Model):
     @property
     def price(self):
         """Price display"""
+        print(
+            "this is most likely safe to remove, it uses max_bid which should never be displayed to normal people.  I don't think it's used anywhere."
+        )
         if self.winning_price:
             return self.winning_price
         return self.max_bid
@@ -2744,7 +2726,7 @@ class Lot(models.Model):
     @property
     def image_count(self):
         """Count the number of images associated with this lot"""
-        return LotImage.objects.filter(lot_number=self.lot_number).count()
+        return self.images.count()
 
     @property
     def multimedia_count(self):
@@ -3024,7 +3006,7 @@ class Invoice(models.Model):
                 auctiontos_seller=self.auctiontos_user,
                 auction=self.auction,
                 is_deleted=False,
-            ).order_by("lot_number")
+            ).order_by("custom_lot_number")
         )
 
     @property
@@ -3033,11 +3015,10 @@ class Invoice(models.Model):
         return (
             Lot.objects.filter(
                 winning_price__isnull=False,
-                active=False,
                 auctiontos_winner=self.auctiontos_user,
                 is_deleted=False,
             )
-            .order_by("lot_number")
+            .order_by("custom_lot_number")
             .annotate(final_price=F("winning_price") * (100 - F("partial_refund_percent")) / 100)
         )
 
@@ -3808,7 +3789,9 @@ class LotHistory(models.Model):
     current_price = models.PositiveIntegerField(null=True, blank=True)
     current_price.help_text = "Price of the lot immediately AFTER this message"
     changed_price = models.BooleanField(default=False)
-    changed_price.help_text = "Was this a bid that changed the price?"
+    changed_price.help_text = (
+        "Was this a bid that changed the price?  If False, this lot will show up in the admin chat system"
+    )
     notification_sent = models.BooleanField(default=False)
     notification_sent.help_text = "Set to true automatically when the notification email is sent"
     bid_amount = models.PositiveIntegerField(null=True, blank=True)
@@ -4094,6 +4077,17 @@ def on_save_auction(sender, instance, **kwargs):
     # Admins can always override those, and they seem to be adding most of the lots for in person stuff anyway.
     # OK, third time's the charm, leave the lines above commented out
 
+    # Some validation for online bidding with in-person auctions for #189
+    if not instance.is_online and instance.allow_bidding_on_lots:
+        if not instance.date_online_bidding_ends:
+            instance.date_online_bidding_ends = instance.date_start
+        if not instance.date_online_bidding_starts:
+            instance.date_online_bidding_starts = instance.date_start - datetime.timedelta(days=7)
+        if instance.date_online_bidding_ends < instance.date_online_bidding_starts:
+            new_start = instance.date_online_bidding_ends
+            instance.date_online_bidding_ends = instance.date_online_bidding_starts
+            instance.date_online_bidding_starts = new_start
+
     # if this is an existing auction
     if instance.pk:
         # print('updating date end on lots because this is an existing auction')
@@ -4195,21 +4189,7 @@ def update_lot_info(sender, instance, **kwargs):
             auction=instance.auction,
             defaults={},
         )
-    # This is probably too slow; instead invoices are recalculated when viewing or exporting
-    # if invoice:
-    # 	if instance.winning_price:
-    # 		invoice.recalculate
-    # if instance.pk:
-    # 	original_instance = Lot.objects.get(pk=instance.pk)
-    # 	if not original_instance.banned and instance.banned:
-    # 		LotHistory.objects.create(
-    # 			lot = instance,
-    # 			user = None,
-    # 			message = 'This lot has been removed',
-    # 			changed_price = True,
-    # 			current_price=instance.high_bid,
-    # 			)
-    if instance.auction and instance.reserve_price < instance.auction.minimum_bid:
+    if instance.auction and (not instance.reserve_price or instance.reserve_price < instance.auction.minimum_bid):
         instance.reserve_price = instance.auction.minimum_bid
 
 

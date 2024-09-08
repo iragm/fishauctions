@@ -152,14 +152,12 @@ class QuickAddLot(forms.ModelForm):
         self.fields["description"].help_text = ""
         if self.auction.reserve_price == "disable":
             self.fields["reserve_price"].widget = HiddenInput()
-        # always required anyway...
-        # if self.auction.reserve_price == "required":
-        #    self.fields['reserve_price'].required = True
+        if self.auction.reserve_price == "required":
+            self.fields["reserve_price"].required = True
         if self.auction.buy_now == "disable":
             self.fields["buy_now_price"].widget = HiddenInput()
-        # if self.auction.buy_now == "required":
-        #    self.fields['buy_now_price'].required = True
-
+        if self.auction.buy_now == "required" or self.auction.buy_now == "forced":
+            self.fields["buy_now_price"].required = True
         if not self.auction.use_categories:
             self.fields["i_bred_this_fish"].widget = HiddenInput()
 
@@ -408,6 +406,7 @@ class WinnerLotSimpleImages(WinnerLotSimple):
                                         });
                                     });
                                 </script>
+                                <span id='make_online_bidder_winner'></span>
                                 </div>
                             </div>
                             </div>
@@ -664,7 +663,7 @@ class EditLot(forms.ModelForm):
         self.fields["auctiontos_winner"].label = "Winner"
         winner_help_test = ""
         if lot.high_bidder:
-            winner_help_test = f"High bidder: <span class='text-warning'>{lot.high_bidder_for_admins}</span> Bid: <span class='text-warning'>${lot.high_bid}</span>"
+            winner_help_test = f"High bidder: <span class='text-warning'>{lot.high_bidder_for_admins}</span> Bid: <span class='text-warning'>${lot.high_bid}</span> {lot.auction_show_high_bidder_template}"
         self.fields["auctiontos_winner"].help_text = winner_help_test
         # self.fields['auctiontos_seller'].label = "Seller"
         # self.fields['auctiontos_seller'].help_text = ""
@@ -1545,12 +1544,16 @@ class AuctionEditForm(forms.ModelForm):
             "tax",
             "advanced_lot_adding",
             "allow_bidding_on_lots",  # it's back...for now
+            "date_online_bidding_ends",
+            "date_online_bidding_starts",
         ]
         widgets = {
             "date_start": DateTimePickerInput(),
             "date_end": DateTimePickerInput(),
             "lot_submission_start_date": DateTimePickerInput(),
             "lot_submission_end_date": DateTimePickerInput(),
+            "date_online_bidding_ends": DateTimePickerInput(),
+            "date_online_bidding_starts": DateTimePickerInput(),
             "notes": forms.Textarea(),
         }
 
@@ -1579,8 +1582,10 @@ class AuctionEditForm(forms.ModelForm):
             # self.fields['pre_register_lot_entry_fee_discount'].widget=forms.HiddenInput()
             self.fields["pre_register_lot_discount_percent"].widget = forms.HiddenInput()
             # self.fields['set_lot_winners_url'].widget=forms.HiddenInput()
+            self.fields["date_online_bidding_starts"].widget = forms.HiddenInput()
+            self.fields["date_online_bidding_ends"].widget = forms.HiddenInput()
         else:
-            self.fields["only_approved_bidders"].widget = forms.HiddenInput()
+            # self.fields["only_approved_bidders"].widget = forms.HiddenInput()
             self.fields["unsold_lot_fee"].widget = forms.HiddenInput()
             self.fields[
                 "allow_bidding_on_lots"
@@ -1598,37 +1603,16 @@ class AuctionEditForm(forms.ModelForm):
         self.fields["date_start"].help_text = "When the auction actually starts"
         self.fields["user_cut"].initial = 100 - self.instance.winning_bid_percent_to_club
         self.fields["club_member_cut"].initial = 100 - self.instance.winning_bid_percent_to_club_for_club_members
-        if self.instance.pk:
-            # editing existing auction
-            pass
-        else:
-            # this is a new auction
-            # if self.cloned_from:
-            #     print(self.cloned_from)
-            #     try:
-            #         originalAuction = Auction.objects.get(slug=self.cloned_from, is_deleted=False)
-            #         #if (originalAuction.created_by.pk == self.user.pk) or self.user.is_superuser:
-            #             # you can only clone your own auctions
-            #         cloneFields = ['notes', 'lot_entry_fee','unsold_lot_fee','winning_bid_percent_to_club',
-            #                 'sealed_bid','use_categories', 'promote_this_auction', 'max_lots_per_user', 'allow_additional_lots_as_donation',
-            #                 'email_users_when_invoices_ready', 'pre_register_lot_entry_fee_discount', 'pre_register_lot_discount_percent', 'allow_bidding_on_lots','only_approved_sellers',
-            #                 'invoice_payment_instructions', 'minimum_bid', 'winning_bid_percent_to_club_for_club_members', 'lot_entry_fee_for_club_members',
-            #                     ]
-            #         for field in cloneFields:
-            #             self.fields[field].initial = getattr(originalAuction, field)
-            #         self.fields['cloned_from'].initial = self.cloned_from
-            #     except Exception as e:
-            #         print(e)
-            # try:
-            #    lastAuction = Auction.objects.filter(created_by=self.user).order_by('-date_end')[0]
-            #    self.fields['notes'].initial = "These rules are unchanged from the last auction\n\n" + lastAuction.notes
-            # except Exception as e:
-            # no old auction
-            # else:
-            if not self.cloned_from:
-                self.fields[
-                    "notes"
-                ].initial = "## General information\n\nYou should remove this line and edit this section to suit your auction.  Use the formatting here as an example.\n\n## Prohibited items\n- You cannot sell any fish or plants banned by state law.\n- You cannot sell large hardware items such as tanks.\n\n## Rules\n- All lots must be properly bagged.  No leaking bags!\n- You do not need to be a club member to buy or sell lots."
+
+        # if self.instance.pk:
+        #     # editing existing auction
+        #     pass
+        # else:
+        #     # this is a new auction
+        #     if not self.cloned_from:
+        #         self.fields[
+        #             "notes"
+        #         ].initial = "## General information\n\nYou should remove this line and edit this section to suit your auction.  Use the formatting here as an example.\n\n## Prohibited items\n- You cannot sell any fish or plants banned by state law.\n- You cannot sell large hardware items such as tanks.\n\n## Rules\n- All lots must be properly bagged.  No leaking bags!\n- You do not need to be a club member to buy or sell lots."
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_id = "auction-form"
@@ -1717,6 +1701,21 @@ class AuctionEditForm(forms.ModelForm):
             HTML("<h4>Lot permissions</h4>"),
             Div(
                 Div(
+                    "allow_bidding_on_lots",
+                    css_class="col-md-4",
+                ),
+                Div(
+                    "date_online_bidding_starts",
+                    css_class="col-md-4",
+                ),
+                Div(
+                    "date_online_bidding_ends",
+                    css_class="col-md-4",
+                ),
+                css_class="row",
+            ),
+            Div(
+                Div(
                     "max_lots_per_user",
                     css_class="col-md-3",
                 ),
@@ -1733,10 +1732,6 @@ class AuctionEditForm(forms.ModelForm):
                     css_class="col-md-3",
                 ),
                 css_class="row",
-            ),
-            Div(
-                "allow_bidding_on_lots",
-                css_class="col-md-3",
             ),
             HTML("<h4>General</h4>"),
             Div(
