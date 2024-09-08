@@ -3,11 +3,15 @@
 {% block title %} Delete bid {% endblock %}
 {% load static %}
 {% block content %}
-            <form method="post">{% csrf_token %}
-                <p>Are you sure you want to delete {{ object.user }}'s bid on {{object.lot_number.lot_name }}?</p>
-                <p>Note: this will only remove {{ object.user }}'s bid on <b>this</b> lot.  If {{ object.user }} is causing trouble, you can <a href="{% url 'userpage' slug=object.user %}">ban them here</a>, which will remove all their bids from all lots.
-                </p>
-                <input type="submit" class='btn btn-danger' value="Delete">
-                <a href="{{object.lot_number.lot_link}}" class='btn btn-secondary'>Cancel</a>
-            </form>
+    <form method="post">{% csrf_token %}
+        {% if removing_own_bid %}
+            <p>Remove your bid on {{object.lot_number.lot_name }}?</p>
+        {% else %}
+            <p>Are you sure you want to delete {{ object.user }}'s bid on {{object.lot_number.lot_name }}?</p>
+            <p>Note: this will only remove {{ object.user }}'s bid on <b>this</b> lot.  If {{ object.user }} is causing trouble, you can <a href="{% url 'userpage' slug=object.user %}">ban them here</a>, which will remove all their bids from all lots.
+        {% endif %}
+        </p>
+        <input type="submit" class='btn btn-danger' value="Delete">
+        <a href="{{object.lot_number.lot_link}}" class='btn btn-secondary'>Cancel</a>
+    </form>
 {% endblock %}

@@ -1546,6 +1546,7 @@ class AuctionEditForm(forms.ModelForm):
             "allow_bidding_on_lots",  # it's back...for now
             "date_online_bidding_ends",
             "date_online_bidding_starts",
+            "allow_deleting_bids",
         ]
         widgets = {
             "date_start": DateTimePickerInput(),
@@ -1702,15 +1703,19 @@ class AuctionEditForm(forms.ModelForm):
             Div(
                 Div(
                     "allow_bidding_on_lots",
-                    css_class="col-md-4",
+                    css_class="col-md-3",
                 ),
                 Div(
                     "date_online_bidding_starts",
-                    css_class="col-md-4",
+                    css_class="col-md-3",
                 ),
                 Div(
                     "date_online_bidding_ends",
-                    css_class="col-md-4",
+                    css_class="col-md-3",
+                ),
+                Div(
+                    "allow_deleting_bids",
+                    css_class="col-md-3",
                 ),
                 css_class="row",
             ),

@@ -113,7 +113,7 @@ urlpatterns = [
     path("lots/user/", views.LotsByUser.as_view(), name="user_lots"),
     path("lots/<int:pk>/<slug:slug>/", views.ViewLot.as_view()),
     path("bids/", login_required(views.MyBids.as_view()), name="my_bids"),
-    path("bids/delete/<int:pk>/", views.BidDelete.as_view()),
+    path("bids/delete/<int:pk>/", views.BidDelete.as_view(), name="delete_bid"),
     path("", views.toDefaultLandingPage),
     path("old_about/", views.aboutSite, name="about"),
     path("about/", views.PromoSite.as_view(), name="promo"),
