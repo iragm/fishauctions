@@ -151,6 +151,7 @@ urlpatterns = [
     path(
         "auctions/<slug:slug>/print/user/<str:username>/",
         login_required(views.LotLabelView.as_view()),
+        name="my_labels_by_username",
     ),
     path(
         "auctions/<slug:slug>/print/bidder/<str:bidder_number>/",

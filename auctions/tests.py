@@ -16,6 +16,7 @@ from .models import (
     Lot,
     LotHistory,
     PickupLocation,
+    UserLabelPrefs,
     add_price_info,
 )
 
@@ -30,11 +31,21 @@ class StandardTestCase(TestCase):
     Tests are also run automatically on commit by github actions
     """
 
+    def endAuction(self):
+        self.online_auction.date_end = timezone.now() - datetime.timedelta(days=2)
+        self.online_auction.save()
+
     def setUp(self):
         time = timezone.now() - datetime.timedelta(days=2)
         timeStart = timezone.now() - datetime.timedelta(days=3)
         theFuture = timezone.now() + datetime.timedelta(days=3)
         self.user = User.objects.create_user(username="my_lot", password="testpassword", email="test@example.com")
+        self.user_with_no_lots = User.objects.create_user(
+            username="no_lots", password="testpassword", email="asdf@example.com"
+        )
+        self.user_who_does_not_join = User.objects.create_user(
+            username="no_joins", password="testpassword", email="zxcgv@example.com"
+        )
         self.online_auction = Auction.objects.create(
             created_by=self.user,
             title="This auction is online",
@@ -64,6 +75,9 @@ class StandardTestCase(TestCase):
         self.tos = AuctionTOS.objects.create(user=self.user, auction=self.online_auction, pickup_location=self.location)
         self.tosB = AuctionTOS.objects.create(
             user=self.userB, auction=self.online_auction, pickup_location=self.location
+        )
+        self.tosC = AuctionTOS.objects.create(
+            user=self.user_with_no_lots, auction=self.online_auction, pickup_location=self.location
         )
         self.lot = Lot.objects.create(
             lot_name="A test lot",
@@ -104,8 +118,8 @@ class StandardTestCase(TestCase):
             auctiontos_seller=self.tos,
             active=False,
         )
-        self.invoice = Invoice.objects.create(auctiontos_user=self.tos)
-        self.invoiceB = Invoice.objects.create(auctiontos_user=self.tosB)
+        self.invoice, c = Invoice.objects.get_or_create(auctiontos_user=self.tos)
+        self.invoiceB, c = Invoice.objects.get_or_create(auctiontos_user=self.tosB)
         self.adjustment_add = InvoiceAdjustment.objects.create(
             adjustment_type="ADD", amount=10, notes="test", invoice=self.invoiceB
         )
@@ -848,7 +862,7 @@ class SetLotWinnerViewTest(TestCase):
         assert updated_lot.winning_price is None
 
     def test_winner_invoice_closed(self):
-        self.invoice = Invoice.objects.create(auctiontos_user=self.bidder)
+        self.invoice, c = Invoice.objects.get_or_create(auctiontos_user=self.bidder)
         self.invoice.status = "READY"
         self.invoice.save()
         self.client.login(username="testuser", password="testpassword")
@@ -1000,3 +1014,75 @@ class LotRefundDialogTests(TestCase):
         updated_lot = Lot.objects.get(pk=self.lot.pk)
         assert updated_lot.partial_refund_percent == 50
         assert updated_lot.banned is False
+
+
+class LotLabelViewTestCase(StandardTestCase):
+    """Tests for the LotLabelView"""
+
+    def setUp(self):
+        super().setUp()
+        self.url = reverse(
+            "my_labels_by_username", kwargs={"slug": self.online_auction.slug, "username": self.user.username}
+        )
+
+    def test_user_can_print_own_labels(self):
+        """Test that a regular user can print their own labels."""
+        self.client.login(username=self.user, password="testpassword")
+        self.endAuction()
+        response = self.client.get(self.url)
+        assert response.status_code == 200
+        assert "attachment; filename=" in response.headers["Content-Disposition"]
+
+    def test_small_labels(self):
+        user_label_prefs, created = UserLabelPrefs.objects.get_or_create(user=self.user)
+        user_label_prefs.preset = "sm"
+        user_label_prefs.save()
+        self.client.login(username=self.user, password="testpassword")
+        response = self.client.get(self.url)
+        # for message in list(response.wsgi_request._messages):
+        #    print(str(message))
+        assert response.status_code == 200
+        assert "attachment; filename=" in response.headers["Content-Disposition"]
+
+    # The test below will fail in ci because tests do not run in the docker container
+    # thermal labels cause a 'Paragraph' object has no attribute 'blPara' error
+    # See https://github.com/virantha/pypdfocr/issues/80
+    # This is the reason we are using a hacked version of platypus/paragraph.py in python_file_hack.sh
+
+    # def test_thermal_labels(self):
+    #     """Test that a regular user can print their own labels."""
+    #     user_label_prefs, created = UserLabelPrefs.objects.get_or_create(user=self.user)
+    #     user_label_prefs.preset = "thermal_sm"
+    #     user_label_prefs.save()
+    #     self.client.login(username=self.user, password="testpassword")
+    #     response = self.client.get(self.url)
+    #     assert response.status_code == 200
+    #     assert "attachment; filename=" in response.headers["Content-Disposition"]
+
+    def test_non_admin_cannot_print_others_labels(self):
+        """Test that a non-admin user cannot print labels for other users."""
+        self.client.login(username="no_tos", password="testpassword")
+
+        response = self.client.get(self.url)
+
+        assert response.status_code == 302
+        messages = list(response.wsgi_request._messages)
+        assert str(messages[0]) == "Your account doesn't have permission to view this page."
+
+    def test_cannot_print_if_not_joined_auction(self):
+        """Test that a user cannot print labels if they haven't joined the auction."""
+        self.client.login(username=self.user_who_does_not_join.username, password="testpassword")
+        url = reverse("print_my_labels", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url)
+        assert response.status_code == 302
+        self.assertRedirects(response, self.online_auction.get_absolute_url())
+        messages = list(response.wsgi_request._messages)
+        assert (
+            str(messages[0])
+            == "You haven't joined this auction yet.  You need to join this auction and add lots before you can print labels."
+        )
+
+    def test_no_printable_lots(self):
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        response = self.client.get(self.url)
+        assert response.status_code == 302

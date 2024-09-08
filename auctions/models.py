@@ -2811,8 +2811,11 @@ class Lot(models.Model):
     def label_line_0(self):
         """Used for printed labels"""
         result = f"<b>LOT: {self.lot_number_display}</b>"
-        # if self.quantity > 1:
-        result += f" QTY: {self.quantity}"
+        if not self.winning_price:
+            if self.donation:
+                result += " (D) "
+            if self.auction.advanced_lot_adding or self.quantity > 1:
+                result += f" QTY: {self.quantity}"
         return result
 
     @property
