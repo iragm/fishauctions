@@ -1051,6 +1051,7 @@ class LotLabelViewTestCase(StandardTestCase):
         user_label_prefs.save()
         self.client.login(username=self.user, password="testpassword")
         response = self.client.get(self.url)
+        print(response.status_code)
         assert response.status_code == 200
         assert "attachment; filename=" in response.headers["Content-Disposition"]
 
