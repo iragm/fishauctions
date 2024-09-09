@@ -29,9 +29,12 @@ def compare_model_instances(instance1, instance2):
 
 class Command(BaseCommand):
     help = "Just a scratchpad to do things"
-    views = PageView.objects.filter(ip_address__isnull=False, latitude=0)
-    for view in views:
-        view.save()
+
+    def handle(self, *args, **options):
+        views = PageView.objects.filter(ip_address__isnull=False, latitude=0)
+        for view in views:
+            view.save()
+
     # def handle(self, *args, **options):
     # campaigns = AuctionCampaign.objects.all()
     # for campaign in campaigns:
