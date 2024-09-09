@@ -24,7 +24,7 @@
 30 9 * * 3 /home/app/web/task.sh weekly_promo
 
 # set user locations
-0 0 * * * /home/app/web/task.sh set_user_location
+0 */2 * * * /home/app/web/task.sh set_user_location
 
 # check for duplicate page views
 */15 * * * * /home/app/web/task.sh remove_duplicate_views
