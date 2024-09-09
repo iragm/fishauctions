@@ -1,6 +1,6 @@
 from django.core.management.base import BaseCommand
 
-from auctions.models import UserData
+from auctions.models import PageView
 
 
 def compare_model_instances(instance1, instance2):
@@ -29,8 +29,9 @@ def compare_model_instances(instance1, instance2):
 
 class Command(BaseCommand):
     help = "Just a scratchpad to do things"
-    d = UserData.objects.get(user__username="ira")
-    print(d.unsubscribe_link)
+    views = PageView.objects.filter(ip_address__isnull=False, latitude=0)
+    for view in views:
+        view.save()
     # def handle(self, *args, **options):
     # campaigns = AuctionCampaign.objects.all()
     # for campaign in campaigns:
