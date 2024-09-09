@@ -1162,6 +1162,7 @@ def pageview(request):
             user_agent = user_agent[:200]
             referrer = clean_referrer(data.get("referrer", None)[:600])
             source = data.get("src", None)
+            uid = data.get("uid", None)
             # mark auction campaign results if applicable present
             ip = ""
             x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
@@ -1169,6 +1170,11 @@ def pageview(request):
                 ip = x_forwarded_for.split(",")[0]
             else:
                 ip = request.META.get("REMOTE_ADDR")
+            if uid:  # and not request.user.is_authenticated:
+                userdata = UserData.objects.filter(unsubscribe_link=uid).first()
+                if userdata:
+                    userdata.last_activity = timezone.now()
+                    userdata.save()
             if source:
                 campaign = AuctionCampaign.objects.filter(uuid=source).first()
                 if campaign and campaign.result == "NONE":
@@ -5176,6 +5182,7 @@ class UserMap(TemplateView):
             filter1 = data["filter"]
         except:
             filter1 = None
+        view_qs = PageView.objects.exclude(latitude=0)
         qs = User.objects.filter(userdata__latitude__isnull=False, is_active=True).annotate(
             lots_sold=Count("lot"), lots_bought=Count("winner")
         )
@@ -5189,8 +5196,10 @@ class UserMap(TemplateView):
             # users by top volume_percentile
             qs = qs.filter(userdata__volume_percentile__lte=filter1)
         elif view == "recent" and filter1:
+            view_qs = view_qs.filter(date_start__gte=timezone.now() - timedelta(hours=int(filter1)))
             qs = qs.filter(userdata__last_activity__gte=timezone.now() - timedelta(hours=int(filter1)))
         context["users"] = qs
+        context["pageviews"] = view_qs
         return context
 
 

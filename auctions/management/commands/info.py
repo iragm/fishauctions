@@ -1,6 +1,6 @@
 from django.core.management.base import BaseCommand
 
-from auctions.models import find_image
+from auctions.models import UserData
 
 
 def compare_model_instances(instance1, instance2):
@@ -29,7 +29,8 @@ def compare_model_instances(instance1, instance2):
 
 class Command(BaseCommand):
     help = "Just a scratchpad to do things"
-    print(find_image("blue shrimp", None))
+    d = UserData.objects.get(user__username="ira")
+    print(d.unsubscribe_link)
     # def handle(self, *args, **options):
     # campaigns = AuctionCampaign.objects.all()
     # for campaign in campaigns:
