@@ -3,13 +3,22 @@
 <script>
     var urlParams = new URLSearchParams(window.location.search);
     var src = urlParams.get('src');
+    var uid = urlParams.get('uid');
     // Remove the "src" parameter from the URL
     var newUrl = window.location.href.replace(/(\?|&)src=[^&]*(&|$)/, '$1').replace(/(&|\?)$/, '');
+    // Remove uid
+    newUrl = newUrl.replace(/(\?|&)uid=[^&]*(&|$)/, '$1').replace(/(&|\?)$/, '');
     window.history.replaceState(null, document.title, newUrl)
     var first_view = true;
     function pageView(data) {
+        setTimeout(() => {
+            sendPageView(data);
+        }, 2000);
+    }
+    function sendPageView(data) {
         data = data ?? {};
         data.src = src;
+        data.uid = uid;
         data.url = newUrl;
         data.title = document.title;
         data.referrer = document.referrer;
