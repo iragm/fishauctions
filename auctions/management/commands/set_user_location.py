@@ -2,9 +2,10 @@ import datetime
 
 import requests
 from django.core.management.base import BaseCommand
+from django.db.models import Q
 from django.utils import timezone
 
-from auctions.models import PageView, UserData
+from auctions.models import Location, PageView, UserData
 
 
 class Command(BaseCommand):
@@ -14,9 +15,8 @@ class Command(BaseCommand):
         # get users that have been on the site for at least 1 days, but have not set their location
         recently = timezone.now() - datetime.timedelta(days=1)
         users = UserData.objects.filter(
+            Q(latitude=0, longitude=0) | Q(location__isnull=True),
             last_ip_address__isnull=False,
-            latitude=0,
-            longitude=0,
             user__date_joined__lte=recently,
         ).order_by("-last_activity")[:100]
         # build a list of IPs - bit awkward as we can't use single quotes here, and it has to be a string, not a list
@@ -26,7 +26,10 @@ class Command(BaseCommand):
                 ip_list += f'"{user.last_ip_address}",'
             ip_list = ip_list[:-1] + "]"  # trailing , breaks things
             # See here for more documentation: https://ip-api.com/docs/api:batch#test
-            r = requests.post("http://ip-api.com/batch?fields=25024", data=ip_list)
+            # lat and lng only
+            # r = requests.post("http://ip-api.com/batch?fields=25024", data=ip_list)
+            # lat lng and country
+            r = requests.post("http://ip-api.com/batch?fields=1106113", data=ip_list)
             if r.status_code == 200:
                 ip_addresses = r.json()
                 # now, we cycle through users again and assign their location based on IP
@@ -35,8 +38,17 @@ class Command(BaseCommand):
                         try:
                             if user.last_ip_address == value["query"]:
                                 if value["status"] == "success":
-                                    user.latitude = value["lat"]
-                                    user.longitude = value["lon"]
+                                    if not user.latitude:
+                                        user.latitude = value["lat"]
+                                    if not user.longitude:
+                                        user.longitude = value["lon"]
+                                    if not user.location:
+                                        continent = Location.objects.filter(name=value["continent"]).first()
+                                        country = Location.objects.filter(name=value["country"]).first()
+                                        default = Location.objects.filter(name="Other").first()
+                                        user.location = next(
+                                            value for value in [continent, country, default] if value is not None
+                                        )
                                     user.save()
                                     print(f"assigning {user.user.email} with IP {user.last_ip_address} a location")
                                     break
@@ -63,6 +75,7 @@ class Command(BaseCommand):
             :10000
         ]
         for view in pageviews:
+            print(view)
             other_view_with_same_ip = (
                 PageView.objects.exclude(latitude=0, longitude=0)
                 .filter(ip_address=view.ip_address)
