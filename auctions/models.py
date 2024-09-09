@@ -177,6 +177,23 @@ def add_price_info(qs):
     )
 
 
+def find_image(name, user, auction):
+    """Find an image from the most recent lot with a given name"""
+    qs = LotImage.objects.filter(
+        (Q(lot_number__user__userdata__share_lot_images=True) | Q(lot_number__user__isnull=True)),
+        lot_number__lot_name=name,
+        lot_number__is_deleted=False,
+        lot_number__banned=False,
+        is_primary=True,
+        lot_number__auction__created_by__pk__in=auction.auction_admins_pks,
+    ).order_by("-lot_number__date_posted")
+    if user:
+        image_from_user = qs.filter(lot_number__user=user).first()
+        if image_from_user:
+            return image_from_user
+    return qs.first()
+
+
 def distance_to(
     latitude,
     longitude,
@@ -627,6 +644,10 @@ class Auction(models.Model):
     extra_promo_link = models.URLField(blank=True, null=True)
     allow_deleting_bids = models.BooleanField(default=False, blank=True)
     allow_deleting_bids.help_text = "Allow users to delete their own bids until the auction ends"
+    auto_add_images = models.BooleanField("Automatically add images to lots", default=True, blank=True)
+    auto_add_images.help_text = (
+        "Images taken from older lots with the same name in any auctions created by you or other admins"
+    )
 
     def __str__(self):
         result = self.title
@@ -1249,6 +1270,17 @@ class Auction(models.Model):
     def hybrid_tutorial_chapters(self):
         return settings.HYBRID_TUTORIAL_CHAPTERS
 
+    @property
+    def auction_admins_qs(self):
+        return AuctionTOS.objects.filter(Q(is_admin=True) | Q(user=self.created_by), auction__pk=self.pk).order_by(
+            "name"
+        )
+
+    @property
+    def auction_admins_pks(self):
+        """For use in querysets, pks only"""
+        return self.auction_admins_qs.values_list("user__pk", flat=True)
+
 
 class PickupLocation(models.Model):
     """
@@ -1568,12 +1600,9 @@ class AuctionTOS(models.Model):
                     self.bidding_allowed = True
                 else:
                     if self.user:
-                        auction_admins = AuctionTOS.objects.filter(is_admin=True, auction=self.auction).values_list(
-                            "user__pk", flat=True
-                        )
                         user_has_participated_before = AuctionTOS.objects.filter(
                             user=self.user,
-                            auction__created_by__pk__in=auction_admins,
+                            auction__created_by__pk__in=self.auction.auction_admins_pks,
                             auctiontos__status="PAID",
                         ).first()
                         if user_has_participated_before:
@@ -2760,6 +2789,17 @@ class Lot(models.Model):
         return LotImage.objects.filter(lot_number=self.lot_number).order_by("-is_primary", "createdon")
 
     @property
+    def auto_image(self):
+        """Grab an automatically generated image"""
+        if not self.auction:
+            return None
+        if self.user and not self.user.userdata.auto_add_images:
+            return None
+        if not self.auction.auto_add_images:
+            return None
+        return find_image(self.lot_name, self.user, self.auction)
+
+    @property
     def thumbnail(self):
         try:
             return LotImage.objects.get(lot_number=self.lot_number, is_primary=True)
@@ -3512,6 +3552,10 @@ class UserData(models.Model):
     email_me_about_new_chat_replies.help_text = (
         "When you comment on lots you don't own, send any new messages about that lot to your email"
     )
+    share_lot_images = models.BooleanField("Allow my lot images to be used on other lots", default=True, blank=True)
+    share_lot_images.help_text = "Images will be added to other lots without an image that have the same name"
+    auto_add_images = models.BooleanField("Automatically add images to my lots", default=True, blank=True)
+    auto_add_images.help_text = "If another lot with the same name has been added previously.  Images are only added to lots that are part of an auction."
 
     # breederboard info
     rank_unique_species = models.PositiveIntegerField(null=True, blank=True)

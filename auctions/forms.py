@@ -129,6 +129,7 @@ class QuickAddLot(forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.fields["custom_lot_number"].help_text = ""
         self.fields["lot_name"].label = "Lot name"
+        self.fields["lot_name"].widget.attrs.update({"class": "auto-image-check"})
         self.fields["lot_name"].help_text = ""
         if not self.is_admin:
             self.fields["custom_lot_number"].widget = HiddenInput()
@@ -1286,8 +1287,7 @@ class PickupLocationForm(forms.ModelForm):
         #     self.fields['auction'].queryset = Auction.objects.filter(date_end__gte=timezone.now()).order_by('date_end')
         # else:
         #     self.fields['auction'].queryset = Auction.objects.filter(created_by=self.user).filter(date_end__gte=timezone.now()).order_by('date_end')
-        contact_queryset = AuctionTOS.objects.filter(auction=self.auction, is_admin=True).order_by("name")
-        self.fields["contact_person"].queryset = contact_queryset
+        self.fields["contact_person"].queryset = self.auction.auction_admins_qs
         self.fields["contact_person"].label_from_instance = lambda obj: f"{obj.name}"
         delete_button_html = ""
         if self.is_edit_form:
@@ -1547,6 +1547,7 @@ class AuctionEditForm(forms.ModelForm):
             "date_online_bidding_ends",
             "date_online_bidding_starts",
             "allow_deleting_bids",
+            "auto_add_images",
         ]
         widgets = {
             "date_start": DateTimePickerInput(),
@@ -1758,6 +1759,10 @@ class AuctionEditForm(forms.ModelForm):
                 ),
                 Div(
                     "advanced_lot_adding",
+                    css_class="col-md-3",
+                ),
+                Div(
+                    "auto_add_images",
                     css_class="col-md-3",
                 ),
                 Div(
@@ -2466,6 +2471,8 @@ class ChangeUserPreferencesForm(forms.ModelForm):
             "email_me_about_new_in_person_auctions_distance",
             "send_reminder_emails_about_joining_auctions",
             "username_visible",
+            "share_lot_images",
+            "auto_add_images",
         )
 
     def __init__(self, user, *args, **kwargs):
@@ -2491,6 +2498,14 @@ class ChangeUserPreferencesForm(forms.ModelForm):
                 Div(
                     "username_visible",
                     css_class="col-md-4",
+                ),
+                Div(
+                    "share_lot_images",
+                    css_class="col-md-6",
+                ),
+                Div(
+                    "auto_add_images",
+                    css_class="col-md-6",
                 ),
                 # Div('use_list_view',css_class='col-md-4',),
                 # Div('use_dark_theme',css_class='col-md-4',),

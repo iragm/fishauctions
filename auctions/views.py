@@ -146,6 +146,7 @@ from .models import (
     Watch,
     add_price_info,
     distance_to,
+    find_image,
     guess_category,
     median_value,
     nearby_auctions,
@@ -1616,6 +1617,21 @@ class LeaveFeedbackView(LoginRequiredMixin, ListView):
         return context
 
 
+class FindImageIcon(LoginRequiredMixin, View):
+    """Return a handy little icon if the lot name will have an image associated with it"""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.auction = get_object_or_404(Auction, slug=kwargs.pop("slug"), is_deleted=False)
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        name = request.POST["name"]
+        result = find_image(name, None, self.auction)
+        if result:
+            return HttpResponse("image available")
+        return HttpResponse("")
+
+
 class AuctionChats(LoginRequiredMixin, ListView, AuctionPermissionsMixin):
     """Auction admins view to show and delete all chats for an auction"""
 
@@ -1691,7 +1707,6 @@ class AuctionShowHighBidder(View, AuctionPermissionsMixin):
                 message=f"{self.request.user} has looked at the max bid on this lot",
                 changed_price=True,
             )
-        print(self.lot.max_bid)
         return HttpResponse(f"Max bid: ${self.lot.max_bid}")
         # return HttpResponse(f"Max bid: ${self.lot.max_bid: .2f}")
 
@@ -3567,6 +3582,8 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "advanced_lot_adding",
                 "date_online_bidding_starts",
                 "date_online_bidding_ends",
+                "allow_deleting_bids",
+                "auto_add_images",
             ]
             for field in fields_to_clone:
                 setattr(auction, field, getattr(original_auction, field))

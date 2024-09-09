@@ -199,7 +199,15 @@ f=e=d="text-white";break;case "success":c="bg-success";f=e=d="text-white";break;
                 {% endif %}
             </div>
             {% else %}
-                {% if lot.user == request.user %}
+                {% if lot.auto_image %}
+                    <img src="{{ lot.auto_image.image.url }}" class="img-fluid"><br>
+                    <span class="text-muted"><small>This image was automatically added from another lot with the same name and may not be representative of this lot</small></span>
+                    <br>
+                    {% if lot.user == request.user %}
+                    <div>This image was added because you have <a href="{% url 'preferences' %}">automatically add images to my lots</a> enabled</div>
+                    {% endif %}
+                {% endif %}
+                {% if lot.user == request.user and not lot.auto_image %}
                 <div>You haven't added any images to this lot yet.  <a href="/blog/whats-a-picture-worth/" target="_blank">Lots with images are more likely to sell</a></div>
                 {% endif %}
             {% endif %}

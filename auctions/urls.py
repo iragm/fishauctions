@@ -391,6 +391,11 @@ urlpatterns = [
         views.AuctionNoShowAction.as_view(),
         name="auction_no_show_dialog",
     ),
+    path(
+        "api/auctions/<slug:slug>/find-image/",
+        views.FindImageIcon.as_view(),
+        name="auto_image_available",
+    ),
     # path('api/auctionstats/distance-traveled', views.AdminStatsDistanceTraveled.as_view(), name='distance_traveled'),
     # path('api/auctionstats/prices-with-images', views.AdminStatsImages.as_view(), name='prices_with_images'),
     path(

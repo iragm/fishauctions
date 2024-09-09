@@ -20,6 +20,8 @@ class AuctionTOSHTMxTable(tables.Table):
         # result = f"<span class='btn btn-secondary btn-sm' style='cursor:pointer;' hx-get='/api/auctiontos/{record.pk}' hx-target='#modals-here' hx-trigger='click'>{value}</span>"
         # as a link, looks better
         result = f"<a href='' hx-noget hx-get='/api/auctiontos/{record.pk}' hx-target='#modals-here' hx-trigger='click'><i class='bi bi-person-fill-gear me-1'></i>{value}</a>"
+        if record.is_admin or (record.user and record.auction.created_by.pk == record.user.pk):
+            result += '<span class="badge bg-danger ms-1 me-1" title="Can add users and lot">Admin</span>'
         if record.is_club_member:
             result += (
                 '<span class="badge bg-info ms-1 me-1" title="Alternate selling fees will be applied">Member</span>'

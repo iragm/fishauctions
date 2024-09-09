@@ -57,5 +57,43 @@ $(".submit-button").click(function(event){
         return true
     }
 });
+{% if auction.auto_add_images %}
+$(document).ready(function() {
+    $('.auto-image-check').on('blur', function() {
+        var $this = $(this);
+        var value = $this.val();
+        $.ajax({
+            url: "{% url 'auto_image_available' slug=auction.slug %}",
+            type: 'POST',
+            data: {
+                'name': value,
+                'csrfmiddlewaretoken': '{{ csrf_token }}'
+            },
+            success: function(response) {
+                    var iconHtml = `<span class="input-group-text" data-bs-toggle="tooltip"
+                    data-bs-placement="bottom" title="An image can automatically be added to this lot">
+                      <i class="bi bi-file-image"></i>
+                    </span>`;
+                    if (!response) {
+                        // Remove the icon
+                        $this.siblings('.input-group-text').remove();
+                    } else {
+                        // Ensure the input isn't already wrapped and icon isn't duplicated
+                        if (!$this.siblings('.input-group-text').length) {
+                            if (!$this.parent().hasClass('input-group')) {
+                                $this.wrap('<div class="input-group"></div>');
+                            }
+                            $this.after(iconHtml);
+                        }
+                        $('[data-bs-toggle="tooltip"]').tooltip();
+                    }
+            },
+            error: function() {
+                console.error('Unable to check for an image for this lot');
+            }
+        });
+    });
+});
+{% endif %}
 </script>
 {% endblock %}

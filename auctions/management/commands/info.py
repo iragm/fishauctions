@@ -1,5 +1,7 @@
 from django.core.management.base import BaseCommand
 
+from auctions.models import find_image
+
 
 def compare_model_instances(instance1, instance2):
     """
@@ -27,6 +29,7 @@ def compare_model_instances(instance1, instance2):
 
 class Command(BaseCommand):
     help = "Just a scratchpad to do things"
+    print(find_image("blue shrimp", None))
     # def handle(self, *args, **options):
     # campaigns = AuctionCampaign.objects.all()
     # for campaign in campaigns:
