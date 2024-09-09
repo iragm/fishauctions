@@ -3410,6 +3410,23 @@ class PageView(models.Model):
             self.save()
             dup.delete()
 
+    def save(self, *args, **kwargs):
+        if not self.latitude and self.ip_address:
+            other_view_with_same_ip = (
+                PageView.objects.exclude(latitude=0, longitude=0)
+                .filter(ip_address=self.ip_address)
+                .order_by("-date_start")
+                .first()
+            )
+            if other_view_with_same_ip:
+                self.latitude = other_view_with_same_ip.latitude
+                self.longitude = other_view_with_same_ip.longitude
+            elif self.user:
+                if self.user.userdata.latitude:
+                    self.latitude = self.user.userdata.latitude
+                    self.longitude = self.user.userdata.longitude
+        super().save(*args, **kwargs)
+
 
 class UserLabelPrefs(models.Model):
     """Dimensions used for the label PDF"""

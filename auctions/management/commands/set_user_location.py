@@ -71,41 +71,18 @@ class Command(BaseCommand):
 
         # now, we handle pageviews separately.  There is some duplicate code here that could get merged with the user lookup above
         # first check is to see if we've already got this IP address in the system somewhere
-        pageviews = PageView.objects.filter(ip_address__isnull=False, latitude=0, longitude=0).order_by("-date_start")[
-            :10000
-        ]
-        for view in pageviews:
-            print(view)
-            other_view_with_same_ip = (
-                PageView.objects.exclude(latitude=0, longitude=0)
-                .filter(ip_address=view.ip_address)
-                .order_by("-date_start")
-                .first()
-            )
-            if other_view_with_same_ip:
-                view.latitude = other_view_with_same_ip.latitude
-                view.longitude = other_view_with_same_ip.longitude
-                view.save()
-            elif view.user:
-                userData, created = UserData.objects.get_or_create(
-                    user=view.user,
-                    defaults={},
-                )
-                if userData.latitude:
-                    view.latitude = userData.latitude
-                if userData.longitude:
-                    view.longitude = userData.longitude
-                view.save()
+        pageviews = (
+            PageView.objects.exclude(ip_address="172.21.0.1")
+            .exclude(ip_address="172.22.0.1")
+            .filter(ip_address__isnull=False, latitude=0, longitude=0)
+            .order_by("-date_start")[:100]
+        )
         # now that we've cycled
         ip_list = "["
         if pageviews:
-            total_ips = 0
             for view in pageviews:
                 if view.ip_address not in ip_list:
                     ip_list += f'"{view.ip_address}",'
-                    total_ips += 1
-                if total_ips > 99:
-                    break
             ip_list = ip_list[:-1] + "]"  # trailing , breaks things
             # See here for more documentation: https://ip-api.com/docs/api:batch#test
             r = requests.post("http://ip-api.com/batch?fields=25024", data=ip_list)
