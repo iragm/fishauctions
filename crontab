@@ -28,3 +28,5 @@
 
 # check for duplicate page views
 */15 * * * * /home/app/web/task.sh remove_duplicate_views
+
+0 5 * * * /home/app/web/task.sh get_ses_statistics
