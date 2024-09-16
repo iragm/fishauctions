@@ -108,6 +108,7 @@ INSTALLED_APPS = [
     "django_recaptcha",
     "chartjs",
     "django_ses",
+    "webpush",
 ]
 ASGI_APPLICATION = "fishauctions.asgi.application"
 MIDDLEWARE = [
@@ -193,6 +194,12 @@ AUTHENTICATION_BACKENDS = [
     "allauth.account.auth_backends.AuthenticationBackend",
 ]
 
+# for https://pypi.org/project/django-webpush/
+WEBPUSH_SETTINGS = {
+    "VAPID_PUBLIC_KEY": os.environ.get("VAPID_PUBLIC_KEY", "abcde"),
+    "VAPID_PRIVATE_KEY": os.environ.get("VAPID_PRIVATE_KEY", "abc"),
+    "VAPID_ADMIN_EMAIL": os.environ.get("ADMIN_EMAIL", "admin@example.com"),
+}
 
 # Use sqlite for testing
 if "test" in sys.argv:

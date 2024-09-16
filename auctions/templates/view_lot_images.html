@@ -1,7 +1,10 @@
 {% extends "base.html" %}
 {% block title %}{{ lot.lot_name }}{% if lot.ended %} (Ended){% endif %}{% endblock %}
 {% load static %}
-
+{% load webpush_notifications %}
+{% block extra_head %}
+    {% webpush_header %}
+{% endblock %}
 {% block extra_css %}
 <link rel="stylesheet" type="text/css" href="{% static 'css/lot.css' %}">
 {% endblock %}
@@ -76,10 +79,10 @@ function deactivate_lot() {
             success : function(result) {
                 if (data.watch) {
                     $("#watch").addClass("watched text-warning");
-                    $("#watch").html("&#9733; Watching{% if not lot.auction or lot.auction.is_online %} - you'll get an email 2 hours before bidding ends{% endif %}");
+                    $("#watch").html("<i class='bi bi-star-fill'></i> Watching{% if not lot.auction or lot.auction.is_online %} - you'll get an email 2 hours before bidding ends{% endif %}");
                 } else {
                     $("#watch").removeClass("watched text-warning");
-                    $("#watch").html('&#9734; Watch');
+                    $("#watch").html('<i class="bi bi-star"></i> Watch');
                 }
             }
         });
@@ -120,9 +123,6 @@ function deactivate_lot() {
             }
         });
     }
-    (function(b){b.toast=function(a,h,g,l,k){b("#toast-container").length||(b("body").prepend('<div id="toast-container" aria-live="polite" aria-atomic="true"></div>'),b("#toast-container").append('<div id="toast-wrapper"></div>'));var c="",d="",e="text-muted",f="",m="object"===typeof a?a.title||"":a||"Notice!";h="object"===typeof a?a.subtitle||"":h||"";g="object"===typeof a?a.content||"":g||"";k="object"===typeof a?a.delay||3E3:k||3E3;switch("object"===typeof a?a.type||"":l||"info"){case "info":c="bg-info";
-f=e=d="text-white";break;case "success":c="bg-success";f=e=d="text-white";break;case "warning":case "warn":c="bg-warning";f=e=d="text-white";break;case "error":case "danger":c="bg-danger",f=e=d="text-white"}a='<div class="toast" role="alert" aria-live="assertive" aria-atomic="true" data-bs-autohide="true" data-bs-delay="'+k+'">'+('<div class="toast-header '+c+" "+d+'">')+('<strong class="me-auto">'+m+"</strong>");a+='<small class="'+e+'">'+h+"</small>";a+='<button type="button" class="ms-2 mb-1 btn-close" data-bs-dismiss="toast" aria-label="Close"></button>';
-""!==g&&(a+='<div class="toast-body">',a+=g,a+="</div>");a+="</div>";b("#toast-wrapper").append(a);b("#toast-wrapper .toast:last").toast("show")}})(jQuery);
 
 </script> {% endblock %}
 {% block undiv_content %}
@@ -466,7 +466,69 @@ f=e=d="text-white";break;case "success":c="bg-success";f=e=d="text-white";break;
             Promo weight: {{lot.promotion_weight}}
         {% endif %}
         {% if request.user.is_authenticated %}
-            <span id="watch" {% if watched %} class="watched text-warning">&#9733; Watching{% else %}>&#9734; Watch{% endif %}</span><br>
+            <span id="watch" {% if watched %} class="watched text-warning"><i class="bi bi-star-fill"></i> Watching{% else %}><i class="bi bi-star"></i> Watch{% endif %}</span>
+                {% if push_notifications_possible %}
+                    <span id='subscribe_success'>
+                    {% if watched and request.user.userdata.push_notifications_when_lots_sell %}
+                        You'll get a notification when bidding starts on this lot
+                        <button class='btn btn-primary btn-sm' data-bs-toggle="modal" data-bs-target="#notification-help" style="cursor: pointer;"><i class="bi bi-question-circle"></i> More information</button>
+                    {% endif %}
+                    </span>
+                    <span id='subscribe_message_area' class='d-none'>
+                        {% webpush_button with_class="btn btn-primary btn-sm" %} to get a notification when bidding starts on this lot
+                        <button class='btn btn-primary btn-sm' data-bs-toggle="modal" data-bs-target="#notification-help" style="cursor: pointer;"><i class="bi bi-question-circle"></i> More information</button>
+                    </span>
+                    <div class="modal fade" id="notification-help" tabindex="-1" aria-labelledby="notification-help-label" aria-hidden="true">
+                    <div class="modal-dialog">
+                        <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title" id="notification-help-label">How's this work?</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                            You can get a notification on your phone lots you've watched go up for bidding.<br><br>
+                            Note that this will only work if the person running this auction enters the lot number when bidding starts -- Some clubs enter the lot number only after bidding has ended, in which case you'll get a notification only after the lot has sold.<br><br>
+                            You don't need to have auction.fish open to see the notification, it'll come up automatically!
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-primary" data-bs-dismiss="modal">OK</button>
+                        </div>
+                        </div>
+                    </div>
+                    </div>
+                    <script>
+                    if (Notification.permission !== "granted") {
+                        $('#subscribe_success').addClass("d-none");
+                        $('#subscribe_message_area').removeClass("d-none");
+                        const targetNode = document.getElementById('webpush-subscribe-button');
+                        // Create a callback function that executes when mutations are observed
+                        const callback = function(mutationsList) {
+                            for (let mutation of mutationsList) {
+                                if (mutation.type === 'childList') {
+                                    if (targetNode.textContent == "Subscribe to Push Messaging") {
+                                    } else {
+                                        $('#subscribe_message_area').addClass("d-none");
+                                        $('#subscribe_success').removeClass("d-none");
+                                        {% if not watched %}$('#subscribe_success').html('Notifications enabled.  Make sure to watch this lot to get a notification');{% endif %}
+                                        $.post({url: "{% url 'enable_notifications' %}",
+                                            beforeSend: function (request) {
+                                                request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+                                            }
+                                        });
+                                    }
+                                }
+                            }
+                        };
+                        // Create an observer instance linked to the callback function
+                        const observer = new MutationObserver(callback);
+                        // Define the configuration for the observer
+                        const config = { childList: true, subtree: true };
+                        // Start observing the target node for configured mutations
+                        observer.observe(targetNode, config);
+                    }
+                    </script>
+                {% endif %}
+            <br>
         {% endif %}
 
 

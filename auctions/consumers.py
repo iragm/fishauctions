@@ -17,6 +17,7 @@ from .models import (
     Invoice,
     Lot,
     LotHistory,
+    User,
     UserBan,
     UserData,
     UserInterestCategory,
@@ -191,12 +192,7 @@ def bid_on_lot(lot, user, amount):
                         auctiontos_winner = AuctionTOS.objects.filter(auction=lot.auction, user=user).first()
                         if auctiontos_winner:
                             lot.auctiontos_winner = auctiontos_winner
-                            invoice, created = Invoice.objects.get_or_create(
-                                auctiontos_user=lot.auctiontos_winner,
-                                auction=lot.auction,
-                                defaults={},
-                            )
-                            invoice.recalculate
+                            lot.create_update_invoices
                     lot.winning_price = lot.buy_now_price
                     lot.buy_now_used = True
                     # this next line makes the lot end immediately after buy now is used
@@ -526,3 +522,53 @@ class LotConsumer(WebsocketConsumer):
     # Receive message from room group
     def chat_message(self, event):
         self.send(text_data=json.dumps(event))
+
+
+class UserConsumer(WebsocketConsumer):
+    """This is ready to use and corresponding code to connect added (commented out) to base.html
+    You can use userdata.send_websocket_message to message the user, like this:
+        result = {
+            "type": "toast",
+            "message": "Hello world!",
+        }
+        user.userdata.send_websocket_message(result)
+    It would make a good messaging system for some stuff like chat messages,
+    but at this time it does not seem like a good idea
+    """
+
+    def connect(self):
+        try:
+            self.pk = self.scope["url_route"]["kwargs"]["user_pk"]
+            user_for = User.objects.filter(pk=self.pk).first()
+            self.user = self.scope["user"]
+            self.user_notification_channel = f"user_{self.pk}"
+            if not user_for or user_for != self.user:
+                self.close()
+            else:
+                self.accept()
+                # Add to the group after accepting the connection
+                async_to_sync(self.channel_layer.group_add)(self.user_notification_channel, self.channel_name)
+
+                # Send a message after accepting the connection
+                # async_to_sync(self.channel_layer.group_send)(
+                #     self.user_notification_channel,
+                #     {"type": "toast", "message": 'Welcome!', 'bg': 'success'},
+                # )
+        except Exception as e:
+            print(e)
+            self.close()
+
+    def disconnect(self, close_code):
+        # Leave room group
+        async_to_sync(self.channel_layer.group_discard)(self.user_notification_channel, self.channel_name)
+        print("disconnected")
+
+    # Receive message from WebSocket
+    def receive(self, text_data):
+        text_data_json = json.loads(text_data)
+        print(text_data_json)
+
+    def toast(self, event):
+        message = event["message"]
+        bg = event.get("bg", "info")
+        self.send(text_data=json.dumps({"type": "toast", "message": message, "bg": bg}))

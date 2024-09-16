@@ -5,7 +5,7 @@
             <div class="col-md-6 offset-md1">
                 {% for image in lot.images|slice:":1" %}
                 {% if lot.sold %}<h1 class='text-danger font-weight-bold' style="position: absolute;-ms-transform: rotate(-20deg);transform: rotate(-20deg);">SOLD</h1>{% endif %}
-                <img src="{{ image.image.url }}" class="img-fluid">
+                <img src="{{ image.image.url }}" class="img-fluid"><br>
                 <span class="text-muted"><small>{{ image.get_image_source_display }}</small></span>{%if image.caption%}<div>{{ image.caption }}</div>{%endif%}
                 {% endfor %}
             </div>
@@ -22,31 +22,17 @@
             <h3>{{ lot.lot_name }}</h3>
             <b>Quantity:</b> {{ lot.quantity }}<br>
             {% if lot.reserve_price > lot.auction.minimum_bid %}<b>Minimum bid:</b> ${{ lot.reserve_price }}<br>{% endif %}
-            {% if lot.auction.allow_bidding_on_lots %}<b>Online high bid:</b> ${{ lot.high_bid }} <b>Bidder:</b> {{ lot.high_bidder_for_admins }} {{ lot.auction_show_high_bidder_template }}{% endif %}<br>
+            {% if lot.buy_now_price %}<b>Buy now:</b> ${{ lot.buy_now_price }}<br>{% endif %}
+            {% if lot.auction.allow_bidding_on_lots %}
+                <b>Online high bid:</b>
+                {% if lot.high_bidder %}
+                    ${{ lot.high_bid }} <b>Bidder:</b> {{ lot.high_bidder_for_admins }} {{ lot.auction_show_high_bidder_template }}
+                {% else %}
+                    No bids
+                {% endif %}
+            {% endif %}<br>
             {% if lot.description %}<div class="jumbotron">{{ lot.description_rendered | safe }}</div>{% endif %}
         </div>
     </div>
 </div>
-{% if lot.high_bidder %}
-  <script type="text/javascript">
-    $(document).ready(function() {
-      var newLink = $('<a>', {
-        href: 'javascript:void(0)',
-        text: 'Sell to {{ lot.high_bidder_for_admins }} for ${{ lot.high_bid }}',
-        class: 'dropdown-item',
-        id: 'make_online_bidder_winner'
-      });
-      $('#make_online_bidder_winner').replaceWith(newLink);
-      newLink.on('click', function(event) {
-        $('#id_winning_price').val({{ lot.high_bid }});
-        $('#id_winner').val('{{ lot.high_bidder_for_admins }}');
-        $(this).closest('form').submit();
-      });
-    });
-  </script>
-{% else %}
-<script type="text/javascript">
-    $('#make_online_bidder_winner').html("<span id='make_online_bidder_winner'></span>");
-</script>
-{% endif %}
 {% endif %}

@@ -16,7 +16,7 @@ from channels.auth import AuthMiddlewareStack
 from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.security.websocket import AllowedHostsOriginValidator
 
-from auctions.consumers import LotConsumer
+from auctions.consumers import LotConsumer, UserConsumer
 
 application = ProtocolTypeRouter(
     {
@@ -28,6 +28,7 @@ application = ProtocolTypeRouter(
                 URLRouter(
                     [
                         re_path(r"ws/lots/(?P<lot_number>\w+)/$", LotConsumer.as_asgi()),
+                        re_path(r"ws/users/(?P<user_pk>\w+)/$", UserConsumer.as_asgi()),
                     ]
                 )
             )

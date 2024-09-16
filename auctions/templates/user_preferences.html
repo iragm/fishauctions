@@ -2,9 +2,36 @@
 {% load crispy_forms_tags %}
 {% block title %}Preferences{% endblock %}
 {% load static %}
+{% load webpush_notifications %}
 
+{% block extra_head %}
+    {% webpush_header %}
+{% endblock %}
 {% block extra_js %}
-<script type='text/javascript'>pageView();</script>
+<script type='text/javascript'>pageView();
+    $('#subscribe_message_area').html(`. <span class=''>This will only work if you {% webpush_button with_class="btn btn-link btn-sm" %} on this device</span>`);
+    if (Notification.permission !== "granted") {
+        $('#subscribe_message_area').removeClass("d-none");
+        const targetNode = document.getElementById('webpush-subscribe-button');
+        // Create a callback function that executes when mutations are observed
+        const callback = function(mutationsList) {
+            for (let mutation of mutationsList) {
+                if (mutation.type === 'childList') {
+                    if (targetNode.textContent == "Subscribe to Push Messaging") {
+                    } else {
+                        $('#subscribe_message_area').addClass("d-none");
+                    }
+                }
+            }
+        };
+        // Create an observer instance linked to the callback function
+        const observer = new MutationObserver(callback);
+        // Define the configuration for the observer
+        const config = { childList: true, subtree: true };
+        // Start observing the target node for configured mutations
+        observer.observe(targetNode, config);
+    }
+</script>
 {% endblock %}
 {% block content %}
 {% include "preferences_ribbon.html" %}

@@ -42,6 +42,7 @@ from django.forms import modelformset_factory
 from django.http import (
     Http404,
     HttpResponse,
+    HttpResponseNotAllowed,
     HttpResponseRedirect,
     JsonResponse,
 )
@@ -77,6 +78,8 @@ from reportlab.platypus import (
     Table,
 )
 from user_agents import parse
+from webpush import send_user_notification
+from webpush.models import PushInformation
 
 from .filters import (
     AuctionTOSFilter,
@@ -112,9 +115,6 @@ from .forms import (
     TOSFormSetHelper,
     UserLabelPrefsForm,
     UserLocation,
-    WinnerLot,
-    WinnerLotSimple,
-    WinnerLotSimpleImages,
 )
 from .models import (
     FAQ,
@@ -136,7 +136,6 @@ from .models import (
     LotImage,
     PageView,
     PickupLocation,
-    Product,
     SearchHistory,
     UserBan,
     UserData,
@@ -283,6 +282,15 @@ class AuctionPermissionsMixin:
             pass
             # print(f"allowing user {self.request.user} to view {self.auction}")
         return result
+
+
+class AuctionViewMixin(AuctionPermissionsMixin):
+    """Subclass this when you need auction permissions, it's easier than using AuctionPermissionsMixin"""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.auction = get_object_or_404(Auction, slug=kwargs.pop("slug"), is_deleted=False)
+        self.is_auction_admin
+        return super().dispatch(request, *args, **kwargs)
 
 
 class AuctionStatsPermissionsMixin:
@@ -878,7 +886,7 @@ def setCoordinates(request):
 
 
 def userBan(request, pk):
-    if request.method == "POST":
+    if request.method == "POST" and request.user.is_authenticated:
         user = request.user
         bannedUser = User.objects.get(pk=pk)
         obj, created = UserBan.objects.update_or_create(
@@ -907,7 +915,7 @@ def userBan(request, pk):
                 if not lot.ended:
                     # print(f"User {str(user)} has banned lot {lot}")
                     lot.banned = True
-                    lot.ban_reason = "This user has been banned from this auction"
+                    lot.ban_reason = "The seller of this lot has been banned from this auction"
                     lot.save()
         # return #redirect('/users/' + str(pk))
         return redirect(reverse("userpage", kwargs={"slug": bannedUser.username}))
@@ -939,38 +947,9 @@ def lotDeactivate(request, pk):
     return redirect("/")
 
 
-# def lotBan(request, pk):
-#     if request.method == 'POST':
-#         lot = Lot.objects.get(pk=pk)
-#         try:
-#             ban_reason = request.POST['banned']
-#         except:
-#             return HttpResponse("specify banned in post data")
-#         checksPass = False
-#         if request.user.is_superuser:
-#             checksPass = True
-#         if lot.auction:
-#             if lot.auction.created_by.pk == request.user.pk:
-#                 checksPass = True
-#         if checksPass:
-#             if not ban_reason:
-#                 lot.banned = False
-#             else:
-#                 lot.banned = True
-#             lot.ban_reason = ban_reason
-#             lot.save()
-#             # I am debating whether or not to add a LotHistory here
-#             # A similar one would need to be added when banning a user,
-#             # so it may make more sense to do this with a reciever on save of lot
-#             # for now, I'm going to leave this alone
-#             return HttpResponse("success")
-#     messages.error(request, "Your account doesn't have permission to view this page")
-#     return redirect('/')
-
-
 def userUnban(request, pk):
     """Delete the UserBan"""
-    if request.method == "POST":
+    if request.method == "POST" and request.user.is_authenticated:
         user = request.user
         bannedUser = User.objects.get(pk=pk)
         obj, created = UserBan.objects.update_or_create(
@@ -1261,6 +1240,24 @@ def invoicePaid(request, pk, **kwargs):
     return redirect("/")
 
 
+class APIPostView(LoginRequiredMixin, View):
+    """POST only method to do stuff, logged in users only"""
+
+    def get(self, request, *args, **kwargs):
+        return HttpResponseNotAllowed(["POST"])
+
+    def post(self, request, *args, **kwargs):
+        raise NotImplementedError()
+
+
+class UpdateLotPushNotificationsView(APIPostView):
+    def post(self, request, *args, **kwargs):
+        userdata = request.user.userdata
+        userdata.push_notifications_when_lots_sell = True
+        userdata.save()
+        return JsonResponse({"result": "success"})
+
+
 @login_required
 def my_lot_report(request):
     """CSV file showing my lots"""
@@ -1445,7 +1442,7 @@ def auctionReport(request, slug):
 def userReport(request):
     """Get a CSV file showing all users from all auctions you're an admin for"""
     response = HttpResponse(content_type="text/csv")
-    response["Content-Disposition"] = 'attachment; filename=all_auction_contacts.csv"'
+    response["Content-Disposition"] = "attachment; filename=all_auction_contacts.csv"
     writer = csv.writer(response)
     found = []
     writer.writerow(["Name", "Email", "Phone"])
@@ -2006,174 +2003,368 @@ class AuctionStats(DetailView, AuctionPermissionsMixin):
         return context
 
 
-class QuickSetLotWinner(FormView, AuctionPermissionsMixin):
-    """A form to let people record the winners of lots (really just for in-person auctions). Just 3 fields:
-    lot number
-    winner
-    winning price
-    """
+# The following lines of code can most likely be removed unless some club complains about the current system to set winners
+# class QuickSetLotWinner(FormView, AuctionPermissionsMixin):
+#     """A form to let people record the winners of lots (really just for in-person auctions). Just 3 fields:
+#     lot number
+#     winner
+#     winning price
+#     """
 
-    template_name = "auctions/quick_set_winner.html"
-    form_class = WinnerLot
-    model = Lot
+#     template_name = "auctions/quick_set_winner.html"
+#     form_class = WinnerLot
+#     model = Lot
 
-    def get_success_url(self):
-        return reverse("auction_lot_winners_autocomplete", kwargs={"slug": self.auction.slug})
+#     def get_success_url(self):
+#         return reverse("auction_lot_winners_autocomplete", kwargs={"slug": self.auction.slug})
 
-    def get_queryset(self):
-        return self.auction.lots_qs
+#     def get_queryset(self):
+#         return self.auction.lots_qs
 
-    def dispatch(self, request, *args, **kwargs):
-        self.auction = Auction.objects.get(slug=kwargs.pop("slug"), is_deleted=False)
-        self.is_auction_admin
-        undo = self.request.GET.get("undo")
-        if undo and request.method == "GET":
-            undo_lot = Lot.objects.filter(custom_lot_number=undo, auction=self.auction).first()
-            if undo_lot:
-                undo_lot.winner = None
-                undo_lot.auctiontos_winner = None
-                undo_lot.winning_price = None
-                if not self.auction.is_online:
-                    undo_lot.date_end = None
-                undo_lot.active = False
-                undo_lot.save()
-                messages.info(
-                    request,
-                    f"{undo_lot.custom_lot_number} {undo_lot.lot_name} now has no winner and can be sold",
-                )
-        return super().dispatch(request, *args, **kwargs)
+#     def dispatch(self, request, *args, **kwargs):
+#         self.auction = Auction.objects.get(slug=kwargs.pop("slug"), is_deleted=False)
+#         self.is_auction_admin
+#         undo = self.request.GET.get("undo")
+#         if undo and request.method == "GET":
+#             undo_lot = Lot.objects.filter(custom_lot_number=undo, auction=self.auction).first()
+#             if undo_lot:
+#                 undo_lot.winner = None
+#                 undo_lot.auctiontos_winner = None
+#                 undo_lot.winning_price = None
+#                 if not self.auction.is_online:
+#                     undo_lot.date_end = None
+#                 undo_lot.active = False
+#                 undo_lot.save()
+#                 undo_lot.create_update_invoices
+#                 messages.info(
+#                     request,
+#                     f"{undo_lot.custom_lot_number} {undo_lot.lot_name} now has no winner and can be sold",
+#                 )
+#         return super().dispatch(request, *args, **kwargs)
 
-    def get_form_kwargs(self):
-        form_kwargs = super().get_form_kwargs()
-        form_kwargs["auction"] = self.auction
-        return form_kwargs
+#     def get_form_kwargs(self):
+#         form_kwargs = super().get_form_kwargs()
+#         form_kwargs["auction"] = self.auction
+#         return form_kwargs
+
+#     def get_context_data(self, **kwargs):
+#         context = super().get_context_data(**kwargs)
+#         context["auction"] = self.auction
+#         return context
+
+#     def form_valid(self, form, **kwargs):
+#         """A bit of cleanup"""
+#         lot = form.cleaned_data.get("lot")
+#         winner = form.cleaned_data.get("winner")
+#         winning_price = form.cleaned_data.get("winning_price")
+#         lot = Lot.objects.get(pk=lot, is_deleted=False)
+#         tos = AuctionTOS.objects.get(pk=winner)
+#         # check auction, find a lot that matches this one, confirm it belongs to this auction
+#         if lot.auction and lot.auction == self.auction:
+#             if (not tos and not winning_price) or (tos.auction and tos.auction == self.auction):
+#                 return self.set_winner(lot, tos, winning_price)
+#         return self.form_invalid(form)
+
+#     def set_winner(self, lot, winning_tos, winning_price):
+#         """Set the winner (or mark lot unsold),
+#         add a success message
+#         This does not do permissions or validation checks, do those first
+#         Call this once the form is valid"""
+#         if not winning_price:
+#             lot.date_end = timezone.now()
+#             lot.save()
+#             messages.success(
+#                 self.request,
+#                 f"Lot {lot.custom_lot_number} has been ended with no winner",
+#             )
+#         else:
+#             lot.auctiontos_winner = winning_tos
+#             lot.winning_price = winning_price
+#             lot.date_end = timezone.now()
+#             lot.save()
+#             lot.create_update_invoices
+#             lot.add_winner_message(self.request.user, winning_tos, winning_price)
+#             undo_url = self.get_success_url() + f"?undo={lot.custom_lot_number}"
+#             messages.success(
+#                 self.request,
+#                 f"Bidder {winning_tos.bidder_number} is now the winner of lot {lot.custom_lot_number}.  <a href='{undo_url}'>Undo</a>",
+#             )
+#         return HttpResponseRedirect(self.get_success_url())
+
+
+# class SetLotWinner(QuickSetLotWinner):
+#     """Same as QuickSetLotWinner but without the autocomplete, per user requests"""
+
+#     form_class = WinnerLotSimple
+
+#     def get_success_url(self):
+#         return reverse("auction_lot_winners", kwargs={"slug": self.auction.slug})
+
+#     def form_valid(self, form, **kwargs):
+#         """A bit of cleanup"""
+#         lot = form.cleaned_data.get("lot")
+#         winner = form.cleaned_data.get("winner")
+#         winning_price = form.cleaned_data.get("winning_price")
+#         if winning_price is None or winning_price < 0:
+#             form.add_error("winning_price", "How much did the lot sell for?")
+#         qs = self.auction.lots_qs
+#         lot = qs.filter(custom_lot_number=lot).first()
+#         tos = None
+#         if not lot:
+#             form.add_error("lot", "No lot found")
+#         if winning_price is not None and winning_price > 0:
+#             tos = AuctionTOS.objects.filter(auction=self.auction, bidder_number=winner)
+#             if len(tos) > 1:
+#                 form.add_error("winner", f"{len(tos)} bidders found with this number!")
+#             else:
+#                 tos = tos.first()
+#             if not tos:
+#                 form.add_error("winner", "No bidder found")
+#             else:
+#                 if tos.invoice and tos.invoice.status != "DRAFT":
+#                     form.add_error("winner", "This user's invoice is not open")
+#         if lot:
+#             if (
+#                 lot.auctiontos_seller
+#                 and lot.auctiontos_seller.invoice
+#                 and lot.auctiontos_seller.invoice.status != "DRAFT"
+#             ):
+#                 form.add_error("lot", "The seller's invoice is not open")
+#             else:
+#                 # right now we allow you to mark unsold lots that have already been sold, bad idea but it's what people want
+#                 if lot.auctiontos_winner and lot.winning_price and winning_price != 0:
+#                     # if lot.auctiontos_winner and lot.winning_price: # this would be better, but would confuse
+#                     error = f"Lot {lot.lot_number_display} has already been sold"
+#                     try:
+#                         if (
+#                             tos.invoice.status == "DRAFT"
+#                             and lot.auctiontos_seller
+#                             and lot.auctiontos_seller.invoice.status == "DRAFT"
+#                         ):
+#                             undo_url = self.get_success_url() + f"?undo={lot.custom_lot_number}"
+#                             form.add_error(
+#                                 "lot",
+#                                 mark_safe(f"{error}.  <a href='{undo_url}'>Click here to mark unsold</a>."),
+#                             )
+#                     except:
+#                         # one invoice or the other doesn't exist, this only happens when the selling the first lot to a given tos
+#                         form.add_error("lot", mark_safe(f"{error}"))
+#                 if lot.high_bidder and lot.auction.allow_bidding_on_lots:
+#                     if winning_price <= lot.max_bid and winner != lot.high_bidder_for_admins:
+#                         form.add_error("winning_price", "Lower than an online bid")
+#                         form.add_error("winner", f"Bidder {lot.high_bidder_for_admins} has bid more than this")
+#         if form.is_valid():
+#             return self.set_winner(lot, tos, winning_price)
+#         return self.form_invalid(form)
+
+
+# class SetLotWinnerImage(SetLotWinner):
+#     """Same as QuickSetLotWinner but without the autocomplete, and with images, per user requests"""
+
+#     template_name = "auctions/quick_set_winner_images.html"
+#     form_class = WinnerLotSimpleImages
+
+#     def get_success_url(self):
+#         return reverse("auction_lot_winners_images", kwargs={"slug": self.auction.slug})
+
+#     def get_context_data(self, **kwargs):
+#         context = super().get_context_data(**kwargs)
+#         context["hide_navbar"] = True
+#         context["menu_tip"] = mark_safe(
+#             f"Press Tab to move the to next field, F11 for full screen, control + or control - to zoom.  <a href='{reverse('auction_main', kwargs={'slug': self.auction.slug})}'>{self.auction} home</a>."
+#         )
+#         return context
+
+
+class DynamicSetLotWinner(AuctionViewMixin, TemplateView):
+    """A form to set lot winners.  Totally async with no page loads, just POST.
+    Eventually this will be the only way to set winners in an in-person auction"""
+
+    template_name = "auctions/dynamic_set_lot_winner.html"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["auction"] = self.auction
+        # Don't want notifications to show up on the projector
+        # context['disable_websocket'] = True
         return context
 
-    def form_valid(self, form, **kwargs):
-        """A bit of cleanup"""
-        lot = form.cleaned_data.get("lot")
-        winner = form.cleaned_data.get("winner")
-        winning_price = form.cleaned_data.get("winning_price")
-        lot = Lot.objects.get(pk=lot, is_deleted=False)
-        tos = AuctionTOS.objects.get(pk=winner)
-        # check auction, find a lot that matches this one, confirm it belongs to this auction
-        if lot.auction and lot.auction == self.auction:
-            if (not tos and not winning_price) or (tos.auction and tos.auction == self.auction):
-                return self.set_winner(lot, tos, winning_price)
-        return self.form_invalid(form)
+    def validate_lot(self, lot, action):
+        """Returns (Lot or None, error or None)"""
+        error = None
+        result_lot = None
+        if not lot and action != "validate":
+            error = "Enter a lot number"
+        else:
+            result_lot = self.auction.lots_qs.filter(custom_lot_number=lot).first()
+            if not result_lot and lot:
+                error = "No lot found"
+        if (
+            result_lot
+            and result_lot.auctiontos_seller
+            and result_lot.auctiontos_seller.invoice
+            and result_lot.auctiontos_seller.invoice.status != "DRAFT"
+        ):
+            if action != "force_save":
+                error = "The seller's invoice is not open"
+        if result_lot and result_lot.auctiontos_winner and result_lot.winning_price and action != "force_save":
+            error = "This lot has already been sold"
+        return result_lot, error
+
+    def validate_price(self, price, action):
+        """Returns (Int or None, error or None)"""
+        result_price = None
+        error = None
+        try:
+            result_price = int(price)
+        except (ValueError, TypeError):
+            if action == "save":
+                error = "Enter the winning price"
+            if action == "force_save":
+                error = "You can skip some errors, but you still need to enter a price"
+        return result_price, error
+
+    def validate_winner(self, winner, action):
+        """Returns (AuctionTOS or None, error or None)"""
+        error = None
+        tos = None
+        if not winner and (action == "force_save" or action == "save"):
+            error = "Enter the winning bidder's number"
+        else:
+            tos = AuctionTOS.objects.filter(auction=self.auction, bidder_number=winner).order_by("-createdon").first()
+            if not tos and winner:
+                error = "No bidder found"
+            else:
+                if tos and tos.invoice and tos.invoice.status != "DRAFT" and action != "force_save":
+                    error = "This user's invoice is not open"
+        return tos, error
+
+    def end_unsold(self, lot):
+        """Mark lot unsold"""
+        lot.date_end = timezone.now()
+        lot.winner = None
+        lot.auctiontos_winner = None
+        lot.winning_price = None
+        lot.active = False
+        lot.save()
+        message = f"{self.request.user} has marked lot {lot.custom_lot_number} as not sold"
+        LotHistory.objects.create(
+            lot=lot,
+            user=self.request.user,
+            message=message,
+            changed_price=True,
+        )
+        lot.send_websocket_message(
+            {
+                "type": "chat_message",
+                "info": "ENDED_NO_WINNER",
+                "message": message,
+                "high_bidder_pk": None,
+                "high_bidder_name": None,
+                "current_high_bid": None,
+            }
+        )
+        return message
 
     def set_winner(self, lot, winning_tos, winning_price):
-        """Set the winner (or mark lot unsold),
-        add a success message
-        This does not do permissions or validation checks, do those first
-        Call this once the form is valid"""
-        if not winning_price:
-            lot.date_end = timezone.now()
-            lot.save()
-            messages.success(
-                self.request,
-                f"Lot {lot.custom_lot_number} has been ended with no winner",
-            )
+        lot.auctiontos_winner = winning_tos
+        lot.winning_price = winning_price
+        lot.date_end = timezone.now()
+        lot.active = False
+        lot.save()
+        lot.add_winner_message(self.request.user, winning_tos, winning_price)
+        return f"Bidder {winning_tos.bidder_number} is now the winner of lot {lot.custom_lot_number}"
+
+    def post(self, request, *args, **kwargs):
+        """All lot validation checks called from here"""
+        lot = request.POST.get("lot", None)
+        price = request.POST.get("price", None)
+        winner = request.POST.get("winner", None)
+        action = request.POST.get("action", "validate")
+
+        result = {
+            "price": None,
+            "winner": None,
+            "lot": None,
+            "last_sold_lot_number": None,
+            "success_message": None,
+            "online_high_bidder_message": None,
+        }
+        lot, lot_error = self.validate_lot(lot, action)
+        if lot and not lot_error and action == "to_online_high_bidder":
+            result["success_message"] = lot.sell_to_online_high_bidder
+            result["last_sold_lot_number"] = lot.custom_lot_number
+            lot.add_winner_message(self.request.user, lot.auctiontos_winner, lot.winning_price)
+            return JsonResponse(result)
+        price, price_error = self.validate_price(price, action)
+        winner, winner_error = self.validate_winner(winner, action)
+        if lot and not lot_error and action == "end_unsold":
+            result["success_message"] = self.end_unsold(lot)
+            result["last_sold_lot_number"] = lot.custom_lot_number
+            return JsonResponse(result)
+        if (
+            not price_error
+            and lot
+            and winner
+            and lot.high_bidder
+            and lot.auction.allow_bidding_on_lots
+            and action != "force_save"
+        ):
+            if price and price <= lot.max_bid and f"{winner}" != f"{lot.high_bidder_for_admins}":
+                price_error = "Lower than an online bid"
+                winner_error = f"Bidder {lot.high_bidder_for_admins} has bid more than this"
+        if not price_error and price and lot and not lot_error and action != "force_save":
+            if lot.reserve_price and price < lot.reserve_price:
+                price_error = f"This lot's minimum bid is ${lot.reserve_price}"
+            if price < self.auction.minimum_bid:
+                price_error = f"Minimum bid is ${self.auction.minimum_bid}"
+        # I think this makes more sense:
+        if not lot_error and not price_error and not winner_error:
+            if action != "validate":
+                result["last_sold_lot_number"] = lot.custom_lot_number
+            if action == "force_save" or action == "save":
+                result["success_message"] = self.set_winner(lot, winner, price)
+        if lot and (action == "validate" or not result["success_message"]) and lot.high_bidder:
+            result["online_high_bidder_message"] = f"Sell to {lot.high_bidder_for_admins} for ${lot.high_bid}"
+            # js code is not in place for this, also remove code from view_lot_simple
+        if lot and not lot_error:
+            lot = "valid"
+        if price and not price_error:
+            price = "valid"
+        if winner and not winner_error:
+            winner = "valid"
+        result["lot"] = lot_error or lot
+        result["price"] = price_error or price
+        result["winner"] = winner_error or winner
+        return JsonResponse(result)
+
+
+class AuctionUnsellLot(AuctionViewMixin, View):
+    def post(self, request, *args, **kwargs):
+        undo_lot = request.POST.get("lot_number", None)
+        if undo_lot:
+            undo_lot = Lot.objects.filter(custom_lot_number=undo_lot, auction=self.auction).first()
+        if undo_lot:
+            result = {
+                "hide_undo_button": "true",
+                "last_sold_lot_number": "",
+                "success_message": f"{undo_lot.custom_lot_number} {undo_lot.lot_name} now has no winner and can be sold",
+            }
+            undo_lot.winner = None
+            undo_lot.auctiontos_winner = None
+            undo_lot.winning_price = None
+            if not self.auction.is_online:
+                undo_lot.date_end = None
+                # this might need changing for online auctions
+                # but as it is now, this view is only ever called for in-person auctions
+            undo_lot.active = True
+            undo_lot.save()
         else:
-            lot.auctiontos_winner = winning_tos
-            lot.winning_price = winning_price
-            lot.date_end = timezone.now()
-            lot.save()
-            lot.add_winner_message(self.request.user, winning_tos, winning_price)
-            undo_url = self.get_success_url() + f"?undo={lot.custom_lot_number}"
-            messages.success(
-                self.request,
-                f"Bidder {winning_tos.bidder_number} is now the winner of lot {lot.custom_lot_number}.  <a href='{undo_url}'>Undo</a>",
-            )
-        return HttpResponseRedirect(self.get_success_url())
+            result = {"message": "No lot found"}
+        return JsonResponse(result)
 
-
-class SetLotWinner(QuickSetLotWinner):
-    """Same as QuickSetLotWinner but without the autocomplete, per user requests"""
-
-    form_class = WinnerLotSimple
-
-    def get_success_url(self):
-        return reverse("auction_lot_winners", kwargs={"slug": self.auction.slug})
-
-    def form_valid(self, form, **kwargs):
-        """A bit of cleanup"""
-        lot = form.cleaned_data.get("lot")
-        winner = form.cleaned_data.get("winner")
-        winning_price = form.cleaned_data.get("winning_price")
-        if winning_price is None or winning_price < 0:
-            form.add_error("winning_price", "How much did the lot sell for?")
-        qs = self.auction.lots_qs
-        lot = qs.filter(custom_lot_number=lot).first()
-        tos = None
-        if not lot:
-            form.add_error("lot", "No lot found")
-        if winning_price is not None and winning_price > 0:
-            tos = AuctionTOS.objects.filter(auction=self.auction, bidder_number=winner)
-            if len(tos) > 1:
-                form.add_error("winner", f"{len(tos)} bidders found with this number!")
-            else:
-                tos = tos.first()
-            if not tos:
-                form.add_error("winner", "No bidder found")
-            else:
-                if tos.invoice and tos.invoice.status != "DRAFT":
-                    form.add_error("winner", "This user's invoice is not open")
-        if lot:
-            if (
-                lot.auctiontos_seller
-                and lot.auctiontos_seller.invoice
-                and lot.auctiontos_seller.invoice.status != "DRAFT"
-            ):
-                form.add_error("lot", "The seller's invoice is not open")
-            else:
-                # right now we allow you to mark unsold lots that have already been sold, bad idea but it's what people want
-                if lot.auctiontos_winner and lot.winning_price and winning_price != 0:
-                    # if lot.auctiontos_winner and lot.winning_price: # this would be better, but would confuse
-                    error = f"Lot {lot.lot_number_display} has already been sold"
-                    try:
-                        if (
-                            tos.invoice.status == "DRAFT"
-                            and lot.auctiontos_seller
-                            and lot.auctiontos_seller.invoice.status == "DRAFT"
-                        ):
-                            undo_url = self.get_success_url() + f"?undo={lot.custom_lot_number}"
-                            form.add_error(
-                                "lot",
-                                mark_safe(f"{error}.  <a href='{undo_url}'>Click here to mark unsold</a>."),
-                            )
-                    except:
-                        # one invoice or the other doesn't exist, this only happens when the selling the first lot to a given tos
-                        form.add_error("lot", mark_safe(f"{error}"))
-                if lot.high_bidder and lot.auction.allow_bidding_on_lots:
-                    if winning_price <= lot.max_bid and winner != lot.high_bidder_for_admins:
-                        form.add_error("winning_price", "Lower than an online bid")
-                        form.add_error("winner", f"Bidder {lot.high_bidder_for_admins} has bid more than this")
-        if form.is_valid():
-            return self.set_winner(lot, tos, winning_price)
-        return self.form_invalid(form)
-
-
-class SetLotWinnerImage(SetLotWinner):
-    """Same as QuickSetLotWinner but without the autocomplete, and with images, per user requests"""
-
-    template_name = "auctions/quick_set_winner_images.html"
-    form_class = WinnerLotSimpleImages
-
-    def get_success_url(self):
-        return reverse("auction_lot_winners_images", kwargs={"slug": self.auction.slug})
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["hide_navbar"] = True
-        context["menu_tip"] = mark_safe(
-            f"Press Tab to move the to next field, F11 for full screen, control + or control - to zoom.  <a href='{reverse('auction_main', kwargs={'slug': self.auction.slug})}'>{self.auction} home</a>."
-        )
-        return context
+    def get(self, request, *args, **kwargs):
+        return self.http_method_not_allowed
 
 
 class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
@@ -2683,6 +2874,8 @@ class ViewLot(DetailView):
                 context["user_specific_bidding_error"] = (
                     f"This lot is part of <b>{lot.auction}</b>. Please <a href='/auctions/{lot.auction.slug}/?next={lot.lot_link}#join'>read the auction's rules and join the auction</a> to bid<br>"
                 )
+            if not lot.auction.is_online and lot.auction.message_users_when_lots_sell:
+                context["push_notifications_possible"] = True
         if lot.within_dynamic_end_time and lot.minutes_to_end > 0 and not lot.sealed_bid:
             messages.info(
                 self.request,
@@ -2759,7 +2952,7 @@ class ViewLot(DetailView):
         return context
 
 
-class ViewLotSimple(ViewLot):
+class ViewLotSimple(ViewLot, AuctionPermissionsMixin):
     """Minimalist view of a lot, just image and description.  For htmx calls"""
 
     template_name = "view_lot_simple.html"
@@ -2767,29 +2960,37 @@ class ViewLotSimple(ViewLot):
 
     def get_context_data(self, **kwargs):
         context = DetailView.get_context_data(self, **kwargs)
-        context["lot"] = self.get_object()
+        lot = self.get_object()
+        context["lot"] = lot
+        if lot and lot.auction:
+            self.auction = lot.auction
+            if self.is_auction_admin and self.auction.message_users_when_lots_sell and not lot.sold:
+                result = {
+                    "type": "chat_message",
+                    "info": "CHAT",
+                    "message": "This lot is about to be sold!",
+                    "pk": -1,
+                    "username": "System",
+                }
+                lot.send_websocket_message(result)
+                watchers = Watch.objects.filter(
+                    lot_number=lot.pk, user__userdata__push_notifications_when_lots_sell=True
+                ).exclude(
+                    # it would be awkward to have notifications pop up when you're projecting an image of the lot
+                    user=self.request.user
+                )
+                for watch in watchers:
+                    # does the user actually have a subscription?
+                    if PushInformation.objects.filter(user=watch.user).first():
+                        payload = {
+                            "head": lot.lot_name + " is about to be sold",
+                            "body": f"Lot {lot.custom_lot_number}  Don't miss out, bid now!  You're getting this notification because you watched this lot.",
+                            "url": "https://" + lot.full_lot_link,
+                        }
+                        if lot.thumbnail:
+                            payload["icon"] = lot.thumbnail.image.url
+                        send_user_notification(user=watch.user, payload=payload, ttl=10000)
         return context
-
-
-def createSpecies(name, scientific_name, category=False):
-    """
-    Create a new product/species
-    This is really only called by the LotValidation class
-    """
-    if not category:
-        # uncategorized
-        category = Category.objects.get(id=21)
-    if category.pk == 18 or category.pk == 19 or category.pk == 20 or category.pk == 21:
-        # breeder points off for some things
-        breeder_points = False
-    else:
-        breeder_points = True
-    return Product.objects.create(
-        common_name=name,
-        scientific_name=scientific_name,
-        breeder_points=breeder_points,
-        category=category,
-    )
 
 
 class ImageCreateView(LoginRequiredMixin, CreateView):
@@ -2906,20 +3107,6 @@ class LotValidation(LoginRequiredMixin):
         lot = form.save(commit=False)
         lot.user = self.request.user
         lot.date_of_last_user_edit = timezone.now()
-        # # just in case someone is messing with the hidden fields
-        # if form.cleaned_data['create_new_species']:
-        #     lot.species = createSpecies(
-        #         form.cleaned_data['new_species_name'],
-        #         form.cleaned_data['new_species_scientific_name'],
-        #         form.cleaned_data['new_species_category'])
-        # if lot.species:
-        #     lot.species_category = lot.species.category
-        #     # if this is not breedable, remove the breeder points
-        #     # they can still be added back in by editing the lot
-        #     if not lot.species.breeder_points:
-        #         lot.i_bred_this_fish = False
-        # if lot.image and not lot.image_source:
-        #     lot.image_source = 'RANDOM' # default to this pic is from the internet
         if lot.buy_now_price:
             if lot.buy_now_price < lot.reserve_price:
                 lot.buy_now_price = lot.reserve_price
@@ -3590,6 +3777,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "date_online_bidding_ends",
                 "allow_deleting_bids",
                 "auto_add_images",
+                "message_users_when_lots_sell",
             ]
             for field in fields_to_clone:
                 setattr(auction, field, getattr(original_auction, field))
@@ -5881,6 +6069,7 @@ class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
             "An account",
             "Search",
             "Watch",
+            "Push notifications as lots sell",
             "Proxy bidding",
             "Chat",
             "Buy now",
@@ -5898,8 +6087,16 @@ class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
             SearchHistory.objects.filter(user__isnull=False, auction=self.auction).values("user").distinct().count()
         )
         seach_percent = int(searches / auctiontos_with_account.count() * 100)
-        watches = Watch.objects.filter(lot_number__auction=self.auction).values("user").distinct().count()
+        watch_qs = Watch.objects.filter(lot_number__auction=self.auction).values("user").distinct()
+        watches = watch_qs.count()
         watch_percent = int(watches / auctiontos_with_account.count() * 100)
+        notifications = (
+            PushInformation.objects.filter(user__in=watch_qs, user__userdata__push_notifications_when_lots_sell=True)
+            .values("user")
+            .distinct()
+            .count()
+        )
+        notification_percent = int(notifications / auctiontos_with_account.count() * 100)
         has_used_proxy_bidding = UserData.objects.filter(
             has_used_proxy_bidding=True,
             user__in=auctiontos_with_account.values_list("user"),
@@ -5954,6 +6151,7 @@ class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
                 account_percent,
                 seach_percent,
                 watch_percent,
+                notification_percent,
                 has_used_proxy_bidding_percent,
                 chat_percent,
                 lot_with_buy_now_percent,
