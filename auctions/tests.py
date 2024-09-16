@@ -1058,3 +1058,8 @@ class DynamicSetLotWinnerViewTestCase(StandardTestCase):
         except socket.gaierror:
             # this happens because channels cannot connect to redis -- tests aren't running in a container
             pass
+
+
+class TestThatDoesntWorkTestCase(StandardTestCase):
+    def test_this_test_should_fail(self):
+        assert 1 == False
