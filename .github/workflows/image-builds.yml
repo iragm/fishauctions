@@ -1,4 +1,4 @@
-name: Docker images build
+name: Docker images build and test
 on:
   push:
   pull_request:
@@ -12,3 +12,4 @@ jobs:
       - uses: actions/checkout@v4
       - run: ./.github/scripts/prepare-ci.sh
       - run: docker compose build
+      - run: docker exec -it django python3 manage.py test
