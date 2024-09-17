@@ -1,4 +1,4 @@
-name: Docker images build
+name: Docker images build and test
 on:
   push:
   pull_request:
@@ -12,3 +12,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: ./.github/scripts/prepare-ci.sh
       - run: docker compose build
+      - run: docker compose up -d
+      - run: sleep 60  # Wait for the container to be up
+      - run: docker compose exec web python3 manage.py test
+      - run: docker compose down

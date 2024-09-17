@@ -22,6 +22,7 @@
             {% if last_auction_used %}
             <tr>
               <td><a href='/auctions/{{last_auction_used.slug}}'>{{ last_auction_used.title }}</a><br class="d-md-none"><span class='ms-1 badge bg-light text-black'>Your last auction</span>
+                {% if not last_auction_used.promote_this_auction %}<span class='badge bg-dark'>Not promoted</span>{% endif %}
                 {{ last_auction_used.template_lot_link_first_column }}
                 {{ last_auction_used.template_promo_info }}
             </td>

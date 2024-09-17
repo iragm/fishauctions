@@ -1548,6 +1548,7 @@ class AuctionEditForm(forms.ModelForm):
             "date_online_bidding_starts",
             "allow_deleting_bids",
             "auto_add_images",
+            "message_users_when_lots_sell",
         ]
         widgets = {
             "date_start": DateTimePickerInput(),
@@ -1581,6 +1582,8 @@ class AuctionEditForm(forms.ModelForm):
             ].help_text = "This should be 1-24 hours before the end of your auction"
             self.fields["allow_bidding_on_lots"].help_text = "Leave this checked or people won't be able to bid!"
             self.fields["allow_bidding_on_lots"].widget = forms.HiddenInput()
+            self.fields["message_users_when_lots_sell"].widget = forms.HiddenInput()
+            self.fields["advanced_lot_adding"].widget = forms.HiddenInput()
             # self.fields['pre_register_lot_entry_fee_discount'].widget=forms.HiddenInput()
             self.fields["pre_register_lot_discount_percent"].widget = forms.HiddenInput()
             # self.fields['set_lot_winners_url'].widget=forms.HiddenInput()
@@ -1777,16 +1780,20 @@ class AuctionEditForm(forms.ModelForm):
                     "buy_now",
                     css_class="col-md-3",
                 ),
-                # Div('set_lot_winners_url', css_class='col-md-3',),
                 Div(
-                    "promote_this_auction",
+                    "message_users_when_lots_sell",
                     css_class="col-md-3",
                 ),
+                # Div('set_lot_winners_url', css_class='col-md-3',),
                 PrependedAppendedText(
                     "tax",
                     "",
                     "%",
                     wrapper_class="col-md-3",
+                ),
+                Div(
+                    "promote_this_auction",
+                    css_class="col-md-3",
                 ),
                 css_class="row",
             ),
@@ -2473,6 +2480,7 @@ class ChangeUserPreferencesForm(forms.ModelForm):
             "username_visible",
             "share_lot_images",
             "auto_add_images",
+            "push_notifications_when_lots_sell",
         )
 
     def __init__(self, user, *args, **kwargs):
@@ -2510,6 +2518,10 @@ class ChangeUserPreferencesForm(forms.ModelForm):
                 # Div('use_list_view',css_class='col-md-4',),
                 # Div('use_dark_theme',css_class='col-md-4',),
                 # Div('show_ads',css_class='col-md-3',),
+                Div(
+                    "push_notifications_when_lots_sell",
+                    css_class="col-md-6",
+                ),
                 css_class="row",
             ),
             HTML("<h4>Notifications</h4><br>"),

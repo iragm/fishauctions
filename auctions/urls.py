@@ -1,5 +1,5 @@
 from django.contrib.auth.decorators import login_required
-from django.urls import path, re_path
+from django.urls import include, path, re_path
 from django.views.generic.base import TemplateView
 from django_ses.views import SESEventWebhookView
 
@@ -30,6 +30,7 @@ urlpatterns = [
     path("api/users/ban/<int:pk>/", views.userBan),
     path("api/users/unban/<int:pk>/", views.userUnban),
     path("api/users/location/", views.setCoordinates),
+    path("api/users/enable-notifications", views.UpdateLotPushNotificationsView.as_view(), name="enable_notifications"),
     path("api/users/lot_notifications/", views.lotNotifications),
     path("api/users/auction_notifications/", views.auctionNotifications),
     path("api/lots/new_lot_last_auction/", views.no_lot_auctions),
@@ -188,20 +189,30 @@ urlpatterns = [
         login_required(views.BulkAddLots.as_view()),
         name="bulk_add_lots_for_myself",
     ),
+    # path(
+    #     "auctions/<slug:slug>/lots/set-winners/old",
+    #     login_required(views.SetLotWinner.as_view()),
+    #     name="auction_lot_winners",
+    # ),
+    # path(
+    #     "auctions/<slug:slug>/lots/set-winners/presentation",
+    #     login_required(views.SetLotWinnerImage.as_view()),
+    #     name="auction_lot_winners_images",
+    # ),
+    # path(
+    #     "auctions/<slug:slug>/lots/set-winners/autocomplete",
+    #     views.QuickSetLotWinner.as_view(),
+    #     name="auction_lot_winners_autocomplete",
+    # ),
     path(
         "auctions/<slug:slug>/lots/set-winners/",
-        login_required(views.SetLotWinner.as_view()),
-        name="auction_lot_winners",
+        views.DynamicSetLotWinner.as_view(),
+        name="auction_lot_winners_dynamic",
     ),
     path(
-        "auctions/<slug:slug>/lots/set-winners/presentation",
-        login_required(views.SetLotWinnerImage.as_view()),
-        name="auction_lot_winners_images",
-    ),
-    path(
-        "auctions/<slug:slug>/lots/set-winners/autocomplete",
-        views.QuickSetLotWinner.as_view(),
-        name="auction_lot_winners_autocomplete",
+        "auctions/<slug:slug>/lots/set-winners/undo/",
+        views.AuctionUnsellLot.as_view(),
+        name="auction_unsell_lot",
     ),
     path("auctions/<slug:slug>/lots/<slug:custom_lot_number>/", views.ViewLot.as_view()),
     path(
@@ -408,4 +419,5 @@ urlpatterns = [
         SESEventWebhookView.as_view(),
         name="handle-event-webhook",
     ),
+    re_path(r"^webpush/", include("webpush.urls")),
 ]

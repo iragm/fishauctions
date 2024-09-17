@@ -135,6 +135,12 @@ window.onload = function() {
    -moz-transition: all .1s ease-out;
    -ms-transition: all .1s ease-out;
 }
+#toast-container {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 1055;
+}
         </style>
         {% block extra_css %}
             {# Override this in templates to add extra stylesheets #}
@@ -200,12 +206,37 @@ window.onload = function() {
                 return false;
             });
           });
-
-          </script>
-      </head>
+          var $ = window.jQuery;
+  // toast
+  (function(b){b.toast=function(a,h,g,l,k){b("#toast-container").length||(b("body").prepend('<div id="toast-container" aria-live="polite" aria-atomic="true"></div>'),b("#toast-container").append('<div id="toast-wrapper"></div>'));var c="",d="",e="text-muted",f="",m="object"===typeof a?a.title||"":a||"Notice!";h="object"===typeof a?a.subtitle||"":h||"";g="object"===typeof a?a.content||"":g||"";k="object"===typeof a?a.delay||3E3:k||3E3;switch("object"===typeof a?a.type||"":l||"info"){case "info":c="bg-info";
+  f=e=d="text-white";break;case "success":c="bg-success";f=e=d="text-white";break;case "warning":case "warn":c="bg-warning";f=e=d="text-white";break;case "error":case "danger":c="bg-danger",f=e=d="text-white"}a='<div class="toast" role="alert" aria-live="assertive" aria-atomic="true" data-bs-autohide="true" data-bs-delay="'+k+'">'+('<div class="toast-header '+c+" "+d+'">')+('<strong class="me-auto">'+m+"</strong>");a+='<small class="'+e+'">'+h+"</small>";a+='<button type="button" class="ms-2 mb-1 btn-close" data-bs-dismiss="toast" aria-label="Close"></button>';
+  ""!==g&&(a+='<div class="toast-body">',a+=g,a+="</div>");a+="</div>";b("#toast-wrapper").append(a);b("#toast-wrapper .toast:last").toast("show")}})(jQuery);
+      {# the following lines are for a user messaging websocket which does not seem needed at this time #}
+      // {% if request.user.is_authenticated and not disable_websocket %}
+      //     var ws_protocol = (window.location.protocol === 'https:') ? 'wss://' : 'ws://'
+      //   const userWebSocket = new WebSocket(
+      //       ws_protocol
+      //       + window.location.host
+      //       + '/ws/users/{{ user.pk }}/'
+      //   );
+      //   userWebSocket.onmessage = function(e) {
+      //     const data = JSON.parse(e.data);
+      //     console.log(data);
+      //     if (data.type == "toast") {
+      //       window.jQuery.toast({
+      //         title: data.message,
+      //         type: data.bg,
+      //         delay: 10000
+      //       });
+      //     }
+      //   }
+      // {% endif %}
+      </script>
+      {% block extra_head %}{% endblock %}
+    </head>
 
     <body class="{% block body_class %}{% endblock %}">
-    <!-- Google Tag Manager (noscript) -->
+      <!-- Google Tag Manager (noscript) -->
     <noscript><iframe src="https://www.googletagmanager.com/ns.html?id={{ GOOGLE_TAG_ID }}"
       height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
       <!-- End Google Tag Manager (noscript) -->
@@ -219,6 +250,8 @@ window.onload = function() {
           });
         </script>
         <span id='navbar_span' style="display: none;">
+      {% else %}
+          <span class="hide-fullscreen">
       {% endif %}
       {% if not request.user.is_authenticated and not hide_google_login %}
       <script src="//accounts.google.com/gsi/client" async></script>
@@ -318,7 +351,7 @@ window.onload = function() {
           </div>
         </div>
         </nav>
-        {% if hide_navbar %}</span><small><a href="#" id="toggleLink">Show/Hide menu</a>. {{ menu_tip }}</small>{% endif %}
+        </span>
         {% if not hide_tos_banner %}
         <div class="alert alert-primary mb-0" role="alert" style="position:fixed; bottom: 0px; width: 100%; z-index:9999;">By using this site, you accept our <a href="/tos/">use of cookies and our terms and conditions</a> <button class="btn btn-sm btn-dark" type="button" onclick="agreeTos()">Don't show again</button></button></div>
         <script>
@@ -383,7 +416,7 @@ window.onload = function() {
             </div>
         </div>
         {% block undiv_content %}{% endblock %}
-        {% if not hide_navbar %}<div class="mt-5 d-flex justify-content-center"><small class="text-muted">Website copyright 2020-2024 <a href="https://tfcb.org">Tropical Fish Club of Burlington</a>. A free and <a href="https://github.com/iragm/fishauctions">open source</a> project.</small></div>{% endif %}
+        <div class="mt-5 d-flex justify-content-center hide-fullscreen"><small class="text-muted hide-fullscreen">Website copyright 2020-2024 <a href="https://tfcb.org">Tropical Fish Club of Burlington</a>. A free and <a href="https://github.com/iragm/fishauctions">open source</a> project.</small></div>
         {% block extra_js %}
             {# Override this in templates to add extra javascript #}
         {% endblock %}

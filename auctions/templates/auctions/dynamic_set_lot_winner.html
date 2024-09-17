@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+{% load i18n %}
+{% block title %}Set winners for {{ auction }}{% endblock %}
+
+{% block extra_js %}
+<script>
+  function undoSellLot() {
+      let data = {
+          lot_number: $("#last_sold_lot_number").text()
+      };
+      $.ajax({
+          url: "{% url 'auction_unsell_lot' slug=auction.slug %}",
+          method: 'POST',
+          beforeSend: function (request) {
+                  request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+              },
+          data: data,
+          success: function(response) {
+              handleServerResponse(response);
+          },
+          error: function(error) {
+              console.error(error);
+          }
+      });
+    }
+
+  function handleServerResponse(response) {
+      $(".form-control").removeClass("is-invalid is-valid");
+      let fields = ['price', 'winner', 'lot']
+      if (response.success_message) {
+        fields.forEach(function(field) {
+          $("#" + field).val('');
+        })
+        $("#result").html('');
+        $("#lot").focus();
+        $("#success_banner").removeClass('d-none');
+        $("#last_sold_lot_number").html(response.last_sold_lot_number);
+        $("#success_message").html(response.success_message);
+        if (response.hide_undo_button) {
+          $("#undo_button").addClass('d-none');
+        } else {
+          $("#undo_button").removeClass('d-none');
+        }
+      } else {
+        fields.forEach(function(field) {
+            if (response[field] === "valid") {
+                $("#" + field).addClass("is-valid");
+            } else if (response[field]) {
+                $("#" + field).addClass("is-invalid");
+                $("#" + field).siblings(".invalid-tooltip").text(response[field]);
+            }
+        });
+      }
+      if (response.online_high_bidder_message) {
+        $("#sell_to_online_high_bidder").removeClass('d-none');
+        $("#sell_to_online_high_bidder").text(response.online_high_bidder_message);
+      } else {
+        $("#sell_to_online_high_bidder").addClass('d-none');
+      }
+
+  }
+
+  function sendFormData(action = 'validate') {
+      let formData = {
+          lot: $("#lot").val(),
+          price: $("#price").val(),
+          winner: $("#winner").val(),
+          action: action
+      };
+      $.ajax({
+          url: '{{ request.path }}',
+          method: 'POST',
+          beforeSend: function (request) {
+                  request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+              },
+          data: formData,
+          success: function(response) {
+              handleServerResponse(response);
+          },
+          error: function(error) {
+              console.error(error);
+          }
+      });
+  }
+
+  function getLotPicture() {
+    htmx.ajax('get','/api/{{ auction.slug }}/lots/' + encodeURIComponent($("#lot").val()), {target: '#result'});
+  }
+$(document).ready(function() {
+        var lotSearch;
+        $("#lot").on('blur', function() {
+          clearTimeout(lotSearch);
+          getLotPicture();
+        });
+        $('#lot').select();
+        var input = document.getElementById('lot');
+        input.addEventListener('keyup', function () {
+          clearTimeout(lotSearch);
+          lotSearch = setTimeout(getLotPicture, 1000);
+        });
+
+      // Full screen mode
+      $('#fullscreen-btn').on('click', function() {
+        let elem = document.documentElement;
+        if (!document.fullscreenElement) {
+          elem.requestFullscreen().catch(err => {
+            console.error(`Error attempting to enable full-screen mode: ${err.message}`);
+          });
+        }
+      });
+      $(document).on('fullscreenchange', function() {
+        if (document.fullscreenElement) {
+          $('.hide-fullscreen').hide();
+          $('#fullscreen-btn').removeClass('d-sm-inline-block');
+        } else {
+          $('.hide-fullscreen').show();
+          $('#fullscreen-btn').addClass('d-sm-inline-block');
+        }
+      });
+
+    // Form stuff
+    $(".form-control").on('blur', function() {
+        sendFormData();
+    });
+    $("#auctionForm").on('submit', function(e) {
+        e.preventDefault();
+        sendFormData('save');
+    });
+});
+
+
+</script>
+{% endblock %}
+{% block content %}
+<span class="hide-fullscreen">
+{% include 'auction_ribbon.html' %}
+
+<small>Use this page to mark lots as sold.  Press tab to move the to next field.  <a href='https://github.com/iragm/fishauctions/issues/223'>Leave feedback about this page here.</a></small><br>
+<button id="fullscreen-btn" class="btn btn-sm bg-primary d-none d-sm-inline-block"><i class="bi bi-fullscreen"></i> Go fullscreen</button>
+
+</span>
+{% endblock %}
+{% block undiv_content %}
+<div class="container">
+
+
+<div class="alert bg-success text-black d-none" id="success_banner">
+  <p class="mb-0"><span id='last_sold_lot_number' class="d-none">
+    </span><span id='success_message'></span> <a id='undo_button' class='text-black d-none' onclick="undoSellLot()" href='javascript:void(0)'>Undo</a>
+  </p>
+</div>
+
+  <form id="auctionForm" class="row row-cols-md-auto g-3 d-flex align-items-center justify-content-center">
+    <div class="col-12 mb-3">
+        <div class="input-group">
+            <input type="text" class="form-control" id="lot" placeholder="Lot number" autocomplete="off">
+            <div class="invalid-tooltip"></div>
+        </div>
+    </div>
+    <div class="col-12 mb-3">
+        <label class="visually-hidden" for="price" class="form-label">Sell Price</label>
+        <div class="input-group">
+            <span class="input-group-text">$</span>
+            <input type="number" class="form-control" id="price" placeholder="0" autocomplete="off">
+            <span class="input-group-text">.00</span>
+            <div class="invalid-tooltip"></div>
+        </div>
+    </div>
+    <div class="col-12 mb-3">
+        <div class="input-group">
+            <input type="text" class="form-control" id="winner" placeholder="Winner" autocomplete="off">
+            <div class="invalid-tooltip"></div>
+        </div>
+    </div>
+    <div class="col-12 mb-3">
+      <div class="btn-group" role="group" aria-label="Save">
+        <button type="submit" class="btn bg-success text-black">Save</button>
+        <div class="btn-group" role="group">
+          <button id="more_safe_optins" type="button" class="btn btn-success dropdown-toggle text-black" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false"></button>
+          <div class="dropdown-menu" aria-labelledby="more_safe_optins">
+            <a class="dropdown-item" href='javascript:void(0)' onclick="sendFormData('force_save')">Ignore errors and save</a>
+            <a id='sell_to_online_high_bidder' class="d-none dropdown-item" onclick="sendFormData('to_online_high_bidder')" href='javascript:void(0)'></a>
+            <a class="dropdown-item" href='javascript:void(0)' onclick="sendFormData('end_unsold')">End lot unsold</a>
+          </div>
+        </div>
+      </div>
+    </div>
+</form>
+</div>
+<div id="result"></div>
+{% endblock %}

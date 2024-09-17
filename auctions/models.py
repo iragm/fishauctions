@@ -4,6 +4,8 @@ import uuid
 from datetime import time
 from random import randint
 
+import channels.layers
+from asgiref.sync import async_to_sync
 from autoslug import AutoSlugField
 from django.conf import settings
 from django.contrib.auth.models import User
@@ -648,6 +650,10 @@ class Auction(models.Model):
     auto_add_images.help_text = (
         "Images taken from older lots with the same name in any auctions created by you or other admins"
     )
+    message_users_when_lots_sell = models.BooleanField(default=True, blank=True)
+    message_users_when_lots_sell.help_text = (
+        "When you enter a lot number on the set lot winners screen, send a notification to any users watching that lot"
+    )
 
     def __str__(self):
         result = self.title
@@ -785,7 +791,8 @@ class Auction(models.Model):
 
     @property
     def set_lot_winners_link(self):
-        return f"{self.get_absolute_url()}lots/set-winners/{self.set_lot_winners_url}"
+        # return f"{self.get_absolute_url()}lots/set-winners/{self.set_lot_winners_url}"
+        return f"{self.get_absolute_url()}lots/set-winners/"
 
     def permission_check(self, user):
         """See if `user` can make changes to this auction"""
@@ -1925,7 +1932,9 @@ class Lot(models.Model):
         blank=True,
         null=True,
     )
-    buy_now_price.help_text = "This lot will be sold instantly for this price if someone is willing to pay this much.  Leave blank unless you know exactly what you're doing"
+    buy_now_price.help_text = (
+        "This lot will be sold with no bidding for this price, if someone is willing to pay this much"
+    )
     species = models.ForeignKey(Product, null=True, blank=True, on_delete=models.SET_NULL)
     species_category = models.ForeignKey(
         Category,
@@ -2102,10 +2111,11 @@ class Lot(models.Model):
     def add_winner_message(self, user, tos, winning_price):
         """Create a lot history message when a winner is declared (or changed)
         It's critical that this function is called every time the winner is changed so that invoices get recalculated"""
+        message = f"{user.username} has set bidder {tos} as the winner of this lot (${winning_price})"
         LotHistory.objects.create(
             lot=self,
             user=user,
-            message=f"{user.username} has set bidder {tos} as the winner of this lot (${winning_price}).",
+            message=message,
             notification_sent=True,
             bid_amount=winning_price,
             changed_price=True,
@@ -2113,6 +2123,20 @@ class Lot(models.Model):
         )
         invoice, created = Invoice.objects.get_or_create(auctiontos_user=tos, auction=self.auction, defaults={})
         invoice.recalculate
+        self.send_websocket_message(
+            {
+                "type": "chat_message",
+                "info": "LOT_END_WINNER",
+                "message": message,
+                "high_bidder_pk": tos.user.pk if tos.user else -1,
+                "high_bidder_name": tos.display_name_for_admins,
+                "current_high_bid": winning_price,
+            }
+        )
+
+    def send_websocket_message(self, message):
+        channel_layer = channels.layers.get_channel_layer()
+        async_to_sync(channel_layer.group_send)(f"lot_{self.pk}", message)
 
     def refund(self, amount, user, message=None):
         """Call this to add a message when refunding a lot"""
@@ -2278,20 +2302,6 @@ class Lot(models.Model):
         return ""
 
     @property
-    def table_class(self):
-        """We need to color rows red if a winner is set without a price, or a price is set without a winner"""
-        if self.auctiontos_winner and not self.winning_price:
-            return "table-danger"
-        if not self.auctiontos_winner and self.winning_price:
-            return "table-danger"
-        return ""
-
-    # @property
-    # def user_as_str(self):
-    # 	"""String value of the seller of this lot"""
-    # 	return str(self.user)
-
-    @property
     def seller_as_str(self):
         """String of the seller name or number, for use on lot pages"""
         if self.auctiontos_seller:
@@ -2368,6 +2378,20 @@ class Lot(models.Model):
             else:
                 return "Anonymous"
         return ""
+
+    @property
+    def sell_to_online_high_bidder(self):
+        if self.high_bidder:
+            self.winner = self.high_bidder
+            self.winning_price = self.high_bid
+            self.active = False
+            tos = AuctionTOS.objects.filter(auction=self.auction, user=self.high_bidder).order_by("-createdon").first()
+            if tos:
+                self.auctiontos_winner = tos
+            self.save()
+            return f"{self.high_bidder_for_admins} is now the winner of lot {self.custom_lot_number} for ${self.winning_price}"
+        else:
+            return "No high bidder"
 
     @property
     def sold(self):
@@ -2801,11 +2825,10 @@ class Lot(models.Model):
 
     @property
     def thumbnail(self):
-        try:
-            return LotImage.objects.get(lot_number=self.lot_number, is_primary=True)
-        except:
-            pass
-        return None
+        default = LotImage.objects.filter(lot_number=self.lot_number, is_primary=True).first()
+        if default:
+            return default
+        return self.auto_image
 
     def get_absolute_url(self):
         return f"/lots/{self.lot_number}/{self.slug}/"
@@ -2928,6 +2951,28 @@ class Lot(models.Model):
             if match:
                 return match.group(1)
         return None
+
+    @property
+    def create_update_invoices(self):
+        """Call whenever ending this lot, or when creating it"""
+        if self.auction and self.winner and not self.auctiontos_winner:
+            tos = AuctionTOS.objects.filter(auction=self.auction, user=self.winner).first()
+            self.auctiontos_winner = tos
+            self.save()
+        if self.auction and self.auctiontos_winner:
+            invoice, created = Invoice.objects.get_or_create(
+                auctiontos_user=self.auctiontos_winner,
+                auction=self.auction,
+                defaults={},
+            )
+            invoice.recalculate
+        if self.auction and self.auctiontos_seller:
+            invoice, created = Invoice.objects.get_or_create(
+                auctiontos_user=self.auctiontos_seller,
+                auction=self.auction,
+                defaults={},
+            )
+            invoice.recalculate
 
 
 class Invoice(models.Model):
@@ -3497,9 +3542,7 @@ class UserData(models.Model):
     )
     last_ip_address = models.CharField(max_length=100, blank=True, null=True)
     email_me_when_people_comment_on_my_lots = models.BooleanField(default=True, blank=True)
-    email_me_when_people_comment_on_my_lots.help_text = (
-        "Notifications will be sent once a day, only for messages you haven't seen"
-    )
+    email_me_when_people_comment_on_my_lots.help_text = "Notifications will be sent once a day, only for messages you haven't seen.  If you'd like to get a notification right away, <a href='https://github.com/iragm/fishauctions/issues/224'>leave a comment here</a>"
     email_me_about_new_auctions = models.BooleanField(
         default=True, blank=True, verbose_name="Email me about new online auctions"
     )
@@ -3573,6 +3616,8 @@ class UserData(models.Model):
     share_lot_images.help_text = "Images will be added to other lots without an image that have the same name"
     auto_add_images = models.BooleanField("Automatically add images to my lots", default=True, blank=True)
     auto_add_images.help_text = "If another lot with the same name has been added previously.  Images are only added to lots that are part of an auction."
+    push_notifications_when_lots_sell = models.BooleanField(default=False, blank=True)
+    push_notifications_when_lots_sell.help_text = "For in-person auctions, get a notification when bidding starts on a lot that you've watched<span class='d-none' id='subscribe_message_area'></span>"
 
     # breederboard info
     rank_unique_species = models.PositiveIntegerField(null=True, blank=True)
@@ -3595,6 +3640,10 @@ class UserData(models.Model):
 
     def __str__(self):
         return f"{self.user.username}'s data"
+
+    def send_websocket_message(self, message):
+        channel_layer = channels.layers.get_channel_layer()
+        async_to_sync(channel_layer.group_send)(f"user_{self.user.pk}", message)
 
     @property
     def my_lots_qs(self):

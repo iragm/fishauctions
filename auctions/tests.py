@@ -16,6 +16,7 @@ from .models import (
     Lot,
     LotHistory,
     PickupLocation,
+    UserData,
     UserLabelPrefs,
     add_price_info,
 )
@@ -39,6 +40,9 @@ class StandardTestCase(TestCase):
         time = timezone.now() - datetime.timedelta(days=2)
         timeStart = timezone.now() - datetime.timedelta(days=3)
         theFuture = timezone.now() + datetime.timedelta(days=3)
+        self.admin_user = User.objects.create_user(
+            username="admin_user", password="testpassword", email="test@example.com"
+        )
         self.user = User.objects.create_user(username="my_lot", password="testpassword", email="test@example.com")
         self.user_with_no_lots = User.objects.create_user(
             username="no_lots", password="testpassword", email="asdf@example.com"
@@ -67,22 +71,44 @@ class StandardTestCase(TestCase):
             lot_entry_fee=2,
             unsold_lot_fee=10,
             tax=25,
+            buy_now="allow",
+            reserve_price="allow",
         )
         self.location = PickupLocation.objects.create(
             name="location", auction=self.online_auction, pickup_time=theFuture
         )
+        self.in_person_location = PickupLocation.objects.create(
+            name="location", auction=self.in_person_auction, pickup_time=theFuture
+        )
         self.userB = User.objects.create_user(username="no_tos", password="testpassword")
-        self.tos = AuctionTOS.objects.create(user=self.user, auction=self.online_auction, pickup_location=self.location)
+        self.admin_online_tos = AuctionTOS.objects.create(
+            user=self.admin_user, auction=self.online_auction, pickup_location=self.location, is_admin=True
+        )
+        self.admin_in_person_tos = AuctionTOS.objects.create(
+            user=self.admin_user, auction=self.in_person_auction, pickup_location=self.in_person_location, is_admin=True
+        )
+        self.online_tos = AuctionTOS.objects.create(
+            user=self.user, auction=self.online_auction, pickup_location=self.location
+        )
+        self.in_person_tos = AuctionTOS.objects.create(
+            user=self.user, auction=self.in_person_auction, pickup_location=self.location
+        )
         self.tosB = AuctionTOS.objects.create(
             user=self.userB, auction=self.online_auction, pickup_location=self.location
         )
         self.tosC = AuctionTOS.objects.create(
             user=self.user_with_no_lots, auction=self.online_auction, pickup_location=self.location
         )
+        self.in_person_buyer = AuctionTOS.objects.create(
+            user=self.user_with_no_lots,
+            auction=self.in_person_auction,
+            pickup_location=self.in_person_location,
+            bidder_number="555",
+        )
         self.lot = Lot.objects.create(
             lot_name="A test lot",
             auction=self.online_auction,
-            auctiontos_seller=self.tos,
+            auctiontos_seller=self.online_tos,
             quantity=1,
             description="",
             winning_price=10,
@@ -92,7 +118,7 @@ class StandardTestCase(TestCase):
         self.lotB = Lot.objects.create(
             lot_name="B test lot",
             auction=self.online_auction,
-            auctiontos_seller=self.tos,
+            auctiontos_seller=self.online_tos,
             quantity=1,
             description="",
             winning_price=10,
@@ -102,7 +128,7 @@ class StandardTestCase(TestCase):
         self.lotC = Lot.objects.create(
             lot_name="C test lot",
             auction=self.online_auction,
-            auctiontos_seller=self.tos,
+            auctiontos_seller=self.online_tos,
             quantity=1,
             description="",
             winning_price=10,
@@ -115,10 +141,10 @@ class StandardTestCase(TestCase):
             description="",
             auction=self.online_auction,
             quantity=1,
-            auctiontos_seller=self.tos,
+            auctiontos_seller=self.online_tos,
             active=False,
         )
-        self.invoice, c = Invoice.objects.get_or_create(auctiontos_user=self.tos)
+        self.invoice, c = Invoice.objects.get_or_create(auctiontos_user=self.online_tos)
         self.invoiceB, c = Invoice.objects.get_or_create(auctiontos_user=self.tosB)
         self.adjustment_add = InvoiceAdjustment.objects.create(
             adjustment_type="ADD", amount=10, notes="test", invoice=self.invoiceB
@@ -138,11 +164,15 @@ class StandardTestCase(TestCase):
             notes="test",
             invoice=self.invoiceB,
         )
+        self.in_person_lot = Lot.objects.create(
+            lot_name="another test lot",
+            auction=self.in_person_auction,
+            auctiontos_seller=self.admin_in_person_tos,
+            quantity=1,
+            description="",
+            custom_lot_number="101-1",
+        )
         # TODO: stuff to add here:
-        # a normal user that has joined no auctions
-        # a user that has joined self.online_auction
-        # a user that is an admin for both auctions (tos.is_admin=True)
-        # lots in the in-person auction
         # a few more users and a userban or two
         # an online auction that hasn't started yet
         # an in-person auction that hasn't started yet
@@ -609,7 +639,7 @@ class InvoiceModelTests(StandardTestCase):
         assert self.invoiceB.contact_email == "test@example.com"
         assert self.invoiceB.is_online
         assert self.invoiceB.unsold_lot_warning == ""
-        assert str(self.invoice) == f"{self.tos.name}'s invoice for {self.tos.auction}"
+        assert str(self.invoice) == f"{self.online_tos.name}'s invoice for {self.online_tos.auction}"
 
         # adjustments
         self.adjustment_add.amount = 0
@@ -747,196 +777,6 @@ class LotPricesTests(TestCase):
         assert lot.your_cut == 0
 
 
-class SetLotWinnerViewTest(TestCase):
-    def setUp(self):
-        time = timezone.now() - datetime.timedelta(days=2)
-        timeStart = timezone.now() - datetime.timedelta(days=3)
-        theFuture = timezone.now() + datetime.timedelta(days=3)
-        self.user = User.objects.create_user(username="testuser", password="testpassword")
-        self.user2 = User.objects.create_user(username="testuser2", password="password")
-        self.auction = Auction.objects.create(
-            created_by=self.user,
-            title="A test auction",
-            date_end=time,
-            date_start=timeStart,
-            winning_bid_percent_to_club=25,
-            lot_entry_fee=2,
-            unsold_lot_fee=10,
-            tax=25,
-        )
-        self.location = PickupLocation.objects.create(name="location", auction=self.auction, pickup_time=theFuture)
-        self.seller = AuctionTOS.objects.create(
-            user=self.user,
-            auction=self.auction,
-            pickup_location=self.location,
-            bidder_number="145",
-        )
-        self.bidder = AuctionTOS.objects.create(
-            user=self.user2,
-            auction=self.auction,
-            pickup_location=self.location,
-            bidder_number="225",
-        )
-        self.lot = Lot.objects.create(
-            custom_lot_number="123",
-            lot_name="A test lot",
-            auction=self.auction,
-            auctiontos_seller=self.seller,
-            quantity=1,
-            description="",
-        )
-        self.lot2 = Lot.objects.create(
-            custom_lot_number="124",
-            lot_name="Another test lot",
-            auction=self.auction,
-            auctiontos_seller=self.seller,
-            quantity=1,
-            description="",
-        )
-        # self.invoice = Invoice.objects.create(auctiontos_user=self.seller)
-        # self.invoiceB = Invoice.objects.create(auctiontos_user=self.tosB)
-
-        # Create test client
-        self.client = Client()
-
-    def test_valid_form_submission_and_undo(self):
-        self.client.login(username="testuser", password="testpassword")
-        url = reverse("auction_lot_winners_images", kwargs={"slug": self.auction.slug})
-        response = self.client.post(
-            url,
-            {
-                "lot": self.lot.custom_lot_number,
-                "winner": self.bidder.bidder_number,
-                "winning_price": 100,
-                "invoice": True,
-                "auction": 5,  # this is not used anywhere, but still required
-            },
-        )
-        assert response.status_code == 302  # Should redirect after successful form submission
-        updated_lot = Lot.objects.get(pk=self.lot.pk)
-        assert updated_lot.auctiontos_winner == self.bidder
-        assert updated_lot.winning_price == 100
-        response = self.client.get(url, {"undo": self.lot.custom_lot_number})
-        assert response.status_code == 200
-        updated_lot = Lot.objects.get(pk=self.lot.pk)
-        assert updated_lot.auctiontos_winner is None
-        assert updated_lot.winning_price is None
-
-    def test_invalid_form_submission(self):
-        url = reverse("auction_lot_winners_images", kwargs={"slug": self.auction.slug})
-        self.client.login(username="testuser", password="testpassword")
-        response = self.client.post(
-            url,
-            {
-                "lot": self.lot.custom_lot_number,
-                "winner": self.bidder.bidder_number,
-                "winning_price": -10,  # Invalid winning price
-                "invoice": True,
-                "auction": 5,
-            },
-        )
-        assert response.status_code == 200  # Form should not be submitted successfully
-        updated_lot = Lot.objects.get(pk=self.lot.pk)
-        assert updated_lot.auctiontos_winner is None
-        assert updated_lot.winning_price is None
-
-    def test_seller_invoice_closed(self):
-        self.invoice = Invoice.objects.get(auctiontos_user=self.seller)
-        self.invoice.status = "READY"
-        self.invoice.save()
-        self.client.login(username="testuser", password="testpassword")
-        url = reverse("auction_lot_winners_images", kwargs={"slug": self.auction.slug})
-        response = self.client.post(
-            url,
-            {
-                "lot": self.lot.custom_lot_number,
-                "winner": self.bidder.bidder_number,
-                "winning_price": 100,
-                "invoice": True,
-                "auction": 5,
-            },
-        )
-        assert response.status_code == 200  # Form should not be submitted successfully
-        updated_lot = Lot.objects.get(pk=self.lot.pk)
-        assert updated_lot.auctiontos_winner is None
-        assert updated_lot.winning_price is None
-
-    def test_winner_invoice_closed(self):
-        self.invoice, c = Invoice.objects.get_or_create(auctiontos_user=self.bidder)
-        self.invoice.status = "READY"
-        self.invoice.save()
-        self.client.login(username="testuser", password="testpassword")
-        url = reverse("auction_lot_winners_images", kwargs={"slug": self.auction.slug})
-        response = self.client.post(
-            url,
-            {
-                "lot": self.lot.custom_lot_number,
-                "winner": self.bidder.bidder_number,
-                "winning_price": 100,
-                "invoice": True,
-                "auction": 5,
-            },
-        )
-        assert response.status_code == 200  # Form should not be submitted successfully
-        updated_lot = Lot.objects.get(pk=self.lot.pk)
-        assert updated_lot.auctiontos_winner is None
-        assert updated_lot.winning_price is None
-
-    def test_winner_not_found(self):
-        self.client.login(username="testuser", password="testpassword")
-        url = reverse("auction_lot_winners_images", kwargs={"slug": self.auction.slug})
-        response = self.client.post(
-            url,
-            {
-                "lot": self.lot.custom_lot_number,
-                "winner": "55665",  # Invalid winner number
-                "winning_price": 100,
-                "invoice": True,
-                "auction": 5,
-            },
-        )
-        assert response.status_code == 200  # Form should not be submitted successfully
-        updated_lot = Lot.objects.get(pk=self.lot.pk)
-        assert updated_lot.auctiontos_winner is None
-        assert updated_lot.winning_price is None
-
-    def test_lot_not_found(self):
-        self.client.login(username="testuser", password="testpassword")
-        url = reverse("auction_lot_winners_images", kwargs={"slug": self.auction.slug})
-        response = self.client.post(
-            url,
-            {
-                "lot": "invalid_lot_number",  # Invalid lot number
-                "winner": self.bidder.bidder_number,
-                "winning_price": 100,
-                "invoice": True,
-                "auction": 5,
-            },
-        )
-        assert response.status_code == 200  # Form should not be submitted successfully
-
-    def test_lot_already_sold(self):
-        self.lot.auctiontos_winner = self.bidder
-        self.lot.winning_price = 100
-        self.lot.save()
-        self.client.login(username="testuser", password="testpassword")
-        url = reverse("auction_lot_winners_images", kwargs={"slug": self.auction.slug})
-        response = self.client.post(
-            url,
-            {
-                "lot": self.lot.custom_lot_number,
-                "winner": self.bidder.bidder_number,
-                "winning_price": 200,  # Attempting to set winner for already sold lot with a different price
-                "invoice": True,
-                "auction": 5,
-            },
-        )
-        assert response.status_code == 200  # Form should not be submitted successfully
-        updated_lot = Lot.objects.get(pk=self.lot.pk)
-        assert updated_lot.auctiontos_winner == self.bidder  # Lot winner should remain unchanged
-        assert updated_lot.winning_price == 100  # Winning price should remain unchanged
-
-
 class LotRefundDialogTests(TestCase):
     def setUp(self):
         time = timezone.now() - datetime.timedelta(days=2)
@@ -1030,6 +870,7 @@ class LotLabelViewTestCase(StandardTestCase):
         self.client.login(username=self.user, password="testpassword")
         self.endAuction()
         response = self.client.get(self.url)
+        # messages = list(response.wsgi_request._messages)
         assert response.status_code == 200
         assert "attachment; filename=" in response.headers["Content-Disposition"]
 
@@ -1044,27 +885,24 @@ class LotLabelViewTestCase(StandardTestCase):
         assert response.status_code == 200
         assert "attachment; filename=" in response.headers["Content-Disposition"]
 
-    # The test below will fail in ci because tests do not run in the docker container
-    # thermal labels cause a 'Paragraph' object has no attribute 'blPara' error
-    # See https://github.com/virantha/pypdfocr/issues/80
-    # This is the reason we are using a hacked version of platypus/paragraph.py in python_file_hack.sh
-
-    # def test_thermal_labels(self):
-    #     """Test that a regular user can print their own labels."""
-    #     user_label_prefs, created = UserLabelPrefs.objects.get_or_create(user=self.user)
-    #     user_label_prefs.preset = "thermal_sm"
-    #     user_label_prefs.save()
-    #     self.client.login(username=self.user, password="testpassword")
-    #     response = self.client.get(self.url)
-    #     assert response.status_code == 200
-    #     assert "attachment; filename=" in response.headers["Content-Disposition"]
+    def test_thermal_labels(self):
+        """Test that a regular user can print their own labels."""
+        # If this test is failing, it's likely that the issue is not in this code, but in a library
+        # thermal labels cause a 'Paragraph' object has no attribute 'blPara' error
+        # See https://github.com/virantha/pypdfocr/issues/80
+        # This is the reason we are using a hacked version of platypus/paragraph.py in python_file_hack.sh
+        user_label_prefs, created = UserLabelPrefs.objects.get_or_create(user=self.user)
+        user_label_prefs.preset = "thermal_sm"
+        user_label_prefs.save()
+        self.client.login(username=self.user, password="testpassword")
+        response = self.client.get(self.url)
+        assert response.status_code == 200
+        assert "attachment; filename=" in response.headers["Content-Disposition"]
 
     def test_non_admin_cannot_print_others_labels(self):
         """Test that a non-admin user cannot print labels for other users."""
         self.client.login(username="no_tos", password="testpassword")
-
         response = self.client.get(self.url)
-
         assert response.status_code == 302
         messages = list(response.wsgi_request._messages)
         assert str(messages[0]) == "Your account doesn't have permission to view this page."
@@ -1086,3 +924,131 @@ class LotLabelViewTestCase(StandardTestCase):
         self.client.login(username=self.user_with_no_lots.username, password="testpassword")
         response = self.client.get(self.url)
         assert response.status_code == 302
+
+
+class UpdateLotPushNotificationsViewTestCase(StandardTestCase):
+    def get_url(self):
+        return reverse("enable_notifications")
+
+    def test_anonymous_user(self):
+        response = self.client.get(self.get_url())
+        assert response.status_code == 302
+        response = self.client.post(self.get_url())
+        assert response.status_code == 302
+
+    def test_logged_in_user(self):
+        self.client.login(username=self.user_who_does_not_join.username, password="testpassword")
+        response = self.client.get(self.get_url())
+        assert response.status_code == 405
+        response = self.client.post(self.get_url())
+        assert response.status_code == 200
+        userdata = UserData.objects.get(user=self.user_who_does_not_join)
+        assert userdata.push_notifications_when_lots_sell is True
+
+
+class DynamicSetLotWinnerViewTestCase(StandardTestCase):
+    def get_url(self):
+        return reverse("auction_lot_winners_dynamic", kwargs={"slug": self.in_person_auction.slug})
+
+    def test_anonymous_user(self):
+        response = self.client.get(self.get_url())
+        assert response.status_code == 403
+        response = self.client.post(self.get_url())
+        assert response.status_code == 403
+
+    def test_non_admin_user(self):
+        self.client.login(username=self.user_who_does_not_join.username, password="testpassword")
+        response = self.client.get(self.get_url())
+        assert response.status_code == 403
+        response = self.client.post(self.get_url())
+        assert response.status_code == 403
+
+    def test_admin_user(self):
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.get(self.get_url())
+        assert response.status_code == 200
+        response = self.client.post(
+            self.get_url(), data={"lot": "101-1", "price": "5", "winner": "555", "action": "validate"}
+        )
+        data = response.json()
+        assert data.get("price") == "valid"
+        assert data.get("winner") == "valid"
+        assert data.get("lot") == "valid"
+
+        self.in_person_lot.reserve_price = 10
+        self.in_person_lot.save()
+        response = self.client.post(
+            self.get_url(), data={"lot": "101-1", "price": "5", "winner": "556", "action": "validate"}
+        )
+        data = response.json()
+        assert data.get("price") != "valid"
+        assert data.get("winner") != "valid"
+        assert data.get("lot") == "valid"
+
+        response = self.client.post(self.get_url(), data={"lot": "102-1", "action": "validate"})
+        data = response.json()
+        assert data.get("lot") != "valid"
+
+        response = self.client.post(
+            self.get_url(), data={"lot": "101-1", "price": "10", "winner": "555", "action": "save"}
+        )
+        data = response.json()
+        assert data.get("price") == "valid"
+        assert data.get("winner") == "valid"
+        assert data.get("lot") == "valid"
+        assert data.get("last_sold_lot_number") == "101-1"
+        assert data.get("success_message") is not None
+
+        lot = Lot.objects.filter(pk=self.in_person_lot.pk).first()
+        assert lot.winning_price == 10
+        assert lot.auctiontos_winner is not None
+
+        response = self.client.post(
+            self.get_url(), data={"lot": "101-1", "price": "10", "winner": "555", "action": "validate"}
+        )
+        data = response.json()
+        assert data.get("lot") != "valid"
+
+        invoice, created = Invoice.objects.get_or_create(auctiontos_user=self.in_person_lot.auctiontos_seller)
+        invoice.status = "UNPAID"
+        invoice.save()
+
+        self.in_person_lot.auctiontos_winner = None
+        self.in_person_lot.winning_price = None
+
+        response = self.client.post(
+            self.get_url(), data={"lot": "101-1", "price": "10", "winner": "555", "action": "save"}
+        )
+        data = response.json()
+        assert data.get("lot") != "valid"
+        assert self.in_person_lot.auctiontos_winner is None
+        assert self.in_person_lot.winning_price is None
+
+        response = self.client.post(
+            self.get_url(), data={"lot": "101-1", "price": "7", "winner": "555", "action": "force_save"}
+        )
+        data = response.json()
+        assert data.get("lot") == "valid"
+
+        lot = Lot.objects.filter(pk=self.in_person_lot.pk).first()
+        assert lot.winning_price == 7
+        assert lot.auctiontos_winner is not None
+
+        Bid.objects.create(user=self.admin_user, lot_number=self.in_person_lot, amount=100)
+        self.in_person_auction.allow_bidding_on_lots = True
+        self.in_person_auction.save()
+        invoice.status = "OPEN"
+        invoice.save()
+
+        lot = Lot.objects.filter(pk=self.in_person_lot.pk).first()
+        lot.winning_price = None
+        lot.auctiontos_winner = None
+        lot.winner = None
+        lot.save()
+
+        response = self.client.post(
+            self.get_url(), data={"lot": "101-1", "price": "10", "winner": "555", "action": "validate"}
+        )
+        data = response.json()
+        assert data.get("price") != "valid"
+        assert data.get("winner") != "valid"
