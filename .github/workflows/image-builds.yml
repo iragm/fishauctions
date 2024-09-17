@@ -14,5 +14,5 @@ jobs:
       - run: docker compose build
       - run: docker compose up -d
       - run: sleep 60  # Wait for the container to be up
-      - run: docker compose exec django python3 manage.py test
+      - run: docker compose exec web python3 manage.py test
       - run: docker compose down
