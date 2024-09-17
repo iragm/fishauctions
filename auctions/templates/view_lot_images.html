@@ -289,7 +289,7 @@ function deactivate_lot() {
             <tr>
                 <td><b>Distance from you:</b></td><td>{{ distance }} {% if lot.local_pickup %}<span class="badge text-dark bg-light">Local pickup available</span>{% endif %}
                     {% if request.user.userdata.location in lot.shipping_locations.all %}
-                    <span class="badge bg-light">Ships to {{ request.user.userdata.location }}</span>
+                    <span class="badge bg-light text-black">Ships to {{ request.user.userdata.location }}</span>
                     {% endif %}
                 </td>
             </tr>

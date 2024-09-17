@@ -4518,7 +4518,13 @@ class LotLabelView(View, AuctionPermissionsMixin):
                         "You don't have any lots with printable labels in this auction.",
                     )
                 else:
-                    messages.error(request, "There aren't any lots with printable labels")
+                    if not self.auction.is_online:
+                        messages.error(request, "There aren't any lots with printable labels")
+                    else:
+                        messages.error(
+                            request,
+                            "No lots with printable labels.  Only lots with a winner will have a label generated for them.",
+                        )
                 return redirect(self.auction.get_absolute_url())
             return super().dispatch(request, *args, **kwargs)
         else:
