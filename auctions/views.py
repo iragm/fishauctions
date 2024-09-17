@@ -2986,6 +2986,7 @@ class ViewLotSimple(ViewLot, AuctionPermissionsMixin):
                             "head": lot.lot_name + " is about to be sold",
                             "body": f"Lot {lot.custom_lot_number}  Don't miss out, bid now!  You're getting this notification because you watched this lot.",
                             "url": "https://" + lot.full_lot_link,
+                            "tag": "lot_sell_notification",
                         }
                         if lot.thumbnail:
                             payload["icon"] = lot.thumbnail.image.url
