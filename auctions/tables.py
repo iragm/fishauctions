@@ -63,9 +63,22 @@ class AuctionTOSHTMxTable(tables.Table):
 
 
 class LotHTMxTable(tables.Table):
-    seller = tables.Column(accessor="auctiontos_seller", verbose_name="Seller")
-    winner = tables.Column(accessor="auctiontos_winner", verbose_name="Winner")
-    winning_price = tables.Column(accessor="winning_price", verbose_name="Price")
+    hide_string = "d-md-table-cell d-none"
+    seller = tables.Column(
+        accessor="auctiontos_seller",
+        verbose_name="Seller",
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
+    winner = tables.Column(
+        accessor="auctiontos_winner",
+        verbose_name="Winner",
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
+    winning_price = tables.Column(
+        accessor="winning_price",
+        verbose_name="Price",
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
     lot_number = tables.Column(accessor="lot_number_display", verbose_name="Lot number", orderable=False)
 
     def render_lot_name(self, value, record):
@@ -93,7 +106,15 @@ class LotHTMxTable(tables.Table):
         result += "</div>"
         if record.banned:
             result += '<span class="badge bg-danger">Removed</span>'
+        # on mobile, reduce the number of columns and show info below the lot name
+        result += f'<span class="d-block d-md-none"><b>Seller:</b> {record.auctiontos_seller} '
+        if record.auctiontos_winner:
+            result += f"<b>Winner:</b> {record.auctiontos_winner} (${record.winning_price}.00)"
+        result += "</span>"
         return mark_safe(result)
+
+    def render_winning_price(self, value, record):
+        return f"${value}.00"
 
     class Meta:
         model = Lot
