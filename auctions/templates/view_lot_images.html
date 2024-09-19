@@ -129,9 +129,52 @@ function deactivate_lot() {
 <div class="container-fluid">
     <div class="row">
         <div class="col-md-offset-1 col-xl-8">
-<div class="container mt-5 mb-5">
+<div class="container mt-2 mb-5">
     <div class="row">
     <div class="col-md-10 offset-md1">
+    {% if request.user.is_authenticated %}
+        <div class="btn-group" role="group">
+            {% if is_auction_admin %}
+                <button class="btn btn-primary" hx-get="{% url 'auctionlotadmin' pk=lot.pk %}"
+                    hx-target="#modals-here"
+                    hx-trigger="click"
+                    _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">
+                    <i class="bi bi-gear-fill"></i> Manage this lot
+                </button>
+                <button class="btn btn-primary" hx-get="{% url 'lot_refund' pk=lot.pk %}"
+                    hx-target="#modals-here"
+                    hx-trigger="click"
+                    _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">
+                    <i class="bi bi-calendar-x"></i> Remove or refund
+                </button>
+            {% endif %}
+            {% if is_auction_admin or lot.user.pk == request.user.pk %}
+                <a class="btn btn-primary" href="{% url 'single_lot_label' pk=lot.pk %}">
+                    <i class="bi bi-tag"></i>
+                    {% if lot.label_printed %}Reprint label{% else %}Print label{% endif %}
+                </a>
+            {% endif %}
+            {% if request.user.is_superuser %}
+                <a href="/admin/auctions/lot/{{lot.pk}}/change/" class="btn btn-danger">
+                    Admin
+                </a>
+            {% endif %}
+            {% if bids %}
+                <button id="btnGroupDrop1" type="button" class="btn btn-danger dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+                    Remove bids
+                </button>
+                <ul class="dropdown-menu" aria-labelledby="btnGroupDrop1">
+                    {% for bid in bids %}
+                        <li>
+                            <a class="dropdown-item" href="{% url 'delete_bid' pk=bid.pk %}">
+                                Remove {{ bid.user.first_name }} {{ bid.user.last_name }} ({{ bid.user }})
+                            </a>
+                        </li>
+                    {% endfor %}
+                </ul>
+        {% endif %}
+        </div>
+    {% endif %}
         <h3>{{ lot.lot_name }}</h3>
             {{ lot.species_category }}{% if lot.category_automatically_added and lot.can_be_edited and lot.user == request.user %}<span class="badge bg-secondary">Cateogry automatically set.  Wrong?  <a href="/lots/edit/{{lot.pk}}">Fix it here</a></span><br>{% else %}, {% endif %}lot number {{lot.lot_number_display }}<br>
             {% if lot.i_bred_this_fish %}<span class="badge text-dark bg-light">Bred by this user</span>{%endif%}
@@ -447,25 +490,6 @@ function deactivate_lot() {
                 {% endif %}
         </span>
         {% if request.user.is_authenticated %}
-            {% if is_auction_admin %}
-            <button class="btn btn-primary me-2" hx-get="{% url 'auctionlotadmin' pk=lot.pk %}",
-                hx-target="#modals-here",
-                hx-trigger="click",
-                _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"><i class="bi bi-gear-fill"></i> Manage this lot</button>
-            <button class="btn btn-primary me-2" hx-get="{% url 'lot_refund' pk=lot.pk %}",
-                hx-target="#modals-here",
-                hx-trigger="click",
-                _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"><i class="bi bi-calendar-x"></i> Remove or refund</button>
-            {% endif %}
-            {% if is_auction_admin or lot.user.pk == request.user.pk%}
-            <a class="btn btn-primary me-2" href="{% url 'single_lot_label' pk=lot.pk %}"><i class="bi bi-tag"></i> {% if lot.label_printed%}Reprint label{% else %}Print label{% endif %}</a>
-            {% endif %}
-        {% endif %}
-        {% if request.user.is_superuser %}
-            <a href="/admin/auctions/lot/{{lot.pk}}/change/" class="btn btn-danger">Admin</a>
-            Promo weight: {{lot.promotion_weight}}
-        {% endif %}
-        {% if request.user.is_authenticated %}
             <span id="watch" {% if watched %} class="watched text-warning"><i class="bi bi-star-fill"></i> Watching{% else %}><i class="bi bi-star"></i> Watch{% endif %}</span>
                 {% if push_notifications_possible %}
                     <span id='subscribe_success'>
@@ -538,15 +562,6 @@ function deactivate_lot() {
                 {% endif %}
             <br>
         {% endif %}
-
-
-    {% if bids %}
-        <h5>Remove bids</h5>
-        {% for bid in bids %}
-        <a href="{% url 'delete_bid' pk=bid.pk %}" class='btn btn-danger mt-1 mr-1'>Remove {{bid.user.first_name}} {{bid.user.last_name}} ({{ bid.user }})'s bid</a><br>
-        {% endfor %}
-    {% endif %}
-
     </div>
   </div>
 </div>
@@ -786,40 +801,6 @@ function deactivate_lot() {
     </div>
     </div>
     {% endif %}
-<!-- Chart -->
-{% if request.user.is_superuser %}
-<script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.3/dist/Chart.min.js"></script>
-<canvas id="myChart" ></canvas>
-<span class="text-muted">Total views: {{lot.page_views }} ({{ lot.anonymous_views }} anyonymous views not shown)</span>
-<script>
-    $.ajax({
-        url: '/api/chart/lots/{{lot.pk}}/',
-        success: function (data) {
-            var ctx = document.getElementById('myChart').getContext('2d');
-            new Chart(ctx, {
-                type: 'bar',
-                data: {
-                    labels: data.labels,
-                    datasets: [{
-                    label: 'View time',
-                    backgroundColor: 'rgba(52, 152, 219, 0.4)',
-                    data: data.data
-                    }]
-                },
-                options: {
-                    legend: {
-                        display: false
-                    },
-                    title: {
-                        display: true,
-                        text: 'User view durations (seconds) of this lot'
-                    }
-                }
-            });
-        }
-    });
-</script>
-{% endif %}
     {% if lot.minutes_to_end > 10 or not lot.minutes_to_end %}
     {% include "ad.html" %}
     {% endif %}
