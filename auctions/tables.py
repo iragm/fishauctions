@@ -7,13 +7,34 @@ from .models import AuctionTOS, Lot
 
 class AuctionTOSHTMxTable(tables.Table):
     hide_string = "d-md-table-cell d-none"
+    show_on_mobile_string = "d-sm-table-cell d-md-none"
     bidder_number = tables.Column(accessor="bidder_number", verbose_name="ID", orderable=True)
     # id = tables.Column(accessor='display_name_for_admins', verbose_name="ID", orderable=False)
     # phone = tables.Column(accessor='phone_as_string', verbose_name="Phone", orderable=False)
-    invoice_link = tables.Column(accessor="invoice_link_html", verbose_name="Invoice", orderable=False)
-    add_lot_link = tables.Column(accessor="bulk_add_link_html", verbose_name="Add lots", orderable=False)
-    print_invoice_link = tables.Column(accessor="print_invoice_link_html", verbose_name="Lot labels", orderable=False)
+    invoice_link = tables.Column(
+        accessor="invoice_link_html",
+        verbose_name="Invoice",
+        orderable=False,
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
+    add_lot_link = tables.Column(
+        accessor="bulk_add_link_html",
+        verbose_name="Add lots",
+        orderable=False,
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
+    print_invoice_link = tables.Column(
+        accessor="print_labels_html",
+        verbose_name="Lot labels",
+        orderable=False,
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
     email = tables.Column(attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}})
+    actions = tables.Column(
+        accessor="actions_dropdown_html",
+        orderable=False,
+        attrs={"th": {"class": show_on_mobile_string}, "cell": {"class": show_on_mobile_string}},
+    )
 
     def render_name(self, value, record):
         # as a button, looks awful
@@ -30,6 +51,7 @@ class AuctionTOSHTMxTable(tables.Table):
             result += '<i class="text-danger bi bi-exclamation-octagon-fill" title="Bidding not allowed"></i>'
         # if not record.bidding_allowed:
         #     result += '<i class="text-danger ms-1 bi bi-cash-coin" title="Selling not allowed"></i>'
+        # for mobile, put other columns in a dropdown menu:
         return mark_safe(result)
 
     def render_email(self, value, record):
@@ -63,9 +85,22 @@ class AuctionTOSHTMxTable(tables.Table):
 
 
 class LotHTMxTable(tables.Table):
-    seller = tables.Column(accessor="auctiontos_seller", verbose_name="Seller")
-    winner = tables.Column(accessor="auctiontos_winner", verbose_name="Winner")
-    winning_price = tables.Column(accessor="winning_price", verbose_name="Price")
+    hide_string = "d-md-table-cell d-none"
+    seller = tables.Column(
+        accessor="auctiontos_seller",
+        verbose_name="Seller",
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
+    winner = tables.Column(
+        accessor="auctiontos_winner",
+        verbose_name="Winner",
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
+    winning_price = tables.Column(
+        accessor="winning_price",
+        verbose_name="Price",
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
     lot_number = tables.Column(accessor="lot_number_display", verbose_name="Lot number", orderable=False)
 
     def render_lot_name(self, value, record):
@@ -93,7 +128,15 @@ class LotHTMxTable(tables.Table):
         result += "</div>"
         if record.banned:
             result += '<span class="badge bg-danger">Removed</span>'
+        # on mobile, reduce the number of columns and show info below the lot name
+        result += f'<span class="d-block d-md-none"><b>Seller:</b> {record.auctiontos_seller} '
+        if record.auctiontos_winner:
+            result += f"<b>Winner:</b> {record.auctiontos_winner} (${record.winning_price}.00)"
+        result += "</span>"
         return mark_safe(result)
+
+    def render_winning_price(self, value, record):
+        return f"${value}.00"
 
     class Meta:
         model = Lot

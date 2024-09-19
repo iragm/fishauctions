@@ -1949,7 +1949,7 @@ class AuctionUsers(SingleTableMixin, FilterView, AuctionPermissionsMixin):
     model = AuctionTOS
     table_class = AuctionTOSHTMxTable
     filterset_class = AuctionTOSFilter
-    paginate_by = 500
+    paginate_by = 100
 
     def get_template_names(self):
         if self.request.htmx:
