@@ -818,4 +818,88 @@ function deactivate_lot() {
     <br><a href='{{lot.auction.view_lot_link}}'>View all lots for {{ lot.auction }}</a><br>
 {% endif %}
 </div>
+
+{% if show_feedback_dialog %}
+<div id="feedback-modals-container">
+<div id="feedback-modal-backdrop" class="modal-backdrop fade show" style="display:block;"></div>
+<div id="feedback-modal" class="modal fade show" tabindex="-1" style="display:block;">
+	<div class="modal-dialog modal-dialog-centered">
+	  <div class="modal-content">
+		<div class="modal-header">
+		  <h5 class="modal-title">You won this lot!</h5>
+		</div>
+		<div class="modal-body">
+        Leave feedback to inform others about this seller
+        <div class="d-flex justify-content-center">
+            <div class="btn-group" role="group" aria-label="Feedback selection">
+                <button type="button" id="1_{{ lot.lot_number }}_winner" onclick="feedback({{ lot.lot_number }}, 'winner', 1, null);" class="btn btn-secondary {% if lot.feedback_rating == 1 %}btn-success{% endif %}">
+                    +1, this was great!
+                </button>
+                <button type="button" id="0_{{ lot.lot_number }}_winner" onclick="feedback({{ lot.lot_number }}, 'winner', 0, null);" class="btn btn-secondary">
+                    No rating
+                </button>
+                <button type="button" id="-1_{{ lot.lot_number }}_winner" onclick="feedback({{ lot.lot_number }}, 'winner', -1, null);" class="btn btn-secondary {% if lot.feedback_rating == -1 %}btn-danger{% endif %}">
+                    -1, not recommended
+                </button>
+            </div>
+        </div>
+
+        <input type="text" placeholder="Comments" id="text_{{lot.lot_number}}_winner" onblur="feedback({{ lot.lot_number }}, 'winner', null, this.value);" value="{% if lot.feedback_text %}{{ lot.feedback_text }}{% endif %}" class="form-control mt-2" style="min-width: 20em;"></td>
+        <br>
+        <span class="text-muted"><a href="{% url 'feedback' %}">Leave feedback on all lots you've won here.</a></span>
+      <div class="modal-footer">
+        <button onclick="closeModal()" class="btn btn-secondary">Close</button>
+    </div>
+	  </div>
+	</div>
+  </div>
+</div>
+</div>
+<script>function closeModal() {
+	var container = document.getElementById("feedback-modals-container")
+	var backdrop = document.getElementById("feedback-modal-backdrop")
+	var modal = document.getElementById("feedback-modal")
+	modal.classList.remove("show")
+	backdrop.classList.remove("show")
+	setTimeout(function() {
+		container.removeChild(backdrop)
+		container.removeChild(modal)
+	}, 200)
+}
+function feedback(pk, leave_as, rating, text) {
+  data = {};
+  if (rating !== null) {
+    data.rating = rating;
+  }
+  if (text) {
+    data.text = text;
+  }
+  $.ajax({
+      type: "POST",
+      beforeSend: function (request) {
+          request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+      },
+      url: "/api/feedback/" + pk + "/" + leave_as + "/",
+      data: data,
+      success : function(result) {
+        if (text) {
+          $("#text_" + pk + "_" + leave_as).addClass('is-valid');
+        }
+        if (rating === 1){
+          $("#1_" + pk + "_" + leave_as).addClass('btn-success');
+          $("#-1_" + pk + "_" + leave_as).removeClass('btn-danger');
+        }
+        if (rating === -1){
+          $("#-1_" + pk + "_" + leave_as).addClass('btn-danger');
+          $("#1_" + pk + "_" + leave_as).removeClass('btn-success');
+        }
+        if (rating === 0){
+          $("#-1_" + pk + "_" + leave_as).removeClass('btn-danger');
+          $("#1_" + pk + "_" + leave_as).removeClass('btn-success');
+        }
+      }
+    });
+  };
+</script>
+{% endif %}
 {% endblock %}
