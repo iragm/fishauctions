@@ -5272,6 +5272,17 @@ class AdminDashboard(TemplateView):
 
     template_name = "dashboard.html"
 
+    def unique_page_views(self, minutes):
+        timeframe = timezone.now() - timezone.timedelta(minutes=minutes)
+        base_qs = PageView.objects.filter(date_start__gte=timeframe)
+        logged_in = base_qs.filter(user__isnull=False).aggregate(unique_views=Count("user", distinct=True))[
+            "unique_views"
+        ]
+        anon = base_qs.filter(user__isnull=True, session_id__isnull=False).aggregate(
+            unique_views=Count("session_id", distinct=True)
+        )["unique_views"]
+        return logged_in + anon
+
     def dispatch(self, request, *args, **kwargs):
         if not (request.user.is_superuser):
             messages.error(request, "Only admins can view the dashboard")
@@ -5362,6 +5373,18 @@ class AdminDashboard(TemplateView):
             )
             .order_by("-total_clicks")[:100]
         )
+        context["day_views_count"] = self.unique_page_views(24 * 60)
+        context["5m_views_count"] = self.unique_page_views(5)
+        context["30m_views_count"] = self.unique_page_views(30)
+        timeframe = timezone.now() - timezone.timedelta(minutes=30)
+        # check to make sure no auctions are happening before applying server updates
+        context["in_person_lots_ended"] = Lot.objects.filter(
+            is_deleted=False, auction__is_online=False, date_end__gte=timeframe, date_end__lte=timezone.now()
+        ).count()
+        timeframe = timezone.now() + timezone.timedelta(minutes=120)
+        context["online_auction_lots_ending"] = Lot.objects.filter(
+            is_deleted=False, date_end__lte=timeframe, date_end__gte=timezone.now()
+        ).count()
         return context
 
 
@@ -5674,6 +5697,7 @@ class AuctionStatsActivityJSONView(BaseLineChartView, AuctionStatsPermissionsMix
     bins = 21
     days_before = 16
     days_after = bins - days_before
+    dates_messed_with = False
 
     def dispatch(self, request, *args, **kwargs):
         self.auction = Auction.objects.get(slug=kwargs["slug"], is_deleted=False)
@@ -5685,12 +5709,19 @@ class AuctionStatsActivityJSONView(BaseLineChartView, AuctionStatsPermissionsMix
         else:  # in person
             self.date_start = self.auction.date_start - timezone.timedelta(days=self.days_before)
             self.date_end = self.auction.date_start + timezone.timedelta(days=self.days_after)
+        # if date_end is in the future, shift the graph to show the same range, but for the present
+        if self.date_end > timezone.now():
+            time_difference = self.date_end - self.date_start
+            self.date_end = timezone.now()
+            self.date_start = self.date_end - time_difference
+            self.dates_messed_with = True
         # self.bin_size = (self.date_end - self.date_start).total_seconds() / self.bins
         # self.bin_edges = [self.date_start + timezone.timedelta(seconds=self.bin_size * i) for i in range(self.bins + 1)]
         return super().dispatch(request, *args, **kwargs)
 
     def get_labels(self):
-        # return [(f"Day {i}") for i in range(self.bins + 1)]
+        if self.dates_messed_with:
+            return [(f"{i-1} days ago") for i in range(self.bins, 0, -1)]
         before = [(f"{i} days before") for i in range(self.days_before, 0, -1)]
         after = [(f"{i} days after") for i in range(1, self.days_after)]
         midpoint = "start"
