@@ -5272,6 +5272,17 @@ class AdminDashboard(TemplateView):
 
     template_name = "dashboard.html"
 
+    def unique_page_views(self, minutes):
+        timeframe = timezone.now() - timezone.timedelta(minutes=minutes)
+        base_qs = PageView.objects.filter(date_start__gte=timeframe)
+        logged_in = base_qs.filter(user__isnull=False).aggregate(unique_views=Count("user", distinct=True))[
+            "unique_views"
+        ]
+        anon = base_qs.filter(user__isnull=True, session_id__isnull=False).aggregate(
+            unique_views=Count("session_id", distinct=True)
+        )["unique_views"]
+        return logged_in + anon
+
     def dispatch(self, request, *args, **kwargs):
         if not (request.user.is_superuser):
             messages.error(request, "Only admins can view the dashboard")
@@ -5362,6 +5373,18 @@ class AdminDashboard(TemplateView):
             )
             .order_by("-total_clicks")[:100]
         )
+        context["day_views_count"] = self.unique_page_views(24 * 60)
+        context["5m_views_count"] = self.unique_page_views(5)
+        context["30m_views_count"] = self.unique_page_views(30)
+        timeframe = timezone.now() - timezone.timedelta(minutes=30)
+        # check to make sure no auctions are happening before applying server updates
+        context["in_person_lots_ended"] = Lot.objects.filter(
+            is_deleted=False, auction__is_online=False, date_end__gte=timeframe, date_end__lte=timezone.now()
+        ).count()
+        timeframe = timezone.now() + timezone.timedelta(minutes=120)
+        context["online_auction_lots_ending"] = Lot.objects.filter(
+            is_deleted=False, date_end__lte=timeframe, date_end__gte=timezone.now()
+        ).count()
         return context
 
 

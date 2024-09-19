@@ -5,8 +5,33 @@
             <h3>Admin Dashboard</h3>
             <table class="table">
                 <tr>
+                  <td>active users 5m:</td>
+                  <td> {{ 5m_views_count }}
+                  </td>
+                </tr>
+                <tr>
+                  <td>active users 30m:</td>
+                  <td> {{ 30m_views_count }}
+                  </td>
+                </tr>
+                <tr>
+                  <td>active users 1d:</td>
+                  <td>{{ day_views_count }}
+                  </td>
+                </tr>
+                <tr>
                   <td>total_users:</td>
                   <td> {{ total_users }}
+                  </td>
+                </tr>
+                <tr>
+                  <td>in person lots ended in the last 30 minutes:</td>
+                  <td> {{ in_person_lots_ended }}
+                  </td>
+                </tr>
+                <tr>
+                  <td>online lots ending in the next 2 hours:</td>
+                  <td> {{ online_auction_lots_ending }}
                   </td>
                 </tr>
                 <tr>

@@ -3414,7 +3414,7 @@ class UserIgnoreCategory(models.Model):
 
 
 class PageView(models.Model):
-    """Track what lots a user views, and how long they spend looking at each one"""
+    """Track what lots a user views"""
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True)
     auction = models.ForeignKey(Auction, null=True, blank=True, on_delete=models.CASCADE)
