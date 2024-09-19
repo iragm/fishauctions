@@ -1048,7 +1048,9 @@ def feedback(request, pk, leave_as):
                     winner_checks_pass = True
             if lot.auctiontos_winner:
                 if lot.auctiontos_winner.user:
-                    if lot.auctiontos_winner.user.pk == request.user.pk:
+                    if (lot.auctiontos_winner.user.pk == request.user.pk) or (
+                        lot.auctiontos_winner.email == request.user.email
+                    ):
                         winner_checks_pass = True
         if winner_checks_pass:
             try:
@@ -2949,6 +2951,13 @@ class ViewLot(DetailView):
                 context["autocheck_chat_subscriptions"] = "false"
             else:
                 context["chat_subscriptions_is_checked"] = False
+        if (
+            lot.auctiontos_winner
+            and self.request.user.is_authenticated
+            and self.request.user.email == lot.auctiontos_winner.email
+        ) or (lot.winner and self.request.user.is_authenticated and self.request.user == lot.winner):
+            if lot.winner_feedback_rating == 0 and timezone.now() > lot.date_end + timedelta(days=2):
+                context["show_feedback_dialog"] = True
         return context
 
 
