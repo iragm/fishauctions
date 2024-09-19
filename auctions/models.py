@@ -583,7 +583,7 @@ class Auction(models.Model):
     use_categories = models.BooleanField(default=True, verbose_name="This is a fish auction")
     use_categories.help_text = "Check to use categories like Cichlids, Livebearers, etc."
     is_deleted = models.BooleanField(default=False)
-    allow_bidding_on_lots = models.BooleanField(default=True)
+    allow_bidding_on_lots = models.BooleanField(default=True, verbose_name="Allow online bidding")
     only_approved_sellers = models.BooleanField(default=False)
     only_approved_sellers.help_text = "Require admin approval before users can add lots.  This will not change permissions for users that have already joined."
     only_approved_bidders = models.BooleanField(default=False)

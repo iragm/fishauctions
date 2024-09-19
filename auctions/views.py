@@ -5697,6 +5697,7 @@ class AuctionStatsActivityJSONView(BaseLineChartView, AuctionStatsPermissionsMix
     bins = 21
     days_before = 16
     days_after = bins - days_before
+    dates_messed_with = False
 
     def dispatch(self, request, *args, **kwargs):
         self.auction = Auction.objects.get(slug=kwargs["slug"], is_deleted=False)
@@ -5708,12 +5709,19 @@ class AuctionStatsActivityJSONView(BaseLineChartView, AuctionStatsPermissionsMix
         else:  # in person
             self.date_start = self.auction.date_start - timezone.timedelta(days=self.days_before)
             self.date_end = self.auction.date_start + timezone.timedelta(days=self.days_after)
+        # if date_end is in the future, shift the graph to show the same range, but for the present
+        if self.date_end > timezone.now():
+            time_difference = self.date_end - self.date_start
+            self.date_end = timezone.now()
+            self.date_start = self.date_end - time_difference
+            self.dates_messed_with = True
         # self.bin_size = (self.date_end - self.date_start).total_seconds() / self.bins
         # self.bin_edges = [self.date_start + timezone.timedelta(seconds=self.bin_size * i) for i in range(self.bins + 1)]
         return super().dispatch(request, *args, **kwargs)
 
     def get_labels(self):
-        # return [(f"Day {i}") for i in range(self.bins + 1)]
+        if self.dates_messed_with:
+            return [(f"{i-1} days ago") for i in range(self.bins, 0, -1)]
         before = [(f"{i} days before") for i in range(self.days_before, 0, -1)]
         after = [(f"{i} days after") for i in range(1, self.days_after)]
         midpoint = "start"

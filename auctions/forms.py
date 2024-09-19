@@ -1590,9 +1590,7 @@ class AuctionEditForm(forms.ModelForm):
         else:
             # self.fields["only_approved_bidders"].widget = forms.HiddenInput()
             self.fields["unsold_lot_fee"].widget = forms.HiddenInput()
-            self.fields[
-                "allow_bidding_on_lots"
-            ].help_text = "Allow people to place bids online.  You should probably leave this unchecked."
+            self.fields["allow_bidding_on_lots"].help_text = "Most auctions should leave this off, it confuses people"
             self.fields[
                 "date_end"
             ].help_text = "You should probably leave this blank so that you can manually set winners. This field has been indefinitely set to hidden - see https://github.com/iragm/fishauctions/issues/116"
