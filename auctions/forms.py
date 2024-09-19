@@ -756,12 +756,10 @@ class CreateEditAuctionTOS(forms.ModelForm):
                     "tos": self.auctiontos.bidder_number,
                 },
             )
-            problem_button_html = f"<a href={problems_url} class='btn text-dark bg-warning'><i class='bi bi-exclamation-circle'></i> Problems</a>"
+            problem_button_html = f"<a href={problems_url} class='btn text-dark bg-warning d-none d-md-inline'><i class='bi bi-exclamation-circle'></i> Problems</a>"
             post_url = f"/api/auctiontos/{self.auctiontos.pk}/"
             delete_url = reverse("auctiontosdelete", kwargs={"pk": self.auctiontos.pk})
-            delete_button_html = (
-                f"<a href={delete_url} class='btn bg-danger'><i class='bi bi-person-fill-x'></i> Delete</a>"
-            )
+            delete_button_html = f"<a href={delete_url} class='btn bg-danger d-none d-md-inline'><i class='bi bi-person-fill-x'></i> Delete</a>"
         else:
             post_url = f"/api/auctiontos/{self.auction.slug}/"
         self.helper = FormHelper()
@@ -810,10 +808,10 @@ class CreateEditAuctionTOS(forms.ModelForm):
             ),
             Div(
                 HTML(
-                    f'{problem_button_html}{delete_button_html}<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'
+                    f'{problem_button_html}{delete_button_html}<button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>'
                 ),
                 HTML(
-                    f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn bg-success float-right ms-2">Save</button>'
+                    f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn bg-success">Save</button>'
                 ),
                 css_class="modal-footer",
             ),

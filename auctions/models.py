@@ -1535,27 +1535,64 @@ class AuctionTOS(models.Model):
         return self.unprinted_labels_qs.count()
 
     @property
-    def print_invoice_link_html(self):
-        """Link print lot labels for this user"""
+    def print_labels_link_html(self):
         if self.unbanned_lot_count:
             url = reverse(
                 "print_labels_by_bidder_number",
                 kwargs={"bidder_number": self.bidder_number, "slug": self.auction.slug},
             )
+            return f"<a href='{url}'><i class='bi bi-tags me-1'></i>Print labels</a>"
+        return ""
+
+    @property
+    def print_unprinted_labels_link_html(self):
+        if self.unprinted_label_count and self.unprinted_label_count != self.print_labels_qs.count():
             unprinted_url = reverse(
                 "print_unprinted_labels_by_bidder_number",
                 kwargs={"bidder_number": self.bidder_number, "slug": self.auction.slug},
             )
-            result = f"<a href='{url}'><i class='bi bi-tags me-1'></i>Print labels</a>"
-            if self.unprinted_label_count and self.unprinted_label_count != self.print_labels_qs.count():
+            return f"<a href='{unprinted_url}'>Print only {self.unprinted_label_count} unprinted labels</a>"
+        return ""
+
+    @property
+    def print_labels_html(self):
+        """For use in HTMX users table; print lot labels for this user"""
+        if self.unbanned_lot_count:
+            result = self.print_labels_link_html
+            if self.print_unprinted_labels_link_html:
                 result += f"""
                 <button type="button" class="btn btn-sm btn-secondary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
                 </button>
                 <div class="dropdown-menu">
-                    <a href='{unprinted_url}'>Print only {self.unprinted_label_count} unprinted labels</a>
+                    <span class='dropdown-item'>{self.print_unprinted_labels_link_html}</span>
                 </div>"""
             return html.format_html(result)
         return ""
+
+    @property
+    def actions_dropdown_html(self):
+        result = f"""<button type='button' class='btn btn-sm btn-secondary dropdown-toggle dropdown-toggle-split' data-bs-toggle='dropdown'
+        aria-haspopup='true' aria-expanded='false'>Actions </button>
+        <div class = "dropdown-menu" id='actions_dropdown'>
+        <span class='dropdown-item'>{self.bulk_add_link_html}</span>"""
+        if self.invoice_link_html:
+            result += f"<span class='dropdown-item'>{self.invoice_link_html}</span>"
+        if self.print_labels_link_html:
+            result += f"<span class='dropdown-item'>{self.print_labels_link_html}</span>"
+        if self.print_unprinted_labels_link_html:
+            result += f"<span class='dropdown-item'>{self.print_unprinted_labels_link_html}</span>"
+        delete_url = reverse("auctiontosdelete", kwargs={"pk": self.pk})
+        result += f"<span class='dropdown-item'><a href={delete_url}><i class='bi bi-person-fill-x me-1'></i>Delete</a></span>"
+        problems_url = reverse(
+            "auction_no_show",
+            kwargs={
+                "slug": self.auction.slug,
+                "tos": self.bidder_number,
+            },
+        )
+        result += f"<span class='dropdown-item'><a href={problems_url}><i class='bi bi-exclamation-circle me-1'></i>Problems</a></span>"
+        result += "</div>"
+        return html.format_html(result)
 
     @property
     def invoice(self):
@@ -1569,9 +1606,9 @@ class AuctionTOS(models.Model):
             if self.invoice.status == "UNPAID":
                 status = "bag-check"
             if self.invoice.status == "PAID":
-                status = "bag-heart"
+                status = "bag-heart text-success"
             return html.format_html(
-                f"<a href='{self.invoice.get_absolute_url()}' hx-noget><i class='bi bi-{status} me-1'></i>View</a>"
+                f"<a href='{self.invoice.get_absolute_url()}' hx-noget><i class='bi bi-{status} me-1'></i>View<span class='d-sm-inline d-md-none'> invoice</span></a>"
             )
         else:
             return ""
