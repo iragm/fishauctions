@@ -17,7 +17,7 @@
     {% crispy formset helper %}
     <button class='btn btn-info' id="add-form" type="button">Add row</button>
 
-    <input type="submit" class='btn bg-info float-right submit-button ms-2 ml-2' name='save_print' id='save_print' value="Save and print labels">
+    <input type="submit" class='btn bg-info float-right submit-button ms-2 ml-2 d-none d-md-inline' name='save_print' id='save_print' value="Save and print labels">
     <input type="submit" class='btn bg-success float-right submit-button' name='save_submit' id='save_submit' value="Save lots for {% if is_admin%}{{ tos.name }}{% else %}{{ auction }}{% endif %}">
   </form>
 {% endblock %}
