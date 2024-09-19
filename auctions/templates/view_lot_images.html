@@ -135,6 +135,9 @@ function deactivate_lot() {
     {% if request.user.is_authenticated %}
         <div class="btn-group" role="group">
             {% if is_auction_admin %}
+                <a class="btn btn-primary" href="/auctions/{{auction.slug}}/lots">
+                    <i class="bi bi-calendar me-1"></i>All lots
+                </a>
                 <button class="btn btn-primary" hx-get="{% url 'auctionlotadmin' pk=lot.pk %}"
                     hx-target="#modals-here"
                     hx-trigger="click"
@@ -167,7 +170,7 @@ function deactivate_lot() {
                     {% for bid in bids %}
                         <li>
                             <a class="dropdown-item" href="{% url 'delete_bid' pk=bid.pk %}">
-                                Remove {{ bid.user.first_name }} {{ bid.user.last_name }} ({{ bid.user }})
+                                Remove bid from {{ bid.user.first_name }} {{ bid.user.last_name }} ({{ bid.user }})
                             </a>
                         </li>
                     {% endfor %}
