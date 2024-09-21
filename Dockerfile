@@ -80,6 +80,7 @@ RUN groupadd -r -g ${PUID-1000} app && \
 
 # create the appropriate directories
 ENV APP_HOME=/home/app/web
+RUN mkdir /home/logs
 RUN mkdir /home/user
 RUN mkdir $APP_HOME
 RUN mkdir $APP_HOME/staticfiles
@@ -130,6 +131,7 @@ RUN /tmp/python_file_hack.sh
 
 # chown all the files to the app user
 RUN chown -R app:app $APP_HOME
+RUN chown -R app:app /home/logs
 RUN chown -R app:app /home/user
 RUN chown -R app:app /var/log/
 RUN chown -R app:app /var/log/

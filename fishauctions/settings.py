@@ -52,6 +52,54 @@ CSRF_TRUSTED_ORIGINS = [
     "https://" + os.environ.get("ALLOWED_HOST_3", ""),
 ]
 
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": "{levelname} {asctime} {module}.{funcName}:{lineno} {message}",
+            "style": "{",
+        },
+        "simple": {
+            "format": "{levelname} {message}",
+            "style": "{",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "simple",
+        },
+        "django_file": {
+            "level": os.getenv("DJANGO_LOG_LEVEL", "INFO"),
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": "/home/logs/django.log",
+            "maxBytes": 1024 * 1024 * 5,  # 5 MB
+            "backupCount": 5,
+            "formatter": "verbose",
+        },
+        "root_file": {
+            "level": os.getenv("LOG_LEVEL", "INFO"),
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": "/home/logs/root.log",
+            "maxBytes": 1024 * 1024 * 5,  # 5 MB
+            "backupCount": 5,
+            "formatter": "verbose",
+        },
+    },
+    "root": {
+        "handlers": ["console", "root_file"],
+        "level": os.getenv("LOG_LEVEL", "INFO"),
+    },
+    "loggers": {
+        "django": {
+            "handlers": ["django_file"],
+            "level": os.getenv("DJANGO_LOG_LEVEL", "INFO"),
+            "propagate": False,
+        },
+    },
+}
+
 # Channels
 CHANNEL_LAYERS = {
     "default": {

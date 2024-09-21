@@ -8,3 +8,4 @@ auctions/templates/ads.txt
 swag/
 mediafiles/
 staticfiles/
+logs/
