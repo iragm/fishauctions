@@ -1,4 +1,8 @@
+import logging
+
 from django.core.management.base import BaseCommand
+
+logger = logging.getLogger(__name__)
 
 
 def compare_model_instances(instance1, instance2):

@@ -1,5 +1,6 @@
 import ast
 import csv
+import logging
 import re
 from collections import Counter
 from datetime import datetime, timedelta
@@ -152,6 +153,8 @@ from .models import (
 )
 from .tables import AuctionTOSHTMxTable, LotHTMxTable, LotHTMxTableForUsers
 
+logger = logging.getLogger(__name__)
+
 
 def bin_data(
     queryset,
@@ -274,13 +277,13 @@ class AuctionPermissionsMixin:
         result = self.auction.permission_check(self.request.user)
         if not result:
             if self.allow_non_admins:
+                logger.debug("non-admins allowed")
                 pass
-                # print('non-admins allowed')
             else:
                 raise PermissionDenied()
         else:
+            logger.debug("allowing user %s to view %s", self.request.user, self.auction)
             pass
-            # print(f"allowing user {self.request.user} to view {self.auction}")
         return result
 
 
@@ -306,13 +309,14 @@ class AuctionStatsPermissionsMixin:
         result = self.auction.permission_check(self.request.user)
         if not result:
             if not self.auction.make_stats_public:
+                logger.debug("non-admins allowed")
                 pass
-                # print('non-admins allowed')
+
             else:
                 raise PermissionDenied()
         else:
+            logger.debug("allowing user %s to view %s", self.request.user, self.auction)
             pass
-            # print(f"allowing user {self.request.user} to view {self.auction}")
         return result
 
 
@@ -377,7 +381,8 @@ class RenderAd(DetailView):
                 campaign.bid = campaign.bid * 2  # Better chance for matching category.  Don't save after this
             if campaign.bid > uniform(0, total - 1):
                 if campaign.number_of_clicks > campaign.max_clicks or campaign.number_of_impressions > campaign.max_ads:
-                    pass  # print("not selected -- limit exceeded")
+                    logger.debug("not selected -- limit exceeded")
+                    pass
                 else:
                     return AdCampaignResponse.objects.create(
                         user=user, campaign=campaign
@@ -901,7 +906,7 @@ def userBan(request, pk):
             lot = Lot.objects.get(pk=bid.lot_number.pk, is_deleted=False)
             if lot.user == user or lot.auction in auctionsList:
                 if not lot.ended:
-                    # print('Deleting bid ' + str(bid))
+                    logger.info("Deleting bid %s", str(bid))
                     bid.delete()
         # ban all lots added by the banned user.  These are not deleted, just removed from the auction
         for auction in auctionsList:
@@ -913,7 +918,7 @@ def userBan(request, pk):
             lots = Lot.objects.exclude(is_deleted=True).filter(user=bannedUser, auction=auction.pk)
             for lot in lots:
                 if not lot.ended:
-                    # print(f"User {str(user)} has banned lot {lot}")
+                    logger.info("User %s has banned lot %s", str(user), lot)
                     lot.banned = True
                     lot.ban_reason = "The seller of this lot has been banned from this auction"
                     lot.save()
@@ -3197,8 +3202,7 @@ class LotValidation(LoginRequiredMixin):
                             newImage.save()
                         # we are only cloning images here, not watchers, views, or other related models
                 except Exception as e:
-                    print(e)
-                    # pass
+                    logger.exception(e)
             msg = "Created lot!"
             if not lot.image_count:
                 msg += f"You should probably <a href='/images/add_image/{lot.lot_number}/'>add an image</a>  to this lot.  Or, "
@@ -3742,8 +3746,9 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                     # you still don't get to clone auctions that aren't yours...
                     if original_auction.permission_check(self.request.user):
                         clone_from_auction = original_auction
-            except Exception:
-                pass  # print(e)
+            except Exception as e:
+                logger.exception(e)
+                pass
         elif "online" in str(self.request.GET):
             is_online = True
         else:
@@ -4026,7 +4031,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
             userData.save()
             return self.form_valid(form)
         else:
-            # print(form.cleaned_data)
+            logger.debug(form.cleaned_data)
             return self.form_invalid(form)
 
 
@@ -4699,11 +4704,11 @@ class LotLabelView(View, AuctionPermissionsMixin):
 
             # Check if the current label is the last label in the current row or the last label in the list
             if (i + 1) % num_cols == 0 or i == len(labels) - 1:
-                # print(f'we have reached the end, {len(labels)} in total')
+                logger.debug("we have reached the end, %s in total", len(labels))
                 # Check if the current label is the last label in the list and labels_row is not full
                 if i == len(labels) - 1 and len(labels_row) < num_cols * 3:
                     # Add empty elements to the labels_row list until it is filled
-                    # print(f"adding {(num_cols*3) - len(labels_row)} extra labels, *3 total columns added")
+                    logger.debug("adding %s extra labels, *3 total columns added", (num_cols * 3) - len(labels_row))
                     labels_row += [
                         [
                             Paragraph("", style),

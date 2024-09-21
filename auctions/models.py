@@ -1,4 +1,5 @@
 import datetime
+import logging
 import re
 import uuid
 from datetime import time
@@ -42,6 +43,8 @@ from location_field.models.plain import PlainLocationField
 from markdownfield.models import MarkdownField, RenderedMarkdownField
 from markdownfield.validators import VALIDATOR_STANDARD
 from pytz import timezone as pytz_timezone
+
+logger = logging.getLogger(__name__)
 
 
 def nearby_auctions(
@@ -399,7 +402,7 @@ def guess_category(text):
         categories[lot.species_category.pk] = category_total + matches
     sorted_categories = sorted(categories.items(), key=lambda x: x[1], reverse=True)
     for key, value in sorted_categories:
-        # print(Category.objects.filter(pk=key).first(), value)
+        logger.debug("%s, %s", Category.objects.filter(pk=key).first(), value)
         return Category.objects.filter(pk=key).first()
     return None
 
@@ -1633,7 +1636,7 @@ class AuctionTOS(models.Model):
             return AuctionTOS.objects.filter(bidder_number=number, auction=self.auction).count()
 
         if not self.pk:
-            # print("new instance of auctionTOS")
+            logger.debug("new instance of auctionTOS")
             if self.auction.only_approved_sellers:
                 self.selling_allowed = False
             if self.auction.only_approved_bidders:
@@ -1905,7 +1908,7 @@ class AuctionTOS(models.Model):
             if userData.last_ip_address:
                 other_users = UserData.objects.filter(last_ip_address=userData.last_ip_address).exclude(pk=userData.pk)
                 for other_user in other_users:
-                    # print(f"{self.user} is also known as {other_user.user}")
+                    logger.debug("%s is also known as %s", self.user, other_user.user)
                     banned = UserBan.objects.filter(banned_user=other_user.user, user=self.auction.created_by).first()
                     if banned:
                         url = reverse("userpage", kwargs={"slug": other_user.user.username})
@@ -2704,7 +2707,7 @@ class Lot(models.Model):
     @property
     def price(self):
         """Price display"""
-        print(
+        logger.warning(
             "this is most likely safe to remove, it uses max_bid which should never be displayed to normal people.  I don't think it's used anywhere."
         )
         if self.winning_price:
@@ -3708,7 +3711,9 @@ class UserData(models.Model):
     @property
     def species_sold(self):
         """Total different species that this user has bred and sold in auctions"""
-        print("species_sold is is no longer used, there's no way for users to enter species information anymore")
+        logger.warning(
+            "species_sold is is no longer used, there's no way for users to enter species information anymore"
+        )
         allLots = (
             self.my_lots_qs.filter(i_bred_this_fish=True, winner__isnull=False).values("species").distinct().count()
         )
@@ -4267,7 +4272,7 @@ def on_save_auction(sender, instance, **kwargs):
 
     # if this is an existing auction
     if instance.pk:
-        # print('updating date end on lots because this is an existing auction')
+        logger.info("updating date end on lots because this is an existing auction")
         # update the date end for all lots associated with this auction
         # note that we do NOT update the end time if there's a winner!
         # This means you cannot reopen an auction simply by changing the date end
@@ -4306,7 +4311,7 @@ def on_save_auction(sender, instance, **kwargs):
                 },
             )
         except:
-            print("Somehow there's two pickup locations for this auction -- how is this possible?")
+            logger.warning("Somehow there's two pickup locations for this auction -- how is this possible?")
 
 
 @receiver(pre_save, sender=UserData)

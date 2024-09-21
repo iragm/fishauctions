@@ -1,8 +1,12 @@
+import logging
+
 from allauth.account.models import EmailAddress
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
 from auctions.models import UserData
+
+logger = logging.getLogger(__name__)
 
 
 class Command(BaseCommand):
@@ -17,5 +21,5 @@ class Command(BaseCommand):
             )
             time_difference = email.user.userdata.last_activity - email.user.date_joined
             if time_difference < timezone.timedelta(hours=24):
-                print("Deleting", email.user)
+                logger.info("Deleting %s", email.user)
                 email.user.delete()

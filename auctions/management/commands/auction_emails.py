@@ -1,4 +1,5 @@
 import datetime
+import logging
 
 from django.contrib.sites.models import Site
 from django.core.management.base import BaseCommand
@@ -7,6 +8,8 @@ from django.utils import timezone
 from post_office import mail
 
 from auctions.models import Auction, UserData
+
+logger = logging.getLogger(__name__)
 
 
 class Command(BaseCommand):
@@ -56,7 +59,7 @@ class Command(BaseCommand):
                     percentComplete = percentComplete.total_seconds() / runtime.total_seconds() * 100
                     if percentComplete > 70:
                         if not auction.email_second_sent:
-                            # print(f'sending auction_second to {auction.created_by.email} ')
+                            logger.info("sending auction_second to %s ", auction.created_by.email)
                             mail.send(
                                 auction.created_by.email,
                                 template="auction_second",
