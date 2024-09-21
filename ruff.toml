@@ -16,7 +16,6 @@ extend-select = [
     # "C90",  # McCabe Complexity
     # "D",    # pydocstyle
     # "DJ",   # flake8-django
-    # "DTZ",  # flake8-datetimez
     "E",    # pycodestyle
     "EM",   # flake8-errmsg
     # "ERA",  # eradicate
@@ -36,7 +35,7 @@ extend-select = [
     # "S",    # flake8-bandit
     # "SIM",  # flake8-simplify
     "TID",  # flake8-tidy-imports
-    # "T20",  # flake8-print
+    "T20",  # flake8-print
     "UP",   # pyupgrade
     "W",    # pycodestyle warnings
 ]

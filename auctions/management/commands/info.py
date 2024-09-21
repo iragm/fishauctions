@@ -1,4 +1,8 @@
+import logging
+
 from django.core.management.base import BaseCommand
+
+logger = logging.getLogger(__name__)
 
 
 def compare_model_instances(instance1, instance2):
@@ -40,13 +44,13 @@ class Command(BaseCommand):
     # total = AuctionCampaign.objects.all().count()
     # total = total-none
     # joined = joined/total * 100
-    # print('joined', joined)
+    # logger.debug('joined', joined)
     # no_response = no_response/total * 100
-    # print('no response', no_response)
+    # logger.debug('no response', no_response)
     # viewed = viewed/total * 100
-    # print('viewed', viewed)
+    # logger.debug('viewed', viewed)
     # none = none/total * 100
-    # print('no email sent', none)
+    # logger.debug('no email sent', none)
     # lots_with_buy_now_available = Lot.objects.filter(is_deleted=False, auction__isnull=False, auction__promote_this_auction=True, buy_now_price__isnull=False)
     # #lots_with_buy_now_used = Lot.objects.filter(is_deleted=False, auction__isnull=False, auction__promote_this_auction=True, buy_now_price__isnull=False, winning_price=F('buy_now_price'))
     # sum_of_buy_now_used = 0
@@ -69,14 +73,14 @@ class Command(BaseCommand):
     #         if lot.winning_price < lot.buy_now_price:
     #             count_of_lots_that_sold_for_less_than_buy_now += 1
     #             sum_of_lots_that_sold_for_less_than_buy_now += lot.winning_price
-    # print(f"buy now is used {count_of_buy_now_used/lots_with_buy_now_available.count()*100}% of the time when it's available")
-    # print(f"average sell price when buy now is used is ${sum_of_buy_now_used/count_of_buy_now_used}")
-    # print(f"average sell price when buy now is not used is ${(sum_of_lots_that_sold_for_less_than_buy_now+sum_of_lots_that_sold_for_more_than_buy_now)/(count_of_lots_that_sold_for_less_than_buy_now+count_of_lots_that_sold_for_more_than_buy_now)}")
-    # print(f"when buy now is not used, the lot sells for more than the buy now price {count_of_lots_that_sold_for_more_than_buy_now/(count_of_lots_that_sold_for_less_than_buy_now+count_of_lots_that_sold_for_more_than_buy_now)*100}% of the time")
+    # logger.debug(f"buy now is used {count_of_buy_now_used/lots_with_buy_now_available.count()*100}% of the time when it's available")
+    # logger.debug(f"average sell price when buy now is used is ${sum_of_buy_now_used/count_of_buy_now_used}")
+    # logger.debug(f"average sell price when buy now is not used is ${(sum_of_lots_that_sold_for_less_than_buy_now+sum_of_lots_that_sold_for_more_than_buy_now)/(count_of_lots_that_sold_for_less_than_buy_now+count_of_lots_that_sold_for_more_than_buy_now)}")
+    # logger.debug(f"when buy now is not used, the lot sells for more than the buy now price {count_of_lots_that_sold_for_more_than_buy_now/(count_of_lots_that_sold_for_less_than_buy_now+count_of_lots_that_sold_for_more_than_buy_now)*100}% of the time")
 
     # lots = Lot.objects.filter(Q(feedback_text__isnull=False)|Q(winner_feedback_text__isnull=False))
     # for lot in lots:
-    #    print(lot.winner_feedback_text, lot.feedback_text)
+    #    logger.debug(lot.winner_feedback_text, lot.feedback_text)
 
     # # fix auctiontos_user on invoices:
     # invoices = Invoice.objects.filter(auctiontos_user__isnull=True, auction__isnull=False, user__isnull=False)
@@ -105,7 +109,7 @@ class Command(BaseCommand):
     #         if not lot.auctiontos_winner:
     #             corrected_winner = AuctionTOS.objects.filter(user=lot.winner, auction=lot.auction).first()
     #             if not corrected_winner:
-    #                 pass#print(lot)
+    #                 pass#logger.debug(lot)
     #             else:
     #                 lot.auctiontos_winner = corrected_winner
     #                 lot.save()
@@ -113,22 +117,22 @@ class Command(BaseCommand):
     #         if not lot.auctiontos_seller:
     #             corrected_seller = AuctionTOS.objects.filter(user=lot.user, auction=lot.auction).first()
     #             if not corrected_seller:
-    #                 pass#print(lot)
+    #                 pass#logger.debug(lot)
     #             else:
-    #                 #print(f"setting {corrected_seller} to be the winenr of {lot}")
+    #                 #logger.debug(f"setting {corrected_seller} to be the winenr of {lot}")
     #                 lot.auctiontos_seller = corrected_seller
     #                 lot.save()
     # # check to make sure that all worked correctly
     # lots = Lot.objects.filter(auction__isnull=False, auctiontos_seller__isnull=True)
     # for lot in lots:
-    #     print(lot)
+    #     logger.debug(lot)
 
     # auctions with no pickup location
     # auctions = Auction.objects.all()
     # for auction in auctions:
     #     locations = PickupLocation.objects.filter(auction=auction)
     #     if not locations:
-    #         print(auction.get_absolute_url())
+    #         logger.debug(auction.get_absolute_url())
 
     # create a graph of how prices change over time
     # f = open("views.txt", "a")
@@ -145,16 +149,16 @@ class Command(BaseCommand):
 
     # some info to add to the dashboard at some point
     # qs = UserData.objects.filter(user__is_active=True)
-    # print(qs.exclude(user__lot__isnull=False).distinct().count()) # sellers
-    # print(qs.exclude(user__winner__isnull=False).distinct().count()) # buyers
-    # print(qs.exclude(user__bid__isnull=True).distinct().count()) # bidders
-    # print(qs.exclude(Q(user__lot__isnull=False)|Q(user__winner__isnull=False)|Q(user__bid__isnull=True)).distinct().count()) # bidders
+    # logger.debug(qs.exclude(user__lot__isnull=False).distinct().count()) # sellers
+    # logger.debug(qs.exclude(user__winner__isnull=False).distinct().count()) # buyers
+    # logger.debug(qs.exclude(user__bid__isnull=True).distinct().count()) # bidders
+    # logger.debug(qs.exclude(Q(user__lot__isnull=False)|Q(user__winner__isnull=False)|Q(user__bid__isnull=True)).distinct().count()) # bidders
 
     # list page views by time
     # views = PageView.objects.filter(user__isnull=False)
     # f = open("views.txt", "a")
     # for view in views:
-    #     print(view.total_time)
+    #     logger.debug(view.total_time)
     #     f.write(f"{view.total_time}\n")
     # f.close()
 
@@ -170,26 +174,26 @@ class Command(BaseCommand):
     # why are there so many mikes??
     # allUsers = User.objects.all().count()
     # mikes = User.objects.filter(Q(first_name="mike")| Q(first_name="michael")).count()
-    # print(allUsers)
-    # print(mikes)
+    # logger.debug(allUsers)
+    # logger.debug(mikes)
 
 
 #  auction = Auction.objects.get(title="TFCB Annual Auction")
 #        users = User.objects.filter(pageview__lot_number__auction=auction).annotate(dcount=Count('id'))
 #        for user in users:
-# print(lot.num_views)
-#            print(f"{user.first_name} {user.last_name}")
+# logger.debug(lot.num_views)
+#            logger.debug(f"{user.first_name} {user.last_name}")
 
 # auction = Auction.objects.get(title="TFCB Annual Auction")
 
-# print(f'{lot.pk}, {bids}, {}')
+# logger.debug(f'{lot.pk}, {bids}, {}')
 # users = User.objects.all()
 # auction = Auction.objects.get(title="PVAS Fall Auction")
 # for user in users:
 #     #won = len(Lot.objects.filter(winner=user, auction=auction))
 #     views = len(PageView.objects.filter(lot_number__auction=auction, user=user))
 #     if views > 5:
-#         print(f'"{user.first_name} {user.last_name}", {views}')
+#         logger.debug(f'"{user.first_name} {user.last_name}", {views}')
 
 # lots = Lot.objects.all()
 # noImageCount = 0
@@ -229,10 +233,10 @@ class Command(BaseCommand):
 #         if lot.winner:
 #             noImageSold += 1
 #             noImageValue.append(lot.winning_price)
-# print("none", noImageSold, noImageCount, sum(noImageValue) / len(noImageValue) )
-# print("internet", internetImageSold, internetImageCount, sum(internetImageValue) / len(internetImageValue) )
-# print("representative", representativeImageSold, representativeImageCount, sum(representativeImageValue) / len(representativeImageValue) )
-# print("actual", actualImageSold, actualImageCount, sum(actualImageValue) / len(actualImageValue) )
+# logger.debug("none", noImageSold, noImageCount, sum(noImageValue) / len(noImageValue) )
+# logger.debug("internet", internetImageSold, internetImageCount, sum(internetImageValue) / len(internetImageValue) )
+# logger.debug("representative", representativeImageSold, representativeImageCount, sum(representativeImageValue) / len(representativeImageValue) )
+# logger.debug("actual", actualImageSold, actualImageCount, sum(actualImageValue) / len(actualImageValue) )
 
 # users = User.objects.all()
 # for user in users:
@@ -243,25 +247,25 @@ class Command(BaseCommand):
 #     #bid = Bid.objects.filter(user=user.pk, lot_number__auction=auction)
 #     won = Lot.objects.filter(winner=user.pk, auction=auction)
 #     #if bid and not userdata.location:
-#     #    print(user.email)
+#     #    logger.debug(user.email)
 #     #viewed = PageView.objects.filter(user=user.pk, lot_number__auction=auction)
 #     if lots or won: #or viewed:# and not lots:
 #         #if user.email == 'cmatuse@gmail.com':
-#         #    print(bid)
+#         #    logger.debug(bid)
 #         confirmed = ""
 #         if user.email not in confirmed:
-#             print(f"{user.first_name} {user.last_name} {user.email}")
+#             logger.debug(f"{user.first_name} {user.last_name} {user.email}")
 #             #try:
 #             #    userdata = UserData.objects.get(user=user.pk)
-#             #    print(user.email, userdata.phone_number)
+#             #    logger.debug(user.email, userdata.phone_number)
 #             #except:
 #             #    pass
 #     # if lots:
 #     #     #if not user.first_name:
-#     #     #    print(user.email)
+#     #     #    logger.debug(user.email)
 #     #     #if bids or lots:
-#     #     print(f"{user.first_name} {user.last_name}` {user.email}` {userdata.location}`Seller")
+#     #     logger.debug(f"{user.first_name} {user.last_name}` {user.email}` {userdata.location}`Seller")
 #     # elif bid:
-#     #     print(f"{user.first_name} {user.last_name}` {user.email}` {userdata.location}`Bidder")
+#     #     logger.debug(f"{user.first_name} {user.last_name}` {user.email}` {userdata.location}`Bidder")
 #     # elif viewed:
-#     #     print(f"{user.first_name} {user.last_name}` {user.email}` {userdata.location}`No bids or lots sold")
+#     #     logger.debug(f"{user.first_name} {user.last_name}` {user.email}` {userdata.location}`No bids or lots sold")

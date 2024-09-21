@@ -1,5 +1,6 @@
-# from django.core.exceptions import ValidationError
+import logging
 
+# from django.core.exceptions import ValidationError
 from allauth.account.forms import ResetPasswordForm, SignupForm
 
 # from bootstrap_datepicker_plus import DateTimePickerInput
@@ -37,6 +38,8 @@ from .models import (
 
 # class DateInput(forms.DateInput):
 #     input_type = 'datetime-local'
+
+logger = logging.getLogger(__name__)
 
 
 class QuickAddTOS(forms.ModelForm):
@@ -939,9 +942,9 @@ class CreateBid(forms.ModelForm):
     # def save(self, *args, **kwargs):
     #     kwargs['commit']=False
     #     obj = super().save(*args, **kwargs)
-    #     print(self.req.user.id)
+    #     logger.debug(self.req.user.id)
     #     #obj.user = self.req.user.id
-    #     #print(str(obj.user)+ " has placed a bid on " + str(obj.lot_number))
+    #     #logger.debug(str(obj.user)+ " has placed a bid on " + str(obj.lot_number))
     #     obj.save()
     #     return obj
 
@@ -1456,7 +1459,7 @@ class CreateAuctionForm(forms.ModelForm):
 
         if self.instance.pk:
             # editing existing auction
-            print("wait, no, we should never get here!!!")
+            logger.debug("wait, no, we should never get here!!!")
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_id = "auction-form"

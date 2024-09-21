@@ -1,6 +1,7 @@
 # chat/consumers.py
 import datetime
 import json
+import logging
 
 from asgiref.sync import async_to_sync
 from channels.generic.websocket import WebsocketConsumer
@@ -22,6 +23,8 @@ from .models import (
     UserData,
     UserInterestCategory,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def check_bidding_permissions(lot, user):
@@ -177,7 +180,9 @@ def bid_on_lot(lot, user, amount):
             if not created:
                 if amount <= bid.amount:
                     result["message"] = f"Bid more than your proxy bid (${bid.amount})"
-                    # print(f"{user_string} tried to bid on {lot} less than their original bid of ${originalBid}")
+                    logger.debug(
+                        "%s tried to bid on %s less than their original bid of $%s", user_string, lot, originalBid
+                    )
                     return result
                 else:
                     bid.last_bid_time = timezone.now()
@@ -241,7 +246,7 @@ def bid_on_lot(lot, user, amount):
             if bid.amount <= originalBid:  # changing this to < would allow bumping without being the high bidder
                 # there's a high bidder already
                 bid.save()  # save the current bid regardless
-                # print(f"{user_string} tried to bid on {lot} less than the current bid of ${originalBid}")
+                logger.debug("%s tried to bid on %s less than the current bid of $%s", user_string, lot, originalBid)
                 result["message"] = f"You can't bid less than ${originalBid + 1}"
                 return result
             if bid.amount > originalBid + 1:
@@ -261,7 +266,7 @@ def bid_on_lot(lot, user, amount):
                         # user is upping their own price, don't tell other people about it
                         result["type"] = "INFO"
                         result["message"] = f"You've raised your proxy bid to ${bid.amount}"
-                        # print(f"{user_string} has raised their bid on {lot} to ${bid.amount}")
+                        logger.debug("%s has raised their bid on %s to $%s", user_string, lot, bid.amount)
                         return result
                 except:
                     pass
@@ -277,7 +282,7 @@ def bid_on_lot(lot, user, amount):
                 result["send_to"] = "everyone"
                 # email the old one
                 current_site = Site.objects.get_current()
-                # print(f'{originalHighBidder.username} has been outbid!')
+                logger.debug("%s has been outbid!", originalHighBidder.username)
                 mail.send(
                     originalHighBidder.email,
                     template="outbid_notification",
@@ -316,7 +321,7 @@ def bid_on_lot(lot, user, amount):
             )
             return result
     except Exception as e:
-        print(e)
+        logger.exception(e)
 
 
 class LotConsumer(WebsocketConsumer):
@@ -357,7 +362,7 @@ class LotConsumer(WebsocketConsumer):
                         },
                     )
                 except Exception as e:
-                    print(e)
+                    logger.exception(e)
             try:
                 owner_chat_notifications = False
                 if self.lot.user:
@@ -382,10 +387,10 @@ class LotConsumer(WebsocketConsumer):
                         },
                     )
             except Exception as e:
-                print(e)
+                logger.exception(e)
 
         except Exception as e:
-            print(e)
+            logger.exception(e)
 
     def disconnect(self, close_code):
         # Leave room group
@@ -397,13 +402,13 @@ class LotConsumer(WebsocketConsumer):
         if self.lot.auctiontos_seller and self.lot.auctiontos_seller.user:
             user_pk = self.lot.auctiontos_seller.user
         if user_pk and self.user.pk == user_pk:
-            # print("lot owner is leaving the chat, marking all chats as seen")
+            logger.debug("lot owner is leaving the chat, marking all chats as seen")
             LotHistory.objects.filter(lot=self.lot.pk, seen=False).update(seen=True)
         # this is for everyone else
         if self.user.pk:
             existing_subscription = ChatSubscription.objects.filter(lot=self.lot, user=self.user.pk).first()
             if existing_subscription:
-                print(f"Marking all ChatSubscription seen last time now for user {self.user.pk}")
+                logger.info("Marking all ChatSubscription seen last time now for user %s", self.user.pk)
                 existing_subscription.last_seen = timezone.now()
                 existing_subscription.last_notification_sent = timezone.now()
                 existing_subscription.save()
@@ -411,8 +416,6 @@ class LotConsumer(WebsocketConsumer):
     # Receive message from WebSocket
     def receive(self, text_data):
         text_data_json = json.loads(text_data)
-        # print(self.user)
-        # print(text_data_json)
         if self.user.is_authenticated:
             try:
                 error = check_all_permissions(self.lot, self.user)
@@ -430,7 +433,6 @@ class LotConsumer(WebsocketConsumer):
                                 {"type": "error_message", "error": error},
                             )
                         else:
-                            # try:
                             if True:
                                 LotHistory.objects.create(
                                     lot=self.lot,
@@ -439,8 +441,6 @@ class LotConsumer(WebsocketConsumer):
                                     changed_price=False,
                                     current_price=self.lot.high_bid,
                                 )
-                            # except Exception as e:
-                            #     print(e)
                             async_to_sync(self.channel_layer.group_send)(
                                 self.room_group_name,
                                 {
@@ -502,10 +502,9 @@ class LotConsumer(WebsocketConsumer):
                     except:
                         pass
             except Exception as e:
-                print(e)
+                logger.exception(e)
         else:
             pass
-            # print("user is not authorized")
 
     # Send a toast error to a single user
     def error_message(self, event):
@@ -555,18 +554,18 @@ class UserConsumer(WebsocketConsumer):
                 #     {"type": "toast", "message": 'Welcome!', 'bg': 'success'},
                 # )
         except Exception as e:
-            print(e)
+            logger.exception(e)
             self.close()
 
     def disconnect(self, close_code):
         # Leave room group
         async_to_sync(self.channel_layer.group_discard)(self.user_notification_channel, self.channel_name)
-        print("disconnected")
+        logger.debug("disconnected")
 
     # Receive message from WebSocket
     def receive(self, text_data):
         text_data_json = json.loads(text_data)
-        print(text_data_json)
+        logger.info(text_data_json)
 
     def toast(self, event):
         message = event["message"]

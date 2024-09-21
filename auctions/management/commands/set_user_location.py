@@ -1,4 +1,5 @@
 import datetime
+import logging
 
 import requests
 from django.core.management.base import BaseCommand
@@ -6,6 +7,8 @@ from django.db.models import Q
 from django.utils import timezone
 
 from auctions.models import Location, PageView, UserData
+
+logger = logging.getLogger(__name__)
 
 
 class Command(BaseCommand):
@@ -50,18 +53,21 @@ class Command(BaseCommand):
                                             value for value in [continent, country, default] if value is not None
                                         )
                                     user.save()
-                                    print(f"assigning {user.user.email} with IP {user.last_ip_address} a location")
+                                    logger.info(
+                                        "assigning %s with IP %s a location", user.user.email, user.last_ip_address
+                                    )
                                     break
                                 else:
-                                    print(
-                                        f"IP {user.last_ip_address} may not be valid - verify it and set their location manually"
+                                    logger.info(
+                                        "IP %s may not be valid - verify it and set their location manually",
+                                        user.last_ip_address,
                                     )
                         except Exception as e:
-                            print(e)
+                            logger.exception(e)
             else:
-                print("Query failed for this IP list:")
-                print(ip_list)
-                print(r["text"])
+                logger.warning("Query failed for this IP list:")
+                logger.warning(ip_list)
+                logger.warning(r["text"])
             # some limitations to note:
             # we are capped at 100 lookups per query
             # Looks like the cap on this service is 15 per minute, so it's easily able to meet our needs if the cron job is run more often.
@@ -99,8 +105,9 @@ class Command(BaseCommand):
                                     view.save()
                                     break
                                 else:
-                                    print(
-                                        f"IP {view.ip_address} may not be valid - verify it and set their location manually"
+                                    logger.warning(
+                                        "IP %s may not be valid - verify it and set their location manually",
+                                        view.ip_address,
                                     )
                         except Exception as e:
-                            print(e)
+                            logger.exception(e)

@@ -6,6 +6,7 @@ services:
       - .:/home/app/web
       - ./auctions/static:/home/app/web/staticfiles
       - ./mediafiles:/home/app/web/mediafiles
+      - ./logs:/home/logs
     expose:
       - 8000
     env_file: .env

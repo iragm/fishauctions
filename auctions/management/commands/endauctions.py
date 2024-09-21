@@ -1,4 +1,5 @@
 import datetime
+import logging
 
 from django.contrib.sites.models import Site
 from django.core.management.base import BaseCommand
@@ -7,6 +8,8 @@ from easy_thumbnails.files import get_thumbnailer
 from post_office import mail
 
 from auctions.models import Lot, LotHistory, LotImage
+
+logger = logging.getLogger(__name__)
 
 
 def declare_winners_on_lots(lots):
@@ -133,8 +136,8 @@ def declare_winners_on_lots(lots):
                             newImage.image_source = "REPRESENTATIVE"
                         newImage.save()
             except Exception as e:
-                print(f'Unable to set winner on "{lot}":')
-                print(e)
+                logger.warning('Unable to set winner on "%s":', lot)
+                logger.exception(e)
         else:
             # note: once again, lots that are part of an in-person auction are not included here
             if lot.ending_very_soon and not lot.sold:
