@@ -416,8 +416,6 @@ class LotConsumer(WebsocketConsumer):
     # Receive message from WebSocket
     def receive(self, text_data):
         text_data_json = json.loads(text_data)
-        # print(self.user)
-        # print(text_data_json)
         if self.user.is_authenticated:
             try:
                 error = check_all_permissions(self.lot, self.user)
@@ -435,7 +433,6 @@ class LotConsumer(WebsocketConsumer):
                                 {"type": "error_message", "error": error},
                             )
                         else:
-                            # try:
                             if True:
                                 LotHistory.objects.create(
                                     lot=self.lot,
@@ -444,8 +441,6 @@ class LotConsumer(WebsocketConsumer):
                                     changed_price=False,
                                     current_price=self.lot.high_bid,
                                 )
-                            # except Exception as e:
-                            #     print(e)
                             async_to_sync(self.channel_layer.group_send)(
                                 self.room_group_name,
                                 {
@@ -510,7 +505,6 @@ class LotConsumer(WebsocketConsumer):
                 logger.exception(e)
         else:
             pass
-            # print("user is not authorized")
 
     # Send a toast error to a single user
     def error_message(self, event):

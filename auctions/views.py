@@ -2782,9 +2782,6 @@ class ViewLot(DetailView):
 
     def get_queryset(self):
         pk = self.kwargs.get(self.pk_url_kwarg)
-        # print(pk) # this will be set for /lots/1234/
-        # print(self.auction_slug) # otherwise, these two will be set for /auctions/abc-def/lots/custom_number/
-        # print(self.custom_lot_number)
         qs = Lot.objects.exclude(is_deleted=True)
         try:
             latitude = self.request.COOKIES["latitude"]
@@ -5981,7 +5978,7 @@ class AuctionStatsReferrersJSONView(AuctionStatsBarChartJSONView):
 #         #auctiontos = AuctionTOS.objects.filter(auction__promote_this_auction=True, user__isnull=False)
 #         buyer_histogram = bin_data(buyers, 'distance_traveled', number_of_bins=5, start_bin=1, end_bin=51, add_column_for_high_overflow=True,)
 #         #seller_histogram = bin_data(sellers, 'distance_traveled', number_of_bins=5, start_bin=1, end_bin=51, add_column_for_high_overflow=True,)
-#         print(buyers.count())
+#         logger.debug(buyers.count())
 #         return [buyer_histogram]
 
 #     def dispatch(self, request, *args, **kwargs):

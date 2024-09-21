@@ -942,9 +942,9 @@ class CreateBid(forms.ModelForm):
     # def save(self, *args, **kwargs):
     #     kwargs['commit']=False
     #     obj = super().save(*args, **kwargs)
-    #     print(self.req.user.id)
+    #     logger.debug(self.req.user.id)
     #     #obj.user = self.req.user.id
-    #     #print(str(obj.user)+ " has placed a bid on " + str(obj.lot_number))
+    #     #logger.debug(str(obj.user)+ " has placed a bid on " + str(obj.lot_number))
     #     obj.save()
     #     return obj
 

@@ -2731,7 +2731,6 @@ class Lot(models.Model):
             bidPrice = allBids[0].amount
             return bidPrice
         except:
-            # print("no bids for this item")
             return self.reserve_price
 
     @property
@@ -2774,7 +2773,6 @@ class Lot(models.Model):
                     # bidPrice = bids[1].amount
                 return bidPrice
             except:
-                # print("no bids for this item")
                 return self.reserve_price
 
     @property
@@ -3130,7 +3128,6 @@ class Invoice(models.Model):
     def rounded_net(self):
         """Always round in the customer's favor (against the club) to make sure that the club doesn't need to deal with change, only whole dollar amounts"""
         rounded = round(self.net)
-        # print(f"{self.net} Rounded to {rounded}")
         if self.user_should_be_paid:
             if self.net > rounded:
                 # we rounded down against the customer
@@ -4297,7 +4294,6 @@ def on_save_auction(sender, instance, **kwargs):
     else:
         # logic for new auctions goes here
         pass
-    # print(instance.date_start)
     if not instance.is_online:
         # for in-person auctions, we need to add a single pickup location
         # and create it if the user was dumb enough to delete it

@@ -742,7 +742,6 @@ class LotPricesTests(TestCase):
         self.tos.save()
         lot = lots.filter(pk=self.lot.pk).first()
         assert lot.your_cut == 10
-        # print(lot.winning_price, lot.your_cut)
         unsold_lot = lots.filter(pk=self.unsold_lot.pk).first()
         assert unsold_lot.your_cut == -10
 
@@ -880,8 +879,6 @@ class LotLabelViewTestCase(StandardTestCase):
         user_label_prefs.save()
         self.client.login(username=self.user, password="testpassword")
         response = self.client.get(self.url)
-        # for message in list(response.wsgi_request._messages):
-        #    print(str(message))
         assert response.status_code == 200
         assert "attachment; filename=" in response.headers["Content-Disposition"]
 
