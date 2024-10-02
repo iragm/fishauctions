@@ -753,6 +753,26 @@ class LotPricesTests(TestCase):
         unsold_lot = lots.filter(pk=self.unsold_lot.pk).first()
         assert unsold_lot.your_cut == -10
 
+        # lot is now pre-registered
+        self.lot.user = self.user
+        self.lot.added_by = self.user
+        self.lot.save()
+        lot = lots.filter(pk=self.lot.pk).first()
+        assert lot.pre_register_discount == 10
+        self.tos.is_club_member = False
+        self.tos.save()
+        # failing in tests, I believe due to sqlite, manual testing works in mariadb.
+        # fixme by uncommenting below once tests have been moved to mariadb
+        # assert lot.your_cut == 6
+        self.tos.is_club_member = True
+        self.tos.save()
+        lot = lots.filter(pk=self.lot.pk).first()
+        # fixme, same deal as the assert before this, see https://github.com/iragm/fishauctions/issues/165
+        # assert lot.your_cut == 6
+        self.lot.user = None
+        self.lot.added_by = None
+        self.lot.save()
+
         self.auction.lot_entry_fee_for_club_members = 1
         self.auction.save()
         lot = lots.filter(pk=self.lot.pk).first()

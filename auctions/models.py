@@ -131,7 +131,7 @@ def add_price_info(qs):
                                             - F(
                                                 "auctiontos_seller__auction__winning_bid_percent_to_club_for_club_members"
                                             )
-                                            - F("pre_register_discount")
+                                            + F("pre_register_discount")
                                         )
                                         / 100
                                     ),
