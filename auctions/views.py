@@ -26,6 +26,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.files.base import ContentFile
 from django.db.models import (
     Avg,
+    Case,
     Count,
     Exists,
     ExpressionWrapper,
@@ -36,6 +37,8 @@ from django.db.models import (
     Q,
     Subquery,
     Sum,
+    Value,
+    When,
 )
 from django.db.models.base import Model as Model
 from django.db.models.functions import TruncDay
@@ -83,6 +86,7 @@ from webpush import send_user_notification
 from webpush.models import PushInformation
 
 from .filters import (
+    AuctionFilter,
     AuctionTOSFilter,
     LotAdminFilter,
     LotFilter,
@@ -151,7 +155,7 @@ from .models import (
     median_value,
     nearby_auctions,
 )
-from .tables import AuctionTOSHTMxTable, LotHTMxTable, LotHTMxTableForUsers
+from .tables import AuctionHTMxTable, AuctionTOSHTMxTable, LotHTMxTable, LotHTMxTableForUsers
 
 logger = logging.getLogger(__name__)
 
@@ -318,6 +322,39 @@ class AuctionStatsPermissionsMixin:
             logger.debug("allowing user %s to view %s", self.request.user, self.auction)
             pass
         return result
+
+
+class LocationMixin:
+    """For location aware views, adds a `get_coordinates()` function which returns a tuple of `latitude, longitude` based on self.request.cookies or userdata
+
+    get_coordinates() should be called before get_context_data
+    make sure to set `view.no_location_message`"""
+
+    # override this message in your view, it'll be shown to users without a location
+    no_location_message = "Click here to set your location"
+
+    # don't set this, it'll get set automatically by get_coordinates() if the user does not have a cookie
+    _location_message = None
+
+    def get_coordinates(self):
+        try:
+            latitude = float(self.request.COOKIES.get("latitude", 0))
+            longitude = float(self.request.COOKIES.get("longitude", 0))
+        except (ValueError, TypeError):
+            latitude, longitude = 0, 0
+
+        if latitude == 0 and longitude == 0:
+            self._location_message = self.no_location_message
+
+            if self.request.user.is_authenticated:
+                latitude = self.request.user.userdata.latitude
+                longitude = self.request.user.userdata.longitude
+        return latitude, longitude
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["location_message"] = self._location_message
+        return context
 
 
 class ClickAd(RedirectView):
@@ -4141,13 +4178,35 @@ def toAccount(request):
     return redirect(reverse("userpage", kwargs={"slug": request.user.username}))
 
 
-class allAuctions(ListView):
+class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
     model = Auction
-    template_name = "all_auctions.html"
-    ordering = ["-date_end"]
+    no_location_message = "Set your location to see how far away auctions are"
+    table_class = AuctionHTMxTable
+    filterset_class = AuctionFilter
+    paginate_by = 100
+
+    def get_template_names(self):
+        if self.request.htmx:
+            template_name = "tables/table_generic.html"
+        else:
+            template_name = "all_auctions.html"
+        return template_name
 
     def get_queryset(self):
-        qs = Auction.objects.exclude(is_deleted=True).order_by("-date_start")
+        last_auction_pk = -1
+        if self.request.user.is_authenticated and self.request.user.userdata.last_auction_used:
+            last_auction_pk = self.request.user.userdata.last_auction_used.pk
+        qs = (
+            Auction.objects.exclude(is_deleted=True)
+            .annotate(
+                is_last_used=Case(
+                    When(pk=last_auction_pk, then=Value(1)),
+                    default=Value(0),
+                    output_field=IntegerField(),
+                )
+            )
+            .order_by("-is_last_used", "-date_start")
+        )
         next_90_days = timezone.now() + timedelta(days=90)
         two_years_ago = timezone.now() - timedelta(days=365 * 2)
         standard_filter = Q(
@@ -4155,19 +4214,7 @@ class allAuctions(ListView):
             date_start__lte=next_90_days,
             date_posted__gte=two_years_ago,
         )
-        latitude = 0
-        longitude = 0
-        try:
-            latitude = self.request.COOKIES["latitude"]
-            longitude = self.request.COOKIES["longitude"]
-        except:
-            if self.request.user.is_authenticated:
-                userData, created = UserData.objects.get_or_create(
-                    user=self.request.user,
-                    defaults={},
-                )
-                latitude = userData.latitude
-                longitude = userData.longitude
+        latitude, longitude = self.get_coordinates()
         if latitude and longitude:
             closest_pickup_location_subquery = (
                 PickupLocation.objects.filter(auction=OuterRef("pk"))
@@ -4176,33 +4223,36 @@ class allAuctions(ListView):
                 .values("distance")[:1]
             )
             qs = qs.annotate(distance=Subquery(closest_pickup_location_subquery))
-        if self.request.user.is_superuser:
-            return qs.exclude(pk=self.request.user.userdata.last_auction_used.pk)
+        else:
+            qs = qs.annotate(distance=Value(0, output_field=FloatField()))
         if not self.request.user.is_authenticated:
-            return qs.filter(standard_filter)
-        qs = qs.filter(
-            Q(auctiontos__user=self.request.user)
-            | Q(auctiontos__email=self.request.user.email)
-            | Q(created_by=self.request.user)
-            | standard_filter
-        ).distinct()
-        if self.request.user.userdata.last_auction_used:
-            # union messes with ordering
-            qs = qs.exclude(pk=self.request.user.userdata.last_auction_used.pk)
+            return qs.filter(standard_filter).annotate(joined=Value(0, output_field=FloatField())).distinct()
+        qs = (
+            qs.filter(
+                Q(auctiontos__user=self.request.user)
+                | Q(auctiontos__email=self.request.user.email)
+                | Q(created_by=self.request.user)
+                | standard_filter
+            )
+            .annotate(
+                joined=Exists(
+                    AuctionTOS.objects.filter(
+                        auction=OuterRef("pk"),
+                        user=self.request.user,
+                    )
+                )
+            )
+            .distinct()
+        )
         return qs
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        try:
-            self.request.COOKIES["longitude"]
-        except:
-            if self.request.user.is_authenticated:
-                context["location_message"] = "Set your location to get notifications about new auctions near you"
-            else:
-                context["location_message"] = "Set your location to see how far away auctions are"
         context["hide_google_login"] = True
-        if self.request.user.is_authenticated:
-            context["last_auction_used"] = self.request.user.userdata.last_auction_used
+        if not self.object_list.exists():
+            context["no_results"] = (
+                "<span class='text-danger'>No auctions found.</span>  This only searches club auctions, if you're looking for fish to buy, check out <a href='/lots/'>the list of lots for sale</a>"
+            )
         return context
 
 

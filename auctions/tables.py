@@ -1,8 +1,9 @@
 import django_tables2 as tables
 from django.urls import reverse
+from django.utils import formats
 from django.utils.safestring import mark_safe
 
-from .models import AuctionTOS, Lot
+from .models import Auction, AuctionTOS, Lot
 
 
 class AuctionTOSHTMxTable(tables.Table):
@@ -157,6 +158,56 @@ class LotHTMxTable(tables.Table):
     #     'hx-trigger':"click",
     #     '_':"on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"
     # }
+
+
+class AuctionHTMxTable(tables.Table):
+    hide_string = "d-md-table-cell d-none"
+
+    auction = tables.Column(accessor="title", verbose_name="Auction")
+    date = tables.Column(accessor="date_start", verbose_name="Status")
+    lots = tables.Column(
+        accessor="template_lot_link_seperate_column",
+        verbose_name="Lots",
+        orderable=False,
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
+
+    def render_date(self, value, record):
+        localized_date = formats.date_format(record.template_date_timestamp, use_l10n=True)
+        return mark_safe(f"{record.template_status}{localized_date}{record.ended_badge}")
+
+    def render_auction(self, value, record):
+        auction = record
+        result = f"<a href='{auction.get_absolute_url()}'>{auction.title}</a><br class='d-md-none'>"
+        if auction.is_last_used:
+            result += " <span class='ms-1 badge bg-light text-black'>Your last auction</span>"
+        if auction.is_online:
+            result += " <span class='badge bg-info'>Online</span>"
+        if not auction.promote_this_auction:
+            result += " <span class='badge bg-dark'>Not promoted</span>"
+        if auction.distance:
+            result += f" <span class='badge bg-primary'>{int(auction.distance)} miles from you</span>"
+        if auction.joined:
+            result += " <span class='badge bg-success text-black'>Joined</span>"
+        result += auction.template_lot_link_first_column + auction.template_promo_info
+        return mark_safe(result)
+
+    class Meta:
+        model = Auction
+        template_name = "tables/bootstrap_htmx.html"
+        fields = (
+            "auction",
+            "date",
+            "lots",
+        )
+        row_attrs = {
+            # 'class': lambda record: str(record.table_class),
+            # 'style':'cursor:pointer;',
+            # 'hx-get': lambda record: "/api/lot/" + str(record.pk),
+            # 'hx-target':"#modals-here",
+            # 'hx-trigger':"click",
+            # '_':"on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"
+        }
 
 
 class LotHTMxTableForUsers(tables.Table):

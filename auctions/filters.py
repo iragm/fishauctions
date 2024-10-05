@@ -32,6 +32,37 @@ from .models import (
 )
 
 
+class AuctionFilter(django_filters.FilterSet):
+    """Filter for the main auctions list"""
+
+    query = django_filters.CharFilter(
+        method="auction_search",
+        label="",
+        widget=TextInput(
+            attrs={
+                "placeholder": "Filter by auction name, or type a number to see nearby auctions",
+                "hx-get": "",
+                "hx-target": "div.table-container",
+                "hx-trigger": "keyup changed delay:300ms",
+                "hx-swap": "outerHTML",
+                "hx-indicator": ".progress",
+            }
+        ),
+    )
+
+    class Meta:
+        model = Auction
+        fields = []  # nothing here so no buttons show up
+
+    def auction_search(self, queryset, name, value):
+        if value == "joined":
+            return queryset.exclude(joined=False).exclude(joined=0)
+        if value.isnumeric():
+            return queryset.filter(distance__lte=int(value))
+        else:
+            return queryset.filter(title__icontains=value)
+
+
 class AuctionTOSFilter(django_filters.FilterSet):
     """This filter is used on any admin views that allow adding users to an auction and on lot creation/winner screens"""
 
