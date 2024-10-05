@@ -596,7 +596,10 @@ class Auction(models.Model):
     email_users_when_invoices_ready = models.BooleanField(default=True)
     invoice_payment_instructions = models.CharField(max_length=255, blank=True, null=True, default="")
     invoice_payment_instructions.help_text = "Shown to the user on their invoice.  For example, 'You will receive a seperate PayPal invoice with payment instructions'"
-    # partial for #139
+    invoice_rounding = models.BooleanField(default=True)
+    invoice_rounding.help_text = (
+        "Round invoice totals to whole dollar amounts.  Check if you plan to accept cash payments."
+    )
     minimum_bid = models.PositiveIntegerField(default=2, validators=[MinValueValidator(1)])
     minimum_bid.help_text = "Lowest price any lot will be sold for"
     lot_entry_fee_for_club_members = models.PositiveIntegerField(
@@ -3127,6 +3130,8 @@ class Invoice(models.Model):
     @property
     def rounded_net(self):
         """Always round in the customer's favor (against the club) to make sure that the club doesn't need to deal with change, only whole dollar amounts"""
+        if not self.auction.invoice_rounding:
+            return self.net
         rounded = round(self.net)
         if self.user_should_be_paid:
             if self.net > rounded:

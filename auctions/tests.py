@@ -795,6 +795,16 @@ class LotPricesTests(TestCase):
         lot = lots.filter(pk=self.lot.pk).first()
         assert lot.your_cut == 0
 
+    def test_invoice_rounding(self):
+        invoice, created = Invoice.objects.get_or_create(auctiontos_user=self.tos)
+        assert invoice.rounded_net == -4
+        self.auction.invoice_rounding = False
+        self.auction.winning_bid_percent_to_club = 12
+        self.auction.save()
+        invoice, created = Invoice.objects.get_or_create(auctiontos_user=self.tos)
+        assert invoice.net == invoice.rounded_net
+        assert round(invoice.rounded_net, 2) == -3.2
+
 
 class LotRefundDialogTests(TestCase):
     def setUp(self):

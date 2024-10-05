@@ -1536,6 +1536,7 @@ class AuctionEditForm(forms.ModelForm):
             "only_approved_sellers",
             "only_approved_bidders",
             "invoice_payment_instructions",
+            "invoice_rounding",
             "minimum_bid",
             "winning_bid_percent_to_club_for_club_members",
             "lot_entry_fee_for_club_members",
@@ -1754,6 +1755,10 @@ class AuctionEditForm(forms.ModelForm):
                 Div(
                     "invoice_payment_instructions",
                     css_class="col-md-6",
+                ),
+                Div(
+                    "invoice_rounding",
+                    css_class="col-md-3",
                 ),
                 Div(
                     "use_categories",
