@@ -26,6 +26,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.files.base import ContentFile
 from django.db.models import (
     Avg,
+    Case,
     Count,
     Exists,
     ExpressionWrapper,
@@ -36,6 +37,8 @@ from django.db.models import (
     Q,
     Subquery,
     Sum,
+    Value,
+    When,
 )
 from django.db.models.base import Model as Model
 from django.db.models.functions import TruncDay
@@ -4144,10 +4147,22 @@ def toAccount(request):
 class allAuctions(ListView):
     model = Auction
     template_name = "all_auctions.html"
-    ordering = ["-date_end"]
 
     def get_queryset(self):
-        qs = Auction.objects.exclude(is_deleted=True).order_by("-date_start")
+        last_auction_pk = -1
+        if self.request.user.is_authenticated and self.request.user.userdata.last_auction_used:
+            last_auction_pk = self.request.user.userdata.last_auction_used.pk
+        qs = (
+            Auction.objects.exclude(is_deleted=True)
+            .annotate(
+                is_last_used=Case(
+                    When(pk=last_auction_pk, then=Value(1)),
+                    default=Value(0),
+                    output_field=IntegerField(),
+                )
+            )
+            .order_by("-is_last_used", "-date_start")
+        )
         next_90_days = timezone.now() + timedelta(days=90)
         two_years_ago = timezone.now() - timedelta(days=365 * 2)
         standard_filter = Q(
@@ -4176,8 +4191,6 @@ class allAuctions(ListView):
                 .values("distance")[:1]
             )
             qs = qs.annotate(distance=Subquery(closest_pickup_location_subquery))
-        if self.request.user.is_superuser:
-            return qs.exclude(pk=self.request.user.userdata.last_auction_used.pk)
         if not self.request.user.is_authenticated:
             return qs.filter(standard_filter)
         qs = qs.filter(
@@ -4186,9 +4199,6 @@ class allAuctions(ListView):
             | Q(created_by=self.request.user)
             | standard_filter
         ).distinct()
-        if self.request.user.userdata.last_auction_used:
-            # union messes with ordering
-            qs = qs.exclude(pk=self.request.user.userdata.last_auction_used.pk)
         return qs
 
     def get_context_data(self, **kwargs):
