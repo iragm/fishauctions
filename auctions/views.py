@@ -324,7 +324,16 @@ class AuctionStatsPermissionsMixin:
 
 
 class LocationMixin:
-    """For location aware views, adds a `get_coordinates()` function which returns a tuple of `latitude, longitude` based on self.request.cookies or userdata"""
+    """For location aware views, adds a `get_coordinates()` function which returns a tuple of `latitude, longitude` based on self.request.cookies or userdata
+
+    get_coordinates() should be called before get_context_data
+    make sure to set `view.no_location_message`"""
+
+    # override this message in your view, it'll be shown to users without a location
+    no_location_message = "Click here to set your location"
+
+    # don't set this, it'll get set automatically by get_coordinates() if the user does not have a cookie
+    _location_message = None
 
     def get_coordinates(self):
         try:
@@ -333,10 +342,18 @@ class LocationMixin:
         except (ValueError, TypeError):
             latitude, longitude = 0, 0
 
-        if latitude == 0 and longitude == 0 and self.request.user.is_authenticated:
-            latitude = self.request.user.userdata.latitude
-            longitude = self.request.user.userdata.longitude
+        if latitude == 0 and longitude == 0:
+            self._location_message = self.no_location_message
+
+            if self.request.user.is_authenticated:
+                latitude = self.request.user.userdata.latitude
+                longitude = self.request.user.userdata.longitude
         return latitude, longitude
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["location_message"] = self._location_message
+        return context
 
 
 class ClickAd(RedirectView):
@@ -4160,9 +4177,10 @@ def toAccount(request):
     return redirect(reverse("userpage", kwargs={"slug": request.user.username}))
 
 
-class allAuctions(ListView, LocationMixin):
+class allAuctions(LocationMixin, ListView):
     model = Auction
     template_name = "all_auctions.html"
+    no_location_message = "Set your location to see how far away auctions are"
 
     def get_queryset(self):
         last_auction_pk = -1
@@ -4207,13 +4225,6 @@ class allAuctions(ListView, LocationMixin):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        try:
-            self.request.COOKIES["longitude"]
-        except:
-            if self.request.user.is_authenticated:
-                context["location_message"] = "Set your location to get notifications about new auctions near you"
-            else:
-                context["location_message"] = "Set your location to see how far away auctions are"
         context["hide_google_login"] = True
         if self.request.user.is_authenticated:
             context["last_auction_used"] = self.request.user.userdata.last_auction_used
