@@ -323,6 +323,22 @@ class AuctionStatsPermissionsMixin:
         return result
 
 
+class LocationMixin:
+    """For location aware views, adds a `get_coordinates()` function which returns a tuple of `latitude, longitude` based on self.request.cookies or userdata"""
+
+    def get_coordinates(self):
+        try:
+            latitude = float(self.request.COOKIES.get("latitude", 0))
+            longitude = float(self.request.COOKIES.get("longitude", 0))
+        except (ValueError, TypeError):
+            latitude, longitude = 0, 0
+
+        if latitude == 0 and longitude == 0 and self.request.user.is_authenticated:
+            latitude = self.request.user.userdata.latitude
+            longitude = self.request.user.userdata.longitude
+        return latitude, longitude
+
+
 class ClickAd(RedirectView):
     def get_redirect_url(self, *args, **kwargs):
         try:
@@ -4144,7 +4160,7 @@ def toAccount(request):
     return redirect(reverse("userpage", kwargs={"slug": request.user.username}))
 
 
-class allAuctions(ListView):
+class allAuctions(ListView, LocationMixin):
     model = Auction
     template_name = "all_auctions.html"
 
@@ -4170,19 +4186,7 @@ class allAuctions(ListView):
             date_start__lte=next_90_days,
             date_posted__gte=two_years_ago,
         )
-        latitude = 0
-        longitude = 0
-        try:
-            latitude = self.request.COOKIES["latitude"]
-            longitude = self.request.COOKIES["longitude"]
-        except:
-            if self.request.user.is_authenticated:
-                userData, created = UserData.objects.get_or_create(
-                    user=self.request.user,
-                    defaults={},
-                )
-                latitude = userData.latitude
-                longitude = userData.longitude
+        latitude, longitude = self.get_coordinates()
         if latitude and longitude:
             closest_pickup_location_subquery = (
                 PickupLocation.objects.filter(auction=OuterRef("pk"))
@@ -4192,7 +4196,7 @@ class allAuctions(ListView):
             )
             qs = qs.annotate(distance=Subquery(closest_pickup_location_subquery))
         if not self.request.user.is_authenticated:
-            return qs.filter(standard_filter)
+            return qs.filter(standard_filter).distinct()
         qs = qs.filter(
             Q(auctiontos__user=self.request.user)
             | Q(auctiontos__email=self.request.user.email)
