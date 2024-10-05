@@ -1,51 +1,27 @@
 {% extends "base.html" %}
+{% load render_table from django_tables2 %}
 {% load crispy_forms_tags %}
-
 {% block title %}Auctions
 {% endblock %}
 {% load static %}
 {% block content %}
+<h3>Auctions</h3>
+<div class='mb-3'>This is a list of club auctions which have been created on this site.</div>
+<a href="/auctions/new/" class='btn bg-info mb-3 text-white'><i class="bi bi-plus-circle"></i> Create a new auction</a><br>
 
+<form class="col-sm-12 mt-2">
+  {% crispy filter.form %}
+</form>
+<div class="progress d-none"> <div class="indeterminate"></div> </div>
+{% render_table table %}
 
-        <h3>Auctions</h3>
-        <div class='mb-3'>This is a listing of club auctions which have been created on this site.</div>
-        <a href="/auctions/new/" class='btn bg-info mb-3 text-white'><i class="bi bi-plus-circle"></i> Create a new auction</a><br>
-        <table class="table table-responsive">
-          <thead>
-            <tr>
-              <th scope="col">Auction</th>
-              <th scope="col">Date</th>
-              <th scope="col" class="d-none d-md-block">Lots</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for auction in object_list %}
-            <tr>
-              <td><a href='/auctions/{{auction.slug}}'>{{ auction.title }}</a><br class="d-md-none">
-                {% if auction.is_last_used %}<span class='ms-1 badge bg-light text-black'>Your last auction</span>{% endif %}
-                {% if auction.is_online %}<span class="badge bg-info">Online</span>{% endif %}
-                {% if not auction.promote_this_auction %}<span class='badge bg-dark'>Not promoted</span>{% endif %}
-                {% if not location_message and auction.number_of_locations %}<span class='badge bg-primary'>{{ auction.distance | floatformat:0 }} miles from you</span>{% endif %}
-                {{ auction.template_lot_link_first_column }}
-                {{ auction.template_promo_info }}
-            </td>
-              <td>
-                {{ auction.template_status }}
-                {{ auction.template_date_timestamp }}
-                {{ auction.ended_badge }}
-              </td>
-              {{ auction.template_lot_link_seperate_column }}
-            </tr>
-            {% endfor %}
-        </tbody>
-      </table>
-<small class="text-muted">Note: Auctions you haven't joined won't appear in this list if they:
+<small class="text-muted">Auctions you've joined will always show up here.  Other auctions will only be listed here if they:
   <ul>
-    <li>aren't related to the fish hobby</li>
-    <li>are set to "do not promote"</li>
-    <li>are starting more than 90 days from today</li>
-    <li>were created more than 2 years ago</li>
+    <li>are related to the fish hobby</li>
+    <li>have "promote this auction" checked</li>
+    <li>are starting less than 90 days from today</li>
+    <li>were created less than 2 years ago</li>
   </ul>
-  Auctions you've joined will always show up here.</small></span>
+</small>
 {% endblock %}
 {% block extra_js %}<script type='text/javascript'>pageView();</script>{% endblock %}

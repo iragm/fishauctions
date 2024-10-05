@@ -1073,12 +1073,12 @@ class Auction(models.Model):
     @property
     def template_lot_link_first_column(self):
         """Shown on small screens only"""
-        return mark_safe(f'<span class="d-md-none"><br>{self.template_lot_link}</span>')
+        return mark_safe(f'<small><span class="d-md-none"><br>{self.template_lot_link}</span></small>')
 
     @property
     def template_lot_link_seperate_column(self):
         """Shown on big screens only"""
-        return mark_safe(f'<td class="d-none d-md-table-cell">{self.template_lot_link}</td>')
+        return mark_safe(f'<span class="d-none d-md-inline">{self.template_lot_link}</span>')
 
     @property
     def can_submit_lots(self):

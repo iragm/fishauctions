@@ -86,6 +86,7 @@ from webpush import send_user_notification
 from webpush.models import PushInformation
 
 from .filters import (
+    AuctionFilter,
     AuctionTOSFilter,
     LotAdminFilter,
     LotFilter,
@@ -154,7 +155,7 @@ from .models import (
     median_value,
     nearby_auctions,
 )
-from .tables import AuctionTOSHTMxTable, LotHTMxTable, LotHTMxTableForUsers
+from .tables import AuctionHTMxTable, AuctionTOSHTMxTable, LotHTMxTable, LotHTMxTableForUsers
 
 logger = logging.getLogger(__name__)
 
@@ -4177,10 +4178,19 @@ def toAccount(request):
     return redirect(reverse("userpage", kwargs={"slug": request.user.username}))
 
 
-class allAuctions(LocationMixin, ListView):
+class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
     model = Auction
-    template_name = "all_auctions.html"
     no_location_message = "Set your location to see how far away auctions are"
+    table_class = AuctionHTMxTable
+    filterset_class = AuctionFilter
+    paginate_by = 100
+
+    def get_template_names(self):
+        if self.request.htmx:
+            template_name = "tables/table_generic.html"
+        else:
+            template_name = "all_auctions.html"
+        return template_name
 
     def get_queryset(self):
         last_auction_pk = -1
@@ -4213,21 +4223,36 @@ class allAuctions(LocationMixin, ListView):
                 .values("distance")[:1]
             )
             qs = qs.annotate(distance=Subquery(closest_pickup_location_subquery))
+        else:
+            qs = qs.annotate(distance=Value(0, output_field=FloatField()))
         if not self.request.user.is_authenticated:
-            return qs.filter(standard_filter).distinct()
-        qs = qs.filter(
-            Q(auctiontos__user=self.request.user)
-            | Q(auctiontos__email=self.request.user.email)
-            | Q(created_by=self.request.user)
-            | standard_filter
-        ).distinct()
+            return qs.filter(standard_filter).annotate(joined=Value(0, output_field=FloatField())).distinct()
+        qs = (
+            qs.filter(
+                Q(auctiontos__user=self.request.user)
+                | Q(auctiontos__email=self.request.user.email)
+                | Q(created_by=self.request.user)
+                | standard_filter
+            )
+            .annotate(
+                joined=Exists(
+                    AuctionTOS.objects.filter(
+                        auction=OuterRef("pk"),
+                        user=self.request.user,
+                    )
+                )
+            )
+            .distinct()
+        )
         return qs
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["hide_google_login"] = True
-        if self.request.user.is_authenticated:
-            context["last_auction_used"] = self.request.user.userdata.last_auction_used
+        if not self.object_list.exists():
+            context["no_results"] = (
+                "<span class='text-danger'>No auctions found.</span>  This only searches club auctions, if you're looking for fish to buy, check out <a href='/lots/'>the list of lots for sale</a>"
+            )
         return context
 
 
