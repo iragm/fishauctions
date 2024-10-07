@@ -2691,8 +2691,8 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
                 lot.auction = self.auction
                 if self.tos.user:
                     lot.user = self.tos.user
-                if not lot.description:
-                    lot.description = ""
+                # if not lot.description:
+                #    lot.description = ""
                 if not lot.pk:
                     lot.added_by = self.request.user
                     if not self.is_admin:
