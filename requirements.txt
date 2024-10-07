@@ -42,6 +42,7 @@ bleach[css]==6.1.0
     #   -r ./requirements.in
     #   django-markdownfield
     #   django-post-office
+    #   django-summernote
 boto3==1.35.0
     # via django-ses
 botocore==1.35.10
@@ -112,6 +113,7 @@ django==5.1
     #   django-qr-code
     #   django-recaptcha
     #   django-ses
+    #   django-summernote
     #   django-tables2
     #   easy-thumbnails
     #   jsonfield
@@ -150,6 +152,8 @@ django-qr-code==4.1.0
 django-recaptcha==4.0.0
     # via -r ./requirements.in
 django-ses[events]==4.1.0
+    # via -r ./requirements.in
+django-summernote==0.8.20.0
     # via -r ./requirements.in
 django-tables2==2.7.0
     # via -r ./requirements.in

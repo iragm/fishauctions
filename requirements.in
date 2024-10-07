@@ -73,3 +73,4 @@ heif-image-plugin
 gunicorn
 django-ses[events]
 django-webpush
+django-summernote

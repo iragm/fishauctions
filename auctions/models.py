@@ -550,16 +550,17 @@ class Auction(models.Model):
     created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     location = models.CharField(max_length=300, null=True, blank=True)
     location.help_text = "State or region of this auction"
-    notes = MarkdownField(
-        rendered_field="notes_rendered",
-        validator=VALIDATOR_STANDARD,
-        blank=True,
-        null=True,
-        verbose_name="Rules",
-        default="",
-    )
-    notes.help_text = "To add a link: [Link text](https://www.google.com)"
-    notes_rendered = RenderedMarkdownField(blank=True, null=True)
+    summernote_description = models.CharField(max_length=10000, verbose_name="Rules", default="", blank=True)
+    # notes = MarkdownField(
+    #     rendered_field="notes_rendered",
+    #     validator=VALIDATOR_STANDARD,
+    #     blank=True,
+    #     null=True,
+    #     verbose_name="Rules",
+    #     default="",
+    # )
+    # notes.help_text = "To add a link: [Link text](https://www.google.com)"
+    # notes_rendered = RenderedMarkdownField(blank=True, null=True)
     code_to_add_lots = models.CharField(max_length=255, blank=True, null=True)
     code_to_add_lots.help_text = (
         "This is like a password: People in your club will enter this code to put their lots in this auction"
@@ -1209,7 +1210,7 @@ class Auction(models.Model):
 
     @property
     def admin_checklist_rules_updated(self):
-        if "You should remove this line and edit this section to suit your auction." in self.notes:
+        if "You should remove this line and edit this section to suit your auction." in self.summernote_description:
             return False
         return True
 
@@ -1949,14 +1950,15 @@ class Lot(models.Model):
     image_source.help_text = "Where did you get this image?"
     i_bred_this_fish = models.BooleanField(default=False, verbose_name="I bred this fish/propagated this plant")
     i_bred_this_fish.help_text = "Check to get breeder points for this lot"
-    description = MarkdownField(
-        rendered_field="description_rendered",
-        validator=VALIDATOR_STANDARD,
-        blank=True,
-        null=True,
-    )
-    description.help_text = "To add a link: [Link text](https://www.google.com)"
-    description_rendered = RenderedMarkdownField(blank=True, null=True)
+    summernote_description = models.CharField(max_length=10000, verbose_name="Description", default="", blank=True)
+    # description = MarkdownField(
+    #     rendered_field="description_rendered",
+    #     validator=VALIDATOR_STANDARD,
+    #     blank=True,
+    #     null=True,
+    # )
+    # description.help_text = "To add a link: [Link text](https://www.google.com)"
+    # description_rendered = RenderedMarkdownField(blank=True, null=True)
     reference_link = models.URLField(blank=True, null=True)
     reference_link.help_text = (
         "A URL with additional information about this lot.  YouTube videos will be automatically embedded."
@@ -2536,7 +2538,7 @@ class Lot(models.Model):
         if self.auction:
             # if this lot is part of an auction, allow changes right up until lot submission ends
             if timezone.now() > self.auction.lot_submission_end_date:
-                return "Lot submission is over for thsi auction"
+                return "Lot submission is over for this auction"
         # if we are getting here, there are no bids or this lot is not part of an auction
         # lots that are not part of an auction can always be edited as long as there are no bids
         return False
@@ -2545,7 +2547,7 @@ class Lot(models.Model):
     def can_be_edited(self):
         """Check to see if this lot can be edited.
         This is needed to prevent people making lots a donation right before the auction ends
-        Actually, by request from many people, there's nothing at all prventing that right at this moment..."""
+        Actually, by request from many people, there's nothing at all preventing that right at this moment..."""
         if self.cannot_be_edited_reason:
             return False
         return True

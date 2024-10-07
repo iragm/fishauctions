@@ -110,7 +110,6 @@ class StandardTestCase(TestCase):
             auction=self.online_auction,
             auctiontos_seller=self.online_tos,
             quantity=1,
-            description="",
             winning_price=10,
             auctiontos_winner=self.tosB,
             active=False,
@@ -120,7 +119,6 @@ class StandardTestCase(TestCase):
             auction=self.online_auction,
             auctiontos_seller=self.online_tos,
             quantity=1,
-            description="",
             winning_price=10,
             auctiontos_winner=self.tosB,
             active=False,
@@ -130,7 +128,6 @@ class StandardTestCase(TestCase):
             auction=self.online_auction,
             auctiontos_seller=self.online_tos,
             quantity=1,
-            description="",
             winning_price=10,
             auctiontos_winner=self.tosB,
             active=False,
@@ -138,7 +135,6 @@ class StandardTestCase(TestCase):
         self.unsoldLot = Lot.objects.create(
             lot_name="Unsold lot",
             reserve_price=10,
-            description="",
             auction=self.online_auction,
             quantity=1,
             auctiontos_seller=self.online_tos,
@@ -169,7 +165,6 @@ class StandardTestCase(TestCase):
             auction=self.in_person_auction,
             auctiontos_seller=self.admin_in_person_tos,
             quantity=1,
-            description="",
             custom_lot_number="101-1",
         )
         # TODO: stuff to add here:
@@ -197,7 +192,6 @@ class ViewLotTest(TestCase):
             auction=self.auction,
             user=self.user,
             quantity=1,
-            description="",
         )
         self.url = reverse("lot_by_pk", kwargs={"pk": self.lot.pk})
         # Create a user for the logged-in scenario
@@ -242,7 +236,6 @@ class AuctionModelTests(TestCase):
             auction=auction,
             user=user,
             quantity=1,
-            description="",
         )
         assert lot.ended is True
 
@@ -268,7 +261,6 @@ class LotModelTests(TestCase):
             reserve_price=5,
             user=user,
             quantity=1,
-            description="",
         )
         assert testLot.ended is False
 
@@ -284,7 +276,6 @@ class LotModelTests(TestCase):
             reserve_price=5,
             user=user,
             quantity=1,
-            description="",
         )
         assert testLot.ended is True
 
@@ -296,7 +287,6 @@ class LotModelTests(TestCase):
             date_end=time,
             reserve_price=5,
             user=user,
-            description="",
         )
         assert lot.high_bid == 5
 
@@ -307,7 +297,6 @@ class LotModelTests(TestCase):
             lot_name="A test lot",
             date_end=time,
             reserve_price=5,
-            description="",
             user=lotuser,
             quantity=1,
         )
@@ -323,7 +312,6 @@ class LotModelTests(TestCase):
             lot_name="A test lot",
             date_end=time,
             reserve_price=5,
-            description="",
             user=lotuser,
             quantity=1,
         )
@@ -341,7 +329,6 @@ class LotModelTests(TestCase):
             lot_name="A test lot",
             date_end=time,
             reserve_price=20,
-            description="",
             user=lotuser,
             quantity=6,
         )
@@ -381,7 +368,6 @@ class LotModelTests(TestCase):
             lot_name="A test lot",
             date_end=time,
             reserve_price=5,
-            description="",
             user=lotuser,
             quantity=1,
         )
@@ -407,7 +393,6 @@ class LotModelTests(TestCase):
             lot_name="A test lot",
             date_end=time,
             reserve_price=5,
-            description="",
             user=lotuser,
             quantity=1,
         )
@@ -435,7 +420,6 @@ class LotModelTests(TestCase):
             lot_name="A test lot",
             date_end=time,
             reserve_price=5,
-            description="",
             user=lotuser,
             quantity=1,
         )
@@ -455,7 +439,6 @@ class LotModelTests(TestCase):
             lot_name="A test lot",
             date_end=time,
             reserve_price=5,
-            description="",
             user=lotuser,
             quantity=1,
         )
@@ -473,7 +456,6 @@ class ChatSubscriptionTests(TestCase):
             lot_name="A test lot",
             date_end=timezone.now() + datetime.timedelta(days=30),
             reserve_price=5,
-            description="",
             user=lotuser,
             quantity=1,
         )
@@ -481,7 +463,6 @@ class ChatSubscriptionTests(TestCase):
             lot_name="seen all",
             date_end=timezone.now() + datetime.timedelta(days=30),
             reserve_price=5,
-            description="",
             user=lotuser,
             quantity=1,
         )
@@ -489,7 +470,6 @@ class ChatSubscriptionTests(TestCase):
             lot_name="Another test lot",
             date_end=timezone.now() + datetime.timedelta(days=30),
             reserve_price=5,
-            description="",
             user=chatuser,
             quantity=1,
         )
@@ -497,7 +477,6 @@ class ChatSubscriptionTests(TestCase):
             lot_name="An unsubscribed lot",
             date_end=timezone.now() + datetime.timedelta(days=30),
             reserve_price=5,
-            description="",
             user=lotuser,
             quantity=1,
         )
@@ -681,7 +660,6 @@ class LotPricesTests(TestCase):
             auction=self.auction,
             auctiontos_seller=self.tos,
             quantity=1,
-            description="",
             winning_price=10,
             auctiontos_winner=self.tosB,
             active=False,
@@ -689,7 +667,6 @@ class LotPricesTests(TestCase):
         self.unsold_lot = Lot.objects.create(
             lot_name="Unsold lot",
             reserve_price=10,
-            description="",
             auction=self.auction,
             quantity=1,
             auctiontos_seller=self.tos,
@@ -698,7 +675,6 @@ class LotPricesTests(TestCase):
         self.sold_no_auction_lot = Lot.objects.create(
             lot_name="not in the auction",
             reserve_price=10,
-            description="",
             auction=None,
             quantity=1,
             user=self.user,
@@ -709,7 +685,6 @@ class LotPricesTests(TestCase):
         self.unsold_no_auction_lot = Lot.objects.create(
             lot_name="unsold not in the auction",
             reserve_price=10,
-            description="",
             auction=None,
             quantity=1,
             user=self.user,
@@ -842,7 +817,6 @@ class LotRefundDialogTests(TestCase):
             auction=self.auction,
             auctiontos_seller=self.seller,
             quantity=1,
-            description="",
         )
         self.lot2 = Lot.objects.create(
             custom_lot_number="124",
@@ -850,7 +824,6 @@ class LotRefundDialogTests(TestCase):
             auction=self.auction,
             auctiontos_seller=self.seller,
             quantity=1,
-            description="",
         )
         self.client = Client()
         self.client.login(username="testuser", password="testpassword")
@@ -860,7 +833,6 @@ class LotRefundDialogTests(TestCase):
             reserve_price=10,
             user=self.user,
             active=True,
-            description="",
         )
         self.lot_url = reverse("lot_refund", kwargs={"pk": self.lot.pk})
 

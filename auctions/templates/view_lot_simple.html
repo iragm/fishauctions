@@ -31,7 +31,7 @@
                     No bids
                 {% endif %}
             {% endif %}<br>
-            {% if lot.description %}<div class="jumbotron">{{ lot.description_rendered | safe }}</div>{% endif %}
+            {{ lot.summernote_description | safe }}
         </div>
     </div>
 </div>

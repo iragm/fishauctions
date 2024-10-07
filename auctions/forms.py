@@ -20,6 +20,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django_recaptcha.fields import ReCaptchaField
 from django_recaptcha.widgets import ReCaptchaV2Invisible
+from django_summernote.widgets import SummernoteWidget
 
 from .models import (
     Auction,
@@ -110,7 +111,7 @@ class QuickAddLot(forms.ModelForm):
         fields = [
             "custom_lot_number",
             "lot_name",
-            "description",
+            "summernote_description",
             "species_category",
             "i_bred_this_fish",
             "quantity",
@@ -119,7 +120,16 @@ class QuickAddLot(forms.ModelForm):
             "buy_now_price",
         ]
         widgets = {
-            "description": forms.Textarea(attrs={"rows": 2}),
+            "summernote_description": SummernoteWidget(
+                attrs={
+                    "summernote": {
+                        "width": "100%",
+                        "height": "100px",
+                        "toolbar": [],
+                    }
+                }
+            ),
+            # "description": forms.Textarea(attrs={"rows": 2}),
         }
 
     def __init__(self, *args, **kwargs):
@@ -151,9 +161,11 @@ class QuickAddLot(forms.ModelForm):
         if not self.auction.advanced_lot_adding:
             self.fields["quantity"].initial = 1
             self.fields["quantity"].widget = HiddenInput()
-            self.fields["description"].widget = HiddenInput()
+            # self.fields["description"].widget = HiddenInput()
+            self.fields["summernote_description"].widget = HiddenInput()
             self.fields["custom_lot_number"].widget = HiddenInput()
-        self.fields["description"].help_text = ""
+        # self.fields["description"].help_text = ""
+        self.fields["summernote_description"].help_text = ""
         if self.auction.reserve_price == "disable":
             self.fields["reserve_price"].widget = HiddenInput()
         if self.auction.reserve_price == "required":
@@ -587,7 +599,8 @@ class EditLot(forms.ModelForm):
                 ),
                 css_class="row",
             ),
-            "description",
+            # "description",
+            "summernote_description",
             Div(
                 Div(
                     "i_bred_this_fish",
@@ -643,7 +656,8 @@ class EditLot(forms.ModelForm):
         else:
             self.fields["custom_lot_number"].help_text = "Leave blank to automatically generate"
         self.fields["lot_name"].initial = self.lot.lot_name
-        self.fields["description"].initial = self.lot.description
+        # self.fields["description"].initial = self.lot.description
+        self.fields["summernote_description"].initial = self.lot.summernote_description
         # self.fields['auctiontos_seller'].initial = self.lot.auctiontos_seller
         self.fields["quantity"].initial = self.lot.quantity
         self.fields["donation"].initial = self.lot.donation
@@ -696,7 +710,8 @@ class EditLot(forms.ModelForm):
             "custom_lot_number",
             "auction",
             "species_category",
-            "description",
+            # "description",
+            "summernote_description",
             # 'auctiontos_seller',
             "quantity",
             "donation",
@@ -708,7 +723,8 @@ class EditLot(forms.ModelForm):
             "winning_price",
         ]
         widgets = {
-            "description": forms.Textarea(attrs={"rows": 2}),
+            "summernote_description": SummernoteWidget(attrs={"summernote": {"width": "100%", "height": "300px"}}),
+            # "description": forms.Textarea(attrs={"rows": 2}),
             # 'auctiontos_seller': autocomplete.ModelSelect2(url='auctiontos-autocomplete', forward=['auction'], attrs={'data-html': True, 'data-container-css-class': ''}),
             "auctiontos_winner": autocomplete.ModelSelect2(
                 url="auctiontos-autocomplete",
@@ -1518,7 +1534,7 @@ class AuctionEditForm(forms.ModelForm):
     class Meta:
         model = Auction
         fields = [
-            "notes",
+            "summernote_description",
             "lot_entry_fee",
             "unsold_lot_fee",
             "winning_bid_percent_to_club",
@@ -1559,7 +1575,7 @@ class AuctionEditForm(forms.ModelForm):
             "lot_submission_end_date": DateTimePickerInput(),
             "date_online_bidding_ends": DateTimePickerInput(),
             "date_online_bidding_starts": DateTimePickerInput(),
-            "notes": forms.Textarea(),
+            "summernote_description": SummernoteWidget(),
         }
 
     def __init__(self, *args, **kwargs):
@@ -1567,7 +1583,7 @@ class AuctionEditForm(forms.ModelForm):
         self.cloned_from = kwargs.pop("cloned_from")
         timezone.activate(kwargs.pop("user_timezone"))
         super().__init__(*args, **kwargs)
-        self.fields["notes"].widget.attrs = {"rows": 10}
+        # self.fields["summernote_description"].widget.attrs = {"rows": 10}
         self.fields["winning_bid_percent_to_club"].label = "Club cut"
         self.fields["winning_bid_percent_to_club_for_club_members"].label = "Club cut (members)"
         self.fields["date_start"].label = "Bidding opens"
@@ -1609,22 +1625,13 @@ class AuctionEditForm(forms.ModelForm):
         self.fields["user_cut"].initial = 100 - self.instance.winning_bid_percent_to_club
         self.fields["club_member_cut"].initial = 100 - self.instance.winning_bid_percent_to_club_for_club_members
 
-        # if self.instance.pk:
-        #     # editing existing auction
-        #     pass
-        # else:
-        #     # this is a new auction
-        #     if not self.cloned_from:
-        #         self.fields[
-        #             "notes"
-        #         ].initial = "## General information\n\nYou should remove this line and edit this section to suit your auction.  Use the formatting here as an example.\n\n## Prohibited items\n- You cannot sell any fish or plants banned by state law.\n- You cannot sell large hardware items such as tanks.\n\n## Rules\n- All lots must be properly bagged.  No leaking bags!\n- You do not need to be a club member to buy or sell lots."
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_id = "auction-form"
         self.helper.form_class = "form"
         self.helper.form_tag = True
         self.helper.layout = Layout(
-            "notes",
+            "summernote_description",
             HTML("<h4>Dates</h4>"),
             Div(
                 Div(
@@ -1861,7 +1868,8 @@ class CreateLotForm(forms.ModelForm):
             "relist_if_not_sold",
             "lot_name",
             "i_bred_this_fish",
-            "description",
+            "summernote_description",
+            # "description",
             "quantity",
             "reserve_price",
             "species_category",
@@ -1884,7 +1892,7 @@ class CreateLotForm(forms.ModelForm):
         )
         exclude = ["user", "image", "image_source"]
         widgets = {
-            "description": forms.Textarea(),
+            "summernote_description": SummernoteWidget(),
             # 'species': forms.HiddenInput(),
             # 'cloned_from': forms.HiddenInput(),
             "shipping_locations": forms.CheckboxSelectMultiple(),
@@ -1895,7 +1903,7 @@ class CreateLotForm(forms.ModelForm):
         self.cloned_from = kwargs.pop("cloned_from")
         self.auction = kwargs.pop("auction")
         super().__init__(*args, **kwargs)
-        self.fields["description"].widget.attrs = {"rows": 3}
+        # self.fields["description"].widget.attrs = {"rows": 3}
         # self.fields['species_category'].required = True
         self.fields["auction"].queryset = (
             Auction.objects.exclude(is_deleted=True)
@@ -1940,7 +1948,8 @@ class CreateLotForm(forms.ModelForm):
                             "lot_name",
                             "quantity",
                             "species_category",
-                            "description",
+                            # "description",
+                            "summernote_description",
                             "i_bred_this_fish",
                             "reserve_price",
                             "buy_now_price",
@@ -2074,7 +2083,8 @@ class CreateLotForm(forms.ModelForm):
                 # Div('image',css_class='col-md-8',),
                 # Div('image_source',css_class='col-md-4',),
                 Div(
-                    "description",
+                    # "description",
+                    "summernote_description",
                     css_class="col-md-12",
                 ),
                 css_class="row",

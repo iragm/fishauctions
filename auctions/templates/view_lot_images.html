@@ -179,7 +179,7 @@ function deactivate_lot() {
         </div>
     {% endif %}
         <h3>{{ lot.lot_name }}</h3>
-            {{ lot.species_category }}{% if lot.category_automatically_added and lot.can_be_edited and lot.user == request.user %}<span class="badge bg-secondary">Cateogry automatically set.  Wrong?  <a href="/lots/edit/{{lot.pk}}">Fix it here</a></span><br>{% else %}, {% endif %}lot number {{lot.lot_number_display }}<br>
+            {{ lot.species_category }}{% if lot.category_automatically_added and lot.can_be_edited and lot.user == request.user %}<span class="badge bg-secondary">Category automatically set.  Wrong?  <a href="/lots/edit/{{lot.pk}}">Fix it here</a></span><br>{% else %}, {% endif %}lot number {{lot.lot_number_display }}<br>
             {% if lot.i_bred_this_fish %}<span class="badge text-dark bg-light">Bred by this user</span>{%endif%}
             {% if lot.pre_registered and lot.user == request.user %}<span class="badge text-dark bg-light" data-toggle="tooltip" data-placement="bottom" title="You'll get a {{ lot.auction.pre_register_lot_discount_percent }}% discount on your selling fees for this lot">Pre-registered</span>{%endif%}
             {% if lot.image_count or lot.video_link %}
@@ -246,7 +246,7 @@ function deactivate_lot() {
             </div>
             {% else %}
                 {% if lot.auto_image %}
-                    <img src="{{ lot.auto_image.image.url }}" class="img-fluid"><br>
+                    <br><img src="{{ lot.auto_image.image.url }}" class="img-fluid"><br>
                     <span class="text-muted"><small>This image was automatically added from another lot with the same name and may not be representative of this lot</small></span>
                     <br>
                     {% if lot.user == request.user %}
@@ -261,8 +261,12 @@ function deactivate_lot() {
             <a href="{% url 'add_image' lot=lot.lot_number %}" class="btn btn-primary"><i class="bi bi-file-image"></i> Add image</a><br>
             {% endif %}
         <br>
-        {% if lot.description %}<div class="jumbotron">{{ lot.description_rendered | safe }}</div>{% endif %}
-            <a href="{{lot.reference_link}}">More information from {{lot.reference_link_domain}}</a>
+        <div class="bg-dark mt-2 mb-2">
+            <div class='ms-2 me-2 mb-1'>
+                {{ lot.summernote_description | safe }}<br>
+                <a href="{{lot.reference_link}}">More information from {{lot.reference_link_domain}}</a>
+            </div><br>
+        </div>
         <table class="table">
             <tr>
                 <td><b>Quantity:</b></td><td>{{ lot.quantity }}</td>
