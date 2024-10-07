@@ -133,6 +133,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "django_extensions",
+    "django_summernote",
     # 'site_settings',
     "crispy_forms",
     "django.contrib.sites",
@@ -549,3 +550,48 @@ HYBRID_TUTORIAL_CHAPTERS = (
     (2 * 60 + 3, "Buy Now"),
     (2 * 60 + 45, "Payment"),
 )
+SUMMERNOTE_THEME = "bs5"
+
+SUMMERNOTE_CONFIG = {
+    "iframe": True,
+    "summernote": {
+        # Change editor size
+        "width": "100%",
+        # 'height': '480',
+        # https://summernote.org/deep-dive/#custom-toolbar-popover
+        "toolbar": [
+            ["style", ["style"]],
+            ["font", ["bold", "italic", "clear"]],
+            # ['color', ['color']],
+            [
+                "para",
+                [
+                    "ul",
+                    "ol",
+                ],
+            ],
+            [
+                "insert",
+                [
+                    "link",
+                ],
+            ],  # 'picture', 'video']],
+            # ['view', ['fullscreen', 'codeview', 'help']],
+        ],
+    },
+    "js": (("/static/summernote/bs5-hack.js"),),
+    # Require users to be authenticated for uploading attachments.
+    # 'attachment_require_authentication': True,
+    # Set `upload_to` function for attachments.
+    # 'attachment_upload_to': my_custom_upload_to_func(),
+    # Set custom storage class for attachments.
+    # 'attachment_storage_class': 'my.custom.storage.class.name',
+    # Set custom model for attachments (default: 'django_summernote.Attachment')
+    # 'attachment_model': 'my.custom.attachment.model',  # must inherit 'django_summernote.AbstractAttachment'
+    # You can completely disable the attachment feature.
+    # 'disable_attachment': True,
+    # Set to `False` to return attachment paths in relative URIs.
+    # 'attachment_absolute_uri': True,
+}
+
+X_FRAME_OPTIONS = "SAMEORIGIN"

@@ -151,7 +151,7 @@ function initMap() {
             <a href="/admin/auctions/auction/{{auction.pk}}/change/" class="btn btn-sm btn-danger mr-1 mt-1">Admin</a>
             {% endif %}
             </div>
-            {% if auction.notes_rendered %}{{ auction.notes_rendered|safe }} {% else %} {% if auction.notes %} {{ auction.notes|safe }}{% endif %}{% endif %}
+            {{ auction.summernote_description|safe }}
             <h5>The following rules will be automatically enforced by this site:</h5>
             <ul>
                 <li>This is an {{ auction.auction_type_as_str }}</li>

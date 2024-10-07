@@ -2784,7 +2784,7 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
             fields=(
                 "custom_lot_number",
                 "lot_name",
-                "description",
+                "summernote_description",
                 "species_category",
                 "i_bred_this_fish",
                 "quantity",
@@ -3518,7 +3518,7 @@ class LotAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
             obj.custom_lot_number = form.cleaned_data["custom_lot_number"]
             obj.lot_name = form.cleaned_data["lot_name"] or "Unknown lot"
             obj.species_category = form.cleaned_data["species_category"] or 21  # uncategorized
-            obj.description = form.cleaned_data["description"]
+            obj.summernote_description = form.cleaned_data["summernote_description"]
             # obj.auctiontos_seller = form.cleaned_data['auctiontos_seller'] or request.user
             obj.quantity = form.cleaned_data["quantity"] or 1
             obj.donation = form.cleaned_data["donation"]
@@ -3793,7 +3793,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
         if clone_from_auction:
             fields_to_clone = [
                 "is_online",
-                "notes",
+                "summernote_description",
                 "lot_entry_fee",
                 "unsold_lot_fee",
                 "winning_bid_percent_to_club",
@@ -3843,8 +3843,15 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 auction.allow_bidding_on_lots = False
                 auction.buy_now = "disable"
                 auction.reserve_price = "disable"
-        if not auction.notes:
-            auction.notes = "## General information\n\nYou should remove this line and edit this section to suit your auction.  Use the formatting here as an example.\n\n## Prohibited items\n- You cannot sell anything banned by state law.\n\n## Rules\n- All lots must be properly bagged.  No leaking bags!\n- You do not need to be a club member to buy or sell lots."
+        if not auction.summernote_description:
+            auction.summernote_description = """
+            <h4>General information</h4>
+            You should remove this line and edit this section to suit your auction.
+            Use the formatting here as an example.<br><br>
+            <h4>Rules</h4>
+            <ul><li>You cannot sell anything banned by state law.</li>
+            <li>All lots must be properly bagged.  No leaking bags!</li>
+            <li>You do not need to be a club member to buy or sell lots.</li></ul>"""
         if auction.is_online:
             auction.date_end = auction.date_start + run_duration
             if not auction.lot_submission_end_date:
