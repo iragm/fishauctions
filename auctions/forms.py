@@ -168,6 +168,7 @@ class QuickAddLot(forms.ModelForm):
         self.fields["summernote_description"].help_text = ""
         if self.auction.reserve_price == "disable":
             self.fields["reserve_price"].widget = HiddenInput()
+            self.fields["reserve_price"].initial = self.auction.minimum_bid
         if self.auction.reserve_price == "required":
             self.fields["reserve_price"].required = True
         if self.auction.buy_now == "disable":
