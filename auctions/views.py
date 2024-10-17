@@ -5340,14 +5340,14 @@ class AdminDashboard(TemplateView):
         context["feedback_last_30_days"] = (
             Lot.objects.exclude(feedback_rating=0).filter(date_posted__gte=timezone.now() - timedelta(days=30)).count()
         )
-        invoiceqs = (
-            Invoice.objects.filter(date__gte=datetime(2021, 6, 15, tzinfo=date_tz.utc))
-            .filter(seller_invoice__winner__isnull=False)
-            .distinct()
-        )
-        context["total_invoices"] = invoiceqs.count()
-        context["printed_invoices"] = invoiceqs.filter(printed=True).count()
-        context["invoice_percent"] = context["printed_invoices"] / context["total_invoices"] * 100
+        # invoiceqs = (
+        #     Invoice.objects.filter(date__gte=datetime(2021, 6, 15, tzinfo=date_tz.utc))
+        #     .filter(seller_invoice__winner__isnull=False)
+        #     .distinct()
+        # )
+        # context["total_invoices"] = invoiceqs.count()
+        # context["printed_invoices"] = invoiceqs.filter(printed=True).count()
+        # context["invoice_percent"] = context["printed_invoices"] / context["total_invoices"] * 100
         context["users_with_search_history"] = User.objects.filter(searchhistory__isnull=False).distinct().count()
         # source of lot images?
         activity = (
@@ -5401,6 +5401,14 @@ class AdminDashboard(TemplateView):
         context["online_auction_lots_ending"] = Lot.objects.filter(
             is_deleted=False, date_end__lte=timeframe, date_end__gte=timezone.now()
         ).count()
+        users_with_printed_labels = User.objects.filter(lot__label_printed=True).distinct()
+        context["users_with_printed_labels"] = users_with_printed_labels.count()
+        context["preset_counts"] = (
+            UserLabelPrefs.objects.filter(user__in=users_with_printed_labels)
+            .values("preset")
+            .annotate(count=Count("user"))
+            .order_by("-count")
+        )
         return context
 
 
