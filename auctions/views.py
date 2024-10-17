@@ -3835,6 +3835,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "allow_deleting_bids",
                 "auto_add_images",
                 "message_users_when_lots_sell",
+                "label_print_fields",
             ]
             for field in fields_to_clone:
                 setattr(auction, field, getattr(original_auction, field))
