@@ -180,14 +180,14 @@ class AuctionHTMxTable(tables.Table):
         auction = record
         result = f"<a href='{auction.get_absolute_url()}'>{auction.title}</a><br class='d-md-none'>"
         if auction.is_last_used:
-            result += " <span class='ms-1 badge bg-light text-black'>Your last auction</span>"
+            result += " <span class='ms-1 badge bg-success text-black'>Your last auction</span>"
         if auction.is_online:
             result += " <span class='badge bg-info'>Online</span>"
         if not auction.promote_this_auction:
             result += " <span class='badge bg-dark'>Not promoted</span>"
         if auction.distance:
             result += f" <span class='badge bg-primary'>{int(auction.distance)} miles from you</span>"
-        if auction.joined:
+        if auction.joined and not auction.is_last_used:
             result += " <span class='badge bg-success text-black'>Joined</span>"
         result += auction.template_lot_link_first_column + auction.template_promo_info
         return mark_safe(result)
