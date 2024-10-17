@@ -61,7 +61,7 @@ LOGGING = {
             "style": "{",
         },
         "simple": {
-            "format": "{levelname} {message}",
+            "format": "{name} {levelname} {message}",
             "style": "{",
         },
     },
@@ -86,6 +86,9 @@ LOGGING = {
             "backupCount": 5,
             "formatter": "verbose",
         },
+        "null": {
+            "class": "logging.NullHandler",
+        },
     },
     "root": {
         "handlers": ["console", "root_file"],
@@ -95,6 +98,16 @@ LOGGING = {
         "django": {
             "handlers": ["django_file"],
             "level": os.getenv("DJANGO_LOG_LEVEL", "INFO"),
+            "propagate": False,
+        },
+        "weasyprint": {
+            # 'handlers': ["null"],
+            "level": "WARNING",
+            "propagate": False,
+        },
+        "fontTools": {
+            # 'handlers': ["null"],
+            "level": "WARNING",
             "propagate": False,
         },
     },
@@ -344,7 +357,8 @@ RECAPTCHA_PRIVATE_KEY = os.environ.get("RECAPTCHA_PRIVATE_KEY", "unsecure")
 
 CRISPY_ALLOWED_TEMPLATE_PACKS = "bootstrap5"
 CRISPY_TEMPLATE_PACK = "bootstrap5"
-CRISPY_FAIL_SILENTLY = False
+# It sure seems like forms fail silently even with this set to False
+# CRISPY_FAIL_SILENTLY = False
 # BOOTSTRAP4 = {
 #     'include_jquery': True,
 # }

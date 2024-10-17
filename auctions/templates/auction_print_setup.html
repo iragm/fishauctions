@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}Print label setup for {{ auction }}{% endblock %}
+{% load static %}
+{% block content %}
+  {% include 'auction_ribbon.html' %}
+  <p><small>Customize the fields that are printed on labels.  These fields will appear on labels that you print, as well as labels that your users print for themselves.<br>
+    You can change what size labels you print on under <a href="{% url 'printing' %}?next={{ request.path }}">printing preferences</a>; your users may print their own labels in different sizes depending on their setup<br>
+    <div>Note that some fields will only be shown on unsold lots: sold lots will always show the winner's name and no price information (buy now/min bid).</div><br>
+    <div>Want some information on the label that's not listed below? Got a problem with a label, such as text that's overlapping? <a href="https://github.com/iragm/fishauctions/issues/238">Leave a comment here.</a></div><br>
+    {% crispy form %}
+{% endblock %}
+{% block extra_js %}
+{% endblock %}

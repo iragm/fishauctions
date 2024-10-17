@@ -479,6 +479,7 @@ class Category(models.Model):
     """Picklist of species.  Used for product, lot, and interest"""
 
     name = models.CharField(max_length=255)
+    name_on_label = models.CharField(max_length=255, default="")
 
     def __str__(self):
         return str(self.name)
@@ -660,6 +661,12 @@ class Auction(models.Model):
     message_users_when_lots_sell = models.BooleanField(default=True, blank=True)
     message_users_when_lots_sell.help_text = (
         "When you enter a lot number on the set lot winners screen, send a notification to any users watching that lot"
+    )
+    label_print_fields = models.CharField(
+        max_length=1000,
+        blank=True,
+        null=True,
+        default="qr_code,lot_name,min_bid_label,buy_now_label,quantity_label,seller_name,donation_label",
     )
 
     def __str__(self):
@@ -2322,10 +2329,10 @@ class Lot(models.Model):
     @property
     def seller_email(self):
         """Email of the seller of this lot"""
-        if self.user:
-            return self.user.email
         if self.auctiontos_seller:
             return self.auctiontos_seller.email
+        if self.user:
+            return self.user.email
         return "Unknown"
 
     @property
@@ -3017,6 +3024,44 @@ class Lot(models.Model):
             )
             invoice.recalculate
 
+    @property
+    def category(self):
+        """string of a shortened species_category.  For labels, usually you want to use `lot.species_category` instead"""
+        if self.species_category and self.species_category.pk != 21:
+            return self.species_category.name_on_label or self.species_category
+        return ""
+
+    @property
+    def donation_label(self):
+        return "(D)" if self.donation else ""
+
+    @property
+    def min_bid_label(self):
+        if self.reserve_price > self.auction.minimum_bid and not self.sold:
+            return f"Min: ${self.reserve_price}"
+        return ""
+
+    @property
+    def buy_now_label(self):
+        if self.buy_now_price and not self.sold:
+            return f"Buy: ${self.buy_now_price}"
+        return ""
+
+    @property
+    def quantity_label(self):
+        if self.auction.advanced_lot_adding or self.quantity > 1:
+            return f"QTY: {self.quantity}"
+        return ""
+
+    @property
+    def auction_date(self):
+        return self.auction.date_start.strftime("%b %Y")
+
+    @property
+    def description_label(self):
+        """Strip all html except <br> from summernote description"""
+        return re.sub(r"(?!<br\s*/?>)<.*?>", "", self.summernote_description)
+
 
 class Invoice(models.Model):
     """
@@ -3523,24 +3568,28 @@ class UserLabelPrefs(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE)
     empty_labels = models.IntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(100)])
     empty_labels.help_text = "To print on partially used label sheets, print this many blank labels before printing the actual labels.  Just remember to set this back to 0 when starting a new sheet of labels!"
+    print_border = models.BooleanField(default=True)
+    print_border.help_text = (
+        "Uncheck if you plant to use peel and stick labels.  Has no effect if you select thermal labels."
+    )
     page_width = models.FloatField(default=8.5, validators=[MinValueValidator(1), MaxValueValidator(100.0)])
     page_height = models.FloatField(default=11, validators=[MinValueValidator(1), MaxValueValidator(100.0)])
     label_width = models.FloatField(default=2.51, validators=[MinValueValidator(1), MaxValueValidator(100.0)])
     label_height = models.FloatField(default=0.98, validators=[MinValueValidator(0.4), MaxValueValidator(50.0)])
-    label_margin_right = models.FloatField(default=0.2, validators=[MinValueValidator(0.1), MaxValueValidator(5.0)])
+    label_margin_right = models.FloatField(default=0.2, validators=[MinValueValidator(0.0), MaxValueValidator(5.0)])
     label_margin_bottom = models.FloatField(default=0.02, validators=[MinValueValidator(0.0), MaxValueValidator(5.0)])
-    page_margin_top = models.FloatField(default=0.55, validators=[MinValueValidator(0.1)])
-    page_margin_bottom = models.FloatField(default=0.45, validators=[MinValueValidator(0.1)])
-    page_margin_left = models.FloatField(default=0.18, validators=[MinValueValidator(0.1)])
-    page_margin_right = models.FloatField(default=0.18, validators=[MinValueValidator(0.05)])
-    font_size = models.FloatField(default=8, validators=[MinValueValidator(5), MaxValueValidator(25)])
+    page_margin_top = models.FloatField(default=0.55, validators=[MinValueValidator(0.0)])
+    page_margin_bottom = models.FloatField(default=0.45, validators=[MinValueValidator(0.0)])
+    page_margin_left = models.FloatField(default=0.18, validators=[MinValueValidator(0.0)])
+    page_margin_right = models.FloatField(default=0.18, validators=[MinValueValidator(0.0)])
+    font_size = models.FloatField(default=8, validators=[MinValueValidator(5), MaxValueValidator(14)])
     UNITS = (
         ("in", "Inches"),
         ("cm", "Centimeters"),
     )
     unit = models.CharField(max_length=20, choices=UNITS, blank=False, null=False, default="in")
     PRESETS = (
-        ("sm", "Small (Avery 5160)"),
+        ("sm", "Small (Avery 5160) (Not recommended)"),
         ("lg", "Large (Avery 18262)"),
         ("thermal_sm", 'Thermal 3"x2"'),
         ("custom", "Custom"),

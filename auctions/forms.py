@@ -2398,11 +2398,15 @@ class UserLabelPrefsForm(forms.ModelForm):
             Div(
                 Div(
                     "preset",
-                    css_class="col-sm-8",
+                    css_class="col-sm-7",
                 ),
                 Div(
                     "empty_labels",
-                    css_class="col-sm-4",
+                    css_class="col-sm-3",
+                ),
+                Div(
+                    "print_border",
+                    css_class="col-sm-2",
                 ),
                 css_class="row",
             ),
@@ -2612,3 +2616,98 @@ class ChangeUserPreferencesForm(forms.ModelForm):
         # image_source = cleaned_data.get("image_source")
         # if image and not image_source:
         #    self.add_error('image_source', "Is this your picture?")
+
+
+class LabelPrintFieldsForm(forms.Form):
+    lot_number = forms.BooleanField(
+        label="Lot number",
+        help_text="Lot number is required",
+        disabled=True,
+        required=False,
+        initial=True,
+    )
+
+    def __init__(self, *args, **kwargs):
+        self.auction = kwargs.pop("auction", None)
+        super().__init__(*args, **kwargs)
+
+        self.available_fields = [
+            # if updating this:
+            # also update models.Auction.label_print_fields if a new field should be enabled by default
+            # update views.LotLabelView.get_context_data and put the field in either the first or second column
+            {
+                "value": "qr_code",
+                "description": "QR Code",
+                "tooltip": "Contains a link to view each lot.  Use your phone's camera to scan.",
+            },
+            {
+                "value": "lot_name",
+                "description": "Lot name",
+                "tooltip": "<span class='text-warning'>Recommended</span>, otherwise people may put the label on the wrong lot",
+            },
+            {"value": "category", "description": "Category", "tooltip": ""},
+            {
+                "value": "donation_label",
+                "description": "Donation",
+                "tooltip": "Mark (D) on any lots that are a donation",
+            },
+            {
+                "value": "min_bid_label",
+                "description": "Minimum bid",
+                "tooltip": "Min bid is disabled in this auction, this will not do anything"
+                if self.auction.reserve_price == "disable"
+                else "Will only be displayed if the lot has a minimum bid set. <span class='text-warning'>Recommended</span>",
+            },
+            {
+                "value": "buy_now_label",
+                "description": "Buy now price",
+                "tooltip": "Buy now is disabled in this auction, this will not do anything"
+                if self.auction.buy_now == "disable"
+                else "Will only be displayed if the lot has a buy now price set. <span class='text-warning'>Recommended</span>",
+            },
+            {"value": "quantity_label", "description": "Quantity", "tooltip": ""},
+            {
+                "value": "auction_date",
+                "description": "Auction date",
+                "tooltip": f"For record keeping of when lots were acquired, show auction date.  It will appear as {self.auction.date_start.strftime('%b %Y')}",
+            },
+            {"value": "seller_name", "description": "Seller's name", "tooltip": ""},
+            {
+                "value": "seller_email",
+                "description": "Seller's email",
+                "tooltip": "Not recommended, this allows buyers to contact the seller directly.  The club should mediate disputes.",
+            },
+            {
+                "value": "description_label",
+                "description": "Description",
+                "tooltip": "Not recommended, as descriptions can be very long.",
+            },
+        ]
+
+        label_print_fields = self.auction.label_print_fields if self.auction else ""
+        selected_fields = label_print_fields.split(",")
+
+        # Iterate over available_fields and create form fields
+        for field in self.available_fields:
+            field_value = field["value"]
+            self.fields[field_value] = forms.BooleanField(
+                label=field["description"],
+                required=False,
+                initial=field_value in selected_fields,
+                help_text=field.get("tooltip", ""),
+            )
+
+        # Set up Crispy Form helper
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.layout = Layout(
+            HTML("<h4>Select fields to print:</h4>"),
+            Field("lot_number"),
+            Div(*[Field(field["value"]) for field in self.available_fields]),  # Use field['value']
+            Submit("save", "Save", css_class="btn btn-success"),  # Save button
+        )
+
+    def save(self):
+        selected_fields = [field["value"] for field in self.available_fields if self.cleaned_data.get(field["value"])]
+        self.auction.label_print_fields = ",".join(selected_fields)
+        self.auction.save()

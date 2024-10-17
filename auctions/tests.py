@@ -873,7 +873,8 @@ class LotLabelViewTestCase(StandardTestCase):
         response = self.client.get(self.url)
         # messages = list(response.wsgi_request._messages)
         assert response.status_code == 200
-        assert "attachment; filename=" in response.headers["Content-Disposition"]
+        # note that weasyprint currently requires pydyf==0.8.0 in requirements.txt
+        assert "attachment;filename=" in response.headers["Content-Disposition"]
 
     def test_small_labels(self):
         user_label_prefs, created = UserLabelPrefs.objects.get_or_create(user=self.user)
@@ -882,7 +883,7 @@ class LotLabelViewTestCase(StandardTestCase):
         self.client.login(username=self.user, password="testpassword")
         response = self.client.get(self.url)
         assert response.status_code == 200
-        assert "attachment; filename=" in response.headers["Content-Disposition"]
+        assert "attachment;filename=" in response.headers["Content-Disposition"]
 
     def test_thermal_labels(self):
         """Test that a regular user can print their own labels."""
@@ -896,7 +897,7 @@ class LotLabelViewTestCase(StandardTestCase):
         self.client.login(username=self.user, password="testpassword")
         response = self.client.get(self.url)
         assert response.status_code == 200
-        assert "attachment; filename=" in response.headers["Content-Disposition"]
+        assert "attachment;filename=" in response.headers["Content-Disposition"]
 
     def test_non_admin_cannot_print_others_labels(self):
         """Test that a non-admin user cannot print labels for other users."""

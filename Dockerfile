@@ -98,12 +98,16 @@ RUN apt-get update && \
     default-libmysqlclient-dev \
     cron \
     nano \
+    # python3-pip \
+    # python3-cffi \
+    # python3-brotli \
+    libpango-1.0-0 \
+    libpangoft2-1.0-0 \
     # libheif dependencies
     libheif-dev \
     && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
-
 RUN pip install pip-tools
 
 # cron setup

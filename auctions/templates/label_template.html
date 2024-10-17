@@ -1,0 +1,114 @@
+{% load qr_code %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            margin: 0;
+        }
+        .content {
+            width: 100%;
+            height: 100%;
+        }
+        @page {
+            size: {{ page_width }}in {{ page_height }}in;
+            padding: 0;
+            margin: {{ page_margin_top }}in {{ page_margin_right }}in {{ page_margin_bottom }}in {{ page_margin_left }}in;
+        }
+        .label-wrapper {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: left;
+            {% if all_borders %}outline: 1px solid rgb(19, 18, 37);{% endif %}
+        }
+        .label {
+            font-size: {{ font_size }}pt;
+            width: {{ label_width }}in;
+            height: {{ label_height }}in;
+            margin: 0in {{ label_margin_right }}in {{ label_margin_bottom }}in 0in;
+            display: flex;
+            {% if print_border %}outline: 1px solid black;{% endif %}
+            box-sizing: border-box;
+            overflow: hidden; /* very important for the description field */
+            page-break-inside: avoid; /* does nothing, see https://github.com/Kozea/WeasyPrint/issues/1967 */
+
+        }
+        .first-column {
+            width: {{ first_column_width }}in;
+            {% if all_borders %}outline: 1px solid red;{% endif %}
+            padding: 0;
+            margin: 0;
+            box-sizing: border-box;
+            white-space: nowrap;
+        }
+        .second-column {
+            width: {{ text_area_width }}in;
+            {% if all_borders %}outline: 1px solid orange;{% endif %}
+            padding: 0;
+            margin: 0;
+        }
+    </style>
+    <title>Labels</title>
+</head>
+<body>
+    <div class="label-wrapper">
+    {% for label in labels %}
+        <div class="label">
+            <div class="first-column">
+                <div><b>{{ label.lot_number_display }}</b></div>
+                {% if 'qr_code' in label.auction.label_print_fields %}
+                    <div>{% qr_from_text label.qr_code size=4 border="1" %}</div>
+                {% endif %}
+                <span style="font-size: {{ first_column_font_size }}pt;">
+                {% for field in label.first_column_fields %}
+                    <div>{{ field }}</div>
+                {% endfor %}
+                </span>
+            </div>
+            <div class="second-column">
+                {% if 'lot_name' in label.auction.label_print_fields %}
+                    {{ label.lot_name }}<br>
+                {% endif %}
+                {% if 'category' in label.auction.label_print_fields %}
+                    {% if label.category %}{{ label.category }}<br>{% endif %}
+                {% endif %}
+                {% if label.second_column_fields %}
+                    {% for field in label.second_column_fields %}
+                        {{ field }}
+                    {% endfor %}
+                <br>
+                {% endif %}
+                {% if label.sold %}
+                    Winner: <b>{{ label.winner_name }}</b><br>
+                    {% if label.auction.multi_location %}
+                        {{ label.winner_location }}<br>
+                    {% endif %}
+                {% else %}
+                    {% if 'seller_name' in label.auction.label_print_fields %}
+                        Seller: {{ label.seller_name }}
+                    {% endif %}
+                    {% if 'seller_email' in label.auction.label_print_fields %}
+                        {{ label.seller_email }}
+                    {% endif %}
+                    {% if 'seller_name' in label.auction.label_print_fields or 'seller_email' in label.auction.label_print_fields %}
+                        <br>
+                    {% endif %}
+                {% endif %}
+                {% if 'description_label' in label.auction.label_print_fields %}
+                    <span style="font-size: {{ description_font_size }}pt;">
+                        {{ label.description_label | safe}}
+                    </span>
+                {% endif %}
+            </div>
+        </div>
+        {% if forloop.counter|divisibleby:labels_per_page %}
+            </div>
+            <span style="page-break-after: always;"></span>
+            <div class="label-wrapper">
+        {% endif %}
+    {% endfor %}
+    </div>
+</body>
+</html>

@@ -49,6 +49,8 @@ botocore==1.35.10
     # via
     #   boto3
     #   s3transfer
+brotli==1.1.0
+    # via fonttools
 certifi==2024.7.4
     # via
     #   -r requirements.in
@@ -58,6 +60,7 @@ cffi==1.16.0
     #   -r requirements.in
     #   cryptography
     #   pyheif
+    #   weasyprint
 channels==4.1.0
     # via
     #   -r requirements.in
@@ -88,6 +91,8 @@ cryptography==43.0.1
     #   pyopenssl
     #   pywebpush
     #   service-identity
+cssselect2==0.7.0
+    # via weasyprint
 daphne==4.1.2
     # via -r requirements.in
 defusedxml==0.7.1
@@ -115,6 +120,7 @@ django==5.1.1
     #   django-ses
     #   django-summernote
     #   django-tables2
+    #   django-weasyprint
     #   easy-thumbnails
     #   jsonfield
 django-allauth==0.63.3
@@ -156,11 +162,14 @@ django-ses[events]==4.1.0
 django-summernote==0.8.20.0
     # via -r requirements.in
 django-tables2==2.7.0
+
+django-weasyprint==2.3.0
     # via -r requirements.in
 django-webpush==0.3.6
     # via -r requirements.in
 easy-thumbnails==2.9
-    # via -r requirements.in
+fonttools[woff]==4.54.1
+    # via weasyprint
 frozenlist==1.4.1
     # via
     #   aiohttp
@@ -171,6 +180,8 @@ h11==0.14.0
     # via uvicorn
 heif-image-plugin==0.6.1
     # via -r requirements.in
+html5lib==1.1
+    # via weasyprint
 http-ece==1.2.1
     # via pywebpush
 httptools==0.6.1
@@ -226,6 +237,7 @@ pillow==10.4.0
     #   -r requirements.in
     #   easy-thumbnails
     #   reportlab
+    #   weasyprint
 pip-review==1.3.0
     # via -r requirements.in
 py-vapid==1.9.1
@@ -249,6 +261,8 @@ pydantic==2.8.2
     #   django-qr-code
 pydantic-core==2.20.1
     # via pydantic
+pydyf==0.8.0
+    # via weasyprint
 pyhamcrest==2.1.0
     # via -r requirements.in
 pyheif==0.7.1
@@ -262,7 +276,8 @@ pyopenssl==24.2.1
     #   -r requirements.in
     #   twisted
 pyparsing==3.1.2
-    # via -r requirements.in
+pyphen==0.16.0
+    # via weasyprint
 python-dateutil==2.9.0.post0
     # via botocore
 python-dotenv==1.0.1
@@ -308,6 +323,7 @@ six==1.16.0
     #   -r requirements.in
     #   automat
     #   bleach
+    #   html5lib
     #   python-dateutil
     #   pywebpush
 sniffio==1.3.1
@@ -318,7 +334,10 @@ sqlparse==0.5.1
     #   django
     #   django-debug-toolbar
 tinycss2==1.2.1
-    # via bleach
+    # via
+    #   bleach
+    #   cssselect2
+    #   weasyprint
 twisted[tls]==24.3.0
     # via
     #   -r requirements.in
@@ -350,10 +369,14 @@ uvloop==0.19.0
     # via uvicorn
 watchfiles==0.22.0
     # via uvicorn
+weasyprint==61.2
+    # via django-weasyprint
 webencodings==0.5.1
     # via
     #   -r requirements.in
     #   bleach
+    #   cssselect2
+    #   html5lib
     #   tinycss2
 websockets==12.0
     # via uvicorn
@@ -363,6 +386,8 @@ zope-interface==6.4.post2
     # via
     #   -r requirements.in
     #   twisted
+zopfli==0.2.3
+    # via fonttools
 
 # The following packages are considered to be unsafe in a requirements file:
 # pip

@@ -64,7 +64,6 @@ urllib3
 webencodings
 zope.interface
 crispy-bootstrap5
-reportlab
 channels_redis
 pyyaml
 ua-parser
@@ -74,3 +73,4 @@ gunicorn
 django-ses[events]
 django-webpush
 django-summernote
+django-weasyprint

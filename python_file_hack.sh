@@ -10,19 +10,20 @@ REPLACE="\        try:\n            with timezone.override(self.tz.resolve(conte
 if grep -qF "$SEARCH" "$FILE"; then
     sed -i "/$SEARCH/,+2 c $REPLACE" "$FILE"
 else
-    echo "Unable to find the text $SEARCH in $FILE, update or remove fix_tz_hack.sh"
+    echo "Unable to find the text $SEARCH in $FILE, update or remove python_file_hack.sh"
     exit 1
 fi
 
 # Reportlab causes certain label settings to throw an error
 # https://github.com/virantha/pypdfocr/issues/80
-FILE="/usr/local/lib/python3.11/site-packages/reportlab/platypus/paragraph.py"
-SEARCH="        if availWidth<_FUZZ:"
-REPLACE="\        # removed\n"
+# this one has been 'fixed' by moving to weasyprint
+# FILE="/usr/local/lib/python3.11/site-packages/reportlab/platypus/paragraph.py"
+# SEARCH="        if availWidth<_FUZZ:"
+# REPLACE="\        # removed\n"
 
-if grep -qF "$SEARCH" "$FILE"; then
-    sed -i "/$SEARCH/,+2 c $REPLACE" "$FILE"
-else
-    echo "Unable to find the text $SEARCH in $FILE, update or remove fix_tz_hack.sh"
-    exit 1
-fi
+# if grep -qF "$SEARCH" "$FILE"; then
+#     sed -i "/$SEARCH/,+2 c $REPLACE" "$FILE"
+# else
+#     echo "Unable to find the text $SEARCH in $FILE, update or remove fix_tz_hack.sh"
+#     exit 1
+# fi

@@ -34,5 +34,9 @@ var form_id = '#printing-prefs';
         <li>Use packing tape to attach them to your lots (make sure your bags are dry!)</li>
     </ol>
     <p>If you want to print on self-adhesive labels, search for <a href="https://www.google.com/search?q=Avery 5160 labels">small labels</a> or <a href="https://www.google.com/search?q=Avery 18262 labels">large labels</a>, and make sure to print using a laser printer (inkjet runs when it's wet).</p>
+    <small class='text-muted'>Keep in mind that most peel and stick (Avery) labels don't have the same margin at the top and the bottom, so if the text isn't printing on the labels, there's a good chance you've got the paper turned around.
+
+        <p><br>If you're printing lots of labels, or running club auctions, it likely makes sense to purchase a thermal printer.</p>
+    </small>
     {% crispy form form.helper %}
 {% endblock %}

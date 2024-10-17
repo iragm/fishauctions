@@ -118,8 +118,16 @@
                   </td>
                 </tr>
                 <tr>
-                  <td>Printed invoices:</td>
-                  <td> {{ printed_invoices }} / {{ total_invoices }} ({{invoice_percent|floatformat:2}}%)
+                  <td>User with printed labels</td>
+                  <td> {{ users_with_printed_labels }}
+                  </td>
+                </tr>
+                <tr>
+                  <td>Label preset usage:</td>
+                  <td>
+                        {% for preset in preset_counts %}
+                            {{ preset.preset }}: {{ preset.count }}<br>
+                        {% endfor %}
                   </td>
                 </tr>
                 <tr>
