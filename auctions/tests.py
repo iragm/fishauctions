@@ -873,6 +873,7 @@ class LotLabelViewTestCase(StandardTestCase):
         response = self.client.get(self.url)
         # messages = list(response.wsgi_request._messages)
         assert response.status_code == 200
+        # note that weasyprint currently requires pydyf==0.8.0 in requirements.txt
         assert "attachment;filename=" in response.headers["Content-Disposition"]
 
     def test_small_labels(self):
