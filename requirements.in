@@ -74,3 +74,4 @@ gunicorn
 django-ses[events]
 django-webpush
 django-summernote
+django-weasyprint

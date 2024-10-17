@@ -7,10 +7,11 @@
   <p><small>This page will allow you to print labels for your auction.
     <br>Some tips:<br>
     <ul>
-      <li>It's often easier to print all labels for a single user on the <a href="/auctions/{{auction.slug}}/users">users</a> tab.</li>
+      <li>Set <a href="{% url 'auction_label_config' slug=auction.slug %}">what gets printed on labels</a></li>
+      <li>It's often easier to print all labels for a single user on the <a href="/auctions/{{auction.slug}}/users">users</a> tab</li>
       <li>Encourage users to pre-register lots and print their own labels.  This saves you paper and a lot of time at the registration desk.</li>
-      <li>Reprint damaged labels by viewing the lot's page.</li>
-      <li>Change your <a href="{% url 'printing' %}?next={{ request.path }}">printing preferences</a> to match the type of labels you're printing.</li>
+      <li>Reprint damaged labels by viewing the lot's page</li>
+      <li>Change your <a href="{% url 'printing' %}?next={{ request.path }}">printing preferences</a> to match the type of labels you're printing</li>
     </ul>
     </small></p>
     <p>You've printed {{ printed_labels_count }} out of {{ all_labels_count }} labels in your auction.</p>

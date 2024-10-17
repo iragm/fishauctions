@@ -403,6 +403,11 @@ urlpatterns = [
         name="auction_no_show_dialog",
     ),
     path(
+        "auctions/<slug:slug>/print-label-setup/",
+        views.AuctionLabelConfig.as_view(),
+        name="auction_label_config",
+    ),
+    path(
         "api/auctions/<slug:slug>/find-image/",
         views.FindImageIcon.as_view(),
         name="auto_image_available",

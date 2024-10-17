@@ -9,7 +9,6 @@ from io import BytesIO, TextIOWrapper
 from random import choice, randint, sample, uniform
 from urllib.parse import unquote, urlencode
 
-import HeifImagePlugin  # noqa: F401 Importing this plugin enables HEIF image support, even though it's not used
 import qr_code
 from chartjs.colors import next_color
 from chartjs.views.columns import BaseColumnsHighChartsView
@@ -67,16 +66,20 @@ from django.views.generic.edit import (
 )
 from django_filters.views import FilterView
 from django_tables2 import SingleTableMixin
+from django_weasyprint import WeasyTemplateResponseMixin
 from easy_thumbnails.files import get_thumbnailer
 from el_pagination.views import AjaxListView
 from PIL import Image
 from qr_code.qrcode.utils import QRCodeOptions
+from reportlab.lib import colors
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import cm, inch
 from reportlab.platypus import (
     Image as PImage,
 )
 from reportlab.platypus import (
+    ImageAndFlowables,
+    KeepInFrame,
     Paragraph,
     SimpleDocTemplate,
     Table,
@@ -111,6 +114,7 @@ from .forms import (
     EditLot,
     InvoiceAdjustmentForm,
     InvoiceAdjustmentFormSetHelper,
+    LabelPrintFieldsForm,
     LotFormSetHelper,
     LotRefundForm,
     MultiAuctionTOSPrintLabelForm,
@@ -1937,6 +1941,20 @@ class AuctionUpdate(UpdateView, AuctionPermissionsMixin):
             messages.info(
                 self.request,
                 f"This auction allows online bidding -- make sure to <a href='{reverse('auction_help', kwargs={'slug':self.get_object().slug})}'>watch the tutorial in the help</a> to see how this works",
+            )
+        if (
+            self.get_object().buy_now == "allow" or self.get_object().buy_now == "required"
+        ) and "buy_now_label" not in self.get_object().label_print_fields:
+            messages.info(
+                self.request,
+                f"Buy now is enabled, but labels are not set to print a buy now price. <a href='{reverse('auction_label_config', kwargs={'slug':self.get_object().slug})}'>You should enable printing buy now on labels here.</a>",
+            )
+        if (
+            self.get_object().reserve_price == "allow" or self.get_object().reserve_price == "required"
+        ) and "min_bid_label" not in self.get_object().label_print_fields:
+            messages.info(
+                self.request,
+                f"Minimum bid is enabled, but labels are not set to print a minimum bid. <a href='{reverse('auction_label_config', kwargs={'slug':self.get_object().slug})}'>You should enable printing minimum bids on labels here.</a>",
             )
         return super().form_valid(form)
 
@@ -4526,13 +4544,15 @@ class InvoiceNoLoginView(InvoiceView):
         return super().dispatch(request, *args, **kwargs)
 
 
-class LotLabelView(View, AuctionPermissionsMixin):
+class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionPermissionsMixin):
     """View and print labels for an auction"""
 
     # these are defined in urls.py and used in get_object(), below
     bidder_number = None
     username = None
-    template_name = "invoice_labels.html"
+    # This one is the old one, it has some good stuff in it like QR code
+    # template_name = "invoice_labels.html"
+    template_name = "label_template.html"
     allow_non_admins = True
     filename = ""  # this will be automatically generated in dispatch
 
@@ -4600,7 +4620,7 @@ class LotLabelView(View, AuctionPermissionsMixin):
             messages.error(request, "Your account doesn't have permission to view this page.")
             return redirect("/")
 
-    def get_context_data(self, **kwargs):
+    def get_context_data_old(self, **kwargs):
         user_label_prefs, created = UserLabelPrefs.objects.get_or_create(user=self.request.user)
         context = {}
         context["empty_labels"] = user_label_prefs.empty_labels
@@ -4647,18 +4667,158 @@ class LotLabelView(View, AuctionPermissionsMixin):
             context["page_margin_right"] = 0.1
             context["font_size"] = 14
             context["unit"] = "in"
-            context["print_qr"] = False
+            context["print_qr"] = True
         else:
             context.update(
                 {f"{field.name}": getattr(user_label_prefs, field.name) for field in UserLabelPrefs._meta.get_fields()}
             )
         return context
 
-    def create_labels(self, request, *args, **kwargs):
+    def create_labels_unused(self, request, *args, **kwargs):
+        """Scratchpad attempting to use reportlab for more advanced stuff, probably safe to remove"""
+        # Get context data and set up PDF response
         context = self.get_context_data(kwargs=kwargs)
         response = HttpResponse(content_type="application/pdf")
-        label_name = self.filename or "labels"
-        label_name = re.sub(r"[^a-zA-Z0-9]", "_", label_name.lower())
+
+        # Generate label file name
+        label_name = re.sub(r"[^a-zA-Z0-9]", "_", (self.filename or "labels").lower())
+        response["Content-Disposition"] = f'attachment; filename="{label_name}.pdf"'
+
+        # Fetch label and page dimensions from context
+        label_width = context.get("label_width")
+        label_height = context.get("label_height")
+        label_margin_right = context.get("label_margin_right")
+        margin_bottom = context.get("label_margin_bottom")
+        page_margin_top = context.get("page_margin_top")
+        page_margin_bottom = context.get("page_margin_bottom")
+        page_margin_left = context.get("page_margin_left")
+        page_margin_right = context.get("page_margin_right")
+
+        # Use inch or cm as unit
+        unit = inch if context.get("unit") == "in" else cm
+        font_size = context.get("font_size")
+        page_width = context.get("page_width")
+        page_height = context.get("page_height")
+
+        # Get queryset and append empty labels
+        labels = self.get_queryset()
+        labels = (["empty"] * context["empty_labels"]) + list(labels)
+
+        # Set up document
+        doc = SimpleDocTemplate(
+            response,
+            pagesize=[page_width * unit, page_height * unit],
+            leftMargin=page_margin_left * unit,
+            rightMargin=page_margin_right * unit,
+            topMargin=page_margin_top * unit,
+            bottomMargin=page_margin_bottom * unit,
+        )
+
+        elements = []
+        page_width = page_width * unit - page_margin_left * unit - page_margin_right * unit  # Adjust page width
+
+        first_column_width = label_width * unit / 5
+        first_column_width = min(first_column_width, label_height * unit)
+        # if first_column_width < stringWidth("123456789", "Helvetica", font_size):
+        # lot number won't fit, make it larger but keep qr code size the same
+
+        text_area_width = label_width * unit - first_column_width
+        margin_right_width = label_margin_right * unit
+        column_width = first_column_width + text_area_width + margin_right_width
+        row_height = (label_height + margin_bottom) * unit
+
+        num_cols = int(page_width / column_width)
+
+        # Paragraph style
+        style = ParagraphStyle(
+            name="Normal",
+            fontName="Helvetica",
+            fontSize=font_size,
+            # leading=font_size * 1.3,
+            borderColor=colors.blue,
+            borderWidth=1,
+        )
+
+        # Optional style with borders (visual debugging)
+        style_with_border = ParagraphStyle(
+            name="NormalWithBorder",
+            fontName="Helvetica",
+            fontSize=font_size,
+            leading=font_size * 1.3,
+            borderColor=colors.red,
+            borderWidth=1,
+            borderPadding=2,
+        )
+
+        # Create rows and table data
+        labels_row = []
+        table_data = []
+
+        for i, label in enumerate(labels):
+            if label == "empty":
+                labels_row.append([[Paragraph("", style)] * 3])
+            else:
+                # currently, we are not trimming the text to fit on a single row
+                # this means that lots with a long label_line_1 will spill over onto 2 rows
+                # we could trim the length to [:20] in the model or here to "fix" this, but it's not a huge problem IMHO
+                # lot number is special, it always must fit on one row
+
+                if context["print_qr"]:
+                    frame = Paragraph("123456789", style)
+                    frame = KeepInFrame(
+                        first_column_width,
+                        font_size * 2,
+                        [
+                            frame,
+                        ],
+                        mode="shrink",
+                    )
+                    # labels_row.append(frame, self.generate_qr_code(
+                    #         label, first_column_width, first_column_width),)
+                    # labels_row.append(Spacer(1, 12))
+                    labels_row.append([frame, self.generate_qr_code(label, first_column_width, first_column_width)])
+                else:
+                    labels_row.append([Paragraph("", style)])  # margin left cell is empty
+                label_text_cell = Paragraph(
+                    f"{label.label_line_0}<br />{label.label_line_1}<br />{label.label_line_2}<br />{label.label_line_3}",
+                    style_with_border,
+                )
+                labels_row.append([label_text_cell])
+                labels_row.append([Paragraph("", style)])  # Empty right margin
+
+            # Append completed rows to table data
+            if (i + 1) % num_cols == 0 or i == len(labels) - 1:
+                if i == len(labels) - 1 and len(labels_row) < num_cols * 3:
+                    labels_row += [[Paragraph("", style)] * 3] * ((num_cols * 3) - len(labels_row))
+                table_data.append(labels_row)
+                labels_row = []
+
+            if label != "empty":
+                label.label_printed = True
+                label.save()
+
+        # Set column widths for table
+        col_widths = [first_column_width, text_area_width, margin_right_width] * num_cols
+
+        # Build the table
+        table = Table(table_data, colWidths=col_widths, rowHeights=row_height)
+        table.setStyle(
+            [
+                ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ]
+        )
+
+        elements.append(table)
+        doc.build(elements)
+
+        return response
+
+    def create_labels_reportlab(self, request, *args, **kwargs):
+        """Works fine but can't be customized"""
+        context = self.get_context_data(kwargs=kwargs)
+        response = HttpResponse(content_type="application/pdf")
+        label_name = re.sub(r"[^a-zA-Z0-9]", "_", (self.filename or "labels").lower())
         response["Content-Disposition"] = f'attachment; filename="{label_name}.pdf"'
         label_width = context.get("label_width")
         label_height = context.get("label_height")
@@ -4668,16 +4828,14 @@ class LotLabelView(View, AuctionPermissionsMixin):
         page_margin_bottom = context.get("page_margin_bottom")
         page_margin_left = context.get("page_margin_left")
         page_margin_right = context.get("page_margin_right")
-        unit = context.get("unit") or "in"
+        unit = inch if context.get("unit") == "in" else cm
         font_size = context.get("font_size")
         page_width = context.get("page_width")
         page_height = context.get("page_height")
-        empty_labels = context["empty_labels"]
+
         labels = self.get_queryset()
-        if unit == "in":
-            unit = inch
-        else:
-            unit = cm
+        labels = (["empty"] * context["empty_labels"]) + list(labels)
+
         doc = SimpleDocTemplate(
             response,
             pagesize=[page_width * unit, page_height * unit],
@@ -4689,12 +4847,12 @@ class LotLabelView(View, AuctionPermissionsMixin):
         elements = []
         # remove margins from page width
         page_width = page_width * unit - page_margin_left * unit - page_margin_right * unit
-        # each label is broken into 3 parts, with a seperate cell for each:
+        # each label is broken into 3 parts, with a separate cell for each:
         # first cell
         if context["print_qr"]:
-            qr_code_width = label_width * unit / 4
-            if qr_code_width > label_height * unit:
-                qr_code_width = label_height * unit
+            qr_code_width = label_width * unit / 5
+            if qr_code_width > label_height * unit / 2:
+                qr_code_width = label_height * unit / 2
             if label_height * unit > qr_code_width:
                 qr_code_height = qr_code_width
             else:
@@ -4718,8 +4876,17 @@ class LotLabelView(View, AuctionPermissionsMixin):
             fontSize=font_size,
             leading=font_size * 1.3,
         )
-        if empty_labels:
-            labels = ["empty"] * empty_labels + list(labels)
+
+        style_with_border = ParagraphStyle(
+            name="Normal",
+            fontName="Helvetica",
+            fontSize=context.get("font_size"),
+            leading=context.get("font_size") * 1.3,
+            borderColor=colors.red,  # Add border color
+            borderWidth=1,  # Add border width for visualization
+            borderPadding=2,  # Add padding to avoid text touching the border
+        )
+
         for i, label in enumerate(labels):
             if label == "empty":
                 labels_row += [[Paragraph("", style), Paragraph("", style), Paragraph("", style)]] * 3
@@ -4727,30 +4894,18 @@ class LotLabelView(View, AuctionPermissionsMixin):
                 # currently, we are not trimming the text to fit on a single row
                 # this means that lots with a long label_line_1 will spill over onto 2 rows
                 # we could trim the length to [:20] in the model or here to "fix" this, but it's not a huge problem IMHO
-                if context["print_qr"]:
-                    label_qr_code = qr_code.qrcode.maker.make_qr_code_image(
-                        label.qr_code,
-                        QRCodeOptions(
-                            size="T",
-                            border=4,
-                            error_correction="L",
-                            image_format="png",
-                        ),
-                    )
-                    image_stream = BytesIO(label_qr_code)
-                    label_qr_code_cell = PImage(
-                        image_stream,
-                        width=qr_code_width,
-                        height=qr_code_height,
-                        lazy=0,
-                        hAlign="LEFT",
-                    )
-                    labels_row.append([label_qr_code_cell])
-                else:
-                    labels_row.append([Paragraph("", style)])  # margin left cell is empty
-                label_text_cell = Paragraph(
-                    f"{label.label_line_0}<br />{label.label_line_1}<br />{label.label_line_2}<br />{label.label_line_3}",
-                    style,
+                # if context["print_qr"]:
+                #     labels_row.append([self.generate_qr_code(label, qr_code_width, qr_code_height)])
+                # else:
+                #     labels_row.append([Paragraph("", style)])  # margin left cell is empty
+                # label_text_cell = Paragraph(
+                #     f"{label.label_line_0}<br />{label.label_line_1}<br />{label.label_line_2}<br />{label.label_line_3}",
+                #     style,
+                # )
+                label_text_cell = ImageAndFlowables(
+                    self.generate_qr_code(label, qr_code_width, qr_code_height),
+                    Paragraph("some text here it's a lot of text very long, just great", style_with_border),
+                    imageSide="left",
                 )
                 labels_row.append([label_text_cell])
                 # margin right cell is empty
@@ -4758,11 +4913,11 @@ class LotLabelView(View, AuctionPermissionsMixin):
 
             # Check if the current label is the last label in the current row or the last label in the list
             if (i + 1) % num_cols == 0 or i == len(labels) - 1:
-                logger.debug("we have reached the end, %s in total", len(labels))
+                # logger.debug("we have reached the end, %s in total", len(labels))
                 # Check if the current label is the last label in the list and labels_row is not full
                 if i == len(labels) - 1 and len(labels_row) < num_cols * 3:
                     # Add empty elements to the labels_row list until it is filled
-                    logger.debug("adding %s extra labels, *3 total columns added", (num_cols * 3) - len(labels_row))
+                    # logger.debug("adding %s extra labels, *3 total columns added", (num_cols * 3) - len(labels_row))
                     labels_row += [
                         [
                             Paragraph("", style),
@@ -4790,9 +4945,141 @@ class LotLabelView(View, AuctionPermissionsMixin):
         doc.build(elements)
         return response
 
+    def get_pdf_filename(self):
+        label_name = re.sub(r"[^a-zA-Z0-9]", "_", (self.filename or "labels").lower())
+        return f"{label_name}.pdf"
+
+    def get_context_data(self, **kwargs):
+        user_label_prefs, created = UserLabelPrefs.objects.get_or_create(user=self.request.user)
+        context = {}
+        context["empty_labels"] = user_label_prefs.empty_labels
+        context["print_border"] = user_label_prefs.print_border
+        context["first_column_width"] = 0.62
+        if user_label_prefs.preset == "sm":
+            # Avery 5160 labels
+            context["page_width"] = 8.5
+            context["page_height"] = 11
+            context["label_width"] = 2.55
+            context["label_height"] = 0.99
+            context["label_margin_right"] = 0.19
+            context["label_margin_bottom"] = 0.01
+            context["page_margin_top"] = 0.57
+            context["page_margin_bottom"] = 0.1
+            context["page_margin_left"] = 0.23
+            context["page_margin_right"] = 0
+            context["font_size"] = 10
+            context["unit"] = "in"
+        elif user_label_prefs.preset == "lg":
+            # Avery 18262 labels
+            context["page_width"] = 8.5
+            context["page_height"] = 11
+            context["label_width"] = 3.85
+            context["label_height"] = 1.2
+            context["label_margin_right"] = 0.25
+            context["label_margin_bottom"] = 0.13
+            context["page_margin_top"] = 0.88
+            context["page_margin_bottom"] = 0.6
+            context["page_margin_left"] = 0.3
+            context["page_margin_right"] = 0
+            context["font_size"] = 13
+            context["first_column_width"] = 0.75
+            context["unit"] = "in"
+        elif user_label_prefs.preset == "thermal_sm":
+            # thermal label printer 3x2
+            context["page_width"] = 3
+            context["page_height"] = 2
+            context["label_width"] = 2.9
+            context["label_height"] = 1.9
+            context["label_margin_right"] = 0
+            context["label_margin_bottom"] = 0
+            context["page_margin_top"] = 0.04
+            context["page_margin_bottom"] = 0.04
+            context["page_margin_left"] = 0.04
+            context["page_margin_right"] = 0.04
+            context["font_size"] = 13
+            context["first_column_width"] = 0.75
+            context["unit"] = "in"
+            # override the user selected setting for thermal labels
+            context["print_border"] = False
+        else:
+            context.update(
+                {f"{field.name}": getattr(user_label_prefs, field.name) for field in UserLabelPrefs._meta.get_fields()}
+            )
+        unit = 2.54 if context.get("unit") == "cm" else 1
+
+        context["label_width"] = context.get("label_width") * unit
+        context["label_height"] = context.get("label_height") * unit
+        context["label_margin_right"] = context.get("label_margin_right") * unit
+        context["label_margin_bottom"] = context.get("label_margin_bottom") * unit
+
+        context["page_margin_top"] = context.get("page_margin_top") * unit
+        context["page_margin_bottom"] = context.get("page_margin_bottom") * unit
+        context["page_margin_left"] = context.get("page_margin_left") * unit
+        context["page_margin_right"] = context.get("page_margin_right") * unit
+
+        context["page_width"] = context.get("page_width") * unit
+        context["page_height"] = context.get("page_height") * unit
+
+        # Calculate the available space on the page
+        available_width = context["page_width"] - context["page_margin_left"] - context["page_margin_right"]
+
+        available_height = context["page_height"] - context["page_margin_top"] - context["page_margin_bottom"]
+
+        # Page breaks don't work, see https://github.com/Kozea/WeasyPrint/issues/1967
+        # manually calculating
+        labels_per_row = int(available_width // (context["label_width"] + context["label_margin_right"]))
+        labels_per_column = int(available_height // (context["label_height"] + context["label_margin_bottom"]))
+        context["labels_per_page"] = labels_per_row * labels_per_column
+
+        labels = self.get_queryset()
+
+        # First column width is fixed at 0.63 for most labels and overridden for large and thermal
+        # context['first_column_width'] = (context['label_width'] / 4)
+        # let's keep the QR code a fixed size regardless of the label size
+        # context['qr_code_height'] = min(context['first_column_width'], context['label_height'] / 2)
+        context["qr_code_height"] = 0.5 * 72
+        height_for_text = context["label_height"] * 72
+        if "qr_code" in self.auction.label_print_fields:
+            height_for_text = height_for_text - context["qr_code_height"]
+        leading_ratio = 1.3
+        line_height = context["font_size"] * leading_ratio
+        lines_that_fit = int(height_for_text / line_height * 1.2)
+        lines_that_fit -= 1  # for the lot number
+        first_column_fields = [
+            "quantity_label",
+            "donation_label",
+            "min_bid_label",
+            "buy_now_label",
+            "auction_date",
+        ]
+        first_column_fields_to_print = [
+            field for field in first_column_fields if field in self.auction.label_print_fields
+        ]
+        # Split the fields: first column and overflow to second column
+        first_column_fields = first_column_fields_to_print[:lines_that_fit]
+        first_column_fields_to_put_in_second_column = first_column_fields_to_print[lines_that_fit:]
+
+        for label in labels:
+            label_first_column_fields = []
+            label_second_column_fields = []
+            for field in first_column_fields:
+                label_first_column_fields.append(getattr(label, field))
+            for field in first_column_fields_to_put_in_second_column:
+                label_second_column_fields.append(getattr(label, field))
+            label.first_column_fields = label_first_column_fields
+            label.second_column_fields = label_second_column_fields
+        context["labels"] = (["empty"] * context["empty_labels"]) + list(labels)
+        context["text_area_width"] = context["label_width"] - context["first_column_width"]
+        context["description_font_size"] = int(context["font_size"] * 0.7)
+        context["first_column_font_size"] = int(context["font_size"] * 0.8)
+        # for sizing
+        context["all_borders"] = False
+        return context
+
     def get(self, request, *args, **kwargs):
         if request.user.is_superuser:
-            return self.create_labels(request, *args, **kwargs)
+            return super().get(self, request, *args, **kwargs)
+            # return self.create_labels(request, *args, **kwargs)
         else:
             try:
                 return self.create_labels(request, *args, **kwargs)
@@ -4803,6 +5090,25 @@ class LotLabelView(View, AuctionPermissionsMixin):
                     "Unable to print labels, this is likely caused by an invalid custom setting here",
                 )
                 return redirect(reverse("printing"))
+
+    def generate_qr_code(self, label, qr_code_width, qr_code_height):
+        label_qr_code = qr_code.qrcode.maker.make_qr_code_image(
+            label.qr_code,
+            QRCodeOptions(
+                size="T",
+                border=1,
+                error_correction="L",
+                image_format="png",
+            ),
+        )
+        image_stream = BytesIO(label_qr_code)
+        return PImage(
+            image_stream,
+            width=qr_code_width,
+            height=qr_code_height,
+            lazy=0,
+            hAlign="LEFT",
+        )
 
 
 class UnprintedLotLabelsView(LotLabelView):
@@ -4820,12 +5126,13 @@ class SingleLotLabelView(LotLabelView):
 
     def dispatch(self, request, *args, **kwargs):
         self.lot = get_object_or_404(Lot, pk=kwargs.pop("pk"), is_deleted=False)
+        self.filename = "label_" + self.lot.custom_lot_number
         if self.lot.auctiontos_seller and self.lot.auctiontos_seller.user is not request.user:
             self.auction = self.lot.auctiontos_seller.auction
             if not self.is_auction_admin:
                 messages.error(
                     request,
-                    "You can't print lables for other people's lots unless you are an admin",
+                    "You can't print labels for other people's lots unless you are an admin",
                 )
                 return redirect("/")
         if not self.lot.auctiontos_seller:
@@ -6282,15 +6589,32 @@ class AuctionStatsAuctioneerSpeedJSONView(AuctionStatsAttritionJSONView):
         return [data]
 
 
-class AuctionBulkPrinting(FormView, AuctionPermissionsMixin):
+class AuctionLabelConfig(AuctionViewMixin, FormView):
+    form_class = LabelPrintFieldsForm
+    template_name = "auction_print_setup.html"
+
+    def get_success_url(self):
+        return reverse("auction_printing", kwargs={"slug": self.auction.slug})
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["auction"] = self.auction
+        return kwargs
+
+    def form_valid(self, form):
+        form.save()
+        return super().form_valid(form)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["auction"] = self.auction
+        return context
+
+
+class AuctionBulkPrinting(AuctionViewMixin, FormView):
     model = Auction
     template_name = "auction_printing.html"
     form_class = MultiAuctionTOSPrintLabelForm
-
-    def dispatch(self, request, *args, **kwargs):
-        self.auction = get_object_or_404(Auction, slug=kwargs.pop("slug"), is_deleted=False)
-        self.is_auction_admin
-        return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
