@@ -3002,7 +3002,7 @@ class ViewLot(DetailView):
             and self.request.user.is_authenticated
             and self.request.user.email == lot.auctiontos_winner.email
         ) or (lot.winner and self.request.user.is_authenticated and self.request.user == lot.winner):
-            if lot.winner_feedback_rating == 0 and timezone.now() > lot.date_end + timedelta(days=2):
+            if lot.feedback_rating == 0 and timezone.now() > lot.date_end + timedelta(days=2):
                 context["show_feedback_dialog"] = True
         return context
 
