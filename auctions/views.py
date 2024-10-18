@@ -4161,17 +4161,17 @@ def toDefaultLandingPage(request):
         # if not, check and see if the user has been participating in an auction
         try:
             auction = UserData.objects.get(user=request.user).last_auction_used
-            if timezone.now() > auction.date_end:
-                try:
-                    invoice = Invoice.objects.get(auctiontos_user__user=request.user, auction=auction)
-                    messages.info(
-                        request,
-                        f'{auction} has ended.  <a href="/invoices/{invoice.pk}">View your invoice</a>, <a href="/feedback/">leave feedback</a> on lots you bought or sold, or <a href="/lots?auction={auction.slug}">view lots</a>',
-                    )
-                    return redirect("/lots/")
-                except:
-                    pass
-                auction = None
+            invoice = (
+                Invoice.objects.filter(auctiontos_user__user=request.user, auctiontos_user__auction=auction)
+                .exclude(status="DRAFT")
+                .first()
+            )
+            if invoice:
+                messages.info(
+                    request,
+                    f'{auction} has ended.  <a href="/invoices/{invoice.pk}">View your invoice</a> or <a href="/feedback/">leave feedback</a> on lots you bought or sold',
+                )
+                return redirect("/lots/")
             else:
                 try:
                     # in progress online auctions get routed
