@@ -1309,7 +1309,7 @@ class PickupLocation(models.Model):
     A given auction can have multiple pickup locations
     """
 
-    name = models.CharField(max_length=50, default="", blank=True, null=True)
+    name = models.CharField(max_length=70, default="", blank=True, null=True)
     name.help_text = "Location name shown to users.  e.x. University Mall in VT"
     user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     auction = models.ForeignKey(Auction, null=True, blank=True, on_delete=models.CASCADE)
