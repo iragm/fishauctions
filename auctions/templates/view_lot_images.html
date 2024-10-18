@@ -390,7 +390,7 @@ function deactivate_lot() {
                 {% endif %}
             {% endif %}
         {% endif %}
-        {% if showExchangeInfo %}
+        {% if show_exchange_info %}
         <a name="exchangeinfo"></a>
         <h5>Exchange info</h5>
         <table class="table">
@@ -399,8 +399,13 @@ function deactivate_lot() {
                     hx-target="#modals-here" hx-trigger="click">{{ lot.seller_name }}</a> {% else %} {{ lot.seller_name }} {% endif %}({{ lot.seller_email | urlize }})<br> <small>{{ lot.location }}</small> <a href="{{ lot.seller_invoice_link }}">Seller's invoice</a></td>
             </tr>
             <tr>
-                <td><b>Winner:</b></td><td>{% if is_auction_admin %}<a href="#" hx-get="/api/auctiontos/{{lot.auctiontos_winner.pk}}"
-                    hx-target="#modals-here" hx-trigger="click">{{ lot.winner_name }}</a> {% else %} {{ lot.winner_name }} {% endif %} ({{ lot.winner_email | urlize }})<br><small>{{ lot.winner_location }}</small> <a href="{{ lot.winner_invoice_link }}">Winner's invoice</a></td>
+                <td><b>Winner:</b></td><td>
+                    {% if is_auction_admin %}<a href="#" hx-get="/api/auctiontos/{{lot.auctiontos_winner.pk}}"
+                    hx-target="#modals-here" hx-trigger="click">{{ lot.winner_name }}</a>
+                    {% else %}
+                        {{ lot.winner_name }}
+                    {% endif %}
+                    {% if lot.winner_email and is_auction_admin %}({{ lot.winner_email | urlize }}){% endif %}<br><small>{{ lot.winner_location }}</small> {% if is_auction_admin %}<a href="{{ lot.winner_invoice_link }}">Winner's invoice</a>{% endif %}</td>
             </tr>
         </table>
         {% endif %}

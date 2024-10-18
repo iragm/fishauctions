@@ -2973,10 +2973,9 @@ class ViewLot(DetailView):
             context["distance"] = 0
         # for lots that are part of an auction, it's very handy to show the exchange info right on the lot page
         # this should be visible only to people running the auction or the seller
-        if lot.auction:
+        if lot.auction and lot.auction.is_online and lot.sold:
             if context["is_auction_admin"] or self.request.user == lot.user:
-                if lot.sold:
-                    context["showExchangeInfo"] = True
+                context["show_exchange_info"] = True
         context["show_image_add_button"] = lot.image_permission_check(self.request.user)
         # chat subscription stuff
         if self.request.user.is_authenticated:
@@ -3003,7 +3002,7 @@ class ViewLot(DetailView):
             and self.request.user.is_authenticated
             and self.request.user.email == lot.auctiontos_winner.email
         ) or (lot.winner and self.request.user.is_authenticated and self.request.user == lot.winner):
-            if lot.winner_feedback_rating == 0 and timezone.now() > lot.date_end + timedelta(days=2):
+            if lot.feedback_rating == 0 and timezone.now() > lot.date_end + timedelta(days=2):
                 context["show_feedback_dialog"] = True
         return context
 
@@ -3835,6 +3834,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "allow_deleting_bids",
                 "auto_add_images",
                 "message_users_when_lots_sell",
+                "label_print_fields",
             ]
             for field in fields_to_clone:
                 setattr(auction, field, getattr(original_auction, field))
@@ -4161,17 +4161,17 @@ def toDefaultLandingPage(request):
         # if not, check and see if the user has been participating in an auction
         try:
             auction = UserData.objects.get(user=request.user).last_auction_used
-            if timezone.now() > auction.date_end:
-                try:
-                    invoice = Invoice.objects.get(auctiontos_user__user=request.user, auction=auction)
-                    messages.info(
-                        request,
-                        f'{auction} has ended.  <a href="/invoices/{invoice.pk}">View your invoice</a>, <a href="/feedback/">leave feedback</a> on lots you bought or sold, or <a href="/lots?auction={auction.slug}">view lots</a>',
-                    )
-                    return redirect("/lots/")
-                except:
-                    pass
-                auction = None
+            invoice = (
+                Invoice.objects.filter(auctiontos_user__user=request.user, auctiontos_user__auction=auction)
+                .exclude(status="DRAFT")
+                .first()
+            )
+            if invoice:
+                messages.info(
+                    request,
+                    f'{auction} has ended.  <a href="/invoices/{invoice.pk}">View your invoice</a> or <a href="/feedback/">leave feedback</a> on lots you bought or sold',
+                )
+                return redirect("/lots/")
             else:
                 try:
                     # in progress online auctions get routed

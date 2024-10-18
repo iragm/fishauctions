@@ -1221,7 +1221,7 @@ class AuctionJoin(forms.ModelForm):
                 if location.pickup_by_mail:
                     self.fields["i_agree"].label = "Yes, mail me my lots"
                 else:
-                    self.fields["i_agree"].label = f"Yes, I will be at {location}"
+                    self.fields["i_agree"].label = "Yes, I will be at this auction"
 
     class Meta:
         model = AuctionTOS
