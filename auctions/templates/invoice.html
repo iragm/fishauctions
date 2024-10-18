@@ -311,7 +311,9 @@ $(document).ready(function(){
         {% if auction.multi_location %}
         <th scope="col">Location</th>
         {% endif %}
+          {% if is_admin %}
         <th scope="col">Seller</th>
+        {% endif %}
         <th scope="col">Price</th>
       </tr>
     </thead>
@@ -342,8 +344,9 @@ $(document).ready(function(){
           {% if auction.multi_location %}
             <td>{{ lot.location }}</td>
           {% endif %}
+          {% if is_admin %}
           <td>
-            {% if show_links and is_admin %}
+            {% if show_links %}
               <a href="#" hx-get="/api/auctiontos/{{lot.auctiontos_seller.pk}}"
                 hx-target="#modals-here"
                 hx-trigger="click">
@@ -353,6 +356,7 @@ $(document).ready(function(){
               {{ lot.seller_name }}
             {% endif %}
           </td>
+          {% endif %}
           <td>
             ${{ lot.final_price|floatformat:2 }}
           </td>
