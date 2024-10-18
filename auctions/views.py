@@ -2973,10 +2973,9 @@ class ViewLot(DetailView):
             context["distance"] = 0
         # for lots that are part of an auction, it's very handy to show the exchange info right on the lot page
         # this should be visible only to people running the auction or the seller
-        if lot.auction:
+        if lot.auction and lot.auction.is_online and lot.sold:
             if context["is_auction_admin"] or self.request.user == lot.user:
-                if lot.sold:
-                    context["showExchangeInfo"] = True
+                context["show_exchange_info"] = True
         context["show_image_add_button"] = lot.image_permission_check(self.request.user)
         # chat subscription stuff
         if self.request.user.is_authenticated:
