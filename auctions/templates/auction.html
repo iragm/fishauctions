@@ -163,7 +163,7 @@ function initMap() {
                     {% if auction.lot_submission_end_date != auction.date_end %}<li>You can submit lots until {{ auction.lot_submission_end_date }}</li>{% endif %}
                 {% else %}
                     {% if auction.online_bidding != 'disable' and auction.date_online_bidding_starts and auction.date_online_bidding_ends %}
-                        <li>{% if auction.online_bidding == 'buy_now_only' %}Buying lots{% else %}Online bidding{% endif %} is allowed starting {{ auction.date_online_bidding_starts }} {% if auction.date_online_bidding_ends != auction.date_start %} to {{ auction.date_online_bidding_ends }}{% endif %}</li>
+                        <li>{% if auction.online_bidding == 'buy_now_only' %}Buying lots online{% else %}Online bidding{% endif %} is allowed starting {{ auction.date_online_bidding_starts }} {% if auction.date_online_bidding_ends != auction.date_start %} to {{ auction.date_online_bidding_ends }}{% endif %}</li>
                     {% endif %}
                     {% if auction.lot_submission_start_date != auction.date_start %}<li>You can submit lots starting {{ auction.lot_submission_start_date }}</li>{% endif %}
                     {% if auction.lot_submission_end_date != auction.date_start %}<li>You can submit lots until {{ auction.lot_submission_end_date }}</li>{% endif %}

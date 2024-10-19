@@ -1927,6 +1927,7 @@ class AuctionUpdate(UpdateView, AuctionPermissionsMixin):
         return context
 
     def form_valid(self, form, **kwargs):
+        form = super().form_valid(form)
         if (
             not self.get_object().is_online
             and self.get_object().online_bidding == "buy_now_only"
@@ -1955,7 +1956,7 @@ class AuctionUpdate(UpdateView, AuctionPermissionsMixin):
                 self.request,
                 f"Minimum bid is enabled, but labels are not set to print a minimum bid. <a href='{reverse('auction_label_config', kwargs={'slug':self.get_object().slug})}'>You should enable printing minimum bids on labels here.</a>",
             )
-        return super().form_valid(form)
+        return form
 
 
 class AuctionLots(SingleTableMixin, FilterView, AuctionPermissionsMixin):

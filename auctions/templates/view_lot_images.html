@@ -426,10 +426,10 @@ function deactivate_lot() {
             class="btn btn-danger"><i class="bi bi-calendar-x"></i> Delete</a>
         {% endif %}
         <span id="bid_area" class="{% if force_buy_now and not lot.bidding_error %}d-none{%endif%}">
-                {% if lot.bidding_error %}
+                {% if lot.ended or lot.winner %}
+                    <div class='mt-2 p-2 bg-dark font-weight-bold'>Bidding has ended on this lot</div>
+                {% elif lot.bidding_error %}
                     <div class='mt-2 p-2 bg-dark font-weight-bold'>{{ lot.bidding_error }}</div>
-                {% elif lot.ended or lot.winner %}
-                    <span>Bidding has ended on this lot<br></span>
                 {% else %}
                 <div class="form-group">
                     <div class="row mb-3 justify-content-center justify-content-lg-start">

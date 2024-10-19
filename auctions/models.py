@@ -2386,6 +2386,10 @@ class Lot(models.Model):
                 return str(self.high_bidder)
             else:
                 return "Anonymous"
+        if self.auction and not self.auction.is_online and self.auction.online_bidding == "buy_now_only":
+            if self.buy_now_price:
+                return "Buy now"
+            return ""
         return "No bids"
 
     @property
@@ -2783,6 +2787,10 @@ class Lot(models.Model):
             except:
                 return 0
         else:
+            if self.auction.online_bidding == "buy_now_only" and not self.bids:
+                if self.buy_now_price:
+                    return self.buy_now_price
+                return ""
             try:
                 bids = self.bids
                 # highest bid is the winner, but the second highest determines the price
@@ -2795,7 +2803,7 @@ class Lot(models.Model):
                     # instead, we'll just return the second highest bid in the case of a tie
                     # bidPrice = bids[1].amount
                 return bidPrice
-            except:
+            except IndexError:
                 return self.reserve_price
 
     @property
