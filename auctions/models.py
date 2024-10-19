@@ -581,6 +581,7 @@ class Auction(models.Model):
     email_third_sent = models.BooleanField(default=False)
     email_fourth_sent = models.BooleanField(default=False)
     email_fifth_sent = models.BooleanField(default=False)
+    reprint_reminder_sent = models.BooleanField(default=False)
     make_stats_public = models.BooleanField(default=True)
     make_stats_public.help_text = "Allow any user who has a link to this auction's stats to see them.  Uncheck to only allow the auction creator to view stats"
     bump_cost = models.PositiveIntegerField(blank=True, default=1, validators=[MinValueValidator(1)])
@@ -588,7 +589,13 @@ class Auction(models.Model):
     use_categories = models.BooleanField(default=True, verbose_name="This is a fish auction")
     use_categories.help_text = "Check to use categories like Cichlids, Livebearers, etc."
     is_deleted = models.BooleanField(default=False)
-    allow_bidding_on_lots = models.BooleanField(default=True, verbose_name="Allow online bidding")
+    ONLINE_BIDDING_OPTIONS = (
+        ("allow", "Allow buy now and bidding"),
+        ("buy_now_only", "Allow buy now only"),
+        ("disable", "No online bidding"),
+    )
+    online_bidding = models.CharField(max_length=20, choices=ONLINE_BIDDING_OPTIONS, blank=False, default="allow")
+    # allow_bidding_on_lots = models.BooleanField(default=True, verbose_name="Allow online bidding")
     only_approved_sellers = models.BooleanField(default=False)
     only_approved_sellers.help_text = "Require admin approval before users can add lots.  This will not change permissions for users that have already joined."
     only_approved_bidders = models.BooleanField(default=False)
@@ -630,7 +637,6 @@ class Auction(models.Model):
         ("disable", "Don't allow"),
         ("allow", "Allow"),
         ("required", "Required for all lots"),
-        ("forced", "Required, and disable bidding"),
     )
     buy_now = models.CharField(max_length=20, choices=BUY_NOW_CHOICES, default="allow")
     buy_now.help_text = "Allow lots to be sold without bidding, for a user-specified price.  If required with bidding disabled, people will only buy now and won't be able to bid against each other."
@@ -906,12 +912,12 @@ class Auction(models.Model):
     @property
     def in_person_closed(self):
         """Maybe we can combine this with the above `closed`, but I'm not sure where else that is used"""
-        if not self.is_online and timezone.now() > self.date_start and not self.allow_bidding_on_lots:
+        if not self.is_online and timezone.now() > self.date_start and self.online_bidding == "disable":
             return True
         if (
             self.date_online_bidding_ends
             and not self.is_online
-            and self.allow_bidding_on_lots
+            and self.online_bidding != "disable"
             and timezone.now() > self.date_online_bidding_ends
             and timezone.now() > self.date_start
         ):
@@ -932,7 +938,7 @@ class Auction(models.Model):
         if (
             self.date_online_bidding_starts
             and not self.is_online
-            and self.allow_bidding_on_lots
+            and self.online_bidding != "disable"
             and timezone.now() > self.date_online_bidding_starts
         ):
             return True
@@ -2100,6 +2106,7 @@ class Lot(models.Model):
     category_automatically_added = models.BooleanField(default=False)
     category_checked = models.BooleanField(default=False)
     label_printed = models.BooleanField(default=False)
+    label_needs_reprinting = models.BooleanField(default=False)
     partial_refund_percent = models.IntegerField(
         default=0, validators=[MinValueValidator(0), MaxValueValidator(100)], blank=True
     )
@@ -2143,8 +2150,10 @@ class Lot(models.Model):
         if not self.reference_link:
             search = self.lot_name.replace(" ", "%20")
             self.reference_link = f"https://www.google.com/search?q={search}&tbm=isch"
-        if self.auction and self.auction.buy_now == "forced":
-            self.reserve_price = self.buy_now_price
+        # These lines would make it so you can't set a reserve price (for in person bidding)
+        # when an auction is set to be buy now only
+        # if self.auction and self.auction.online_bidding == "buy_now_only":
+        #    self.reserve_price = self.buy_now_price
         super().save(*args, **kwargs)
 
         # chat history subscription for the owner
@@ -2403,7 +2412,7 @@ class Lot(models.Model):
             and self.high_bidder
             and not self.auction.is_online
             and not self.ended
-            and self.auction.allow_bidding_on_lots
+            and self.auction.online_bidding == "allow"
         ):
             return mark_safe(f"""<a href='javascript:void(0);'
                 hx-get="{reverse('auction_show_high_bidder', kwargs={'pk':self.pk})}"
@@ -2523,7 +2532,7 @@ class Lot(models.Model):
         if (
             not self.auction.is_online
             and self.auction.date_online_bidding_ends
-            and self.auction.allow_bidding_on_lots
+            and self.auction.online_bidding != "disable"
             and timezone.now() > self.auction.date_online_bidding_ends
         ):
             return False
@@ -2593,7 +2602,7 @@ class Lot(models.Model):
                 return self.auction.date_start
             if (
                 not self.auction.is_online
-                and self.auction.allow_bidding_on_lots
+                and self.auction.online_bidding != "disable"
                 and self.auction.date_online_bidding_starts > first_bid_date
             ):
                 return self.auction.date_online_bidding_starts
@@ -2609,7 +2618,7 @@ class Lot(models.Model):
         if self.tos_needed:
             return "The creator of this lot has not confirmed their pickup location for this auction."
         if self.auction:
-            if not self.auction.allow_bidding_on_lots:
+            if self.auction.online_bidding == "disable":
                 return "This auction doesn't allow online bidding"
             if not self.auction.started:
                 return "Bidding hasn't opened yet for this auction"
@@ -2617,6 +2626,8 @@ class Lot(models.Model):
                 return "Online bidding has ended for this auction"
             if not self.auction.is_online and timezone.now() < self.auction.date_online_bidding_starts:
                 return "Online bidding hasn't started yet for this auction"
+            if self.auction.online_bidding == "buy_now_only" and not self.buy_now_price:
+                return "This lot does not have a buy now price set, you can't buy it now"
         if self.deactivated:
             return "This lot has been deactivated by its owner"
         if self.bidding_allowed_on > timezone.now():
@@ -4313,7 +4324,7 @@ def on_save_auction(sender, instance, **kwargs):
     # OK, third time's the charm, leave the lines above commented out
 
     # Some validation for online bidding with in-person auctions for #189
-    if not instance.is_online and instance.allow_bidding_on_lots:
+    if not instance.is_online and instance.online_bidding != "disable":
         if not instance.date_online_bidding_ends:
             instance.date_online_bidding_ends = instance.date_start
         if not instance.date_online_bidding_starts:

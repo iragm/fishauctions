@@ -363,7 +363,7 @@ class LotFilter(django_filters.FilterSet):
         except:
             pass
         # "all", "open", "unsold", or "ended".  If regarding an auction, should default to all
-        self.status = "open"
+        self.status = "all"
         self.showShipping = True
         self.shippingLocation = 52  # USA, later we might set this with a cookie like we do with lat and lng
         if self.user.is_authenticated:
@@ -569,7 +569,7 @@ class LotFilter(django_filters.FilterSet):
         if self.status == "open":
             primary_queryset = primary_queryset.filter(active=True)
         if self.status == "unsold":
-            primary_queryset = primary_queryset.filter(active=True, winner__isnull=True)
+            primary_queryset = primary_queryset.filter(active=True, winning_price__isnull=True)
         # if not self.regardingAuction and not self.regardingUser:
         #     # no auction or user selected in the filter
         #     primary_queryset = primary_queryset.exclude(auction__promote_this_auction=False)
@@ -655,6 +655,7 @@ class LotFilter(django_filters.FilterSet):
         if self.user.is_superuser:
             show_very_new_lots = True
         if self.regardingAuction:
+            # might want to change this to be `and self.regardingAuction.online_bidding == 'disable'`
             if not self.regardingAuction.is_online:
                 show_very_new_lots = True
         if not show_very_new_lots:
@@ -787,7 +788,7 @@ class LotFilter(django_filters.FilterSet):
             for fragment in split:
                 fragment = fragment.strip()
                 qList |= (
-                    Q(description__icontains=fragment)
+                    Q(summernote_description__icontains=fragment)
                     | Q(lot_name__icontains=fragment)
                     | Q(user__username=fragment)
                     | Q(custom_lot_number=fragment)

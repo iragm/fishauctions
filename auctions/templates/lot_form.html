@@ -64,7 +64,7 @@ function setAuctionRequiredFields(val) {
                     } else {
                         $('#div_id_buy_now_price').show();
                     }
-                    if (result.buy_now == 'required' || result.buy_now == 'forced') {
+                    if (result.buy_now == 'required') {
                         $('#id_buy_now_price').attr('required', true);
                     }
                 } else {

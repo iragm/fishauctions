@@ -1927,7 +1927,16 @@ class AuctionUpdate(UpdateView, AuctionPermissionsMixin):
         return context
 
     def form_valid(self, form, **kwargs):
-        if not self.get_object().is_online and self.get_object().allow_bidding_on_lots:
+        if (
+            not self.get_object().is_online
+            and self.get_object().online_bidding == "buy_now_only"
+            and self.get_object().buy_now == "disable"
+        ):
+            messages.info(
+                self.request,
+                "You've enabled online buy now with no bidding, but buy now isn't enabled.  Sellers won't be able to set a buy now price.",
+            )
+        elif not self.get_object().is_online and self.get_object().online_bidding != "disable":
             messages.info(
                 self.request,
                 f"This auction allows online bidding -- make sure to <a href='{reverse('auction_help', kwargs={'slug':self.get_object().slug})}'>watch the tutorial in the help</a> to see how this works",
@@ -2359,7 +2368,7 @@ class DynamicSetLotWinner(AuctionViewMixin, TemplateView):
             and lot
             and winner
             and lot.high_bidder
-            and lot.auction.allow_bidding_on_lots
+            and lot.auction.online_bidding == "allow"
             and action != "force_save"
         ):
             if price and price <= lot.max_bid and f"{winner}" != f"{lot.high_bidder_for_admins}":
@@ -2877,7 +2886,7 @@ class ViewLot(DetailView):
         except:
             defaultBidAmount = 0
             context["viewer_bid"] = None
-        if lot.auction and lot.auction.buy_now == "forced":
+        if lot.auction and lot.auction.online_bidding == "buy_now_only" and lot.buy_now_price:
             defaultBidAmount = lot.buy_now_price
             context["force_buy_now"] = True
         else:
@@ -2931,7 +2940,7 @@ class ViewLot(DetailView):
                 "Bidding is ending soon.  Bids placed now will extend the end time of this lot.  This page will update automatically, you don't need to reload it",
             )
         if not context["user_tos"] and not lot.ended and lot.auction:
-            if lot.auction.allow_bidding_on_lots:
+            if lot.auction.online_bidding != "disable":
                 messages.info(
                     self.request,
                     f"Please <a href='/auctions/{lot.auction.slug}/?next=/lots/{ lot.pk }/'>read the auction's rules and join the auction</a> to bid",
@@ -3178,7 +3187,7 @@ class LotValidation(LoginRequiredMixin):
                 lot.reserve_price = lot.auction.minimum_bid
             if lot.auction.buy_now == "disable" and lot.buy_now_price:
                 lot.buy_now_price = None
-            if (lot.auction.buy_now == "require" or lot.auction.buy_now == "forced") and not lot.buy_now_price:
+            if (lot.auction.buy_now == "require") and not lot.buy_now_price:
                 lot.buy_now_price = lot.auction.minimum_bid
                 messages.error(self.request, "You need to set a buy now price for this lot!")
             lot.date_end = lot.auction.date_end
@@ -3471,6 +3480,8 @@ class BidDelete(LoginRequiredMixin, DeleteView):
                 lot.date_end = timezone.now() + timedelta(days=lot.lot_run_duration)
             lot.active = True
             lot.buy_now_used = False
+            if lot.label_printed:
+                lot.label_needs_reprinting = True
             lot.save()
         self.get_object().delete()
         LotHistory.objects.create(lot=lot, user=self.request.user, message=history_message, changed_price=True)
@@ -3814,7 +3825,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "is_chat_allowed",
                 "lot_promotion_cost",
                 "code_to_add_lots",
-                "allow_bidding_on_lots",
+                "online_bidding",
                 "pre_register_lot_discount_percent",
                 "only_approved_sellers",
                 "only_approved_bidders",
@@ -3848,7 +3859,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
         else:
             auction.is_online = is_online
             if not is_online:
-                auction.allow_bidding_on_lots = False
+                auction.online_bidding = "disable"
                 auction.buy_now = "disable"
                 auction.reserve_price = "disable"
         if not auction.summernote_description:
@@ -4697,6 +4708,10 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionPermissionsM
         context["labels_per_page"] = labels_per_row * labels_per_column
 
         labels = self.get_queryset()
+        for label in labels:
+            label.label_printed = True
+            label.label_needs_reprinting = False
+            label.save()
 
         # First column width is fixed at 0.63 for most labels and overridden for large and thermal
         # context['first_column_width'] = (context['label_width'] / 4)

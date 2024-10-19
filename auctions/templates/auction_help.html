@@ -7,7 +7,7 @@
   <div>
     This video will walk you through the entire process of running your auction.
   </div>
-  {% if not auction.is_online and auction.allow_bidding_on_lots %}
+  {% if not auction.is_online and auction.online_bidding != 'disable' %}
   <br><p>You've enabled online bidding on an in-person auction</p>
   <span class="text-muted">Make sure to watch this video for details on how this process works!</span>
   {% include 'youtube_embed.html' with videoId=auction.hybrid_tutorial chapters=auction.hybrid_tutorial_chapters %}

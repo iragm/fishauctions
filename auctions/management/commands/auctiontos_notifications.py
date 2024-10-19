@@ -101,6 +101,20 @@ class Command(BaseCommand):
             tos.save()
             if tos.unbanned_lot_count:
                 send_tos_notification("auction_print_reminder", tos)
+
+        # for auctions that allow buy now, we need to send a reminder email to sellers to print their lot labels
+        auctions_that_need_print_reminder = Auction.objects.filter(
+            is_deleted=False, is_online=False, date_online_bidding_ends__lt=timezone.now(), reprint_reminder_sent=False
+        )
+        for auction in auctions_that_need_print_reminder:
+            auction.reprint_reminder_sent = True
+            auction.save()
+            if auction.date_start > timezone.now() + datetime.timedelta(hours=4):
+                sellers_to_remind = base_qs.filter(auction=auction)
+                for seller in sellers_to_remind:
+                    if seller.unprinted_labels_qs.filter(label_needs_reprinting=True).count():
+                        send_tos_notification("reprint_reminder", seller)
+
         # this is a quick reminder to join auctions that you've viewed but haven't joined.  Fixes #134
         join_auction_reminder = AuctionCampaign.objects.filter(
             timestamp__lte=timezone.now() - datetime.timedelta(hours=24),

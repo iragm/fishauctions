@@ -41,7 +41,7 @@
         <i class="bi bi-filter"></i> Filters
       </button>
       <div class="dropdown-menu" aria-labelledby="dropdownMenuButton">
-        {% if auction.allow_bidding_on_lots %}
+        {% if auction.online_bidding != 'disable' %}
         <label class="dropdown-item ">
           <input type="checkbox" class="invoice_filter" id="checkbox_no_bid"> <i class="bi bi-cash-coin"></i> Can't bid
         </label>
