@@ -43,6 +43,8 @@ def check_bidding_permissions(lot, user):
         else:
             if not tos.bidding_allowed:
                 return "This auction requires admin approval before you can bid"
+        if not lot.auction.is_online and lot.auction.online_bidding == "disable":
+            return "This auction does not allow online bidding"
     return False
 
 
@@ -136,7 +138,15 @@ def bid_on_lot(lot, user, amount):
                     "Your invoice for this auction is not open.  An administrator can reopen it and allow you to bid."
                 )
                 return result
-
+        if (
+            lot.auction
+            and not lot.auction.is_online
+            and lot.auction.online_bidding == "buy_now_only"
+            and lot.buy_now_price
+        ):
+            if amount < lot.buy_now_price:
+                result["message"] = "This auction does not allow bids, you can only buy this lot now."
+                return result
         originalHighBidder = lot.high_bidder
         originalBid = lot.high_bid
         bid, created = Bid.objects.get_or_create(
@@ -200,6 +210,9 @@ def bid_on_lot(lot, user, amount):
                             lot.create_update_invoices
                     lot.winning_price = lot.buy_now_price
                     lot.buy_now_used = True
+                    if lot.label_printed:
+                        lot.label_printed = False
+                        lot.label_needs_reprinting = True
                     # this next line makes the lot end immediately after buy now is used
                     # I have put it in and taken it out a few times now, it is controversial because it causes lots to "disappear" when sold
                     # see also lot.ended - setting this is needed to make buy now lots go into invoices immediately

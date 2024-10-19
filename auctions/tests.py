@@ -213,9 +213,18 @@ class ViewLotTest(TestCase):
         response = self.client.get(self.url)
         self.assertContains(response, "You can't bid on your own lot")
 
+    def test_with_tos_on_ended_lot(self):
+        AuctionTOS.objects.create(user=self.userB, auction=self.auction, pickup_location=self.location)
+        self.client.login(username="no_tos", password="testpassword")
+        response = self.client.get(self.url)
+        self.assertContains(response, "Bidding has ended on this lot")
+
     def test_with_tos_on_new_lot(self):
         AuctionTOS.objects.create(user=self.userB, auction=self.auction, pickup_location=self.location)
         self.client.login(username="no_tos", password="testpassword")
+        lot = Lot.objects.filter(pk=self.lot.pk).first()
+        lot.date_end = timezone.now() + datetime.timedelta(days=1)
+        lot.save()
         response = self.client.get(self.url)
         self.assertContains(response, "This lot is very new")
 
@@ -1035,7 +1044,7 @@ class DynamicSetLotWinnerViewTestCase(StandardTestCase):
         assert lot.auctiontos_winner is not None
 
         Bid.objects.create(user=self.admin_user, lot_number=self.in_person_lot, amount=100)
-        self.in_person_auction.allow_bidding_on_lots = True
+        self.in_person_auction.online_bidding == "allow"
         self.in_person_auction.save()
         invoice.status = "OPEN"
         invoice.save()

@@ -4,9 +4,9 @@
 {% load static %}
 {% load django_htmx %}
 <!DOCTYPE html>
-{% include 'demo_formatting.html' %}
+{# {% include 'demo_formatting.html' %} #}
 <!-- Global site tag (gtag.js) - Google Analytics -->
-{% if GOOGLE_MEASUREMENT_ID != "None" %}<script async src="https://www.googletagmanager.com/gtag/js?id={{ GOOGLE_MEASUREMENT_ID }}"></script>
+{% if GOOGLE_MEASUREMENT_ID %}<script async src="https://www.googletagmanager.com/gtag/js?id={{ GOOGLE_MEASUREMENT_ID }}"></script>
 <script>
   window.dataLayer = window.dataLayer || [];
   function gtag(){dataLayer.push(arguments);}
@@ -15,7 +15,7 @@
   gtag('config', '{{ GOOGLE_MEASUREMENT_ID }}');
 </script>{% endif %}
 <!-- Google Tag Manager -->
-{% if GOOGLE_TAG_ID != "None" %}<script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+{% if GOOGLE_TAG_ID %}<script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
   new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
   j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
   'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
@@ -31,7 +31,7 @@ window.onload = function() {
   <html class="no-js" lang="en" data-bs-theme="dark">
     <head>
         <meta charset="utf-8" />
-        {% if GOOGLE_ADSENSE_ID != 'None' %}
+        {% if GOOGLE_ADSENSE_ID %}
         <script data-ad-client="{{GOOGLE_ADSENSE_ID}}" async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script>
         {% endif %}
         {% if show_ads %}<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script>{% endif %}

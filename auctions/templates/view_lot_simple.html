@@ -23,7 +23,7 @@
             <b>Quantity:</b> {{ lot.quantity }}<br>
             {% if lot.reserve_price > lot.auction.minimum_bid %}<b>Minimum bid:</b> ${{ lot.reserve_price }}<br>{% endif %}
             {% if lot.buy_now_price %}<b>Buy now:</b> ${{ lot.buy_now_price }}<br>{% endif %}
-            {% if lot.auction.allow_bidding_on_lots %}
+            {% if lot.auction.online_bidding == 'allow' %}
                 <b>Online high bid:</b>
                 {% if lot.high_bidder %}
                     ${{ lot.high_bid }} <b>Bidder:</b> {{ lot.high_bidder_for_admins }} {{ lot.auction_show_high_bidder_template }}

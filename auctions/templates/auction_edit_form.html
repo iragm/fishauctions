@@ -23,13 +23,13 @@ var form_id = '#auction-form';
 {% include 'leave_page_warning.js' %}
 
 $(document).ready(function() {
-    change_bidding(document.getElementById('id_allow_bidding_on_lots').checked);
+    change_bidding(document.getElementById('id_online_bidding').value);
 });
-$('#id_allow_bidding_on_lots').change(function(data) {
-    change_bidding(this.checked);
+$('#id_online_bidding').change(function(data) {
+    change_bidding(this.value);
 });
 function change_bidding(value){
-    if (value) {
+    if (value != 'disable') {
         $('#div_id_date_online_bidding_starts').show();
         $('#div_id_date_online_bidding_ends').show();
         $('#div_id_only_approved_bidders').show();

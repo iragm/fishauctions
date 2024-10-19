@@ -173,7 +173,7 @@ class QuickAddLot(forms.ModelForm):
             self.fields["reserve_price"].required = True
         if self.auction.buy_now == "disable":
             self.fields["buy_now_price"].widget = HiddenInput()
-        if self.auction.buy_now == "required" or self.auction.buy_now == "forced":
+        if self.auction.buy_now == "required":
             self.fields["buy_now_price"].required = True
         if not self.auction.use_categories:
             self.fields["i_bred_this_fish"].widget = HiddenInput()
@@ -197,9 +197,7 @@ class QuickAddLot(forms.ModelForm):
                 cleaned_data["reserve_price"] = self.auction.minimum_bid
             if self.auction.buy_now == "disable" and cleaned_data.get("buy_now_price"):
                 cleaned_data["buy_now_price"] = None
-            if (self.auction.buy_now == "require" or self.auction.buy_now == "forced") and not cleaned_data.get(
-                "buy_now_price"
-            ):
+            if (self.auction.buy_now == "require") and not cleaned_data.get("buy_now_price"):
                 self.add_error("buy_now_price", "Buy Now price is required in this auction")
         # we need to make sure users can't add extra lots
         if not self.is_admin and self.auction.max_lots_per_user:
@@ -864,9 +862,9 @@ class CreateEditAuctionTOS(forms.ModelForm):
             self.fields["is_club_member"].initial = self.auctiontos.is_club_member
             self.fields["selling_allowed"].initial = self.auctiontos.selling_allowed
             self.fields["bidding_allowed"].initial = self.auctiontos.bidding_allowed
-            if not auction.allow_bidding_on_lots and not self.auctiontos:
+            if auction.online_bidding == "disable" and not self.auctiontos:
                 self.fields["bidding_allowed"].widget = HiddenInput()
-            if not auction.allow_bidding_on_lots and self.auctiontos and self.auctiontos.bidding_allowed:
+            if auction.online_bidding == "disable" and self.auctiontos and self.auctiontos.bidding_allowed:
                 self.fields["bidding_allowed"].widget = HiddenInput()
         else:
             self.fields["is_admin"].widget = HiddenInput()
@@ -1562,7 +1560,7 @@ class AuctionEditForm(forms.ModelForm):
             "buy_now",
             "tax",
             "advanced_lot_adding",
-            "allow_bidding_on_lots",  # it's back...for now
+            "online_bidding",
             "date_online_bidding_ends",
             "date_online_bidding_starts",
             "allow_deleting_bids",
@@ -1599,8 +1597,7 @@ class AuctionEditForm(forms.ModelForm):
             self.fields[
                 "lot_submission_end_date"
             ].help_text = "This should be 1-24 hours before the end of your auction"
-            self.fields["allow_bidding_on_lots"].help_text = "Leave this checked or people won't be able to bid!"
-            self.fields["allow_bidding_on_lots"].widget = forms.HiddenInput()
+            self.fields["online_bidding"].widget = forms.HiddenInput()
             self.fields["message_users_when_lots_sell"].widget = forms.HiddenInput()
             self.fields["advanced_lot_adding"].widget = forms.HiddenInput()
             # self.fields['pre_register_lot_entry_fee_discount'].widget=forms.HiddenInput()
@@ -1611,7 +1608,7 @@ class AuctionEditForm(forms.ModelForm):
         else:
             # self.fields["only_approved_bidders"].widget = forms.HiddenInput()
             self.fields["unsold_lot_fee"].widget = forms.HiddenInput()
-            self.fields["allow_bidding_on_lots"].help_text = "Most auctions should leave this off, it confuses people"
+            self.fields["online_bidding"].help_text = "Most auctions should leave this off, it confuses people"
             self.fields[
                 "date_end"
             ].help_text = "You should probably leave this blank so that you can manually set winners. This field has been indefinitely set to hidden - see https://github.com/iragm/fishauctions/issues/116"
@@ -1714,7 +1711,7 @@ class AuctionEditForm(forms.ModelForm):
             HTML("<h4>Lot permissions</h4>"),
             Div(
                 Div(
-                    "allow_bidding_on_lots",
+                    "online_bidding",
                     css_class="col-md-3",
                 ),
                 Div(

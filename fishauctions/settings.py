@@ -405,9 +405,9 @@ VIEW_WEIGHT = 1
 BID_WEIGHT = 10
 WEIGHT_AGAINST_TOP_INTEREST = 20
 
-GOOGLE_MEASUREMENT_ID = os.environ.get("GOOGLE_MEASUREMENT_ID", "unsecure")
-GOOGLE_TAG_ID = os.environ.get("GOOGLE_TAG_ID", "unsecure")
-GOOGLE_ADSENSE_ID = os.environ.get("GOOGLE_ADSENSE_ID", "unsecure")
+GOOGLE_MEASUREMENT_ID = os.environ.get("GOOGLE_MEASUREMENT_ID", "")
+GOOGLE_TAG_ID = os.environ.get("GOOGLE_TAG_ID", "")
+GOOGLE_ADSENSE_ID = os.environ.get("GOOGLE_ADSENSE_ID", "")
 
 GOOGLE_OAUTH_LINK = os.environ.get("GOOGLE_OAUTH_LINK", "unsecure")
 SECURE_CROSS_ORIGIN_OPENER_POLICY = "same-origin-allow-popups"

@@ -40,7 +40,7 @@ $("#submit-id-submit").click(function(event){
     (left + width) <= (window.pageXOffset + window.innerWidth)
   );
 }
-{% if auction.allow_bidding_on_lots %}
+{% if auction.online_bidding != 'disable' %}
   var joinButton = document.querySelector('#submit-id-submit');
   var message;
   var messageCheck;
@@ -156,14 +156,14 @@ function initMap() {
             <ul>
                 <li>This is an {{ auction.auction_type_as_str }}</li>
                 {% if auction.is_online %}
-                    {% if auction.allow_bidding_on_lots %}<li>You must place bids on this website</li>{% endif %}
+                    <li>You must place bids on this website</li>
                     <li>Bidding will be open from {{ auction.date_start }} to {{ auction.date_end}}</li>
                     {% if not auction.sealed_bid %}<li>If last minute bids are placed on a lot, the <a href="/faq#how-exactly-do-dynamic-endings-work">end time for that lot will be extended</a>.  All lots will end by {{ auction.dynamic_end }}</li>{% endif %}
                     {% if auction.lot_submission_start_date != auction.date_start %}<li>You can submit lots starting {{ auction.lot_submission_start_date }}</li>{% endif %}
                     {% if auction.lot_submission_end_date != auction.date_end %}<li>You can submit lots until {{ auction.lot_submission_end_date }}</li>{% endif %}
                 {% else %}
-                    {% if auction.allow_bidding_on_lots and auction.date_online_bidding_starts and auction.date_online_bidding_ends %}
-                        <li>Online bidding is allowed starting {{ auction.date_online_bidding_starts }} {% if auction.date_online_bidding_ends != auction.date_start %} to {{ auction.date_online_bidding_ends }}{% endif %}</li>
+                    {% if auction.online_bidding != 'disable' and auction.date_online_bidding_starts and auction.date_online_bidding_ends %}
+                        <li>{% if auction.online_bidding == 'buy_now_only' %}Buying lots online{% else %}Online bidding{% endif %} is allowed starting {{ auction.date_online_bidding_starts }} {% if auction.date_online_bidding_ends != auction.date_start %} to {{ auction.date_online_bidding_ends }}{% endif %}</li>
                     {% endif %}
                     {% if auction.lot_submission_start_date != auction.date_start %}<li>You can submit lots starting {{ auction.lot_submission_start_date }}</li>{% endif %}
                     {% if auction.lot_submission_end_date != auction.date_start %}<li>You can submit lots until {{ auction.lot_submission_end_date }}</li>{% endif %}
