@@ -639,7 +639,7 @@ class Auction(models.Model):
         ("required", "Required for all lots"),
     )
     buy_now = models.CharField(max_length=20, choices=BUY_NOW_CHOICES, default="allow")
-    buy_now.help_text = "Allow lots to be sold without bidding, for a user-specified price.  If required with bidding disabled, people will only buy now and won't be able to bid against each other."
+    buy_now.help_text = "Allow lots to be sold without bidding, for a user-specified price."
     RESERVE_CHOICES = (
         ("disable", "Don't allow"),
         ("allow", "Allow"),
