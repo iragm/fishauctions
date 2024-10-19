@@ -2787,7 +2787,7 @@ class Lot(models.Model):
             except:
                 return 0
         else:
-            if self.auction.online_bidding == "buy_now_only" and not self.bids:
+            if self.auction and self.auction.online_bidding == "buy_now_only" and not self.bids:
                 if self.buy_now_price:
                     return self.buy_now_price
                 return ""
