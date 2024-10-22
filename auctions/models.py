@@ -798,6 +798,10 @@ class Auction(models.Model):
         return f"{self.get_absolute_url()}?printredirect={reverse('print_my_labels', kwargs={'slug': self.slug})}"
 
     @property
+    def label_print_unprinted_link(self):
+        return f"{self.get_absolute_url()}?printredirect={reverse('print_my_unprinted_labels', kwargs={'slug': self.slug})}"
+
+    @property
     def add_lot_link(self):
         return f"/lots/new/?auction={self.slug}"
 
