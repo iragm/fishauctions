@@ -150,6 +150,11 @@ urlpatterns = [
         name="print_my_labels",
     ),
     path(
+        "auctions/<slug:slug>/print-my-unprinted-labels/",
+        login_required(views.UnprintedLotLabelsView.as_view()),
+        name="print_my_unprinted_labels",
+    ),
+    path(
         "auctions/<slug:slug>/print/user/<str:username>/",
         login_required(views.LotLabelView.as_view()),
         name="my_labels_by_username",
