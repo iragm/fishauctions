@@ -58,7 +58,7 @@ function deactivate_lot() {
             $("#recommendations").html(result);
         },
     });
-    }, 1000);
+    }, 5000);
     {% endif %}
     pageView({'lot':{{ lot.pk }} });
      // Logic for watching lots
