@@ -363,7 +363,7 @@ class LotFilter(django_filters.FilterSet):
         except:
             pass
         # "all", "open", "unsold", or "ended".  If regarding an auction, should default to all
-        self.status = "all"
+        self.status = "open"
         self.showShipping = True
         self.shippingLocation = 52  # USA, later we might set this with a cookie like we do with lat and lng
         if self.user.is_authenticated:
