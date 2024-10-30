@@ -4665,13 +4665,13 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionPermissionsM
             # thermal label printer 3x2
             context["page_width"] = 3
             context["page_height"] = 2
-            context["label_width"] = 2.9
+            context["label_width"] = 2.84
             context["label_height"] = 1.9
             context["label_margin_right"] = 0
             context["label_margin_bottom"] = 0
             context["page_margin_top"] = 0.04
             context["page_margin_bottom"] = 0.04
-            context["page_margin_left"] = 0.04
+            context["page_margin_left"] = 0.1
             context["page_margin_right"] = 0.04
             context["font_size"] = 13
             context["first_column_width"] = 0.75
