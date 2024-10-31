@@ -3085,6 +3085,10 @@ class Lot(models.Model):
         """Strip all html except <br> from summernote description"""
         return re.sub(r"(?!<br\s*/?>)<.*?>", "", self.summernote_description)
 
+    @property
+    def description_cleaned(self):
+        return re.sub(r'(style="[^"]*?)color:[^;"]*;?([^"]*")', r"\1\2", self.summernote_description)
+
 
 class Invoice(models.Model):
     """
