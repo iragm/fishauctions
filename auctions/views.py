@@ -4665,13 +4665,13 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionPermissionsM
             # thermal label printer 3x2
             context["page_width"] = 3
             context["page_height"] = 2
-            context["label_width"] = 2.9
+            context["label_width"] = 2.84
             context["label_height"] = 1.9
             context["label_margin_right"] = 0
             context["label_margin_bottom"] = 0
             context["page_margin_top"] = 0.04
             context["page_margin_bottom"] = 0.04
-            context["page_margin_left"] = 0.04
+            context["page_margin_left"] = 0.1
             context["page_margin_right"] = 0.04
             context["font_size"] = 13
             context["first_column_width"] = 0.75
@@ -4793,9 +4793,12 @@ class SingleLotLabelView(LotLabelView):
     def dispatch(self, request, *args, **kwargs):
         self.lot = get_object_or_404(Lot, pk=kwargs.pop("pk"), is_deleted=False)
         self.filename = "label_" + self.lot.custom_lot_number
-        if self.lot.auctiontos_seller and self.lot.auctiontos_seller.user is not request.user:
+        if self.lot.auctiontos_seller:
             self.auction = self.lot.auctiontos_seller.auction
-            if not self.is_auction_admin:
+            auth = False
+            if self.lot.auctiontos_seller.user and self.lot.auctiontos_seller.user.pk == request.user.pk:
+                auth = True
+            if not auth and not self.is_auction_admin:
                 messages.error(
                     request,
                     "You can't print labels for other people's lots unless you are an admin",
