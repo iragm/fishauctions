@@ -3066,11 +3066,21 @@ class ImageCreateView(LoginRequiredMixin, CreateView):
     template_name = "image_form.html"
     form_class = CreateImageForm
 
+    def get_lot(self, request, *args, **kwargs):
+        return get_object_or_404(Lot, pk=kwargs["lot"], is_deleted=False)
+
     def dispatch(self, request, *args, **kwargs):
-        try:
-            self.lot = Lot.objects.get(lot_number=kwargs["lot"], is_deleted=False)
-        except:
-            raise Http404
+        self.lot = self.get_lot(self, request, *args, **kwargs)
+        if not self.lot:
+            messages.info(
+                request,
+                f"All lots for {self.tos.bidder_number} already have an image",
+            )
+            return redirect(reverse("auction_tos_list", kwargs={"slug": self.auction.slug}))
+        # try:
+        #     self.lot = Lot.objects.get(lot_number=kwargs["lot"], is_deleted=False)
+        # except:
+        #     raise Http404
         if not self.lot.image_permission_check(request.user):
             messages.error(request, "You can't add an image to this lot")
             return redirect(self.get_success_url())
@@ -3102,8 +3112,26 @@ class ImageCreateView(LoginRequiredMixin, CreateView):
         if not image.image_source:
             image.image_source = "RANDOM"
         image.save()
-        messages.success(self.request, "New image added")
+        messages.success(self.request, f"New image added to {self.lot.lot_name}")
         return super().form_valid(form)
+
+
+class QuickBulkAddImages(ImageCreateView):
+    """Add images to any lots that don't have one"""
+
+    def get_lot(self, request, *args, **kwargs):
+        self.auction = get_object_or_404(Auction, slug=kwargs.pop("slug"), is_deleted=False)
+        self.tos = get_object_or_404(AuctionTOS, bidder_number=kwargs.pop("bidder_number"), auction=self.auction)
+        return (
+            Lot.objects.filter(auctiontos_seller=self.tos, winning_price__isnull=True)
+            .exclude(lotimage__isnull=False)
+            .distinct()
+            .order_by("date_posted")
+            .first()
+        )
+
+    def get_success_url(self):
+        return reverse("bulk_add_image", kwargs={"slug": self.auction.slug, "bidder_number": self.tos.bidder_number})
 
 
 class ImageUpdateView(UpdateView):

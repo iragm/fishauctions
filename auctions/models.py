@@ -1615,6 +1615,14 @@ class AuctionTOS(models.Model):
             },
         )
         result += f"<span class='dropdown-item'><a href={problems_url}><i class='bi bi-exclamation-circle me-1'></i>Problems</a></span>"
+        bulk_add_images_url = reverse(
+            "bulk_add_image",
+            kwargs={
+                "slug": self.auction.slug,
+                "bidder_number": self.bidder_number,
+            },
+        )
+        result += f"<span class='dropdown-item'><a href={bulk_add_images_url}><i class='bi bi-file-image me-1'></i>Quick add images</a></span>"
         result += "</div>"
         return html.format_html(result)
 

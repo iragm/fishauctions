@@ -284,6 +284,10 @@ class LotAdminFilter(django_filters.FilterSet):
                 | Q(custom_lot_number=value)
             )
         else:
+            # fixme - if 'no images'
+            # qs = qs.filter()
+            # LotImage.objects.filter(lot_number=self.lot_number)
+
             queryset = queryset.filter(
                 Q(auctiontos_seller__name__icontains=value)
                 | Q(auctiontos_seller__bidder_number=value)

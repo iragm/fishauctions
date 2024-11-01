@@ -131,6 +131,11 @@ urlpatterns = [
         login_required(views.ImageCreateView.as_view()),
         name="add_image",
     ),
+    path(
+        "auctions/<slug:slug>/quick-add-images/<slug:bidder_number>",
+        login_required(views.QuickBulkAddImages.as_view()),
+        name="bulk_add_image",
+    ),
     path("images/<int:pk>/delete/", views.ImageDelete.as_view(), name="delete_image"),
     path("images/<int:pk>/edit", views.ImageUpdateView.as_view(), name="edit_image"),
     path("auctions/", views.AllAuctions.as_view(), name="auctions"),
