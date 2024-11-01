@@ -31,4 +31,14 @@
   });
   </script>
   {% endif %}
+  <script>
+    // update url to allow bookmarking searches
+    document.getElementById('id_query').addEventListener('input', function(event) {
+    let query = event.target.value;
+    let newUrl = new URL(window.location);
+    newUrl.searchParams.set('query', query);
+    history.replaceState({}, '', newUrl);
+    htmx.trigger('#filter-form', 'keyup');
+  });
+  </script>
 {% endblock %}
