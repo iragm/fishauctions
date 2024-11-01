@@ -212,7 +212,7 @@ This graph shows overall engagement of people with your auction.  You can gauge 
           </tr>
 
         <tr>
-        <td>Sold lots</td><td>{{auction.total_sold_lots}}</td>
+        <td>Sold lots</td><td>{{auction.total_sold_lots}}  ({{ auction.total_sold_lots_with_buy_now_percent|floatformat:0 }}% with buy now)</td>
       </tr>
       <tr>
         <td>Median lot price</td><td>${{auction.median_lot_price|floatformat:2}}</td>

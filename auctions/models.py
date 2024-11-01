@@ -1054,6 +1054,25 @@ class Auction(models.Model):
         return self.lots_qs.filter(winning_price__isnull=False).exclude(banned=True).count()
 
     @property
+    def total_sold_lots_with_buy_now_percent(self):
+        if not self.total_sold_lots:
+            return 0
+        if self.is_online:
+            return (
+                self.lots_qs.filter(winning_price__isnull=False, buy_now_used=True).exclude(banned=True).count()
+                / self.total_sold_lots
+                * 100
+            )
+        else:
+            return (
+                self.lots_qs.filter(winning_price__isnull=False, winning_price=F("buy_now_price"))
+                .exclude(banned=True)
+                .count()
+                / self.total_sold_lots
+                * 100
+            )
+
+    @property
     def total_unsold_lots(self):
         return self.lots_qs.filter(winning_price__isnull=True).exclude(banned=True).count()
 
