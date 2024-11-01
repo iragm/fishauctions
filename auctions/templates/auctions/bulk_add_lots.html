@@ -37,6 +37,13 @@ function cloneMore(selector, type) {
         var id = 'id_' + name;
         $(this).attr({'name': name, 'id': id}).removeAttr('checked'); // keep last row's values
         //$(this).attr({'name': name, 'id': id}).val('').removeAttr('checked'); // blank rows
+
+        // Check if the ID contains "custom_lot_number" and clear the value if true
+        if (id.includes("custom_lot_number")) {
+            $(this).val('');
+        } else {
+            $(this).removeAttr('checked'); // keep last row's values
+        }
     });
     newElement.find('label').each(function() {
         var newFor = $(this).attr('for').replace('-' + (total-1) + '-','-' + total + '-');
