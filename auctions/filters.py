@@ -103,6 +103,11 @@ class AuctionTOSFilter(django_filters.FilterSet):
             qs = qs.order_by("trust")
 
         RHYMING_NAMES = [
+            [
+                "andy",
+                "andrew",
+                "drew",
+            ],
             ["alex", "alexander", "lex", "lexi"],
             ["al", "albert", "bert"],
             ["bart", "bartholomew", "bartie"],
