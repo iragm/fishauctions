@@ -1684,7 +1684,7 @@ class AuctionTOS(models.Model):
             return AuctionTOS.objects.filter(bidder_number=number, auction=self.auction).count()
 
         if not self.pk:
-            logger.debug("new instance of auctionTOS")
+            # logger.debug("new instance of auctionTOS")
             if self.auction.only_approved_sellers:
                 self.selling_allowed = False
             if self.auction.only_approved_bidders:
@@ -1778,7 +1778,7 @@ class AuctionTOS(models.Model):
                     failsafe += 1
         if not self.bidder_number:
             # I don't ever want this to be null
-            self.bidder_number = 999
+            self.bidder_number = "ERROR"
         if str(self.memo) == "None":
             self.memo = ""
         # update the email address as appropriate
