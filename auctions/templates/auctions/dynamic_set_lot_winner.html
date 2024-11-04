@@ -102,14 +102,23 @@ $(document).ready(function() {
       // Full screen mode
       $('#fullscreen-btn').on('click', function() {
         let elem = document.documentElement;
-        if (!document.fullscreenElement) {
-          elem.requestFullscreen().catch(err => {
-            console.error(`Error attempting to enable full-screen mode: ${err.message}`);
-          });
+        if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+          // Use requestFullscreen if available, otherwise try webkitRequestFullscreen
+          (elem.requestFullscreen ? elem.requestFullscreen() : elem.webkitRequestFullscreen())
+            .catch(err => {
+              console.error(`Error attempting to enable full-screen mode: ${err.message}`);
+            });
+        } else {
+          // Use exitFullscreen if available, otherwise try webkitExitFullscreen
+          (document.exitFullscreen ? document.exitFullscreen() : document.webkitExitFullscreen())
+            .catch(err => {
+              console.error(`Error attempting to exit full-screen mode: ${err.message}`);
+            });
         }
       });
-      $(document).on('fullscreenchange', function() {
-        if (document.fullscreenElement) {
+
+      $(document).on('fullscreenchange webkitfullscreenchange', function() {
+        if (document.fullscreenElement || document.webkitFullscreenElement) {
           $('.hide-fullscreen').hide();
           $('#fullscreen-btn').removeClass('d-sm-inline-block');
         } else {

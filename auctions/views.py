@@ -2032,6 +2032,14 @@ class AuctionUsers(SingleTableMixin, FilterView, AuctionPermissionsMixin):
         context["active_tab"] = "users"
         return context
 
+    def get(self, *args, **kwargs):
+        if not self.request.htmx and self.queryset.filter(bidder_number="ERROR").count():
+            messages.error(
+                self.request,
+                "Automatic bidder number generation failed, manually set the bidder numbers for these users",
+            )
+        return super().get(*args, **kwargs)
+
 
 class AuctionStats(DetailView, AuctionPermissionsMixin):
     """Fun facts about an auction"""

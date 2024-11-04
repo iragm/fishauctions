@@ -37,6 +37,13 @@ class AuctionTOSHTMxTable(tables.Table):
         attrs={"th": {"class": show_on_mobile_string}, "cell": {"class": show_on_mobile_string}},
     )
 
+    def render_bidder_number(self, value, record):
+        if record.bidder_number == "ERROR":
+            return mark_safe(
+                '<span class="badge bg-danger ms-1 me-1" title="Failed to generate a bidder number for this user">ERROR</span>'
+            )
+        return value
+
     def render_name(self, value, record):
         # as a button, looks awful
         # result = f"<span class='btn btn-secondary btn-sm' style='cursor:pointer;' hx-get='/api/auctiontos/{record.pk}' hx-target='#modals-here' hx-trigger='click'>{value}</span>"
