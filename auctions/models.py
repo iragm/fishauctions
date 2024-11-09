@@ -3259,7 +3259,7 @@ class Invoice(models.Model):
                 auctiontos_seller=self.auctiontos_user,
                 auction=self.auction,
                 is_deleted=False,
-            ).order_by("custom_lot_number")
+            ).order_by("pk")
         )
 
     @property
@@ -3271,7 +3271,7 @@ class Invoice(models.Model):
                 auctiontos_winner=self.auctiontos_user,
                 is_deleted=False,
             )
-            .order_by("custom_lot_number")
+            .order_by("pk")
             .annotate(final_price=F("winning_price") * (100 - F("partial_refund_percent")) / 100)
         )
 
