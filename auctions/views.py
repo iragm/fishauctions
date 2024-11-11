@@ -3595,6 +3595,10 @@ class LotAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
             if obj.auctiontos_winner:
                 if self.lot_initial_winner != obj.auctiontos_winner:
                     obj.add_winner_message(self.request.user, obj.auctiontos_winner, obj.winning_price)
+                    if not obj.date_end:
+                        obj.date_end = timezone.now()
+                        obj.active = False
+                        obj.save()
             return HttpResponse("<script>location.reload();</script>", status=200)
             # return HttpResponse("<script>closeModal();</script>", status=200)
         else:
