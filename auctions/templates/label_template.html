@@ -57,7 +57,7 @@
     {% for label in labels %}
         <div class="label">
             <div class="first-column">
-                <div><b>{{ label.lot_number_display }}</b></div>
+                <div><b><span {% if label.lot_number_display|length > 6 %}style="font-size: 0.6em;"{% endif %}>{{ label.lot_number_display }}</span></b></div>
                 {% if 'qr_code' in label.auction.label_print_fields %}
                     <div>{% qr_from_text label.qr_code size=4 border="1" %}</div>
                 {% endif %}
