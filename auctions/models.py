@@ -536,6 +536,16 @@ class Auction(models.Model):
     pre_register_lot_entry_fee_discount.help_text = (
         "Decrease the lot entry fee by this amount if users add lots through this website"
     )
+    force_donation_threshold = models.PositiveIntegerField(
+        default=None,
+        blank=True,
+        null=True,
+        validators=[MinValueValidator(0), MaxValueValidator(10)],
+        verbose_name="Donation threshold",
+    )
+    force_donation_threshold.help_text = (
+        "Most auctions should leave this blank.  Force lots to be a donation if they sell for this amount or less."
+    )
     date_posted = models.DateTimeField(auto_now_add=True)
     date_start = models.DateTimeField("Auction start date")
     date_start.help_text = "Bidding starts on this date"
@@ -2186,6 +2196,13 @@ class Lot(models.Model):
         # when an auction is set to be buy now only
         # if self.auction and self.auction.online_bidding == "buy_now_only":
         #    self.reserve_price = self.buy_now_price
+        if (
+            self.auction
+            and self.auction.force_donation_threshold
+            and self.winning_price
+            and self.winning_price <= self.auction.force_donation_threshold
+        ):
+            self.donation = True
         super().save(*args, **kwargs)
 
         # chat history subscription for the owner
