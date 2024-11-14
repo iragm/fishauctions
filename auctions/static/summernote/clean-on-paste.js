@@ -18,8 +18,37 @@ document.addEventListener('DOMContentLoaded', function () {
 });
 
 function cleanPastedContent(content) {
-  // Remove all tags except a few allowed ones (e.g., <a>, <div>, <p>, <br>, etc.)
-  const allowedTags = /<(\/?)(a|div|p|br|span|em|i|li|ol|ul|strong|h[1-6]|table|tbody|thead|tr|td|abbr|b|blockquote|code|strike|u|sup|sub)[^>]*>/gi;
-  const cleanedContent = content.replace(allowedTags, '$&').replace(/<\/?[^>]+(>|$)/g, "");
-  return cleanedContent;
+  // List of allowed tags
+  const allowedTags = new Set([
+      'a', 'div', 'p', 'br', 'span', 'em', 'i', 'li', 'ol', 'ul',
+      'strong', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'table', 'tbody',
+      'thead', 'tr', 'td', 'abbr', 'acronym', 'b', 'blockquote', 'code',
+      'strike', 'u', 'sup', 'sub'
+  ]);
+
+  // Use DOMParser to parse the pasted HTML
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(content, 'text/html');
+
+  // Recursive function to remove disallowed tags
+  function cleanNode(node) {
+      // Iterate over child nodes
+      Array.from(node.childNodes).forEach(child => {
+          if (child.nodeType === Node.ELEMENT_NODE) {
+              // Remove the node if it is not in the allowed tags set
+              if (!allowedTags.has(child.tagName.toLowerCase())) {
+                  child.remove();
+              } else {
+                  // Otherwise, recursively clean its children
+                  cleanNode(child);
+              }
+          }
+      });
+  }
+
+  // Clean the parsed document's body
+  cleanNode(doc.body);
+
+  // Return the cleaned HTML as a string
+  return doc.body.innerHTML;
 }
