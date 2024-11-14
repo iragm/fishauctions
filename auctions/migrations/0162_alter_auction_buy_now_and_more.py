@@ -22,6 +22,6 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name="auction",
             name="summernote_description",
-            field=models.CharField(blank=True, default="", max_length=10000000, verbose_name="Rules"),
+            field=models.CharField(blank=True, default="", max_length=10000, verbose_name="Rules"),
         ),
     ]

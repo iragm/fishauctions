@@ -3199,9 +3199,6 @@ class LotValidation(LoginRequiredMixin):
             # return redirect(reverse("contact_info"))
         return super().dispatch(request, *args, **kwargs)
 
-    def clean(self):
-        super().clean()
-
     def form_valid(self, form, **kwargs):
         """
         There is quite a lot that needs to be done before the lot is saved
@@ -3290,7 +3287,7 @@ class LotValidation(LoginRequiredMixin):
                         # we are only cloning images here, not watchers, views, or other related models
                 except Exception as e:
                     logger.exception(e)
-            msg = "Created lot!"
+            msg = "Created lot! "
             if not lot.image_count:
                 msg += f"You should probably <a href='/images/add_image/{lot.lot_number}/'>add an image</a>  to this lot.  Or, "
             msg += "<a href='/lots/new'>create another lot</a>"

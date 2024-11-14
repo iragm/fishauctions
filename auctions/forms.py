@@ -1,4 +1,5 @@
 import logging
+import re
 
 # from django.core.exceptions import ValidationError
 from allauth.account.forms import ResetPasswordForm, SignupForm
@@ -41,6 +42,13 @@ from .models import (
 #     input_type = 'datetime-local'
 
 logger = logging.getLogger(__name__)
+
+
+def clean_summernote(html, max_length=16383):
+    """Helper function to shorten summernote fields, which can contain thousands of formatting characters"""
+    if len(html) > max_length:
+        html = re.sub(r"(?!<br\s*/?>)<.*?>", "", html)[:max_length]
+    return html
 
 
 class QuickAddTOS(forms.ModelForm):

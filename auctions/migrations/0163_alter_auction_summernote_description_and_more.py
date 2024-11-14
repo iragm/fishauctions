@@ -12,11 +12,11 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name="auction",
             name="summernote_description",
-            field=models.CharField(blank=True, default="", max_length=16383, verbose_name="Rules"),
+            field=models.CharField(blank=True, default="", max_length=10000, verbose_name="Rules"),
         ),
         migrations.AlterField(
             model_name="lot",
             name="summernote_description",
-            field=models.CharField(blank=True, default="", max_length=16383, verbose_name="Description"),
+            field=models.CharField(blank=True, default="", max_length=10000, verbose_name="Description"),
         ),
     ]

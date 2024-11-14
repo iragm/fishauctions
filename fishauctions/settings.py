@@ -593,7 +593,10 @@ SUMMERNOTE_CONFIG = {
             # ['view', ['fullscreen', 'codeview', 'help']],
         ],
     },
-    "js": (("/static/summernote/bs5-hack.js"),),
+    "js": (
+        ("/static/summernote/bs5-hack.js"),
+        ("/static/summernote/clean-on-paste.js"),
+    ),
     # Require users to be authenticated for uploading attachments.
     # 'attachment_require_authentication': True,
     # Set `upload_to` function for attachments.

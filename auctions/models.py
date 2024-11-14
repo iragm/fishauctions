@@ -551,7 +551,7 @@ class Auction(models.Model):
     created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     location = models.CharField(max_length=300, null=True, blank=True)
     location.help_text = "State or region of this auction"
-    summernote_description = models.CharField(max_length=16383, verbose_name="Rules", default="", blank=True)
+    summernote_description = models.CharField(max_length=10000, verbose_name="Rules", default="", blank=True)
     # notes = MarkdownField(
     #     rendered_field="notes_rendered",
     #     validator=VALIDATOR_STANDARD,
@@ -1994,7 +1994,7 @@ class Lot(models.Model):
     image_source.help_text = "Where did you get this image?"
     i_bred_this_fish = models.BooleanField(default=False, verbose_name="I bred this fish/propagated this plant")
     i_bred_this_fish.help_text = "Check to get breeder points for this lot"
-    summernote_description = models.CharField(max_length=16383, verbose_name="Description", default="", blank=True)
+    summernote_description = models.CharField(max_length=10000, verbose_name="Description", default="", blank=True)
     # description = MarkdownField(
     #     rendered_field="description_rendered",
     #     validator=VALIDATOR_STANDARD,
@@ -2160,7 +2160,8 @@ class Lot(models.Model):
                         match = int(match[-1])
                         if match >= custom_lot_number:
                             custom_lot_number = match + 1
-                self.custom_lot_number = f"{self.auctiontos_seller.bidder_number}-{custom_lot_number}"
+                # trim the end to fit in custom lot number if the length is too long
+                self.custom_lot_number = f"{self.auctiontos_seller.bidder_number}-{custom_lot_number}"[:9]
         # a bit of magic to automatically set categories
         fix_category = False
         if self.species_category:
