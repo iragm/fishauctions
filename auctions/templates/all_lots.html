@@ -54,6 +54,8 @@ Your lots{% else %}
       {% endif %}
       {% if view == "mywonlots" %}
       Lots you've won
+     <br><a href="{% url 'my_won_lot_csv' %}" class="btn btn-sm bg-primary"><i class="bi bi-download"></i>Export CSV</a>
+
       {% endif %}
       {% endif %}</h3>
 

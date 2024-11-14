@@ -247,6 +247,7 @@ urlpatterns = [
         name="auction_printing_pdf",
     ),
     path("selling/csv/", views.my_lot_report, name="my_lot_report"),
+    path("buying/csv/", views.my_won_lot_csv, name="my_won_lot_csv"),
     path("auctions/<slug:slug>/lotlist/", views.auctionLotList, name="lot_list"),
     path("auctions/<slug:slug>/delete/", views.AuctionDelete.as_view()),
     path("auctions/<slug:slug>/chat/", views.AuctionChats.as_view()),
