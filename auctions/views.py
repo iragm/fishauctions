@@ -1297,8 +1297,36 @@ class UpdateLotPushNotificationsView(APIPostView):
 
 
 @login_required
+def my_won_lot_csv(request):
+    """CSV file showing won lots"""
+    lots = add_price_info(
+        Lot.objects.filter(Q(winner=request.user) | Q(auctiontos_winner__email=request.user.email)).exclude(
+            is_deleted=True
+        )
+    )
+    current_site = Site.objects.get_current()
+    response = HttpResponse(content_type="text/csv")
+    response["Content-Disposition"] = (
+        f'attachment; filename="my_won_lots_from_{current_site.domain.replace(".","_")}.csv"'
+    )
+    writer = csv.writer(response)
+    writer.writerow(["Lot number", "Name", "Auction", "Winning price", "Link"])
+    for lot in lots:
+        writer.writerow(
+            [
+                lot.lot_number_display,
+                lot.lot_name,
+                lot.auction,
+                f"${lot.winning_price}",
+                "https://" + lot.full_lot_link,
+            ]
+        )
+    return response
+
+
+@login_required
 def my_lot_report(request):
-    """CSV file showing my lots"""
+    """CSV file showing sold lots"""
     lots = add_price_info(
         Lot.objects.filter(Q(user=request.user) | Q(auctiontos_seller__email=request.user.email)).exclude(
             is_deleted=True
