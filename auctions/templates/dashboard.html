@@ -118,19 +118,6 @@
                   </td>
                 </tr>
                 <tr>
-                  <td>User with printed labels</td>
-                  <td> {{ users_with_printed_labels }}
-                  </td>
-                </tr>
-                <tr>
-                  <td>Label preset usage:</td>
-                  <td>
-                        {% for preset in preset_counts %}
-                            {{ preset.preset }}: {{ preset.count }}<br>
-                        {% endfor %}
-                  </td>
-                </tr>
-                <tr>
                   <td>users who have used search:</td>
                   <td> {{ users_with_search_history }}
                   </td>

@@ -21,7 +21,10 @@
         {% for chunk in auction.paypal_invoice_chunks %}
         <a href="{% url 'paypal_csv' slug=auction.slug chunk=chunk %}" class="dropdown-item"><i class="bi bi-paypal"></i> PayPal Invoice CSV {% if auction.paypal_invoice_chunks|length > 1 %} #{{chunk}}{% endif %}</a>
         {% endfor %}
-        {% if not auction.paypal_invoice_chunks|length %}<span class="text-muted dropdown-item"><i class="bi bi-paypal"></i> No PayPal invoices</span>{% endif %}
+        {% if not auction.paypal_invoice_chunks|length %}<span class="text-muted dropdown-item"><i class="bi bi-paypal"></i> No PayPal invoices</span>
+        {% else %}
+        <a href="https://www.paypal.com/invoice/batch" class="dropdown-item"><i class="bi bi-paypal"></i> Paypal Batch Invoice Upload</span>
+        {% endif %}
         <a href="/blog/online-payments-suck/" class="dropdown-item"><i class="bi bi-info-circle"></i> PayPal invoice help</a>
       </div>
     </span>

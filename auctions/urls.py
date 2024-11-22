@@ -94,6 +94,7 @@ urlpatterns = [
     ),
     path("lots/recommended/", views.AllRecommendedLots.as_view()),
     path("lots/", views.AllLots.as_view(), name="allLots"),
+    path("qr/<int:pk>/", views.LotQRView.as_view(), name="lot_by_pk_qr"),
     path("lots/<int:pk>/", views.ViewLot.as_view(), name="lot_by_pk"),
     path(
         "lots/edit/<int:pk>/",

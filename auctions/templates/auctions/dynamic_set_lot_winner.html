@@ -4,6 +4,37 @@
 
 {% block extra_js %}
 <script>
+  let tooltipTimeout;
+  function initializeTooltipWithTimeout() {
+      if (tooltipTimeout) {
+          clearTimeout(tooltipTimeout);
+      }
+      tooltipTimeout = setTimeout(() => {
+          const tooltipTriggerElement = document.getElementById('more_save_options_tooltip');
+          if (tooltipTriggerElement) {
+              const existingTooltip = bootstrap.Tooltip.getInstance(tooltipTriggerElement);
+
+              if (!existingTooltip) {
+                  tooltipTriggerElement.setAttribute('title', 'Ignore errors and save here');
+                  const tooltip = new bootstrap.Tooltip(tooltipTriggerElement);
+                  tooltip.show();
+              }
+          }
+      }, 100);
+  }
+
+  function removeTooltip() {
+      const tooltipTriggerElement = document.getElementById('more_save_options_tooltip');
+      if (tooltipTriggerElement) {
+          const existingTooltip = bootstrap.Tooltip.getInstance(tooltipTriggerElement);
+          if (existingTooltip) {
+              existingTooltip.dispose();
+          }
+          tooltipTriggerElement.removeAttribute('title');
+      }
+  }
+
+
   function undoSellLot() {
       let data = {
           lot_number: $("#last_sold_lot_number").text()
@@ -28,6 +59,7 @@
       $(".form-control").removeClass("is-invalid is-valid");
       let fields = ['price', 'winner', 'lot']
       if (response.success_message) {
+        removeTooltip()
         fields.forEach(function(field) {
           $("#" + field).val('');
         })
@@ -46,6 +78,7 @@
             if (response[field] === "valid") {
                 $("#" + field).addClass("is-valid");
             } else if (response[field]) {
+                initializeTooltipWithTimeout();
                 $("#" + field).addClass("is-invalid");
                 $("#" + field).siblings(".invalid-tooltip").text(response[field]);
             }
@@ -185,8 +218,8 @@ $(document).ready(function() {
       <div class="btn-group" role="group" aria-label="Save">
         <button type="submit" class="btn bg-success text-black">Save</button>
         <div class="btn-group" role="group">
-          <button id="more_safe_optins" type="button" class="btn btn-success dropdown-toggle text-black" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false"></button>
-          <div class="dropdown-menu" aria-labelledby="more_safe_optins">
+          <button id="more_save_options" type="button" class="btn btn-success dropdown-toggle text-black" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false"></button><span id="more_save_options_tooltip"></span>
+          <div class="dropdown-menu" aria-labelledby="more_save_options">
             <a class="dropdown-item" href='javascript:void(0)' onclick="sendFormData('force_save')">Ignore errors and save</a>
             <a id='sell_to_online_high_bidder' class="d-none dropdown-item" onclick="sendFormData('to_online_high_bidder')" href='javascript:void(0)'></a>
             <a class="dropdown-item" href='javascript:void(0)' onclick="sendFormData('end_unsold')">End lot unsold</a>

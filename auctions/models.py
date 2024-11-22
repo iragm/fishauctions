@@ -1091,6 +1091,10 @@ class Auction(models.Model):
         return self.lots_qs.exclude(banned=True).count()
 
     @property
+    def number_of_lots_with_scanned_qr(self):
+        return self.lots_qs.filter(pageview__source__icontains="qr", auction__pk=self.pk).distinct().count()
+
+    @property
     def labels_qs(self):
         lots = self.lots_qs.exclude(banned=True)
         if self.is_online:
@@ -1110,7 +1114,7 @@ class Auction(models.Model):
 
     @property
     def template_lot_link(self):
-        """Not directly used in templates, use template_lot_link_first_column and template_lot_link_seperate_column instead"""
+        """Not directly used in templates, use template_lot_link_first_column and template_lot_link_separate_column instead"""
         if timezone.now() > self.lot_submission_start_date:
             result = f"<a href='{ self.view_lot_link }'>View lots</a>"
         else:
@@ -1123,7 +1127,7 @@ class Auction(models.Model):
         return mark_safe(f'<small><span class="d-md-none"><br>{self.template_lot_link}</span></small>')
 
     @property
-    def template_lot_link_seperate_column(self):
+    def template_lot_link_separate_column(self):
         """Shown on big screens only"""
         return mark_safe(f'<span class="d-none d-md-inline">{self.template_lot_link}</span>')
 
@@ -2971,7 +2975,8 @@ class Lot(models.Model):
     @property
     def qr_code(self):
         """Full domain name URL used to for QR codes"""
-        return f"{self.full_lot_link}?src=qr"
+        current_site = Site.objects.get_current()
+        return f"https://{current_site.domain}{reverse('lot_by_pk_qr', kwargs={'pk': self.pk})}"
 
     @property
     def seller_string(self):

@@ -573,6 +573,14 @@ class AuctionTOSAutocomplete(autocomplete.Select2QuerySetView):
         return qs.order_by("-name")
 
 
+class LotQRView(RedirectView):
+    def get_redirect_url(self, *args, **kwargs):
+        lot = Lot.objects.filter(pk=self.kwargs["pk"]).first()
+        if lot:
+            return f"{lot.lot_link}?src=qr"
+        return None
+
+
 class AllRecommendedLots(TemplateView):
     """
     Show all recommended lots as a standalone page
@@ -5486,14 +5494,14 @@ class AdminDashboard(TemplateView):
         context["online_auction_lots_ending"] = Lot.objects.filter(
             is_deleted=False, date_end__lte=timeframe, date_end__gte=timezone.now()
         ).count()
-        users_with_printed_labels = User.objects.filter(lot__label_printed=True).distinct()
-        context["users_with_printed_labels"] = users_with_printed_labels.count()
-        context["preset_counts"] = (
-            UserLabelPrefs.objects.filter(user__in=users_with_printed_labels)
-            .values("preset")
-            .annotate(count=Count("user"))
-            .order_by("-count")
-        )
+        # users_with_printed_labels = User.objects.filter(lot__label_printed=True).distinct()
+        # context["users_with_printed_labels"] = users_with_printed_labels.count()
+        # context["preset_counts"] = (
+        #     UserLabelPrefs.objects.filter(user__in=users_with_printed_labels)
+        #     .values("preset")
+        #     .annotate(count=Count("user"))
+        #     .order_by("-count")
+        # )
         return context
 
 

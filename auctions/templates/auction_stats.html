@@ -232,6 +232,10 @@ This graph shows overall engagement of people with your auction.  You can gauge 
       <tr>
         <td>Seller payout</td><td>${{ auction.total_to_sellers|floatformat:2 }}</td>
       </tr>
+      <tr>
+        <td>Lots with a scanned QR code</td><td>{{ auction.number_of_lots_with_scanned_qr }}</td>
+      </tr>
+
   </tbody>
 </table>
 
