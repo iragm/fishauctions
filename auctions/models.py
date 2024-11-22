@@ -1091,6 +1091,10 @@ class Auction(models.Model):
         return self.lots_qs.exclude(banned=True).count()
 
     @property
+    def number_of_lots_with_scanned_qr(self):
+        return self.lots_qs.filter(pageview__source__icontains="qr", auction__pk=self.pk).distinct().count()
+
+    @property
     def labels_qs(self):
         lots = self.lots_qs.exclude(banned=True)
         if self.is_online:
