@@ -1,6 +1,5 @@
 import django_tables2 as tables
 from django.urls import reverse
-from django.utils import formats
 from django.utils.safestring import mark_safe
 
 from .models import Auction, AuctionTOS, Lot
@@ -171,17 +170,17 @@ class AuctionHTMxTable(tables.Table):
     hide_string = "d-md-table-cell d-none"
 
     auction = tables.Column(accessor="title", verbose_name="Auction")
-    date = tables.Column(accessor="date_start", verbose_name="Status")
+    date = tables.Column(accessor="date_start", verbose_name="Starts")
     lots = tables.Column(
-        accessor="template_lot_link_seperate_column",
+        accessor="template_lot_link_separate_column",
         verbose_name="Lots",
         orderable=False,
         attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
     )
 
-    def render_date(self, value, record):
-        localized_date = formats.date_format(record.template_date_timestamp, use_l10n=True)
-        return mark_safe(f"{record.template_status}{localized_date}{record.ended_badge}")
+    # def render_date(self, value, record):
+    #    localized_date = formats.date_format(record.template_date_timestamp, use_l10n=True)
+    #    return mark_safe(f"{record.template_status}{localized_date}{record.ended_badge}")
 
     def render_auction(self, value, record):
         auction = record

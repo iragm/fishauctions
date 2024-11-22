@@ -1110,7 +1110,7 @@ class Auction(models.Model):
 
     @property
     def template_lot_link(self):
-        """Not directly used in templates, use template_lot_link_first_column and template_lot_link_seperate_column instead"""
+        """Not directly used in templates, use template_lot_link_first_column and template_lot_link_separate_column instead"""
         if timezone.now() > self.lot_submission_start_date:
             result = f"<a href='{ self.view_lot_link }'>View lots</a>"
         else:
@@ -1123,7 +1123,7 @@ class Auction(models.Model):
         return mark_safe(f'<small><span class="d-md-none"><br>{self.template_lot_link}</span></small>')
 
     @property
-    def template_lot_link_seperate_column(self):
+    def template_lot_link_separate_column(self):
         """Shown on big screens only"""
         return mark_safe(f'<span class="d-none d-md-inline">{self.template_lot_link}</span>')
 
