@@ -573,6 +573,14 @@ class AuctionTOSAutocomplete(autocomplete.Select2QuerySetView):
         return qs.order_by("-name")
 
 
+class LotQRView(RedirectView):
+    def get_redirect_url(self, *args, **kwargs):
+        lot = Lot.objects.filter(pk=self.kwargs["pk"]).first()
+        if lot:
+            return f"{lot.lot_link}?src=qr"
+        return None
+
+
 class AllRecommendedLots(TemplateView):
     """
     Show all recommended lots as a standalone page

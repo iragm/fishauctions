@@ -2971,7 +2971,8 @@ class Lot(models.Model):
     @property
     def qr_code(self):
         """Full domain name URL used to for QR codes"""
-        return f"{self.full_lot_link}?src=qr"
+        current_site = Site.objects.get_current()
+        return f"https://{current_site.domain}{reverse('lot_by_pk_qr', kwargs={'pk': self.pk})}"
 
     @property
     def seller_string(self):
