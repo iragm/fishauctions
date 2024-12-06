@@ -270,7 +270,7 @@ pyhamcrest==2.1.0
     # via -r requirements.in
 pyheif==0.8.0
     # via heif-image-plugin
-pyjwt==2.10.0
+pyjwt==2.10.1
     # via -r requirements.in
 pymysql==1.1.1
     # via -r requirements.in
