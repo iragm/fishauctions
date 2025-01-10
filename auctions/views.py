@@ -3882,6 +3882,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
         run_duration = timezone.timedelta(days=7)  # only set for is_online
         online_bidding_start_diff = timezone.timedelta(days=7)
         online_bidding_end_diff = timezone.timedelta(minutes=0)
+        lot_submission_end_date_diff = timezone.timedelta(minutes=0)
         if clone_from_auction:
             fields_to_clone = [
                 "is_online",
@@ -3930,6 +3931,8 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 online_bidding_start_diff = original_auction.date_start - original_auction.date_online_bidding_starts
             if original_auction.date_online_bidding_ends:
                 online_bidding_end_diff = original_auction.date_start - original_auction.date_online_bidding_ends
+            if original_auction.lot_submission_end_date:
+                lot_submission_end_date_diff = original_auction.date_start - original_auction.lot_submission_end_date
             auction.cloned_from = original_auction
         else:
             auction.is_online = is_online
@@ -3955,7 +3958,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
         else:
             auction.date_end = None
             if not auction.lot_submission_end_date:
-                auction.lot_submission_end_date = auction.date_start
+                auction.lot_submission_end_date = auction.date_start - lot_submission_end_date_diff
             if not auction.lot_submission_start_date:
                 auction.lot_submission_start_date = auction.date_start - run_duration
             if not auction.date_online_bidding_starts:
