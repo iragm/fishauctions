@@ -788,7 +788,7 @@ class LotFilter(django_filters.FilterSet):
             return queryset.filter(
                 Q(lot_number=int(value))
                 | Q(lot_name__icontains=value)
-                | Q(custom_lot_number=value)
+                | Q(custom_lot_number=value)  # fixme - #269
                 | Q(auctiontos_seller__bidder_number=value)
             )
         else:
@@ -800,7 +800,7 @@ class LotFilter(django_filters.FilterSet):
                     Q(summernote_description__icontains=fragment)
                     | Q(lot_name__icontains=fragment)
                     | Q(user__username=fragment)
-                    | Q(custom_lot_number=fragment)
+                    | Q(custom_lot_number=fragment)  # fixme - #269
                     | Q(auctiontos_seller__bidder_number=fragment)
                 )
             return queryset.filter(qList)

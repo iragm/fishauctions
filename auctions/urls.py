@@ -69,6 +69,7 @@ urlpatterns = [
     ),
     path("api/userignorecategory/", views.GetUserIgnoreCategory.as_view()),
     path("api/ignore_auction/", views.ignoreAuction),
+    # fixme - #269
     path(
         "api/<slug:slug>/lots/<slug:custom_lot_number>/",
         views.ViewLotSimple.as_view(),
@@ -225,7 +226,9 @@ urlpatterns = [
         views.AuctionUnsellLot.as_view(),
         name="auction_unsell_lot",
     ),
+    # fixme - #269
     path("auctions/<slug:slug>/lots/<slug:custom_lot_number>/", views.ViewLot.as_view()),
+    # fixme - #269
     path(
         "auctions/<slug:slug>/lots/<slug:custom_lot_number>/<slug:lot_slug>/",
         views.ViewLot.as_view(),

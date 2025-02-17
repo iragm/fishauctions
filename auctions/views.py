@@ -1640,10 +1640,9 @@ def auctionLotList(request, slug):
         lots = auction.lots_qs.filter(winning_price__isnull=False).select_related("user", "winner")
         lots = add_price_info(lots)
         for lot in lots:
-            lot_number = lot.custom_lot_number or lot.lot_number
             writer.writerow(
                 [
-                    lot_number,
+                    lot.lot_number_display,
                     lot.lot_name,
                     lot.auctiontos_seller.name,
                     lot.auctiontos_seller.email,
@@ -2302,6 +2301,7 @@ class DynamicSetLotWinner(AuctionViewMixin, TemplateView):
         if not lot and action != "validate":
             error = "Enter a lot number"
         else:
+            # fixme - #269
             result_lot = self.auction.lots_qs.filter(custom_lot_number=lot).first()
             if not result_lot and lot:
                 error = "No lot found"
@@ -2353,7 +2353,7 @@ class DynamicSetLotWinner(AuctionViewMixin, TemplateView):
         lot.winning_price = None
         lot.active = False
         lot.save()
-        message = f"{self.request.user} has marked lot {lot.custom_lot_number} as not sold"
+        message = f"{self.request.user} has marked lot {lot.lot_number_display} as not sold"
         LotHistory.objects.create(
             lot=lot,
             user=self.request.user,
@@ -2379,7 +2379,7 @@ class DynamicSetLotWinner(AuctionViewMixin, TemplateView):
         lot.active = False
         lot.save()
         lot.add_winner_message(self.request.user, winning_tos, winning_price)
-        return f"Bidder {winning_tos.bidder_number} is now the winner of lot {lot.custom_lot_number}"
+        return f"Bidder {winning_tos.bidder_number} is now the winner of lot {lot.lot_number_display}"
 
     def post(self, request, *args, **kwargs):
         """All lot validation checks called from here"""
@@ -2399,14 +2399,14 @@ class DynamicSetLotWinner(AuctionViewMixin, TemplateView):
         lot, lot_error = self.validate_lot(lot, action)
         if lot and not lot_error and action == "to_online_high_bidder":
             result["success_message"] = lot.sell_to_online_high_bidder
-            result["last_sold_lot_number"] = lot.custom_lot_number
+            result["last_sold_lot_number"] = lot.lot_number_display
             lot.add_winner_message(self.request.user, lot.auctiontos_winner, lot.winning_price)
             return JsonResponse(result)
         price, price_error = self.validate_price(price, action)
         winner, winner_error = self.validate_winner(winner, action)
         if lot and not lot_error and action == "end_unsold":
             result["success_message"] = self.end_unsold(lot)
-            result["last_sold_lot_number"] = lot.custom_lot_number
+            result["last_sold_lot_number"] = lot.lot_number_display
             return JsonResponse(result)
         if (
             not price_error
@@ -2427,7 +2427,7 @@ class DynamicSetLotWinner(AuctionViewMixin, TemplateView):
         # I think this makes more sense:
         if not lot_error and not price_error and not winner_error:
             if action != "validate":
-                result["last_sold_lot_number"] = lot.custom_lot_number
+                result["last_sold_lot_number"] = lot.lot_number_display
             if action == "force_save" or action == "save":
                 result["success_message"] = self.set_winner(lot, winner, price)
         if lot and (action == "validate" or not result["success_message"]) and lot.high_bidder:
@@ -2449,12 +2449,13 @@ class AuctionUnsellLot(AuctionViewMixin, View):
     def post(self, request, *args, **kwargs):
         undo_lot = request.POST.get("lot_number", None)
         if undo_lot:
+            # fixme - #269
             undo_lot = Lot.objects.filter(custom_lot_number=undo_lot, auction=self.auction).first()
         if undo_lot:
             result = {
                 "hide_undo_button": "true",
                 "last_sold_lot_number": "",
-                "success_message": f"{undo_lot.custom_lot_number} {undo_lot.lot_name} now has no winner and can be sold",
+                "success_message": f"{undo_lot.lot_number_display} {undo_lot.lot_name} now has no winner and can be sold",
             }
             undo_lot.winner = None
             undo_lot.auctiontos_winner = None
@@ -2724,7 +2725,7 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
             form_kwargs={
                 "tos": self.tos,
                 "auction": self.auction,
-                "custom_lot_numbers_used": [],
+                # "custom_lot_numbers_used": [],
                 "is_admin": self.is_admin,
             },
             queryset=self.queryset,
@@ -2741,7 +2742,7 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
             form_kwargs={
                 "tos": self.tos,
                 "auction": self.auction,
-                "custom_lot_numbers_used": [],
+                # "custom_lot_numbers_used": [],
                 "is_admin": self.is_admin,
             },
             queryset=self.queryset,
@@ -2759,7 +2760,7 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
                     lot.added_by = self.request.user
                     if not self.is_admin:
                         # you are adding lots for yourself, set custom lot number automatically
-                        lot.custom_lot_number = None
+                        # lot.custom_lot_number = None
                         # we need to set lot.user here
                         if self.tos.user:
                             lot.user = self.tos.user
@@ -2844,7 +2845,7 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
             Lot,
             extra=extra,
             fields=(
-                "custom_lot_number",
+                # "custom_lot_number",
                 "lot_name",
                 "summernote_description",
                 "species_category",

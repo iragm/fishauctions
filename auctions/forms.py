@@ -117,7 +117,7 @@ class QuickAddLot(forms.ModelForm):
     class Meta:
         model = Lot
         fields = [
-            "custom_lot_number",
+            # "custom_lot_number",
             "lot_name",
             "summernote_description",
             "species_category",
@@ -142,18 +142,18 @@ class QuickAddLot(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         self.auction = kwargs.pop("auction")
-        self.custom_lot_numbers_used = kwargs.pop("custom_lot_numbers_used")
+        # self.custom_lot_numbers_used = kwargs.pop("custom_lot_numbers_used")
         self.is_admin = kwargs.pop("is_admin")
         self.tos = kwargs.pop("tos")
         self.lot_count = 0
         # we need to work around the case where a user enters duplicate custom lot numbers
         super().__init__(*args, **kwargs)
-        self.fields["custom_lot_number"].help_text = ""
+        # self.fields["custom_lot_number"].help_text = ""
         self.fields["lot_name"].label = "Lot name"
         self.fields["lot_name"].widget.attrs.update({"class": "auto-image-check"})
         self.fields["lot_name"].help_text = ""
-        if not self.is_admin:
-            self.fields["custom_lot_number"].widget = HiddenInput()
+        # if not self.is_admin:
+        #    self.fields["custom_lot_number"].widget = HiddenInput()
         # if not self.auction.use_categories:
         if True:  # hide category field, it's automatically set now
             self.fields["species_category"].widget = HiddenInput()
@@ -171,7 +171,7 @@ class QuickAddLot(forms.ModelForm):
             self.fields["quantity"].widget = HiddenInput()
             # self.fields["description"].widget = HiddenInput()
             self.fields["summernote_description"].widget = HiddenInput()
-            self.fields["custom_lot_number"].widget = HiddenInput()
+            # self.fields["custom_lot_number"].widget = HiddenInput()
         # self.fields["description"].help_text = ""
         self.fields["summernote_description"].help_text = ""
         if self.auction.reserve_price == "disable":
@@ -188,18 +188,18 @@ class QuickAddLot(forms.ModelForm):
 
     def clean(self):
         cleaned_data = super().clean()
-        custom_lot_number = cleaned_data.get("custom_lot_number")
-        if custom_lot_number:
-            existing_lots = Lot.objects.exclude(is_deleted=True).filter(
-                custom_lot_number=custom_lot_number, auction=self.auction
-            )
-            lot_number = cleaned_data.get("lot_number")
-            if lot_number:
-                existing_lots = existing_lots.exclude(lot_number=lot_number.pk)
-            else:
-                self.custom_lot_numbers_used.append(custom_lot_number)
-            if existing_lots.count() or self.custom_lot_numbers_used.count(custom_lot_number) > 1:
-                self.add_error("custom_lot_number", "This lot number is already in use")
+        # custom_lot_number = cleaned_data.get("custom_lot_number")
+        # if custom_lot_number:
+        #     existing_lots = Lot.objects.exclude(is_deleted=True).filter(
+        #         custom_lot_number=custom_lot_number, auction=self.auction
+        #     )
+        #     lot_number = cleaned_data.get("lot_number")
+        #     if lot_number:
+        #         existing_lots = existing_lots.exclude(lot_number=lot_number.pk)
+        #     else:
+        #         self.custom_lot_numbers_used.append(custom_lot_number)
+        #     if existing_lots.count() or self.custom_lot_numbers_used.count(custom_lot_number) > 1:
+        #         self.add_error("custom_lot_number", "This lot number is already in use")
         if not self.is_admin:
             if self.auction.reserve_price == "disable":
                 cleaned_data["reserve_price"] = self.auction.minimum_bid
@@ -585,10 +585,10 @@ class EditLot(forms.ModelForm):
         self.helper.layout = Layout(
             "auction",
             Div(
-                Div(
-                    "custom_lot_number",
-                    css_class="col-sm-7",
-                ),
+                # Div(
+                #     "custom_lot_number",
+                #     css_class="col-sm-7",
+                # ),
                 Div(
                     "quantity",
                     css_class="col-sm-5",
@@ -652,16 +652,16 @@ class EditLot(forms.ModelForm):
             ),
         )
         # self.fields['species_category'].queryset = auction.location_qs #PickupLocation.objects.filter(auction=self.auction).order_by('name')
-        self.fields["custom_lot_number"].initial = self.lot.custom_lot_number
+        # self.fields["custom_lot_number"].initial = self.lot.custom_lot_number
         self.fields["auction"].initial = self.lot.auction
-        if self.lot.label_printed:
-            self.fields[
-                "custom_lot_number"
-            ].help_text = (
-                "<span class='text-warning'>Label already printed!</span> Make sure to reprint it if you change this"
-            )
-        else:
-            self.fields["custom_lot_number"].help_text = "Leave blank to automatically generate"
+        # if self.lot.label_printed:
+        #     self.fields[
+        #         "custom_lot_number"
+        #     ].help_text = (
+        #         "<span class='text-warning'>Label already printed!</span> Make sure to reprint it if you change this"
+        #     )
+        # else:
+        #    self.fields["custom_lot_number"].help_text = "Leave blank to automatically generate"
         self.fields["lot_name"].initial = self.lot.lot_name
         # self.fields["description"].initial = self.lot.description
         self.fields["summernote_description"].initial = self.lot.summernote_description
@@ -714,7 +714,7 @@ class EditLot(forms.ModelForm):
         model = Lot
         fields = [
             "lot_name",
-            "custom_lot_number",
+            # "custom_lot_number",
             "auction",
             "species_category",
             # "description",
@@ -747,16 +747,16 @@ class EditLot(forms.ModelForm):
         if auction:
             if not auction.permission_check(self.user):
                 self.add_error("auction", "How did you even manage to change this field?")
-        custom_lot_number = cleaned_data.get("custom_lot_number")
-        if custom_lot_number:
-            other_lots = (
-                Lot.objects.exclude(is_deleted=True)
-                .filter(auction=auction, custom_lot_number=custom_lot_number)
-                .exclude(pk=self.lot.pk)
-                .count()
-            )
-            if other_lots:
-                self.add_error("custom_lot_number", "Lot number already in use")
+        # custom_lot_number = cleaned_data.get("custom_lot_number")
+        # if custom_lot_number:
+        #     other_lots = (
+        #         Lot.objects.exclude(is_deleted=True)
+        #         .filter(auction=auction, custom_lot_number=custom_lot_number)
+        #         .exclude(pk=self.lot.pk)
+        #         .count()
+        #     )
+        #     if other_lots:
+        #         self.add_error("custom_lot_number", "Lot number already in use")
         if not cleaned_data.get("auctiontos_winner") and cleaned_data.get("winning_price"):
             self.add_error("auctiontos_winner", "You need to set a winner")
         if cleaned_data.get("auctiontos_winner") and not cleaned_data.get("winning_price"):

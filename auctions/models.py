@@ -2163,6 +2163,7 @@ class Lot(models.Model):
         """
         For in-person auctions, we'll generate a bidder_number-lot_number format
         """
+        # fixme - #269
         if not self.custom_lot_number and self.auction:
             if self.auctiontos_seller:
                 custom_lot_number = 1
@@ -2507,7 +2508,7 @@ class Lot(models.Model):
             if tos:
                 self.auctiontos_winner = tos
             self.save()
-            return f"{self.high_bidder_for_admins} is now the winner of lot {self.custom_lot_number} for ${self.winning_price}"
+            return f"{self.high_bidder_for_admins} is now the winner of lot {self.lot_number_display} for ${self.winning_price}"
         else:
             return "No high bidder"
 
@@ -2962,8 +2963,8 @@ class Lot(models.Model):
     @property
     def lot_link(self):
         """Simplest link to access this lot with"""
-        if self.custom_lot_number and self.auction:
-            return f"/auctions/{self.auction.slug}/lots/{self.custom_lot_number}/{self.slug}/"
+        if self.auction:
+            return f"/auctions/{self.auction.slug}/lots/{self.lot_number_display}/{self.slug}/"
         return f"/lots/{self.lot_number}/{self.slug}/"
 
     @property
