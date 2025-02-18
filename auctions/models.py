@@ -684,6 +684,7 @@ class Auction(models.Model):
         null=True,
         default="qr_code,lot_name,min_bid_label,buy_now_label,quantity_label,seller_name,donation_label",
     )
+    use_seller_dash_lot_numbering = models.BooleanField(default=True, blank=True)
 
     def __str__(self):
         result = self.title
@@ -1996,7 +1997,14 @@ class Lot(models.Model):
         ),
         ("RANDOM", "This picture is from the internet"),
     )
+    # 3 lot numbers follow, in general use the property lot_number_display which will select the appropriate one
+    # all have the verbose name lot number, and to users they are all essentially the same, but they are used differently
+    # below is the database pk
     lot_number = models.AutoField(primary_key=True)
+    # below is an automatically assigned int for use in auctions
+    lot_number_int = models.IntegerField(null=True, blank=True, verbose_name="Lot number")
+    # below is an override of the other lot numbers, it was the default for use in auctions until 2025, but now lot_number_int is used instead
+    # see https://github.com/iragm/fishauctions/issues/269
     custom_lot_number = models.CharField(max_length=9, blank=True, null=True, verbose_name="Lot number")
     custom_lot_number.help_text = "You can override the default lot number with this"
     lot_name = models.CharField(max_length=40)
