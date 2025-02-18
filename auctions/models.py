@@ -684,7 +684,7 @@ class Auction(models.Model):
         null=True,
         default="qr_code,lot_name,min_bid_label,buy_now_label,quantity_label,seller_name,donation_label",
     )
-    use_seller_dash_lot_numbering = models.BooleanField(default=True, blank=True)
+    use_seller_dash_lot_numbering = models.BooleanField(default=False, blank=True)
 
     def __str__(self):
         result = self.title
