@@ -22,6 +22,7 @@ from django.db.models import (
     F,
     FloatField,
     IntegerField,
+    Max,
     OuterRef,
     Q,
     Subquery,
@@ -2171,8 +2172,15 @@ class Lot(models.Model):
         """
         For in-person auctions, we'll generate a bidder_number-lot_number format
         """
-        # fixme - #269
-        if not self.custom_lot_number and self.auction:
+        if self.lot_number_int is None and self.auction:
+            minimum_lot_number = 1
+            # Get the current maximum lot_number_int for the auction
+            max_number = Lot.objects.filter(auction=self.auction).aggregate(Max("lot_number_int"))[
+                "lot_number_int__max"
+            ]
+            self.lot_number_int = (max_number or (minimum_lot_number - 1)) + 1
+        # custom lot number set for old auctions
+        if not self.custom_lot_number and self.auction and self.auction.use_seller_dash_lot_numbering:
             if self.auctiontos_seller:
                 custom_lot_number = 1
                 other_lots = self.auctiontos_seller.lots_qs
@@ -2966,7 +2974,12 @@ class Lot(models.Model):
 
     @property
     def lot_number_display(self):
-        return self.custom_lot_number or self.lot_number
+        if self.auction and self.auction.use_seller_dash_lot_numbering and self.custom_lot_number:
+            return self.custom_lot_number
+        # note that custom lot numbers are effectively disabled here
+        if self.auction and self.lot_number_int:
+            return self.lot_number_int
+        return self.lot_number
 
     @property
     def lot_link(self):
