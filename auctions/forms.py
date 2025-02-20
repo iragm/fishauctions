@@ -849,7 +849,7 @@ class CreateEditAuctionTOS(forms.ModelForm):
         if self.is_edit_form:
             # hide fields if editing
             self.fields["bidder_number"].initial = self.auctiontos.bidder_number
-            if self.auctiontos.unbanned_lot_count:
+            if self.auctiontos.unbanned_lot_count and self.auction.use_seller_dash_lot_numbering:
                 self.fields[
                     "bidder_number"
                 ].help_text = f"<span class=''>This user has already added {self.auctiontos.unbanned_lot_count} lots.</span> Changing this will not update lot numbers, but invoices will still be accurate"
