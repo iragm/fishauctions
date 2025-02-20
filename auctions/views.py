@@ -5409,6 +5409,19 @@ class LotChartView(View):
         return redirect("/")
 
 
+class AdminErrorPage(TemplateView):
+    """A sanity check to make sure the 500 error emails are working as they should be"""
+
+    template_name = "dashboard.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        if not (request.user.is_superuser):
+            messages.error(request, "Only admins can break the website")
+            return redirect("/")
+        1 / 0
+        return super().dispatch(request, *args, **kwargs)
+
+
 class AdminDashboard(TemplateView):
     """Provides an at-a-glance view of some interesting stats"""
 
