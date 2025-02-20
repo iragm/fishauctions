@@ -2308,10 +2308,10 @@ class DynamicSetLotWinner(AuctionViewMixin, TemplateView):
                 result_lot_qs = self.auction.lots_qs.filter(lot_number_int=lot)
             # This can happen if two people are submitting lots at the exact same millisecond.  It seems very unlikely but an easy enough edge case to catch.
             if result_lot_qs.count() > 1:
-                error = "Multiple lots with this lot number.  Go to the lot's page and set the winner there"
+                error = "Multiple lots with this lot number.  Go to the lot's page and set the winner there."
             else:
                 result_lot = result_lot_qs.first()
-            if not result_lot and lot:
+            if not result_lot and lot and not error:
                 error = "No lot found"
         if (
             result_lot
