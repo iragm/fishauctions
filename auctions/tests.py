@@ -73,6 +73,7 @@ class StandardTestCase(TestCase):
             tax=25,
             buy_now="allow",
             reserve_price="allow",
+            use_seller_dash_lot_numbering=True,
         )
         self.location = PickupLocation.objects.create(
             name="location", auction=self.online_auction, pickup_time=theFuture
@@ -1061,3 +1062,16 @@ class DynamicSetLotWinnerViewTestCase(StandardTestCase):
         data = response.json()
         assert data.get("price") != "valid"
         assert data.get("winner") != "valid"
+
+        Lot.objects.create(
+            lot_name="dupe",
+            auction=self.in_person_auction,
+            auctiontos_seller=self.admin_in_person_tos,
+            quantity=1,
+            custom_lot_number="101-1",
+        )
+        response = self.client.post(
+            self.get_url(), data={"lot": "101-1", "price": "10", "winner": "555", "action": "validate"}
+        )
+        data = response.json()
+        assert "Multiple" in data.get("lot")

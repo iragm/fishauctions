@@ -22,6 +22,7 @@ from django.db.models import (
     F,
     FloatField,
     IntegerField,
+    Max,
     OuterRef,
     Q,
     Subquery,
@@ -684,6 +685,7 @@ class Auction(models.Model):
         null=True,
         default="qr_code,lot_name,min_bid_label,buy_now_label,quantity_label,seller_name,donation_label",
     )
+    use_seller_dash_lot_numbering = models.BooleanField(default=False, blank=True)
 
     def __str__(self):
         result = self.title
@@ -1996,7 +1998,14 @@ class Lot(models.Model):
         ),
         ("RANDOM", "This picture is from the internet"),
     )
+    # 3 lot numbers follow, in general use the property lot_number_display which will select the appropriate one
+    # all have the verbose name lot number, and to users they are all essentially the same, but they are used differently
+    # below is the database pk
     lot_number = models.AutoField(primary_key=True)
+    # below is an automatically assigned int for use in auctions
+    lot_number_int = models.IntegerField(null=True, blank=True, verbose_name="Lot number")
+    # below is an override of the other lot numbers, it was the default for use in auctions until 2025, but now lot_number_int is used instead
+    # see https://github.com/iragm/fishauctions/issues/269
     custom_lot_number = models.CharField(max_length=9, blank=True, null=True, verbose_name="Lot number")
     custom_lot_number.help_text = "You can override the default lot number with this"
     lot_name = models.CharField(max_length=40)
@@ -2160,10 +2169,17 @@ class Lot(models.Model):
     )
 
     def save(self, *args, **kwargs):
-        """
-        For in-person auctions, we'll generate a bidder_number-lot_number format
-        """
-        if not self.custom_lot_number and self.auction:
+        # for old and new auctions, generate a lot number int
+        if self.lot_number_int is None and self.auction:
+            minimum_lot_number = 1
+            # Get the current maximum lot_number_int for the auction
+            # This is deliberately not excluding deleted and removed lots -- don't use auction.lots_qs here
+            max_number = Lot.objects.filter(auction=self.auction).aggregate(Max("lot_number_int"))[
+                "lot_number_int__max"
+            ]
+            self.lot_number_int = (max_number or (minimum_lot_number - 1)) + 1
+        # custom lot number set for old auctions: bidder_number-lot_number format
+        if not self.custom_lot_number and self.auction and self.auction.use_seller_dash_lot_numbering:
             if self.auctiontos_seller:
                 custom_lot_number = 1
                 other_lots = self.auctiontos_seller.lots_qs
@@ -2507,7 +2523,7 @@ class Lot(models.Model):
             if tos:
                 self.auctiontos_winner = tos
             self.save()
-            return f"{self.high_bidder_for_admins} is now the winner of lot {self.custom_lot_number} for ${self.winning_price}"
+            return f"{self.high_bidder_for_admins} is now the winner of lot {self.lot_number_display} for ${self.winning_price}"
         else:
             return "No high bidder"
 
@@ -2957,13 +2973,18 @@ class Lot(models.Model):
 
     @property
     def lot_number_display(self):
-        return self.custom_lot_number or self.lot_number
+        if self.auction and self.auction.use_seller_dash_lot_numbering and self.custom_lot_number:
+            return self.custom_lot_number
+        # note that custom lot numbers are effectively disabled here
+        if self.auction and self.lot_number_int:
+            return self.lot_number_int
+        return self.lot_number
 
     @property
     def lot_link(self):
         """Simplest link to access this lot with"""
-        if self.custom_lot_number and self.auction:
-            return f"/auctions/{self.auction.slug}/lots/{self.custom_lot_number}/{self.slug}/"
+        if self.auction:
+            return f"/auctions/{self.auction.slug}/lots/{self.lot_number_display}/{self.slug}/"
         return f"/lots/{self.lot_number}/{self.slug}/"
 
     @property

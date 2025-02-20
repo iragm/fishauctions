@@ -1640,10 +1640,9 @@ def auctionLotList(request, slug):
         lots = auction.lots_qs.filter(winning_price__isnull=False).select_related("user", "winner")
         lots = add_price_info(lots)
         for lot in lots:
-            lot_number = lot.custom_lot_number or lot.lot_number
             writer.writerow(
                 [
-                    lot_number,
+                    lot.lot_number_display,
                     lot.lot_name,
                     lot.auctiontos_seller.name,
                     lot.auctiontos_seller.email,
@@ -2026,6 +2025,11 @@ class AuctionLots(SingleTableMixin, FilterView, AuctionPermissionsMixin):
         # context['filter'] = LotAdminFilter(auction = self.auction)
         return context
 
+    def get_table_kwargs(self, **kwargs):
+        kwargs = super().get_table_kwargs(**kwargs)
+        kwargs["auction"] = self.auction
+        return kwargs
+
 
 class AuctionHelp(AdminEmailMixin, TemplateView, AuctionPermissionsMixin):
     template_name = "auction_help.html"
@@ -2283,8 +2287,7 @@ class AuctionStats(DetailView, AuctionPermissionsMixin):
 
 
 class DynamicSetLotWinner(AuctionViewMixin, TemplateView):
-    """A form to set lot winners.  Totally async with no page loads, just POST.
-    Eventually this will be the only way to set winners in an in-person auction"""
+    """A form to set lot winners.  Totally async with no page loads, just POST"""
 
     template_name = "auctions/dynamic_set_lot_winner.html"
 
@@ -2302,8 +2305,18 @@ class DynamicSetLotWinner(AuctionViewMixin, TemplateView):
         if not lot and action != "validate":
             error = "Enter a lot number"
         else:
-            result_lot = self.auction.lots_qs.filter(custom_lot_number=lot).first()
-            if not result_lot and lot:
+            # this next line makes it so you cannot search by custom_lot_number in a use_seller_dash_lot_numbering auction
+            # if custom lot numbers are ever reenabled, change this
+            if self.auction.use_seller_dash_lot_numbering:
+                result_lot_qs = self.auction.lots_qs.filter(custom_lot_number=lot)
+            else:
+                result_lot_qs = self.auction.lots_qs.filter(lot_number_int=lot)
+            # This can happen if two people are submitting lots at the exact same millisecond.  It seems very unlikely but an easy enough edge case to catch.
+            if result_lot_qs.count() > 1:
+                error = "Multiple lots with this lot number.  Go to the lot's page and set the winner there."
+            else:
+                result_lot = result_lot_qs.first()
+            if not result_lot and lot and not error:
                 error = "No lot found"
         if (
             result_lot
@@ -2353,7 +2366,7 @@ class DynamicSetLotWinner(AuctionViewMixin, TemplateView):
         lot.winning_price = None
         lot.active = False
         lot.save()
-        message = f"{self.request.user} has marked lot {lot.custom_lot_number} as not sold"
+        message = f"{self.request.user} has marked lot {lot.lot_number_display} as not sold"
         LotHistory.objects.create(
             lot=lot,
             user=self.request.user,
@@ -2379,7 +2392,7 @@ class DynamicSetLotWinner(AuctionViewMixin, TemplateView):
         lot.active = False
         lot.save()
         lot.add_winner_message(self.request.user, winning_tos, winning_price)
-        return f"Bidder {winning_tos.bidder_number} is now the winner of lot {lot.custom_lot_number}"
+        return f"Bidder {winning_tos.bidder_number} is now the winner of lot {lot.lot_number_display}"
 
     def post(self, request, *args, **kwargs):
         """All lot validation checks called from here"""
@@ -2399,14 +2412,14 @@ class DynamicSetLotWinner(AuctionViewMixin, TemplateView):
         lot, lot_error = self.validate_lot(lot, action)
         if lot and not lot_error and action == "to_online_high_bidder":
             result["success_message"] = lot.sell_to_online_high_bidder
-            result["last_sold_lot_number"] = lot.custom_lot_number
+            result["last_sold_lot_number"] = lot.lot_number_display
             lot.add_winner_message(self.request.user, lot.auctiontos_winner, lot.winning_price)
             return JsonResponse(result)
         price, price_error = self.validate_price(price, action)
         winner, winner_error = self.validate_winner(winner, action)
         if lot and not lot_error and action == "end_unsold":
             result["success_message"] = self.end_unsold(lot)
-            result["last_sold_lot_number"] = lot.custom_lot_number
+            result["last_sold_lot_number"] = lot.lot_number_display
             return JsonResponse(result)
         if (
             not price_error
@@ -2427,7 +2440,7 @@ class DynamicSetLotWinner(AuctionViewMixin, TemplateView):
         # I think this makes more sense:
         if not lot_error and not price_error and not winner_error:
             if action != "validate":
-                result["last_sold_lot_number"] = lot.custom_lot_number
+                result["last_sold_lot_number"] = lot.lot_number_display
             if action == "force_save" or action == "save":
                 result["success_message"] = self.set_winner(lot, winner, price)
         if lot and (action == "validate" or not result["success_message"]) and lot.high_bidder:
@@ -2449,12 +2462,15 @@ class AuctionUnsellLot(AuctionViewMixin, View):
     def post(self, request, *args, **kwargs):
         undo_lot = request.POST.get("lot_number", None)
         if undo_lot:
-            undo_lot = Lot.objects.filter(custom_lot_number=undo_lot, auction=self.auction).first()
+            if self.auction.use_seller_dash_lot_numbering:
+                undo_lot = self.auction.lots_qs.filter(custom_lot_number=undo_lot).first()
+            else:
+                undo_lot = self.auction.lots_qs.filter(lot_number_int=undo_lot).first()
         if undo_lot:
             result = {
                 "hide_undo_button": "true",
                 "last_sold_lot_number": "",
-                "success_message": f"{undo_lot.custom_lot_number} {undo_lot.lot_name} now has no winner and can be sold",
+                "success_message": f"{undo_lot.lot_number_display} {undo_lot.lot_name} now has no winner and can be sold",
             }
             undo_lot.winner = None
             undo_lot.auctiontos_winner = None
@@ -2724,7 +2740,7 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
             form_kwargs={
                 "tos": self.tos,
                 "auction": self.auction,
-                "custom_lot_numbers_used": [],
+                # "custom_lot_numbers_used": [],
                 "is_admin": self.is_admin,
             },
             queryset=self.queryset,
@@ -2741,7 +2757,7 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
             form_kwargs={
                 "tos": self.tos,
                 "auction": self.auction,
-                "custom_lot_numbers_used": [],
+                # "custom_lot_numbers_used": [],
                 "is_admin": self.is_admin,
             },
             queryset=self.queryset,
@@ -2759,7 +2775,7 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
                     lot.added_by = self.request.user
                     if not self.is_admin:
                         # you are adding lots for yourself, set custom lot number automatically
-                        lot.custom_lot_number = None
+                        # lot.custom_lot_number = None
                         # we need to set lot.user here
                         if self.tos.user:
                             lot.user = self.tos.user
@@ -2844,7 +2860,7 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
             Lot,
             extra=extra,
             fields=(
-                "custom_lot_number",
+                # "custom_lot_number",
                 "lot_name",
                 "summernote_description",
                 "species_category",
@@ -2901,10 +2917,22 @@ class ViewLot(DetailView):
         else:
             # we are probably here form the auction/custom lot number route
             qs = qs.filter(
-                auction__isnull=False,
-                auction__slug=self.auction_slug,
-                custom_lot_number__isnull=False,
-                custom_lot_number=self.custom_lot_number,
+                Q(
+                    # legacy lot numbers in auctions
+                    auction__isnull=False,
+                    auction__slug=self.auction_slug,
+                    auction__use_seller_dash_lot_numbering=True,
+                    custom_lot_number__isnull=False,
+                    custom_lot_number=self.custom_lot_number,
+                )
+                | Q(
+                    # autogenerated int lot numbers in auctions
+                    auction__isnull=False,
+                    auction__slug=self.auction_slug,
+                    auction__use_seller_dash_lot_numbering=False,
+                    lot_number_int__isnull=False,
+                    lot_number_int=self.custom_lot_number,
+                )
             )
         return qs
 
@@ -3882,6 +3910,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
         run_duration = timezone.timedelta(days=7)  # only set for is_online
         online_bidding_start_diff = timezone.timedelta(days=7)
         online_bidding_end_diff = timezone.timedelta(minutes=0)
+        lot_submission_end_date_diff = timezone.timedelta(minutes=0)
         if clone_from_auction:
             fields_to_clone = [
                 "is_online",
@@ -3930,6 +3959,8 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 online_bidding_start_diff = original_auction.date_start - original_auction.date_online_bidding_starts
             if original_auction.date_online_bidding_ends:
                 online_bidding_end_diff = original_auction.date_start - original_auction.date_online_bidding_ends
+            if original_auction.lot_submission_end_date:
+                lot_submission_end_date_diff = original_auction.date_start - original_auction.lot_submission_end_date
             auction.cloned_from = original_auction
         else:
             auction.is_online = is_online
@@ -3955,7 +3986,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
         else:
             auction.date_end = None
             if not auction.lot_submission_end_date:
-                auction.lot_submission_end_date = auction.date_start
+                auction.lot_submission_end_date = auction.date_start - lot_submission_end_date_diff
             if not auction.lot_submission_start_date:
                 auction.lot_submission_start_date = auction.date_start - run_duration
             if not auction.date_online_bidding_starts:
