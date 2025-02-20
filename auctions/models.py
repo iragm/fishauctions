@@ -2169,17 +2169,16 @@ class Lot(models.Model):
     )
 
     def save(self, *args, **kwargs):
-        """
-        For in-person auctions, we'll generate a bidder_number-lot_number format
-        """
+        # for old and new auctions, generate a lot number int
         if self.lot_number_int is None and self.auction:
             minimum_lot_number = 1
             # Get the current maximum lot_number_int for the auction
+            # This is deliberately not excluding deleted and removed lots -- don't use auction.lots_qs here
             max_number = Lot.objects.filter(auction=self.auction).aggregate(Max("lot_number_int"))[
                 "lot_number_int__max"
             ]
             self.lot_number_int = (max_number or (minimum_lot_number - 1)) + 1
-        # custom lot number set for old auctions
+        # custom lot number set for old auctions: bidder_number-lot_number format
         if not self.custom_lot_number and self.auction and self.auction.use_seller_dash_lot_numbering:
             if self.auctiontos_seller:
                 custom_lot_number = 1
