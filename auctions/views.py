@@ -2025,6 +2025,11 @@ class AuctionLots(SingleTableMixin, FilterView, AuctionPermissionsMixin):
         # context['filter'] = LotAdminFilter(auction = self.auction)
         return context
 
+    def get_table_kwargs(self, **kwargs):
+        kwargs = super().get_table_kwargs(**kwargs)
+        kwargs["auction"] = self.auction
+        return kwargs
+
 
 class AuctionHelp(AdminEmailMixin, TemplateView, AuctionPermissionsMixin):
     template_name = "auction_help.html"

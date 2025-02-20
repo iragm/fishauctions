@@ -108,7 +108,7 @@ class LotHTMxTable(tables.Table):
         verbose_name="Price",
         attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
     )
-    lot_number = tables.Column(accessor="lot_number_display", verbose_name="Lot number", orderable=False)
+    lot_number = tables.Column(accessor="lot_number_int", verbose_name="Lot number", orderable=True)
 
     def render_lot_name(self, value, record):
         result = f"""
@@ -164,6 +164,15 @@ class LotHTMxTable(tables.Table):
     #     'hx-trigger':"click",
     #     '_':"on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"
     # }
+    def __init__(self, *args, **kwargs):
+        self.auction = kwargs.pop("auction")
+        if self.auction and self.auction.use_seller_dash_lot_numbering:
+            self.base_columns["lot_number"] = tables.Column(
+                accessor="lot_number_display",
+                verbose_name="Lot number",
+                orderable=False,
+            )
+        super().__init__(*args, **kwargs)
 
 
 class AuctionHTMxTable(tables.Table):
