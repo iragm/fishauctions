@@ -449,7 +449,7 @@ class MultiAuctionTOSPrintLabelForm(forms.Form):
     print_only_unprinted = forms.BooleanField(
         required=False,
         initial=True,
-        label="Print only unprinted labels",
+        label="Only print labels that haven't been printed yet",
         help_text="Uncheck if you hate trees",
     )
 
