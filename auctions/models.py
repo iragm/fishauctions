@@ -2194,9 +2194,8 @@ class Lot(models.Model):
                 self.custom_lot_number = f"{self.auctiontos_seller.bidder_number}-{custom_lot_number}"[:9]
         # a bit of magic to automatically set categories
         fix_category = False
-        if self.species_category:
-            if self.species_category.pk == 21:
-                fix_category = True
+        if not self.species_category or (self.species_category and self.species_category.pk == 21):
+            fix_category = True
         if not self.species_category:
             fix_category = True
         if self.category_checked:
@@ -2204,7 +2203,10 @@ class Lot(models.Model):
         if fix_category:
             self.category_checked = True
             if self.auction:
-                if self.auction.use_categories:
+                if not self.auction.use_categories:
+                    # force uncategorized for non-fish auctions
+                    self.species_category = Category.objects.filter(pk=21).first()
+                else:
                     result = guess_category(self.lot_name)
                     if result:
                         self.species_category = result
