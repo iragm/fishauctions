@@ -1,6 +1,7 @@
 import ast
 import csv
 import logging
+import math
 import re
 from collections import Counter
 from datetime import datetime, timedelta
@@ -2951,7 +2952,7 @@ class ViewLot(DetailView):
                 ):
                     messages.info(
                         self.request,
-                        f"Bid on (and win) any lot in the {lot.auction} and get ${lot.auction.first_bid_payout} back!",
+                        f"Bid on (and win) any lot in {lot.auction} and get ${lot.auction.first_bid_payout} back!",
                     )
         try:
             defaultBidAmount = Bid.objects.get(user=self.request.user, lot_number=lot.pk, is_deleted=False).amount
@@ -2971,10 +2972,10 @@ class ViewLot(DetailView):
             if not lot.high_bidder:
                 defaultBidAmount = lot.reserve_price
             else:
-                if defaultBidAmount > lot.high_bid:
+                if defaultBidAmount > lot.high_bid + max(math.floor(lot.high_bid * 0.05), 1):
                     pass
                 else:
-                    defaultBidAmount = lot.high_bid + 1
+                    defaultBidAmount = lot.high_bid + max(math.floor(lot.high_bid * 0.05), 1)
         context["viewer_pk"] = self.request.user.pk
         try:
             context["submitter_pk"] = lot.user.pk

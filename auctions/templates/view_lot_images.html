@@ -43,6 +43,11 @@ function deactivate_lot() {
     }
 </style>
 <script type="text/javascript">
+    function next_bid(amount) {
+        console.log(amount);
+        console.log(amount * 0.05 | 0);
+        return amount + ((amount * 0.05 | 0) || 1);
+    }
     var removeDot;
     var originalTitle = "";
     window.onload = function() {
@@ -490,7 +495,7 @@ function deactivate_lot() {
                                                 $('#your_bid').html('Your max bid is $<span id="your_bid_price">' + bid + "</span>");
                                             }
                                             if (bid > price) {
-                                                $('#bid_amount').val(bid + 1);
+                                                $('#bid_amount').val(next_bid(price));
                                             }
                                             $('#confirmBid').modal('hide');
                                             $('#confirmDialogText').html("Enter an amount");
@@ -668,11 +673,10 @@ function deactivate_lot() {
                 $(document).prop('title', '🔴$' + data.current_high_bid + ": " + originalTitle);
                 clearTimeout(removeDot);
                 var removeDot = setTimeout(function(){$(document).prop('title', '$' + data.current_high_bid + ": " + originalTitle);}, 500);
-                //$("#bid_amount").val(data.current_high_bid + 1);
                 if (!$("#bid_amount").is(":focus")) {
                     if (data.info !== "INFO") {
                         if (Number($("#bid_amount").val()) <= data.current_high_bid) {
-                            $("#bid_amount").val(data.current_high_bid + 1);
+                            $("#bid_amount").val(next_bid(data.current_high_bid));
                         }
                     }
                 }
