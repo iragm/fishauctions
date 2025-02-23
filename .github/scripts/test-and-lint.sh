@@ -36,11 +36,14 @@ process_args() {
               ;;
           --lint-check | -L) RUFF_MODE='check'
               ;;
+          --verbose) VERBOSE='true'
+              ;;
           --help | -h) usage;
               exit 0
               ;;
-          *) usage;
-              exit 1;
+          *) echo "Unknown argument: $1" >&2
+             usage
+             exit 1
               ;;
       esac
       shift
