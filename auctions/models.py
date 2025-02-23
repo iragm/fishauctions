@@ -1118,7 +1118,7 @@ class Auction(models.Model):
     def template_lot_link(self):
         """Not directly used in templates, use template_lot_link_first_column and template_lot_link_separate_column instead"""
         if timezone.now() > self.lot_submission_start_date:
-            result = f"<a href='{ self.view_lot_link }'>View lots</a>"
+            result = f"<a href='{self.view_lot_link}'>View lots</a>"
         else:
             result = "<small class='text-muted'>Lots not yet open</small>"
         return result
@@ -2490,7 +2490,7 @@ class Lot(models.Model):
             and self.auction.online_bidding == "allow"
         ):
             return mark_safe(f"""<a href='javascript:void(0);'
-                hx-get="{reverse('auction_show_high_bidder', kwargs={'pk':self.pk})}"
+                hx-get="{reverse("auction_show_high_bidder", kwargs={"pk": self.pk})}"
                 hx-swap="outerHTML"
                 hx-trigger="click"
             >

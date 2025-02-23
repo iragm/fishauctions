@@ -1042,7 +1042,7 @@ class AuctionNoShowForm(forms.Form):
     def __init__(self, auction, tos, *args, **kwargs):
         self.auction = auction
         self.tos = tos
-        submit_button_html = f'<button hx-post="{reverse("auction_no_show_dialog", kwargs={"slug":self.auction.slug, "tos":self.tos.bidder_number})}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Take actions</button>'
+        submit_button_html = f'<button hx-post="{reverse("auction_no_show_dialog", kwargs={"slug": self.auction.slug, "tos": self.tos.bidder_number})}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Take actions</button>'
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "post"
@@ -1111,7 +1111,7 @@ class ChangeInvoiceStatusForm(forms.Form):
         submit_button_html = ""
         self.show_checkbox = show_checkbox
         if self.invoice_count:
-            submit_button_html = f'<button hx-post="{reverse("auction_invoices_ready", kwargs={"slug":self.auction.slug})}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Change invoices</button>'
+            submit_button_html = f'<button hx-post="{reverse("auction_invoices_ready", kwargs={"slug": self.auction.slug})}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Change invoices</button>'
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "post"
@@ -1168,7 +1168,7 @@ class LotRefundForm(forms.ModelForm):
             self.fields["partial_refund_percent"].widget = HiddenInput()
         else:
             self.fields["banned"].widget = HiddenInput()
-        save_button_html = f'<button hx-post="{reverse("lot_refund", kwargs={"pk":self.lot.pk})}" hx-target="#modals-here" type="submit" class="btn bg-success float-right ms-2">Save</button>'
+        save_button_html = f'<button hx-post="{reverse("lot_refund", kwargs={"pk": self.lot.pk})}" hx-target="#modals-here" type="submit" class="btn bg-success float-right ms-2">Save</button>'
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_class = "form"
