@@ -6030,10 +6030,9 @@ class AuctionStatsBarChartJSONView(BaseColumnsHighChartsView, AuctionPermissions
 
     def get_dataset_options(self, index, color):
         default_opt = {
-            "backgroundColor": "rgba(%d, %d, %d, 0.5)" % color,
-            "borderColor": "rgba(%d, %d, %d, 1)" % color,
-            "pointBackgroundColor": "rgba(%d, %d, %d, 1)" % color,
-            "pointBorderColor": "#fff",
+            "backgroundColor": f"rgba({color[0]}, {color[1]}, {color[2]}, 0.5)",
+            "borderColor": f"rgba({color[0]}, {color[1]}, {color[2]}, 1)",
+            "pointBackgroundColor": f"rgba({color[0]}, {color[1]}, {color[2]}, 1)",
         }
         return default_opt
 
