@@ -2,6 +2,7 @@
 import datetime
 import json
 import logging
+import math
 
 from asgiref.sync import async_to_sync
 from channels.generic.websocket import WebsocketConsumer
@@ -148,7 +149,7 @@ def bid_on_lot(lot, user, amount):
                 result["message"] = "This auction does not allow bids, you can only buy this lot now."
                 return result
         originalHighBidder = lot.high_bidder
-        originalBid = lot.high_bid
+        original_bid = lot.high_bid
         bid, created = Bid.objects.get_or_create(
             user=user,
             lot_number=lot,
@@ -189,17 +190,17 @@ def bid_on_lot(lot, user, amount):
         else:
             if not created:
                 if amount <= bid.amount:
-                    result["message"] = f"Bid more than your proxy bid (${bid.amount})"
+                    result["message"] = f"Bid more than your current bid (${bid.amount})"
                     logger.debug(
-                        "%s tried to bid on %s less than their original bid of $%s", user_string, lot, originalBid
+                        "%s tried to bid on %s less than their original bid of $%s", user_string, lot, original_bid
                     )
                     return result
                 else:
                     bid.last_bid_time = timezone.now()
                     bid.amount = amount
                     # bid.amount now contains the actual bid, regardless of whether it was new or not
-                    bid.save()
-            # from here on, lot.high_bidder and lot.high_bid will include the current bid
+                    # bid.save()
+            # no longer true: from here on, lot.high_bidder and lot.high_bid will include the current bid
             if lot.buy_now_price and not originalHighBidder:
                 if bid.amount >= lot.buy_now_price:
                     lot.winner = user
@@ -256,13 +257,16 @@ def bid_on_lot(lot, user, amount):
                 bid.last_bid_time = timezone.now()
                 bid.save()
                 return result
-            if bid.amount <= originalBid:  # changing this to < would allow bumping without being the high bidder
+            # bid increments - also set in views.py and in view_lot_images.html
+            next_allowed_amount = original_bid + max(math.floor(original_bid * 0.05), 1)
+            # if bid.amount <= original_bid:  # changing this to < would allow bumping without being the high bidder
+            if bid.amount < next_allowed_amount:
                 # there's a high bidder already
-                bid.save()  # save the current bid regardless
-                logger.debug("%s tried to bid on %s less than the current bid of $%s", user_string, lot, originalBid)
-                result["message"] = f"You can't bid less than ${originalBid + 1}"
+                logger.debug("%s tried to bid on %s less than the current bid of $%s", user_string, lot, original_bid)
+                result["message"] = f"You have to bid at least ${next_allowed_amount}"
                 return result
-            if bid.amount > originalBid + 1:
+            if bid.amount > next_allowed_amount:
+                bid.save()
                 userData, userdataCreated = UserData.objects.get_or_create(
                     user=user,
                     defaults={},

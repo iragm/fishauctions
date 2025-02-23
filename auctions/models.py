@@ -1118,7 +1118,7 @@ class Auction(models.Model):
     def template_lot_link(self):
         """Not directly used in templates, use template_lot_link_first_column and template_lot_link_separate_column instead"""
         if timezone.now() > self.lot_submission_start_date:
-            result = f"<a href='{ self.view_lot_link }'>View lots</a>"
+            result = f"<a href='{self.view_lot_link}'>View lots</a>"
         else:
             result = "<small class='text-muted'>Lots not yet open</small>"
         return result
@@ -2194,9 +2194,8 @@ class Lot(models.Model):
                 self.custom_lot_number = f"{self.auctiontos_seller.bidder_number}-{custom_lot_number}"[:9]
         # a bit of magic to automatically set categories
         fix_category = False
-        if self.species_category:
-            if self.species_category.pk == 21:
-                fix_category = True
+        if not self.species_category or (self.species_category and self.species_category.pk == 21):
+            fix_category = True
         if not self.species_category:
             fix_category = True
         if self.category_checked:
@@ -2204,7 +2203,10 @@ class Lot(models.Model):
         if fix_category:
             self.category_checked = True
             if self.auction:
-                if self.auction.use_categories:
+                if not self.auction.use_categories:
+                    # force uncategorized for non-fish auctions
+                    self.species_category = Category.objects.filter(pk=21).first()
+                else:
                     result = guess_category(self.lot_name)
                     if result:
                         self.species_category = result
@@ -2488,7 +2490,7 @@ class Lot(models.Model):
             and self.auction.online_bidding == "allow"
         ):
             return mark_safe(f"""<a href='javascript:void(0);'
-                hx-get="{reverse('auction_show_high_bidder', kwargs={'pk':self.pk})}"
+                hx-get="{reverse("auction_show_high_bidder", kwargs={"pk": self.pk})}"
                 hx-swap="outerHTML"
                 hx-trigger="click"
             >

@@ -83,6 +83,7 @@ urlpatterns = [
     path("clubs/", views.ClubMap.as_view(), name="clubs"),
     path("usermap/", views.UserMap.as_view(), name="admin_user_map"),
     path("dashboard/", views.AdminDashboard.as_view(), name="admin_dashboard"),
+    path("error/", views.AdminErrorPage.as_view(), name="admin_error"),
     path("tos/", views.UserAgreement.as_view(), name="tos"),
     path(
         "robots.txt",

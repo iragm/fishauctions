@@ -145,7 +145,7 @@ class QuickAddLot(forms.ModelForm):
         # self.custom_lot_numbers_used = kwargs.pop("custom_lot_numbers_used")
         self.is_admin = kwargs.pop("is_admin")
         self.tos = kwargs.pop("tos")
-        self.lot_count = 0
+        self.new_lot_count = 0
         # we need to work around the case where a user enters duplicate custom lot numbers
         super().__init__(*args, **kwargs)
         # self.fields["custom_lot_number"].help_text = ""
@@ -214,7 +214,7 @@ class QuickAddLot(forms.ModelForm):
                 existing_lots = existing_lots.exclude(donation=True)
             if not cleaned_data.get("lot_number"):
                 # new lots only
-                total_lots = existing_lots.count() + self.lot_count
+                total_lots = existing_lots.count() + self.new_lot_count
                 if total_lots > self.auction.max_lots_per_user:
                     if self.auction.allow_additional_lots_as_donation:
                         if not cleaned_data.get("donation"):
@@ -224,9 +224,26 @@ class QuickAddLot(forms.ModelForm):
                 # increment counter of unsaved lots
                 if self.auction.allow_additional_lots_as_donation:
                     if not cleaned_data.get("donation"):
-                        self.lot_count += 1
+                        self.new_lot_count += 1
                 else:
-                    self.lot_count += 1
+                    self.new_lot_count += 1
+            else:
+                is_saved = Lot.objects.filter(pk=cleaned_data.get("lot_number").pk, donation=True).first()
+                if is_saved and self.auction.allow_additional_lots_as_donation and not cleaned_data.get("donation"):
+                    lot_count = (
+                        Lot.objects.exclude(is_deleted=True)
+                        .filter(
+                            auctiontos_seller=self.tos,
+                            donation=False,
+                            banned=False,
+                        )  # .exclude(pk=cleaned_data.get("lot_number").pk)
+                        .count()
+                    )
+                    if lot_count >= self.auction.max_lots_per_user:
+                        self.add_error(
+                            "donation",
+                            "This needs to be a donation due to the max lots per user allowed in this auction",
+                        )
         return cleaned_data
 
 
@@ -449,7 +466,7 @@ class MultiAuctionTOSPrintLabelForm(forms.Form):
     print_only_unprinted = forms.BooleanField(
         required=False,
         initial=True,
-        label="Print only unprinted labels",
+        label="Only print labels that haven't been printed yet",
         help_text="Uncheck if you hate trees",
     )
 
@@ -1025,7 +1042,7 @@ class AuctionNoShowForm(forms.Form):
     def __init__(self, auction, tos, *args, **kwargs):
         self.auction = auction
         self.tos = tos
-        submit_button_html = f'<button hx-post="{reverse("auction_no_show_dialog", kwargs={"slug":self.auction.slug, "tos":self.tos.bidder_number})}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Take actions</button>'
+        submit_button_html = f'<button hx-post="{reverse("auction_no_show_dialog", kwargs={"slug": self.auction.slug, "tos": self.tos.bidder_number})}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Take actions</button>'
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "post"
@@ -1094,7 +1111,7 @@ class ChangeInvoiceStatusForm(forms.Form):
         submit_button_html = ""
         self.show_checkbox = show_checkbox
         if self.invoice_count:
-            submit_button_html = f'<button hx-post="{reverse("auction_invoices_ready", kwargs={"slug":self.auction.slug})}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Change invoices</button>'
+            submit_button_html = f'<button hx-post="{reverse("auction_invoices_ready", kwargs={"slug": self.auction.slug})}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Change invoices</button>'
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "post"
@@ -1151,7 +1168,7 @@ class LotRefundForm(forms.ModelForm):
             self.fields["partial_refund_percent"].widget = HiddenInput()
         else:
             self.fields["banned"].widget = HiddenInput()
-        save_button_html = f'<button hx-post="{reverse("lot_refund", kwargs={"pk":self.lot.pk})}" hx-target="#modals-here" type="submit" class="btn bg-success float-right ms-2">Save</button>'
+        save_button_html = f'<button hx-post="{reverse("lot_refund", kwargs={"pk": self.lot.pk})}" hx-target="#modals-here" type="submit" class="btn bg-success float-right ms-2">Save</button>'
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_class = "form"
@@ -2254,6 +2271,24 @@ class CreateLotForm(forms.ModelForm):
                                 "auction",
                                 f"You can't add more lots to this auction (Limit: {auction.max_lots_per_user})",
                             )
+            else:
+                # that special case when someone is editing a lot to get around the limit
+                is_saved = Lot.objects.filter(pk=self.instance.pk, donation=True).first()
+                if is_saved and auction.allow_additional_lots_as_donation and not cleaned_data.get("donation"):
+                    lot_count = (
+                        Lot.objects.exclude(is_deleted=True)
+                        .filter(
+                            user=self.user,
+                            donation=False,
+                            banned=False,
+                        )
+                        .count()
+                    )
+                    if lot_count >= auction.max_lots_per_user:
+                        self.add_error(
+                            "donation",
+                            "This needs to be a donation due to the max lots per user allowed in this auction",
+                        )
 
         # check to see if this lot exists already
         # this code is no longer needed since we disable the submit button on click; if there start being problems with duplicate lots, I'll uncomment the below

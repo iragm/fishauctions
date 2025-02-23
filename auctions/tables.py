@@ -119,18 +119,18 @@ class LotHTMxTable(tables.Table):
 					<div><a href='{record.lot_link}?src=admin'><i class="bi bi-calendar ms-1 me-1"></i>Lot page</a></div>
 		"""
         if not record.image_count:
-            result += f"""<a href="{reverse("add_image", kwargs={"lot": record.pk})}?next={reverse("auction_lot_list", kwargs={"slug":record.auction.slug})}"<i class="bi bi-file-image ms-1 me-1"></i>Add image</a>"""
-        result += f"""<div><a href='#' hx-get="{reverse('lot_refund', kwargs={'pk':record.pk})}",
+            result += f"""<a href="{reverse("add_image", kwargs={"lot": record.pk})}?next={reverse("auction_lot_list", kwargs={"slug": record.auction.slug})}"<i class="bi bi-file-image ms-1 me-1"></i>Add image</a>"""
+        result += f"""<div><a href='#' hx-get="{reverse("lot_refund", kwargs={"pk": record.pk})}",
                 hx-target="#modals-here",
                 hx-trigger="click",
                 _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"><i class="bi bi-calendar-x ms-1 me-1"></i>Remove or refund</a></div>
                 <div><a class="" href="{reverse("single_lot_label", kwargs={"pk": record.pk})}"><i class="bi bi-tag ms-1 me-1"></i>{"Reprint label" if record.label_printed else "Print label"}</a></div>
-                <div><a href="{ record.seller_invoice_link }"><i class="bi bi-bag-fill ms-1 me-1"></i>Seller's invoice</a></div>
+                <div><a href="{record.seller_invoice_link}"><i class="bi bi-bag-fill ms-1 me-1"></i>Seller's invoice</a></div>
 
         """
         if record.winner_invoice_link:
             result += f"""
-            <div><a href="{ record.winner_invoice_link }"><i class="bi bi-bag ms-1 me-1"></i>Winner's invoice</a></div>
+            <div><a href="{record.winner_invoice_link}"><i class="bi bi-bag ms-1 me-1"></i>Winner's invoice</a></div>
 			"""
         result += "</div>"
         if record.banned:

@@ -1,6 +1,7 @@
 import ast
 import csv
 import logging
+import math
 import re
 from collections import Counter
 from datetime import datetime, timedelta
@@ -703,11 +704,11 @@ class MyLots(SingleTableMixin, FilterView):
     def get(self, *args, **kwargs):
         if not self.request.htmx:
             if self.request.user.userdata.unnotified_subscriptions_count:
-                msg = f"You've got { self.request.user.userdata.unnotified_subscriptions_count } lot"
+                msg = f"You've got {self.request.user.userdata.unnotified_subscriptions_count} lot"
                 if self.request.user.userdata.unnotified_subscriptions_count > 1:
                     msg += "s"
                 msg += (
-                    f""" with new messages.  <a href="{reverse('messages')}">Go to your messages page to see them</a>"""
+                    f""" with new messages.  <a href="{reverse("messages")}">Go to your messages page to see them</a>"""
                 )
                 messages.info(self.request, msg)
         return super().get(*args, **kwargs)
@@ -1315,7 +1316,7 @@ def my_won_lot_csv(request):
     current_site = Site.objects.get_current()
     response = HttpResponse(content_type="text/csv")
     response["Content-Disposition"] = (
-        f'attachment; filename="my_won_lots_from_{current_site.domain.replace(".","_")}.csv"'
+        f'attachment; filename="my_won_lots_from_{current_site.domain.replace(".", "_")}.csv"'
     )
     writer = csv.writer(response)
     writer.writerow(["Lot number", "Name", "Auction", "Winning price", "Link"])
@@ -1342,7 +1343,7 @@ def my_lot_report(request):
     )
     current_site = Site.objects.get_current()
     response = HttpResponse(content_type="text/csv")
-    response["Content-Disposition"] = f'attachment; filename="my_lots_from_{current_site.domain.replace(".","_")}.csv"'
+    response["Content-Disposition"] = f'attachment; filename="my_lots_from_{current_site.domain.replace(".", "_")}.csv"'
     writer = csv.writer(response)
     writer.writerow(["Lot number", "Name", "Auction", "Status", "Winning price", "My cut"])
     for lot in lots:
@@ -1975,21 +1976,21 @@ class AuctionUpdate(UpdateView, AuctionPermissionsMixin):
         elif not self.get_object().is_online and self.get_object().online_bidding != "disable":
             messages.info(
                 self.request,
-                f"This auction allows online bidding -- make sure to <a href='{reverse('auction_help', kwargs={'slug':self.get_object().slug})}'>watch the tutorial in the help</a> to see how this works",
+                f"This auction allows online bidding -- make sure to <a href='{reverse('auction_help', kwargs={'slug': self.get_object().slug})}'>watch the tutorial in the help</a> to see how this works",
             )
         if (
             self.get_object().buy_now == "allow" or self.get_object().buy_now == "required"
         ) and "buy_now_label" not in self.get_object().label_print_fields:
             messages.info(
                 self.request,
-                f"Buy now is enabled, but labels are not set to print a buy now price. <a href='{reverse('auction_label_config', kwargs={'slug':self.get_object().slug})}'>You should enable printing buy now on labels here.</a>",
+                f"Buy now is enabled, but labels are not set to print a buy now price. <a href='{reverse('auction_label_config', kwargs={'slug': self.get_object().slug})}'>You should enable printing buy now on labels here.</a>",
             )
         if (
             self.get_object().reserve_price == "allow" or self.get_object().reserve_price == "required"
         ) and "min_bid_label" not in self.get_object().label_print_fields:
             messages.info(
                 self.request,
-                f"Minimum bid is enabled, but labels are not set to print a minimum bid. <a href='{reverse('auction_label_config', kwargs={'slug':self.get_object().slug})}'>You should enable printing minimum bids on labels here.</a>",
+                f"Minimum bid is enabled, but labels are not set to print a minimum bid. <a href='{reverse('auction_label_config', kwargs={'slug': self.get_object().slug})}'>You should enable printing minimum bids on labels here.</a>",
             )
         return form
 
@@ -2916,16 +2917,17 @@ class ViewLot(DetailView):
             qs = qs.filter(pk=pk)
         else:
             # we are probably here form the auction/custom lot number route
-            qs = qs.filter(
-                Q(
-                    # legacy lot numbers in auctions
-                    auction__isnull=False,
-                    auction__slug=self.auction_slug,
-                    auction__use_seller_dash_lot_numbering=True,
-                    custom_lot_number__isnull=False,
-                    custom_lot_number=self.custom_lot_number,
-                )
-                | Q(
+            filters = Q(
+                # legacy lot numbers in auctions
+                auction__isnull=False,
+                auction__slug=self.auction_slug,
+                auction__use_seller_dash_lot_numbering=True,
+                custom_lot_number__isnull=False,
+                custom_lot_number=self.custom_lot_number,
+            )
+
+            if self.custom_lot_number.isnumeric():
+                filters |= Q(
                     # autogenerated int lot numbers in auctions
                     auction__isnull=False,
                     auction__slug=self.auction_slug,
@@ -2933,7 +2935,8 @@ class ViewLot(DetailView):
                     lot_number_int__isnull=False,
                     lot_number_int=self.custom_lot_number,
                 )
-            )
+
+            qs = qs.filter(filters)
         return qs
 
     def get_context_data(self, **kwargs):
@@ -2949,7 +2952,7 @@ class ViewLot(DetailView):
                 ):
                     messages.info(
                         self.request,
-                        f"Bid on (and win) any lot in the {lot.auction} and get ${lot.auction.first_bid_payout} back!",
+                        f"Bid on (and win) any lot in {lot.auction} and get ${lot.auction.first_bid_payout} back!",
                     )
         try:
             defaultBidAmount = Bid.objects.get(user=self.request.user, lot_number=lot.pk, is_deleted=False).amount
@@ -2969,10 +2972,10 @@ class ViewLot(DetailView):
             if not lot.high_bidder:
                 defaultBidAmount = lot.reserve_price
             else:
-                if defaultBidAmount > lot.high_bid:
+                if defaultBidAmount > lot.high_bid + max(math.floor(lot.high_bid * 0.05), 1):
                     pass
                 else:
-                    defaultBidAmount = lot.high_bid + 1
+                    defaultBidAmount = lot.high_bid + max(math.floor(lot.high_bid * 0.05), 1)
         context["viewer_pk"] = self.request.user.pk
         try:
             context["submitter_pk"] = lot.user.pk
@@ -3016,7 +3019,7 @@ class ViewLot(DetailView):
             if lot.auction.online_bidding != "disable":
                 messages.info(
                     self.request,
-                    f"Please <a href='/auctions/{lot.auction.slug}/?next=/lots/{ lot.pk }/'>read the auction's rules and join the auction</a> to bid",
+                    f"Please <a href='/auctions/{lot.auction.slug}/?next=/lots/{lot.pk}/'>read the auction's rules and join the auction</a> to bid",
                 )
         if self.request.user.is_authenticated:
             userData, created = UserData.objects.get_or_create(
@@ -5407,6 +5410,19 @@ class LotChartView(View):
         return redirect("/")
 
 
+class AdminErrorPage(TemplateView):
+    """A sanity check to make sure the 500 error emails are working as they should be"""
+
+    template_name = "dashboard.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        if not (request.user.is_superuser):
+            messages.error(request, "Only admins can break the website")
+            return redirect("/")
+        1 / 0
+        return super().dispatch(request, *args, **kwargs)
+
+
 class AdminDashboard(TemplateView):
     """Provides an at-a-glance view of some interesting stats"""
 
@@ -5869,7 +5885,7 @@ class AuctionStatsActivityJSONView(BaseLineChartView, AuctionStatsPermissionsMix
 
     def get_labels(self):
         if self.dates_messed_with:
-            return [(f"{i-1} days ago") for i in range(self.bins, 0, -1)]
+            return [(f"{i - 1} days ago") for i in range(self.bins, 0, -1)]
         before = [(f"{i} days before") for i in range(self.days_before, 0, -1)]
         after = [(f"{i} days after") for i in range(1, self.days_after)]
         midpoint = "start"
@@ -6014,10 +6030,9 @@ class AuctionStatsBarChartJSONView(BaseColumnsHighChartsView, AuctionPermissions
 
     def get_dataset_options(self, index, color):
         default_opt = {
-            "backgroundColor": "rgba(%d, %d, %d, 0.5)" % color,
-            "borderColor": "rgba(%d, %d, %d, 1)" % color,
-            "pointBackgroundColor": "rgba(%d, %d, %d, 1)" % color,
-            "pointBorderColor": "#fff",
+            "backgroundColor": f"rgba({color[0]}, {color[1]}, {color[2]}, 0.5)",
+            "borderColor": f"rgba({color[0]}, {color[1]}, {color[2]}, 1)",
+            "pointBackgroundColor": f"rgba({color[0]}, {color[1]}, {color[2]}, 1)",
         }
         return default_opt
 
