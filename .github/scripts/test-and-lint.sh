@@ -1,4 +1,5 @@
 #! /usr/bin/env bash
+echo "running with args $@"
 set -euo pipefail
 
 RUFF_MODE=''
