@@ -145,7 +145,7 @@ class QuickAddLot(forms.ModelForm):
         # self.custom_lot_numbers_used = kwargs.pop("custom_lot_numbers_used")
         self.is_admin = kwargs.pop("is_admin")
         self.tos = kwargs.pop("tos")
-        self.lot_count = 0
+        self.new_lot_count = 0
         # we need to work around the case where a user enters duplicate custom lot numbers
         super().__init__(*args, **kwargs)
         # self.fields["custom_lot_number"].help_text = ""
@@ -214,7 +214,7 @@ class QuickAddLot(forms.ModelForm):
                 existing_lots = existing_lots.exclude(donation=True)
             if not cleaned_data.get("lot_number"):
                 # new lots only
-                total_lots = existing_lots.count() + self.lot_count
+                total_lots = existing_lots.count() + self.new_lot_count
                 if total_lots > self.auction.max_lots_per_user:
                     if self.auction.allow_additional_lots_as_donation:
                         if not cleaned_data.get("donation"):
@@ -224,9 +224,26 @@ class QuickAddLot(forms.ModelForm):
                 # increment counter of unsaved lots
                 if self.auction.allow_additional_lots_as_donation:
                     if not cleaned_data.get("donation"):
-                        self.lot_count += 1
+                        self.new_lot_count += 1
                 else:
-                    self.lot_count += 1
+                    self.new_lot_count += 1
+            else:
+                is_saved = Lot.objects.filter(pk=cleaned_data.get("lot_number").pk, donation=True).first()
+                if is_saved and self.auction.allow_additional_lots_as_donation and not cleaned_data.get("donation"):
+                    lot_count = (
+                        Lot.objects.exclude(is_deleted=True)
+                        .filter(
+                            auctiontos_seller=self.tos,
+                            donation=False,
+                            banned=False,
+                        )  # .exclude(pk=cleaned_data.get("lot_number").pk)
+                        .count()
+                    )
+                    if lot_count >= self.auction.max_lots_per_user:
+                        self.add_error(
+                            "donation",
+                            "This needs to be a donation due to the max lots per user allowed in this auction",
+                        )
         return cleaned_data
 
 
@@ -2254,6 +2271,24 @@ class CreateLotForm(forms.ModelForm):
                                 "auction",
                                 f"You can't add more lots to this auction (Limit: {auction.max_lots_per_user})",
                             )
+            else:
+                # that special case when someone is editing a lot to get around the limit
+                is_saved = Lot.objects.filter(pk=self.instance.pk, donation=True).first()
+                if is_saved and auction.allow_additional_lots_as_donation and not cleaned_data.get("donation"):
+                    lot_count = (
+                        Lot.objects.exclude(is_deleted=True)
+                        .filter(
+                            user=self.user,
+                            donation=False,
+                            banned=False,
+                        )
+                        .count()
+                    )
+                    if lot_count >= auction.max_lots_per_user:
+                        self.add_error(
+                            "donation",
+                            "This needs to be a donation due to the max lots per user allowed in this auction",
+                        )
 
         # check to see if this lot exists already
         # this code is no longer needed since we disable the submit button on click; if there start being problems with duplicate lots, I'll uncomment the below
