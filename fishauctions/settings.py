@@ -86,6 +86,7 @@ LOGGING = {
             "backupCount": 5,
             "formatter": "verbose",
         },
+        "mail_admins": {"level": "ERROR", "class": "django.utils.log.AdminEmailHandler"},
         "null": {
             "class": "logging.NullHandler",
         },
@@ -108,6 +109,11 @@ LOGGING = {
         "fontTools": {
             # 'handlers': ["null"],
             "level": "WARNING",
+            "propagate": False,
+        },
+        "django.request": {
+            "handlers": ["mail_admins"],
+            "level": "ERROR",
             "propagate": False,
         },
     },
