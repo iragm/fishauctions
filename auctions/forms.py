@@ -14,6 +14,7 @@ from crispy_forms.layout import HTML, Layout, Submit
 from dal import autocomplete
 from django import forms
 from django.contrib.auth.models import User
+from django.core.exceptions import ValidationError
 from django.forms import (
     HiddenInput,
 )
@@ -22,6 +23,7 @@ from django.utils import timezone
 from django_recaptcha.fields import ReCaptchaField
 from django_recaptcha.widgets import ReCaptchaV2Invisible
 from django_summernote.widgets import SummernoteWidget
+from PIL import Image, UnidentifiedImageError
 
 from .models import (
     Auction,
@@ -1410,6 +1412,16 @@ class PickupLocationForm(forms.ModelForm):
         return cleaned_data
 
 
+def validate_image(file):
+    try:
+        with Image.open(file) as img:
+            img.verify()  # Verify the image integrity
+            img.seek(0)  # Ensure we can read the first frame (important for multi-frame formats)
+    except (UnidentifiedImageError, ValueError, OSError):
+        msg = "Uploaded image is corrupt or not a valid image file"
+        raise ValidationError(msg)
+
+
 class CreateImageForm(forms.ModelForm):
     class Meta:
         model = LotImage
@@ -1445,6 +1457,12 @@ class CreateImageForm(forms.ModelForm):
             ),
             Submit("submit", "Save", css_class="create-update-image btn-success"),
         )
+
+    def clean_image(self):
+        image = self.cleaned_data.get("image")
+        if image:
+            validate_image(image)
+        return image
 
 
 class CreateAuctionForm(forms.ModelForm):
