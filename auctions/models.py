@@ -667,6 +667,34 @@ class Auction(models.Model):
     tax.help_text = "Added to invoices for all won lots"
     advanced_lot_adding = models.BooleanField(default=False)
     advanced_lot_adding.help_text = "Show lot number, quantity and description fields when bulk adding lots"
+    use_quantity_field = models.BooleanField(default=False, blank=True)
+    custom_checkbox_name = models.CharField(
+        max_length=50, default="", blank=True, null=True, verbose_name="Custom checkbox name"
+    )
+    custom_checkbox_name.help_text = "Shown when users add lots.  Leave blank to disable"
+    use_cares_field = models.BooleanField(default=False, blank=True)
+    CUSTOM_CHOICES = (
+        ("disable", "Off"),
+        ("allow", "Optional"),
+        ("required", "Required for all lots"),
+    )
+    custom_field_1 = models.CharField(
+        max_length=20,
+        choices=CUSTOM_CHOICES,
+        default="disable",
+        verbose_name="Custom field for lots",
+    )
+    custom_field_1 = "Additional information on the label such as notes, scientific name, collection location..."
+    custom_field_1_name = models.CharField(
+        max_length=50, default="Notes", blank=True, null=True, verbose_name="Custom field name"
+    )
+    custom_field_1_name.help_text = "What's the custom field used for?  This is shown to users"
+    allow_bulk_adding_lots = models.BooleanField(default=True)
+    allow_bulk_adding_lots.help_text = (
+        "Uncheck to force users to add lots one at a time to encourage use of descriptions and pictures."
+    )
+    copy_users_when_copying_this_auction = models.BooleanField(default=False)
+    copy_users_when_copying_this_auction.help_text = "Save yourself a few clicks when bulk importing users"
     extra_promo_text = models.CharField(max_length=50, default="", blank=True, null=True)
     extra_promo_link = models.URLField(blank=True, null=True)
     allow_deleting_bids = models.BooleanField(default=False, blank=True)
@@ -2015,6 +2043,8 @@ class Lot(models.Model):
     image.help_text = "Optional.  Add a picture of the item here."
     image_source = models.CharField(max_length=20, choices=PIC_CATEGORIES, blank=True)
     image_source.help_text = "Where did you get this image?"
+    custom_checkbox = models.BooleanField(default=False, verbose_name="Custom checkbox")
+    custom_field_1 = models.CharField(max_length=60, default="", blank=True)
     i_bred_this_fish = models.BooleanField(default=False, verbose_name="I bred this fish/propagated this plant")
     i_bred_this_fish.help_text = "Check to get breeder points for this lot"
     summernote_description = models.TextField(verbose_name="Description", default="", blank=True)
