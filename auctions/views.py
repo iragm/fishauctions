@@ -115,7 +115,6 @@ from .forms import (
     TOSFormSetHelper,
     UserLabelPrefsForm,
     UserLocation,
-    validate_image,
 )
 from .models import (
     FAQ,
@@ -3201,11 +3200,11 @@ class ImageCreateView(LoginRequiredMixin, CreateView):
             image.is_primary = True
         if not image.image_source:
             image.image_source = "RANDOM"
-        logger.warning("About to validate image in form_valid")
-        validate_image(image)
-        logger.warning("Finished validating image in form_valid")
-        image.save()
-        messages.success(self.request, f"New image added to {self.lot.lot_name}")
+        try:
+            image.save()
+        except Exception as e:
+            form.add_error("image", f"Image is not in a supported format or is corrupt.  Error: {e}")
+            return self.form_invalid(form)
         return super().form_valid(form)
 
 
