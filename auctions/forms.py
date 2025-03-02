@@ -1519,6 +1519,7 @@ class CreateImageForm(forms.ModelForm):
         )
 
     def clean_image(self):
+        logging.warning("cleaning image")
         image = self.cleaned_data.get("image")
         if image:
             validate_image(image)
