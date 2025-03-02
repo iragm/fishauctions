@@ -86,6 +86,7 @@ LOGGING = {
             "backupCount": 5,
             "formatter": "verbose",
         },
+        "mail_admins": {"level": "ERROR", "class": "django.utils.log.AdminEmailHandler"},
         "null": {
             "class": "logging.NullHandler",
         },
@@ -108,6 +109,11 @@ LOGGING = {
         "fontTools": {
             # 'handlers': ["null"],
             "level": "WARNING",
+            "propagate": False,
+        },
+        "django.request": {
+            "handlers": ["mail_admins"],
+            "level": "ERROR",
             "propagate": False,
         },
     },
@@ -302,7 +308,8 @@ ACCOUNT_FORMS = {
     "signup": "auctions.forms.CustomSignupForm",
     "reset_password": "auctions.forms.CustomResetPasswordForm",
 }
-ACCOUNT_AUTHENTICATION_METHOD = "username_email"
+# ACCOUNT_AUTHENTICATION_METHOD = "username_email"
+ACCOUNT_LOGIN_METHODS = {"username", "email"}
 ACCOUNT_CONFIRM_EMAIL_ON_GET = True
 ACCOUNT_EMAIL_REQUIRED = True
 ACCOUNT_EMAIL_VERIFICATION = "mandatory"

@@ -597,8 +597,8 @@ class Auction(models.Model):
     make_stats_public.help_text = "Allow any user who has a link to this auction's stats to see them.  Uncheck to only allow the auction creator to view stats"
     bump_cost = models.PositiveIntegerField(blank=True, default=1, validators=[MinValueValidator(1)])
     bump_cost.help_text = "The amount a user will be charged each time they move a lot to the top of the list"
-    use_categories = models.BooleanField(default=True, verbose_name="This is a fish auction")
-    use_categories.help_text = "Check to use categories like Cichlids, Livebearers, etc."
+    use_categories = models.BooleanField(default=True, verbose_name="Use category field")
+    use_categories.help_text = "Not shown on the bulk add lots form.  Check to use categories like Cichlids, Livebearers, etc.  This option is required if you want to promote your auction on the main auctions list."
     is_deleted = models.BooleanField(default=False)
     ONLINE_BIDDING_OPTIONS = (
         ("allow", "Allow buy now and bidding"),
@@ -667,6 +667,41 @@ class Auction(models.Model):
     tax.help_text = "Added to invoices for all won lots"
     advanced_lot_adding = models.BooleanField(default=False)
     advanced_lot_adding.help_text = "Show lot number, quantity and description fields when bulk adding lots"
+    use_quantity_field = models.BooleanField(default=False, blank=True)
+    custom_checkbox_name = models.CharField(
+        max_length=50, default="", blank=True, null=True, verbose_name="Custom checkbox name"
+    )
+    custom_checkbox_name.help_text = "Shown when users add lots"
+    use_reference_link = models.BooleanField(default=True, blank=True)
+    use_reference_link.help_text = "Not shown on the bulk add lots form.  Especially handy for videos."
+    use_description = models.BooleanField(default=True, blank=True)
+    use_description.help_text = "Not shown on the bulk add lots form"
+    use_donation_field = models.BooleanField(default=True, blank=True)
+    use_i_bred_this_fish_field = models.BooleanField(default=True, blank=True, verbose_name="Use Breeder Points field")
+    use_custom_checkbox_field = models.BooleanField(default=False, blank=True)
+    use_custom_checkbox_field.help_text = "Optional information such as CARES, native species, difficult to keep, etc."
+    CUSTOM_CHOICES = (
+        ("disable", "Off"),
+        ("allow", "Optional"),
+        ("required", "Required for all lots"),
+    )
+    custom_field_1 = models.CharField(
+        max_length=20,
+        choices=CUSTOM_CHOICES,
+        default="disable",
+        verbose_name="Custom field for lots",
+    )
+    custom_field_1.help_text = (
+        "Additional information on the label such as notes, scientific name, collection location..."
+    )
+    custom_field_1_name = models.CharField(
+        max_length=50, default="Notes", blank=True, null=True, verbose_name="Custom field name"
+    )
+    custom_field_1_name.help_text = "What's the custom field used for?  This is shown to users"
+    allow_bulk_adding_lots = models.BooleanField(default=True)
+    allow_bulk_adding_lots.help_text = "Uncheck to force users to add lots one at a time.  Turning this off encourage more detail and pictures about each lot, but makes adding lots take longer. Admins can always bulk add lots for other users."
+    copy_users_when_copying_this_auction = models.BooleanField(default=False)
+    copy_users_when_copying_this_auction.help_text = "Save yourself a few clicks when bulk importing users"
     extra_promo_text = models.CharField(max_length=50, default="", blank=True, null=True)
     extra_promo_link = models.URLField(blank=True, null=True)
     allow_deleting_bids = models.BooleanField(default=False, blank=True)
@@ -676,14 +711,12 @@ class Auction(models.Model):
         "Images taken from older lots with the same name in any auctions created by you or other admins"
     )
     message_users_when_lots_sell = models.BooleanField(default=True, blank=True)
-    message_users_when_lots_sell.help_text = (
-        "When you enter a lot number on the set lot winners screen, send a notification to any users watching that lot"
-    )
+    message_users_when_lots_sell.help_text = "Recommended if you are recording winners as lots sell.  When you enter a lot number on the set lot winners screen, send a notification to any users watching that lot"
     label_print_fields = models.CharField(
         max_length=1000,
         blank=True,
         null=True,
-        default="qr_code,lot_name,min_bid_label,buy_now_label,quantity_label,seller_name,donation_label",
+        default="qr_code,lot_name,min_bid_label,buy_now_label,quantity_label,seller_name,donation_label,custom_field_1,i_bred_this_fish_label,custom_checkbox_label",
     )
     use_seller_dash_lot_numbering = models.BooleanField(default=False, blank=True)
 
@@ -2010,11 +2043,13 @@ class Lot(models.Model):
     custom_lot_number.help_text = "You can override the default lot number with this"
     lot_name = models.CharField(max_length=40)
     slug = AutoSlugField(populate_from="lot_name", unique=False)
-    lot_name.help_text = "Short description of this lot"
+    # lot_name.help_text = "Short description of this lot"
     image = ThumbnailerImageField(upload_to="images/", blank=True)
     image.help_text = "Optional.  Add a picture of the item here."
     image_source = models.CharField(max_length=20, choices=PIC_CATEGORIES, blank=True)
     image_source.help_text = "Where did you get this image?"
+    custom_checkbox = models.BooleanField(default=False, verbose_name="Custom checkbox")
+    custom_field_1 = models.CharField(max_length=60, default="", blank=True)
     i_bred_this_fish = models.BooleanField(default=False, verbose_name="I bred this fish/propagated this plant")
     i_bred_this_fish.help_text = "Check to get breeder points for this lot"
     summernote_description = models.TextField(verbose_name="Description", default="", blank=True)
@@ -2253,7 +2288,11 @@ class Lot(models.Model):
             changed_price=True,
             seen=True,
         )
-        invoice, created = Invoice.objects.get_or_create(auctiontos_user=tos, auction=self.auction, defaults={})
+        # Impossibly this line sometimes errors, there must be a way of making duplicates
+        # invoice, created = Invoice.objects.get_or_create(auctiontos_user=tos, auction=self.auction, defaults={})
+        invoice = Invoice.objects.filter(auctiontos_user=tos, auction=self.auction).first()
+        if not invoice:
+            invoice = Invoice.objects.create(auctiontos_user=tos, auction=self.auction)
         invoice.recalculate
         self.send_websocket_message(
             {
@@ -3129,7 +3168,9 @@ class Lot(models.Model):
 
     @property
     def donation_label(self):
-        return "(D)" if self.donation else ""
+        if self.donation and self.auction.use_donation_field:
+            return "(D)"
+        return ""
 
     @property
     def min_bid_label(self):
@@ -3145,8 +3186,20 @@ class Lot(models.Model):
 
     @property
     def quantity_label(self):
-        if self.auction.advanced_lot_adding or self.quantity > 1:
+        if self.auction.use_quantity_field or self.quantity > 1:
             return f"QTY: {self.quantity}"
+        return ""
+
+    @property
+    def custom_checkbox_label(self):
+        if self.auction.custom_checkbox_name and self.auction.use_custom_checkbox_field and self.custom_checkbox:
+            return self.auction.custom_checkbox_name
+        return ""
+
+    @property
+    def i_bred_this_fish_label(self):
+        if self.i_bred_this_fish and self.auction.use_i_bred_this_fish_field:
+            return "(B)"
         return ""
 
     @property

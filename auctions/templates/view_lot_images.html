@@ -273,9 +273,21 @@ function deactivate_lot() {
             </div><br>
         </div>
         <table class="table">
+            {% if lot.auction.use_quantity_field %}
             <tr>
                 <td><b>Quantity:</b></td><td>{{ lot.quantity }}</td>
             </tr>
+            {% endif %}
+            {% if lot.custom_checkbox_label %}
+            <tr>
+                <td><b>{{ lot.custom_checkbox_label }}</b></td><td></td>
+            </tr>
+            {% endif %}
+            {% if lot.auction.custom_field_1 != 'disable' and lot.auction.custom_field_1_name and lot.custom_field_1 %}
+            <tr>
+                <td><b>{{ lot.auction.custom_field_1_name }}:</b></td><td>{{ lot.custom_field_1 }}</td>
+            </tr>
+            {% endif %}
             <tr>
                 <td><b>Seller:</b></td><td>{% if lot.donation %} A donation from {% endif %}{% if lot.user %}<a href="{% url 'userpage' slug=lot.user %}">{{ lot.user }}</a> (<a href="/lots/user/?user={{lot.user}}">All lots from {{ lot.user }}</a>){% if not lot.auction %}
                     <span class='badge text-dark bg-light'>Lots sold: {{ lot.user.userdata.lots_sold }}</span> <span class='badge text-dark bg-success'>+{{ lot.user.userdata.positive_feedback_as_seller }}</span> <span class='badge bg-danger'>-{{ lot.user.userdata.negative_feedback_as_seller }}</span>
