@@ -4062,7 +4062,24 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                     else:
                         location.second_pickup_time = auction.date_start + secondTimeDiff
                 location.save()
-            # we are only cloning pickup locations here, no other models (AuctionTOS would be the first one that comes to mind)
+            # copy any auctiontos, if appropriate
+            if clone_from_auction.copy_users_when_copying_this_auction:
+                auctiontos = AuctionTOS.objects.filter(auction=clone_from_auction)
+                for tos in auctiontos:
+                    tos.pk = None
+                    tos.createdon = None
+                    tos.auction = auction
+                    tos.email_address_status = "UNKNOWN"
+                    tos.manually_added = True
+                    tos.print_reminder_email_sent = False
+                    if tos.pickup_location.name == str(clone_from_auction):
+                        new_location_name = str(auction)
+                    else:
+                        new_location_name = tos.pickup_location.name
+                    new_location = PickupLocation.objects.filter(auction=auction, name=new_location_name).first()
+                    if new_location:
+                        tos.pickup_location = new_location
+                        tos.save()
         return super().form_valid(form)
 
 
