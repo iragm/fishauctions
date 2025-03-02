@@ -1619,46 +1619,52 @@ def auctionLotList(request, slug):
         response = HttpResponse(content_type="text/csv")
         response["Content-Disposition"] = 'attachment; filename="' + slug + '-lot-list.csv"'
         writer = csv.writer(response)
-        writer.writerow(
-            [
-                "Lot number",
-                "Lot",
-                "Seller",
-                "Seller email",
-                "Seller phone",
-                "Seller location",
-                "Winner",
-                "Winner email",
-                "Winner phone",
-                "Winner location",
-                "Breeder points",
-                "Sell price",
-                "Club Cut",
-                "Seller cut",
-            ]
-        )
+        first_row_fields = [
+            "Lot number",
+            "Lot",
+            "Seller",
+            "Seller email",
+            "Seller phone",
+            "Seller location",
+            "Winner",
+            "Winner email",
+            "Winner phone",
+            "Winner location",
+            "Breeder points",
+            "Sell price",
+            "Club Cut",
+            "Seller cut",
+        ]
+        if auction.use_custom_checkbox_field and auction.custom_checkbox_name:
+            first_row_fields.append(auction.custom_checkbox_name)
+        if auction.custom_field_1 != "disable" and auction.custom_field_1_name:
+            first_row_fields.append(auction.custom_field_1_name)
+        writer.writerow(first_row_fields)
         # lots = Lot.objects.exclude(is_deleted=True).filter(auction__slug=slug, auctiontos_winner__isnull=False).select_related('user', 'winner')
         lots = auction.lots_qs.filter(winning_price__isnull=False).select_related("user", "winner")
         lots = add_price_info(lots)
         for lot in lots:
-            writer.writerow(
-                [
-                    lot.lot_number_display,
-                    lot.lot_name,
-                    lot.auctiontos_seller.name,
-                    lot.auctiontos_seller.email,
-                    lot.auctiontos_seller.phone_as_string,
-                    lot.location,
-                    lot.auctiontos_winner.name,
-                    lot.auctiontos_winner.email,
-                    lot.auctiontos_winner.phone_as_string,
-                    lot.winner_location,
-                    lot.i_bred_this_fish_display,
-                    f"{lot.winning_price:.2f}",
-                    f"{lot.club_cut:.2f}",
-                    f"{lot.your_cut:.2f}",
-                ]
-            )
+            row = [
+                lot.lot_number_display,
+                lot.lot_name,
+                lot.auctiontos_seller.name,
+                lot.auctiontos_seller.email,
+                lot.auctiontos_seller.phone_as_string,
+                lot.location,
+                lot.auctiontos_winner.name,
+                lot.auctiontos_winner.email,
+                lot.auctiontos_winner.phone_as_string,
+                lot.winner_location,
+                lot.i_bred_this_fish_display,
+                f"{lot.winning_price:.2f}",
+                f"{lot.club_cut:.2f}",
+                f"{lot.your_cut:.2f}",
+            ]
+            if auction.use_custom_checkbox_field and auction.custom_checkbox_name:
+                row.append(lot.custom_checkbox_label)
+            if auction.custom_field_1 != "disable" and auction.custom_field_1_name:
+                row.append(lot.custom_field_1)
+            writer.writerow(row)
         return response
     messages.error(request, "Your account doesn't have permission to view this page")
     return redirect("/")
@@ -2845,6 +2851,12 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
         if not self.is_admin and not self.auction.can_submit_lots:
             messages.error(request, f"Lot submission has ended for {self.auction}")
             return redirect(f"/auctions/{self.auction.slug}/")
+        if not self.is_admin and not self.auction.allow_bulk_adding_lots:
+            messages.error(
+                request,
+                "Bulk adding lots has been disabled in this auction, add your lots one at a time using this form",
+            )
+            return redirect(self.auction.add_lot_link)
         self.queryset = self.tos.unbanned_lot_qs
         if self.auction.max_lots_per_user:
             # default rows should be the max that are allowed in the auction
@@ -2870,6 +2882,8 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
                 "donation",
                 "reserve_price",
                 "buy_now_price",
+                "custom_checkbox",
+                "custom_field_1",
             ),
             form=QuickAddLot,
         )
@@ -3408,7 +3422,11 @@ class LotCreateView(LotValidation, CreateView):
             defaults={},
         )
         if userData.last_auction_used:
-            if userData.last_auction_used.can_submit_lots and not userData.last_auction_used.is_online:
+            if (
+                userData.last_auction_used.can_submit_lots
+                and not userData.last_auction_used.is_online
+                and userData.last_auction_used.allow_bulk_adding_lots
+            ):
                 messages.info(
                     request,
                     f"Sick of adding lots one at a time?  <a href='{reverse('bulk_add_lots_for_myself', kwargs={'slug': userData.last_auction_used.slug})}'>Add lots of lots to {userData.last_auction_used}</a>",
@@ -3634,7 +3652,7 @@ class LotAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
         form = self.get_form()
         if form.is_valid():
             obj = self.lot
-            obj.custom_lot_number = form.cleaned_data["custom_lot_number"]
+            # obj.custom_lot_number = form.cleaned_data["custom_lot_number"]
             obj.lot_name = form.cleaned_data["lot_name"] or "Unknown lot"
             obj.species_category = form.cleaned_data["species_category"] or 21  # uncategorized
             obj.summernote_description = form.cleaned_data["summernote_description"]
@@ -3647,6 +3665,8 @@ class LotAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
             obj.banned = form.cleaned_data["banned"]
             obj.auctiontos_winner = form.cleaned_data["auctiontos_winner"]
             obj.winning_price = form.cleaned_data["winning_price"]
+            obj.custom_checkbox = form.cleaned_data["custom_checkbox"]
+            obj.custom_field_1 = form.cleaned_data["custom_field_1"]
             # need to make sure the winner matches the auctiontos_winner
             if obj.pk and obj.winner:
                 if not obj.auctiontos_winner:
@@ -3953,6 +3973,14 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "message_users_when_lots_sell",
                 "label_print_fields",
                 "force_donation_threshold",
+                "use_quantity_field",
+                "custom_checkbox_name",
+                "custom_field_1",
+                "custom_field_1_name",
+                "allow_bulk_adding_lots",
+                "copy_users_when_copying_this_auction",
+                "use_donation_field",
+                "use_i_bred_this_fish_field",
             ]
             for field in fields_to_clone:
                 setattr(auction, field, getattr(original_auction, field))
@@ -3968,9 +3996,13 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
         else:
             auction.is_online = is_online
             if not is_online:
+                # override default settings for new in-person auctions
                 auction.online_bidding = "disable"
                 auction.buy_now = "disable"
                 auction.reserve_price = "disable"
+            else:
+                # override default settings for new online auctions
+                auction.use_quantity_field = True
         if not auction.summernote_description:
             auction.summernote_description = """
             <h4>General information</h4>
@@ -4839,6 +4871,8 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionPermissionsM
             "donation_label",
             "min_bid_label",
             "buy_now_label",
+            "custom_checkbox_label",
+            "i_bred_this_fish_label",
             "auction_date",
         ]
         first_column_fields_to_print = [
@@ -6601,6 +6635,15 @@ class AuctionFinder(View, LoginRequiredMixin):
                 "use_categories": self.auction.use_categories,
                 "reserve_price": self.auction.reserve_price,
                 "buy_now": self.auction.buy_now,
+                "use_quantity_field": self.auction.use_quantity_field,
+                "custom_checkbox_name": self.auction.custom_checkbox_name,
+                "custom_field_1": self.auction.custom_field_1,
+                "custom_field_1_name": self.auction.custom_field_1_name,
+                "use_donation_field": self.auction.use_donation_field,
+                "use_i_bred_this_fish_field": self.auction.use_i_bred_this_fish_field,
+                "use_custom_checkbox_field": self.auction.use_custom_checkbox_field,
+                "use_reference_link": self.auction.use_reference_link,
+                "use_description": self.auction.use_description,
             }
         return JsonResponse(result)
 

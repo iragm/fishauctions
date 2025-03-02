@@ -121,24 +121,26 @@ class QuickAddLot(forms.ModelForm):
         fields = [
             # "custom_lot_number",
             "lot_name",
-            "summernote_description",
+            # "summernote_description",
             "species_category",
             "i_bred_this_fish",
             "quantity",
             "donation",
             "reserve_price",
             "buy_now_price",
+            "custom_checkbox",
+            "custom_field_1",
         ]
         widgets = {
-            "summernote_description": SummernoteWidget(
-                attrs={
-                    "summernote": {
-                        "width": "100%",
-                        "height": "100px",
-                        "toolbar": [],
-                    }
-                }
-            ),
+            # "summernote_description": SummernoteWidget(
+            #     attrs={
+            #         "summernote": {
+            #             "width": "100%",
+            #             "height": "100px",
+            #             "toolbar": [],
+            #         }
+            #     }
+            # ),
             # "description": forms.Textarea(attrs={"rows": 2}),
         }
 
@@ -161,6 +163,16 @@ class QuickAddLot(forms.ModelForm):
             self.fields["species_category"].widget = HiddenInput()
         self.fields["species_category"].label = "Category"
         self.fields["species_category"].help_text = ""
+        if self.auction.use_custom_checkbox_field and self.auction.custom_checkbox_name:
+            self.fields["custom_checkbox"].label = self.auction.custom_checkbox_name
+        else:
+            self.fields["custom_checkbox"].widget = HiddenInput()
+        if self.auction.custom_field_1 != "disable" and self.auction.custom_field_1_name:
+            self.fields["custom_field_1"].label = self.auction.custom_field_1_name
+            if self.auction.custom_field_1 == "required":
+                self.fields["custom_field_1"].required = True
+        else:
+            self.fields["custom_field_1"].widget = HiddenInput()
         self.fields["i_bred_this_fish"].label = "Breeder points"
         self.fields["i_bred_this_fish"].help_text = ""
         self.fields["quantity"].help_text = ""
@@ -187,6 +199,19 @@ class QuickAddLot(forms.ModelForm):
             self.fields["buy_now_price"].required = True
         if not self.auction.use_categories:
             self.fields["i_bred_this_fish"].widget = HiddenInput()
+        if not self.auction.use_custom_checkbox_field or not self.auction.custom_checkbox_name:
+            self.fields["custom_checkbox"].widget = HiddenInput()
+        if self.auction.custom_field_1 == "disable" or not self.auction.custom_field_1_name:
+            self.fields["custom_field_1"].widget = HiddenInput()
+        else:
+            if self.auction.custom_field_1 == "required":
+                self.fields["custom_field_1"].required = True
+        if not self.auction.use_quantity_field:
+            self.fields["quantity"].widget = HiddenInput()
+        if not self.auction.use_donation_field:
+            self.fields["donation"].widget = HiddenInput()
+        if not self.auction.use_i_bred_this_fish_field:
+            self.fields["i_bred_this_fish"].widget = HiddenInput()
 
     def clean(self):
         cleaned_data = super().clean()
@@ -209,6 +234,10 @@ class QuickAddLot(forms.ModelForm):
                 cleaned_data["buy_now_price"] = None
             if (self.auction.buy_now == "require") and not cleaned_data.get("buy_now_price"):
                 self.add_error("buy_now_price", "Buy Now price is required in this auction")
+            if (
+                self.auction.custom_field_1 == "required" and self.auction.custom_field_1_name
+            ) and not cleaned_data.get("custom_field_1"):
+                self.add_error("buy_now_price", "Required in this auction")
         # we need to make sure users can't add extra lots
         if not self.is_admin and self.auction.max_lots_per_user:
             existing_lots = self.tos.unbanned_lot_qs
@@ -623,11 +652,14 @@ class EditLot(forms.ModelForm):
                     "species_category",
                     css_class="col-sm-5",
                 ),
-                css_class="row",
-            ),
-            # "description",
-            "summernote_description",
-            Div(
+                Div(
+                    "custom_field_1",
+                    css_class="col-sm-9",
+                ),
+                Div(
+                    "custom_checkbox",
+                    css_class="col-sm-3",
+                ),
                 Div(
                     "i_bred_this_fish",
                     css_class="col-sm-3",
@@ -643,6 +675,10 @@ class EditLot(forms.ModelForm):
                 Div(
                     "reserve_price",
                     css_class="col-sm-3",
+                ),
+                Div(
+                    "summernote_description",
+                    css_class="col-sm-12",
                 ),
                 css_class="row",
             ),
@@ -688,8 +724,15 @@ class EditLot(forms.ModelForm):
         self.fields["quantity"].initial = self.lot.quantity
         self.fields["donation"].initial = self.lot.donation
         self.fields["winning_price"].initial = self.lot.winning_price
+        if not self.auction.use_description:
+            self.fields["summernote_description"].widget = HiddenInput()
         if not self.auction.use_categories:
             self.fields["species_category"].widget = HiddenInput()
+        if not self.auction.use_quantity_field:
+            self.fields["quantity"].widget = HiddenInput()
+        if not self.auction.use_donation_field:
+            self.fields["donation"].widget = HiddenInput()
+        if not self.auction.use_i_bred_this_fish_field:
             self.fields["i_bred_this_fish"].widget = HiddenInput()
         self.fields["species_category"].initial = self.lot.species_category
         self.fields["i_bred_this_fish"].initial = self.lot.i_bred_this_fish
@@ -697,6 +740,21 @@ class EditLot(forms.ModelForm):
         self.fields["reserve_price"].initial = self.lot.reserve_price
         self.fields["buy_now_price"].help_text = ""
         self.fields["reserve_price"].help_text = ""
+
+        self.fields["custom_checkbox"].initial = self.lot.custom_checkbox
+        self.fields["custom_checkbox"].help_text = ""
+        self.fields["custom_field_1"].initial = self.lot.custom_field_1
+        self.fields["custom_field_1"].custom_field_1 = ""
+        if self.auction.use_custom_checkbox_field and self.auction.custom_checkbox_name:
+            self.fields["custom_checkbox"].label = self.auction.custom_checkbox_name
+        else:
+            self.fields["custom_checkbox"].widget = HiddenInput()
+        if self.auction.custom_field_1 != "disable" and self.auction.custom_field_1_name:
+            self.fields["custom_field_1"].label = self.auction.custom_field_1_name
+            if self.auction.custom_field_1 == "required":
+                self.fields["custom_field_1"].required = True
+        else:
+            self.fields["custom_field_1"].widget = HiddenInput()
         self.fields["banned"].initial = self.lot.banned
         self.fields["auctiontos_winner"].initial = self.lot.auctiontos_winner
         # and some housekeeping on labels and help text
@@ -747,6 +805,8 @@ class EditLot(forms.ModelForm):
             "banned",
             "auctiontos_winner",
             "winning_price",
+            "custom_checkbox",
+            "custom_field_1",
         ]
         widgets = {
             "summernote_description": SummernoteWidget(attrs={"summernote": {"width": "100%", "height": "300px"}}),
@@ -1610,6 +1670,17 @@ class AuctionEditForm(forms.ModelForm):
             "allow_deleting_bids",
             "auto_add_images",
             "message_users_when_lots_sell",
+            "use_quantity_field",
+            "custom_checkbox_name",
+            "custom_field_1",
+            "custom_field_1_name",
+            "allow_bulk_adding_lots",
+            "copy_users_when_copying_this_auction",
+            "use_donation_field",
+            "use_i_bred_this_fish_field",
+            "use_custom_checkbox_field",
+            "use_reference_link",
+            "use_description",
         ]
         widgets = {
             "date_start": DateTimePickerInput(),
@@ -1641,6 +1712,8 @@ class AuctionEditForm(forms.ModelForm):
             self.fields[
                 "lot_submission_end_date"
             ].help_text = "This should be 1-24 hours before the end of your auction"
+            self.fields["use_description"].widget = forms.HiddenInput()
+            self.fields["allow_bulk_adding_lots"].widget = forms.HiddenInput()
             self.fields["online_bidding"].widget = forms.HiddenInput()
             self.fields["message_users_when_lots_sell"].widget = forms.HiddenInput()
             self.fields["advanced_lot_adding"].widget = forms.HiddenInput()
@@ -1781,18 +1854,81 @@ class AuctionEditForm(forms.ModelForm):
             Div(
                 Div(
                     "max_lots_per_user",
-                    css_class="col-md-3",
+                    css_class="col-md-4",
                 ),
                 Div(
                     "allow_additional_lots_as_donation",
-                    css_class="col-md-3",
+                    css_class="col-md-4",
                 ),
                 Div(
                     "only_approved_sellers",
-                    css_class="col-md-3",
+                    css_class="col-md-4",
                 ),
                 Div(
                     "only_approved_bidders",
+                    css_class="col-md-4",
+                ),
+                Div(
+                    "copy_users_when_copying_this_auction",
+                    css_class="col-md-4",
+                ),
+                css_class="row",
+            ),
+            HTML("""<h4>Fields</h4>Control what information your users can enter about lots.
+                <span class='text-warning'>For advanced users only!</span>
+                The default settings are recommended for most auctions<br>
+                <small>If you enable more than a couple extra fields here, you should disable bulk adding lots, as too many fields in the bulk adding lots form quickly becomes overwhelming for users</small><br><br>"""),
+            Div(
+                Div(
+                    "allow_bulk_adding_lots",
+                    css_class="col-md-3",
+                ),
+                Div(
+                    "use_categories",
+                    css_class="col-md-3",
+                ),
+                Div(
+                    "use_quantity_field",
+                    css_class="col-md-3",
+                ),
+                Div(
+                    "use_donation_field",
+                    css_class="col-md-3",
+                ),
+                Div(
+                    "use_i_bred_this_fish_field",
+                    css_class="col-md-3",
+                ),
+                Div(
+                    "use_reference_link",
+                    css_class="col-md-3",
+                ),
+                Div(
+                    "use_description",
+                    css_class="col-md-3",
+                ),
+                Div(
+                    "custom_field_1",
+                    css_class="col-md-3",
+                ),
+                Div(
+                    "custom_field_1_name",
+                    css_class="col-md-3",
+                ),
+                Div(
+                    "use_custom_checkbox_field",
+                    css_class="col-md-3",
+                ),
+                Div(
+                    "custom_checkbox_name",
+                    css_class="col-md-3",
+                ),
+                Div(
+                    "reserve_price",
+                    css_class="col-md-3",
+                ),
+                Div(
+                    "buy_now",
                     css_class="col-md-3",
                 ),
                 css_class="row",
@@ -1816,27 +1952,15 @@ class AuctionEditForm(forms.ModelForm):
                     css_class="col-md-3",
                 ),
                 Div(
-                    "use_categories",
-                    css_class="col-md-3",
-                ),
-                Div(
-                    "advanced_lot_adding",
-                    css_class="col-md-3",
-                ),
-                Div(
-                    "auto_add_images",
-                    css_class="col-md-3",
-                ),
-                Div(
                     "minimum_bid",
                     css_class="col-md-3",
                 ),
+                # Div(
+                #     "advanced_lot_adding",
+                #     css_class="col-md-3",
+                # ),
                 Div(
-                    "reserve_price",
-                    css_class="col-md-3",
-                ),
-                Div(
-                    "buy_now",
+                    "auto_add_images",
                     css_class="col-md-3",
                 ),
                 Div(
@@ -1912,6 +2036,7 @@ class CreateLotForm(forms.ModelForm):
     class Meta:
         model = Lot
         fields = (
+            "reference_link",
             "relist_if_sold",
             "relist_if_not_sold",
             "lot_name",
@@ -1926,7 +2051,7 @@ class CreateLotForm(forms.ModelForm):
             "shipping_locations",
             "buy_now_price",
             "show_payment_pickup_info",
-            "promoted",
+            # "promoted",
             "part_of_auction",
             "other_text",
             "local_pickup",
@@ -1936,7 +2061,8 @@ class CreateLotForm(forms.ModelForm):
             "payment_other_method",
             "payment_other_address",
             "run_duration",
-            "reference_link",
+            "custom_checkbox",
+            "custom_field_1",
         )
         exclude = ["user", "image", "image_source"]
         widgets = {
@@ -2003,6 +2129,8 @@ class CreateLotForm(forms.ModelForm):
                             "buy_now_price",
                             "reference_link",
                             "donation",
+                            "custom_checkbox",
+                            "custom_field_1",
                         ]
                         for field in cloneFields:
                             self.fields[field].initial = getattr(cloneLot, field)
@@ -2085,11 +2213,6 @@ class CreateLotForm(forms.ModelForm):
                     "auction",
                     css_class="col-md-8",
                 ),
-                # HTML("<br><span class='text-danger col-xl-12'>You must select a pickup location before you can submit lots in an auction</span><br>"),
-                Div(
-                    "donation",
-                    css_class="col-md-4",
-                ),
                 Div(
                     "run_duration",
                     css_class="col-md-4",
@@ -2102,42 +2225,30 @@ class CreateLotForm(forms.ModelForm):
                     "relist_if_sold",
                     css_class="col-md-4",
                 ),
-                Div(
-                    "promoted",
-                    css_class="col-md-4",
-                ),
+                # Div(
+                #     "promoted",
+                #     css_class="col-md-4",
+                # ),
                 Div(
                     "show_payment_pickup_info",
                     css_class="col-md-12",
                 ),
-                css_class="row",
-            ),
-            Div(
                 Div(
                     "lot_name",
                     css_class="col-md-12",
                 ),
                 Div(
-                    "species_category",
+                    "custom_field_1",
+                    css_class="col-md-12",
+                ),
+                Div(
+                    "summernote_description",
                     css_class="col-md-12",
                 ),
                 Div(
                     "reference_link",
                     css_class="col-md-12",
                 ),
-                css_class="row",
-            ),
-            Div(
-                # Div('image',css_class='col-md-8',),
-                # Div('image_source',css_class='col-md-4',),
-                Div(
-                    # "description",
-                    "summernote_description",
-                    css_class="col-md-12",
-                ),
-                css_class="row",
-            ),
-            Div(
                 Div(
                     "quantity",
                     css_class="col-md-3",
@@ -2147,12 +2258,24 @@ class CreateLotForm(forms.ModelForm):
                     css_class="col-md-3",
                 ),
                 Div(
+                    "custom_checkbox",
+                    css_class="col-md-3",
+                ),
+                Div(
                     "reserve_price",
                     css_class="col-md-3",
                 ),
                 Div(
                     "buy_now_price",
                     css_class="col-md-3",
+                ),
+                Div(
+                    "donation",
+                    css_class="col-md-3",
+                ),
+                Div(
+                    "species_category",
+                    css_class="col-md-12",
                 ),
                 css_class="row",
             ),
@@ -2729,6 +2852,31 @@ class LabelPrintFieldsForm(forms.Form):
                 "tooltip": "Buy now is disabled in this auction, this will not do anything"
                 if self.auction.buy_now == "disable"
                 else "Will only be displayed if the lot has a buy now price set. <span class='text-warning'>Recommended</span>",
+            },
+            {
+                "value": "custom_field_1",
+                "description": "Custom field"
+                if not self.auction.custom_field_1_name
+                else self.auction.custom_field_1_name,
+                "tooltip": "Custom field is disabled in this auction, this will not do anything"
+                if self.auction.custom_field_1 == "disable"
+                else "",
+            },
+            {
+                "value": "custom_checkbox_label",
+                "description": "Custom checkbox"
+                if not self.auction.custom_checkbox_name
+                else self.auction.custom_checkbox_name,
+                "tooltip": "Custom checkbox is disabled in this auction, this will not do anything"
+                if not self.auction.use_custom_checkbox_field
+                else "",
+            },
+            {
+                "value": "i_bred_this_fish_label",
+                "description": "Breeder points",
+                "tooltip": "Breeder points field is disabled in this auction, this will not do anything"
+                if not self.auction.use_i_bred_this_fish_field
+                else "",
             },
             {"value": "quantity_label", "description": "Quantity", "tooltip": ""},
             {

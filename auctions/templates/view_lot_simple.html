@@ -20,7 +20,7 @@
         {% endif %}
         <div class="col-md-6 offset-md1">
             <h3>{{ lot.lot_name }}</h3>
-            <b>Quantity:</b> {{ lot.quantity }}<br>
+            {% if lot.auction.use_quantity_field %}<b>Quantity:</b> {{ lot.quantity }}<br>{% endif %}
             {% if lot.reserve_price > lot.auction.minimum_bid %}<b>Minimum bid:</b> ${{ lot.reserve_price }}<br>{% endif %}
             {% if lot.buy_now_price %}<b>Buy now:</b> ${{ lot.buy_now_price }}<br>{% endif %}
             {% if lot.auction.online_bidding == 'allow' %}
@@ -31,6 +31,11 @@
                     No bids
                 {% endif %}
             {% endif %}<br>
+            {% if lot.auction.use_i_bred_this_fish_field and lot.i_bred_this_fish%}<b>Bred by this user</b><br>{% endif %}
+            {% if lot.custom_checkbox_label %}<b>{{ lot.custom_checkbox_label }}</b><br>{% endif %}
+            {% if lot.auction.custom_field_1 != 'disable' and lot.auction.custom_field_1_name and lot.custom_field_1 %}
+                <b>{{ lot.auction.custom_field_1_name }}:</b> {{ lot.custom_field_1 }}<br>
+            {% endif %}
             {{ lot.description_cleaned | safe }}
         </div>
     </div>

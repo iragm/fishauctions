@@ -13,23 +13,24 @@ var form_id = '#lot-form';
 
 function setAuction(setting) {
     if (setting) {
-        $('#div_id_auction').show();
-        $('#div_id_donation').show();
-        $('#div_id_relist_if_not_sold').hide();
-        $('#div_id_relist_if_sold').hide();
-        $('#div_id_promoted').hide();
-        $('#div_id_run_duration').hide();
+        $('#div_id_auction').closest('.col-md-3').show();
+        $('#div_id_donation').closest('.col-md-3').show();
+        $('#div_id_relist_if_not_sold').closest('.mb-3').hide();
+        $('#div_id_relist_if_sold').closest('.mb-3').hide();
+        //$('#div_id_promoted').closest('.col-md-3').hide();
+        $('#div_id_run_duration').closest('.col-md-4').hide();
         $('#div_id_show_payment_pickup_info').hide();
         $("#id_show_payment_pickup_info").prop('checked', false);
         $('#payment_pickup_info').hide();
         setAuctionRequiredFields($('#id_auction').val())
     } else {
-        $('#div_id_auction').hide();
-        $('#div_id_donation').hide();
-        $('#div_id_promoted').show();
-        $('#div_id_relist_if_not_sold').show();
-        $('#div_id_relist_if_sold').show();
-        $('#div_id_run_duration').show();
+        // fields for non-auction lots
+        $('#div_id_auction').closest('.col-md-3').hide();
+        $('#div_id_donation').closest('.col-md-3').hide();
+        //$('#div_id_promoted').closest('.col-md-3').show();
+        $('#div_id_relist_if_not_sold').closest('.mb-3').show();
+        $('#div_id_relist_if_sold').closest('.mb-3').show();
+        $('#div_id_run_duration').closest('.col-md-4').show();
         $('#div_id_show_payment_pickup_info').show();
         setAuctionRequiredFields(false);
     }
@@ -45,34 +46,86 @@ function setAuctionRequiredFields(val) {
             url: "{% url 'get_auction_info' %}",
             data: {'auction': val},
             success : function(result) {
-                if (result.buy_now) {
-                    if (result.use_categories) {
-                        $('#div_id_species_category').show();
-                        $('#div_id_i_bred_this_fish').show();
+                if (result.buy_now) { // auction exists
+                    if (result.use_quantity_field) {
+                        $('#div_id_quantity').closest('.col-md-3').show();
                     } else {
-                        $('#div_id_species_category').hide();
-                        $('#div_id_i_bred_this_fish').hide();
+                        var $quantity = $('#id_quantity');
+                        if (!$quantity.val().trim() || isNaN($quantity.val())) {
+                            $quantity.val(1);
+                        }
+                        $('#div_id_quantity').closest('.col-md-3').hide();
+                    }
+                    if (result.custom_checkbox_name && result.use_custom_checkbox_field) {
+                        $('#div_id_custom_checkbox').closest('.col-md-3').show();
+                        $('label[for="id_custom_checkbox"]').text(result.custom_checkbox_name);
+                    } else {
+                        $('#div_id_custom_checkbox').closest('.col-md-3').hide();
+                    }
+                    if (result.custom_field_1 !== 'disable' && result.custom_field_1_name) {
+                        $('#div_id_custom_field_1').closest('.col-md-12').show();
+                        $('label[for="id_custom_field_1"]').text(result.custom_field_1_name);
+                        if (result.custom_field_1 == 'required') {
+                            $('#id_custom_field_1').attr('required', true);
+                        } else {
+                            $('#id_custom_field_1').attr('required', false);
+
+                        }
+                    } else {
+                        $('#id_custom_field_1').attr('required', false);
+                        $('#div_id_custom_field_1').closest('.col-md-12').hide();
+                    }
+                    if (result.use_donation_field) {
+                        $('#div_id_donation').closest('.col-md-3').show();
+                    } else {
+                        $('#div_id_donation').closest('.col-md-3').hide();
+                    }
+                    if (result.use_description) {
+                        $('#div_id_summernote_description').closest('.col-md-12').show();
+                    } else {
+                        $('#div_id_summernote_description').closest('.col-md-12').hide();
+                    }
+                    if (result.use_i_bred_this_fish_field) {
+                        $('#div_id_i_bred_this_fish').closest('.col-md-3').show();
+                    } else {
+                        $('#div_id_i_bred_this_fish').closest('.col-md-3').hide();
+                    }
+                    if (result.use_reference_link) {
+                        $('#div_id_reference_link').closest('.col-md-3').show();
+                    } else {
+                        $('#div_id_reference_link').closest('.col-md-3').hide();
+                    }
+                    if (result.use_categories) {
+                        $('#div_id_species_category').closest('.col-md-12').show();
+                    } else {
+                        $('#div_id_species_category').closest('.col-md-12').hide();
                     }
                     if (result.reserve_price == 'disable') {
-                        $('#div_id_reserve_price').hide();
+                        $('#div_id_reserve_price').closest('.col-md-3').hide();
                     } else {
-                        $('#div_id_reserve_price').show();
+                        $('#div_id_reserve_price').closest('.col-md-3').show();
                     }
                     if (result.buy_now == 'disable') {
-                        $('#div_id_buy_now_price').hide();
+                        $('#div_id_buy_now_price').closest('.col-md-3').hide();
                         $('#id_buy_now_price').attr('required', false);
                     } else {
-                        $('#div_id_buy_now_price').show();
+                        $('#div_id_buy_now_price').closest('.col-md-3').show();
                     }
                     if (result.buy_now == 'required') {
                         $('#id_buy_now_price').attr('required', true);
                     }
                 } else {
-                    $('#div_id_species_category').show();
-                    $('#div_id_i_bred_this_fish').show();
+                    // reset to defaults
+                    $('#div_id_quantity').closest('.col-md-3').show();
+                    $('#div_id_custom_field_1').closest('.col-md-12').hide();
+                    $('#div_id_custom_checkbox').closest('.col-md-3').hide();
+                    $('#div_id_reference_link').closest('.col-md-3').show();
+                    $('#div_id_summernote_description').closest('.col-md-12').show();
+                    $('#div_id_species_category').closest('.col-md-12').show();
+                    $('#div_id_i_bred_this_fish').closest('.col-md-3').show();
                     $('#id_buy_now_price').attr('required', false);
-                    $('#div_id_reserve_price').show();
-                    $('#div_id_buy_now_price').show();
+                    $('#div_id_reserve_price').closest('.col-md-3').show();
+                    $('#div_id_buy_now_price').closest('.col-md-3').show();
                 }
             }
         });
@@ -118,7 +171,7 @@ $(document).ready(function() {
                 success : function(result) {
                     if (result['value'] && result['value'] !== 21) {
                         $('#id_species_category').val(result['value']);
-                        $('#hint_id_species_category').html("Looks like you're selling " + result['name'] + ".  <span class='text-warning'>If that's not correct, change it here.</span>");
+                        $('#id_species_category_helptext').html("Looks like you're selling " + result['name'] + ".  <span class='text-warning'>If that's not correct, change it here.</span>");
                     }
                 }
                 });
