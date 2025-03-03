@@ -40,6 +40,7 @@
           {% if not auction.is_online %}<a class="dropdown-item" href="{{ auction.set_lot_winners_link }}"><i class="bi bi-calendar-check"></i> Set lot winners</a>{% endif %}
           <a class="dropdown-item" href="/auctions/{{auction.slug}}/chat/"><i class="bi bi-chat-fill"></i> Chat messages</a>
           <a class="dropdown-item" href='{% url "auction_help" slug=auction.slug %}'><i class="bi bi-question-circle-fill"></i> Help and Support</a>
+          {% if not auction.is_online %}<a class="dropdown-item" href='{% url "auction_quick_checkout" slug=auction.slug %}'><i class="bi bi-bag-heart"></i> Quick checkout users</a>{% endif %}
           <a class="dropdown-item" href="/auctions/new?copy={{auction.slug}}"><i class="bi bi-plus-circle"></i> Copy to new auction</a>
           <a class="dropdown-item" href="/auctions/{{auction.slug}}/stats/"><i class="bi bi-graph-up"></i> Stats</a>
           {% if not auction.is_online %}<a class="dropdown-item" href='{% url "auction_printing" slug=auction.slug %}'><i class="bi bi-tags"></i> Print labels</a>{% endif %}

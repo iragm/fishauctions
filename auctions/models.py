@@ -1696,7 +1696,7 @@ class AuctionTOS(models.Model):
 
     @property
     def invoice(self):
-        return Invoice.objects.filter(auctiontos_user=self.pk).first()
+        return Invoice.objects.filter(auctiontos_user=self.pk).order_by("-date").first()
 
     @property
     def invoice_link_html(self):
