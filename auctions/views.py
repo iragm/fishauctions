@@ -2496,6 +2496,38 @@ class AuctionUnsellLot(AuctionViewMixin, View):
         return self.http_method_not_allowed
 
 
+class QuickCheckout(AuctionViewMixin, TemplateView):
+    """Enter a bidder number or name and mark their invoice as paid
+    For https://github.com/iragm/fishauctions/issues/292"""
+
+    template_name = "auctions/quick_checkout.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["auction"] = self.auction
+        return context
+
+
+class QuickCheckoutHTMX(AuctionViewMixin, TemplateView):
+    """For use with HTMX calls on QuickCheckout"""
+
+    template_name = "auctions/quick_checkout_htmx.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["auction"] = self.auction
+        qs = AuctionTOS.objects.filter(auction=self.auction)
+        filtered_qs = AuctionTOSFilter.generic(self, qs, kwargs.get("filter"))
+        if filtered_qs.count() > 1:
+            context["multiple_tos"] = True
+        else:
+            context["multiple_tos"] = False
+            context["tos"] = filtered_qs.first()
+            if context["tos"]:
+                context["invoice"] = context["tos"].invoice
+        return context
+
+
 class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
     """Add/edit lots of lots for a given auctiontos pk"""
 

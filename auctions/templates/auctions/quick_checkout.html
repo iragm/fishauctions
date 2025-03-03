@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% load i18n %}
+{% block title %}Quick checkout for {{ auction }}{% endblock %}
+
+{% block extra_js %}
+<script>
+$(document).ready(function() {
+  var tosSearch;
+  $('#tos').select();
+  function getTos() {
+    htmx.ajax('get','/api/auctions/{{ auction.slug }}/checkout/' + encodeURIComponent($("#tos").val()), {target: '#result'});
+  }
+    $("#tos").on('blur', function() {
+    clearTimeout(tosSearch);
+    getTos();
+  });
+  var input = document.getElementById('tos');
+  input.addEventListener('keyup', function () {
+    clearTimeout(tosSearch);
+    tosSearch = setTimeout(getTos, 600);
+  });
+});
+</script>
+{% endblock %}
+{% block content %}
+{% include 'auction_ribbon.html' %}
+<small>Use this page quickly mark invoices paid at the end of your auction.  <a href='https://github.com/iragm/fishauctions/issues/292'>Leave feedback about this page here.</a></small><br>
+<div class="container">
+  <input type="text" class="form-control" id="tos" placeholder="Bidder number or name" autocomplete="off">
+</div>
+<div id="result"></div>
+{% endblock %}

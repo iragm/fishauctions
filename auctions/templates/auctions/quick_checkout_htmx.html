@@ -1,0 +1,17 @@
+<div class="container mt-4">
+  {% if multiple_tos %}
+    Multiple users found.  Use a more specific search term.
+  {% else %}
+    {% if tos %}
+      {% if not invoice %}
+        This user does not have an invoice
+      {% else %}
+        {% if invoice.unsold_lot_warning %}<span class='text-warning'>{{unsold_lot_warning}}</span><br>{% endif %}
+        {{ tos.name }} {{ invoice.invoice_summary_short }} {% include 'invoice_buttons.html' %}<br>
+        {% if tos.memo %}Memo: {{ tos.memo }}<br>{% endif %}
+        <a href="{{ invoice.get_absolute_url }}" target="_blank"><i class="bi bi-arrow-up-right-square-fill"></i> View or adjust invoice</a>
+        <a href="{{ invoice.get_absolute_url }}?print" target="_blank"><i class="bi bi-printer-fill"></i> Print invoice</a>
+      {% endif %}
+    {% endif %}
+  {% endif %}
+</div>

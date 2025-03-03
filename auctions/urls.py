@@ -226,6 +226,16 @@ urlpatterns = [
         views.AuctionUnsellLot.as_view(),
         name="auction_unsell_lot",
     ),
+    path(
+        "auctions/<slug:slug>/checkout",
+        views.QuickCheckout.as_view(),
+        name="auction_quick_checkout",
+    ),
+    path(
+        "api/auctions/<slug:slug>/checkout/<slug:filter>/",
+        views.QuickCheckoutHTMX.as_view(),
+        name="auction_quick_checkout_htmx",
+    ),
     path("auctions/<slug:slug>/lots/<slug:custom_lot_number>/", views.ViewLot.as_view()),
     path(
         "auctions/<slug:slug>/lots/<slug:custom_lot_number>/<slug:lot_slug>/",
