@@ -2317,7 +2317,12 @@ class DynamicSetLotWinner(AuctionViewMixin, TemplateView):
             if self.auction.use_seller_dash_lot_numbering:
                 result_lot_qs = self.auction.lots_qs.filter(custom_lot_number=lot)
             else:
-                result_lot_qs = self.auction.lots_qs.filter(lot_number_int=lot)
+                try:
+                    lot = int(lot)
+                except ValueError:
+                    error = "Lot number must be a number"
+                if not error:
+                    result_lot_qs = self.auction.lots_qs.filter(lot_number_int=lot)
             # This can happen if two people are submitting lots at the exact same millisecond.  It seems very unlikely but an easy enough edge case to catch.
             if result_lot_qs.count() > 1:
                 error = "Multiple lots with this lot number.  Go to the lot's page and set the winner there."
