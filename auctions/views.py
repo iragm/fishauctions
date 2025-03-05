@@ -2314,6 +2314,7 @@ class DynamicSetLotWinner(AuctionViewMixin, TemplateView):
         else:
             # this next line makes it so you cannot search by custom_lot_number in a use_seller_dash_lot_numbering auction
             # if custom lot numbers are ever reenabled, change this
+            result_lot_qs = Lot.objects.none()
             if self.auction.use_seller_dash_lot_numbering:
                 result_lot_qs = self.auction.lots_qs.filter(custom_lot_number=lot)
             else:
