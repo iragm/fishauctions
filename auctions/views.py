@@ -2322,7 +2322,7 @@ class DynamicSetLotWinner(AuctionViewMixin, TemplateView):
                     lot = int(lot)
                 except ValueError:
                     error = "Lot number must be a number"
-                if not error:
+                if not error and lot:
                     result_lot_qs = self.auction.lots_qs.filter(lot_number_int=lot)
             # This can happen if two people are submitting lots at the exact same millisecond.  It seems very unlikely but an easy enough edge case to catch.
             if result_lot_qs.count() > 1:
