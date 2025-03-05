@@ -3145,18 +3145,14 @@ class Lot(models.Model):
             self.auctiontos_winner = tos
             self.save()
         if self.auction and self.auctiontos_winner:
-            invoice, created = Invoice.objects.get_or_create(
-                auctiontos_user=self.auctiontos_winner,
-                auction=self.auction,
-                defaults={},
-            )
+            invoice = Invoice.objects.filter(auctiontos_user=self.auctiontos_winner, auction=self.auction).first()
+            if not invoice:
+                invoice = Invoice.objects.create(auctiontos_user=self.auctiontos_winner, auction=self.auction)
             invoice.recalculate
         if self.auction and self.auctiontos_seller:
-            invoice, created = Invoice.objects.get_or_create(
-                auctiontos_user=self.auctiontos_seller,
-                auction=self.auction,
-                defaults={},
-            )
+            invoice = Invoice.objects.filter(auctiontos_user=self.auctiontos_seller, auction=self.auction).first()
+            if not invoice:
+                invoice = Invoice.objects.create(auctiontos_user=self.auctiontos_seller, auction=self.auction)
             invoice.recalculate
 
     @property
@@ -4563,19 +4559,19 @@ def update_lot_info(sender, instance, **kwargs):
         instance.longitude = userData.longitude
         instance.address = userData.address
 
-    # create an invoice for this seller/winner
-    if instance.auction and instance.auctiontos_seller:
-        invoice, created = Invoice.objects.get_or_create(
-            auctiontos_user=instance.auctiontos_seller,
-            auction=instance.auction,
-            defaults={},
-        )
-    if instance.auction and instance.auctiontos_winner:
-        invoice, created = Invoice.objects.get_or_create(
-            auctiontos_user=instance.auctiontos_winner,
-            auction=instance.auction,
-            defaults={},
-        )
+    # # create an invoice for this seller/winner
+    # if instance.auction and instance.auctiontos_seller:
+    #     invoice, created = Invoice.objects.get_or_create(
+    #         auctiontos_user=instance.auctiontos_seller,
+    #         auction=instance.auction,
+    #         defaults={},
+    #     )
+    # if instance.auction and instance.auctiontos_winner:
+    #     invoice, created = Invoice.objects.get_or_create(
+    #         auctiontos_user=instance.auctiontos_winner,
+    #         auction=instance.auction,
+    #         defaults={},
+    #     )
     if instance.auction and (not instance.reserve_price or instance.reserve_price < instance.auction.minimum_bid):
         instance.reserve_price = instance.auction.minimum_bid
 
