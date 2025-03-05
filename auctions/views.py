@@ -7,6 +7,7 @@ from collections import Counter
 from datetime import datetime, timedelta
 from datetime import timezone as date_tz
 from io import BytesIO, TextIOWrapper
+from pathlib import Path
 from random import choice, randint, sample, uniform
 from urllib.parse import unquote, urlencode
 
@@ -22,7 +23,7 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.models import User
 from django.contrib.messages.views import SuccessMessageMixin
 from django.contrib.sites.models import Site
-from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.core.files.base import ContentFile
 from django.db.models import (
     Avg,
@@ -50,7 +51,7 @@ from django.http import (
     HttpResponseRedirect,
     JsonResponse,
 )
-from django.shortcuts import get_object_or_404, redirect, render
+from django.shortcuts import get_object_or_404, redirect
 from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils import timezone
@@ -1140,7 +1141,7 @@ def clean_referrer(url):
     if not url:
         url = ""
     url = re.sub(r"^https?://", "", url)  # no http/s at the beginning
-    if "auction.fish/" not in url:
+    if Site.objects.get_current().domain not in url:
         url = re.sub(r"\?.*", "", url)  # remove get params
     url = re.sub(r"^www\.", "", url)  # www
     url = re.sub(r"/+$", "", url)  # trailing /
@@ -2988,6 +2989,7 @@ class ViewLot(DetailView):
     def get_context_data(self, **kwargs):
         lot = self.get_object()
         context = super().get_context_data(**kwargs)
+        context["domain"] = Site.objects.get_current().domain
         context["is_auction_admin"] = False
         if lot.auction:
             context["auction"] = lot.auction
@@ -4301,10 +4303,6 @@ class FAQ(AdminEmailMixin, ListView):
         context["domain"] = current_site.domain
         context["hide_google_login"] = True
         return context
-
-
-def aboutSite(request):
-    return render(request, "about.html")
 
 
 class PromoSite(TemplateView):
@@ -5698,11 +5696,18 @@ class ClubMap(AdminEmailMixin, TemplateView):
 
 
 class UserAgreement(TemplateView):
-    template_name = "tos.html"
+    template_name = "tos_wrapper.html"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["hide_google_login"] = True
+        tos_path = Path(settings.BASE_DIR / "tos.html")
+        if Path.exists(tos_path):
+            with Path.open(tos_path) as file:
+                context["tos_content"] = file.read()
+        else:
+            msg = "No TOS found.  You must place a file called tos.html in the root project directory (next to the .env file)"
+            raise ImproperlyConfigured(msg)
         return context
 
 
@@ -6152,7 +6157,7 @@ class AuctionStatsReferrersJSONView(AuctionStatsBarChartJSONView):
         self.views = (
             PageView.objects.filter(Q(auction=self.auction) | Q(lot_number__auction=self.auction))
             .exclude(referrer__isnull=True)
-            .exclude(referrer__startswith="auction.fish")
+            .exclude(referrer__startswith=Site.objects.get_current().domain)
             .exclude(referrer__exact="")
             .values("referrer")
             .annotate(count=Count("referrer"))

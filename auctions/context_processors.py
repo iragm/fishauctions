@@ -129,3 +129,7 @@ def dismissed_cookies_tos(request):
             except:
                 pass
     return {"hide_tos_banner": hide_tos_banner}
+
+
+def site_config(request):
+    return {"navbar_brand": settings.NAVBAR_BRAND, "copyright_message": settings.COPYRIGHT_MESSAGE}

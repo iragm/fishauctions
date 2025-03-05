@@ -382,7 +382,7 @@ def guess_category(text):
             species_category__isnull=False,
             is_deleted=False,
         )
-        .exclude(species_category__pk=21)
+        .exclude(species_category__name="Uncategorized")
         .exclude(auction__promote_this_auction=False)
     )
     q_objects = Q()
@@ -491,7 +491,9 @@ class Category(models.Model):
 
 
 class Product(models.Model):
-    """A species or item in the auction"""
+    """A species or item in the auction
+    This is not really used much anymore,
+    it was intended to exist for every possible species of fish, but that's just too much for the scope of this project"""
 
     common_name = models.CharField(max_length=255)
     common_name.help_text = "The name usually used to describe this species"
@@ -2050,7 +2052,7 @@ class Lot(models.Model):
     image_source.help_text = "Where did you get this image?"
     custom_checkbox = models.BooleanField(default=False, verbose_name="Custom checkbox")
     custom_field_1 = models.CharField(max_length=60, default="", blank=True)
-    i_bred_this_fish = models.BooleanField(default=False, verbose_name="I bred this fish/propagated this plant")
+    i_bred_this_fish = models.BooleanField(default=False, verbose_name=settings.I_BRED_THIS_FISH_LABEL)
     i_bred_this_fish.help_text = "Check to get breeder points for this lot"
     summernote_description = models.TextField(verbose_name="Description", default="", blank=True)
     # description = MarkdownField(
@@ -2229,7 +2231,7 @@ class Lot(models.Model):
                 self.custom_lot_number = f"{self.auctiontos_seller.bidder_number}-{custom_lot_number}"[:9]
         # a bit of magic to automatically set categories
         fix_category = False
-        if not self.species_category or (self.species_category and self.species_category.pk == 21):
+        if not self.species_category or (self.species_category and self.species_category.name == "Uncategorized"):
             fix_category = True
         if not self.species_category:
             fix_category = True
@@ -2240,7 +2242,7 @@ class Lot(models.Model):
             if self.auction:
                 if not self.auction.use_categories:
                     # force uncategorized for non-fish auctions
-                    self.species_category = Category.objects.filter(pk=21).first()
+                    self.species_category = Category.objects.filter(name="Uncategorized").first()
                 else:
                     result = guess_category(self.lot_name)
                     if result:
@@ -3161,8 +3163,8 @@ class Lot(models.Model):
 
     @property
     def category(self):
-        """string of a shortened species_category.  For labels, usually you want to use `lot.species_category` instead"""
-        if self.species_category and self.species_category.pk != 21:
+        """string of a shortened species_category.  This is for labels, usually you want to use `lot.species_category` instead"""
+        if self.species_category and self.species_category.name != "Uncategorized":
             return self.species_category.name_on_label or self.species_category
         return ""
 
@@ -3757,6 +3759,14 @@ class UserLabelPrefs(models.Model):
     )
 
 
+def get_default_can_create_auctions():
+    return getattr(settings, "ALLOW_USERS_TO_CREATE_AUCTIONS", True)
+
+
+def get_default_can_submit_lots():
+    return getattr(settings, "ALLOW_USERS_TO_CREATE_LOTS", True)
+
+
 class UserData(models.Model):
     """
     Extension of user model to store additional info
@@ -3832,7 +3842,8 @@ class UserData(models.Model):
     banned_from_chat_until.help_text = (
         "After this date, the user can post chats again.  Being banned from chatting does not block bidding"
     )
-    can_submit_standalone_lots = models.BooleanField(default=True)
+    can_submit_standalone_lots = models.BooleanField(default=get_default_can_submit_lots)
+    can_create_club_auctions = models.BooleanField(default=get_default_can_create_auctions)
     dismissed_cookies_tos = models.BooleanField(default=False)
     show_ad_controls = models.BooleanField(default=False, blank=True)
     show_ad_controls.help_text = "Show a tab for ads on all pages"

@@ -433,7 +433,7 @@ class LotAutoCategoryAdmin(admin.ModelAdmin):
 
     def uncategorize(self, request, queryset):
         """Change to uncategorized"""
-        uncategorized = Category.objects.get(pk=21)
+        uncategorized = Category.objects.filter(name="Uncategorized").first()
         for lot in queryset:
             lot.species_category = uncategorized
             lot.category_automatically_added = False
