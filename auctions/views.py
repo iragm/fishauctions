@@ -2315,10 +2315,16 @@ class DynamicSetLotWinner(AuctionViewMixin, TemplateView):
         else:
             # this next line makes it so you cannot search by custom_lot_number in a use_seller_dash_lot_numbering auction
             # if custom lot numbers are ever reenabled, change this
+            result_lot_qs = Lot.objects.none()
             if self.auction.use_seller_dash_lot_numbering:
                 result_lot_qs = self.auction.lots_qs.filter(custom_lot_number=lot)
             else:
-                result_lot_qs = self.auction.lots_qs.filter(lot_number_int=lot)
+                try:
+                    lot = int(lot)
+                except ValueError:
+                    error = "Lot number must be a number"
+                if not error and lot:
+                    result_lot_qs = self.auction.lots_qs.filter(lot_number_int=lot)
             # This can happen if two people are submitting lots at the exact same millisecond.  It seems very unlikely but an easy enough edge case to catch.
             if result_lot_qs.count() > 1:
                 error = "Multiple lots with this lot number.  Go to the lot's page and set the winner there."
@@ -2822,9 +2828,9 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
                 lot.save()
             if lots:
                 messages.success(self.request, f"Updated lots for {self.tos.name}")
-                invoice, created = Invoice.objects.get_or_create(
-                    auctiontos_user=self.tos, auction=self.auction, defaults={}
-                )
+                invoice = Invoice.objects.filter(auctiontos_user=self.tos, auction=self.auction).first()
+                if not invoice:
+                    invoice = Invoice.objects.create(auctiontos_user=self.tos, auction=self.auction)
                 invoice.recalculate
             # when saving labels, it doesn't take you off from the page you're on
             # So we need to go somewhere, and then say "download labels"
@@ -3360,9 +3366,9 @@ class LotValidation(LoginRequiredMixin):
                 )
             else:
                 lot.auctiontos_seller = auctiontos
-                invoice, created = Invoice.objects.get_or_create(
-                    auctiontos_user=auctiontos, auction=lot.auction, defaults={}
-                )
+                invoice = Invoice.objects.filter(auctiontos_user=auctiontos, auction=lot.auction).first()
+                if not invoice:
+                    invoice = Invoice.objects.create(auctiontos_user=auctiontos, auction=lot.auction)
                 invoice.recalculate
         else:
             # this lot is NOT part of an auction
@@ -3448,9 +3454,10 @@ class LotCreateView(LotValidation, CreateView):
         """When a new lot is created, make sure to create an invoice for the seller"""
         lot = form.save(commit=False)
         if lot.auction and lot.auctiontos_seller:
-            invoice, created = Invoice.objects.get_or_create(
-                auctiontos_user=lot.auctiontos_seller, auction=lot.auction, defaults={}
-            )
+            invoice = Invoice.objects.filter(auctiontos_user=lot.auctiontos_seller, auction=lot.auction).first()
+            if not invoice:
+                invoice = Invoice.objects.create(auctiontos_user=lot.auctiontos_seller, auction=lot.auction)
+            invoice.recalculate
         return super().form_valid(form, **kwargs)
 
     def dispatch(self, request, *args, **kwargs):
@@ -3781,11 +3788,12 @@ class AuctionTOSDelete(TemplateView, FormMixin, AuctionPermissionsMixin):
             else:
                 if form.cleaned_data["merge_with"]:
                     new_auctiontos = AuctionTOS.objects.get(pk=form.cleaned_data["merge_with"])
-                    invoice, created = Invoice.objects.get_or_create(
-                        auctiontos_user=new_auctiontos,
-                        auction=new_auctiontos.auction,
-                        defaults={},
-                    )
+                    invoice = Invoice.objects.filter(
+                        auctiontos_user=new_auctiontos, auction=new_auctiontos.auction
+                    ).first()
+                    if not invoice:
+                        invoice = Invoice.objects.create(auctiontos_user=new_auctiontos, auction=new_auctiontos.auction)
+                    invoice.recalculate
                     for lot in sold_lots:
                         lot.auctiontos_seller = new_auctiontos
                         lot.save()
