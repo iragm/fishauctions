@@ -159,7 +159,7 @@ $(document).ready(function() {
         setAuction(true);
     });
     $('#id_lot_name').change(function(data) {
-        if (!$('#id_species_category').val() || $('#id_species_category').val() == 21) {
+        if (!$('#id_species_category').val()) {
             if ($('#div_id_species_category').is(':visible')) {
                 $.ajax({
                 type: "POST",
@@ -169,7 +169,7 @@ $(document).ready(function() {
                 url: "{% url 'guess_category' %}",
                 data: {'lot_name': this.value},
                 success : function(result) {
-                    if (result['value'] && result['value'] !== 21) {
+                    if (result['value'] && result['name'] !== "Uncategorized") {
                         $('#id_species_category').val(result['value']);
                         $('#id_species_category_helptext').html("Looks like you're selling " + result['name'] + ".  <span class='text-warning'>If that's not correct, change it here.</span>");
                     }
