@@ -81,10 +81,12 @@ RUN groupadd -r -g ${PUID-1000} app && \
 # create the appropriate directories
 ENV APP_HOME=/home/app/web
 RUN mkdir /home/logs
+RUN mkdir -p /home/app/logs
+RUN touch /home/app/logs/django.log
 RUN mkdir /home/user
-RUN mkdir $APP_HOME
-RUN mkdir $APP_HOME/staticfiles
-RUN mkdir $APP_HOME/mediafiles
+RUN mkdir -p $APP_HOME
+RUN mkdir -p $APP_HOME/staticfiles
+RUN mkdir -p $APP_HOME/mediafiles
 RUN mkdir /home/app/.cache
 
 WORKDIR $APP_HOME
@@ -136,6 +138,7 @@ RUN /tmp/python_file_hack.sh
 # chown all the files to the app user
 RUN chown -R app:app $APP_HOME
 RUN chown -R app:app /home/logs
+RUN chown -R app:app /home/app/logs/
 RUN chown -R app:app /home/user
 RUN chown -R app:app /var/log/
 RUN chown -R app:app /var/log/
