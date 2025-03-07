@@ -289,7 +289,8 @@ class LotAdminFilter(django_filters.FilterSet):
                 | Q(custom_lot_number=value)
             )
         else:
-            # fixme - if 'no images'
+            if value == "broken":
+                return queryset.filter(auctiontos_winner__isnull=True, winner__isnull=False)
             # qs = qs.filter()
             # LotImage.objects.filter(lot_number=self.lot_number)
 

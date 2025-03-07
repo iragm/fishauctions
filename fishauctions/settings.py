@@ -73,7 +73,7 @@ LOGGING = {
         "django_file": {
             "level": os.getenv("DJANGO_LOG_LEVEL", "INFO"),
             "class": "logging.handlers.RotatingFileHandler",
-            "filename": "/home/logs/django.log",
+            "filename": "/home/app/logs/django.log",
             "maxBytes": 1024 * 1024 * 5,  # 5 MB
             "backupCount": 5,
             "formatter": "verbose",
@@ -81,7 +81,7 @@ LOGGING = {
         "root_file": {
             "level": os.getenv("LOG_LEVEL", "INFO"),
             "class": "logging.handlers.RotatingFileHandler",
-            "filename": "/home/logs/root.log",
+            "filename": "/home/app/logs/root.log",
             "maxBytes": 1024 * 1024 * 5,  # 5 MB
             "backupCount": 5,
             "formatter": "verbose",
