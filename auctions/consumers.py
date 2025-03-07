@@ -205,7 +205,9 @@ def bid_on_lot(lot, user, amount):
                 if bid.amount >= lot.buy_now_price:
                     lot.winner = user
                     if lot.auction:
-                        auctiontos_winner = AuctionTOS.objects.filter(auction=lot.auction, user=user).first()
+                        auctiontos_winner = AuctionTOS.objects.filter(
+                            Q(user=user) | Q(email=user.email), auction=lot.auction
+                        ).first()
                         if auctiontos_winner:
                             lot.auctiontos_winner = auctiontos_winner
                             lot.create_update_invoices
