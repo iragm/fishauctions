@@ -109,24 +109,24 @@ Support for you running your own auction website is extremely limited (read: non
 
 ### Deploy the website
 Log into your VM and enter the following:
-'''
+```
 git clone https://github.com/iragm/fishauctions
 cd fishauctions
 cp .env.example .env
 nano .env
-'''
+```
 Go through what's there and enter the keys you got in the pre-setup checklist above.  One thing to pay attention to is the email configuration.
 If you chose Gmail, configure things like this:
-'''
+```
 POST_OFFICE_EMAIL_BACKEND="django.core.mail.backends.smtp.EmailBackend"
 EMAIL_USE_TLS='True'
 EMAIL_HOST='smtp.gmail.com'
 EMAIL_PORT='587'
 EMAIL_HOST_USER='example@gmail.com'
 EMAIL_HOST_PASSWORD='your gmail app password, not your gmail password'
-'''
+```
 If you're using Amazon SES, the above settings won't be used, set these up instead:
-'''
+```
 POST_OFFICE_EMAIL_BACKEND="django_ses.SESBackend"
 AWS_ACCESS_KEY_ID="secret"
 AWS_SECRET_ACCESS_KEY="secret"
@@ -134,13 +134,13 @@ AWS_SESSION_PROFILE="default"
 AWS_SES_REGION_NAME="us-east-1"
 AWS_SES_REGION_ENDPOINT="email.us-east-1.amazonaws.com"
 AWS_SES_CONFIGURATION_SET="secret"
-'''
+```
 Most of the other options in the .env file are pretty self-explanatory.  Booleans (True or False) are case sensitive.
 Save and exit nano, then type:
-'''
+```
 docker compose --profile "*" build
 docker compose up
-'''
+```
 With a little luck, things worked.  If not, open an issue and provide as much detail as possible.  Don't put your keys in the issue, but do include any logs.  Remember that support is very limited for custom production deployments.  If something isn't talked about in this guide, I'm not really interested in helping with it.
 
 ### Post setup:
