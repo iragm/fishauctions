@@ -6,7 +6,7 @@ import auctions.models
 
 
 def create_or_update_email_templates(apps, schema_editor):
-    EmailTemplate = apps.get_model("django-post_office", "EmailTemplate")
+    EmailTemplate = apps.get_model("post_office", "EmailTemplate")
 
     templates = [
         {
@@ -1149,6 +1149,7 @@ def create_faqs(apps, schema_editor):
 class Migration(migrations.Migration):
     dependencies = [
         ("auctions", "0174_alter_auction_allow_bulk_adding_lots_and_more"),
+        ("post_office", "__latest__"),  # Ensure post_office migrations are applied first
     ]
 
     operations = [
