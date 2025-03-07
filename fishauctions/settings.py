@@ -477,6 +477,8 @@ if os.environ.get("ENABLE_HELP", "True") == "False":
     ENABLE_HELP = False
 else:
     ENABLE_HELP = True
+MAILING_ADDRESS = os.environ.get("MAILING_ADDRESS", "No address configured")
+WEEKLY_PROMO_MESSAGE = os.environ.get("WEEKLY_PROMO_MESSAGE", "")
 
 # the following words are very common and should not be used when generating recommended lots or assigning categories
 IGNORE_WORDS = [

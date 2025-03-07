@@ -9,7 +9,594 @@ def create_or_update_email_templates(apps, schema_editor):
     EmailTemplate = apps.get_model("post_office", "EmailTemplate")
 
     templates = [
-        {"name": "auction_first", "subject": "foo", "content": "bar", "html_content": "html"},
+        {
+            "name": "auction_first",
+            "subject": "Thanks for creating an auction!",
+            "content": """Hello {{ auction.created_by.first_name }},
+
+Thanks for creating {{ auction }} on {{domain}}!
+
+Your next steps:
+{% if auction.no_location %}*You haven't yet added a pickup location to your auction.  You should add one here: https://{{ domain }}/locations/new/?next=/auctions/{{auction.slug}}{% else %}{% if not auction.multi_location %}If you want, you can add an additional pickup location (or two) here: https://{{ domain }}/auctions/{{auction.slug}}/locations/new/
+
+Here's some more information about how multi-locations auctions work:
+https://{{domain}}/blog/multiple-location-auctions/{% endif %}
+
+{% endif %}* Users won't be able to add or bid on lots until they've read your auction rules and confirmed their pickup location.  You should confirm your own pickup location and add a few lots to your auction so there's something there for other users to see and bid on.
+
+* {% if not auction.promote_this_auction %}Your auction isn't visible to users unless they have a link to it.  {%endif%}Use this link to share your auction: https://{{ domain }}/?{{auction.slug}}{% if auction.multi_location %}
+
+* It looks like you've added more than one pickup location to your auction.  Here's some more information about how multi-locations auctions work:
+https://{{domain}}/blog/multiple-location-auctions/{% endif %}
+
+* If you need to make changes to the rules, sooner is better than later.  You can edit your auction here: https://{{domain}}/auctions/{{auction.slug}}/edit/
+
+* Read about encouraging participation: https://{{domain}}/blog/encouraging-participation/
+
+You'll get a few more emails like this over the course of your auction, unless you unsubscribe: https://{{ domain }}/unsubscribe/{{unsubscribe}}/
+
+Just reply to this email if you have questions!
+
+Best wishes,
+{{domain}}""",
+            "html_content": """Hello {{ auction.created_by.first_name }},<br><br>
+
+Thanks for creating {{ auction }} on {{domain}}!<br><br>
+
+Your next steps:<br>
+<ol>
+{% if auction.no_location %}<li> You haven't yet added a pickup location to your auction.  You should <a href="https://{{ domain }}/locations/new/?next=/auctions/{{auction.slug}}">add one here</a>.</li>{% else %}{% if not auction.multi_location %}<li>If you want, you can <a href="https://{{ domain }}/auctions/{{auction.slug}}/locations/new/">add an additional pickup location (or two) here</a>. Here's <a href="https://{{domain}}/blog/multiple-location-auctions/">more information about how multi-locations auctions work</a>.</li>{% endif %}{% endif %}<li> Users won't be able to add or bid on lots until they've read your auction rules and confirmed their pickup location.  You should confirm your own pickup location and add a few lots to your auction so there's something there for other users to see and bid on.</li>
+
+<li> {% if not auction.promote_this_auction %}Your auction isn't visible to users unless they have a link to it.  {% endif %}Use this link to share your auction: https://{{ domain }}/?{{auction.slug}}</li>
+
+{% if auction.multi_location %}<li> It looks like you've added more than one pickup location to your auction.  Here's some <a href='https://{{domain}}/blog/multiple-location-auctions/'>more information about how multi-locations auctions work</a>.</li>{% endif %}
+
+<li> If you need to make changes to the rules, sooner is better than later.  You can <a href='https://{{domain}}/auctions/{{auction.slug}}/edit/'>edit your auction here</a>.</li>
+
+<li> Read about <a href='https://{{domain}}/blog/encouraging-participation/'>encouraging participation</a>.
+</li></ol>
+You'll get a few more emails like this over the course of your auction, unless you <a href='https://{{ domain }}/unsubscribe/{{unsubscribe}}/'>unsubscribe</a>
+<br><br>
+Just reply to this email if you have questions!<br><br>
+Best wishes,<br>{{domain}}""",
+        },
+        {
+            "name": "auction_invoices",
+            "subject": "Invoices for {{auction}} are ready!",
+            "content": """Hello {{ auction.created_by.first_name }},
+
+Your auction has ended and invoices are ready!
+
+Please review the invoices for {{auction}} and mark them ready for payment: https://{{domain}}/auctions/{{auction.slug}}/users/
+
+* Users will get an email notification ONLY AFTER you mark these invoice ready for payment, so mark them ready as soon as possible to give users time to pay before they need to pickup and exchange lots.  You can change this behavior with the Invoice Notifications setting in your auction's rules.
+
+* This site does not handle payments, but we make it easy for you to import the automatically generated invoices into Paypal: https://{{ domain }}/blog/online-payments-suck/.
+
+* If you want to make changes or adjustments to these invoices, make those before marking them ready.  You'll see editing tools on each invoice to manually adjust it.
+
+* Remember to print out a copy of each invoice and bring it to the pickup location.  Having these on hand will make the lot exchange easier: users get their invoice showing payment, and can show it to the sellers before picking up their lots.
+
+https://{{ domain }}/unsubscribe/{{unsubscribe}}/""",
+            "html_content": """Hello {{ auction.created_by.first_name }},<br><br>
+
+Your auction has ended and invoices are ready!<br><br>
+
+Please review the <a href="https://{{domain}}/auctions/{{auction.slug}}/users/">invoices for {{auction}} and mark them ready for payment</a><br><br>
+
+<ul><li> Users will get an email notification <em>only after</em> you mark these invoice ready for payment, so mark them ready as soon as possible to give users time to pay before they need to pickup and exchange lots.  You can change this behavior with the Invoices Notification setting in your auction's rules</li>
+
+<li> This site does not handle payments, but we make it easy for you to <a href="https://{{ domain }}/blog/online-payments-suck/">import the automatically generated invoices into Paypal</a>.</li>
+
+<li> If you want to make changes or adjustments to these invoices, make those before marking them ready.  You'll see editing tools on each invoice to manually adjust it.</li>
+
+<li> Remember to print out a copy of each invoice and bring it to the pickup location.  Having these on hand will make the lot exchange easier: users get their invoice showing payment, and can show it to the sellers before picking up their lots.</li>
+</ul>
+<br>
+Best wishes,<br>{{domain}}<br><br>
+<small><a href="https://{{ domain }}/unsubscribe/{{unsubscribe}}/">Unsubscribe</a></small>""",
+        },
+        {
+            "name": "auction_print_reminder",
+            "subject": "Remember to print your labels for {{ tos.auction }}",
+            "content": """Hello {{ tos.name }},
+
+Thanks for adding lots to {{ tos.auction }}!  {% if tos.auction.is_online%}Now that the auction has ended,{% else %}Before you bring your lots to the auction,{%endif%} please print your labels: https://{{domain}}{{tos.auction.label_print_link}}
+
+{% if not tos.auction.is_online%}If you want to add more lots, add them before printing your labels.{%endif%}You can print these on regular paper, cut them out, and use packing tape to attach them to your lots.  Make sure the bags are dry before attaching the labels!
+
+{% if tos.auction.is_online%}If you don't own a printer, write the lot number{% if tos.auction.multi_location %}, winner's location {% endif %} and winner's name clearly on each lot.
+{% else %}
+Make sure to arrive well before the auction begins so you have time to organize your lots.
+{% endif %}
+
+{% if tos.auction.use_categories %}If you haven't packed fish before, take a look at these tips: https://{{ domain }}/blog/transporting-fish/{% endif %}
+
+Questions?  Just reply and we'll help!""",
+            "html_content": """Hello {{ tos.name }},<br>
+<br>
+Thanks for adding lots to {{ tos.auction }}!  {% if tos.auction.is_online%}Now that the auction has ended,{% else %}Before you bring your lots to the auction,{%endif%} please <a href="https://{{domain}}{{tos.auction.label_print_link}}">print your labels from here</a>.<br>{% if not tos.auction.is_online%}If you want to add more lots, add them before printing your labels.{%endif%}
+<li>Print labels on regular paper</li>
+<li>Cut them out</li>
+<li>Use packing tape to attach them to your lots</li>
+</ol>Make sure the bags are dry before attaching the labels!<br>
+<br>
+{% if tos.auction.is_online%}If you don't own a printer, <b>write the lot number{% if tos.auction.multi_location %}, winner's location {% endif %} and winner's name clearly on each lot</b>.<br><br>
+Remember to bring your lots to {{ tos.pickup_location }}, on {{ tos.pickup_time_as_localized_string }}.{% else %}
+Make sure to arrive well before the auction begins, so you have time to organize your lots.  Remember that bidding starts promptly on {{ tos.auction_date_as_localized_string }}.<br>
+{% endif %}<a href="{{tos.pickup_location.directions_link}}">Get directions</a>.
+<br><br>
+{% if tos.auction.use_categories %}If you haven't packed fish before, take a look at <a href="https://{{ domain }}/blog/transporting-fish/">these tips</a>.<br><br>{% endif %}
+Questions?  Just reply and we'll help!<br>""",
+        },
+        {
+            "name": "auction_second",
+            "subject": "See a list of users in your auction",
+            "content": """Hello {{ auction.created_by.first_name }},
+
+{{ auction.number_of_confirmed_tos }} people have joined {{auction}}!
+
+Now is a good time to download a spreadsheet of user information.  You can download the latest copy of this file here: https://{{domain}}/auctions/{{auction.slug}}/report/
+
+Try importing this to Google drive:
+Go to https://drive.google.com
+Select New>File Upload, then select the CSV file you just downloaded
+Open the uploaded file with Sheets
+Click Data>Create a Filter
+Use the filter you created to sort your CSV file and get information.
+
+You may want to email some of these groups of people:
+People who viewed lots but did not bid -- encourage them to bid
+People who sold or bid on lots -- confirm that they'll be at the pickup location
+People who didn't fill out an address or phone number -- to make sure you have their contact info
+People who aren't part of your club -- ask them to join!
+{% if auction.use_categories %}People who sold lots -- remind them to stop feeding their fish a couple days before they bag them up{% endif %}
+
+Unsubscribe: https://{{ domain }}/unsubscribe/{{unsubscribe}}/""",
+            "html_content": """Hello {{ auction.created_by.first_name }},<br><br>
+
+{{ auction.number_of_confirmed_tos }} people have joined {{auction}}!<br><br>
+
+Now is a good time to download a spreadsheet of user information.  You can <a href="https://{{domain}}/auctions/{{auction.slug}}/report/">download the latest copy of this file here</a>. <br><br>
+
+Try importing this to Google drive:<br>
+<ol>
+<li>Go to <a href="https://drive.google.com">Google Drive</a></li>
+<li>Select <b>New>File Upload</b>, then select the CSV file you just downloaded</li>
+<li>Open the uploaded file with Sheets</li>
+<li>Click <b>Data>Create a Filter</b></li>
+<li>Use the filter you created to sort your CSV file and get information.</li>
+</ol>
+<br>
+
+You may want to email some of these groups of people:<br>
+<ul>
+<li>People who viewed lots but did not bid -- encourage them to bid</li>
+<li>People who sold or bid on lots -- confirm that they'll be at the pickup location</li>
+<li>People who didn't fill out an address or phone number -- to make sure you have their contact info</li>
+{% if auction.use_categories %}<li>People who sold lots -- remind them to stop feeding their fish a couple days before they bag them up</li>{% endif %}
+<li>People who aren't part of your club -- ask them to join!</li>
+</ul>
+<br>
+Best wishes,<br>{{domain}}<br><br>
+<small><a href="https://{{ domain }}/unsubscribe/{{unsubscribe}}/">Unsubscribe</a></small>""",
+        },
+        {
+            "name": "auction_thanks",
+            "subject": "Thanks for running an auction",
+            "content": """Hello {{ auction.created_by.first_name }},
+
+Thanks for choosing {{domain}} to run your auction!
+* Take a look at the stats for {{auction}}: https://{{domain}}/auctions/{{auction.slug}}/stats/
+
+* Remind your users to leave feedback on lots they've bought and sold: https://{{domain}}/feedback/  It's probably a good idea to thank them for participating in {{auction}}, and to encourage them to join your club.  Remember that you can download a list of users here: https://{{domain}}/auctions/{{auction.slug}}/report/
+
+* If you haven't already done so, you should mark your invoices paid.  https://{{domain}}/auctions/{{auction.slug}}/users/
+
+Once again, thank you very much for using {{domain}}.  If you have suggestions to help improve the site, just reply to this email!
+
+Unsubscribe from these emails: https://{{ domain }}/unsubscribe/{{unsubscribe}}/""",
+            "html_content": """Hello {{ auction.created_by.first_name }},<br><br>
+
+Thanks for choosing {{domain}} to run your auction!<br><br>
+
+<ul>
+<li> Take a look at the <a href="https://{{domain}}/auctions/{{auction.slug}}/stats/">stats for {{auction}}</a>.</li>
+
+<li> Remind your users to <a href="https://{{domain}}/feedback/">leave feedback</a> on lots they've bought and sold.  It's probably a good idea to thank them for participating in the {{auction}}, and to encourage them to join your club.  Remember that you can <a href="https://{{domain}}/auctions/{{auction.slug}}/report/">download a list of users here</a>.</li>
+
+<li> If you haven't already done so, you should <a href="https://{{domain}}/auctions/{{auction.slug}}/users/">mark your invoices paid</a>.</li>
+</ul><br>
+Once again, thank you very much for using {{domain}}.  If you have suggestions to help improve the site, just reply to this email!<br><br>
+Best wishes,<br>{{domain}}<br><br>
+<small><a href="https://{{ domain }}/unsubscribe/{{unsubscribe}}/">Unsubscribe</a></small>""",
+        },
+        {
+            "name": "in_person_auction_welcome",
+            "subject": "Thanks for joining {{tos.auction}}",
+            "content": """Hello {{ tos.name }},
+
+Thank you for joining {{tos.auction}}!  This is an in-person auction that starts {{ tos.auction_date_as_localized_string }}.  You can get directions here: {{tos.pickup_location.directions_link}}
+
+See the auction's rules here: https://{{domain}}/auctions/{{tos.auction.slug}}/
+
+See you there!
+
+Questions?  Just reply and we'll help!""",
+            "html_content": """Hello {{ tos.name }},<br>
+<br>
+Thank you for joining {{tos.auction}}!  This is an in-person auction that starts {{ tos.auction_date_as_localized_string }}.  <a href="{{tos.pickup_location.directions_link}}">Get directions here</a>.<br>
+<br>
+If you want to sell lots, you can <a href="https://{{domain}}{{tos.auction.add_lot_link}}">add them here</a>.<br>
+<br>
+Make sure to <a href="https://{{domain}}/auctions/{{tos.auction.slug}}/">read the auction's rules</a>.<br>
+<br>
+See you there!<br>
+<br>
+Questions?  Just reply and we'll help!""",
+        },
+        {
+            "name": "invoice_ready",
+            "subject": "{{ subject }}",
+            "content": """Hello {{ name }},
+
+{{ subject }}.  {% if invoice.user_should_be_paid %}You will be paid{% else %}You owe a total of{% endif %} ${{ invoice.absolute_amount|floatformat:2}}{% if location %}
+
+{% if invoice.status == "PAID" %}Your invoice has been paid in full, this is just a receipt for your records.{% endif %}
+
+{% if invoice.auction.is_online %}
+You must meet at {{ location }} to exchange your lots.
+
+See you there!{% endif %}{% endif %}
+
+https://{{domain}}/invoices/{{invoice.no_login_link}}/
+
+{{ invoice.auction.invoice_payment_instructions | default:""}}
+
+Best wishes,
+{{domain}}""",
+            "html_content": """Hello {{ name }},<br><br>
+
+{{ subject }}.  {% if invoice.user_should_be_paid %}You will be paid{% else %}You owe a total of{% endif %} ${{ invoice.absolute_amount|floatformat:2}}{% if location %}
+{% if invoice.status == "PAID" %}<br><br>Your invoice has been paid in full, this is just a receipt for your records.{% endif %}
+{% if invoice.auction.is_online %}<br><br>
+You must meet at {{ location }} to exchange your lots.<br><br>
+
+See you there!{% endif %}{% endif %}<br><br>
+
+<a href='https://{{domain}}/invoices/{{invoice.no_login_link}}/?src=notification'>Click here to view your invoice</a><br><br>
+<br>{{ invoice.auction.invoice_payment_instructions | default:""}}<br>
+Best wishes,<br>
+{{domain}}""",
+        },
+        {
+            "name": "join_auction_reminder",
+            "subject": "Don't forget to join {{ auction }}",
+            "content": """Hey {{ user.first_name }},
+
+Thanks for checking out {{ auction }}!  Don't forget to join:  Read the rules and click the green button at the bottom of this page:
+https://{{ domain }}/auctions/{{auction.slug}}
+
+{% if auction.allow_bidding_on_lots %}Once you join, make sure to bid on any lots you're interested in!{% else %}Don't miss out!{% endif %}
+
+{% for lot in lots %}
+* {{ lot.lot_name }}: https://{{lot.full_lot_link}}
+
+{% endfor %}
+
+Got questions?  Having trouble?  Just reply and we'll help you!
+
+Turn these emails off at https://{{ domain }}/preferences/ or unsubscribe from everything: https://{{ domain }}/unsubscribe/{{unsubscribe}}/ Snail mail address: {{ mailing_address }}""",
+            "html_content": """Hey {{ user.first_name }},<br><br>
+
+Thanks for checking out {{ auction }}!  Don't forget to join:  <a href='https://{{ domain }}/auctions/{{auction.slug}}?src={{uuid}}'>Read the rules and click the green button at the bottom of this page</a>
+<br><br>
+
+{% if auction.allow_bidding_on_lots %}Once you join, make sure to bid on any lots you're interested in!{% else %}Don't miss out!{% endif %}<br><br>
+
+{% for lot in lots %}
+<b>{{ lot.lot_name }}</b><br>
+<a href="https://{{lot.full_lot_link}}?src={{uuid}}">{% if lot.thumbnail %}<img src='https://{{ domain }}{{ lot.thumbnail.image.lot_list.url }}'></img><br>{% endif %}View and bid on this lot</a><br><br>
+
+{% endfor %}
+
+Got questions?  Having trouble?  Just reply and we'll help you!<br><br>
+
+<br><small>Turn these emails off under your <a href='https://{{ domain }}/preferences/'>preferences</a>, or <a href="https://{{ domain }}/unsubscribe/{{unsubscribe}}/">unsubscribe</a> from this kind of thing, or snail mail us at {{ mailing_address }}</small>""",
+        },
+        {
+            "name": "lot_ended_relist",
+            "subject": "Lot ended",
+            "content": """Hi {{lot.user.first_name}},
+
+Your lot, {{ lot.lot_name }}, has ended.  If you want to relist it, click here: https://{{ domain }}//lots/new/?copy={{ lot.lot_number }}
+
+Best wishes,
+{{domain}}""",
+            "html_content": """Hi {{lot.user.first_name}},<br>
+<br>
+Your lot, {{ lot.lot_name }}, has ended.  If you want to relist it, <a href='https://{{ domain }}//lots/new/?copy={{ lot.lot_number }}'>click here</a><br><br>
+
+Best wishes,<br>
+{{domain}}""",
+        },
+        {
+            "name": "non_auction_lot_seller",
+            "subject": "{{ lot.lot_name }} is now sold!",
+            "content": """Hi {{lot.user.first_name}},
+
+You've sold {{ lot.lot_name }} for ${{lot.winning_price}} to {{ lot.winner.first_name}} {{lot.winner.last_name}}.
+
+Reply to this email to contact the winner and coordinate payment and lot exchange.
+
+Best wishes,
+{{domain}}""",
+            "html_content": """Hi {{lot.user.first_name}},<br><br>
+
+You've sold {{ lot.lot_name }} for ${{lot.winning_price}} to {{ lot.winner.first_name}} {{lot.winner.last_name}}<br><br>
+
+Reply to this email to contact the winner and coordinate payment and lot exchange.<br><br>
+
+Best wishes,<br>
+{{domain}}""",
+        },
+        {
+            "name": "non_auction_lot_winner",
+            "subject": "{{ lot.lot_name }} is now sold!",
+            "content": """Hi {{lot.winner.first_name}},
+
+You've won {{ lot.lot_name }} for ${{lot.winning_price}} from {{ lot.user.first_name }} {{ lot.user.last_name }}.
+
+Reply to this email to contact the seller and coordinate payment and lot exchange.
+
+Best wishes,
+{{domain}}""",
+            "html_content": """Hi {{lot.winner.first_name}},<br><br>
+
+You've won {{ lot.lot_name }} for ${{lot.winning_price}} from {{ lot.user.first_name }} {{ lot.user.last_name }}.<br><br>
+
+Reply to this email to contact the seller and coordinate payment and lot exchange.<br><br>
+
+Best wishes,<br>
+{{domain}}""",
+        },
+        {
+            "name": "online_auction_welcome",
+            "subject": "Thanks for joining {{tos.auction}}",
+            "content": """Hello {{ tos.name }},
+
+Thank you for joining {{tos.auction}}!  This is an online auction with in-person lot exchange.
+
+{{ closer_location_warning }}
+Some things to keep in mind:
+* Bidding ends on {{ tos.auction_date_as_localized_string }}.  If last-minute bids are placed on a lot, the end time will be extended: https://{{ domain }}/faq#how-exactly-do-dynamic-endings-work
+* The winning bid is determined by the second highest bidder, so you should bid what an item is worth to you.  You'll only pay $1 more than the second highest bid.
+* If you want to sell lots, you can do so now.
+* Any lots you win will need to be picked up{% if tos.auction.multi_location %} at {{ tos.pickup_location }},{% endif %}{% if not tos.pickup_location.users_must_coordinate_pickup%} on {{ tos.pickup_time_as_localized_string }}{% endif %}.  You can get directions here: {{tos.pickup_location.directions_link}}
+{% if tos.auction.multi_location and tos.second_pickup_time_as_localized_string %}* This is a multi-location auction; you can bid on lots at any location, and the club will coordinate transport between locations.  If you win lots from other locations, you'll need to return on {{tos.second_pickup_time_as_localized_string}} to pick them up.{% endif %}
+
+Questions?  Just reply and we'll help!""",
+            "html_content": """Hello {{ tos.name }},<br>
+<br>
+Thank you for joining {{tos.auction}}!  This is an online auction with in-person lot exchange.<br>
+
+{{ closer_location_warning_html }}<br>
+Some things to keep in mind:<ul>
+<li>Bidding ends on {{ tos.auction_date_as_localized_string }}.  Expect prices to increase -- sometimes dramatically! -- on the last day.  If last-minute bids are placed on a lot, the end time will be extended.  <a href="https://{{ domain }}/faq#how-exactly-do-dynamic-endings-work">More about dynamic endings</a></li>
+<li> The winning bid is determined by the second highest bidder, so you should bid what an item is worth to you.  You'll only pay $1 more than the second highest bid.</li>
+<li> If you want to sell lots, you can do so now.  <a href="https://{{domain}}{{tos.auction.add_lot_link}}">Click here to get started.</a></li>
+<li> Any lots you win will need to be picked up{% if tos.auction.multi_location %} at {{ tos.pickup_location }},{% endif %}{% if not tos.pickup_location.users_must_coordinate_pickup%} on {{ tos.pickup_time_as_localized_string }}{% endif %}.  <a href="{{tos.pickup_location.directions_link}}">Get directions</a></li>
+{% if tos.auction.multi_location and tos.second_pickup_time_as_localized_string %}<li> This is a multi-location auction; you can bid on lots at any location, and the club will coordinate transport between locations.  If you win lots from other locations, you'll need to return on {{tos.second_pickup_time_as_localized_string}} to pick them up.</li>{% endif %}</ul>
+<br>
+<br>
+Questions?  Just reply and we'll help!""",
+        },
+        {
+            "name": "outbid_notification",
+            "subject": "You've been outbid!",
+            "content": """Hello {{ name }},
+
+You've been outbid on lot {{ lot.lot_number }} - {{ lot.lot_name }}.
+
+Bid more here: https://{{ domain }}/lots/{{ lot.lot_number }}/{{ lot.slug }}/
+
+Good luck!""",
+            "html_content": """Hello {{ name }},<br><br>
+
+You've been outbid on lot {{ lot.lot_number }} - <b>{{ lot.lot_name }}</b><br>
+
+{% if lot.thumbnail %}<img src='https://{{ domain }}{{ lot.thumbnail.image.lot_list.url }}'></img><br>{% endif %}
+
+<a href='https://{{ domain }}/lots/{{ lot.lot_number }}/{{ lot.slug }}/?src=outbid'>Click here to increase your bid</a><br><br>
+
+Good luck!""",
+        },
+        {
+            "name": "reprint_reminder",
+            "subject": "Some of your labels for {{ tos.auction }} need to be reprinted",
+            "content": """Hello {{ tos.name }},
+
+Some of your lots have sold with buy now!
+
+To help get these to the winner, a new label needs to be printed with the winner's name. If you're able to print a new label before the auction, that would be great.  Click here: https://{{domain}}{{tos.auction.label_print_unprinted_link}} (this will only print labels that need to be printed) and place these labels on your sold lot(s).
+
+If printing isn't possible, please notify the auction staff when you arrive so we can assist.
+
+Thank you, and we'll see you at {{ tos.auction }}
+
+Questions?  Just reply and we'll help!""",
+            "html_content": """Hello {{ tos.name }},<br><br>
+
+Some of your lots have sold with buy now!<br><br>
+
+To help get these to the winner, a new label needs to be printed with the winner's name. If you're able to print a new label before the auction, that would be great.  <a href='https://{{domain}}{{tos.auction.label_print_unprinted_link}}'>Click here to print your labels</a> (this will only print labels that need to be printed) and place these labels on your sold lot(s).<br><br>
+
+If printing isn't possible, please notify the auction staff when you arrive so we can assist.<br><br>
+
+Thank you, and we'll see you at {{ tos.auction }}<br><br>
+
+Questions?  Just reply and we'll help!""",
+        },
+        {
+            "name": "unread_chat_messages",
+            "subject": "Unread chat messages on {{domain}}",
+            "content": """Hi {{name}},
+
+New messages at https://{{domain}}/messages/
+
+Unsubscribe: https://{{ domain }}/unsubscribe/{{unsubscribe}}/""",
+            "html_content": """Hi {{name}},
+
+{% if data.my_lot_subscriptions_count and data.email_me_when_people_comment_on_my_lots %}
+<br><br>People have been chatting about your lots.  Take a look and answer any questions that have come up:<br><br>
+{% for sub in data.my_lot_subscriptions %}
+	<a href="https://{{ sub.lot.full_lot_link }}?src=chat_notification">{{ sub.lot.lot_name }}</a> ({{sub.new_message_count}} new message{% if sub.new_message_count != 1%}s{%endif%})<br><br>
+{% endfor %}
+{% endif %}
+{% if data.other_lot_subscriptions_count and data.email_me_about_new_chat_replies %}
+<br><br>Messages on lots you've commented on:<br><br>
+{% for sub in data.other_lot_subscriptions %}
+	<a href="https://{{ sub.lot.full_lot_link }}?src=chat_notification">{{ sub.lot.lot_name }}</a> ({{sub.new_message_count}} new message{% if sub.new_message_count != 1%}s{%endif%})<br><br>
+{% endfor %}
+{% endif %}
+Make sure to sign in -- messages only show up for logged in users.<br><br>
+
+<small><a href="https://{{ domain }}/messages/">Manage messages</a> or <a href="https://{{ domain }}/unsubscribe/{{unsubscribe}}/">unsubscribe</a></small>""",
+        },
+        {
+            "name": "user_joined_auction_despite_ban",
+            "subject": "A user you may have banned in the past has joined {{ tos.auction }}",
+            "content": """{{ tos.name }} joined {{ tos.auction}}.  Their IP address is {{ tos.user.userdata.last_ip_address }}, the same as a user you have banned in the past, {{ tos.trying_to_avoid_ban }}.""",
+            "html_content": """Hello,<br>
+<br>
+{{ tos.name }} joined {{ tos.auction}}.  Their IP address is {{ tos.user.userdata.last_ip_address }}, the same as a user you have banned in the past, {{ tos.trying_to_avoid_ban }}.<br>
+<br>
+You can <a href="https://{{domain}}{{tos.auction.user_admin_link}}?query={{tos}}">view their contact info here</a>.
+<br>""",
+        },
+        {
+            "name": "username_is_email",
+            "subject": "Update your {{ domain }} username",
+            "content": """Hello,
+
+Your chosen username on {{ domain }} is {{username}}.  Usernames are publicly visible, so using an email address as your username can lead to potential security risks, including an increased likelihood of receiving spam emails.
+
+To ensure the security and privacy of your account, we highly recommend changing your username. This will not only protect you from unwanted spam, but also enhance the overall security of your account.
+
+To change your username, please go to https://{{ domain }}/username/
+
+Your security and privacy are our top priorities.  You can find more information at https://{{ domain }}/blog/privacy/
+
+Best wishes,
+{{ domain }}""",
+            "html_content": """Hello,<br>
+<br>
+Your chosen username on {{ domain }} is {{username}}.  Usernames are publicly visible, so using an email address as your username can lead to potential security risks, including an increased likelihood of receiving spam emails.<br>
+<br>
+To ensure the security and privacy of your account, we highly recommend changing your username. This will not only protect you from unwanted spam, but also enhance the overall security of your account.<br>
+<br>
+<a href='https://{{ domain }}/username/'>Change your username here.</a><br><br>
+
+Your security and privacy are our top priorities.  <a href='https://{{ domain }}/blog/privacy/'>You can find more information here.</a><br>
+<br>
+Best wishes,<br>
+{{ domain }}""",
+        },
+        {
+            "name": "watched_items_ending",
+            "subject": "Lots you've watched are ending soon",
+            "content": """Make sure to bid on the lots you've watched!
+
+https://{{domain}}/lots/watched/""",
+            "html_content": """Make sure to bid on the lots you've watched!<br><br>
+
+<a href="https://{{domain}}/lots/watched/?src=email">Click here to view your watched lots</a>""",
+        },
+        {
+            "name": "weekly_promo_email",
+            "subject": "The latest updates from {{ domain }}",
+            "content": """Hello {{ name }},
+
+Here a quick summary of new stuff you might be interested in:
+{% if auctions %}
+Auctions near you:
+{% for auction in auctions %}
+{{ auction.title }}
+({{ auction.distance|floatformat:0 }} miles away)
+https://{{domain}}/?{{auction.slug}}
+
+{% endfor %}
+{%endif%}
+{% if nearby_lots %}
+Lots available for pickup near you:
+{% for lot in nearby_lots %}
+{{ lot.lot_name }}
+https://{{ domain }}/lots/{{ lot.lot_number }}/{{ lot.slug }}/
+
+{% endfor %}
+{%endif%}
+{% if shippable_lots %}
+Lots available for shipping:
+{% for lot in shippable_lots %}
+{{ lot.lot_name }}
+https://{{ domain }}/lots/{{ lot.lot_number }}/{{ lot.slug }}/
+
+{% endfor %}
+{%endif%}
+
+Visit the site here: https://{{ domain }}/
+
+Unsubscribe from these emails: https://{{ domain }}/unsubscribe/{{unsubscribe}}/ Snail mail address: {{ mailing_address }}
+{% if special_message %}
+
+{{ special_message }}
+{% endif %}""",
+            "html_content": """Hello {{ name }},<br><br>
+
+{% if special_message %}<br><br>
+{{ special_message }}<br><br>
+{% endif %}
+
+Here a quick summary of new stuff you might be interested in:<br><br>
+{% if auctions %}
+<h3>Auctions near you</h3>
+{% for auction in auctions %}
+<a href='https://{{domain}}/?{{auction.slug}}=&src=weekly_email&uid={{unsubscribe}}'>{{ auction.title }}</a> ({{ auction.distance|floatformat:0 }} miles away)<br><br>
+
+{% endfor %}
+{%endif%}
+{% if nearby_lots %}
+<h3>Lots available for pickup near you</h3>
+{% for lot in nearby_lots %}
+<b>{{ lot.lot_name }}</b><br>
+<a href="https://{{ domain }}/lots/{{ lot.lot_number }}/{{ lot.slug }}/?src=weekly_email&uid={{unsubscribe}}">{% if lot.thumbnail %}<img src='https://{{ domain }}{{ lot.thumbnail.image.lot_list.url }}'></img><br>{% endif %}View and bid on this lot</a><br><br>
+
+{% endfor %}
+{%endif%}
+{% if shippable_lots %}
+<h3>Lots available for shipping</h3>
+{% for lot in shippable_lots %}
+<b>{{ lot.lot_name }}</b><br>
+<a href="https://{{ domain }}/lots/{{ lot.lot_number }}/{{ lot.slug }}/?src=weekly_email&uid={{unsubscribe}}">{% if lot.thumbnail %}<img src='https://{{ domain }}{{ lot.thumbnail.image.lot_list.url }}'></img><br>{% endif %}View and bid on this lot</a><br><br>
+{% endfor %}
+{%endif%}
+
+There's lots more, too!  <a href="https://{{ domain }}/?src=weekly_email&uid={{unsubscribe}}">Click here to see everything</a><br><br>
+
+<br><small><a href="https://{{ domain }}/preferences/">Manage your notifications</a> or <a href="https://{{ domain }}/unsubscribe/{{unsubscribe}}/">unsubscribe</a><br>Snail mail address: {{ mailing_address }}</small>""",
+        },
+        {
+            "name": "wrong_location_selected",
+            "subject": "A user may have selected the wrong location in {{ tos.auction }}",
+            "content": """{{ tos.name }} joined {{ tos.auction}}.  They may have selected the wrong pickup location -- {{ tos.closest_location_for_this_user}} is approximately {{tos.closer_location_savings}} miles closer to them, but they've selected {{ tos.pickup_location }} instead.""",
+            "html_content": """Hello,<br>
+<br>
+{{ tos.name }} joined {{ tos.auction}}.  They may have selected the wrong pickup location -- {{ tos.closest_location_for_this_user}} is approximately {{tos.closer_location_savings}} miles closer to them, but they've selected {{ tos.pickup_location }} instead.<br>
+<br>
+You can <a href="https://{{domain}}{{tos.auction.user_admin_link}}?query={{tos}}">change their pickup location for them here</a>, but don't make changes without talking with them first!<br>
+<br>
+Their email is {{ tos.email }}""",
+        },
     ]
 
     for template in templates:
@@ -20,6 +607,542 @@ def create_or_update_email_templates(apps, schema_editor):
                 "content": template["content"],
                 "html_content": template["html_content"],
             },
+        )
+
+
+def create_categories(apps, schema_editor):
+    Category = apps.get_model("auctions", "Category")
+
+    if not Category.objects.exists():
+        Category.objects.bulk_create(
+            [
+                Category(name="Example Category 1", name_on_label=""),
+                Category(name="Example Category 2", name_on_label=""),
+                Category(name="Uncategorized", name_on_label=""),
+            ]
+        )
+
+
+def create_or_update_blog_posts(apps, schema_editor):
+    BlogPost = apps.get_model("auctions", "BlogPost")
+
+    templates = [
+        {
+            "title": "PayPal Integration",
+            "slug": """online-payments-suck""",
+            "body": """After your auction ends, you can export a list of invoices that owe you money and use PayPal to send them to users.  This feature is primarily for use with online auctions; if you're running an in-person auction, you'll usually have people pay before they leave, so billing everyone all at once doesn't really make sense.
+
+1. Go to your auction's page and and click on the **Users** tab.
+2. Make any necessary adjustments to your invoices, then click **Set Open Invoices to Ready**
+3. Click **Export**, then **PayPal Invoice CSV**.  You'll download a CSV file.
+4. Go to [Paypal's batch invoice page](https://www.paypal.com/invoice/batch) (you'll be prompted to sign into Paypal)
+5. Click **Browse**, then **Import Batch Invoice File**.  Select the file you downloaded earlier.
+6. Review the invoices to make sure they are correct, then click **Send Invoices**
+7. Use PayPal to keep track of who has paid.
+
+### FAQ and troubleshooting
+
+#### My users page says **No PayPal invoices**
+Only invoices that are **Ready** get exported.  If everyone has paid, or if you forgot to do step 2 above, you won't have any invoices to export.
+
+#### PayPal takes you to a page that says "Let's get you back on track" instead of the batch invoice screen
+This is an issue on Paypal's end that impacts newly created Paypal accounts. You can open a case with them, by emailing Merchant Technical Support <merchanttechsupport@paypal.com>
+
+It may help to reference case 12959943, which is the same issue when my club encountered it. Typically, it takes about 2 weeks for Paypal to reply, so you may want to find some other method to send out invoices for now (such as using an older Paypal account).
+
+#### Paypal says *We had trouble reading your file*
+Make sure you're uploading the correct CSV.  The users CSV file won't work -- the correct file will have the word *paypal*  in the file name.
+
+#### There are multiple PayPal CSV files
+Paypal will only let you batch invoice 150 users at a time, so if there's more than one file listed, download them all, and repeat step 4-6 for each file.  Congrats on running an auction where more than 150 people owe you money!
+
+#### There's an invoice missing from the list
+Users who are owed money (sold more than they bought) are not included in this list. I am assuming most clubs will want to pay these people in cash when they drop off their lots, or by check afterwards (the seller's address is listed on the users page).  This will allow you to avoid the PayPal fees for these users.
+
+Also any invoices that are **open** or **paid** are not included.
+
+#### Downloading and uploading these files and keeping track of who paid is awful!
+
+I know.  Ideally, I would integrate completely with something like Shopify or PayPal, and handle all payments seamlessly on this site.
+
+Unfortunately, any payment method that allows credit card payments allows charge backs, which is not something my club has the resources to handle.
+
+And any payment method that doesn't allow charge backs (like Bitcoin) is very difficult for end users.  At this time, I'm committed to keeping this site completely free, and there just isn't a system that would allow this site to automatically handle payments without taking on a lot of liability.
+
+#### Is there any risk here?
+Yes, of course:  By using this feature, your club is taking on all the risks of online payments -- like charge backs and an increased likelihood of getting audited on your taxes.  But, it's very handy to click a couple buttons and invoice all your users.
+
+#### But I don't want to use Paypal!
+
+At the moment I am not aware of other payment processors that support batch invoicing from a CSV file.  If there's one you'd like to use, let me know -- it's not difficult to export the data.""",
+            "extra_js": """""",
+        },
+        {
+            "title": "Encouraging participation",
+            "slug": "encouraging-participation",
+            "body": """Perhaps the most critical factor in the success of an auction is getting a large enough number of people to participate in it.
+
+For a fish club -- and a seller -- the worst kind of auction is one where lots sell for a dollar or two each.  This almost always happens when there's only one person interested in buying a lot.  Unfortunately, having even a few lots sell "for cheap" drives down the perceived value of all the lots in the auction, making normally high-value lots sell for less than they should.
+
+In order for a given lot to sell for what it's worth, at least two people need to _really_ want it.  To figure out how to get that "critical mass", we need to examine exactly how users participate in an auction.
+
+Users' interaction with this site looks like this:
+
+1. Visit the site
+2. See a lot they like
+3. Sign up for an account
+4. Place a bid
+5. Up their bid if they are outbid
+
+At each step, some number of people will give up for whatever reason -- that's "friction" in this process.  A graph of that friction looks something like this:
+
+chart1
+
+Ideally, every user who viewed a lot would win at least a lot or two, meaning there would be very little decrease as you move down the above graph.
+
+Looking at points where this graph narrows allow us to spot ways to make this site work more smoothly for users.  For example, the large change between all views (purple) and views from users (yellow) suggests that a big hold-up is how difficult the sign-up process is.  To help with this, I've added the ability to sign in with Google to the site.  52% of our existing users use Gmail anyway, so this should help make things more straightforward.
+
+But, there's another way to interpret this graph: What if people aren't signing up because they don't see anything they want badly enough to bid on?
+
+Looking at the number of users who actually bid tells an interesting story.
+
+chart2
+
+This chart shows everyone who viewed lots in the TFCB 2020 Annual Auction.  Of these people, only some (yellow) created an account, and even fewer (green) actually placed bids.
+
+It's difficult to say exactly _why_ this is. 	But, we can look at the number of lots that users (only users with an account) bid on.
+
+chart3
+
+On the right, there are obviously a good number of people who bid on many lots -- thank you to those people, without you these auctions wouldn't be possible!  But, there are almost as many who don't bid on anything at all.  The lack of users buying just a couple lots suggests that -- for many folks -- it's just not worth the trouble of committing to go to a place to pick up fish.  In an effort to reach these people, I've added a bidding incentive option to auctions.  When creating an auction, you can give people a credit in the amount that you choose when they place their first bid in an auction.  This obviously decreases the club's profit in an auction, but bringing in an additional 5-10 people can easily drive prices up enough to justify the cost of this incentive.  Remember: it's all about getting to that critical mass where at least 2 people _must have_ any given lot.
+
+One thing to remember about these charts is that they only include people who visited the auction site.  We can't know how many people are (for example) aware of your club, but don't know about the auction, or have heard about the auction but didn't have a link for the site.  Perhaps a more accurate funnel chart would look like this:
+
+chart4
+
+Click a label to toggle visibility.
+
+Ultimately, for your auction to succeed, it will be easier to expand the number of people who know about it, rather than relying on this site to bring in people by itself.""",
+            "extra_js": """<script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.3/dist/Chart.min.js"></script>
+<script src="/static/js/chart.funnel.min.js"></script>
+<script>
+var chart1 = {
+    type: 'funnel',
+    data: {
+        datasets: [{
+            data: [169, 75, 52, 43],
+            backgroundColor: [
+                        'rgba(86, 53, 176, 0.4)',
+                        'rgba(217, 211, 41, 0.4)',
+                        'rgba(62, 184, 64, 0.4)',
+                        'rgba(166, 33, 27, 0.4)',
+                      ],
+                      hoverBackgroundColor: [
+                        'rgba(86, 53, 176, 0.8)',
+                        'rgba(217, 211, 41, 0.8)',
+                        'rgba(62, 184, 64, 0.8)',
+                        'rgba(166, 33, 27, 0.8)',
+                      ]
+        }],
+        labels: [
+        "Total unique views (estimated)",
+        "Users who viewed lots",
+        "Users who bid on at least one item",
+        "Users who won at least one item"
+        ]
+    },
+        options: {
+            responsive: true,
+            sort: 'desc',
+            legend: {
+                position: 'bottom'
+            },
+            title: {
+                display: false,
+                text: 'Chart.js Funnel Chart'
+            },
+            animation: {
+                animateScale: true,
+                animateRotate: true
+            }
+        }
+};
+var chart2 = {
+    type: 'pie',
+    data: {
+        datasets: [{
+            data: [97, 20, 52],
+            backgroundColor: [
+                'rgba(86, 53, 176, 0.4)',
+                'rgba(217, 211, 41, 0.4)',
+                'rgba(62, 184, 64, 0.4)',
+
+                ],
+            hoverBackgroundColor: [
+                'rgba(86, 53, 176, 0.8)',
+                'rgba(217, 211, 41, 0.8)',
+                'rgba(62, 184, 64, 0.8)',
+
+                ],
+            label: "All Views"
+        }],
+        labels: ['Viewed but no account', 'Account but no bids', 'Bid on at least one lot']
+    },
+    options: {
+        responsive: true,
+        title: {
+                display: false,
+                text: 'Chart.js Pie Chart'
+            },
+    }
+};
+
+var chart3 = {
+				type: 'bar',
+				data: {
+                    labels: ['Did not bid','Bid on 1 lot','Bid on 2 lots','Bid on 3 lots','Bid on 4 lots','Bid on 5 lots','Bid on 6 lots','Bid on 7 lots','Bid on 8 lots','Bid on 9 lots','Bid on 10+ lots',],
+                    datasets: [{
+                        label: 'Users with an account',
+                        backgroundColor: 'rgba(66, 135, 245, 0.4)',
+                        // borderColor: window.chartColors.red,
+                        borderWidth: 1,
+                        data: [20,5,5,2,2,4,1,2,2,5,22]
+                    },]
+                },
+				options: {
+					responsive: true,
+					legend: {
+						position: 'top',
+					},
+					title: {
+						display: false,
+						text: 'Chart.js Bar Chart'
+					}
+				}
+			};
+var chart4 = {
+    type: 'funnel',
+    data: {
+        datasets: [{
+            data: [7800000000, 7000000, 245000, 500, 169, 75, 52, 43],
+            backgroundColor: [
+                        'rgba(63, 242, 96, 0.4)',
+                        'rgba(37, 184, 132, 0.4)',
+                        'rgba(29, 172, 191, 0.4)',
+                        'rgba(31, 103, 204, 0.4)',
+                        'rgba(86, 53, 176, 0.4)',
+                        'rgba(217, 211, 41, 0.4)',
+                        'rgba(62, 184, 64, 0.4)',
+                        'rgba(166, 33, 27, 0.4)',
+                      ],
+                      hoverBackgroundColor: [
+                        'rgba(63, 242, 96, 0.8)',
+                        'rgba(37, 184, 132, 0.8)',
+                        'rgba(29, 172, 191, 0.8)',
+                        'rgba(31, 103, 204, 0.8)',
+                        'rgba(86, 53, 176, 0.8)',
+                        'rgba(217, 211, 41, 0.8)',
+                        'rgba(62, 184, 64, 0.8)',
+                        'rgba(166, 33, 27, 0.8)',
+                      ]
+        }],
+        labels: [
+        "All people in the world (estimated)",
+        "People who live within driving distance of your auction (estimated)",
+        "People who keep fish (estimated)",
+        "People who who know about your auction (estimated)",
+        "Total unique views (estimated)",
+        "Users who viewed lots",
+        "Users who bid on at least one item",
+        "Users who won at least one item"
+        ]
+    },
+        options: {
+            responsive: true,
+            sort: 'desc',
+            legend: {
+                position: 'bottom'
+            },
+            title: {
+                display: false,
+                text: 'Chart.js Funnel Chart'
+            },
+            animation: {
+                animateScale: true,
+                animateRotate: true
+            }
+        }
+};
+
+window.onload = function() {
+
+    var ctx = document.getElementById('chart1').getContext('2d');
+    window.chart1 = new Chart(ctx, chart1);
+    var ctx2 = document.getElementById('chart2').getContext('2d');
+    window.chart2 = new Chart(ctx2, chart2);
+    var ctx3 = document.getElementById('chart3').getContext('2d');
+    window.chart3 = new Chart(ctx3, chart3);
+    var ctx4 = document.getElementById('chart4').getContext('2d');
+    window.chart4 = new Chart(ctx4, chart4);
+};
+
+</script>""",
+        },
+        {
+            "title": "How do multi-location auctions work?",
+            "slug": "multiple-location-auctions",
+            "body": """Club auctions are great, but they are limited by their physical location: there's only so many different lots and buyers available in one area.  Most people simply won't drive more than an hour or so to attend a local auction.
+
+To attract more bidders and sellers, this site supports adding multiple locations to an auction.
+
+Here's an example showing two locations.
+chart1
+
+
+Having multiple pickup locations requires two pickup times - one in the morning for sellers to drop off lots and buyers to pay for lots, and the other in the afternoon for buyers to pick up lots from the other location.
+
+The logistics of multiple pickup locations becomes a bit tricky.  Here are some suggestions to help keep you organized:
+
+1. Make sure that sellers write the lot number and location on their lots
+
+2. Have a central sorting location without buyers or sellers.  That way, your staff members can coordinate sorting lots to different locations without answering questions and giving lots to people
+
+3. Have a designated person in charge of each pickup location.
+
+4. Confirm the pickup location with users ahead of time.
+
+5. Handle payments [with Paypal](/blog/online-payments-suck/) or require that buyers pay in the morning.  This avoids problems with "no show" buyers.
+
+Multiple pickup locations are quite a bit of extra work to coordinate, but they bring in a much greater diversity of lots and new buyers.""",
+            "extra_js": """<script>
+window.onload = function() {
+  var figure = $("#chart1").parent();
+  figure.html(`
+  <div id="carouselExampleIndicators" class="carousel slide" data-bs-ride="carousel">
+    <ol class="carousel-indicators" style=" bottom: -40px;">
+      <li data-bs-target="#carouselExampleIndicators" data-bs-slide-to="0" class="active"></li>
+      <li data-bs-target="#carouselExampleIndicators" data-bs-slide-to="1"></li>
+      <li data-bs-target="#carouselExampleIndicators" data-bs-slide-to="2"></li>
+    </ol>
+    <div class="carousel-inner">
+      <div class="carousel-item active">
+        <img class="d-block w-100" src="/static/locations_1.svg" alt="First slide">
+      </div>
+      <div class="carousel-item">
+        <img class="d-block w-100" src="/static/locations_2.svg" alt="Second slide">
+      </div>
+      <div class="carousel-item">
+        <img class="d-block w-100" src="/static/locations_3.svg" alt="Third slide">
+      </div>
+    </div>
+    <a class="carousel-control-prev" href="#carouselExampleIndicators" role="button" data-bs-slide="prev">
+      <span class="carousel-control-prev-icon" aria-hidden="true"></span>
+      <span class="visually-hidden">Previous</span>
+    </a>
+    <a class="carousel-control-next" href="#carouselExampleIndicators" role="button" data-bs-slide="next">
+      <span class="carousel-control-next-icon" aria-hidden="true"></span>
+      <span class="visually-hidden">Next</span>
+    </a>
+  </div>
+  `);
+}
+</script>""",
+        },
+        {
+            "title": "Privacy",
+            "slug": "privacy",
+            "body": """It's pretty important to know who you're sharing your personal information with.  This site keeps track of the following pieces of information:
+
+- Your name
+
+- Your email address
+
+- Your phone number
+
+- Your mailing address
+
+- Your location
+
+We don't collect or store any sort of payment information at all.  For the most part, your contact information isn't shared with anyone else on the site.  Here are the *only* times your information is shared with other users:
+
+- Your email address is visible to all users on [your contact page](/account/), unless you hide it in [preferences](/preferences/).  Only signed in users can see any of your info.
+
+- Your username is visible whenever you place a bid.  You can uncheck *Username Visible* in [preferences](/preferences/), which will hide your username when you bid.  Even if this is unchecked, your username will always be shown when you sell a lot or make a chat message.  (It's worth mentioning that when your username is hidden, you're still not completely anonymous.  Auction admins can still see your username, and, behind the scenes, a unique identifier is used and visible in the page source to other bidders.)
+
+- If your username is an email address, that *will* be visible to non-logged-in users, and you'll probably get spam.  You'll get an email recommending that you [change your username](/username/), which is likely the reason you're reading this page.
+
+- When you confirm your pickup location for an auction, all of your contact information is made available to the organizer of the auction.  This is visible to them even if you don't sell or buy any lots in the auction.
+
+- When you sell a lot that is part of an auction, your real name is given to the winner of that lot.
+
+- When you win a lot that is part of an auction, your real name is given to the seller of that lot.
+
+- When you sell a lot that is *not* part of an auction, all your contact information is given to the winner of that lot.
+
+- When you win a lot that is *not* part of an auction, all your contact information is given to the seller of that lot.
+
+We have never had any personal information requests from law enforcement, and we'll remove this message if we receive one.
+
+We take your privacy and security seriously.  If you see something that doesn't seem right, reach out and we'll fix it.""",
+            "extra_js": """""",
+        },
+        {
+            "title": "Transporting fish",
+            "slug": "transporting-fish",
+            "body": """### Tips for packaging fish
+
+If you've never packaged fish to bring to an auction before, the process can be intimidating.  But don't worry, it's not hard!  Just follow these suggestions to help minimize stress to your fish.
+
+* Don't feed your fish for at least a few days before you bag them.  This will help reduce the amount of toxic ammonia that's in the bag with them.
+* Net the fish, and put them in a bag filled a third full with clean tank water.  Don't put too many fish in a single bag, especially if they are large fish.
+* *Bag early*: Catch the fish the night before and put them in a bag - but don't seal the bag, and put an airstone bubbling slowly in it.  Before you drop off your fish, you can change out the water for fresh water and close up the bag.
+* Use breather bags.  These are expensive, but allow gas exchange, meaning that O2/CO2 are no longer an issue and the only thing you need to be worried about is ammonia.
+* Bag with polyfilter or carbon, which help absorb toxins (mostly ammonia) in the bag
+* Bag with oxygen - if you have it, inflate the bag with oxygen, which will last longer than regular air.
+* Never breath into the bag to inflate it, or you'll get CO2 in it, which can suffocate the fish.
+* Never fill the bag more than half full (1/3 full is better), there should be a good amount of air on top of the fish.  More air and less water is actually better, since your fish will run out of oxygen in the bag more quickly than ammonia or CO2 will build up in the water.
+* Bring your fish to the drop off site in a cooler so they don't get too cold
+* Certain corydoras catfish can release a toxin, and poison themselves in the bag.  They release it almost immediately after being caught, so you should net them, put them in a container (a yogurt container works well) for 2-5 minutes, then net them out of the container and put them in a bag filled with water from the aquarium they came out of.  Discard the water in the container, which will contain the toxin.
+* Double bag the cories, loaches, and other fish with sharp spines, because their spines can poke through some bags.
+
+### Tips for acclimating new fish
+
+When you get new fish, it's tempting to dump them into the tank right away. But, changes in water chemistry can be lethal!  There are a few factors to consider:
+* *Changes in temperature:* changes in temperature of more than a few degrees can shock and rapidly kill fish
+* *Osmotic shock:* changes in water hardness or total dissolved solids are very stressful to fish
+* *Ammonia and pH:* in the bag, CO2 build-up (from the fish breathing) has lowered the pH in the bag.  This converts ammonia to the less toxic form NH4 (ammonium).  When you open the bag, air rushes in and raises the pH, causing NH4 to convert to NH3.  NH3 (ammonia) can cause permanent damage to a fish's gills.
+
+With these in mind, there are a couple approaches that people use to acclimate new fish to their aquariums:
+
+* *Scoop and dump:* float the bag in the tank for 15-20 minutes so that the temperatures match.  (Note: never float a breather bag).  Remove the bag from the tank, scoop the fish out with a net, and then dump them into the tank.  This approach works well for most cichlids, and larger or hardier fish.  This method should not be used with fish that are sensitive to osmostic shock.  Never use this method with shrimp.
+* *Slow acclimation:* open the bag and pour in a bit of tank water every 15 minutes.  This is the method recommended by almost every pet store I've been to.  It would be a good idea to add a tiny bit of dechlorinator as soon as you open the bag (most of these will remove ammonia), but be very careful not to overdose, as dechlorinators can kill fish in high concentrations.  Try
+adding the dechlorinator to a gallon of water, and then add a half cup of that water to the bag.
+* *Drip acclimation:* Dump the bag of fish into a small container like a 5 gallon bucket, add some dechlorinator (see the tip above to avoid over-dosing), and run a bit of airline tube from the tank to the container.  Drip tank water into the container at a rate of 3 drops per second.  Continue dripping water for 6 hours (do not cut the time short, new proteins need to be made to allow the fish to adapt to the new water).  Don't let the water in the bucket get too cold; it may be good to float the bucket in another tank.  It's also a good idea to add an airstone.  This method should be used with inverts like shrimp or sensitive fish like wild caught tetras.
+
+Which method is "right"?  Of the two largest online fish vendors, Live Aquaria recommends scoop and dump, while Blue Zoo recommends drip acclimation.  So, I suspect that for most fish, it really doesn't matter as long as you are careful and understand what kind of fish you are dealing with.  If you are not sure which method to use, reach out to the seller and ask for their advice.""",
+            "extra_js": """""",
+        },
+        {
+            "title": "What's a picture worth?",
+            "slug": "whats-a-picture-worth",
+            "body": """When you submit a lot, pictures are optional.  Before you skip them, though, take a look at these graphs.
+
+These charts are based on 374 lots sold in three different TFCB auctions.  First, here's how having a picture (or not) changes the sale price:
+
+chart1
+
+Interestingly, not having a picture doesn't make much difference in determining how much your lot will sell for (look at the scale on the Y axis before you get too excited about the huge bar for a representative image).
+
+Another interesting takeaway here is that having a picture of the actual item may cause it to sell for a bit less than a representative picture.  This most likely happens because the representative pictures tend to be very good, while pictures of the actual item tend to be less so.
+
+Let's look at this a different way.  How does having a picture change the chances of an item to sell?
+
+chart2
+
+The chance of an item selling drops from 86% (any kind of picture) to 62% if there's no picture.
+
+The take home message here is that people may ignore your lot altogether if they aren't sure what it looks like.
+
+#### And another thing
+
+These data were collected before the tile view (that has thumbnails of the lot) was added.  I expect this divide to grow even further now that you can see a picture without even needing to click on the lot.""",
+            "extra_js": """<script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.3/dist/Chart.min.js"></script>
+<script>
+var chart1 = {
+    type: 'bar',
+    data: {
+        labels: ['None', 'Internet', 'Representative', 'Actual'],
+        datasets: [{
+            label: "Lot's chance of selling with this type of image",
+            backgroundColor: 'rgba(135, 66, 66, 0.4)',
+            // borderColor: window.chartColors.red,
+            borderWidth: 1,
+            data: [62, 82, 86, 90]
+        },]
+    },
+    options: {
+        responsive: true,
+        legend: {
+            display: false,
+            position: 'top',
+        },
+        title: {
+
+            //display: false,
+            text: 'Percent chance of selling a lot with different image sources'
+        }
+    }
+};
+var chart2 = {
+    type: 'bar',
+    data: {
+        labels: ['None', 'Internet', 'Representative', 'Actual'],
+        datasets: [{
+            label: 'Sale price of lots with this type of image',
+            backgroundColor: 'rgba(66, 135, 245, 0.4)',
+            // borderColor: window.chartColors.red,
+            borderWidth: 1,
+            data: [13.32, 13.24, 14.91, 12.31]
+        },]
+    },
+    options: {
+        responsive: true,
+        legend: {
+            display: false,
+            position: 'top',
+        },
+        title: {
+            //display: false,
+            text: 'Sell price ($) of lots with different image sources'
+        }
+    }
+};
+window.onload = function() {
+
+    var ctx = document.getElementById('chart1').getContext('2d');
+    window.chart2 = new Chart(ctx, chart2);
+    var ctx2 = document.getElementById('chart2').getContext('2d');
+    window.chart1 = new Chart(ctx2, chart1);
+};
+
+</script>""",
+        },
+    ]
+
+    for template in templates:
+        BlogPost.objects.update_or_create(
+            slug=template["slug"],
+            defaults={
+                "title": template["title"],
+                "body": template["body"],
+                "extra_js": template["extra_js"],
+            },
+        )
+
+
+def create_faqs(apps, schema_editor):
+    FAQ = apps.get_model("auctions", "FAQ")
+    if not FAQ.objects.exists():
+        FAQ.objects.bulk_create(
+            [
+                FAQ(
+                    question="How exactly do dynamic endings work?",
+                    category_text="Technical Details",
+                    answer="""Bids placed in the last 15 minutes before bidding ends will extend the end time.
+
+* The end time is set to 15 minutes after the bid is placed.  This (in theory) gives you enough time to check your email, see that you've been outbid, and up your bid
+* Certain actions will not extend the end time:
+    * Increasing your proxy bid
+    * Using buy now (because bidding ends immediately, duh!)
+    * Placing a bid on a lot that no one else has bid on
+* Lots that are part of an auction have a hard cutoff time of 1 hour after the auction ends - the end time won't be extended past this time!""",
+                ),
+                FAQ(
+                    question="What is this site?",
+                    category_text="General",
+                    answer="""This site is a clone of [auction.fish](https://auction.fish).  You can [view the original source code and create your own auction website on Github](https://github.com/iragm/fishauctions)""",
+                ),
+            ]
         )
 
 
@@ -48,4 +1171,5 @@ class Migration(migrations.Migration):
             field=models.BooleanField(default=auctions.models.get_default_can_submit_lots),
         ),
         migrations.RunPython(create_or_update_email_templates),
+        migrations.RunPython(create_categories),
     ]
