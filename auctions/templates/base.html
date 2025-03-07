@@ -306,14 +306,18 @@ window.onload = function() {
                   <li class="nav-item dropdown">
                     <a class="nav-link dropdown-toggle" data-bs-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">About</a>
                     <div class="dropdown-menu">
+                      {% if enable_promo_page %}
                       <a class="dropdown-item" href="/about/">About site</a>
+                      {% endif %}
                       <a class="dropdown-item" href="/faq/">FAQ</a>
                       <a class="dropdown-item" href="/tos/">Terms and Conditions</a>
                       </div>
                   </li>
+                  {% if enable_club_finder %}
                   <li class="nav-item">
                     <a class="nav-link" href="/clubs/">Clubs</a>
                   </li>
+                  {% endif %}
                   {% if request.user.is_authenticated %}
                   <li class="nav-item dropdown">
                     <a class="nav-link dropdown-toggle" data-bs-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">{{ request.user.username }}</a>

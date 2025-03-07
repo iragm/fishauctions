@@ -6,7 +6,7 @@ import auctions.models
 
 
 def create_or_update_email_templates(apps, schema_editor):
-    EmailTemplate = apps.get_model("post_office", "EmailTemplate")
+    EmailTemplate = apps.get_model("django-post_office", "EmailTemplate")
 
     templates = [
         {
@@ -110,7 +110,7 @@ Thanks for adding lots to {{ tos.auction }}!  {% if tos.auction.is_online%}Now t
 Make sure to arrive well before the auction begins so you have time to organize your lots.
 {% endif %}
 
-{% if tos.auction.use_categories %}If you haven't packed fish before, take a look at these tips: https://{{ domain }}/blog/transporting-fish/{% endif %}
+{% if website_focus == "fish" %}If you haven't packed fish before, take a look at these tips: https://{{ domain }}/blog/transporting-fish/{% endif %}
 
 Questions?  Just reply and we'll help!""",
             "html_content": """Hello {{ tos.name }},<br>
@@ -126,7 +126,7 @@ Remember to bring your lots to {{ tos.pickup_location }}, on {{ tos.pickup_time_
 Make sure to arrive well before the auction begins, so you have time to organize your lots.  Remember that bidding starts promptly on {{ tos.auction_date_as_localized_string }}.<br>
 {% endif %}<a href="{{tos.pickup_location.directions_link}}">Get directions</a>.
 <br><br>
-{% if tos.auction.use_categories %}If you haven't packed fish before, take a look at <a href="https://{{ domain }}/blog/transporting-fish/">these tips</a>.<br><br>{% endif %}
+{% if website_focus == "fish" %}If you haven't packed fish before, take a look at <a href="https://{{ domain }}/blog/transporting-fish/">these tips</a>.<br><br>{% endif %}
 Questions?  Just reply and we'll help!<br>""",
         },
         {
@@ -1172,4 +1172,6 @@ class Migration(migrations.Migration):
         ),
         migrations.RunPython(create_or_update_email_templates),
         migrations.RunPython(create_categories),
+        migrations.RunPython(create_or_update_blog_posts),
+        migrations.RunPython(create_faqs),
     ]

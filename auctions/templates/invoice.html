@@ -94,7 +94,7 @@ $(document).ready(function(){
   <div class="col">
     {% if not is_admin %}
       <a href="/feedback/" class="btn btn-primary ml-1 mr-1 ">Leave feedback</a>
-      {% if invoice.auction and invoice.auction.use_categories %}
+      {% if website_focus == "fish" %}
         <a href="/blog/transporting-fish/" class="btn btn-primary ml-1 mr-1 ">Info on transporting fish</a>
       {% endif %}
       {% if location_map %}

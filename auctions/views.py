@@ -700,6 +700,7 @@ class MyLots(SingleTableMixin, FilterView):
             user=self.request.user,
             defaults={},
         )
+        context["website_focus"] = settings.WEBSITE_FOCUS
         return context
 
     def get(self, *args, **kwargs):
@@ -2043,6 +2044,8 @@ class AuctionHelp(AdminEmailMixin, TemplateView, AuctionPermissionsMixin):
     template_name = "auction_help.html"
 
     def dispatch(self, request, *args, **kwargs):
+        if not settings.ENABLE_HELP:
+            return redirect("/")
         self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs.pop("slug")).first()
         self.is_auction_admin
         return super().dispatch(request, *args, **kwargs)
@@ -3916,6 +3919,17 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
     redirect_url = None  # really only used if this is a cloned auction
     cloned_from = None
 
+    def dispatch(self, request, *args, **kwargs):
+        original_dispatch = super().dispatch(request, *args, **kwargs)
+        auction_creation_allowed = False
+        if self.request.user.is_authenticated and self.request.user.userdata.can_create_club_auctions:
+            auction_creation_allowed = True
+        if self.request.user.is_superuser:
+            auction_creation_allowed = True
+        if not auction_creation_allowed:
+            return redirect("/")
+        return original_dispatch
+
     def get_success_url(self):
         if self.redirect_url:
             return self.redirect_url
@@ -4316,6 +4330,11 @@ class FAQ(AdminEmailMixin, ListView):
 class PromoSite(TemplateView):
     template_name = "promo.html"
 
+    def dispatch(self, request, *args, **kwargs):
+        if not settings.ENABLE_PROMO_PAGE:
+            return redirect("/")
+        return super().dispatch(request, *args, **kwargs)
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["hide_google_login"] = True
@@ -4337,7 +4356,10 @@ def toDefaultLandingPage(request):
                 return AllLots.as_view()(request)
             else:
                 # promo page for non-logged in users
-                return PromoSite.as_view()(request)
+                if settings.ENABLE_PROMO_PAGE:
+                    return PromoSite.as_view()(request)
+                else:
+                    return AllAuctions.as_view()(request)
         try:
             # Did the user sign the tos yet?
             AuctionTOS.objects.get(user=request.user, auction=auction)
@@ -4476,8 +4498,15 @@ class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
         context["hide_google_login"] = True
         if not self.object_list.exists():
             context["no_results"] = (
-                "<span class='text-danger'>No auctions found.</span>  This only searches club auctions, if you're looking for fish to buy, check out <a href='/lots/'>the list of lots for sale</a>"
+                f"<span class='text-danger'>No auctions found.</span>  This only searches club auctions, if you're looking for {settings.WEBSITE_FOCUS} to buy, check out <a href='/lots/'>the list of lots for sale</a>"
             )
+        context["show_new_auction_button"] = True
+        if self.request.user.is_authenticated and not self.request.user.userdata.can_create_club_auctions:
+            context["show_new_auction_button"] = False
+        if not self.request.user.is_authenticated and not settings.ALLOW_USERS_TO_CREATE_AUCTIONS:
+            context["show_new_auction_button"] = False
+        if self.request.user.is_superuser:
+            context["show_new_auction_button"] = True
         return context
 
 
@@ -4669,6 +4698,7 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
                 },
             )
         context["is_auction_admin"] = self.is_auction_admin
+        context["website_focus"] = settings.WEBSITE_FOCUS
         return context
 
     def get_success_url(self):
@@ -5688,6 +5718,11 @@ class UserMap(TemplateView):
 
 class ClubMap(AdminEmailMixin, TemplateView):
     template_name = "clubs.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        if not settings.ENABLE_CLUB_FINDER:
+            return redirect("/")
+        return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)

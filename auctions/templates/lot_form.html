@@ -132,6 +132,9 @@ function setAuctionRequiredFields(val) {
 }
 
 $(document).ready(function() {
+    {% if not request.user.userdata.can_submit_standalone_lots %}
+    $('#div_id_part_of_auction').hide();
+    {% endif %}
     if(document.getElementById('id_part_of_auction_0').checked) {
         setAuction(true);
     } else {

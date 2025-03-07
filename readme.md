@@ -135,6 +135,28 @@ AWS_SES_REGION_NAME="us-east-1"
 AWS_SES_REGION_ENDPOINT="email.us-east-1.amazonaws.com"
 AWS_SES_CONFIGURATION_SET="secret"
 ```
+A few other settings, and what they do:
+
+`NAVBAR_BRAND` This is what's shown on the top of every page.
+
+`COPYRIGHT_MESSAGE` This is shown at the bottom of every page.  HTML allowed here.
+
+`MAILING_ADDRESS` Your physical mailing address, shown next to the unsubscribe link on promo emails.
+
+`ALLOW_USERS_TO_CREATE_AUCTIONS` Set this to False (case sensitive) to allow only admin users to create club auctions
+
+`ALLOW_USERS_TO_CREATE_LOTS` Set this to False (case sensitive) to disable creating stand-alone lots not associated with any auction.  Users will still be able to add lots to club auctions.
+
+`ENABLE_PROMO_PAGE` This should be left at False so the main auctions list is the landing page.
+
+`ENABLE_HELP` if True, will show the auction's help button and the auction.fish branded tutorial videos
+
+`I_BRED_THIS_FISH_LABEL` is what's shown to users when checking the "breeder points" checkbox
+
+`WEEKLY_PROMO_MESSAGE` is included in the weekly promotional email.  Plain text only.  Generally, leave this blank.
+
+`WEBSITE_FOCUS` Plural, all-lowercase name of whatever your website is focused around.  For example, "fish", "birds", "items"...
+
 Most of the other options in the .env file are pretty self-explanatory.  Booleans (True or False) are case sensitive.
 Save and exit nano, then type:
 ```
@@ -147,6 +169,8 @@ With a little luck, things worked.  If not, open an issue and provide as much de
 If you didn't get any errors, shut down the containers with control+c and then restart them in detached mode (`docker compose up -d`).  Create a super user with `docker exec -it django python3 manage.py` and then browse to the website and try to log in with that user.
 
 Log into the admin site and update the categories and FAQ articles to suit your tastes.
+
+Note: Do not remove the default "Uncategorized" category, it's referenced in several places in the code.  It's fine to remove the other default categories.
 
 ### Updates:
 Updates can be run by typing `./update.sh` in your VM.  This pulls the latest from iragm/fishauctions right now.

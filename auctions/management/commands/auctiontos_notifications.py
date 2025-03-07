@@ -27,6 +27,7 @@ def send_tos_notification(template, tos):
         context={
             "domain": current_site.domain,
             "tos": tos,
+            "website_focus": settings.WEBSITE_FOCUS,
         },
     )
 

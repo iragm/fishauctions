@@ -132,4 +132,10 @@ def dismissed_cookies_tos(request):
 
 
 def site_config(request):
-    return {"navbar_brand": settings.NAVBAR_BRAND, "copyright_message": settings.COPYRIGHT_MESSAGE}
+    return {
+        "navbar_brand": settings.NAVBAR_BRAND,
+        "copyright_message": settings.COPYRIGHT_MESSAGE,
+        "enable_club_finder": settings.ENABLE_CLUB_FINDER,
+        "enable_help": settings.ENABLE_HELP,
+        "enable_promo_page": settings.ENABLE_PROMO_PAGE,
+    }

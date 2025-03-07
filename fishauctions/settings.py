@@ -452,9 +452,10 @@ SEND_WELCOME_EMAIL = True
 DATA_UPLOAD_MAX_NUMBER_FIELDS = 20000
 
 NAVBAR_BRAND = os.environ.get("NAVBAR_BRAND", "auction.fish")
+WEBSITE_FOCUS = os.environ.get("WEBSITE_FOCUS", "items")
 COPYRIGHT_MESSAGE = os.environ.get(
     "COPYRIGHT_MESSAGE",
-    'Website copyright 2020-2025 <a href="https://tfcb.org">Tropical Fish Club of Burlington</a>. A free and <a href="https://github.com/iragm/fishauctions">open source</a> project.',
+    "bottom text",
 )
 I_BRED_THIS_FISH_LABEL = os.environ.get("I_BRED_THIS_FISH_LABEL", "I bred this fish/propagated this plant")
 if os.environ.get("ALLOW_USERS_TO_CREATE_AUCTIONS", "True") == "False":
