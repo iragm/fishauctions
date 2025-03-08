@@ -66,6 +66,15 @@
         $("#result").html('');
         $("#lot").focus();
         $("#success_banner").removeClass('d-none');
+        console.log();
+        if (response.banner == "error") {
+          $("#success_banner").removeClass('bg-success');
+          $("#success_banner").addClass('bg-danger');
+        } else {
+          $("#success_banner").addClass('bg-success');
+          $("#success_banner").removeClass('bg-danger');
+        }
+
         $("#last_sold_lot_number").html(response.last_sold_lot_number);
         $("#success_message").html(response.success_message);
         if (response.hide_undo_button) {
@@ -110,8 +119,12 @@
           success: function(response) {
               handleServerResponse(response);
           },
-          error: function(error) {
-              console.error(error);
+          error: function(xhr, status, error) {
+            $("#success_banner").removeClass('bg-success');
+            $("#success_banner").addClass('bg-danger');
+            $("#success_banner").removeClass('d-none');
+            $("#success_message").html(`FAILED: ${error}`);
+            $("#undo_button").addClass('d-none');
           }
       });
   }

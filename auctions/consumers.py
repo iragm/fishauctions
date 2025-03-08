@@ -38,7 +38,11 @@ def check_bidding_permissions(lot, user):
     if lot.user and lot.user.pk == user.pk:
         return "You can't bid on your own lot"
     if lot.auction:
-        tos = AuctionTOS.objects.filter(Q(user=user) | Q(email=user.email), auction=lot.auction).first()
+        tos = (
+            AuctionTOS.objects.filter(Q(user=user) | Q(email=user.email), auction=lot.auction)
+            .order_by("-createdon")
+            .first()
+        )
         if not tos:
             return "You haven't joined this auction"
         else:
@@ -205,9 +209,11 @@ def bid_on_lot(lot, user, amount):
                 if bid.amount >= lot.buy_now_price:
                     lot.winner = user
                     if lot.auction:
-                        auctiontos_winner = AuctionTOS.objects.filter(
-                            Q(user=user) | Q(email=user.email), auction=lot.auction
-                        ).first()
+                        auctiontos_winner = (
+                            AuctionTOS.objects.filter(Q(user=user) | Q(email=user.email), auction=lot.auction)
+                            .order_by("-createdon")
+                            .first()
+                        )
                         if auctiontos_winner:
                             lot.auctiontos_winner = auctiontos_winner
                             lot.create_update_invoices

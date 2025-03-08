@@ -86,7 +86,9 @@ class QuickAddTOS(forms.ModelForm):
         cleaned_data = super().clean()
         bidder_number = cleaned_data.get("bidder_number")
         if bidder_number:
-            existing_tos = AuctionTOS.objects.filter(bidder_number=bidder_number, auction=self.auction)
+            existing_tos = AuctionTOS.objects.filter(bidder_number=bidder_number, auction=self.auction).order_by(
+                "-createdon"
+            )
             pk = cleaned_data.get("pk")
             if pk:
                 existing_tos = existing_tos.exclude(pk=pk)
@@ -96,7 +98,11 @@ class QuickAddTOS(forms.ModelForm):
                 self.add_error("bidder_number", "This bidder number is already in use")
         if cleaned_data.get("email") and not cleaned_data.get("pk"):
             # duplicate email check for new users only
-            existing_tos = AuctionTOS.objects.filter(email=cleaned_data.get("email"), auction=self.auction).first()
+            existing_tos = (
+                AuctionTOS.objects.filter(email=cleaned_data.get("email"), auction=self.auction)
+                .order_by("-createdon")
+                .first()
+            )
             if existing_tos:
                 self.add_error("email", "This email address is already in use")
         name = cleaned_data.get("name")
