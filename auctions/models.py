@@ -1759,6 +1759,8 @@ class AuctionTOS(models.Model):
                 # self.confirm_email_sent = True
                 # self.print_reminder_email_sent = True
                 # self.second_confirm_email_sent = True
+            if self.email and not self.user:
+                self.user = User.objects.filter(active=True, email=self.email).first()
         # fill out some fields from user, if set
         # There is a huge security concern here:   <<<< ATTENTION!!!
         # If someone creates an auction and adds every email address that's public
@@ -3143,7 +3145,11 @@ class Lot(models.Model):
     def create_update_invoices(self):
         """Call whenever ending this lot, or when creating it"""
         if self.auction and self.winner and not self.auctiontos_winner:
-            tos = AuctionTOS.objects.filter(auction=self.auction, user=self.winner).first()
+            tos = (
+                AuctionTOS.objects.filter(Q(user=self.winner) | Q(email=self.winner.email), auction=self.auction)
+                .order_by("-createdon")
+                .first()
+            )
             self.auctiontos_winner = tos
             self.save()
         if self.auction and self.auctiontos_winner:
@@ -4593,7 +4599,11 @@ def update_lot_info(sender, instance, **kwargs):
 def user_logged_in_callback(sender, user, request, **kwargs):
     """When a user signs in, check for any AuctionTOS that have this users email but no user, and attach them to the user
     This allows people to view invoices, leave feedback, get contact information for sellers, etc.
-    Important to have this be any user, not just new ones so that existing users can be signed up for in-person auctions"""
+    Important to have this be any user, not just new ones so that existing users can be signed up for in-person auctions
+
+    After some thought, the user is also set in auctiontos.save
+     -- but this is still important because people may add users who do not yet have an account
+    """
     auctiontoss = AuctionTOS.objects.filter(user__isnull=True, email=user.email)
     for auctiontos in auctiontoss:
         auctiontos.user = user
