@@ -32,22 +32,27 @@ This project has now been packaged in Docker, so assuming you have docker instal
 git clone https://github.com/iragm/fishauctions
 cd fishauctions
 cp .env.example .env
-[...edit your .env file as needed, make sure to remove the lines that say "leave blank for development" and change DEBUG to True ...]
+[...edit your .env file as needed, make sure to remove the first 4 lines ...]
 docker compose --profile "*" build
 docker compose up -d
 ```
-You should now be able to access a development site at 127.0.0.1 (Note: don't use port 8000)
+You should now be able to access a development site at 127.0.0.1 (Note: unlike most Django projects, you probably won't use port 8000)
 
 One last thing to do is to create an admin.  Back in the shell, enter:
 ```
 docker exec -it django python3 manage.py shell -c "from django.contrib.auth import get_user_model; User=get_user_model(); u=User.objects.create_superuser('admin', 'admin@example.com', 'example'); u.emailaddress_set.create(email=u.email, verified=True, primary=True)"
 ```
-Now, back to your web browser, enter the username `admin` and the password `example`, and you should be good to go.
+Now, back to your web browser, enter the username `admin` and the password `example`, and you should be good to go.  If not, open an issue here and I'll take a look at it.
 
-#### ENV
-Development-friendly default values are set for most of the environment, but you may wish to use existing databases or specify secure passwords.  Simply rename the `.env.example` file to `.env`, edit it as needed (making sure to remove the lines used for production), and you should be good to go.
+#### A few notes on development environments
 
-This file doesn't document everything, but it has the most common settings.  For example, if you use port 80 for something else, you could serve up the development site on a different port by editing your .env file to have the line HTTP_PORT=81
+Development-friendly default values are set for most of the environment, but you may wish to use existing databases or specify secure passwords.
+
+The .env.example doesn't document everything, but it has the most common settings.  For example, if you use port 80 for something else, you could serve up the development site on a different port by editing your .env file to have the line HTTP_PORT=81
+
+For more information on the settings and what they do, see the production section, below.
+
+Some stuff (like Google Maps) won't work without an API key.  When generating your API key, make sure to include the port number you use if it's not port 80, for example, http://127.0.0.1:81 if you use port 81
 
 #### Production environment differences
 At this time, I'm only aware of one production deployment, but since this is open source, you're welcome to spin up your own competing website.
@@ -157,6 +162,8 @@ A few other settings, and what they do:
 
 `ENABLE_PROMO_PAGE` This should be left at False so the main auctions list is the landing page.
 
+`ENABLE_CLUB_FINDER` This should be left at False, setting it to true will show the clubs map dropdown menu.
+
 `ENABLE_HELP` if True, will show the auction's help button and the auction.fish branded tutorial videos
 
 `I_BRED_THIS_FISH_LABEL` is what's shown to users when checking the "breeder points" checkbox
@@ -179,7 +186,13 @@ With a little luck, things worked.  If not, open an issue and provide as much de
 ### Post setup:
 If you didn't get any errors, shut down the containers with control+c and then restart them in detached mode (`docker compose up -d`).  Create a super user with `docker exec -it django python3 manage.py createsuperuser` and then browse to the website and try to log in with that user (if you don't get a verification email, you can use the steps in the development section above to create a super user with a verified email, but don't forget to change the password!).
 
-Log into the admin site and update the categories and FAQ articles to suit your tastes.
+Go to the Django admin site (it's in the admin dropdown menu) and update the categories and FAQ articles to suit your tastes.
+
+Note that the Django admin site is barely used in production.  I use it to:
+- Add blog posts, categories, and FAQs
+- Give users super user permission, and permission to create lots/auctions
+
+Everything else can be done through the UI.
 
 Note: Do not remove the default "Uncategorized" category, it's referenced in several places in the code.  It's fine to remove the other default categories.
 
