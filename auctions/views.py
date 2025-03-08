@@ -72,6 +72,7 @@ from django_weasyprint import WeasyTemplateResponseMixin
 from easy_thumbnails.files import get_thumbnailer
 from el_pagination.views import AjaxListView
 from PIL import Image
+from pytz import timezone as pytz_timezone
 from qr_code.qrcode.utils import QRCodeOptions
 from reportlab.platypus import (
     Image as PImage,
@@ -2013,6 +2014,23 @@ class AuctionUpdate(UpdateView, AuctionPermissionsMixin):
             messages.info(
                 self.request,
                 f"Minimum bid is enabled, but labels are not set to print a minimum bid. <a href='{reverse('auction_label_config', kwargs={'slug': self.get_object().slug})}'>You should enable printing minimum bids on labels here.</a>",
+            )
+
+        # some checks to warn if an important time is set for midnight (00:00)
+        user_tz = self.request.COOKIES.get("user_timezone", settings.TIME_ZONE)
+        try:
+            user_tz = pytz_timezone(user_tz)
+        except Exception:  # Catch any invalid timezone errors
+            user_tz = pytz_timezone(settings.TIME_ZONE)
+        if self.get_object().is_online:
+            time_value = self.get_object().date_end
+        else:
+            time_value = self.get_object().date_start
+        localized_time = time_value.astimezone(user_tz)
+        if localized_time.hour == 0 and localized_time.minute == 0:
+            messages.info(
+                self.request,
+                f"Don't set your {'end' if self.get_object().is_online else 'start'} time to midnight, users will find it confusing.  Use 23:59 instead.",
             )
         return form
 
