@@ -3756,11 +3756,13 @@ class UserLabelPrefs(models.Model):
 
 
 def get_default_can_create_auctions():
-    return getattr(settings, "ALLOW_USERS_TO_CREATE_AUCTIONS", True)
+    return settings.ALLOW_USERS_TO_CREATE_AUCTIONS
+    # return getattr(settings, "ALLOW_USERS_TO_CREATE_AUCTIONS", True)
 
 
 def get_default_can_submit_lots():
-    return getattr(settings, "ALLOW_USERS_TO_CREATE_LOTS", True)
+    return settings.ALLOW_USERS_TO_CREATE_LOTS
+    # return getattr(settings, "ALLOW_USERS_TO_CREATE_LOTS", True)
 
 
 class UserData(models.Model):

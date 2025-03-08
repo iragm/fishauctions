@@ -32,11 +32,17 @@ This project has now been packaged in Docker, so assuming you have docker instal
 git clone https://github.com/iragm/fishauctions
 cd fishauctions
 cp .env.example .env
-[...edit your .env file as needed...]
+[...edit your .env file as needed, make sure to remove the lines that say "leave blank for development" and change DEBUG to True ...]
 docker compose --profile "*" build
 docker compose up -d
 ```
 You should now be able to access a development site at 127.0.0.1 (Note: don't use port 8000)
+
+One last thing to do is to create an admin.  Back in the shell, enter:
+```
+docker exec -it django python3 manage.py shell -c "from django.contrib.auth import get_user_model; User=get_user_model(); u=User.objects.create_superuser('admin', 'admin@example.com', 'example'); u.emailaddress_set.create(email=u.email, verified=True, primary=True)"
+```
+Now, back to your web browser, enter the username `admin` and the password `example`, and you should be good to go.
 
 #### ENV
 Development-friendly default values are set for most of the environment, but you may wish to use existing databases or specify secure passwords.  Simply rename the `.env.example` file to `.env`, edit it as needed (making sure to remove the lines used for production), and you should be good to go.
@@ -75,6 +81,8 @@ To check if code passes the linting check *without* modifying any files on disk,
 
 #### Management commands
 Run these with docker exec after docker compose is up.  For example: `docker exec -it django python3 manage.py makemigrations`
+
+A note on migrations: occasionally webpush seems to give permission denied about a file `0006_alter_subscriptioninfo_user_agent.py`.  If this happens, just run `docker exec -u root -it django python3 manage.py makemigrations`
 
 ### Developing in VSCode
 
@@ -163,10 +171,13 @@ Save and exit nano, then type:
 docker compose --profile "*" build
 docker compose up
 ```
+
+Finally, create a file called `tos.html` with your terms of service in the same directory as the .env file.
+
 With a little luck, things worked.  If not, open an issue and provide as much detail as possible.  Don't put your keys in the issue, but do include any logs.  Remember that support is very limited for custom production deployments.  If something isn't talked about in this guide, I'm not really interested in helping with it.
 
 ### Post setup:
-If you didn't get any errors, shut down the containers with control+c and then restart them in detached mode (`docker compose up -d`).  Create a super user with `docker exec -it django python3 manage.py` and then browse to the website and try to log in with that user.
+If you didn't get any errors, shut down the containers with control+c and then restart them in detached mode (`docker compose up -d`).  Create a super user with `docker exec -it django python3 manage.py createsuperuser` and then browse to the website and try to log in with that user (if you don't get a verification email, you can use the steps in the development section above to create a super user with a verified email, but don't forget to change the password!).
 
 Log into the admin site and update the categories and FAQ articles to suit your tastes.
 
