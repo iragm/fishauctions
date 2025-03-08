@@ -66,8 +66,15 @@
         $("#result").html('');
         $("#lot").focus();
         $("#success_banner").removeClass('d-none');
-        $("#success_banner").addClass('bg-success');
-        $("#success_banner").removeClass('bg-danger');
+        console.log();
+        if (response.banner == "error") {
+          $("#success_banner").removeClass('bg-success');
+          $("#success_banner").addClass('bg-danger');
+        } else {
+          $("#success_banner").addClass('bg-success');
+          $("#success_banner").removeClass('bg-danger');
+        }
+
         $("#last_sold_lot_number").html(response.last_sold_lot_number);
         $("#success_message").html(response.success_message);
         if (response.hide_undo_button) {

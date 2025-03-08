@@ -2206,6 +2206,7 @@ class Lot(models.Model):
     max_bid_revealed_by = models.ForeignKey(
         User, null=True, blank=True, on_delete=models.SET_NULL, related_name="max_bid_revealed_by"
     )
+    admin_validated = models.BooleanField(default=False)
 
     def save(self, *args, **kwargs):
         # for old and new auctions, generate a lot number int

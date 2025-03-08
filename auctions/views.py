@@ -2360,6 +2360,8 @@ class DynamicSetLotWinner(AuctionViewMixin, TemplateView):
                     error = "Lot number must be a number"
                 if not error and lot:
                     result_lot_qs = self.auction.lots_qs.filter(lot_number_int=lot)
+                if error and not lot and action == "validate":
+                    error = ""
             # This can happen if two people are submitting lots at the exact same millisecond.  It seems very unlikely but an easy enough edge case to catch.
             if result_lot_qs.count() > 1:
                 error = "Multiple lots with this lot number.  Go to the lot's page and set the winner there."
@@ -2486,12 +2488,34 @@ class DynamicSetLotWinner(AuctionViewMixin, TemplateView):
                 price_error = f"This lot's minimum bid is ${lot.reserve_price}"
             if price < self.auction.minimum_bid:
                 price_error = f"Minimum bid is ${self.auction.minimum_bid}"
-        # I think this makes more sense:
         if not lot_error and not price_error and not winner_error:
             if action != "validate":
                 result["last_sold_lot_number"] = lot.lot_number_display
             if action == "force_save" or action == "save":
                 result["success_message"] = self.set_winner(lot, winner, price)
+        # if two people are recording bids, we can validate whether or not a lot was sold
+        if (
+            lot
+            and winner
+            and price
+            and not price_error
+            and not winner_error
+            and lot_error == "This lot has already been sold"
+            and (action == "force_save" or action == "save")
+        ):
+            if winner == lot.auctiontos_winner and price == lot.winning_price:
+                # Lot has been double checked -- mark it as good
+                lot.admin_validated = True
+                lot.save()
+                result["success_message"] = "This lot has been double checked"
+                result["last_sold_lot_number"] = lot.lot_number_display
+            else:
+                # Mismatch between what's been saved in the db and the current request
+                result = {
+                    "banner": "error",
+                    "last_sold_lot_number": lot.lot_number_display,
+                    "success_message": f"Lot {lot.lot_number_display} already sold for ${lot.winning_price} to {lot.auctiontos_winner.bidder_number}.  If this is not correct, you can undo this sale",
+                }
         if lot and (action == "validate" or not result["success_message"]) and lot.high_bidder:
             result["online_high_bidder_message"] = f"Sell to {lot.high_bidder_for_admins} for ${lot.high_bid}"
             # js code is not in place for this, also remove code from view_lot_simple
@@ -2529,6 +2553,7 @@ class AuctionUnsellLot(AuctionViewMixin, View):
                 # this might need changing for online auctions
                 # but as it is now, this view is only ever called for in-person auctions
             undo_lot.active = True
+            undo_lot.admin_validated = False
             undo_lot.save()
         else:
             result = {"message": "No lot found"}
