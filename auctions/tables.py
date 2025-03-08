@@ -198,6 +198,8 @@ class AuctionHTMxTable(tables.Table):
             result += " <span class='ms-1 badge bg-success text-black'>Your last auction</span>"
         if auction.is_online:
             result += " <span class='badge bg-info'>Online</span>"
+        if auction.is_deleted:
+            result += " <span class='badge bg-danger'>Deleted</span>"
         if not auction.promote_this_auction:
             result += " <span class='badge bg-dark'>Not promoted</span>"
         if auction.distance:
