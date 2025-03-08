@@ -262,7 +262,7 @@ window.onload = function() {
       {% endif %}
       <nav class="navbar navbar-expand-lg bg-primary bg-gradient bg-opacity-75" data-bs-theme="dark">
         <div class="container-fluid">
-          <a class="navbar-brand" href="/">auction.fish</a>
+          <a class="navbar-brand" href="/">{{ navbar_brand }}</a>
           <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#site_navbar" aria-controls="navbarColor02" aria-expanded="false" aria-label="Toggle navigation">
             <span class="navbar-toggler-icon"></span>
           </button>
@@ -306,14 +306,18 @@ window.onload = function() {
                   <li class="nav-item dropdown">
                     <a class="nav-link dropdown-toggle" data-bs-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">About</a>
                     <div class="dropdown-menu">
+                      {% if enable_promo_page %}
                       <a class="dropdown-item" href="/about/">About site</a>
+                      {% endif %}
                       <a class="dropdown-item" href="/faq/">FAQ</a>
                       <a class="dropdown-item" href="/tos/">Terms and Conditions</a>
                       </div>
                   </li>
+                  {% if enable_club_finder %}
                   <li class="nav-item">
                     <a class="nav-link" href="/clubs/">Clubs</a>
                   </li>
+                  {% endif %}
                   {% if request.user.is_authenticated %}
                   <li class="nav-item dropdown">
                     <a class="nav-link dropdown-toggle" data-bs-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">{{ request.user.username }}</a>
@@ -416,7 +420,7 @@ window.onload = function() {
             </div>
         </div>
         {% block undiv_content %}{% endblock %}
-        <div class="mt-5 d-flex justify-content-center hide-fullscreen"><small class="text-muted hide-fullscreen">Website copyright 2020-2025 <a href="https://tfcb.org">Tropical Fish Club of Burlington</a>. A free and <a href="https://github.com/iragm/fishauctions">open source</a> project.</small></div>
+        <div class="mt-5 d-flex justify-content-center hide-fullscreen"><small class="text-muted hide-fullscreen">{{ copyright_message | safe }}</small></div>
         {% block extra_js %}
             {# Override this in templates to add extra javascript #}
         {% endblock %}

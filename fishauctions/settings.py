@@ -210,6 +210,7 @@ TEMPLATES = [
                 "auctions.context_processors.theme",
                 "auctions.context_processors.add_location",
                 "auctions.context_processors.dismissed_cookies_tos",
+                "auctions.context_processors.site_config",
                 "auctions.context_processors.add_tz",
             ],
         },
@@ -316,7 +317,7 @@ ACCOUNT_EMAIL_VERIFICATION = "mandatory"
 ACCOUNT_LOGIN_ON_EMAIL_CONFIRMATION = True
 ACCOUNT_LOGIN_ON_PASSWORD_RESET = True
 ACCOUNT_SESSION_REMEMBER = True
-ACCOUNT_EMAIL_SUBJECT_PREFIX = "auction.fish - "
+ACCOUNT_EMAIL_SUBJECT_PREFIX = ""
 ACCOUNT_DEFAULT_HTTP_PROTOCOL = "https"
 ACCOUNT_CHANGE_EMAIL = True
 
@@ -449,6 +450,36 @@ DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
 SEND_WELCOME_EMAIL = True
 
 DATA_UPLOAD_MAX_NUMBER_FIELDS = 20000
+
+NAVBAR_BRAND = os.environ.get("NAVBAR_BRAND", "auction.fish")
+WEBSITE_FOCUS = os.environ.get("WEBSITE_FOCUS", "items")
+COPYRIGHT_MESSAGE = os.environ.get(
+    "COPYRIGHT_MESSAGE",
+    "bottom text",
+)
+I_BRED_THIS_FISH_LABEL = os.environ.get("I_BRED_THIS_FISH_LABEL", "I bred this fish/propagated this plant")
+if os.environ.get("ALLOW_USERS_TO_CREATE_AUCTIONS", "True") == "False":
+    ALLOW_USERS_TO_CREATE_AUCTIONS = False
+else:
+    ALLOW_USERS_TO_CREATE_AUCTIONS = True
+if os.environ.get("ALLOW_USERS_TO_CREATE_LOTS", "True") == "False":
+    ALLOW_USERS_TO_CREATE_LOTS = False
+else:
+    ALLOW_USERS_TO_CREATE_LOTS = True
+if os.environ.get("ENABLE_PROMO_PAGE", "True") == "False":
+    ENABLE_PROMO_PAGE = False
+else:
+    ENABLE_PROMO_PAGE = True
+if os.environ.get("ENABLE_CLUB_FINDER", "True") == "False":
+    ENABLE_CLUB_FINDER = False
+else:
+    ENABLE_CLUB_FINDER = True
+if os.environ.get("ENABLE_HELP", "True") == "False":
+    ENABLE_HELP = False
+else:
+    ENABLE_HELP = True
+MAILING_ADDRESS = os.environ.get("MAILING_ADDRESS", "No address configured")
+WEEKLY_PROMO_MESSAGE = os.environ.get("WEEKLY_PROMO_MESSAGE", "")
 
 # the following words are very common and should not be used when generating recommended lots or assigning categories
 IGNORE_WORDS = [

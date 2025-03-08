@@ -1,5 +1,6 @@
 import datetime
 
+from django.conf import settings
 from django.contrib.sites.models import Site
 from django.core.management.base import BaseCommand
 from django.db.models import OuterRef, Subquery
@@ -26,6 +27,7 @@ def send_tos_notification(template, tos):
         context={
             "domain": current_site.domain,
             "tos": tos,
+            "website_focus": settings.WEBSITE_FOCUS,
         },
     )
 
@@ -180,5 +182,6 @@ class Command(BaseCommand):
                         "lots": lots,
                         "user": campaign.user,
                         "unsubscribe": userData.unsubscribe_link,
+                        "mailing_address": settings.MAILING_ADDRESS,
                     },
                 )

@@ -7,6 +7,7 @@ from collections import Counter
 from datetime import datetime, timedelta
 from datetime import timezone as date_tz
 from io import BytesIO, TextIOWrapper
+from pathlib import Path
 from random import choice, randint, sample, uniform
 from urllib.parse import unquote, urlencode
 
@@ -22,7 +23,7 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.models import User
 from django.contrib.messages.views import SuccessMessageMixin
 from django.contrib.sites.models import Site
-from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.core.files.base import ContentFile
 from django.db.models import (
     Avg,
@@ -50,7 +51,7 @@ from django.http import (
     HttpResponseRedirect,
     JsonResponse,
 )
-from django.shortcuts import get_object_or_404, redirect, render
+from django.shortcuts import get_object_or_404, redirect
 from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils import timezone
@@ -699,6 +700,7 @@ class MyLots(SingleTableMixin, FilterView):
             user=self.request.user,
             defaults={},
         )
+        context["website_focus"] = settings.WEBSITE_FOCUS
         return context
 
     def get(self, *args, **kwargs):
@@ -1140,7 +1142,7 @@ def clean_referrer(url):
     if not url:
         url = ""
     url = re.sub(r"^https?://", "", url)  # no http/s at the beginning
-    if "auction.fish/" not in url:
+    if Site.objects.get_current().domain not in url:
         url = re.sub(r"\?.*", "", url)  # remove get params
     url = re.sub(r"^www\.", "", url)  # www
     url = re.sub(r"/+$", "", url)  # trailing /
@@ -2042,6 +2044,8 @@ class AuctionHelp(AdminEmailMixin, TemplateView, AuctionPermissionsMixin):
     template_name = "auction_help.html"
 
     def dispatch(self, request, *args, **kwargs):
+        if not settings.ENABLE_HELP:
+            return redirect("/")
         self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs.pop("slug")).first()
         self.is_auction_admin
         return super().dispatch(request, *args, **kwargs)
@@ -2994,6 +2998,7 @@ class ViewLot(DetailView):
     def get_context_data(self, **kwargs):
         lot = self.get_object()
         context = super().get_context_data(**kwargs)
+        context["domain"] = Site.objects.get_current().domain
         context["is_auction_admin"] = False
         if lot.auction:
             context["auction"] = lot.auction
@@ -3914,6 +3919,17 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
     redirect_url = None  # really only used if this is a cloned auction
     cloned_from = None
 
+    def dispatch(self, request, *args, **kwargs):
+        original_dispatch = super().dispatch(request, *args, **kwargs)
+        auction_creation_allowed = False
+        if self.request.user.is_authenticated and self.request.user.userdata.can_create_club_auctions:
+            auction_creation_allowed = True
+        if self.request.user.is_superuser:
+            auction_creation_allowed = True
+        if not auction_creation_allowed:
+            return redirect("/")
+        return original_dispatch
+
     def get_success_url(self):
         if self.redirect_url:
             return self.redirect_url
@@ -4311,12 +4327,13 @@ class FAQ(AdminEmailMixin, ListView):
         return context
 
 
-def aboutSite(request):
-    return render(request, "about.html")
-
-
 class PromoSite(TemplateView):
     template_name = "promo.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        if not settings.ENABLE_PROMO_PAGE:
+            return redirect("/")
+        return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -4339,7 +4356,10 @@ def toDefaultLandingPage(request):
                 return AllLots.as_view()(request)
             else:
                 # promo page for non-logged in users
-                return PromoSite.as_view()(request)
+                if settings.ENABLE_PROMO_PAGE:
+                    return PromoSite.as_view()(request)
+                else:
+                    return AllAuctions.as_view()(request)
         try:
             # Did the user sign the tos yet?
             AuctionTOS.objects.get(user=request.user, auction=auction)
@@ -4478,8 +4498,15 @@ class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
         context["hide_google_login"] = True
         if not self.object_list.exists():
             context["no_results"] = (
-                "<span class='text-danger'>No auctions found.</span>  This only searches club auctions, if you're looking for fish to buy, check out <a href='/lots/'>the list of lots for sale</a>"
+                f"<span class='text-danger'>No auctions found.</span>  This only searches club auctions, if you're looking for {settings.WEBSITE_FOCUS} to buy, check out <a href='/lots/'>the list of lots for sale</a>"
             )
+        context["show_new_auction_button"] = True
+        if self.request.user.is_authenticated and not self.request.user.userdata.can_create_club_auctions:
+            context["show_new_auction_button"] = False
+        if not self.request.user.is_authenticated and not settings.ALLOW_USERS_TO_CREATE_AUCTIONS:
+            context["show_new_auction_button"] = False
+        if self.request.user.is_superuser:
+            context["show_new_auction_button"] = True
         return context
 
 
@@ -4671,6 +4698,7 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
                 },
             )
         context["is_auction_admin"] = self.is_auction_admin
+        context["website_focus"] = settings.WEBSITE_FOCUS
         return context
 
     def get_success_url(self):
@@ -5691,6 +5719,11 @@ class UserMap(TemplateView):
 class ClubMap(AdminEmailMixin, TemplateView):
     template_name = "clubs.html"
 
+    def dispatch(self, request, *args, **kwargs):
+        if not settings.ENABLE_CLUB_FINDER:
+            return redirect("/")
+        return super().dispatch(request, *args, **kwargs)
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
@@ -5706,11 +5739,18 @@ class ClubMap(AdminEmailMixin, TemplateView):
 
 
 class UserAgreement(TemplateView):
-    template_name = "tos.html"
+    template_name = "tos_wrapper.html"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["hide_google_login"] = True
+        tos_path = Path(settings.BASE_DIR / "tos.html")
+        if Path.exists(tos_path):
+            with Path.open(tos_path) as file:
+                context["tos_content"] = file.read()
+        else:
+            msg = "No TOS found.  You must place a file called tos.html in the root project directory (next to the .env file)"
+            raise ImproperlyConfigured(msg)
         return context
 
 
@@ -6160,7 +6200,7 @@ class AuctionStatsReferrersJSONView(AuctionStatsBarChartJSONView):
         self.views = (
             PageView.objects.filter(Q(auction=self.auction) | Q(lot_number__auction=self.auction))
             .exclude(referrer__isnull=True)
-            .exclude(referrer__startswith="auction.fish")
+            .exclude(referrer__startswith=Site.objects.get_current().domain)
             .exclude(referrer__exact="")
             .values("referrer")
             .annotate(count=Count("referrer"))

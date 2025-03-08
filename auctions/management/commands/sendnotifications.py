@@ -67,5 +67,5 @@ class Command(BaseCommand):
             mail.send(
                 data.user.email,
                 template="username_is_email",
-                context={"username": data.user.username},
+                context={"username": data.user.username, "domain": current_site.domain},
             )

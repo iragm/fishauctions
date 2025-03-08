@@ -1,5 +1,6 @@
 import datetime
 
+from django.conf import settings
 from django.contrib.auth.models import User
 from django.contrib.sites.models import Site
 from django.core.management.base import BaseCommand
@@ -126,6 +127,7 @@ class Command(BaseCommand):
                         "nearby_lots": template_nearby_lots,
                         "shippable_lots": template_shippable_lots,
                         "unsubscribe": user.userdata.unsubscribe_link,
-                        "special_message": "",
+                        "special_message": settings.WEEKLY_PROMO_MESSAGE,
+                        "mailing_address": settings.MAILING_ADDRESS,
                     },
                 )

@@ -7,8 +7,9 @@
 {% block content %}
 <h3>Auctions</h3>
 <div class='mb-3'>This is a list of club auctions which have been created on this site.</div>
+{% if show_new_auction_button %}
 <a href="/auctions/new/" class='btn bg-info mb-3 text-white'><i class="bi bi-plus-circle"></i> Create a new auction</a><br>
-
+{% endif %}
 <form class="col-sm-12 mt-2">
   {% crispy filter.form %}
 </form>
@@ -17,7 +18,6 @@
 
 <small class="text-muted">Auctions you've joined will always show up here.  Other auctions will only be listed here if they:
   <ul>
-    <li>are related to the fish hobby</li>
     <li>have "promote this auction" checked</li>
     <li>are starting less than 90 days from today</li>
     <li>were created less than 2 years ago</li>

@@ -177,7 +177,7 @@ class QuickAddLot(forms.ModelForm):
         self.fields["donation"].help_text = ""
         self.fields["reserve_price"].help_text = ""
         self.fields["buy_now_price"].help_text = ""
-        self.fields["species_category"].initial = Category.objects.get(pk=21)  # uncategorized
+        self.fields["species_category"].initial = Category.objects.filter(name="Uncategorized").first()
         if not self.auction.advanced_lot_adding:
             self.fields["quantity"].initial = 1
             self.fields["quantity"].widget = HiddenInput()

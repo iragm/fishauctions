@@ -17,7 +17,7 @@
     <li>{% if auction.admin_checklist_additional_admin %}<i class="bi bi-check-square-fill text-success"></i>{% else %}<i class="bi bi-exclamation-square-fill text-danger"></i>{%endif%} Click a name to edit that user and <a href="/auctions/{{auction.slug}}/users">add an additional admin</a> to help you set lot winners</li>
     {% endif %}
   </ul>
-  <div>Having trouble?  <a href='{% url "auction_help" slug=auction.slug %}'>Click here to get help</a></div>
+  {% if enable_help %}<div>Having trouble?  <a href='{% url "auction_help" slug=auction.slug %}'>Click here to get help</a></div>{% endif %}
   <small class="text-muted">This message will disappear once you've finished setting up your auction.</small>
 </div>
     {% endif %}
@@ -39,7 +39,7 @@
           <a class="dropdown-item" href="{{ auction.location_link }}"><i class="bi bi-geo-alt-fill"></i> Location{% if auction.location_qs|length > 1 %}s{% endif %}</a>
           {% if not auction.is_online %}<a class="dropdown-item" href="{{ auction.set_lot_winners_link }}"><i class="bi bi-calendar-check"></i> Set lot winners</a>{% endif %}
           <a class="dropdown-item" href="/auctions/{{auction.slug}}/chat/"><i class="bi bi-chat-fill"></i> Chat messages</a>
-          <a class="dropdown-item" href='{% url "auction_help" slug=auction.slug %}'><i class="bi bi-question-circle-fill"></i> Help and Support</a>
+          {% if enable_help %}<a class="dropdown-item" href='{% url "auction_help" slug=auction.slug %}'><i class="bi bi-question-circle-fill"></i> Help and Support</a>{% endif %}
           {% if not auction.is_online %}<a class="dropdown-item" href='{% url "auction_quick_checkout" slug=auction.slug %}'><i class="bi bi-bag-heart"></i> Quick checkout users</a>{% endif %}
           <a class="dropdown-item" href="/auctions/new?copy={{auction.slug}}"><i class="bi bi-plus-circle"></i> Copy to new auction</a>
           <a class="dropdown-item" href="/auctions/{{auction.slug}}/stats/"><i class="bi bi-graph-up"></i> Stats</a>

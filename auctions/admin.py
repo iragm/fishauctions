@@ -1,6 +1,10 @@
+import csv
+import datetime
+
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
+from django.http import HttpResponse
 
 from .models import (
     FAQ,
@@ -30,6 +34,30 @@ from .models import (
     Watch,
     guess_category,
 )
+
+
+def export_to_csv(modeladmin, request, queryset):
+    opts = modeladmin.model._meta
+    response = HttpResponse(content_type="text/csv")
+    response["Content-Disposition"] = f"attachment;filename={opts.verbose_name}.csv"
+    writer = csv.writer(response)
+    fields = [field for field in opts.get_fields() if not field.many_to_many and not field.one_to_many]
+    # Write a first row with header information
+    writer.writerow([field.verbose_name for field in fields])
+    # Write data rows
+    for obj in queryset:
+        data_row = []
+        for field in fields:
+            value = getattr(obj, field.name)
+            if isinstance(value, datetime.datetime):
+                value = value.strftime("%d/%m/%Y")
+            data_row.append(value)
+        writer.writerow(data_row)
+
+    return response
+
+
+export_to_csv.short_description = "Export to CSV"
 
 
 class FaqAdmin(admin.ModelAdmin):
@@ -267,6 +295,7 @@ class ClubAdmin(admin.ModelAdmin):
     inlines = [
         UserInline,
     ]
+    actions = [export_to_csv]
 
 
 class LocationAdmin(admin.ModelAdmin):
@@ -433,7 +462,7 @@ class LotAutoCategoryAdmin(admin.ModelAdmin):
 
     def uncategorize(self, request, queryset):
         """Change to uncategorized"""
-        uncategorized = Category.objects.get(pk=21)
+        uncategorized = Category.objects.filter(name="Uncategorized").first()
         for lot in queryset:
             lot.species_category = uncategorized
             lot.category_automatically_added = False

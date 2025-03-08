@@ -118,7 +118,6 @@ urlpatterns = [
     path("bids/", login_required(views.MyBids.as_view()), name="my_bids"),
     path("bids/delete/<int:pk>/", views.BidDelete.as_view(), name="delete_bid"),
     path("", views.toDefaultLandingPage),
-    path("old_about/", views.aboutSite, name="about"),
     path("about/", views.PromoSite.as_view(), name="promo"),
     path("account/", views.toAccount, name="account"),
     path("invoices/", login_required(views.Invoices.as_view()), name="my_invoices"),

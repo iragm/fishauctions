@@ -171,9 +171,9 @@ function initMap() {
                 {% if auction.sealed_bid %}<li>This is a sealed bid auction - you won't be able to see how much others have bid on a lot.</li>{% endif %}
                 {% if auction.max_lots_per_user %}<li>You can submit up to {{ auction.max_lots_per_user }} lots.{% if auction.allow_additional_lots_as_donation %} Additional lots accepted only as a donation.{% endif %}</li>{% endif %}
                 {% if auction.pre_register_lot_discount_percent %}
-                    {% if auction.winning_bid_percent_to_club and auction.lot_entry_fee %} <li>For lots you pre-register on auction.fish, you will be charged ${{ auction.lot_entry_fee }} plus {{ auction.template_pre_register_fee }}%  of the winning price per lot you sell</li>
-                    {% else %} {% if auction.winning_bid_percent_to_club %} <li>For lots you pre-register on auction.fish, you will be charged {{ auction.template_pre_register_fee }}% of the winning price per lot you sell</li> {% endif %}
-                    {% if auction.lot_entry_fee %} <li>For lots you pre-register on auction.fish, you will be charged a flat rate of ${{ auction.lot_entry_fee }}, minus {{ auction.pre_register_lot_discount_percent }}% per lot you sell</li> {% endif %}
+                    {% if auction.winning_bid_percent_to_club and auction.lot_entry_fee %} <li>For lots you pre-register on {{ domain }}, you will be charged ${{ auction.lot_entry_fee }} plus {{ auction.template_pre_register_fee }}%  of the winning price per lot you sell</li>
+                    {% else %} {% if auction.winning_bid_percent_to_club %} <li>For lots you pre-register on {{ domain }}, you will be charged {{ auction.template_pre_register_fee }}% of the winning price per lot you sell</li> {% endif %}
+                    {% if auction.lot_entry_fee %} <li>For lots you pre-register on {{ domain }}, you will be charged a flat rate of ${{ auction.lot_entry_fee }}, minus {{ auction.pre_register_lot_discount_percent }}% per lot you sell</li> {% endif %}
                     {% endif %}
                 {% endif %}
                 {% if auction.winning_bid_percent_to_club and auction.lot_entry_fee %} <li>{% if auction.pre_register_lot_discount_percent %}For lots registered by auction staff on site, you{% else %}You{% endif %} will be charged ${{ auction.lot_entry_fee }} plus {{ auction.winning_bid_percent_to_club }}%  of the winning price per lot you sell</li>

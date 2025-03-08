@@ -32,11 +32,17 @@ This project has now been packaged in Docker, so assuming you have docker instal
 git clone https://github.com/iragm/fishauctions
 cd fishauctions
 cp .env.example .env
-[...edit your .env file as needed...]
+[...edit your .env file as needed, make sure to remove the lines that say "leave blank for development" and change DEBUG to True ...]
 docker compose --profile "*" build
 docker compose up -d
 ```
 You should now be able to access a development site at 127.0.0.1 (Note: don't use port 8000)
+
+One last thing to do is to create an admin.  Back in the shell, enter:
+```
+docker exec -it django python3 manage.py shell -c "from django.contrib.auth import get_user_model; User=get_user_model(); u=User.objects.create_superuser('admin', 'admin@example.com', 'example'); u.emailaddress_set.create(email=u.email, verified=True, primary=True)"
+```
+Now, back to your web browser, enter the username `admin` and the password `example`, and you should be good to go.
 
 #### ENV
 Development-friendly default values are set for most of the environment, but you may wish to use existing databases or specify secure passwords.  Simply rename the `.env.example` file to `.env`, edit it as needed (making sure to remove the lines used for production), and you should be good to go.
@@ -76,6 +82,8 @@ To check if code passes the linting check *without* modifying any files on disk,
 #### Management commands
 Run these with docker exec after docker compose is up.  For example: `docker exec -it django python3 manage.py makemigrations`
 
+A note on migrations: occasionally webpush seems to give permission denied about a file `0006_alter_subscriptioninfo_user_agent.py`.  If this happens, just run `docker exec -u root -it django python3 manage.py makemigrations`
+
 ### Developing in VSCode
 
 This project is optimized for development in [Visual Studio Code](https://code.visualstudio.com/).
@@ -93,3 +101,99 @@ You can optionally enable a pre-commit hook that will ensure code auto-formattin
 To install on your local machine, install via `pip install pre-commit`, then run `pre-commit install` to register this project's pre-commit hooks.
 
 By default, `pre-commit` only runs on files that were changed. When installing `pre-commit` for the first time, you can optionally run `pre-commit run --all-files` to run the hooks against all files.
+
+
+## Running your own auction website
+Support for you running your own auction website is extremely limited (read: non-existent).  That said, here's the basics of getting started.
+
+### Pre setup checklist:
+* Register a domain name with your favorite registrar.  I like Cloudflare, it also provides free DDOS protection and caching.
+* Purchase a VM.  I use Hostinger.  I don't love them, but they're cheap.  They're fine.  [Grab a KVM2 and use this referral code to get 20% off](https://www.hostinger.com/cart?product=vps%3Avps_kvm_2&period=12&referral_type=cart_link&REFERRALCODE=LXNOIRADNJML&referral_id=01957151-831f-71d8-8b2e-10baf21e9524).  I use and recommend Ubuntu as the OS.
+* Get a Vapid key [by following the instructions here](https://pypi.org/project/django-webpush/).  This is for push notifications.
+* Get a Gmail address with 2F enabled and get an [app key](https://support.google.com/accounts/answer/185833?hl=en), or sign up for Amazon's SES.
+* Get a [Google Maps API key](https://console.cloud.google.com/)
+* Get a Google OAUTH key by following the [app registration section here](https://docs.allauth.org/en/latest/socialaccount/providers/google.html).  Just do steps 1 and 2 and make a note of the secret keys, the Django configuration has already been done.
+* Get a [Recaptcha v2 invisible key](https://cloud.google.com/security/products/recaptcha)
+
+### Deploy the website
+Log into your VM and enter the following:
+```
+git clone https://github.com/iragm/fishauctions
+cd fishauctions
+cp .env.example .env
+nano .env
+```
+Go through what's there and enter the keys you got in the pre-setup checklist above.  One thing to pay attention to is the email configuration.
+If you chose Gmail, configure things like this:
+```
+POST_OFFICE_EMAIL_BACKEND="django.core.mail.backends.smtp.EmailBackend"
+EMAIL_USE_TLS='True'
+EMAIL_HOST='smtp.gmail.com'
+EMAIL_PORT='587'
+EMAIL_HOST_USER='example@gmail.com'
+EMAIL_HOST_PASSWORD='your gmail app password, not your gmail password'
+```
+If you're using Amazon SES, the above settings won't be used, set these up instead:
+```
+POST_OFFICE_EMAIL_BACKEND="django_ses.SESBackend"
+AWS_ACCESS_KEY_ID="secret"
+AWS_SECRET_ACCESS_KEY="secret"
+AWS_SESSION_PROFILE="default"
+AWS_SES_REGION_NAME="us-east-1"
+AWS_SES_REGION_ENDPOINT="email.us-east-1.amazonaws.com"
+AWS_SES_CONFIGURATION_SET="secret"
+```
+A few other settings, and what they do:
+
+`NAVBAR_BRAND` This is what's shown on the top of every page.
+
+`COPYRIGHT_MESSAGE` This is shown at the bottom of every page.  HTML allowed here.
+
+`MAILING_ADDRESS` Your physical mailing address, shown next to the unsubscribe link on promo emails.
+
+`ALLOW_USERS_TO_CREATE_AUCTIONS` Set this to False (case sensitive) to allow only admin users to create club auctions
+
+`ALLOW_USERS_TO_CREATE_LOTS` Set this to False (case sensitive) to disable creating stand-alone lots not associated with any auction.  Users will still be able to add lots to club auctions.
+
+`ENABLE_PROMO_PAGE` This should be left at False so the main auctions list is the landing page.
+
+`ENABLE_HELP` if True, will show the auction's help button and the auction.fish branded tutorial videos
+
+`I_BRED_THIS_FISH_LABEL` is what's shown to users when checking the "breeder points" checkbox
+
+`WEEKLY_PROMO_MESSAGE` is included in the weekly promotional email.  Plain text only.  Generally, leave this blank.
+
+`WEBSITE_FOCUS` Plural, all-lowercase name of whatever your website is focused around.  For example, "fish", "birds", "items"...
+
+Most of the other options in the .env file are pretty self-explanatory.  Booleans (True or False) are case sensitive.
+Save and exit nano, then type:
+```
+docker compose --profile "*" build
+docker compose up
+```
+
+Finally, create a file called `tos.html` with your terms of service in the same directory as the .env file.
+
+With a little luck, things worked.  If not, open an issue and provide as much detail as possible.  Don't put your keys in the issue, but do include any logs.  Remember that support is very limited for custom production deployments.  If something isn't talked about in this guide, I'm not really interested in helping with it.
+
+### Post setup:
+If you didn't get any errors, shut down the containers with control+c and then restart them in detached mode (`docker compose up -d`).  Create a super user with `docker exec -it django python3 manage.py createsuperuser` and then browse to the website and try to log in with that user (if you don't get a verification email, you can use the steps in the development section above to create a super user with a verified email, but don't forget to change the password!).
+
+Log into the admin site and update the categories and FAQ articles to suit your tastes.
+
+Note: Do not remove the default "Uncategorized" category, it's referenced in several places in the code.  It's fine to remove the other default categories.
+
+### Updates:
+Updates can be run by typing `./update.sh` in your VM.  This pulls the latest from iragm/fishauctions right now.
+
+### Changes and new features:
+There's quite a bit of other stuff (ads, google analytics, etc.) that was enabled in the past and has been disabled.  If you want this stuff, make a pull request for it.  If you want something:
+
+* you want to disable the captcha on sign up
+* or you can't figure out how to get a Vapid key and you want to disable push notifications
+* or you want to disable google ouath
+* or you want to pull updates from your own repo
+
+or whatever, **make a pull request**.  Make sure that the default settings keep things as they are.
+
+I will (often) add new features that benefit auction.fish.  I will not add new features that benefit your website and don't help auction.fish.
