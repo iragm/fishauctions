@@ -296,6 +296,20 @@ class AuctionViewMixin(AuctionPermissionsMixin):
         return super().dispatch(request, *args, **kwargs)
 
 
+class AdminOnlyViewMixin:
+    """Include to make this view only visible to super users on the website
+    Despite the name, this has nothing to do with auction admins"""
+
+    permission_denied_message = "Only admins can view this page"
+    redirect_url = "/"
+
+    def dispatch(self, request, *args, **kwargs):
+        if not (request.user.is_superuser):
+            messages.error(request, self.permission_denied_message)
+            return redirect(self.redirect_url)
+        return super().dispatch(request, *args, **kwargs)
+
+
 class AuctionStatsPermissionsMixin:
     """For graph classes"""
 
@@ -4444,7 +4458,7 @@ class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
         if self.request.user.is_authenticated and self.request.user.userdata.last_auction_used:
             last_auction_pk = self.request.user.userdata.last_auction_used.pk
         qs = (
-            Auction.objects.exclude(is_deleted=True)
+            Auction.objects.all()
             .annotate(
                 is_last_used=Case(
                     When(pk=last_auction_pk, then=Value(1)),
@@ -4473,7 +4487,10 @@ class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
         else:
             qs = qs.annotate(distance=Value(0, output_field=FloatField()))
         if not self.request.user.is_authenticated:
+            qs = qs.exclude(is_deleted=True)
             return qs.filter(standard_filter).annotate(joined=Value(0, output_field=FloatField())).distinct()
+        if self.request.user.is_superuser:
+            return qs.annotate(joined=Value(0, output_field=FloatField())).distinct()
         qs = (
             qs.filter(
                 Q(auctiontos__user=self.request.user)
@@ -5532,86 +5549,34 @@ class LotChartView(View):
         return redirect("/")
 
 
-class AdminErrorPage(TemplateView):
+class AdminErrorPage(AdminOnlyViewMixin, TemplateView):
     """A sanity check to make sure the 500 error emails are working as they should be"""
 
     template_name = "dashboard.html"
 
-    def dispatch(self, request, *args, **kwargs):
-        if not (request.user.is_superuser):
-            messages.error(request, "Only admins can break the website")
-            return redirect("/")
-        1 / 0
-        return super().dispatch(request, *args, **kwargs)
+    def get(self, request, *args, **kwargs):
+        return 1 / 0
 
 
-class AdminDashboard(TemplateView):
-    """Provides an at-a-glance view of some interesting stats"""
+class AdminTraffic(AdminOnlyViewMixin, TemplateView):
+    """Popular pages and user last activity"""
 
-    template_name = "dashboard.html"
-
-    def unique_page_views(self, minutes):
-        timeframe = timezone.now() - timezone.timedelta(minutes=minutes)
-        base_qs = PageView.objects.filter(date_start__gte=timeframe)
-        logged_in = base_qs.filter(user__isnull=False).aggregate(unique_views=Count("user", distinct=True))[
-            "unique_views"
-        ]
-        anon = base_qs.filter(user__isnull=True, session_id__isnull=False).aggregate(
-            unique_views=Count("session_id", distinct=True)
-        )["unique_views"]
-        return logged_in + anon
-
-    def dispatch(self, request, *args, **kwargs):
-        if not (request.user.is_superuser):
-            messages.error(request, "Only admins can view the dashboard")
-            return redirect("/")
-        return super().dispatch(request, *args, **kwargs)
+    template_name = "dashboard_traffic.html"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        days_param = self.request.GET.get("days", 7)
+        try:
+            days = int(days_param)
+        except (ValueError, TypeError):
+            days = 7
+        context["days"] = days
+        timeframe = timezone.now() - timedelta(days=days)
+
+        # this next section is the user last activity
+        # this is very old code, and it would probably be far better to use PageViews
+        # for logged in and not logged in users instead to show overall traffic over time
         qs = UserData.objects.filter(user__is_active=True)
-        context["total_users"] = qs.count()
-        context["unsubscribes"] = qs.filter(has_unsubscribed=True).count()
-        context["anonymous"] = (
-            qs.filter(username_visible=False).exclude(user__username__icontains="@").count()
-        )  # inactive users with an email as their username were set to anonymous Nov 2023
-        context["light_theme"] = qs.filter(use_dark_theme=False).count()
-        context["hide_ads"] = qs.filter(show_ads=False).count()
-        context["no_club_auction"] = qs.filter(user__auctiontos__isnull=True).distinct().count()
-        context["no_participate"] = (
-            qs.exclude(Q(user__winner__isnull=False) | Q(user__lot__isnull=False)).distinct().count()
-        )
-        context["using_watch"] = qs.exclude(user__watch__isnull=True).distinct().count()
-        context["using_buy_now"] = qs.filter(user__winner__buy_now_used=True).count()
-        context["using_proxy_bidding"] = qs.filter(has_used_proxy_bidding=True).count()
-        context["buyers"] = qs.filter(user__winner__isnull=False).distinct().count()
-        context["sellers"] = qs.filter(user__lot__isnull=False).distinct().count()
-        context["has_location"] = qs.exclude(latitude=0).count()
-        context["new_lots_last_7_days"] = (
-            Lot.objects.exclude(is_deleted=True).filter(date_posted__gte=timezone.now() - timedelta(days=7)).count()
-        )
-        context["new_lots_last_30_days"] = (
-            Lot.objects.exclude(is_deleted=True).filter(date_posted__gte=timezone.now() - timedelta(days=30)).count()
-        )
-        context["bidders_last_30_days"] = (
-            qs.filter(user__bid__last_bid_time__gte=timezone.now() - timedelta(days=30))
-            .values("user")
-            .distinct()
-            .count()
-        )
-        context["feedback_last_30_days"] = (
-            Lot.objects.exclude(feedback_rating=0).filter(date_posted__gte=timezone.now() - timedelta(days=30)).count()
-        )
-        # invoiceqs = (
-        #     Invoice.objects.filter(date__gte=datetime(2021, 6, 15, tzinfo=date_tz.utc))
-        #     .filter(seller_invoice__winner__isnull=False)
-        #     .distinct()
-        # )
-        # context["total_invoices"] = invoiceqs.count()
-        # context["printed_invoices"] = invoiceqs.filter(printed=True).count()
-        # context["invoice_percent"] = context["printed_invoices"] / context["total_invoices"] * 100
-        context["users_with_search_history"] = User.objects.filter(searchhistory__isnull=False).distinct().count()
-        # source of lot images?
         activity = (
             qs.filter(last_activity__gte=timezone.now() - timedelta(days=60))
             .annotate(day=TruncDay("last_activity"))
@@ -5625,16 +5590,41 @@ class AdminDashboard(TemplateView):
         for day in activity:
             context["last_activity_days"].append((timezone.now() - day["day"]).days)
             context["last_activity_count"].append(day["c"])
-        seven_days_ago = timezone.now() - timedelta(days=7)
-        page_view_qs = PageView.objects.filter(date_end__gte=seven_days_ago)
+        # popular page stuff follows
+        page_view_qs = PageView.objects.filter(date_start__gte=timeframe)
+        # may want to move this to a get param at some point
+        number_of_popular_pages_to_show = 50
         context["page_views"] = (
             page_view_qs.values("url", "title")
             .annotate(
-                unique_view_count=Count("url"),
-                total_view_count=Sum("counter") + F("unique_view_count"),
+                # there's no way this code is right,
+                # it dates back to when view counter was being used, and that field is no longer filled out
+                # total_view_count=Sum("counter") + F("unique_view_count"),
+                view_count=Count("url"),
             )
-            .order_by("-total_view_count")[:100]
+            .order_by("-view_count")[:number_of_popular_pages_to_show]
         )
+        # heat  map stuff follows
+        context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
+        context["pageviews"] = PageView.objects.exclude(latitude=0).filter(date_start__gte=timeframe)
+        return context
+
+
+class AdminReferrers(AdminOnlyViewMixin, TemplateView):
+    """Where's your traffic coming from?"""
+
+    template_name = "dashboard_referrers.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        days_param = self.request.GET.get("days", 7)
+        try:
+            days = int(days_param)
+        except (ValueError, TypeError):
+            days = 7
+        context["days"] = days
+        timeframe = timezone.now() - timedelta(days=days)
+        page_view_qs = PageView.objects.filter(date_end__gte=timeframe)
         referrers = (
             page_view_qs.exclude(referrer__isnull=True)
             .exclude(referrer="")
@@ -5651,9 +5641,74 @@ class AdminDashboard(TemplateView):
             )
             .order_by("-total_clicks")[:100]
         )
-        context["day_views_count"] = self.unique_page_views(24 * 60)
-        context["5m_views_count"] = self.unique_page_views(5)
-        context["30m_views_count"] = self.unique_page_views(30)
+        return context
+
+
+class AdminDashboard(AdminOnlyViewMixin, TemplateView):
+    """Currently active users overview"""
+
+    template_name = "dashboard.html"
+
+    def unique_page_views(self, minutes, view_type="anon"):
+        timeframe = timezone.now() - timezone.timedelta(minutes=minutes)
+        base_qs = PageView.objects.filter(date_start__gte=timeframe)
+        if view_type == "logged_in":
+            return base_qs.filter(user__isnull=False).aggregate(unique_views=Count("user", distinct=True))[
+                "unique_views"
+            ]
+        if view_type == "anon":
+            return base_qs.filter(user__isnull=True, session_id__isnull=False).aggregate(
+                unique_views=Count("session_id", distinct=True)
+            )["unique_views"]
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        qs = UserData.objects.filter(user__is_active=True)
+        context["total_users"] = qs.count()
+        # context["unsubscribes"] = qs.filter(has_unsubscribed=True).count()
+        # context["anonymous"] = (
+        #     qs.filter(username_visible=False).exclude(user__username__icontains="@").count()
+        # )  # inactive users with an email as their username were set to anonymous Nov 2023
+        # context["light_theme"] = qs.filter(use_dark_theme=False).count()
+        # context["hide_ads"] = qs.filter(show_ads=False).count()
+        # context["no_club_auction"] = qs.filter(user__auctiontos__isnull=True).distinct().count()
+        # context["no_participate"] = (
+        #     qs.exclude(Q(user__winner__isnull=False) | Q(user__lot__isnull=False)).distinct().count()
+        # )
+        # context["using_watch"] = qs.exclude(user__watch__isnull=True).distinct().count()
+        # context["using_buy_now"] = qs.filter(user__winner__buy_now_used=True).count()
+        # context["using_proxy_bidding"] = qs.filter(has_used_proxy_bidding=True).count()
+        # context["buyers"] = qs.filter(user__winner__isnull=False).distinct().count()
+        # context["sellers"] = qs.filter(user__lot__isnull=False).distinct().count()
+        # context["has_location"] = qs.exclude(latitude=0).count()
+        # context["new_lots_last_7_days"] = (
+        #     Lot.objects.exclude(is_deleted=True).filter(date_posted__gte=timezone.now() - timedelta(days=7)).count()
+        # )
+        # context["new_lots_last_30_days"] = (
+        #     Lot.objects.exclude(is_deleted=True).filter(date_posted__gte=timezone.now() - timedelta(days=30)).count()
+        # )
+        # context["bidders_last_30_days"] = (
+        #     qs.filter(user__bid__last_bid_time__gte=timezone.now() - timedelta(days=30))
+        #     .values("user")
+        #     .distinct()
+        #     .count()
+        # )
+        # context["feedback_last_30_days"] = (
+        #     Lot.objects.exclude(feedback_rating=0).filter(date_posted__gte=timezone.now() - timedelta(days=30)).count()
+        # )
+        # context["users_with_search_history"] = User.objects.filter(searchhistory__isnull=False).distinct().count()
+        logged_in_5m = self.unique_page_views(5, "logged_in")
+        anon_5m = self.unique_page_views(5, "anon")
+        logged_in_30m = self.unique_page_views(30, "logged_in")
+        anon_30m = self.unique_page_views(30, "anon")
+        logged_in_1d = self.unique_page_views(24 * 60, "logged_in")
+        anon_1d = self.unique_page_views(24 * 60, "anon")
+        context["day_views_count"] = logged_in_1d + anon_1d
+        context["5m_views_count"] = logged_in_5m + anon_5m
+        context["30m_views_count"] = logged_in_30m + anon_30m
+        if logged_in_1d + anon_1d == 0:
+            anon_1d = 1  # so it's a hack to avoid /0, whatever
+        context["day_views_count_percent_with_account"] = int(logged_in_1d / (logged_in_1d + anon_1d) * 100)
         timeframe = timezone.now() - timezone.timedelta(minutes=30)
         # check to make sure no auctions are happening before applying server updates
         context["in_person_lots_ended"] = Lot.objects.filter(
@@ -5695,7 +5750,7 @@ class UserMap(TemplateView):
             filter1 = data["filter"]
         except:
             filter1 = None
-        view_qs = PageView.objects.exclude(latitude=0)
+        # view_qs = PageView.objects.exclude(latitude=0)
         qs = User.objects.filter(userdata__latitude__isnull=False, is_active=True).annotate(
             lots_sold=Count("lot"), lots_bought=Count("winner")
         )
@@ -5709,10 +5764,10 @@ class UserMap(TemplateView):
             # users by top volume_percentile
             qs = qs.filter(userdata__volume_percentile__lte=filter1)
         elif view == "recent" and filter1:
-            view_qs = view_qs.filter(date_start__gte=timezone.now() - timedelta(hours=int(filter1)))
+            # view_qs = view_qs.filter(date_start__gte=timezone.now() - timedelta(hours=int(filter1)))
             qs = qs.filter(userdata__last_activity__gte=timezone.now() - timedelta(hours=int(filter1)))
         context["users"] = qs
-        context["pageviews"] = view_qs
+        # context["pageviews"] = view_qs
         return context
 
 

@@ -2,194 +2,41 @@
 {% block title %} Admin Dashboard {% endblock %}
 {% load static %}
 {% block content %}
-            <h3>Admin Dashboard</h3>
-            <table class="table">
-                <tr>
-                  <td>active users 5m:</td>
-                  <td> {{ 5m_views_count }}
-                  </td>
-                </tr>
-                <tr>
-                  <td>active users 30m:</td>
-                  <td> {{ 30m_views_count }}
-                  </td>
-                </tr>
-                <tr>
-                  <td>active users 1d:</td>
-                  <td>{{ day_views_count }}
-                  </td>
-                </tr>
-                <tr>
-                  <td>total_users:</td>
-                  <td> {{ total_users }}
-                  </td>
-                </tr>
-                <tr>
-                  <td>in person lots ended in the last 30 minutes:</td>
-                  <td> {{ in_person_lots_ended }}
-                  </td>
-                </tr>
-                <tr>
-                  <td>online lots ending in the next 2 hours:</td>
-                  <td> {{ online_auction_lots_ending }}
-                  </td>
-                </tr>
-                <tr>
-                  <td>unsubscribes:</td>
-                  <td> {{ unsubscribes }}
-                  </td>
-                </tr>
-                <tr>
-                  <td>ads off:</td>
-                  <td> {{ hide_ads }}
-                  </td>
-                </tr>
-                <tr>
-                  <td>Never jointed a club auction</td>
-                  <td> {{ no_club_auction }}
-                  </td>
-                </tr>
-                <tr>
-                  <td>Never bought nor sold a lot</td>
-                  <td> {{ no_participate }}
-                  </td>
-                </tr>
-                <tr>
-                  <td>has used buy now:</td>
-                  <td> {{ using_buy_now }}
-                  </td>
-                </tr>
-                <tr>
-                  <td>has used proxy bidding:</td>
-                  <td> {{ using_proxy_bidding }}
-                  </td>
-                </tr>
-                <tr>
-                  <td>using watch:</td>
-                  <td> {{ using_watch }}
-                  </td>
-                </tr>
-                <tr>
-                  <td>anonymous:</td>
-                  <td> {{ anonymous }}
-                  </td>
-                </tr>
-                <tr>
-                  <td>light_theme:</td>
-                  <td> {{ light_theme }}
-                  </td>
-                </tr>
-                <tr>
-                  <td>sellers:</td>
-                  <td> {{ sellers }}
-                  </td>
-                </tr>
-                <tr>
-                  <td>buyers:</td>
-                  <td> {{ buyers }}
-                  </td>
-                </tr>
-                <tr>
-                  <td>has_location:</td>
-                  <td> {{ has_location }}
-                  </td>
-                </tr>
-                <tr>
-                <tr>
-                  <td>new_lots_last_7_days:</td>
-                  <td> {{ new_lots_last_7_days }}
-                  </td>
-                </tr>
-                <tr>
-                <tr>
-                  <td>new_lots_last_30_days:</td>
-                  <td> {{ new_lots_last_30_days }}
-                  </td>
-                </tr>
-                <tr>
-                  <tr>
-                    <td>feedback_last_30_days:</td>
-                    <td> {{ feedback_last_30_days }}
-                    </td>
-                  </tr>
-                <tr>
-                  <td>bidders_last_30_days:</td>
-                  <td> {{ bidders_last_30_days }}
-                  </td>
-                </tr>
-                <tr>
-                  <td>users who have used search:</td>
-                  <td> {{ users_with_search_history }}
-                  </td>
-                </tr>
-            </table>
-
-            <script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.3/dist/Chart.min.js"></script>
-            <canvas id="myChart" ></canvas>
-            <script>
-                var ctx = document.getElementById('myChart').getContext('2d');
-                new Chart(ctx, {
-                    type: 'bar',
-                    data: {
-                        labels: [{% for day in last_activity_days %}'{{day}} days ago',{%endfor%}],
-                        datasets: [{
-                            label: 'Number of users',
-                            backgroundColor: 'rgba(52, 152, 219, 0.4)',
-                            data: [{% for data in last_activity_count %}{{data}},{%endfor%}],
-                        },
-                    ]
-                    },
-                    options: {
-                        legend: {
-                            display: true
-                        },
-                        title: {
-                            display: true,
-                            text: 'Last user activity'
-                        }
-                    }
-                });
-            </script>
-
-            <table>
-              <thead>
-                <tr>
-                  <th>Page</th>
-                  <th>Total views</th>
-                  <th>Unique views</th>
-                </tr>
-              </thead>
-              <tbody>
-              {% for page in page_views %}
-                <tr>
-                  <td><a href='{{page.url}}'>{{ page.title }}</a></td>
-                  <td>{{ page.total_view_count }}</td>
-                  <td>{{ page.unique_view_count }}</td>
-                </tr>
-              {% endfor %}
-              </tbody>
-            </table>
-            <table>
-              <thead>
-                <tr>
-                  <th>Referrer</th>
-                  <th>Clicks</th>
-                  <th>Top page</th>
-                </tr>
-              </thead>
-              <tbody>
-              {% for ref in referrers %}
-                <tr>
-                  <td><a href='{{ref.referrer}}'>{{ ref.referrer }}</a></td>
-                  <td>{{ ref.total_clicks }}</td>
-                  <td><a href='{{ref.url}}'>{{ ref.title }}</a></td>
-                </tr>
-              {% endfor %}
-              </tbody>
-            </table>
-{% endblock %}
-
-
-{% block extra_js %}
-<script type='text/javascript'>pageView();</script>
+<h3>User stats</h3>
+<table class="table">
+    <tr>
+      <td>Active users 5m:</td>
+      <td> {{ 5m_views_count }}
+      </td>
+    </tr>
+    <tr>
+      <td>Active users 30m:</td>
+      <td> {{ 30m_views_count }}
+      </td>
+    </tr>
+    <tr>
+      <td>Active users 1d:</td>
+      <td>{{ day_views_count }} ({{day_views_count_percent_with_account}}% with an account)
+      </td>
+    </tr>
+    <tr>
+      <td>Total users:</td>
+      <td> {{ total_users }}
+      </td>
+    </tr>
+</table>
+<h3>Current auction usage</h3>
+<small class='text-muted'>Use this info along with the current users stat to see if it's safe to apply updates</small>
+<table class="table">
+    <tr>
+      <td>Lots from in person auctions ended in the last 30 minutes</td>
+      <td> {{ in_person_lots_ended }}
+      </td>
+    </tr>
+    <tr>
+      <td>Online auction lots scheduled to end in the next 2 hours</td>
+      <td> {{ online_auction_lots_ending }}
+      </td>
+    </tr>
+</table>
 {% endblock %}

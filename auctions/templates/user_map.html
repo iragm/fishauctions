@@ -7,7 +7,6 @@
 src="https://maps.googleapis.com/maps/api/js?key={{google_maps_api_key}}&callback=initMap&libraries=&v=weekly&libraries=marker,visualization"
 async
 ></script>
-<script type='text/javascript'>pageView();</script>
 <script>
 
 function initMap() {
@@ -51,30 +50,6 @@ function initMap() {
             }
         })(marker, i));
     }
-    // Heat map
-    var map = new google.maps.Map(document.getElementById("map_visualization"), {
-        zoom: 5,
-        center: { lat: 39.095963, lng: -83.662005 },
-    });
-
-    var heatmapData = [
-        {% for view in pageviews %}
-        new google.maps.LatLng({{ view.latitude}}, {{ view.longitude}}),
-        {% endfor %}
-    ];
-
-    var heatmap = new google.maps.visualization.HeatmapLayer({
-        data: heatmapData,
-        radius: 20,
-        dissipating: true,
-        gradient:
-        [   'rgba(139, 0, 0, 0)',
-            'rgba(255, 69, 0, 1)',
-            'rgba(255, 99, 99, 1)',
-        ]
-    });
-
-    heatmap.setMap(map);
 }
 </script>
 {% endblock %}
@@ -82,9 +57,5 @@ function initMap() {
             <h4>User map</h4>
             <div id="map_wrapper" style='height: 600px;'>
                 <div id="map_canvas" class="mapping" style='width: 100%; height: 100%;'></div>
-                <div id="map_visualization" class="mapping mt-2" style='width: 100%; height: 100%;'></div>
             </div>
-            {% if not has_user_location %}
-            <span><a href="#" onclick="setLocation()">{{ location_message }}</a></span>
-            {% endif %}
 {% endblock %}

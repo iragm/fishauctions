@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %} User traffic {% endblock %}
+{% load static %}
+{% block content %}
+<h3>Users by last activity</h3>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.3/dist/Chart.min.js"></script>
+<canvas id="myChart" ></canvas>
+<script>
+    var ctx = document.getElementById('myChart').getContext('2d');
+    new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: [{% for day in last_activity_days %}'{{day}} days ago',{%endfor%}],
+            datasets: [{
+                label: 'Number of users',
+                backgroundColor: 'rgba(52, 152, 219, 0.4)',
+                data: [{% for data in last_activity_count %}{{data}},{%endfor%}],
+            },
+        ]
+        },
+        options: {
+            legend: {
+                display: true
+            },
+            title: {
+                display: true,
+                text: 'Last user activity'
+            }
+        }
+    });
+</script>
+<h3>Popular pages from the last {{ days }} days</h3>
+<table>
+  <thead>
+    <tr>
+      <th>Page</th>
+      <th>Views</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for page in page_views %}
+    <tr>
+      <td><a href='{{page.url}}'>{{ page.title }}</a></td>
+      <td>{{ page.view_count }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<h3>Heat map of traffic over the last {{ days }} days</h3>
+<div id="map_wrapper" style='height: 600px;'>
+<div id="map_visualization" class="mapping mt-2" style='width: 100%; height: 100%;'></div>
+</div>
+{% endblock %}
+{% block extra_js %}
+<script
+src="https://maps.googleapis.com/maps/api/js?key={{google_maps_api_key}}&callback=initMap&libraries=&v=weekly&libraries=marker,visualization"
+async
+></script>
+<script>
+
+function initMap() {
+    var map = new google.maps.Map(document.getElementById("map_visualization"), {
+        zoom: 5,
+        center: { lat: 39.095963, lng: -83.662005 },
+    });
+
+    var heatmapData = [
+        {% for view in pageviews %}
+        new google.maps.LatLng({{ view.latitude}}, {{ view.longitude}}),
+        {% endfor %}
+    ];
+
+    var heatmap = new google.maps.visualization.HeatmapLayer({
+        data: heatmapData,
+        radius: 20,
+        dissipating: true,
+        gradient:
+        [   'rgba(139, 0, 0, 0)',
+            'rgba(255, 69, 0, 1)',
+            'rgba(255, 99, 99, 1)',
+        ]
+    });
+
+    heatmap.setMap(map);
+}
+</script>
+{% endblock %}
