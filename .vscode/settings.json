@@ -14,5 +14,4 @@
         "enable": true
     },
     "ruff.lint.enable": true,
-    "ruff.lint.run": "onType",
 }
