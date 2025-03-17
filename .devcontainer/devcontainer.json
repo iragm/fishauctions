@@ -11,7 +11,7 @@
 	// Features to add to the dev container. More info: https://containers.dev/features.
 	"features": {
 		"ghcr.io/devcontainers/features/common-utils:2": {},
-		"ghcr.io/mikaello/devcontainer-features/modern-shell-utils:1": {},
+		"ghcr.io/mikaello/devcontainer-features/modern-shell-utils:2": {},
 		"ghcr.io/devcontainers/features/docker-in-docker:2.12.0": {},
 		"ghcr.io/devcontainers/features/git:1": {},
 		"ghcr.io/devcontainers/features/python:1": {}
