@@ -3631,7 +3631,7 @@ class PageView(models.Model):
     auction.help_text = "Only filled out when a user views an auction's rules page"
     lot_number = models.ForeignKey(Lot, null=True, blank=True, on_delete=models.CASCADE)
     lot_number.help_text = "Only filled out when a user views a specific lot's page"
-    date_start = models.DateTimeField(auto_now_add=True)
+    date_start = models.DateTimeField(auto_now_add=True, db_index=True)
     date_end = models.DateTimeField(null=True, blank=True, default=timezone.now)
     total_time = models.PositiveIntegerField(default=0)
     total_time.help_text = "The total time in seconds the user has spent on the lot page"
@@ -3640,7 +3640,7 @@ class PageView(models.Model):
     url = models.CharField(max_length=600, blank=True, null=True)
     title = models.CharField(max_length=600, blank=True, null=True)
     referrer = models.CharField(max_length=600, blank=True, null=True)
-    session_id = models.CharField(max_length=600, blank=True, null=True)
+    session_id = models.CharField(max_length=600, blank=True, null=True, db_index=True)
     notification_sent = models.BooleanField(default=False)
     duplicate_check_completed = models.BooleanField(default=False)
     latitude = models.FloatField(default=0)
