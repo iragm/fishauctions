@@ -134,272 +134,268 @@ function deactivate_lot() {
 <div class="container-fluid">
     <div class="row">
         <div class="col-md-offset-1 col-xl-8">
-<div class="container mt-2 mb-5">
-    <div class="row">
-    <div class="col-md-10 offset-md1">
-    {% if request.user.is_authenticated %}
-        <div class="btn-group" role="group">
-            {% if is_auction_admin %}
-                <a class="btn btn-primary" href="/auctions/{{auction.slug}}/lots">
-                    <i class="bi bi-calendar me-1"></i>All lots
-                </a>
-                <button class="btn btn-primary" hx-get="{% url 'auctionlotadmin' pk=lot.pk %}"
-                    hx-target="#modals-here"
-                    hx-trigger="click"
-                    _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">
-                    <i class="bi bi-gear-fill"></i> Manage this lot
-                </button>
-                <button class="btn btn-primary" hx-get="{% url 'lot_refund' pk=lot.pk %}"
-                    hx-target="#modals-here"
-                    hx-trigger="click"
-                    _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">
-                    <i class="bi bi-calendar-x"></i> Remove or refund
-                </button>
-            {% endif %}
-            {% if is_auction_admin or lot.user.pk == request.user.pk %}
-                <a class="btn btn-primary" href="{% url 'single_lot_label' pk=lot.pk %}">
-                    <i class="bi bi-tag"></i>
-                    {% if lot.label_printed %}Reprint label{% else %}Print label{% endif %}
-                </a>
-            {% endif %}
-            {% if request.user.is_superuser %}
-                <a href="/admin/auctions/lot/{{lot.pk}}/change/" class="btn btn-danger">
-                    Admin
-                </a>
-            {% endif %}
-            {% if bids %}
-                <button id="btnGroupDrop1" type="button" class="btn btn-danger dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
-                    Remove bids
-                </button>
-                <ul class="dropdown-menu" aria-labelledby="btnGroupDrop1">
-                    {% for bid in bids %}
-                        <li>
-                            <a class="dropdown-item" href="{% url 'delete_bid' pk=bid.pk %}">
-                                Remove bid from {{ bid.user.first_name }} {{ bid.user.last_name }} ({{ bid.user }})
-                            </a>
-                        </li>
-                    {% endfor %}
-                </ul>
-        {% endif %}
-        </div>
-    {% endif %}
-        <h3>{{ lot.lot_name }}</h3>
-            {{ lot.species_category }}{% if lot.category_automatically_added and lot.can_be_edited and lot.user == request.user %}<span class="badge bg-secondary">Category automatically set.  Wrong?  <a href="/lots/edit/{{lot.pk}}">Fix it here</a></span><br>{% else %}, {% endif %}lot number {{lot.lot_number_display }}<br>
-            {% if lot.i_bred_this_fish %}<span class="badge text-dark bg-light">Bred by this user</span>{%endif%}
-            {% if lot.pre_registered and lot.user == request.user %}<span class="badge text-dark bg-light" data-toggle="tooltip" data-placement="bottom" title="You'll get a {{ lot.auction.pre_register_lot_discount_percent }}% discount on your selling fees for this lot">Pre-registered</span>{%endif%}
-            {% if lot.image_count or lot.video_link %}
-            <div>
-                <div id="image_carousel" class="carousel slide">
-                    <div class="carousel-inner">
-                        {% if lot.video_link %}
-                        <div class="carousel-item active">
-                            <div class="ratio ratio-16x9">
-                                <iframe src="https://www.youtube.com/embed/{{ lot.video_link }}"
-                                        title="YouTube video player" frameborder="0"
-                                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                                        allowfullscreen></iframe>
-                            </div>
-                        </div>
+            <div class="container mt-2 mb-5">
+                <div class="row">
+                <div class="col-md-10 offset-md1">
+                    {% if request.user.is_authenticated %}
+                        <div class="btn-group" role="group">
+                            {% if is_auction_admin %}
+                                <a class="btn btn-primary" href="/auctions/{{auction.slug}}/lots">
+                                    <i class="bi bi-calendar me-1"></i>All lots
+                                </a>
+                                <button class="btn btn-primary" hx-get="{% url 'auctionlotadmin' pk=lot.pk %}"
+                                    hx-target="#modals-here"
+                                    hx-trigger="click"
+                                    _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">
+                                    <i class="bi bi-gear-fill"></i> Manage this lot
+                                </button>
+                                <button class="btn btn-primary" hx-get="{% url 'lot_refund' pk=lot.pk %}"
+                                    hx-target="#modals-here"
+                                    hx-trigger="click"
+                                    _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">
+                                    <i class="bi bi-calendar-x"></i> Remove or refund
+                                </button>
+                            {% endif %}
+                            {% if is_auction_admin or lot.user.pk == request.user.pk %}
+                                <a class="btn btn-primary" href="{% url 'single_lot_label' pk=lot.pk %}">
+                                    <i class="bi bi-tag"></i>
+                                    {% if lot.label_printed %}Reprint label{% else %}Print label{% endif %}
+                                </a>
+                            {% endif %}
+                            {% if request.user.is_superuser %}
+                                <a href="/admin/auctions/lot/{{lot.pk}}/change/" class="btn btn-danger">
+                                    Admin
+                                </a>
+                            {% endif %}
+                            {% if bids %}
+                                <button id="btnGroupDrop1" type="button" class="btn btn-danger dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+                                    Remove bids
+                                </button>
+                                <ul class="dropdown-menu" aria-labelledby="btnGroupDrop1">
+                                    {% for bid in bids %}
+                                        <li>
+                                            <a class="dropdown-item" href="{% url 'delete_bid' pk=bid.pk %}">
+                                                Remove bid from {{ bid.user.first_name }} {{ bid.user.last_name }} ({{ bid.user }})
+                                            </a>
+                                        </li>
+                                    {% endfor %}
+                                </ul>
                         {% endif %}
-                        {% for image in lot.images %}
-                        <div class="carousel-item {% if image.is_primary and not lot.video_link %}active{%endif%}">
-                            <img src="{{ image.image.url }}" class="img-fluid rounded">
-                            <div class='carousel-caption text-light text-left'>
-                                <span class="text-muted"><small>{{ image.get_image_source_display }}</small></span>{%if image.caption%}<br>{{ image.caption }}{%endif%}
-                            </div>
-                                {% if show_image_add_button %}
-                                <div class="container">
-                                    <div class='row mb-3'>
-                                        <div class="col-auto">
-                                            <button class="btn btn-primary" name="rotate-left" onclick="rotate('{{image.pk}}', 90)"><i class="bi bi-arrow-counterclockwise"></i> Rotate</button>
-                                        </div>
-                                        {% if not image.is_primary %}
-                                        <div class="col-auto">
-                                            <button class="btn btn-info" name="make-primary" onclick="make_primary('{{image.pk}}')"><i class="bi bi-file-image-fill"></i> Make primary</button>
-                                        </div>
-                                        {% endif %}
-                                        <div class="col-auto">
-                                            <a href="{% url 'edit_image' pk=image.pk %}" class="btn text-dark bg-warning"><i class="bi bi-gear-fill"></i> Edit image</a>
-                                        </div>
-                                        <div class="col-auto">
-                                            <a href="{% url 'delete_image' pk=image.pk %}" class="btn btn-danger"><i class="bi bi-file-x"></i> Delete image</a>
-                                        </div>
-                                        <div class="col-auto">
-                                            <button class="btn btn-primary" name="rotate-right" onclick="rotate('{{image.pk}}', -90)"><i class="bi bi-arrow-clockwise"></i> Rotate</button>
-                                        </div>
+                        </div>
+                    {% endif %}
+                    <h3>{{ lot.lot_name }}</h3>
+                    {{ lot.species_category }}{% if lot.category_automatically_added and lot.can_be_edited and lot.user == request.user %}<span class="badge bg-secondary">Category automatically set.  Wrong?  <a href="/lots/edit/{{lot.pk}}">Fix it here</a></span><br>{% else %}, {% endif %}lot number {{lot.lot_number_display }}<br>
+                    {% if lot.i_bred_this_fish %}<span class="badge text-dark bg-light">Bred by this user</span>{%endif%}
+                    {% if lot.pre_registered and lot.user == request.user %}<span class="badge text-dark bg-light" data-toggle="tooltip" data-placement="bottom" title="You'll get a {{ lot.auction.pre_register_lot_discount_percent }}% discount on your selling fees for this lot">Pre-registered</span>{%endif%}
+                    {% if lot.image_count or lot.video_link %}
+                    <div>
+                        <div id="image_carousel" class="carousel slide">
+                            <div class="carousel-inner">
+                                {% if lot.video_link %}
+                                <div class="carousel-item active">
+                                    <div class="ratio ratio-16x9">
+                                        <iframe src="https://www.youtube.com/embed/{{ lot.video_link }}"
+                                                title="YouTube video player" frameborder="0"
+                                                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                                                allowfullscreen></iframe>
                                     </div>
                                 </div>
                                 {% endif %}
-                        </div>
-                        {% endfor %}
-                    </div>
-                </div>
-                {% if lot.multimedia_count > 1 %}
-                <div class="d-flex">
-                    {% if lot.video_link %}
-                    <button data-bs-target="#image_carousel" data-bs-slide-to="0" class="me-2 active thumbnail">
-                            <img style="min-width: 100px;" src="{% static 'youtube.png' %}" class="rounded">
-                    </button>
-                    {% endif %}
-                    {% for image in lot.images %}
-                    <a href="#" data-bs-target="#image_carousel" data-bs-slide-to="{% if lot.video_link %}{{ forloop.counter }}{% else %}{{ forloop.counter0 }}{% endif %}"  class="me-2 {% if image.is_primary and not lot.video_link %}active{% endif %}">
-                        <img style="min-width: 100px;" src="{{ image.image.lot_list.url }}" class="rounded">
-                    </a>
-                    {% endfor %}
-                </div>
-                {% endif %}
-            </div>
-            {% else %}
-                {% if lot.auto_image %}
-                    <br><img src="{{ lot.auto_image.image.url }}" class="img-fluid"><br>
-                    <span class="text-muted"><small>This image was automatically added from another lot with the same name and may not be representative of this lot</small></span>
-                    <br>
-                    {% if lot.user == request.user %}
-                    <div>This image was added because you have <a href="{% url 'preferences' %}">automatically add images to my lots</a> enabled</div>
-                    {% endif %}
-                {% endif %}
-                {% if lot.user == request.user and not lot.auto_image %}
-                <div>You haven't added any images to this lot yet.  <a href="/blog/whats-a-picture-worth/" target="_blank">Lots with images are more likely to sell</a></div>
-                {% endif %}
-            {% endif %}
-            {% if show_image_add_button %}
-            <a href="{% url 'add_image' lot=lot.lot_number %}" class="btn btn-primary"><i class="bi bi-file-image"></i> Add image</a><br>
-            {% endif %}
-        <br>
-        <div class="bg-dark mt-2 mb-2">
-            <div class='ms-2 me-2 mb-1'>
-                {{ lot.description_cleaned | safe }}<br>
-                <a href="{{lot.reference_link}}">More information from {{lot.reference_link_domain}}</a>
-            </div><br>
-        </div>
-        <table class="table">
-            {% if lot.auction.use_quantity_field %}
-            <tr>
-                <td><b>Quantity:</b></td><td>{{ lot.quantity }}</td>
-            </tr>
-            {% endif %}
-            {% if lot.custom_checkbox_label %}
-            <tr>
-                <td><b>{{ lot.custom_checkbox_label }}</b></td><td></td>
-            </tr>
-            {% endif %}
-            {% if lot.auction.custom_field_1 != 'disable' and lot.auction.custom_field_1_name and lot.custom_field_1 %}
-            <tr>
-                <td><b>{{ lot.auction.custom_field_1_name }}:</b></td><td>{{ lot.custom_field_1 }}</td>
-            </tr>
-            {% endif %}
-            <tr>
-                <td><b>Seller:</b></td><td>{% if lot.donation %} A donation from {% endif %}{% if lot.user %}<a href="{% url 'userpage' slug=lot.user %}">{{ lot.user }}</a> (<a href="/lots/user/?user={{lot.user}}">All lots from {{ lot.user }}</a>){% if not lot.auction %}
-                    <span class='badge text-dark bg-light'>Lots sold: {{ lot.user.userdata.lots_sold }}</span> <span class='badge text-dark bg-success'>+{{ lot.user.userdata.positive_feedback_as_seller }}</span> <span class='badge bg-danger'>-{{ lot.user.userdata.negative_feedback_as_seller }}</span>
-                    {% endif %}{% else %}{{lot.auctiontos_seller}}{% endif %}</td>
-            </tr>
-            <tr>
-                <td><b>
-                    <span id="price_label">{% if lot.sold or lot.ended %}
-                        Winner:
-                        {% else %}
-                            {% if lot.sealed_bid %}
-                            Sealed bid auction
-                            {% else %}
-                            {% if lot.high_bidder %}
-                                Current bid:
-                            {% else %}
-                                Minimum bid:
-                            {% endif %}
-                            {% endif %}
-                        {% endif %}
-                    </span></b></td>
-                    <td>
-                    {% if lot.sold %}
-                        $<span id="price">{{lot.winning_price}}</span> <span id="high_bidder_name">{% if lot.winner %}
-                            {% if lot.winner.userdata.username_visible %}
-                                <a href="{% url 'userpage' slug=lot.winner %}">{{ lot.winner }}</a>
-                            {% else %}
-                                Anonymous
-                            {% endif %}
-                            {% else %}
-                                Bidder: {{ lot.auctiontos_winner }}
-                            {% endif %}</span>
-                    {% else %}
-                        {% if lot.ended %}
-                            Not sold
-                        {% else %}
-                            {% if lot.sealed_bid %}
-                            You can't see how much others have bid
-                            {% else %}
-                                {% if lot.high_bidder %}
-                                <span>
-                                    $<span id="price">{{ lot.high_bid }}</span>
-                                    {% if lot.high_bidder.pk == request.user.id %}
-                                    <span id="high_bidder_name"> - you're winning!</span>
-                                    {% else %}
-                                    <span id="high_bidder_name">{% if lot.high_bidder.userdata.username_visible %}<a href="{% url 'userpage' slug=lot.high_bidder %}">{{ lot.high_bidder }}</a>{% else %}Anonymous{%endif%}</span>
-                                    {% endif %}
-                                    <span id="your_bid">
-                                        {% if viewer_bid %}
-                                        Your max bid is $<span id='your_bid_price'>{{ viewer_bid }}</span>
-                                        {% if lot.bids_can_be_removed and lot.auction.allow_deleting_bids %}
-                                            <a href="{% url 'delete_bid' pk=viewer_bid_pk %}" class='btn btn-danger btn-sm'>Remove your bid</a>
+                                {% for image in lot.images %}
+                                <div class="carousel-item {% if image.is_primary and not lot.video_link %}active{%endif%}">
+                                    <img src="{{ image.image.url }}" class="img-fluid rounded">
+                                    <div class='carousel-caption text-light text-left'>
+                                        <span class="text-muted"><small>{{ image.get_image_source_display }}</small></span>{%if image.caption%}<br>{{ image.caption }}{%endif%}
+                                    </div>
+                                        {% if show_image_add_button %}
+                                        <div class="container">
+                                            <div class='row mb-3'>
+                                                <div class="col-auto">
+                                                    <button class="btn btn-primary" name="rotate-left" onclick="rotate('{{image.pk}}', 90)"><i class="bi bi-arrow-counterclockwise"></i> Rotate</button>
+                                                </div>
+                                                {% if not image.is_primary %}
+                                                <div class="col-auto">
+                                                    <button class="btn btn-info" name="make-primary" onclick="make_primary('{{image.pk}}')"><i class="bi bi-file-image-fill"></i> Make primary</button>
+                                                </div>
+                                                {% endif %}
+                                                <div class="col-auto">
+                                                    <a href="{% url 'edit_image' pk=image.pk %}" class="btn text-dark bg-warning"><i class="bi bi-gear-fill"></i> Edit image</a>
+                                                </div>
+                                                <div class="col-auto">
+                                                    <a href="{% url 'delete_image' pk=image.pk %}" class="btn btn-danger"><i class="bi bi-file-x"></i> Delete image</a>
+                                                </div>
+                                                <div class="col-auto">
+                                                    <button class="btn btn-primary" name="rotate-right" onclick="rotate('{{image.pk}}', -90)"><i class="bi bi-arrow-clockwise"></i> Rotate</button>
+                                                </div>
+                                            </div>
+                                        </div>
                                         {% endif %}
-                                        {% endif %}</span>
-                                    {% if is_auction_admin %}{{ lot.auction_show_high_bidder_template }}{% endif %}
-                                </span>
-                                {% else %}
-                                    $<span id="price">{{ lot.reserve_price }} {% if lot.buy_now_price and not lot.bidding_error %}<button type="button" class='btn btn-sm btn-success text-black' id="buy-now">Buy now: ${{lot.buy_now_price}}</button>{% endif %}</span> <span id="high_bidder_name"></span><span id="your_bid"></span>
-                                {% endif %}
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        {% if lot.multimedia_count > 1 %}
+                        <div class="d-flex">
+                            {% if lot.video_link %}
+                            <button data-bs-target="#image_carousel" data-bs-slide-to="0" class="me-2 active thumbnail">
+                                    <img style="min-width: 100px;" src="{% static 'youtube.png' %}" class="rounded">
+                            </button>
+                            {% endif %}
+                            {% for image in lot.images %}
+                            <a href="#" data-bs-target="#image_carousel" data-bs-slide-to="{% if lot.video_link %}{{ forloop.counter }}{% else %}{{ forloop.counter0 }}{% endif %}"  class="me-2 {% if image.is_primary and not lot.video_link %}active{% endif %}">
+                                <img style="min-width: 100px;" src="{{ image.image.lot_list.url }}" class="rounded">
+                            </a>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% else %}
+                        {% if lot.auto_image %}
+                            <br><img src="{{ lot.auto_image.image.url }}" class="img-fluid"><br>
+                            <span class="text-muted"><small>This image was automatically added from another lot with the same name and may not be representative of this lot</small></span>
+                            <br>
+                            {% if lot.user == request.user %}
+                            <div>This image was added because you have <a href="{% url 'preferences' %}">automatically add images to my lots</a> enabled</div>
                             {% endif %}
                         {% endif %}
+                        {% if lot.user == request.user and not lot.auto_image %}
+                        <div>You haven't added any images to this lot yet.  <a href="/blog/whats-a-picture-worth/" target="_blank">Lots with images are more likely to sell</a></div>
+                        {% endif %}
                     {% endif %}
-                    </td>
-            </tr>
-            {% if not lot.auction %}
-            <tr>
-                <td><b>Distance from you:</b></td><td>{{ distance }} {% if lot.local_pickup %}<span class="badge text-dark bg-light">Local pickup available</span>{% endif %}
-                    {% if request.user.userdata.location in lot.shipping_locations.all %}
-                    <span class="badge bg-light text-black">Ships to {{ request.user.userdata.location }}</span>
+                    {% if show_image_add_button %}
+                    <a href="{% url 'add_image' lot=lot.lot_number %}" class="btn btn-primary"><i class="bi bi-file-image"></i> Add image</a><br>
                     {% endif %}
-                </td>
-            </tr>
-            <tr>
-                <td><b>Payment:</b></td><td>
-                    {% if lot.payment_other_method %}{{ lot.payment_other_method }}{% endif %}
-                    {% if lot.payment_paypal %}<span class="badge text-dark bg-light">Paypal OK</span>{% endif %}
-                    {% if lot.payment_cash %}<span class="badge text-dark bg-light">Cash OK</span>{% endif %}
-                </td>
-            </tr>
-            {% if lot.other_text %}
-            <tr>
-                <td><b>Shipping notes:</b></td><td>{{ lot.other_text }} </td>
-            </tr>
-            {% endif %}
-            {% endif %}
+                    <br>
+                    <div class="bg-dark mt-2 mb-2">
+                        <div class='ms-2 me-2 mb-1'>
+                            {{ lot.description_cleaned | safe }}<br>
+                            <a href="{{lot.reference_link}}">More information from {{lot.reference_link_domain}}</a>
+                        </div><br>
+                    </div>
+                    <table class="table">
+                        {% if lot.auction and lot.auction.use_quantity_field %}
+                        <tr>
+                            <td><b>Quantity:</b></td><td>{{ lot.quantity }}</td>
+                        </tr>
+                        {% endif %}
+                        {% if lot.auction and lot.custom_checkbox_label %}
+                        <tr>
+                            <td><b>{{ lot.custom_checkbox_label }}</b></td><td></td>
+                        </tr>
+                        {% endif %}
+                        {% if lot.auction and lot.auction.custom_field_1 != 'disable' and lot.auction.custom_field_1_name and lot.custom_field_1 %}
+                        <tr>
+                            <td><b>{{ lot.auction.custom_field_1_name }}:</b></td><td>{{ lot.custom_field_1 }}</td>
+                        </tr>
+                        {% endif %}
+                        <tr>
+                            <td><b>Seller:</b></td><td>{% if lot.donation %} A donation from {% endif %}{% if lot.user %}<a href="{% url 'userpage' slug=lot.user %}">{{ lot.user }}</a> (<a href="/lots/user/?user={{lot.user}}">All lots from {{ lot.user }}</a>){% if not lot.auction %}
+                                <span class='badge text-dark bg-light'>Lots sold: {{ lot.user.userdata.lots_sold }}</span> <span class='badge text-dark bg-success'>+{{ lot.user.userdata.positive_feedback_as_seller }}</span> <span class='badge bg-danger'>-{{ lot.user.userdata.negative_feedback_as_seller }}</span>
+                                {% endif %}{% else %}this{{lot.auctiontos_seller}}{% endif %}</td>
+                        </tr>
+                        <tr>
+                            <td><b>
+                                <span id="price_label">{% if lot.sold or lot.ended %}
+                                    Winner:
+                                    {% else %}
+                                        {% if lot.sealed_bid %}
+                                        Sealed bid auction
+                                        {% else %}
+                                        {% if lot.high_bidder %}
+                                            Current bid:
+                                        {% else %}
+                                            Minimum bid:
+                                        {% endif %}
+                                        {% endif %}
+                                    {% endif %}
+                                </span></b></td>
+                                <td>
+                                {% if lot.sold %}
+                                    $<span id="price">{{lot.winning_price}}</span> <span id="high_bidder_name">{% if lot.winner %}
+                                        {% if lot.winner.userdata.username_visible %}
+                                            <a href="{% url 'userpage' slug=lot.winner %}">{{ lot.winner }}</a>
+                                        {% else %}
+                                            Anonymous
+                                        {% endif %}
+                                        {% else %}
+                                            Bidder: {{ lot.auctiontos_winner }}
+                                        {% endif %}</span>
+                                {% else %}
+                                    {% if lot.ended %}
+                                        Not sold
+                                    {% else %}
+                                        {% if lot.sealed_bid %}
+                                        You can't see how much others have bid
+                                        {% else %}
+                                            {% if lot.high_bidder %}
+                                            <span>
+                                                $<span id="price">{{ lot.high_bid }}</span>
+                                                {% if lot.high_bidder.pk == request.user.id %}
+                                                <span id="high_bidder_name"> - you're winning!</span>
+                                                {% else %}
+                                                <span id="high_bidder_name">{% if lot.high_bidder.userdata.username_visible %}<a href="{% url 'userpage' slug=lot.high_bidder %}">{{ lot.high_bidder }}</a>{% else %}Anonymous{%endif%}</span>
+                                                {% endif %}
+                                                <span id="your_bid">
+                                                    {% if viewer_bid %}
+                                                    Your max bid is $<span id='your_bid_price'>{{ viewer_bid }}</span>
+                                                    {% if lot.bids_can_be_removed and lot.auction.allow_deleting_bids %}
+                                                        <a href="{% url 'delete_bid' pk=viewer_bid_pk %}" class='btn btn-danger btn-sm'>Remove your bid</a>
+                                                    {% endif %}
+                                                    {% endif %}</span>
+                                                {% if is_auction_admin %}{{ lot.auction_show_high_bidder_template }}{% endif %}
+                                            </span>
+                                            {% else %}
+                                                $<span id="price">{{ lot.reserve_price }} {% if lot.buy_now_price and not lot.bidding_error %}<button type="button" class='btn btn-sm btn-success text-black' id="buy-now">Buy now: ${{lot.buy_now_price}}</button>{% endif %}</span> <span id="high_bidder_name"></span><span id="your_bid"></span>
+                                            {% endif %}
+                                        {% endif %}
+                                    {% endif %}
+                                {% endif %}
+                                </td>
+                        </tr>
+                        {% if not lot.auction %}
+                        <tr>
+                            <td><b>Distance from you:</b></td><td>{{ distance }} {% if lot.local_pickup %}<span class="badge text-dark bg-light">Local pickup available</span>{% endif %}
+                                {% if request.user.userdata.location in lot.shipping_locations.all %}
+                                <span class="badge bg-light text-black">Ships to {{ request.user.userdata.location }}</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><b>Payment:</b></td><td>
+                                {% if lot.payment_other_method %}{{ lot.payment_other_method }}{% endif %}
+                                {% if lot.payment_paypal %}<span class="badge text-dark bg-light">Paypal OK</span>{% endif %}
+                                {% if lot.payment_cash %}<span class="badge text-dark bg-light">Cash OK</span>{% endif %}
+                            </td>
+                        </tr>
+                        {% if lot.other_text %}
+                        <tr>
+                            <td><b>Shipping notes:</b></td><td>{{ lot.other_text }} </td>
+                        </tr>
+                        {% endif %}
+                        {% endif %}
 
-            <tr>
-                <td><b>Ends:</b></td><td><span id="end_date" class="{% if lot.ended %} {% endif %}">{{ lot.calculated_end_for_templates }}</span>{% if lot.ended %}<span class='badge-pill badge bg-danger'>Ended</span>{% endif %}</td>
-            </tr>
+                        <tr>
+                            <td><b>Ends:</b></td><td><span id="end_date" class="{% if lot.ended %} {% endif %}">{{ lot.calculated_end_for_templates }}</span>{% if lot.ended %}<span class='badge-pill badge bg-danger'>Ended</span>{% endif %}</td>
+                        </tr>
 
-            {% if lot.auction and lot.auction.multi_location and lot.location %}
-            <tr>
-                <td><b>Location:</b></td><td>{{ lot.location }}
-                    {% if user_tos_location and user_tos_location != lot.location_as_object %}
-                        <small class='text-muted'>Delivered to {{ user_tos_location }} at {{ user_tos_location.second_pickup_time|default:user_tos_location.pickup_time }}.</small>
-                    {% endif %}
-                </td>
-            </tr>
-            {% endif %}
-            {% if not lot.transportable %}
-            <tr>
-                <td><b>Not transportable</b></td><td>This lot can only be picked up at its location, we won't deliver it to other pickup locations</td>
-            </tr>
-            {% endif %}
-            {% if not lot.sealed_bid %}
-            <tr>
-                <td><b>Views:</b></td><td>{{ lot.page_views }} views{% if lot.number_of_watchers %}, {{lot.number_of_watchers}} watching{%endif%}</td>
-            </tr>
-            {% endif %}
-        </table>
-
-        {% if lot.user == request.user %}<a href="/lots/new/?copy={{lot.pk}}" class="btn btn-info"><i class="bi bi-calendar-plus"></i> Copy to new lot</a>{% endif %}
+                        {% if lot.auction and lot.auction.multi_location and lot.location %}
+                        <tr>
+                            <td><b>Location:</b></td><td>{{ lot.location }}
+                                {% if user_tos_location and user_tos_location != lot.location_as_object %}
+                                    <small class='text-muted'>Delivered to {{ user_tos_location }} at {{ user_tos_location.second_pickup_time|default:user_tos_location.pickup_time }}.</small>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endif %}
+                        {% if not lot.sealed_bid %}
+                        <tr>
+                            <td><b>Views:</b></td><td>{{ lot.page_views }} views{% if lot.number_of_watchers %}, {{lot.number_of_watchers}} watching{%endif%}</td>
+                        </tr>
+                        {% endif %}
+                    </table>
+                {% if request.user.is_authenticated and lot.user.pk == request.user.id %}
+                    <a href="/lots/new/?copy={{lot.pk}}" class="btn btn-info"><i class="bi bi-calendar-plus"></i> Copy to new lot</a>
+                {% endif %}
         {% if not lot.auction %}
             {% if request.user.is_authenticated %}
                 {% if lot.user == request.user or request.user.is_superuser %}
