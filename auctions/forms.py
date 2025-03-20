@@ -2102,29 +2102,25 @@ class CreateLotForm(forms.ModelForm):
             #    self.fields['species_search'].initial = self.instance.species.common_name.split(",")[0]
         else:
             if self.cloned_from:
-                try:
-                    cloneLot = Lot.objects.get(pk=self.cloned_from, is_deleted=False)
-                    if (cloneLot.user.pk == self.user.pk) or self.user.is_superuser:
-                        # you can only clone your lots
-                        cloneFields = [
-                            "lot_name",
-                            "quantity",
-                            "species_category",
-                            # "description",
-                            "summernote_description",
-                            "i_bred_this_fish",
-                            "reserve_price",
-                            "buy_now_price",
-                            "reference_link",
-                            "donation",
-                            "custom_checkbox",
-                            "custom_field_1",
-                        ]
-                        for field in cloneFields:
-                            self.fields[field].initial = getattr(cloneLot, field)
-                        self.fields["cloned_from"].initial = int(self.cloned_from)
-                except:
-                    pass
+                clone_from_lot = Lot.objects.filter(pk=self.cloned_from, is_deleted=False).first()
+                if clone_from_lot and ((clone_from_lot.user.pk == self.user.pk) or self.user.is_superuser):
+                    # you can only clone your lots
+                    cloneFields = [
+                        "lot_name",
+                        "quantity",
+                        "species_category",
+                        "summernote_description",
+                        "i_bred_this_fish",
+                        "reserve_price",
+                        "buy_now_price",
+                        "reference_link",
+                        "donation",
+                        "custom_checkbox",
+                        "custom_field_1",
+                    ]
+                    for field in cloneFields:
+                        self.fields[field].initial = getattr(clone_from_lot, field)
+                    self.fields["cloned_from"].initial = int(self.cloned_from)
             # default to making new lots part of a club auction
             self.fields["part_of_auction"].initial = "True"
             self.fields["run_duration"].initial = 10

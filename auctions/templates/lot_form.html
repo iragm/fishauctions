@@ -13,7 +13,7 @@ var form_id = '#lot-form';
 
 function setAuction(setting) {
     if (setting) {
-        $('#div_id_auction').closest('.col-md-3').show();
+        $('#div_id_auction').closest('.col-md-8').show();
         $('#div_id_donation').closest('.col-md-3').show();
         $('#div_id_relist_if_not_sold').closest('.mb-3').hide();
         $('#div_id_relist_if_sold').closest('.mb-3').hide();
@@ -25,7 +25,7 @@ function setAuction(setting) {
         setAuctionRequiredFields($('#id_auction').val())
     } else {
         // fields for non-auction lots
-        $('#div_id_auction').closest('.col-md-3').hide();
+        $('#div_id_auction').closest('.col-md-8').hide();
         $('#div_id_donation').closest('.col-md-3').hide();
         //$('#div_id_promoted').closest('.col-md-3').show();
         $('#div_id_relist_if_not_sold').closest('.mb-3').show();
