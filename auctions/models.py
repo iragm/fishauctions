@@ -734,6 +734,12 @@ class Auction(models.Model):
         self.is_deleted = True
         self.save()
 
+    def save(self, *args, **kwargs):
+        if self.date_start.year < 2000:
+            current_year = timezone.now().year
+            self.date_start = self.date_start.replace(year=current_year)
+        super().save(*args, **kwargs)
+
     @property
     def location_qs(self):
         """All locations associated with this auction"""
@@ -1760,7 +1766,7 @@ class AuctionTOS(models.Model):
                 # self.print_reminder_email_sent = True
                 # self.second_confirm_email_sent = True
             if self.email and not self.user:
-                self.user = User.objects.filter(active=True, email=self.email).first()
+                self.user = User.objects.filter(is_active=True, email=self.email).first()
         # fill out some fields from user, if set
         # There is a huge security concern here:   <<<< ATTENTION!!!
         # If someone creates an auction and adds every email address that's public

@@ -2674,14 +2674,13 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
                     pass
             return default_response
 
-        def columns_exist_in_csv(csv_reader, columns):
+        def columns_exist(field_names, columns):
             """returns True if any value in the list `columns` exists in the file"""
-            first_row = next(csv_reader)
-            result = extract_info(first_row, columns, None)
-            if result is None:
-                return False
-            else:
-                return True
+            case_insensitive_row = {k.lower() for k in field_names}
+            for column in columns:
+                if column in case_insensitive_row:
+                    return True
+            return False
 
         csv_file.seek(0)
         csv_reader = csv.DictReader(TextIOWrapper(csv_file.file))
@@ -2697,19 +2696,19 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
         # order matters here - the most important columns should be validated last,
         # so the error refers to the most important missing column
         try:
-            if not columns_exist_in_csv(csv_reader, phone_field_names):
+            if not columns_exist(csv_reader.fieldnames, phone_field_names):
                 error = "Warning: This file does not contain a phone column"
             else:
                 some_columns_exist = True
-            if not columns_exist_in_csv(csv_reader, address_field_names):
+            if not columns_exist(csv_reader.fieldnames, address_field_names):
                 error = "Warning: This file does not contain an address column"
             else:
                 some_columns_exist = True
-            if not columns_exist_in_csv(csv_reader, name_field_names):
+            if not columns_exist(csv_reader.fieldnames, name_field_names):
                 error = "Warning: This file does not contain a name column"
             else:
                 some_columns_exist = True
-            if not columns_exist_in_csv(csv_reader, email_field_names):
+            if not columns_exist(csv_reader.fieldnames, email_field_names):
                 error = "Warning: This file does not contain an email column"
             else:
                 some_columns_exist = True
@@ -2717,7 +2716,54 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
                 error = (
                     "Unable to read information from this CSV file.  Make sure it contains an email and a name column"
                 )
-        except UnicodeDecodeError as e:
+
+            total_tos = 0
+            total_skipped = 0
+            for row in csv_reader:
+                bidder_number = extract_info(row, bidder_number_fields)
+                email = extract_info(row, email_field_names)
+                name = extract_info(row, name_field_names)
+                phone = extract_info(row, phone_field_names)
+                address = extract_info(row, address_field_names)
+                is_club_member = extract_info(row, is_club_member_fields)
+                if is_club_member.lower() in ["yes", "true", "member", "club member"]:
+                    is_club_member = True
+                else:
+                    is_club_member = False
+                if email or name or phone or address:
+                    if self.tos_is_in_auction(self.auction, name, email):
+                        logger.debug("CSV import skipping %s", name)
+                        total_skipped += 1
+                    else:
+                        logger.debug("CSV import adding %s", name)
+                        if bidder_number:
+                            if AuctionTOS.objects.filter(auction=self.auction, bidder_number=bidder_number).first():
+                                bidder_number = ""
+                        AuctionTOS.objects.create(
+                            auction=self.auction,
+                            pickup_location=self.auction.location_qs.first(),
+                            manually_added=True,
+                            bidder_number=bidder_number,
+                            name=name,
+                            phone_number=phone,
+                            email=email,
+                            address=address,
+                            is_club_member=is_club_member,
+                        )
+                        total_tos += 1
+            if error:
+                messages.error(self.request, error)
+            msg = f"{total_tos} users added"
+            if total_skipped:
+                msg += (
+                    f", {total_skipped} users are already in this auction (matched by email, or name if email not set)"
+                )
+            messages.info(self.request, msg)
+            url = reverse("auction_tos_list", kwargs={"slug": self.auction.slug})
+            response = HttpResponse(status=200)
+            response["HX-Redirect"] = url
+            return response
+        except (UnicodeDecodeError, ValueError) as e:
             messages.error(
                 self.request, f"Unable to read file.  Make sure this is a valid UTF-8 CSV file.  Error was: {e}"
             )
@@ -2725,45 +2771,6 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
             response = HttpResponse(status=200)
             response["HX-Redirect"] = url
             return response
-        total_tos = 0
-        total_skipped = 0
-        for row in csv_reader:
-            bidder_number = extract_info(row, bidder_number_fields)
-            email = extract_info(row, email_field_names)
-            name = extract_info(row, name_field_names)
-            phone = extract_info(row, phone_field_names)
-            address = extract_info(row, address_field_names)
-            is_club_member = extract_info(row, is_club_member_fields)
-            if is_club_member.lower() in ["yes", "true", "member", "club member"]:
-                is_club_member = True
-            else:
-                is_club_member = False
-            if email or name or phone or address:
-                if self.tos_is_in_auction(self.auction, name, email):
-                    total_skipped += 1
-                else:
-                    AuctionTOS.objects.create(
-                        auction=self.auction,
-                        pickup_location=self.auction.location_qs.first(),
-                        manually_added=True,
-                        bidder_number=bidder_number,
-                        name=name,
-                        phone_number=phone,
-                        email=email,
-                        address=address,
-                        is_club_member=is_club_member,
-                    )
-                    total_tos += 1
-        if error:
-            messages.error(self.request, error)
-        msg = f"{total_tos} users added"
-        if total_skipped:
-            msg += f", {total_skipped} users are already in this auction (matched by email, or name if email not set)"
-        messages.info(self.request, msg)
-        url = reverse("auction_tos_list", kwargs={"slug": self.auction.slug})
-        response = HttpResponse(status=200)
-        response["HX-Redirect"] = url
-        return response
 
         # The code below would populate the formset with the info from the CSV.
         # This process is simply not working, and it fails silently with no log.
