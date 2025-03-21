@@ -1766,7 +1766,7 @@ class AuctionTOS(models.Model):
                 # self.print_reminder_email_sent = True
                 # self.second_confirm_email_sent = True
             if self.email and not self.user:
-                self.user = User.objects.filter(active=True, email=self.email).first()
+                self.user = User.objects.filter(is_active=True, email=self.email).first()
         # fill out some fields from user, if set
         # There is a huge security concern here:   <<<< ATTENTION!!!
         # If someone creates an auction and adds every email address that's public
