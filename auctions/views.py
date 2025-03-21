@@ -2624,7 +2624,8 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
                     total_skipped = 0
                     total_tos = 0
                     for tos in auctiontos:
-                        if not self.tos_is_in_auction(self.auction, tos.name, tos.email):
+                        # if not self.tos_is_in_auction(self.auction, tos.name, tos.email):
+                        if not self.auction.find_user(tos.name, tos.email):
                             initial_formset_data.append(
                                 {
                                     "bidder_number": tos.bidder_number,
@@ -2731,7 +2732,8 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
                 else:
                     is_club_member = False
                 if email or name or phone or address:
-                    if self.tos_is_in_auction(self.auction, name, email):
+                    if self.auction.find_user(name, email):
+                        # if self.tos_is_in_auction(self.auction, name, email):
                         logger.debug("CSV import skipping %s", name)
                         total_skipped += 1
                     else:
@@ -2859,6 +2861,7 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
 
     def tos_is_in_auction(self, auction, name, email):
         """Return the tos if the name or email are already present in the auction, otherwise None"""
+        logger.warning("tos_is_in_auction is deprecated, use auction.find_user() instead")
         qs = AuctionTOS.objects.filter(auction=auction)
         if email:
             qs = qs.filter(email=email)

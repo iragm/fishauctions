@@ -47,7 +47,14 @@ class AuctionTOSHTMxTable(tables.Table):
         # as a button, looks awful
         # result = f"<span class='btn btn-secondary btn-sm' style='cursor:pointer;' hx-get='/api/auctiontos/{record.pk}' hx-target='#modals-here' hx-trigger='click'>{value}</span>"
         # as a link, looks better
-        result = f"<a href='' hx-noget hx-get='/api/auctiontos/{record.pk}' hx-target='#modals-here' hx-trigger='click'><i class='bi bi-person-fill-gear me-1'></i>{value}</a>"
+        result = (
+            f"<a href='' hx-noget hx-get='/api/auctiontos/{record.pk}' hx-target='#modals-here' hx-trigger='click'>"
+        )
+        if record.possible_duplicate:
+            result += "<i class='text-warning bi bi-people-fill me-1' title='This user may be a duplicate'></i>"
+        else:
+            result += "<i class='bi bi-person-fill-gear me-1'></i>"
+        result += f"{value}</a>"
         if record.is_admin or (record.user and record.auction.created_by.pk == record.user.pk):
             result += '<span class="badge bg-danger ms-1 me-1" title="Can add users and lot">Admin</span>'
         if record.is_club_member:

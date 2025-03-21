@@ -233,7 +233,7 @@ urlpatterns = [
         name="auction_quick_checkout",
     ),
     path(
-        "api/auctions/<slug:slug>/checkout/<slug:filter>/",
+        "api/auctions/<slug:slug>/checkout/<path:filter>/",
         views.QuickCheckoutHTMX.as_view(),
         name="auction_quick_checkout_htmx",
     ),

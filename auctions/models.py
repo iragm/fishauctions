@@ -740,6 +740,26 @@ class Auction(models.Model):
             self.date_start = self.date_start.replace(year=current_year)
         super().save(*args, **kwargs)
 
+    def find_user(self, name="", email="", exclude_pk=None):
+        """Used for duplicate checks and when adding users to an auction
+        Returns an AuctionTOS instance or None"""
+        qs = AuctionTOS.objects.filter(auction__pk=self.pk)
+        if not name and not email:
+            return None
+        if exclude_pk:
+            qs = qs.exclude(pk=exclude_pk)
+        if email:
+            email_search = qs.filter(email=email).first()
+            if email_search:
+                return email_search
+        if name:
+            from .filters import AuctionTOSFilter
+
+            name_search = AuctionTOSFilter.generic(self, qs, name, match_names_only=True).first()
+            if name_search:
+                return name_search
+        return None
+
     @property
     def location_qs(self):
         """All locations associated with this auction"""
@@ -1578,6 +1598,10 @@ class AuctionTOS(models.Model):
     is_club_member = models.BooleanField(default=False, blank=True, verbose_name="Club member")
     memo = models.CharField(max_length=500, blank=True, null=True, default="")
     memo.help_text = "Only other auction admins can see this"
+    possible_duplicate = models.ForeignKey(
+        "AuctionTOS", on_delete=models.SET_NULL, related_name="duplicate", blank=True, null=True
+    )
+    possible_duplicate.help_text = "There's a chance this user is a duplicate if this is set"
 
     @property
     def phone_as_string(self):
@@ -1859,7 +1883,20 @@ class AuctionTOS(models.Model):
             )
             if existing_instance:
                 self.email_address_status = existing_instance.email_address_status
+
         super().save(*args, **kwargs)
+
+        duplicate_instance = self.auction.find_user(name=self.name, email=self.email, exclude_pk=self.pk)
+        if duplicate_instance:
+            # using update here avoids recursion because update does not call save()
+            AuctionTOS.objects.filter(pk=self.pk).update(possible_duplicate=duplicate_instance.pk)
+            AuctionTOS.objects.filter(pk=duplicate_instance.pk).update(possible_duplicate=self.pk)
+        else:
+            # no duplicate found
+            if self.possible_duplicate:
+                # remove ourselves from the duplicate if it was previously set
+                AuctionTOS.objects.filter(pk=self.possible_duplicate.pk).update(possible_duplicate=None)
+                AuctionTOS.objects.filter(pk=self.pk).update(possible_duplicate=None)
 
     @property
     def display_name_for_admins(self):
