@@ -5146,7 +5146,7 @@ class SingleLotLabelView(LotLabelView):
 
     def dispatch(self, request, *args, **kwargs):
         self.lot = get_object_or_404(Lot, pk=kwargs.pop("pk"), is_deleted=False)
-        self.filename = "label_" + self.lot.lot_number_display
+        self.filename = f"label_{self.lot.lot_number_display}"
         if self.lot.auctiontos_seller:
             self.auction = self.lot.auctiontos_seller.auction
             auth = False
