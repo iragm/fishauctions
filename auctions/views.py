@@ -3998,6 +3998,14 @@ class AuctionTOSAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
             context["modal_title"] = "Add new user"
         if self.auctiontos:
             context["invoice"] = self.auctiontos.invoice
+        # for real time form validation
+        extra_script = "<script>"
+        if self.auctiontos:
+            extra_script += f"let pk={self.auctiontos.pk};"
+        else:
+            extra_script += "let pk=null;"
+        extra_script += "console.log(pk);</script>"
+        context["extra_script"] = mark_safe(extra_script)
         return context
 
     def post(self, request, *args, **kwargs):

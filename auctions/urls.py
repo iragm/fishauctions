@@ -237,6 +237,11 @@ urlpatterns = [
         views.QuickCheckoutHTMX.as_view(),
         name="auction_quick_checkout_htmx",
     ),
+    path(
+        "api/auctions/<slug:slug>/validate-name/<path:filter>/",
+        views.QuickCheckoutHTMX.as_view(),
+        name="fixme",
+    ),
     path("auctions/<slug:slug>/lots/<slug:custom_lot_number>/", views.ViewLot.as_view()),
     path(
         "auctions/<slug:slug>/lots/<slug:custom_lot_number>/<slug:lot_slug>/",
