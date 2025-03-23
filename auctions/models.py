@@ -1076,9 +1076,13 @@ class Auction(models.Model):
             invoice.save()
 
     @property
+    def tos_qs(self):
+        return AuctionTOS.objects.filter(auction=self.pk).order_by("-createdon")
+
+    @property
     def number_of_confirmed_tos(self):
         """How many people selected a pickup location in this auction"""
-        return AuctionTOS.objects.filter(auction=self.pk).count()
+        return self.tos_qs.count()
 
     @property
     def number_of_sellers(self):
@@ -1224,11 +1228,6 @@ class Auction(models.Model):
         return len(sellers) + len(buyers)
 
     @property
-    def number_of_tos(self):
-        """This will return users, ignoring any auctiontos without a user set"""
-        return AuctionTOS.objects.filter(auction=self.pk).count()
-
-    @property
     def preregistered_users(self):
         return AuctionTOS.objects.filter(auction=self.pk, manually_added=False).count()
 
@@ -1338,7 +1337,7 @@ class Auction(models.Model):
 
     @property
     def admin_checklist_others_joined(self):
-        if self.number_of_tos > 1:
+        if self.number_of_confirmed_tos > 1:
             return True
         return False
 
