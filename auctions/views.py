@@ -4079,7 +4079,7 @@ class AuctionTOSAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
             extra_script += f"var pk={self.auctiontos.pk};"
         else:
             extra_script += "var pk=null;"
-        extra_script += f"""var validation_url = '{reverse('auctiontos_validation', kwargs={'slug': self.auction.slug})}';
+        extra_script += f"""var validation_url = '{reverse("auctiontos_validation", kwargs={"slug": self.auction.slug})}';
                             var csrf_token = '{get_token(self.request)}';'qqq'"""
         extra_script += """
 
