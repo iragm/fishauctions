@@ -1668,6 +1668,7 @@ class AuctionEditForm(forms.ModelForm):
             "custom_field_1_name",
             "allow_bulk_adding_lots",
             "copy_users_when_copying_this_auction",
+            "use_seller_dash_lot_numbering",
             "use_donation_field",
             "use_i_bred_this_fish_field",
             "use_custom_checkbox_field",
@@ -1864,6 +1865,10 @@ class AuctionEditForm(forms.ModelForm):
                     "copy_users_when_copying_this_auction",
                     css_class="col-md-4",
                 ),
+                Div(
+                    "use_seller_dash_lot_numbering",
+                    css_class="col-md-4",
+                ),
                 css_class="row",
             ),
             HTML("""<h4>Fields</h4>Control what information your users can enter about lots.
@@ -1975,21 +1980,19 @@ class AuctionEditForm(forms.ModelForm):
             Submit("submit", "Save", css_class="create-update-auction btn-success"),
         )
 
-    # as it stands right now, we are not cleaning this at all
-    # we are relying on the auction save receiver models.on_save_auction to clean anything up
-    # def clean(self):
-    #     cleaned_data = super().clean()
-    #     date_end = cleaned_data.get("date_end")
-    #     date_start = cleaned_data.get("date_start")
-    #     lot_submission_end_date = cleaned_data.get("lot_submission_end_date")
-    #     if date_end < timezone.now() + datetime.timedelta(hours=2):
-    #         self.add_error('date_end', "The end date can't be in the past")
-    #     if date_end < date_start:
-    #         self.add_error('date_end', "The end date can't be before the start date")
-    #     if lot_submission_end_date:
-    #         if lot_submission_end_date > date_end:
-    #             self.add_error('lot_submission_end_date', "Submission should end before the auction ends")
-    #     return cleaned_data
+    def clean(self):
+        cleaned_data = super().clean()
+        use_seller_dash_lot_numbering = cleaned_data.get("use_seller_dash_lot_numbering")
+        saved_instance = self.instance
+
+        if saved_instance and saved_instance.pk:
+            if use_seller_dash_lot_numbering is not saved_instance.use_seller_dash_lot_numbering:
+                if saved_instance.admin_checklist_lots_added:
+                    self.add_error(
+                        "use_seller_dash_lot_numbering", "This option cannot be changed after lots have been added."
+                    )
+
+        return cleaned_data
 
 
 class CreateLotForm(forms.ModelForm):

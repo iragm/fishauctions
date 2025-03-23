@@ -4392,6 +4392,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "copy_users_when_copying_this_auction",
                 "use_donation_field",
                 "use_i_bred_this_fish_field",
+                "use_seller_dash_lot_numbering",
             ]
             for field in fields_to_clone:
                 setattr(auction, field, getattr(original_auction, field))

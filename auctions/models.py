@@ -721,6 +721,7 @@ class Auction(models.Model):
         default="qr_code,lot_name,min_bid_label,buy_now_label,quantity_label,seller_name,donation_label,custom_field_1,i_bred_this_fish_label,custom_checkbox_label",
     )
     use_seller_dash_lot_numbering = models.BooleanField(default=False, blank=True)
+    use_seller_dash_lot_numbering.help_text = "Include the seller's bidder number with the lot number.  This option is not recommended as users find it confusing."
 
     def __str__(self):
         result = self.title
