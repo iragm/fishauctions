@@ -1326,7 +1326,7 @@ class UpdateLotPushNotificationsView(APIPostView):
 class AuctionTOSValidation(AuctionViewMixin, APIPostView):
     """For real time validation on the auctiontos admin create form
     See views.AuctionTOSAdmin for the corresponding js and view
-    qqq"""
+    """
 
     def post(self, request, *args, **kwargs):
         pk = request.POST.get("pk", None)
@@ -2534,6 +2534,7 @@ class DynamicSetLotWinner(AuctionViewMixin, TemplateView):
             "last_sold_lot_number": None,
             "success_message": None,
             "online_high_bidder_message": None,
+            "auction_minutes_to_end": None,
         }
         lot, lot_error = self.validate_lot(lot, action)
         if lot and not lot_error and action == "to_online_high_bidder":
@@ -2603,6 +2604,9 @@ class DynamicSetLotWinner(AuctionViewMixin, TemplateView):
         result["lot"] = lot_error or lot
         result["price"] = price_error or price
         result["winner"] = winner_error or winner
+        if not lot_error and not price_error and not winner_error:
+            result["auction_minutes_to_end"] = self.auction.estimate_end
+            result["unsold_lot_count"] = self.auction.total_unsold_lots
         return JsonResponse(result)
 
 
@@ -4080,7 +4084,7 @@ class AuctionTOSAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
         else:
             extra_script += "var pk=null;"
         extra_script += f"""var validation_url = '{reverse("auctiontos_validation", kwargs={"slug": self.auction.slug})}';
-                            var csrf_token = '{get_token(self.request)}';'qqq'"""
+                            var csrf_token = '{get_token(self.request)}';"""
         extra_script += """
 
     function setFieldInvalid(fieldId, message, is_invalid) {

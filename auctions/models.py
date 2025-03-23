@@ -761,6 +761,32 @@ class Auction(models.Model):
         return None
 
     @property
+    def estimate_end(self):
+        try:
+            if self.is_online:
+                return None
+            expected_sell_percent = 95
+            lots_to_use_for_estimate = 10
+            percent_complete = self.total_unsold_lots / self.total_lots
+            if percent_complete > expected_sell_percent:
+                return None
+            lots = self.lots_qs.exclude(date_end__isnull=True).order_by("-date_end")[:lots_to_use_for_estimate]
+            if lots.count() < lots_to_use_for_estimate:
+                return None
+            first_lot = lots[0]
+            last_lot = lots[lots_to_use_for_estimate - 1]
+            time_diff = first_lot.date_end - last_lot.date_end
+            elapsed_seconds = time_diff.total_seconds()
+            rate = elapsed_seconds / lots_to_use_for_estimate
+            mintues_to_end = int(self.total_unsold_lots * rate / 60)
+            if mintues_to_end < 15:
+                return None
+            return mintues_to_end
+        except Exception as e:
+            logger.error(e)
+            return None
+
+    @property
     def location_qs(self):
         """All locations associated with this auction"""
         return PickupLocation.objects.filter(auction=self.pk).order_by("name")
