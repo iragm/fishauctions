@@ -90,8 +90,9 @@ class AuctionTOSFilter(django_filters.FilterSet):
         self.helper = FormHelper()
         return result
 
-    def generic(self, qs, value):
+    def generic(self, qs, value, match_names_only=False):
         """Pass this a queryset and a value (string) to filter, and it'll return a suitable queryset
+        pass match_names_only=True to filter only name information.  This will give an exact name match (Bob Smith) OR a rhyming name match (Robert Smith)
         This is getting reused in a couple places now, just import it with `from .filters import AuctionTOSFilter` and then use `AuctionTOSFilter.generic(qs, filter)`
         """
 
@@ -214,14 +215,16 @@ class AuctionTOSFilter(django_filters.FilterSet):
             "no sell": {"selling_allowed": False},
             "email bad": {"email_address_status": "BAD"},
             "email good": {"email_address_status": "VALID"},
+            "duplicate": {"possible_duplicate__isnull": False},
         }
 
-        # Apply filters based on patterns
-        for keyword, filter_data in invoice_patterns.items():
-            pattern = re.compile(rf"^{keyword}|\s{keyword}\s|\s{keyword}$")
-            if pattern.search(value):
-                value = pattern.sub("", value)
-                qs = qs.filter(**filter_data)
+        if not match_names_only:
+            # Apply filters based on patterns
+            for keyword, filter_data in invoice_patterns.items():
+                pattern = re.compile(rf"^{keyword}|\s{keyword}\s|\s{keyword}$")
+                if pattern.search(value):
+                    value = pattern.sub("", value)
+                    qs = qs.filter(**filter_data)
 
         # search by rhyming names
         qList = Q()
@@ -241,6 +244,11 @@ class AuctionTOSFilter(django_filters.FilterSet):
                     qList |= Q(name__istartswith=possible_matching_name + last_name)
 
         value = value.strip()
+
+        if match_names_only:
+            qs = qs.filter(Q(name=value) | Q(qList))
+            return qs
+
         normal_filter = Q(
             Q(name__icontains=value)
             | Q(email=value)

@@ -99,6 +99,20 @@
       } else {
         $("#sell_to_online_high_bidder").addClass('d-none');
       }
+      if (response.auction_minutes_to_end) {
+        var result = response.unsold_lot_count + " unsold lots.  Based on the rate of the last 10 lots sold, this auction will end in "
+        var hours = Math.floor(response.auction_minutes_to_end / 60);
+        var remainingMinutes = response.auction_minutes_to_end % 60;
+        if (hours > 0) {
+            result += hours + " hour" + (hours > 1 ? "s" : "") + (remainingMinutes > 0 ? " and " + remainingMinutes + " minute" + (remainingMinutes > 1 ? "s" : "") : "");
+        } else {
+            result += remainingMinutes + " minute" + (remainingMinutes > 1 ? "s" : "");
+        }
+        $("#auction_minutes_to_end").removeClass('d-none');
+        $("#auction_minutes_to_end").text(result);
+      } else {
+        $("#auction_minutes_to_end").addClass('d-none');
+      }
 
   }
 
@@ -243,4 +257,7 @@ $(document).ready(function() {
 </form>
 </div>
 <div id="result"></div>
+<div class="d-flex justify-content-center">
+    <small><span class="text-muted" id="auction_minutes_to_end"></span></small>
+</div>
 {% endblock %}

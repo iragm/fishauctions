@@ -8,7 +8,10 @@ $(document).ready(function() {
   var tosSearch;
   $('#tos').select();
   function getTos() {
-    htmx.ajax('get','/api/auctions/{{ auction.slug }}/checkout/' + encodeURIComponent($("#tos").val()), {target: '#result'});
+    searchTerm = encodeURIComponent($("#tos").val());
+    if (searchTerm) {
+      htmx.ajax('get','/api/auctions/{{ auction.slug }}/checkout/' + searchTerm, {target: '#result'});
+    }
   }
     $("#tos").on('blur', function() {
     clearTimeout(tosSearch);
@@ -17,7 +20,7 @@ $(document).ready(function() {
   var input = document.getElementById('tos');
   input.addEventListener('keyup', function () {
     clearTimeout(tosSearch);
-    tosSearch = setTimeout(getTos, 600);
+    tosSearch = setTimeout(getTos, 300);
   });
 });
 </script>

@@ -233,9 +233,14 @@ urlpatterns = [
         name="auction_quick_checkout",
     ),
     path(
-        "api/auctions/<slug:slug>/checkout/<slug:filter>/",
+        "api/auctions/<slug:slug>/checkout/<path:filter>/",
         views.QuickCheckoutHTMX.as_view(),
         name="auction_quick_checkout_htmx",
+    ),
+    path(
+        "api/auctions/<slug:slug>/validate-tos/",
+        views.AuctionTOSValidation.as_view(),
+        name="auctiontos_validation",
     ),
     path("auctions/<slug:slug>/lots/<slug:custom_lot_number>/", views.ViewLot.as_view()),
     path(

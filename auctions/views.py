@@ -51,6 +51,7 @@ from django.http import (
     HttpResponseRedirect,
     JsonResponse,
 )
+from django.middleware.csrf import get_token
 from django.shortcuts import get_object_or_404, redirect
 from django.template.loader import render_to_string
 from django.urls import reverse
@@ -1322,6 +1323,78 @@ class UpdateLotPushNotificationsView(APIPostView):
         return JsonResponse({"result": "success"})
 
 
+class AuctionTOSValidation(AuctionViewMixin, APIPostView):
+    """For real time validation on the auctiontos admin create form
+    See views.AuctionTOSAdmin for the corresponding js and view
+    """
+
+    def post(self, request, *args, **kwargs):
+        pk = request.POST.get("pk", None)
+        try:
+            pk = int(pk) if pk is not None else None
+        except ValueError:
+            pk = None
+        name = request.POST.get("name", None)
+        bidder_number = request.POST.get("bidder_number", None)
+        email = request.POST.get("email", None)
+        # note: be careful what you dump in result
+        # javascript will fill out any id on the form with this info
+        result = {
+            "id_bidder_number": "",
+            "id_name": "",
+            "id_email": "",
+            "id_address": "",
+            "id_is_club_member": "",
+            "id_phone_number": "",
+            "id_memo": "",
+            "name_tooltip": "",
+            "bidder_number_tooltip": "",
+            "email_tooltip": "",
+        }
+        base_qs = self.auction.tos_qs
+        if pk:
+            base_qs = base_qs.exclude(pk=pk)
+        if name and not email and not pk:
+            old_auctions = Auction.objects.filter(
+                Q(created_by=self.auction.created_by)
+                | Q(created_by=self.request.user)
+                | Q(auctiontos__is_admin=True, auctiontos__user=self.request.user)
+            )
+            qs = AuctionTOS.objects.filter(auction__in=old_auctions, email__isnull=False).order_by("-createdon")
+            old_tos = AuctionTOSFilter.generic(self, qs, name, match_names_only=True).first()
+            if old_tos:
+                bidder_number_used_in_this_auction = base_qs.filter(bidder_number=old_tos.bidder_number).first()
+                if not bidder_number_used_in_this_auction:
+                    result["id_bidder_number"] = old_tos.bidder_number
+                result["id_name"] = old_tos.name
+                result["id_email"] = old_tos.email
+                result["id_address"] = old_tos.address
+                result["id_is_club_member"] = old_tos.is_club_member
+                result["id_phone_number"] = old_tos.phone_number
+                result["id_memo"] = old_tos.memo
+            else:
+                logger.info("no user found in older auctions with name %s", name)
+        if name:
+            existing_tos_in_this_auction = AuctionTOSFilter.generic(self, base_qs, name, match_names_only=True).first()
+            if existing_tos_in_this_auction:
+                result["name_tooltip"] = f"{existing_tos_in_this_auction.name} is already in this auction"
+            else:
+                logger.info("no user found in older auctions with name %s", name)
+        if email:
+            existing_tos_in_this_auction = base_qs.filter(email=email).first()
+            if existing_tos_in_this_auction:
+                result["email_tooltip"] = "Email is already in this auction"
+            else:
+                logger.info("no user found in this auction with email %s", email)
+        if bidder_number:
+            existing_tos_in_this_auction = base_qs.filter(bidder_number=bidder_number).first()
+            if existing_tos_in_this_auction:
+                result["bidder_number_tooltip"] = "Bidder number in use"
+            else:
+                logger.info("no user found in this auction with email %s", email)
+        return JsonResponse(result)
+
+
 @login_required
 def my_won_lot_csv(request):
     """CSV file showing won lots"""
@@ -1658,7 +1731,9 @@ def auctionLotList(request, slug):
             first_row_fields.append(auction.custom_field_1_name)
         writer.writerow(first_row_fields)
         # lots = Lot.objects.exclude(is_deleted=True).filter(auction__slug=slug, auctiontos_winner__isnull=False).select_related('user', 'winner')
-        lots = auction.lots_qs.filter(winning_price__isnull=False).select_related("user", "winner")
+        lots = auction.lots_qs.filter(winning_price__isnull=False, auctiontos_winner__isnull=False).select_related(
+            "user", "winner"
+        )
         lots = add_price_info(lots)
         for lot in lots:
             row = [
@@ -2459,6 +2534,7 @@ class DynamicSetLotWinner(AuctionViewMixin, TemplateView):
             "last_sold_lot_number": None,
             "success_message": None,
             "online_high_bidder_message": None,
+            "auction_minutes_to_end": None,
         }
         lot, lot_error = self.validate_lot(lot, action)
         if lot and not lot_error and action == "to_online_high_bidder":
@@ -2528,6 +2604,9 @@ class DynamicSetLotWinner(AuctionViewMixin, TemplateView):
         result["lot"] = lot_error or lot
         result["price"] = price_error or price
         result["winner"] = winner_error or winner
+        if not lot_error and not price_error and not winner_error:
+            result["auction_minutes_to_end"] = self.auction.estimate_end
+            result["unsold_lot_count"] = self.auction.total_unsold_lots
         return JsonResponse(result)
 
 
@@ -2624,7 +2703,8 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
                     total_skipped = 0
                     total_tos = 0
                     for tos in auctiontos:
-                        if not self.tos_is_in_auction(self.auction, tos.name, tos.email):
+                        # if not self.tos_is_in_auction(self.auction, tos.name, tos.email):
+                        if not self.auction.find_user(tos.name, tos.email):
                             initial_formset_data.append(
                                 {
                                     "bidder_number": tos.bidder_number,
@@ -2731,7 +2811,8 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
                 else:
                     is_club_member = False
                 if email or name or phone or address:
-                    if self.tos_is_in_auction(self.auction, name, email):
+                    if self.auction.find_user(name, email):
+                        # if self.tos_is_in_auction(self.auction, name, email):
                         logger.debug("CSV import skipping %s", name)
                         total_skipped += 1
                     else:
@@ -2859,6 +2940,7 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
 
     def tos_is_in_auction(self, auction, name, email):
         """Return the tos if the name or email are already present in the auction, otherwise None"""
+        logger.warning("tos_is_in_auction is deprecated, use auction.find_user() instead")
         qs = AuctionTOS.objects.filter(auction=auction)
         if email:
             qs = qs.filter(email=email)
@@ -3995,6 +4077,155 @@ class AuctionTOSAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
             context["modal_title"] = "Add new user"
         if self.auctiontos:
             context["invoice"] = self.auctiontos.invoice
+        # for real time form validation
+        extra_script = "<script>"
+        if self.auctiontos:
+            extra_script += f"var pk={self.auctiontos.pk};"
+        else:
+            extra_script += "var pk=null;"
+        extra_script += f"""var validation_url = '{reverse("auctiontos_validation", kwargs={"slug": self.auction.slug})}';
+                            var csrf_token = '{get_token(self.request)}';"""
+        extra_script += """
+
+    function setFieldInvalid(fieldId, message, is_invalid) {
+        var field = document.getElementById(fieldId);
+        if (!field) return;
+
+        var feedbackId = fieldId + "_feedback";
+        var feedback = document.getElementById(feedbackId);
+
+        if (is_invalid) {
+            field.classList.add("is-invalid");
+            var existing_error = document.getElementById( "error_1_"+fieldId);
+            if (existing_error) {
+                existing_error.remove();
+            }
+            if (feedback) {
+                feedback.remove();
+            }
+            feedback = document.createElement("div");
+            feedback.id = feedbackId;
+            feedback.className = "invalid-feedback";
+            field.parentNode.appendChild(feedback);
+
+            feedback.textContent = message;
+        } else {
+            field.classList.remove("is-invalid");
+            if (feedback) {
+                feedback.remove();
+            }
+        }
+    }
+
+    function showAutocomplete(response, remove) {
+        var feedback = document.getElementById('id_name_feedback');
+        if (feedback) {
+            feedback.remove();
+        }
+        if (remove) {
+            return;
+        }
+        feedback = document.createElement("div");
+        feedback.id = "id_name_feedback";
+        feedback.className = "valid-feedback d-block cursor-pointer";
+        feedback.innerHTML = "<button role='button' class='btn btn-sm btn-info' id='autocompleteTosForm'>Click to use " + response.id_email + "</button>";
+        var autocomplete = response;
+        document.getElementById('id_name').parentNode.appendChild(feedback);
+
+        //setTimeout(function() {
+            var link = document.getElementById('autocompleteTosForm');
+            link.addEventListener('click', function(event) {
+            event.preventDefault();
+
+            for (var key in autocomplete) {
+                console.log(key);
+                if (autocomplete.hasOwnProperty(key)) {
+                    var element = document.getElementById(key);
+                    if (element) {
+                        if (element.type !== "checkbox" && element.value === "") {
+                            element.value = autocomplete[key] || '';
+                        }
+                        if (element.type === "checkbox") {
+                            element.checked = autocomplete[key] === true;
+                        }
+                    }
+                }
+            }
+
+            });
+            link.focus();
+        //}, 40);
+
+    }
+
+
+    function showTooltip(element, message) {
+        var el = element;
+
+        // Destroy existing tooltip (if any)
+        if (el._tooltipInstance) {
+            el._tooltipInstance.dispose();
+        }
+
+        // Set tooltip attributes
+        el.setAttribute("data-bs-toggle", "tooltip");
+        el.setAttribute("data-bs-placement", "right");
+        el.setAttribute("title", message);
+
+        // Initialize and show Bootstrap tooltip
+        el._tooltipInstance = new bootstrap.Tooltip(el);
+        el._tooltipInstance.show();
+    }
+
+    function hideTooltip(element) {
+        if (element._tooltipInstance) {
+            element._tooltipInstance.dispose();
+            element._tooltipInstance = null;
+        }
+    }
+
+    function validateField() {
+        var nameInput = document.getElementById("id_name");
+
+        var data = {
+            pk: pk,
+            name: $("#id_name").val(),
+            bidder_number: $("#id_bidder_number").val(),
+            email: $("#id_email").val(),
+        };
+
+        $.ajax({
+            url: validation_url,
+            type: "POST",
+            data: data,
+            headers: { "X-CSRFToken": csrf_token },
+            success: function (response) {
+                if (response.name_tooltip) {
+                    showTooltip(nameInput, response.name_tooltip);
+                    showAutocomplete(response, true)
+                } else if (response.id_email) {
+                    showAutocomplete(response)
+                } else {
+                    hideTooltip(nameInput);
+                    showAutocomplete(response, true)
+                }
+                if (response.email_tooltip) {
+                    setFieldInvalid("id_email", response.email_tooltip, true);
+                } else {
+                    setFieldInvalid("id_email", response.email_tooltip, false);
+                }
+                if (response.bidder_number_tooltip) {
+                    setFieldInvalid("id_bidder_number", response.bidder_number_tooltip, true);
+                } else {
+                    setFieldInvalid("id_bidder_number", response.bidder_number_tooltip, false);
+                }
+            }
+        });
+    }
+
+    $("#id_bidder_number, #id_name, #id_email").on("blur", validateField);
+        </script>"""
+        context["extra_script"] = mark_safe(extra_script)
         return context
 
     def post(self, request, *args, **kwargs):
@@ -4161,6 +4392,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "copy_users_when_copying_this_auction",
                 "use_donation_field",
                 "use_i_bred_this_fish_field",
+                "use_seller_dash_lot_numbering",
             ]
             for field in fields_to_clone:
                 setattr(auction, field, getattr(original_auction, field))

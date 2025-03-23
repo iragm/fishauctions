@@ -721,6 +721,7 @@ class Auction(models.Model):
         default="qr_code,lot_name,min_bid_label,buy_now_label,quantity_label,seller_name,donation_label,custom_field_1,i_bred_this_fish_label,custom_checkbox_label",
     )
     use_seller_dash_lot_numbering = models.BooleanField(default=False, blank=True)
+    use_seller_dash_lot_numbering.help_text = "Include the seller's bidder number with the lot number.  This option is not recommended as users find it confusing."
 
     def __str__(self):
         result = self.title
@@ -739,6 +740,52 @@ class Auction(models.Model):
             current_year = timezone.now().year
             self.date_start = self.date_start.replace(year=current_year)
         super().save(*args, **kwargs)
+
+    def find_user(self, name="", email="", exclude_pk=None):
+        """Used for duplicate checks and when adding users to an auction
+        Returns an AuctionTOS instance or None"""
+        qs = AuctionTOS.objects.filter(auction__pk=self.pk)
+        if not name and not email:
+            return None
+        if exclude_pk:
+            qs = qs.exclude(pk=exclude_pk)
+        if email:
+            email_search = qs.filter(email=email).first()
+            if email_search:
+                return email_search
+        if name:
+            from .filters import AuctionTOSFilter
+
+            name_search = AuctionTOSFilter.generic(self, qs, name, match_names_only=True).first()
+            if name_search:
+                return name_search
+        return None
+
+    @property
+    def estimate_end(self):
+        try:
+            if self.is_online:
+                return None
+            expected_sell_percent = 95
+            lots_to_use_for_estimate = 10
+            percent_complete = self.total_unsold_lots / self.total_lots
+            if percent_complete > expected_sell_percent:
+                return None
+            lots = self.lots_qs.exclude(date_end__isnull=True).order_by("-date_end")[:lots_to_use_for_estimate]
+            if lots.count() < lots_to_use_for_estimate:
+                return None
+            first_lot = lots[0]
+            last_lot = lots[lots_to_use_for_estimate - 1]
+            time_diff = first_lot.date_end - last_lot.date_end
+            elapsed_seconds = time_diff.total_seconds()
+            rate = elapsed_seconds / lots_to_use_for_estimate
+            mintues_to_end = int(self.total_unsold_lots * rate / 60)
+            if mintues_to_end < 15:
+                return None
+            return mintues_to_end
+        except Exception as e:
+            logger.error(e)
+            return None
 
     @property
     def location_qs(self):
@@ -1056,9 +1103,13 @@ class Auction(models.Model):
             invoice.save()
 
     @property
+    def tos_qs(self):
+        return AuctionTOS.objects.filter(auction=self.pk).order_by("-createdon")
+
+    @property
     def number_of_confirmed_tos(self):
         """How many people selected a pickup location in this auction"""
-        return AuctionTOS.objects.filter(auction=self.pk).count()
+        return self.tos_qs.count()
 
     @property
     def number_of_sellers(self):
@@ -1204,11 +1255,6 @@ class Auction(models.Model):
         return len(sellers) + len(buyers)
 
     @property
-    def number_of_tos(self):
-        """This will return users, ignoring any auctiontos without a user set"""
-        return AuctionTOS.objects.filter(auction=self.pk).count()
-
-    @property
     def preregistered_users(self):
         return AuctionTOS.objects.filter(auction=self.pk, manually_added=False).count()
 
@@ -1318,7 +1364,7 @@ class Auction(models.Model):
 
     @property
     def admin_checklist_others_joined(self):
-        if self.number_of_tos > 1:
+        if self.number_of_confirmed_tos > 1:
             return True
         return False
 
@@ -1578,6 +1624,10 @@ class AuctionTOS(models.Model):
     is_club_member = models.BooleanField(default=False, blank=True, verbose_name="Club member")
     memo = models.CharField(max_length=500, blank=True, null=True, default="")
     memo.help_text = "Only other auction admins can see this"
+    possible_duplicate = models.ForeignKey(
+        "AuctionTOS", on_delete=models.SET_NULL, related_name="duplicate", blank=True, null=True
+    )
+    possible_duplicate.help_text = "There's a chance this user is a duplicate if this is set"
 
     @property
     def phone_as_string(self):
@@ -1859,7 +1909,20 @@ class AuctionTOS(models.Model):
             )
             if existing_instance:
                 self.email_address_status = existing_instance.email_address_status
+
         super().save(*args, **kwargs)
+
+        duplicate_instance = self.auction.find_user(name=self.name, email=self.email, exclude_pk=self.pk)
+        if duplicate_instance:
+            # using update here avoids recursion because update does not call save()
+            AuctionTOS.objects.filter(pk=self.pk).update(possible_duplicate=duplicate_instance.pk)
+            AuctionTOS.objects.filter(pk=duplicate_instance.pk).update(possible_duplicate=self.pk)
+        else:
+            # no duplicate found
+            if self.possible_duplicate:
+                # remove ourselves from the duplicate if it was previously set
+                AuctionTOS.objects.filter(pk=self.possible_duplicate.pk).update(possible_duplicate=None)
+                AuctionTOS.objects.filter(pk=self.pk).update(possible_duplicate=None)
 
     @property
     def display_name_for_admins(self):
