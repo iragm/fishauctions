@@ -1600,6 +1600,7 @@ class AuctionTOS(models.Model):
         default=False,
         verbose_name="Grant admin permissions to help run this auction",
         blank=True,
+        db_index=True,
     )
     # yes we are using a string to store a number
     # this is actually important because some day, someone will ask to make the bidder numbers have characters like "1-234" or people's names
@@ -2109,10 +2110,10 @@ class Lot(models.Model):
     # below is the database pk
     lot_number = models.AutoField(primary_key=True)
     # below is an automatically assigned int for use in auctions
-    lot_number_int = models.IntegerField(null=True, blank=True, verbose_name="Lot number")
+    lot_number_int = models.IntegerField(null=True, blank=True, verbose_name="Lot number", db_index=True)
     # below is an override of the other lot numbers, it was the default for use in auctions until 2025, but now lot_number_int is used instead
     # see https://github.com/iragm/fishauctions/issues/269
-    custom_lot_number = models.CharField(max_length=9, blank=True, null=True, verbose_name="Lot number")
+    custom_lot_number = models.CharField(max_length=9, blank=True, null=True, verbose_name="Lot number", db_index=True)
     custom_lot_number.help_text = "You can override the default lot number with this"
     lot_name = models.CharField(max_length=40)
     slug = AutoSlugField(populate_from="lot_name", unique=False)
@@ -2188,8 +2189,8 @@ class Lot(models.Model):
         on_delete=models.SET_NULL,
         related_name="auctiontos_winner",
     )
-    active = models.BooleanField(default=True)
-    winning_price = models.PositiveIntegerField(null=True, blank=True)
+    active = models.BooleanField(default=True, db_index=True)
+    winning_price = models.PositiveIntegerField(null=True, blank=True, db_index=True)
     refunded = models.BooleanField(default=False)
     refunded.help_text = "Don't charge the winner or pay the seller for this lot."
     banned = models.BooleanField(default=False, verbose_name="Removed", blank=True)
@@ -2243,8 +2244,8 @@ class Lot(models.Model):
     buy_now_used = models.BooleanField(default=False)
 
     # Location, populated from userdata.  This is needed to prevent users from changing their address after posting a lot
-    latitude = models.FloatField(blank=True, null=True)
-    longitude = models.FloatField(blank=True, null=True)
+    latitude = models.FloatField(blank=True, null=True, db_index=True)
+    longitude = models.FloatField(blank=True, null=True, db_index=True)
     address = models.CharField(max_length=500, blank=True, null=True)
 
     # Payment and shipping options, populated from last submitted lot
@@ -3701,7 +3702,7 @@ class PageView(models.Model):
     lot_number = models.ForeignKey(Lot, null=True, blank=True, on_delete=models.CASCADE)
     lot_number.help_text = "Only filled out when a user views a specific lot's page"
     date_start = models.DateTimeField(auto_now_add=True, db_index=True)
-    date_end = models.DateTimeField(null=True, blank=True, default=timezone.now)
+    date_end = models.DateTimeField(null=True, blank=True, default=timezone.now, db_index=True)
     total_time = models.PositiveIntegerField(default=0)
     total_time.help_text = "The total time in seconds the user has spent on the lot page"
     source = models.CharField(max_length=200, blank=True, null=True, default="")
@@ -3712,8 +3713,8 @@ class PageView(models.Model):
     session_id = models.CharField(max_length=600, blank=True, null=True, db_index=True)
     notification_sent = models.BooleanField(default=False)
     duplicate_check_completed = models.BooleanField(default=False)
-    latitude = models.FloatField(default=0)
-    longitude = models.FloatField(default=0)
+    latitude = models.FloatField(default=0, db_index=True)
+    longitude = models.FloatField(default=0, db_index=True)
     ip_address = models.CharField(max_length=100, blank=True, null=True)
     user_agent = models.CharField(max_length=200, blank=True, null=True)
     platform = models.CharField(max_length=200, default="", blank=True, null=True)

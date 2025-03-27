@@ -237,16 +237,30 @@ class UserAdmin(BaseUserAdmin):
     inlines = [
         UserdataInline,
         UserLabelPrefsInline,
-        AuctionTOSInline,  # too much noise, but important to have
-        InterestInline,  # too much noise
+        # AuctionTOSInline,  # too much noise, but important to have
+        # InterestInline,  # too much noise
     ]
     search_fields = (
         "first_name",
         "last_name",
-        "userdata__club__abbreviation",
+        # "userdata__club__abbreviation",
         "email",
         "username",
     )
+
+    readonly_fields = [
+        "last_activity",
+        "date_joined",
+        "last_login",
+    ]
+
+    def get_queryset(self, request):
+        return (
+            super()
+            .get_queryset(request)
+            .select_related("userdata__club", "userdata__last_auction_used", "userdata__location")
+            .prefetch_related("userlabelprefs")
+        )
 
     def last_activity(self, obj):
         return obj.userdata.last_activity
