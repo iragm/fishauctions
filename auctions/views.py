@@ -4868,6 +4868,9 @@ class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
             context["show_new_auction_button"] = True
         return context
 
+    def get_table(self, **kwargs):
+        return self.table_class(self.get_table_data(), request=self.request, **kwargs)
+
 
 class Leaderboard(ListView):
     model = UserData
