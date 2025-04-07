@@ -620,7 +620,7 @@ class AuctionTOSAdmin(admin.ModelAdmin):
 
 class PageViewAdmin(admin.ModelAdmin):
     model = PageView
-    list_display = ("user", "session", "source", "url", "date_start")
+    list_display = ("user", "session_id", "source", "url", "date_start")
     ordering = ("-date_start",)
 
 
