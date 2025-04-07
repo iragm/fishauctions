@@ -6003,10 +6003,18 @@ class AdminDashboard(AdminOnlyViewMixin, TemplateView):
             # return base_qs.filter(user__isnull=True, session_id__isnull=False).aggregate(
             #    unique_views=Count("session_id", distinct=True)
             # )["unique_views"]
+            # this one is the same as above.  Both use session which is somehow getting clobbered.  Maybe cloudflare.
+            # return (
+            #     base_qs.filter(user__isnull=True, session_id__isnull=False)
+            #     .exclude(session_id="")
+            #     .values("session_id")
+            #     .distinct()
+            #     .count()
+            # )
             return (
-                base_qs.filter(user__isnull=True, session_id__isnull=False)
-                .exclude(session_id="")
-                .values("session_id")
+                base_qs.filter(user__isnull=True)
+                .exclude(ip_address="", ip_address__isnull=True)
+                .values("ip_address")
                 .distinct()
                 .count()
             )
