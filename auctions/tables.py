@@ -96,6 +96,9 @@ class AuctionTOSHTMxTable(tables.Table):
     #     'hx-trigger':"click",
     #     #'_':"on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"
     # }
+    def __init__(self, *args, **kwargs):
+        self.request = kwargs.pop("request", None)
+        super().__init__(*args, **kwargs)
 
 
 class LotHTMxTable(tables.Table):
@@ -213,6 +216,25 @@ class AuctionHTMxTable(tables.Table):
             result += f" <span class='badge bg-primary'>{int(auction.distance)} miles from you</span>"
         if auction.joined and not auction.is_last_used:
             result += " <span class='badge bg-success text-black'>Joined</span>"
+        user = self.request.user if self.request else None
+        if user and user.is_authenticated and auction.distance and not auction.joined and not auction.is_last_used:
+            show_for_you = False
+            if (
+                user.userdata.email_me_about_new_auctions_distance
+                and auction.is_online
+                and auction.distance <= user.userdata.email_me_about_new_auctions_distance
+                and not auction.closed
+            ):
+                show_for_you = True
+            if (
+                user.userdata.email_me_about_new_in_person_auctions_distance
+                and not auction.is_online
+                and auction.distance <= user.userdata.email_me_about_new_in_person_auctions_distance
+                and not auction.in_person_closed
+            ):
+                show_for_you = True
+            if show_for_you:
+                result += " <span class='badge bg-warning text-black'>For you</span>"
         result += auction.template_lot_link_first_column + auction.template_promo_info
         return mark_safe(result)
 

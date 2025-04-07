@@ -61,23 +61,6 @@ window.onload = function() {
         <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
         <script type="text/javascript" src="{% static 'js/auction_site.js' %}"></script>
         {% include 'base_page_view.html' %}
-        {# handle the unread messages and auctions notification counter #}
-        <script>
-          updateAuctionCounter();
-          function updateAuctionCounter() {
-            $.ajax({
-              type: "POST",
-              beforeSend: function (request) {
-                  request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
-              },
-              url: "/api/users/auction_notifications/",
-              success : function(result) {
-                $("#new_auctions").html(result.new);
-              }
-            });
-          }
-
-        </script>
         {% if request.user.is_authenticated %}
         <script>
           updateMessageCounter();
