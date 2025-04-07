@@ -295,12 +295,34 @@ class LotAdminFilter(django_filters.FilterSet):
                 | Q(lot_name__icontains=value)
                 | Q(lot_number=value)
                 | Q(custom_lot_number=value)
+                | Q(lot_number_int=value)
             )
         else:
+
+            def get_colon_filter(key, val):
+                if key == "lot":
+                    if val.isnumeric():
+                        return Q(lot_number_int=val) | Q(custom_lot_number=val)
+                    return Q(custom_lot_number=val)
+                elif key == "seller":
+                    return Q(auctiontos_seller__bidder_number=val)
+                elif key == "winner":
+                    return Q(auctiontos_winner__bidder_number=val)
+                return Q()
+
+            # this was a one-off for a bug found during an ACM auction.  It's probably safe to remove.
             if value == "broken":
                 return queryset.filter(auctiontos_winner__isnull=True, winner__isnull=False)
-            # qs = qs.filter()
-            # LotImage.objects.filter(lot_number=self.lot_number)
+
+            if value == "unsold":
+                return queryset.filter(auctiontos_winner__isnull=True)
+            if value == "removed":
+                return queryset.filter(banned=True)
+            if ":" in value:
+                key, val = (s.strip() for s in value.split(":", 1))
+                q_obj = get_colon_filter(key, val)
+                if q_obj:
+                    return queryset.filter(q_obj)
 
             queryset = queryset.filter(
                 Q(auctiontos_seller__name__icontains=value)
