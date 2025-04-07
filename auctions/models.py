@@ -3715,7 +3715,7 @@ class PageView(models.Model):
     duplicate_check_completed = models.BooleanField(default=False)
     latitude = models.FloatField(default=0, db_index=True)
     longitude = models.FloatField(default=0, db_index=True)
-    ip_address = models.CharField(max_length=100, blank=True, null=True)
+    ip_address = models.CharField(max_length=100, blank=True, null=True, db_index=True)
     user_agent = models.CharField(max_length=200, blank=True, null=True)
     platform = models.CharField(max_length=200, default="", blank=True, null=True)
     os = models.CharField(

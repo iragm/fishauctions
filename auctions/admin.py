@@ -621,6 +621,11 @@ class AuctionTOSAdmin(admin.ModelAdmin):
 class PageViewAdmin(admin.ModelAdmin):
     model = PageView
     list_display = ("user", "session_id", "source", "url", "date_start")
+    readonly_fields = (
+        "user",
+        "auction",
+        "lot_number",
+    )
     ordering = ("-date_start",)
 
 
