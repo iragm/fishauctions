@@ -1191,6 +1191,9 @@ def pageview(request):
         else:
             # anonymous users go by session
             user = None
+            # saving the session will force key generation
+            if not request.session.session_key:
+                request.session.save()
             session_id = request.session.session_key
         if first_view == "true":  # good ol Javascript
             user_agent = request.META.get("HTTP_USER_AGENT", "")
@@ -5992,17 +5995,21 @@ class AdminDashboard(AdminOnlyViewMixin, TemplateView):
         timeframe = timezone.now() - timezone.timedelta(minutes=minutes)
         base_qs = PageView.objects.filter(date_start__gte=timeframe)
         if view_type == "logged_in":
-            return base_qs.filter(user__isnull=False).aggregate(unique_views=Count("user", distinct=True))[
-                "unique_views"
-            ]
-            # chat gpt gave this but it cannot possilby be giving good data
-            # return base_qs.filter(user__isnull=False).values("user").distinct().count()
+            # return base_qs.filter(user__isnull=False).aggregate(unique_views=Count("user", distinct=True))[
+            #    "unique_views"
+            # ]
+            return base_qs.filter(user__isnull=False).values("user").distinct().count()
         if view_type == "anon":
-            return base_qs.filter(user__isnull=True, session_id__isnull=False).aggregate(
-                unique_views=Count("session_id", distinct=True)
-            )["unique_views"]
-            # chat gpt gave this but it cannot possilby be giving good data
-            # return base_qs.filter(user__isnull=True, session_id__isnull=False).values("session_id").distinct().count()
+            # return base_qs.filter(user__isnull=True, session_id__isnull=False).aggregate(
+            #    unique_views=Count("session_id", distinct=True)
+            # )["unique_views"]
+            return (
+                base_qs.filter(user__isnull=True, session_id__isnull=False)
+                .exclude(session_id="")
+                .values("session_id")
+                .distinct()
+                .count()
+            )
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
