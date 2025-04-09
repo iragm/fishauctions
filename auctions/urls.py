@@ -84,6 +84,7 @@ urlpatterns = [
     path("admin-usermap/", views.UserMap.as_view(), name="admin_user_map"),
     path("admin-dashboard/", views.AdminDashboard.as_view(), name="admin_dashboard"),
     path("admin-traffic/", views.AdminTraffic.as_view(), name="admin_traffic"),
+    path("admin-traffic-data/", views.AdminTrafficJSON.as_view(), name="admin_traffic_json"),
     path("admin-referrers/", views.AdminReferrers.as_view(), name="admin_referrers"),
     path("admin-error/", views.AdminErrorPage.as_view(), name="admin_error"),
     path("tos/", views.UserAgreement.as_view(), name="tos"),

@@ -17,6 +17,7 @@
       </button>
       <div class="dropdown-menu" aria-labelledby="dropdownMenuButton">
         <a href="{% url 'user_list' slug=auction.slug %}" class="dropdown-item"><i class="bi bi-person-fill-down"></i> Users CSV</a>
+        {% if auction.show_invoice_ready_button %}
         {% for chunk in auction.paypal_invoice_chunks %}
         <a href="{% url 'paypal_csv' slug=auction.slug chunk=chunk %}" class="dropdown-item"><i class="bi bi-paypal"></i> PayPal Invoice CSV {% if auction.paypal_invoice_chunks|length > 1 %} #{{chunk}}{% endif %}</a>
         {% endfor %}
@@ -25,6 +26,7 @@
         <a href="https://www.paypal.com/invoice/batch" class="dropdown-item"><i class="bi bi-paypal"></i> Paypal Batch Invoice Upload</span>
         {% endif %}
         <a href="/blog/online-payments-suck/" class="dropdown-item"><i class="bi bi-info-circle"></i> PayPal invoice help</a>
+        {% endif %}
       </div>
     </span>
     <a href="{% url 'bulk_add_users' auction.slug %}" class="btn btn-sm mt-2  mb-2 btn-primary"><i class="bi bi-node-plus"></i> Bulk add users</a>

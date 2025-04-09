@@ -1232,20 +1232,21 @@ def pageview(request):
                     if tos:
                         campaign.result = "JOINED"
                         campaign.save()
-            PageView.objects.create(
-                lot_number=lot_number,
-                url=url_without_params,
-                auction=auction,
-                session_id=session_id,
-                user=user,
-                user_agent=user_agent,
-                ip_address=ip[:100],
-                platform=parsed_ua.os.family,
-                os=os,
-                referrer=referrer,
-                title=data.get("title", "")[:600],
-                source=source,
-            )
+            if "Googlebot" not in user_agent:
+                PageView.objects.create(
+                    lot_number=lot_number,
+                    url=url_without_params,
+                    auction=auction,
+                    session_id=session_id,
+                    user=user,
+                    user_agent=user_agent,
+                    ip_address=ip[:100],
+                    platform=parsed_ua.os.family,
+                    os=os,
+                    referrer=referrer,
+                    title=data.get("title", "")[:600],
+                    source=source,
+                )
             if user and lot_number and lot_number.species_category:
                 # create interest in this category if this is a new view for this category
                 interest, created = UserInterestCategory.objects.get_or_create(
@@ -5953,6 +5954,34 @@ class AdminTraffic(AdminOnlyViewMixin, TemplateView):
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
         context["pageviews"] = PageView.objects.exclude(latitude=0).filter(date_start__gte=timeframe)
         return context
+
+
+class AdminTrafficJSON(AdminOnlyViewMixin, BaseLineChartView):
+    """JSON userdata"""
+
+    def dispatch(self, request, *args, **kwargs):
+        days_param = self.request.GET.get("days", 7)
+        try:
+            days = int(days_param)
+        except (ValueError, TypeError):
+            days = 7
+        self.bins = days
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_labels(self):
+        return [(f"{i - 1} days ago") for i in range(self.bins, 0, -1)][::-1]
+
+    def get_providers(self):
+        return ["Views"]
+
+    def get_data(self):
+        timeframe = timezone.now() - timedelta(days=self.bins)
+        views = PageView.objects.filter(date_start__gte=timeframe).order_by("-date_start")
+
+        # what follows is a delightful reminder of how important a consistent naming scheme is
+        return [
+            bin_data(views, "date_start", self.bins, timeframe, timezone.now())[::-1],
+        ]
 
 
 class AdminReferrers(AdminOnlyViewMixin, TemplateView):

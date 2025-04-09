@@ -620,7 +620,7 @@ class AuctionTOSAdmin(admin.ModelAdmin):
 
 class PageViewAdmin(admin.ModelAdmin):
     model = PageView
-    list_display = ("user", "session_id", "source", "url", "date_start")
+    list_display = ("user", "ip_address", "source", "url", "date_start")
     readonly_fields = (
         "user",
         "auction",
