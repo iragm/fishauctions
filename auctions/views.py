@@ -1232,20 +1232,21 @@ def pageview(request):
                     if tos:
                         campaign.result = "JOINED"
                         campaign.save()
-            PageView.objects.create(
-                lot_number=lot_number,
-                url=url_without_params,
-                auction=auction,
-                session_id=session_id,
-                user=user,
-                user_agent=user_agent,
-                ip_address=ip[:100],
-                platform=parsed_ua.os.family,
-                os=os,
-                referrer=referrer,
-                title=data.get("title", "")[:600],
-                source=source,
-            )
+            if "Googlebot" not in user_agent:
+                PageView.objects.create(
+                    lot_number=lot_number,
+                    url=url_without_params,
+                    auction=auction,
+                    session_id=session_id,
+                    user=user,
+                    user_agent=user_agent,
+                    ip_address=ip[:100],
+                    platform=parsed_ua.os.family,
+                    os=os,
+                    referrer=referrer,
+                    title=data.get("title", "")[:600],
+                    source=source,
+                )
             if user and lot_number and lot_number.species_category:
                 # create interest in this category if this is a new view for this category
                 interest, created = UserInterestCategory.objects.get_or_create(
