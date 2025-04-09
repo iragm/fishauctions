@@ -2,9 +2,9 @@
 {% block title %} User traffic {% endblock %}
 {% load static %}
 {% block content %}
-<h3>Users by last activity</h3>
+<h3>Activity</h3>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.3/dist/Chart.min.js"></script>
-<canvas id="myChart" ></canvas>
+<!-- <canvas id="myChart" ></canvas>
 <script>
     var ctx = document.getElementById('myChart').getContext('2d');
     new Chart(ctx, {
@@ -28,6 +28,15 @@
             }
         }
     });
+</script> -->
+<canvas id="pageviews" width="500" height="400"></canvas>
+<script type="text/javascript">
+  $.get('{% url "admin_traffic_json" %}?days={{ days }}', function(data) {
+    var ctx = $("#pageviews").get(0).getContext("2d");
+    new Chart(ctx, {
+      type: 'line', data: data
+    });
+  });
 </script>
 <h3>Popular pages from the last {{ days }} days</h3>
 <table>
