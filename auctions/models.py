@@ -1103,6 +1103,16 @@ class Auction(models.Model):
             invoice.save()
 
     @property
+    def show_invoice_ready_button(self):
+        """invoice status of 'ready' is very confusing for people
+        This is tied to several pieces of logic that are also not needed for in person auctions, like paypal integratiaon"""
+        if self.is_online:
+            return True
+        if self.online_bidding == "disable":
+            return False
+        return True
+
+    @property
     def tos_qs(self):
         return AuctionTOS.objects.filter(auction=self.pk).order_by("-createdon")
 
