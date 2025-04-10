@@ -31,6 +31,7 @@
     </span>
     <a href="{% url 'bulk_add_users' auction.slug %}" class="btn btn-sm mt-2  mb-2 btn-primary"><i class="bi bi-node-plus"></i> Bulk add users</a>
     {% if not auction.is_online %}<a class="btn btn-sm btn-primary" href='{% url "auction_quick_checkout" slug=auction.slug %}'><i class="bi bi-bag-heart"></i> Quick checkout users</a>{% endif %}
+    {% if auction.show_invoice_ready_button %}
     <a href="#" class="btn btn-sm mt-2  mb-2 btn-primary"
     hx-get="{% url 'auction_invoices_ready' auction.slug %}"
     hx-target="#modals-here"
@@ -41,6 +42,7 @@
     hx-target="#modals-here"
     hx-trigger="click"
     _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"><i class="bi bi-bag-heart"></i> Set ready invoices to paid</a>
+    {% endif %}
     <span class="dropdown">
       <button class="btn btn-sm mt-2 mb-2 btn-primary dropdown-toggle" type="button" id="dropdownMenuButton" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
         <i class="bi bi-filter"></i> Filters
