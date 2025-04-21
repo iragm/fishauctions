@@ -296,6 +296,7 @@ class LotAdminFilter(django_filters.FilterSet):
                 | Q(lot_number=value)
                 | Q(custom_lot_number=value)
                 | Q(lot_number_int=value)
+                | Q(custom_field_1=value)
             )
         else:
 
@@ -331,6 +332,7 @@ class LotAdminFilter(django_filters.FilterSet):
                 | Q(auctiontos_seller__user__username=value)
                 | Q(lot_name__icontains=value)
                 | Q(custom_lot_number=value)
+                | Q(custom_field_1__icontains=value)
                 | Q(auction__title__icontains=value)
             )
         return queryset
@@ -821,6 +823,7 @@ class LotFilter(django_filters.FilterSet):
                 | Q(lot_name__icontains=value)
                 | Q(lot_number_int=value)
                 | Q(custom_lot_number=value)
+                | Q(custom_field_1=value)
                 | Q(auctiontos_seller__bidder_number=value)
             )
         else:
@@ -834,6 +837,7 @@ class LotFilter(django_filters.FilterSet):
                     | Q(user__username=fragment)
                     | Q(lot_number_int=fragment)
                     | Q(custom_lot_number=fragment)
+                    | Q(custom_field_1__icontains=fragment)
                     | Q(auctiontos_seller__bidder_number=fragment)
                 )
             return queryset.filter(qList)

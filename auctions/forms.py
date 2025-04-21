@@ -1728,7 +1728,7 @@ class AuctionEditForm(forms.ModelForm):
             ].help_text = "This should probably be before bidding starts.  Admins (you) can add more lots at any time, this only restricts users."
             self.fields[
                 "email_users_when_invoices_ready"
-            ].help_text = "Only works if you enter the user's email address when adding them to your auction"
+            ].help_text = "Email users a link to view their invoice.  Only works if you enter the user's email address when adding them to your auction"
         self.fields["date_start"].help_text = "When the auction actually starts"
         self.fields["user_cut"].initial = 100 - self.instance.winning_bid_percent_to_club
         self.fields["club_member_cut"].initial = 100 - self.instance.winning_bid_percent_to_club_for_club_members

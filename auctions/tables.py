@@ -7,7 +7,8 @@ from .models import Auction, AuctionTOS, Lot
 
 class AuctionTOSHTMxTable(tables.Table):
     hide_string = "d-md-table-cell d-none"
-    show_on_mobile_string = "d-sm-table-cell d-md-none"
+    show_on_mobile_string = ""
+    # show_on_mobile_string = "d-sm-table-cell d-md-none"
     bidder_number = tables.Column(accessor="bidder_number", verbose_name="ID", orderable=True)
     # id = tables.Column(accessor='display_name_for_admins', verbose_name="ID", orderable=False)
     # phone = tables.Column(accessor='phone_as_string', verbose_name="Phone", orderable=False)
@@ -29,7 +30,7 @@ class AuctionTOSHTMxTable(tables.Table):
         orderable=False,
         attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
     )
-    email = tables.Column(attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}})
+    # email = tables.Column(attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}})
     actions = tables.Column(
         accessor="actions_dropdown_html",
         orderable=False,
@@ -63,19 +64,24 @@ class AuctionTOSHTMxTable(tables.Table):
             )
         if not record.bidding_allowed:
             result += '<i class="text-danger bi bi-exclamation-octagon-fill" title="Bidding not allowed"></i>'
+        if record.email_address_status == "BAD":
+            result += "<i class='bi bi-envelope-exclamation-fill text-danger ms-1' title='Unable to send email to this address'></i>"
+        if record.email_address_status == "VALID":
+            result += "<i class='bi bi-envelope-check-fill ms-1' title='Verified email'></i>"
         # if not record.bidding_allowed:
         #     result += '<i class="text-danger ms-1 bi bi-cash-coin" title="Selling not allowed"></i>'
         # for mobile, put other columns in a dropdown menu:
         return mark_safe(result)
 
-    def render_email(self, value, record):
-        email_string = f'<a href="mailto:{value}">{value}</a>'
-        # email_string = value
-        if record.email_address_status == "BAD":
-            email_string += "<i class='bi bi-envelope-exclamation-fill text-danger ms-1' title='Unable to send email to this address'></i>"
-        if record.email_address_status == "VALID":
-            email_string += "<i class='bi bi-envelope-check-fill ms-1' title='Verified email'></i>"
-        return mark_safe(email_string)
+    # def render_email(self, value, record):
+    #     """No longer used, but keeping it here for reference"""
+    #     email_string = f'<a href="mailto:{value}">{value}</a>'
+    #     # email_string = value
+    #     if record.email_address_status == "BAD":
+    #         email_string += "<i class='bi bi-envelope-exclamation-fill text-danger ms-1' title='Unable to send email to this address'></i>"
+    #     if record.email_address_status == "VALID":
+    #         email_string += "<i class='bi bi-envelope-check-fill ms-1' title='Verified email'></i>"
+    #     return mark_safe(email_string)
 
     class Meta:
         model = AuctionTOS
@@ -83,7 +89,7 @@ class AuctionTOSHTMxTable(tables.Table):
         fields = (
             "bidder_number",
             "name",
-            "email",
+            # "email",
             "print_invoice_link",
             "add_lot_link",
             "invoice_link",
