@@ -4485,7 +4485,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                     tos.pk = None
                     tos.createdon = None
                     tos.auction = auction
-                    tos.email_address_status = "UNKNOWN"
+                    # tos.email_address_status = "UNKNOWN"
                     tos.manually_added = True
                     tos.print_reminder_email_sent = False
                     if tos.pickup_location.name == str(clone_from_auction):
