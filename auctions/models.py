@@ -712,7 +712,9 @@ class Auction(models.Model):
     auto_add_images.help_text = (
         "Images taken from older lots with the same name in any auctions created by you or other admins"
     )
-    message_users_when_lots_sell = models.BooleanField(default=True, blank=True)
+    message_users_when_lots_sell = models.BooleanField(
+        default=True, blank=True, verbose_name="Allow push notifications for watched lots"
+    )
     message_users_when_lots_sell.help_text = "Recommended if you are recording winners as lots sell.  When you enter a lot number on the set lot winners screen, send a notification to any users watching that lot"
     label_print_fields = models.CharField(
         max_length=1000,
