@@ -1734,16 +1734,38 @@ class AuctionTOS(models.Model):
 
     @property
     def actions_dropdown_html(self):
+        show_on_mobile_string = "d-md-none"
         result = f"""<button type='button' class='btn btn-sm btn-secondary dropdown-toggle dropdown-toggle-split' data-bs-toggle='dropdown'
         aria-haspopup='true' aria-expanded='false'>Actions </button>
         <div class = "dropdown-menu" id='actions_dropdown'>
-        <span class='dropdown-item'>{self.bulk_add_link_html}</span>"""
+        <span class='dropdown-item {show_on_mobile_string}'>{self.bulk_add_link_html}</span>"""
         if self.invoice_link_html:
-            result += f"<span class='dropdown-item'>{self.invoice_link_html}</span>"
+            result += f"<span class='dropdown-item {show_on_mobile_string}'>{self.invoice_link_html}</span>"
         if self.print_labels_link_html:
-            result += f"<span class='dropdown-item'>{self.print_labels_link_html}</span>"
+            result += f"<span class='dropdown-item {show_on_mobile_string}'>{self.print_labels_link_html}</span>"
         if self.print_unprinted_labels_link_html:
-            result += f"<span class='dropdown-item'>{self.print_unprinted_labels_link_html}</span>"
+            result += (
+                f"<span class='dropdown-item {show_on_mobile_string}'>{self.print_unprinted_labels_link_html}</span>"
+            )
+        if self.email:
+            email_url = f"mailto:{self.email}"
+            icon_class = "bi bi-envelope"
+            if self.email_address_status == "BAD":
+                icon_class = "bi bi-envelope-exclamation-fill text-danger"
+            if self.email_address_status == "VALID":
+                icon_class = "bi bi-envelope-check-fill"
+            result += (
+                f"<span class='dropdown-item'><a href={email_url}><i class='{icon_class} me-1'></i>Email</a></span>"
+            )
+        won_lots_url = (
+            reverse("auction_lot_list", kwargs={"slug": self.auction.slug}) + f"?query=winner%3A{self.bidder_number}"
+        )
+        result += f"<span class='dropdown-item'><a href={won_lots_url}><i class='bi bi bi-calendar-check me-1'></i>View {self.bought_lots_qs.count()} lots won</a></span>"
+        sold_lots_url = (
+            reverse("auction_lot_list", kwargs={"slug": self.auction.slug}) + f"?query=seller%3A{self.bidder_number}"
+        )
+
+        result += f"<span class='dropdown-item'><a href={sold_lots_url}><i class='bi bi-calendar me-1'></i>View {self.lots_qs.count()} lots sold</a></span>"
         delete_url = reverse("auctiontosdelete", kwargs={"pk": self.pk})
         result += f"<span class='dropdown-item'><a href={delete_url}><i class='bi bi-person-fill-x me-1'></i>Delete</a></span>"
         problems_url = reverse(
@@ -1761,7 +1783,7 @@ class AuctionTOS(models.Model):
                 "bidder_number": self.bidder_number,
             },
         )
-        result += f"<span class='dropdown-item'><a href={bulk_add_images_url}><i class='bi bi-file-image me-1'></i>Quick add images</a></span>"
+        result += f"<span class='dropdown-item {show_on_mobile_string}'><a href={bulk_add_images_url}><i class='bi bi-file-image me-1'></i>Quick add images</a></span>"
         result += "</div>"
         return html.format_html(result)
 
