@@ -209,26 +209,25 @@ function deactivate_lot() {
                                     </div>
                                         {% if show_image_add_button %}
                                         <div class="container">
-                                            <div class='row mb-3'>
-                                                <div class="col-auto">
-                                                    <button class="btn btn-primary" name="rotate-left" onclick="rotate('{{image.pk}}', 90)"><i class="bi bi-arrow-counterclockwise"></i> Rotate</button>
-                                                </div>
+                                            <div class="btn-group" role="group" aria-label="Image actions">
+                                                <button class="btn btn-primary" name="rotate-left" onclick="rotate('{{image.pk}}', 90)">
+                                                    <i class="bi bi-arrow-counterclockwise"></i> <span class="d-none d-lg-inline">Rotate Left</span>
+                                                </button>
+                                                <button class="btn btn-primary" name="rotate-right" onclick="rotate('{{image.pk}}', -90)">
+                                                    <i class="bi bi-arrow-clockwise"></i> <span class="d-none d-lg-inline">Rotate Right</span>
+                                                </button>
                                                 {% if not image.is_primary %}
-                                                <div class="col-auto">
-                                                    <button class="btn btn-info" name="make-primary" onclick="make_primary('{{image.pk}}')"><i class="bi bi-file-image-fill"></i> Make primary</button>
-                                                </div>
+                                                <button class="btn btn-info" name="make-primary" onclick="make_primary('{{image.pk}}')">
+                                                    <i class="bi bi-file-image-fill"></i> Make Primary
+                                                </button>
                                                 {% endif %}
-                                                <div class="col-auto">
-                                                    <a href="{% url 'edit_image' pk=image.pk %}" class="btn text-dark bg-warning"><i class="bi bi-gear-fill"></i> Edit image</a>
-                                                </div>
-                                                <div class="col-auto">
-                                                    <a href="{% url 'delete_image' pk=image.pk %}" class="btn btn-danger"><i class="bi bi-file-x"></i> Delete image</a>
-                                                </div>
-                                                <div class="col-auto">
-                                                    <button class="btn btn-primary" name="rotate-right" onclick="rotate('{{image.pk}}', -90)"><i class="bi bi-arrow-clockwise"></i> Rotate</button>
-                                                </div>
+                                                <a href="{% url 'edit_image' pk=image.pk %}" class="btn text-dark bg-warning">
+                                                    <i class="bi bi-gear-fill"></i> Edit Image
+                                                </a>
+                                                <a href="{% url 'delete_image' pk=image.pk %}" class="btn btn-danger">
+                                                    <i class="bi bi-file-x"></i> Delete Image
+                                                </a>
                                             </div>
-                                        </div>
                                         {% endif %}
                                 </div>
                                 {% endfor %}
@@ -263,7 +262,7 @@ function deactivate_lot() {
                         {% endif %}
                     {% endif %}
                     {% if show_image_add_button %}
-                    <a href="{% url 'add_image' lot=lot.lot_number %}" class="btn btn-primary"><i class="bi bi-file-image"></i> Add image</a><br>
+                    <a href="{% url 'add_image' lot=lot.lot_number %}" class="mt-2 btn btn-primary"><i class="bi bi-file-image"></i> Add image</a><br>
                     {% endif %}
                     <br>
                     <div class="bg-dark mt-2 mb-2">
