@@ -3908,7 +3908,10 @@ class LotAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
             obj = self.lot
             # obj.custom_lot_number = form.cleaned_data["custom_lot_number"]
             obj.lot_name = form.cleaned_data["lot_name"] or "Unknown lot"
-            obj.species_category = form.cleaned_data["species_category"] or 21  # uncategorized
+            category = form.cleaned_data["species_category"]
+            if not category:
+                category = Category.objects.filter(name="Uncategorized").first()
+            obj.species_category = category
             obj.summernote_description = form.cleaned_data["summernote_description"]
             # obj.auctiontos_seller = form.cleaned_data['auctiontos_seller'] or request.user
             obj.quantity = form.cleaned_data["quantity"] or 1
