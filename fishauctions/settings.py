@@ -614,7 +614,7 @@ SUMMERNOTE_CONFIG = {
         "toolbar": [
             ["style", ["style"]],
             ["font", ["bold", "italic", "clear"]],
-            # ['color', ['color']],
+            ["color", ["color"]],
             [
                 "para",
                 [
@@ -628,6 +628,7 @@ SUMMERNOTE_CONFIG = {
                     "link",
                 ],
             ],  # 'picture', 'video']],
+            ["view", ["codeview"]],
             # ['view', ['fullscreen', 'codeview', 'help']],
         ],
     },

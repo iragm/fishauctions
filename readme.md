@@ -179,6 +179,8 @@ docker compose --profile "*" build
 docker compose up
 ```
 
+Run `./update.sh` -- this is needed to configure the url.
+
 Finally, create a file called `tos.html` with your terms of service in the same directory as the .env file.
 
 With a little luck, things worked.  If not, open an issue and provide as much detail as possible.  Don't put your keys in the issue, but do include any logs.  Remember that support is very limited for custom production deployments.  If something isn't talked about in this guide, I'm not really interested in helping with it.
@@ -197,7 +199,9 @@ Everything else can be done through the UI.
 Note: Do not remove the default "Uncategorized" category, it's referenced in several places in the code.  It's fine to remove the other default categories.
 
 ### Updates:
-Updates can be run by typing `./update.sh` in your VM.  This pulls the latest from iragm/fishauctions right now.
+Updates can be run by typing `./update.sh` in your VM.
+
+Very rarely following an update I've needed to run `docker compose down && docker compose up -d` instead of just running update, so if the site isn't coming back after an update, give this a try before rolling back to your snapshot.
 
 ### Changes and new features:
 There's quite a bit of other stuff (ads, google analytics, etc.) that was enabled in the past and has been disabled.  If you want this stuff, make a pull request for it.  If you want something:

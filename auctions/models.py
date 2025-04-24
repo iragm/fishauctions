@@ -1616,12 +1616,12 @@ class AuctionTOS(models.Model):
     )
     # yes we are using a string to store a number
     # this is actually important because some day, someone will ask to make the bidder numbers have characters like "1-234" or people's names
-    bidder_number = models.CharField(max_length=20, default="", blank=True)
+    bidder_number = models.CharField(max_length=20, default="", blank=True, db_index=True)
     bidder_number.help_text = "Must be unique, blank to automatically generate"
     bidding_allowed = models.BooleanField(default=True, blank=True)
     selling_allowed = models.BooleanField(default=True, blank=True)
-    name = models.CharField(max_length=181, null=True, blank=True)
-    email = models.EmailField(null=True, blank=True)
+    name = models.CharField(max_length=181, null=True, blank=True, db_index=True)
+    email = models.EmailField(null=True, blank=True, db_index=True)
     EMAIL_ADDRESS_STATUSES = (
         ("BAD", "Invalid"),
         ("UNKNOWN", "Unknown"),
