@@ -208,7 +208,7 @@ function deactivate_lot() {
                                         <span class="text-muted"><small>{{ image.get_image_source_display }}</small></span>{%if image.caption%}<br>{{ image.caption }}{%endif%}
                                     </div>
                                         {% if show_image_add_button %}
-                                        <div class="container">
+                                        <div class="container mb-2">
                                             <div class="btn-group" role="group" aria-label="Image actions">
                                                 <button class="btn btn-primary" name="rotate-left" onclick="rotate('{{image.pk}}', 90)">
                                                     <i class="bi bi-arrow-counterclockwise"></i> <span class="d-none d-lg-inline">Rotate Left</span>
@@ -228,6 +228,7 @@ function deactivate_lot() {
                                                     <i class="bi bi-file-x"></i> Delete Image
                                                 </a>
                                             </div>
+                                        </div>
                                         {% endif %}
                                 </div>
                                 {% endfor %}
