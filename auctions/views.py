@@ -5731,6 +5731,14 @@ class UserLabelPrefsView(UpdateView, SuccessMessageMixin):
             defaults={},
         )
         context["last_auction_used"] = userData.last_auction_used
+        context["last_admin_auction"] = (
+            Auction.objects.filter(
+                Q(created_by=self.request.user) | Q(auctiontos__user=self.request.user, auctiontos__is_admin=True),
+                is_deleted=False,
+            )
+            .order_by("-date_start")
+            .first()
+        )
         return context
 
 
@@ -6059,6 +6067,12 @@ class AdminDashboard(AdminOnlyViewMixin, TemplateView):
         context = super().get_context_data(**kwargs)
         qs = UserData.objects.filter(user__is_active=True)
         context["total_users"] = qs.count()
+
+        context["verified_emails_count"] = User.objects.filter(emailaddress__verified=True).distinct().count()
+        context["users_with_email_no_account_count"] = (
+            AuctionTOS.objects.filter(user__isnull=True, email__isnull=False).values("email").distinct().count()
+        )
+
         # context["unsubscribes"] = qs.filter(has_unsubscribed=True).count()
         # context["anonymous"] = (
         #     qs.filter(username_visible=False).exclude(user__username__icontains="@").count()

@@ -38,5 +38,10 @@ var form_id = '#printing-prefs';
 
         <p><br>If you're printing lots of labels, or running club auctions, it likely makes sense to purchase a thermal printer.</p>
     </small>
+
+        {% if last_admin_auction %}
+        <span class="text-warning"><b>Note:</b></span> These are your personal label printing settings, they don't change anything for other users.  Because you're an admin in {{ last_auction_used }}, you can <a href='{% url "auction_printing" slug=last_auction_used.slug %}'>print labels for other users</a>, or <a href="{% url 'auction_label_config' slug=last_auction_used.slug %}">change what gets printed on labels.</a><br>
+        {% endif %}
+
     {% crispy form form.helper %}
 {% endblock %}
