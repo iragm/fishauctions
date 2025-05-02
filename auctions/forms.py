@@ -2410,6 +2410,7 @@ class CreateLotForm(forms.ModelForm):
                     lot_count = (
                         Lot.objects.exclude(is_deleted=True)
                         .filter(
+                            auction=auction,
                             user=self.user,
                             donation=False,
                             banned=False,
