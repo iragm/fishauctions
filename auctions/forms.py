@@ -2416,7 +2416,7 @@ class CreateLotForm(forms.ModelForm):
                         )
                         .count()
                     )
-                    if auction and lot_count >= auction.max_lots_per_user:
+                    if auction.max_lots_per_user and lot_count >= auction.max_lots_per_user:
                         self.add_error(
                             "donation",
                             "This needs to be a donation due to the max lots per user allowed in this auction",
