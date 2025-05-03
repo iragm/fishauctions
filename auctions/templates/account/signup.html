@@ -17,5 +17,17 @@
       {% endif %}
       <button class="btn btn-primary" type="submit">{% trans "Sign Up" %}</button>
     </form>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const form = document.querySelector('form');
+    const submitBtn = form.querySelector('[type="submit"]');
 
+    form.addEventListener('submit', function () {
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.innerText = 'Submitting...';
+        }
+    });
+});
+</script>
 {% endblock %}
