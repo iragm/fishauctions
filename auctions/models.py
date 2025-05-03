@@ -583,7 +583,7 @@ class Auction(models.Model):
     first_bid_payout = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
     first_bid_payout.help_text = "This is a feature to encourage bidding.  Give each bidder this amount, for free.  <a href='/blog/encouraging-participation/' target='_blank'>More information</a>"
     promote_this_auction = models.BooleanField(default=True)
-    promote_this_auction.help_text = "Show this to everyone in the list of auctions. <span class='text-warning'>Uncheck if this is a test or private auction</span>."
+    promote_this_auction.help_text = "Show this to everyone in the list of auctions"
     is_chat_allowed = models.BooleanField(default=True)
     max_lots_per_user = models.PositiveIntegerField(null=True, blank=True, validators=[MaxValueValidator(100)])
     max_lots_per_user.help_text = "A user won't be able to add more than this many lots to this auction"

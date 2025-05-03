@@ -1991,7 +1991,9 @@ class AuctionEditForm(forms.ModelForm):
                     self.add_error(
                         "use_seller_dash_lot_numbering", "This option cannot be changed after lots have been added."
                     )
-
+        pattern = r"^(test|mock|trial|example)([-_]|$)|([-_])(test|mock|trial|example)([-_]|$)"
+        if cleaned_data.get("promote_this_auction") and re.search(pattern, saved_instance.slug, re.IGNORECASE):
+            self.add_error("promote_this_auction", "Test auctions cannot be promoted.")
         return cleaned_data
 
 

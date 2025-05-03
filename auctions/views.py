@@ -2070,7 +2070,7 @@ class AuctionUpdate(AuctionViewMixin, UpdateView):
                 self.request,
                 "You've enabled online buy now with no bidding, but buy now isn't enabled.  Sellers won't be able to set a buy now price.",
             )
-        elif not self.get_object().is_online and self.get_object().online_bidding != "disable":
+        elif not self.get_object().is_online and self.get_object().online_bidding != "disable" and settings.ENABLE_HELP:
             messages.info(
                 self.request,
                 f"This auction allows online bidding -- make sure to <a href='{reverse('auction_help', kwargs={'slug': self.get_object().slug})}'>watch the tutorial in the help</a> to see how this works",
