@@ -1994,6 +1994,8 @@ class AuctionEditForm(forms.ModelForm):
         pattern = r"^(test|mock|trial|example)([-_]|$)|([-_])(test|mock|trial|example)([-_]|$)"
         if cleaned_data.get("promote_this_auction") and re.search(pattern, saved_instance.slug, re.IGNORECASE):
             self.add_error("promote_this_auction", "Test auctions cannot be promoted.")
+        elif cleaned_data.get("promote_this_auction") and not saved_instance.admin_checklist_location_set:
+            self.add_error("promote_this_auction", "Set the location before promoting this auction")
         return cleaned_data
 
 
