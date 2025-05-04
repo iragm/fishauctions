@@ -2412,6 +2412,8 @@ class Lot(models.Model):
                     if result:
                         self.species_category = result
                         self.category_automatically_added = True
+                    else:
+                        self.species_category = Category.objects.filter(name="Uncategorized").first()
         if not self.reference_link:
             search = self.lot_name.replace(" ", "%20")
             self.reference_link = f"https://www.google.com/search?q={search}&tbm=isch"
