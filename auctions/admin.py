@@ -345,6 +345,17 @@ class AuctionAdmin(admin.ModelAdmin):
         PickupLocationInline,
     ]
 
+    actions = ["export_user_emails"]
+
+    def export_user_emails(self, request, queryset):
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = "attachment;filename=auctions.csv"
+        writer = csv.writer(response)
+        writer.writerow(["Auction", "Name", "Email"])
+        for obj in queryset:
+            writer.writerow([obj.title, obj.created_by.first_name, obj.created_by.email])
+        return response
+
 
 class BidInline(admin.TabularInline):
     model = Bid
