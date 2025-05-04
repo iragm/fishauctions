@@ -212,8 +212,10 @@ class AuctionHTMxTable(tables.Table):
         result = f"<a href='{auction.get_absolute_url()}'>{auction.title}</a><br class='d-md-none'>"
         if auction.is_last_used:
             result += " <span class='ms-1 badge bg-success text-black'>Your last auction</span>"
-        if auction.is_online:
-            result += " <span class='badge bg-info'>Online</span>"
+        if auction.is_online and not auction.in_progress:
+            result += " <span class='badge bg-primary'>Online</span>"
+        if auction.in_progress or auction.in_person_in_progress:
+            result += " <span class='badge bg-info'>Online bidding now!</span>"
         if auction.is_deleted:
             result += " <span class='badge bg-danger'>Deleted</span>"
         if not auction.promote_this_auction:

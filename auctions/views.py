@@ -1811,18 +1811,18 @@ class FindImageIcon(LoginRequiredMixin, View):
         return HttpResponse("")
 
 
-class AuctionChats(LoginRequiredMixin, ListView, AuctionPermissionsMixin):
+class AuctionChats(AuctionViewMixin, LoginRequiredMixin, ListView):
     """Auction admins view to show and delete all chats for an auction"""
 
     model = LotHistory
     template_name = "chats.html"
 
-    def dispatch(self, request, *args, **kwargs):
-        self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs.pop("slug")).first()
-        if not self.auction:
-            raise Http404
-        self.is_auction_admin
-        return super().dispatch(request, *args, **kwargs)
+    # def dispatch(self, request, *args, **kwargs):
+    #     self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs.pop("slug")).first()
+    #     if not self.auction:
+    #         raise Http404
+    #     self.is_auction_admin
+    #     return super().dispatch(request, *args, **kwargs)
 
     def get_queryset(self):
         # get related auctiontos if the user has joined the auction
@@ -1890,19 +1890,19 @@ class AuctionShowHighBidder(View, AuctionPermissionsMixin):
         # return HttpResponse(f"Max bid: ${self.lot.max_bid: .2f}")
 
 
-class PickupLocations(ListView, AuctionPermissionsMixin):
+class PickupLocations(AuctionViewMixin, ListView):
     """Show all pickup locations belonging to the current auction"""
 
     model = PickupLocation
     template_name = "all_pickup_locations.html"
     ordering = ["name"]
 
-    def dispatch(self, request, *args, **kwargs):
-        self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs.pop("slug")).first()
-        if not self.auction:
-            raise Http404
-        self.is_auction_admin
-        return super().dispatch(request, *args, **kwargs)
+    # def dispatch(self, request, *args, **kwargs):
+    #     self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs.pop("slug")).first()
+    #     if not self.auction:
+    #         raise Http404
+    #     self.is_auction_admin
+    #     return super().dispatch(request, *args, **kwargs)
 
     def get_queryset(self):
         qs = PickupLocation.objects.filter(
@@ -2030,17 +2030,12 @@ class PickupLocationsCreate(PickupLocationForm, CreateView, AuctionPermissionsMi
         return kwargs
 
 
-class AuctionUpdate(UpdateView, AuctionPermissionsMixin):
+class AuctionUpdate(AuctionViewMixin, UpdateView):
     """The form users fill out to edit an auction"""
 
     model = Auction
     template_name = "auction_edit_form.html"
     form_class = AuctionEditForm
-
-    def dispatch(self, request, *args, **kwargs):
-        self.auction = self.get_object()
-        self.is_auction_admin
-        return super().dispatch(request, *args, **kwargs)
 
     def get_success_url(self):
         return "/auctions/" + str(self.kwargs["slug"])
@@ -2075,7 +2070,7 @@ class AuctionUpdate(UpdateView, AuctionPermissionsMixin):
                 self.request,
                 "You've enabled online buy now with no bidding, but buy now isn't enabled.  Sellers won't be able to set a buy now price.",
             )
-        elif not self.get_object().is_online and self.get_object().online_bidding != "disable":
+        elif not self.get_object().is_online and self.get_object().online_bidding != "disable" and settings.ENABLE_HELP:
             messages.info(
                 self.request,
                 f"This auction allows online bidding -- make sure to <a href='{reverse('auction_help', kwargs={'slug': self.get_object().slug})}'>watch the tutorial in the help</a> to see how this works",
@@ -2114,7 +2109,7 @@ class AuctionUpdate(UpdateView, AuctionPermissionsMixin):
         return form
 
 
-class AuctionLots(SingleTableMixin, FilterView, AuctionPermissionsMixin):
+class AuctionLots(SingleTableMixin, AuctionViewMixin, FilterView):
     """List of lots associated with an auction.  This is for admins; don't confuse this with the thumbnail-enhanced lot view `AllLots` for users.
 
     At some point, it may make sense to subclass AllLots here, but I think the needs of the two views are so different that it doesn't make sense
@@ -2125,18 +2120,15 @@ class AuctionLots(SingleTableMixin, FilterView, AuctionPermissionsMixin):
     filterset_class = LotAdminFilter
     paginate_by = 50
 
+    def get_queryset(self):
+        return Lot.objects.exclude(is_deleted=True).filter(auction=self.auction).order_by("lot_number")
+
     def get_template_names(self):
         if self.request.htmx:
             template_name = "tables/table_generic.html"
         else:
             template_name = "auctions/auction_lot_admin.html"
         return template_name
-
-    def dispatch(self, request, *args, **kwargs):
-        self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs.pop("slug")).first()
-        self.queryset = Lot.objects.exclude(is_deleted=True).filter(auction=self.auction).order_by("lot_number")
-        self.is_auction_admin
-        return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -2151,14 +2143,12 @@ class AuctionLots(SingleTableMixin, FilterView, AuctionPermissionsMixin):
         return kwargs
 
 
-class AuctionHelp(AdminEmailMixin, TemplateView, AuctionPermissionsMixin):
+class AuctionHelp(AdminEmailMixin, AuctionViewMixin, TemplateView):
     template_name = "auction_help.html"
 
     def dispatch(self, request, *args, **kwargs):
         if not settings.ENABLE_HELP:
             return redirect("/")
-        self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs.pop("slug")).first()
-        self.is_auction_admin
         return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
@@ -2167,13 +2157,16 @@ class AuctionHelp(AdminEmailMixin, TemplateView, AuctionPermissionsMixin):
         return context
 
 
-class AuctionUsers(SingleTableMixin, FilterView, AuctionPermissionsMixin):
+class AuctionUsers(SingleTableMixin, AuctionViewMixin, FilterView):
     """List of users (AuctionTOS) associated with an auction"""
 
     model = AuctionTOS
     table_class = AuctionTOSHTMxTable
     filterset_class = AuctionTOSFilter
     paginate_by = 100
+
+    def get_queryset(self):
+        return AuctionTOS.objects.filter(auction=self.auction).order_by("name")
 
     def get_template_names(self):
         if self.request.htmx:
@@ -2182,12 +2175,6 @@ class AuctionUsers(SingleTableMixin, FilterView, AuctionPermissionsMixin):
             template_name = "auction_users.html"
         return template_name
 
-    def dispatch(self, request, *args, **kwargs):
-        self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs.pop("slug")).first()
-        self.queryset = AuctionTOS.objects.filter(auction=self.auction).order_by("name")
-        self.is_auction_admin
-        return super().dispatch(request, *args, **kwargs)
-
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["auction"] = self.auction
@@ -2195,7 +2182,7 @@ class AuctionUsers(SingleTableMixin, FilterView, AuctionPermissionsMixin):
         return context
 
     def get(self, *args, **kwargs):
-        if not self.request.htmx and self.queryset.filter(bidder_number="ERROR").count():
+        if not self.request.htmx and self.get_queryset().filter(bidder_number="ERROR").count():
             messages.error(
                 self.request,
                 "Automatic bidder number generation failed, manually set the bidder numbers for these users",
@@ -2203,25 +2190,11 @@ class AuctionUsers(SingleTableMixin, FilterView, AuctionPermissionsMixin):
         return super().get(*args, **kwargs)
 
 
-class AuctionStats(DetailView, AuctionPermissionsMixin):
+class AuctionStats(AuctionViewMixin, DetailView):
     """Fun facts about an auction"""
 
     model = Auction
     template_name = "auction_stats.html"
-    allow_non_admins = True
-
-    def dispatch(self, request, *args, **kwargs):
-        self.auction = self.get_object()
-        auth = False
-        if self.get_object().make_stats_public:
-            auth = True
-        if self.is_auction_admin:
-            auth = True
-        if auth:
-            return super().dispatch(request, *args, **kwargs)
-        else:
-            messages.error(request, "Stats for this auction are not public")
-            return redirect("/")
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -2678,7 +2651,7 @@ class QuickCheckoutHTMX(AuctionViewMixin, TemplateView):
         return context
 
 
-class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
+class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
     """Add/edit lots of lots for a given auctiontos pk"""
 
     template_name = "auctions/bulk_add_users.html"
@@ -2955,15 +2928,6 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
         return qs.first()
 
     def dispatch(self, request, *args, **kwargs):
-        self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs.pop("slug")).first()
-        if not self.auction:
-            raise Http404
-        if not self.auction.permission_check(self.request.user):
-            messages.error(
-                request,
-                "Your account doesn't have permission to add users to this auction",
-            )
-            return redirect("/")
         self.queryset = AuctionTOS.objects.none()  # we don't want to allow editing
         return super().dispatch(request, *args, **kwargs)
 
@@ -2985,7 +2949,7 @@ class BulkAddUsers(TemplateView, ContextMixin, AuctionPermissionsMixin):
             )
 
 
-class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
+class BulkAddLots(TemplateView, AuctionPermissionsMixin):
     """Add/edit lots of lots for a given auctiontos pk"""
 
     template_name = "auctions/bulk_add_lots.html"
@@ -3071,7 +3035,7 @@ class BulkAddLots(TemplateView, ContextMixin, AuctionPermissionsMixin):
         return context
 
     def dispatch(self, request, *args, **kwargs):
-        self.auction = Auction.objects.exclude(is_deleted=True).filter(slug=kwargs.pop("slug")).first()
+        self.auction = get_object_or_404(Auction, slug=kwargs.pop("slug"), is_deleted=False)
         self.is_admin = False
         if not self.auction:
             raise Http404
@@ -3734,18 +3698,15 @@ class LotUpdate(LotValidation, UpdateView):
         return context
 
 
-class AuctionDelete(DeleteView, AuctionPermissionsMixin):
+class AuctionDelete(AuctionViewMixin, DeleteView):
     model = Auction
 
     def dispatch(self, request, *args, **kwargs):
-        self.auction = self.get_object()
-        if not self.get_object().can_be_deleted:
+        result = super().dispatch(request, *args, **kwargs)
+        if not self.auction.can_be_deleted:
             messages.error(request, "There are already lots in this auction, it can't be deleted")
             return redirect("/")
-        if not self.is_auction_admin:
-            messages.error(request, "Only the auction creator can delete an auction")
-            return redirect("/")
-        return super().dispatch(request, *args, **kwargs)
+        return result
 
     def get_success_url(self):
         return "/auctions/"
@@ -4502,7 +4463,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
         return super().form_valid(form)
 
 
-class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
+class AuctionInfo(AuctionViewMixin, FormMixin, DetailView):
     """Main view of a single auction"""
 
     template_name = "auction.html"
@@ -4512,31 +4473,31 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
     auction = None
     allow_non_admins = True
 
-    def get_object(self, *args, **kwargs):
-        if self.auction:
-            return self.auction
-        else:
-            try:
-                auction = Auction.objects.get(slug=self.kwargs.get(self.slug_url_kwarg), is_deleted=False)
-                self.auction = auction
-                return auction
-            except:
-                msg = "No auctions found matching the query"
-                raise Http404(msg)
+    # def get_object(self, *args, **kwargs):
+    #     if self.auction:
+    #         return self.auction
+    #     else:
+    #         try:
+    #             auction = Auction.objects.get(slug=self.kwargs.get(self.slug_url_kwarg), is_deleted=False)
+    #             self.auction = auction
+    #             return auction
+    #         except:
+    #             msg = "No auctions found matching the query"
+    #             raise Http404(msg)
 
     def get_success_url(self):
         data = self.request.GET.copy()
         try:
             if not data["next"]:
-                data["next"] = self.get_object().view_lot_link
+                data["next"] = self.auction.view_lot_link
             return data["next"]
         except Exception:
-            return self.get_object().view_lot_link
+            return self.auction.view_lot_link
 
     def get_form_kwargs(self):
         form_kwargs = super().get_form_kwargs()
         form_kwargs["user"] = self.request.user
-        form_kwargs["auction"] = self.get_object()
+        form_kwargs["auction"] = self.auction
         return form_kwargs
 
     # def dispatch(self, request, *args, **kwargs):
@@ -4548,20 +4509,20 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["pickup_locations"] = self.get_object().location_qs
+        context["pickup_locations"] = self.auction.location_qs
         current_site = Site.objects.get_current()
         context["domain"] = current_site.domain
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
-        if self.get_object().closed:
+        if self.auction.closed:
             context["ended"] = True
             messages.info(
                 self.request,
-                f"This auction has ended.  You can't bid on anything, but you can still <a href='{self.get_object().view_lot_link}'>view lots</a>.",
+                f"This auction has ended.  You can't bid on anything, but you can still <a href='{self.auction.view_lot_link}'>view lots</a>.",
             )
         else:
             context["ended"] = False
         try:
-            existingTos = AuctionTOS.objects.get(user=self.request.user, auction=self.get_object())
+            existingTos = AuctionTOS.objects.get(user=self.request.user, auction=self.auction)
             existingTos = existingTos.pickup_location
             i_agree = True
             context["hasChosenLocation"] = existingTos.pk
@@ -4572,34 +4533,34 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
             #     existingTos = PickupLocation.objects.filter(auction=self.get_object().pk)[0]
             # else:
             existingTos = None
-            if self.get_object().multi_location:
+            if self.auction.multi_location:
                 i_agree = True
             else:
                 i_agree = False
-                existingTos = PickupLocation.objects.filter(auction=self.get_object()).first()
+                existingTos = PickupLocation.objects.filter(auction=self.auction).first()
             # if self.request.user.is_authenticated and not context['ended']:
             #     if not self.get_object().no_location:
             #         messages.add_message(self.request, messages.ERROR, "Please confirm you have read these rules by selecting your pickup location at the bottom of this page.")
         context["active_tab"] = "main"
-        if self.request.user.pk == self.get_object().created_by.pk:
-            invalidPickups = self.get_object().pickup_locations_before_end
+        if self.request.user.pk == self.auction.created_by.pk:
+            invalidPickups = self.auction.pickup_locations_before_end
             if invalidPickups:
                 messages.info(
                     self.request,
                     f"<a href='{invalidPickups}'>Some pickup times</a> are set before the end date of the auction",
                 )
-            if self.get_object().time_start_is_at_night and not self.get_object().is_online:
+            if self.auction.time_start_is_at_night and not self.auction.is_online:
                 messages.info(
                     self.request,
-                    f"You know your auction is starting in the middle of the night, right? <a href='{reverse('edit_auction', kwargs={'slug': self.get_object().slug})}'>Click here to change when bidding opens</a> and remember that it's in 24 hour time",
+                    f"You know your auction is starting in the middle of the night, right? <a href='{reverse('edit_auction', kwargs={'slug': self.auction.slug})}'>Click here to change when bidding opens</a> and remember that it's in 24 hour time",
                 )
 
         context["form"] = AuctionJoin(
             user=self.request.user,
-            auction=self.get_object(),
+            auction=self.auction,
             initial={
                 "user": self.request.user.id,
-                "auction": self.get_object().pk,
+                "auction": self.auction.pk,
                 "pickup_location": existingTos,
                 "i_agree": i_agree,
             },
@@ -4608,7 +4569,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
         return context
 
     def post(self, request, *args, **kwargs):
-        auction = self.get_object()
+        auction = self.auction
         form = self.get_form()
         if form.is_valid():
             userData, created = UserData.objects.get_or_create(
@@ -4972,9 +4933,9 @@ class Invoices(ListView, LoginRequiredMixin):
         ).order_by("-date")
         return qs
 
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        return context
+    # def get_context_data(self, **kwargs):
+    #     context = super().get_context_data(**kwargs)
+    #     return context
 
 
 # password protected in views.py
@@ -6570,17 +6531,17 @@ class AuctionStatsAttritionJSONView(BaseLineChartView, AuctionStatsPermissionsMi
         return [data]
 
 
-class AuctionStatsBarChartJSONView(BaseColumnsHighChartsView, AuctionPermissionsMixin):
+class AuctionStatsBarChartJSONView(AuctionViewMixin, BaseColumnsHighChartsView):
     """This is needed because of https://github.com/peopledoc/django-chartjs/issues/56"""
 
-    allow_non_admins = True
+    # allow_non_admins = True
 
-    def dispatch(self, request, *args, **kwargs):
-        self.auction = Auction.objects.get(slug=kwargs["slug"], is_deleted=False)
-        if not self.is_auction_admin:
-            return redirect("/")
-        result = super().dispatch(request, *args, **kwargs)
-        return result
+    # def dispatch(self, request, *args, **kwargs):
+    #     self.auction = Auction.objects.get(slug=kwargs["slug"], is_deleted=False)
+    #     if not self.is_auction_admin:
+    #         return redirect("/")
+    #     result = super().dispatch(request, *args, **kwargs)
+    #     return result
 
     def get_yUnit(self):
         return ""

@@ -583,7 +583,7 @@ class Auction(models.Model):
     first_bid_payout = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0)])
     first_bid_payout.help_text = "This is a feature to encourage bidding.  Give each bidder this amount, for free.  <a href='/blog/encouraging-participation/' target='_blank'>More information</a>"
     promote_this_auction = models.BooleanField(default=True)
-    promote_this_auction.help_text = "Show this to everyone in the list of auctions. <span class='text-warning'>Uncheck if this is a test or private auction</span>."
+    promote_this_auction.help_text = "Show this to everyone in the list of auctions"
     is_chat_allowed = models.BooleanField(default=True)
     max_lots_per_user = models.PositiveIntegerField(null=True, blank=True, validators=[MaxValueValidator(100)])
     max_lots_per_user.help_text = "A user won't be able to add more than this many lots to this auction"
@@ -1051,6 +1051,13 @@ class Auction(models.Model):
         return False
 
     @property
+    def in_person_in_progress(self):
+        """For display on the main auctions list"""
+        if not self.is_online and self.started and not self.in_person_closed:
+            return True
+        return False
+
+    @property
     def in_progress(self):
         """For display on the main auctions list"""
         if self.is_online and self.started and not self.closed:
@@ -1269,6 +1276,46 @@ class Auction(models.Model):
     @property
     def preregistered_users(self):
         return AuctionTOS.objects.filter(auction=self.pk, manually_added=False).count()
+
+    @property
+    def campaigns_qs(self):
+        return AuctionCampaign.objects.filter(auction=self.pk).order_by("-timestamp")
+
+    @property
+    def number_of_reminder_emails(self):
+        return self.campaigns_qs.exclude(result="ERR").count()
+
+    @property
+    def reminder_email_clicks(self):
+        return (
+            self.campaigns_qs.exclude(result="ERR").exclude(result="NONE").count()
+            / self.number_of_reminder_emails
+            * 100
+        )
+
+    @property
+    def reminder_email_joins(self):
+        return self.campaigns_qs.filter(result="JOINED").count() / self.number_of_reminder_emails * 100
+
+    @property
+    def all_auctions_reminder_email_clicks(self):
+        return (
+            AuctionCampaign.objects.exclude(result="ERR").exclude(result="NONE").count()
+            / AuctionCampaign.objects.exclude(result="ERR").count()
+            * 100
+        )
+
+    @property
+    def all_auctions_reminder_email_joins(self):
+        return (
+            AuctionCampaign.objects.filter(result="JOINED").count()
+            / AuctionCampaign.objects.exclude(result="ERR").count()
+            * 100
+        )
+
+    @property
+    def weekly_promo_email_clicks(self):
+        return PageView.objects.filter(source="weekly_promo", auction=self.pk).count()
 
     @property
     def multi_location(self):
@@ -1958,6 +2005,14 @@ class AuctionTOS(models.Model):
                 # remove ourselves from the duplicate if it was previously set
                 AuctionTOS.objects.filter(pk=self.possible_duplicate.pk).update(possible_duplicate=None)
                 AuctionTOS.objects.filter(pk=self.pk).update(possible_duplicate=None)
+
+        if self.user:
+            related_campaign = (
+                AuctionCampaign.objects.filter(auction=self.auction, user=self.user).exclude(result="JOINED").first()
+            )
+            if related_campaign:
+                related_campaign.result = "JOINED"
+                related_campaign.save()
 
     @property
     def display_name_for_admins(self):
@@ -3739,7 +3794,7 @@ class PageView(models.Model):
     date_end = models.DateTimeField(null=True, blank=True, default=timezone.now, db_index=True)
     total_time = models.PositiveIntegerField(default=0)
     total_time.help_text = "The total time in seconds the user has spent on the lot page"
-    source = models.CharField(max_length=200, blank=True, null=True, default="")
+    source = models.CharField(max_length=200, blank=True, null=True, default="", db_index=True)
     counter = models.PositiveIntegerField(default=0)
     url = models.CharField(max_length=600, blank=True, null=True)
     title = models.CharField(max_length=600, blank=True, null=True)
@@ -4434,6 +4489,7 @@ class AuctionCampaign(models.Model):
             ("JOINED", "Joined"),
         ),
         default="NONE",
+        db_index=True,
     )
     email_sent = models.BooleanField(default=False)
 

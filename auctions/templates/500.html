@@ -3,9 +3,14 @@
 {% block body_class %}template-404{% endblock %}
 
 {% block content %}
-        <h1>Something broke, badly...</h1>
+        <h5>Hm...that broke</h5>
 
-        <h3>500 Internal Server Error</h3>
+        An error occurred while trying to load this page.
+        <ul>
+        <li>This isn't your fault</li>
+        <li>These types of issues are usually fixed within a day or two</li>
+        <li>This issue will automatically be reported, you don't need to do anything</li>
+        </ul>
 
         <div><img src="{% static 'cracked_tank.jpg' %}" style="max-width:100%;"></img></div>
         <span class="text-muted">rrasco / Reef Central had it worse than this, though</span>
