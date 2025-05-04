@@ -1271,6 +1271,42 @@ class Auction(models.Model):
         return AuctionTOS.objects.filter(auction=self.pk, manually_added=False).count()
 
     @property
+    def campaigns_qs(self):
+        return AuctionCampaign.objects.filter(auction=self.pk).order_by("-timestamp")
+
+    @property
+    def number_of_reminder_emails(self):
+        return self.campaigns_qs.exclude(result="ERR").count()
+
+    @property
+    def reminder_email_clicks(self):
+        return (
+            self.campaigns_qs.exclude(result="ERR").exclude(result="NONE").count()
+            / self.number_of_reminder_emails
+            * 100
+        )
+
+    @property
+    def reminder_email_joins(self):
+        return self.campaigns_qs.filter(result="JOINED").count() / self.number_of_reminder_emails * 100
+
+    @property
+    def all_auctions_reminder_email_clicks(self):
+        return (
+            AuctionCampaign.objects.exclude(result="ERR").exclude(result="NONE").count()
+            / AuctionCampaign.objects.exclude(result="ERR").count()
+            * 100
+        )
+
+    @property
+    def all_auctions_reminder_email_joins(self):
+        return (
+            AuctionCampaign.objects.filter(result="JOINED").count()
+            / AuctionCampaign.objects.exclude(result="ERR").count()
+            * 100
+        )
+
+    @property
     def multi_location(self):
         """
         True if there's more than one location at this auction
@@ -1958,6 +1994,14 @@ class AuctionTOS(models.Model):
                 # remove ourselves from the duplicate if it was previously set
                 AuctionTOS.objects.filter(pk=self.possible_duplicate.pk).update(possible_duplicate=None)
                 AuctionTOS.objects.filter(pk=self.pk).update(possible_duplicate=None)
+
+        if self.user:
+            related_campaign = (
+                AuctionCampaign.objects.filter(auction=self.auction, user=self.user).exclude(result="JOINED").first()
+            )
+            if related_campaign:
+                related_campaign.result = "JOINED"
+                related_campaign.save()
 
     @property
     def display_name_for_admins(self):
@@ -3739,7 +3783,7 @@ class PageView(models.Model):
     date_end = models.DateTimeField(null=True, blank=True, default=timezone.now, db_index=True)
     total_time = models.PositiveIntegerField(default=0)
     total_time.help_text = "The total time in seconds the user has spent on the lot page"
-    source = models.CharField(max_length=200, blank=True, null=True, default="")
+    source = models.CharField(max_length=200, blank=True, null=True, default="", db_index=True)
     counter = models.PositiveIntegerField(default=0)
     url = models.CharField(max_length=600, blank=True, null=True)
     title = models.CharField(max_length=600, blank=True, null=True)
@@ -4434,6 +4478,7 @@ class AuctionCampaign(models.Model):
             ("JOINED", "Joined"),
         ),
         default="NONE",
+        db_index=True,
     )
     email_sent = models.BooleanField(default=False)
 

@@ -17,7 +17,7 @@
     <li>{% if auction.admin_checklist_additional_admin %}<i class="bi bi-check-square-fill text-success"></i>{% else %}<i class="bi bi-exclamation-square-fill text-danger"></i>{%endif%} Click a name to edit that user and <a href="/auctions/{{auction.slug}}/users">add an additional admin</a> to help you set lot winners</li>
     {% endif %}
   </ul>
-  {% if not auction.promote_this_auction %}<small>This auction is not promoted.  It will appear in <a href={% url 'auctions' %}>the list of auctions</a> for you, and for any users that have joined, but it won't be visible to anyone else unless you share the URL with them.  Promoted auctions are also included in a weekly promotional email sent every Wednesday to nearby users.</small><br>{% endif %}
+  {% if not auction.promote_this_auction %}<small>This auction is not promoted.  It will appear in <a href={% url 'auctions' %}>the list of auctions</a> for you, for any users you manually add (based on email address), and for any users that have joined, but it won't be visible to anyone else unless you share the URL with them.  Promoted auctions are also included in a weekly promotional email sent every Wednesday to nearby users.</small><br>{% endif %}
   {% if enable_help %}<div>Having trouble?  <a href='{% url "auction_help" slug=auction.slug %}'>Click here to get help</a></div>{% endif %}
   <small class="text-muted">This message will disappear once you've finished setting up your auction.</small>
 </div>
