@@ -199,21 +199,25 @@ This graph shows overall engagement of people with your auction.  You can gauge 
               This graph represents "friction" in this process.  At each step, some number of people will give up.  Ideally, every user who viewed a lot would win at least a lot or two, meaning there would be very little change as you move down the graph.<br><br>Remember that this graph only indicates people who visited the auction site, we can't know how many people are (for example) aware of your club but don't know about the auction, or have heard about the auction but didn't have a link for the site.</span>
             <br>
             {% endif %}
-<br><h4>Join reminder emails</h4>
-When users with an account view your auction but don't join it, they'll be sent a reminder email 24 hours later.  Users can turn off <b>send reminder emails about joining auctions</b> under preferences.
+<br><h4>Promotions and join reminder emails</h4>
+When users with an account view your auction but don't join it, they'll be sent a reminder email 24 hours later.  Users can turn off <b>send reminder emails about joining auctions</b> under preferences.<br><br>
+Promoted auctions are included in a weekly promotional email sent every Wednesday to nearby users.
 
 <table class="table">
     <thead>
     </thead>
     <tbody>
         <tr>
-            <td>Users who received a reminder email</td><td>{{auction.number_of_reminder_emails}}</td>
+            <td>Users who received a join reminder email</td><td>{{auction.number_of_reminder_emails}}</td>
         </tr>
         <tr>
-            <td>Click rate</td><td>{{auction.reminder_email_clicks|floatformat:2}}% ({{auction.all_auctions_reminder_email_clicks|floatformat:2}}% in all auctions)</td>
+            <td>Click rate for join reminder email</td><td>{{auction.reminder_email_clicks|floatformat:2}}% ({{auction.all_auctions_reminder_email_clicks|floatformat:2}}% in all auctions)</td>
         </tr>
         <tr>
-            <td>Join rate</td><td>{{auction.reminder_email_joins|floatformat:2}}% ({{auction.all_auctions_reminder_email_joins|floatformat:2}}% in all auctions)</td>
+            <td>Join rate for join reminder email</td><td>{{auction.reminder_email_joins|floatformat:2}}% ({{auction.all_auctions_reminder_email_joins|floatformat:2}}% in all auctions)</td>
+        </tr>
+        <tr>
+            <td>Clicks from weekly promo email</td><td>{{auction.weekly_promo_email_clicks}}</td>
         </tr>
   </tbody>
 </table>
