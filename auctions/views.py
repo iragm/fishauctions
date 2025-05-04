@@ -3414,6 +3414,21 @@ class ImageCreateView(LoginRequiredMixin, CreateView):
             image.is_primary = True
         if not image.image_source:
             image.image_source = "RANDOM"
+        uploaded_image = form.cleaned_data.get("image")
+
+        # Attempt to convert non-standard JPEG formats (like MPO) to standard JPEG
+        try:
+            with Image.open(uploaded_image) as img:
+                if img.format != "JPEG":
+                    img = img.convert("RGB")  # Ensure it's in a JPEG-safe mode
+                    buffer = BytesIO()
+                    img.save(buffer, format="JPEG")
+                    buffer.seek(0)
+                    image.image.save(
+                        uploaded_image.name.replace(".jpeg", "") + ".jpg", ContentFile(buffer.read()), save=False
+                    )
+        except Exception as e:
+            logging.error("Error processing image: %s", e)
         try:
             image.save()
         except Exception as e:
