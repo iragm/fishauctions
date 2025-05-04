@@ -4463,7 +4463,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
         return super().form_valid(form)
 
 
-class AuctionInfo(AuctionViewMixin, FormMixin, DetailView):
+class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
     """Main view of a single auction"""
 
     template_name = "auction.html"
@@ -4473,17 +4473,17 @@ class AuctionInfo(AuctionViewMixin, FormMixin, DetailView):
     auction = None
     allow_non_admins = True
 
-    # def get_object(self, *args, **kwargs):
-    #     if self.auction:
-    #         return self.auction
-    #     else:
-    #         try:
-    #             auction = Auction.objects.get(slug=self.kwargs.get(self.slug_url_kwarg), is_deleted=False)
-    #             self.auction = auction
-    #             return auction
-    #         except:
-    #             msg = "No auctions found matching the query"
-    #             raise Http404(msg)
+    def get_object(self, *args, **kwargs):
+        if self.auction:
+            return self.auction
+        else:
+            try:
+                auction = Auction.objects.get(slug=self.kwargs.get(self.slug_url_kwarg), is_deleted=False)
+                self.auction = auction
+                return auction
+            except:
+                msg = "No auctions found matching the query"
+                raise Http404(msg)
 
     def get_success_url(self):
         data = self.request.GET.copy()
@@ -4500,12 +4500,15 @@ class AuctionInfo(AuctionViewMixin, FormMixin, DetailView):
         form_kwargs["auction"] = self.auction
         return form_kwargs
 
-    # def dispatch(self, request, *args, **kwargs):
-    #     if self.get_object().permission_check(request.user):
-    #         locations = self.get_object().location_qs.count()
-    #         if not locations:
-    #             messages.info(self.request, "You haven't added any pickup locations to this auction yet. <a href='/locations/new/'>Add one now</a>")
-    #     return super().dispatch(request, *args, **kwargs)
+    def dispatch(self, request, *args, **kwargs):
+        if self.get_object().permission_check(request.user):
+            locations = self.get_object().location_qs.count()
+            if not locations:
+                messages.info(
+                    self.request,
+                    "You haven't added any pickup locations to this auction yet. <a href='/locations/new/'>Add one now</a>",
+                )
+        return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
