@@ -1051,6 +1051,13 @@ class Auction(models.Model):
         return False
 
     @property
+    def in_person_in_progress(self):
+        """For display on the main auctions list"""
+        if not self.is_online and self.started and not self.in_person_closed:
+            return True
+        return False
+
+    @property
     def in_progress(self):
         """For display on the main auctions list"""
         if self.is_online and self.started and not self.closed:
