@@ -1287,6 +1287,8 @@ class Auction(models.Model):
 
     @property
     def reminder_email_clicks(self):
+        if self.number_of_reminder_emails == 0:
+            return 0
         return (
             self.campaigns_qs.exclude(result="ERR").exclude(result="NONE").count()
             / self.number_of_reminder_emails
@@ -1295,23 +1297,23 @@ class Auction(models.Model):
 
     @property
     def reminder_email_joins(self):
+        if self.number_of_reminder_emails == 0:
+            return 0
         return self.campaigns_qs.filter(result="JOINED").count() / self.number_of_reminder_emails * 100
 
     @property
     def all_auctions_reminder_email_clicks(self):
-        return (
-            AuctionCampaign.objects.exclude(result="ERR").exclude(result="NONE").count()
-            / AuctionCampaign.objects.exclude(result="ERR").count()
-            * 100
-        )
+        campaigns = AuctionCampaign.objects.exclude(result="ERR").count()
+        if campaigns == 0:
+            return 0
+        return AuctionCampaign.objects.exclude(result="ERR").exclude(result="NONE").count() / campaigns * 100
 
     @property
     def all_auctions_reminder_email_joins(self):
-        return (
-            AuctionCampaign.objects.filter(result="JOINED").count()
-            / AuctionCampaign.objects.exclude(result="ERR").count()
-            * 100
-        )
+        campaigns = AuctionCampaign.objects.exclude(result="ERR").count()
+        if campaigns == 0:
+            return 0
+        return AuctionCampaign.objects.filter(result="JOINED").count() / campaigns * 100
 
     @property
     def weekly_promo_email_clicks(self):
