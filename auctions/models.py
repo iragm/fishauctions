@@ -1315,7 +1315,7 @@ class Auction(models.Model):
 
     @property
     def weekly_promo_email_clicks(self):
-        return PageView.objects.filter(source="weekly_promo", auction=self.pk).count()
+        return PageView.objects.filter(source="weekly_email", auction=self.pk).count()
 
     @property
     def multi_location(self):
