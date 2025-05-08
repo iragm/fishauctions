@@ -1710,8 +1710,14 @@ def auctionLotList(request, slug):
     auction = Auction.objects.get(slug=slug, is_deleted=False)
     if auction.permission_check(request.user):
         # Create the HttpResponse object with the appropriate CSV header.
+        query = request.GET.get("query", None)
         response = HttpResponse(content_type="text/csv")
-        response["Content-Disposition"] = 'attachment; filename="' + slug + '-lot-list.csv"'
+        if not query:
+            filename = "all-lot-list"
+        else:
+            filename = "lot-list-" + query
+            query = unquote(query)
+        response["Content-Disposition"] = f'attachment; filename="{slug}-{filename}.csv"'
         writer = csv.writer(response)
         first_row_fields = [
             "Lot number",
@@ -1735,10 +1741,10 @@ def auctionLotList(request, slug):
             first_row_fields.append(auction.custom_field_1_name)
         writer.writerow(first_row_fields)
         # lots = Lot.objects.exclude(is_deleted=True).filter(auction__slug=slug, auctiontos_winner__isnull=False).select_related('user', 'winner')
-        lots = auction.lots_qs.filter(winning_price__isnull=False, auctiontos_winner__isnull=False).select_related(
-            "user", "winner"
-        )
+        lots = auction.lots_qs
         lots = add_price_info(lots)
+        if query:
+            lots = LotAdminFilter.generic(None, lots, query)
         for lot in lots:
             row = [
                 lot.lot_number_display,
@@ -1747,14 +1753,14 @@ def auctionLotList(request, slug):
                 lot.auctiontos_seller.email,
                 lot.auctiontos_seller.phone_as_string,
                 lot.location,
-                lot.auctiontos_winner.name,
-                lot.auctiontos_winner.email,
-                lot.auctiontos_winner.phone_as_string,
+                lot.auctiontos_winner.name if lot.auctiontos_winner else "",
+                lot.auctiontos_winner.email if lot.auctiontos_winner else "",
+                lot.auctiontos_winner.phone_as_string if lot.auctiontos_winner else "",
                 lot.winner_location,
                 lot.i_bred_this_fish_display,
-                f"{lot.winning_price:.2f}",
-                f"{lot.club_cut:.2f}",
-                f"{lot.your_cut:.2f}",
+                f"{lot.winning_price:.2f}" if lot.winning_price else "",
+                f"{lot.club_cut:.2f}" if lot.winning_price else "",
+                f"{lot.your_cut:.2f}" if lot.winning_price else "",
             ]
             if auction.use_custom_checkbox_field and auction.custom_checkbox_name:
                 row.append(lot.custom_checkbox_label)

@@ -40,6 +40,12 @@
     let newUrl = new URL(window.location);
     newUrl.searchParams.set('query', query);
     history.replaceState({}, '', newUrl);
+
+    // Update the #all_lot_list link with the query parameter
+    let allLotListLink = document.getElementById('all_lot_list');
+    let originalHref = allLotListLink.getAttribute('href').split('?')[0];
+    allLotListLink.setAttribute('href', `${originalHref}?query=${encodeURIComponent(query)}`);
+
     htmx.trigger('#filter-form', 'keyup');
   });
   </script>
