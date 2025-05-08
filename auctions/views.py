@@ -97,6 +97,7 @@ from .forms import (
     AuctionEditForm,
     AuctionJoin,
     AuctionNoShowForm,
+    BulkSellLotsToOnlineHighBidder,
     ChangeInvoiceStatusForm,
     ChangeUsernameForm,
     ChangeUserPreferencesForm,
@@ -5402,6 +5403,51 @@ def getClubs(request):
             "id", "name", "abbreviation"
         )
         return JsonResponse(list(result), safe=False)
+
+
+class BulkSetLotsWon(TemplateView, FormMixin, AuctionPermissionsMixin):
+    """Sell all lots based on the current filter to online high bidder"""
+
+    template_name = "auctions/generic_admin_form.html"
+    form_class = BulkSellLotsToOnlineHighBidder
+
+    def dispatch(self, request, *args, **kwargs):
+        self.auction = get_object_or_404(Auction, slug=kwargs.pop("slug"), is_deleted=False)
+        self.is_auction_admin
+        self.original_query = request.GET.get("query", "")
+        if not self.original_query:
+            self.original_query = request.POST.get("query", "")
+        self.query = unquote(self.original_query)
+        self.queryset = LotAdminFilter.generic(self, self.auction.lots_qs, self.query)
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        form = self.get_form()
+        if form.is_valid():
+            for lot in self.queryset:
+                lot.sell_to_online_high_bidder
+                if lot.auctiontos_winner:
+                    lot.add_winner_message(self.request.user, lot.auctiontos_winner, lot.winning_price)
+            return HttpResponse("<script>location.reload();</script>", status=200)
+        return self.form_invalid(form)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        tooltip = "This is intended to be used with silent auctions where people place bids on their phones, or with hybrid online auctions where some lots will be sold ahead of time.  It will sell any lots with online bids to the current online high bidder."
+        if not self.query:
+            tooltip += "<br><br><span class='text-warning'>You are about to set the winners of all lots.  This is a bad idea, you should click on cancel and then type in a filter first.</span>"
+        else:
+            tooltip += f"<br><br>You are about to set the winners of {self.queryset.count()} lots that match the filter <span class='text-warning'>{self.query}</span>"
+        context["tooltip"] = tooltip
+        context["modal_title"] = "Sell lots to online high bidders"
+        return context
+
+    def get_form_kwargs(self):
+        form_kwargs = super().get_form_kwargs()
+        form_kwargs["query"] = self.query
+        form_kwargs["auction"] = self.auction
+        form_kwargs["queryset"] = self.queryset
+        return form_kwargs
 
 
 class InvoiceBulkUpdateStatus(TemplateView, FormMixin, AuctionPermissionsMixin):

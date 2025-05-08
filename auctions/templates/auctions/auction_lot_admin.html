@@ -12,7 +12,14 @@
     {% if not auction.is_online %}<a class='btn btn-sm btn-primary' href="{{ auction.set_lot_winners_link }}"><i class="bi bi-calendar-check"></i> Set winners</a>{% endif %}
     <a id='all_lot_list' href="{% url 'lot_list' slug=auction.slug %}" class="btn btn-sm mt-2 mb-2 btn-primary"><i class="bi bi-download"></i> Export lot CSV</a>
     <a href="{{auction.view_lot_link}}" class="btn btn-sm btn-primary"><i class="bi bi-calendar"></i> See user view</a>
-
+{% if auction.show_invoice_ready_button and not auction.is_online%}
+<a id='bulk_set_lots_won' href="#" class="btn btn-sm mt-2  mb-2 btn-primary"
+    hx-get="{% url 'bulk_set_lots_won' auction.slug %}"
+    hx-vals='{"query": ""}'
+    hx-target="#modals-here"
+    hx-trigger="click"
+    _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"><i class="bi bi-calendar-check-fill"></i> Sell lots to online high bidder</a>
+{% endif %}
   <form class="col-sm-12 mt-2">
     {% crispy filter.form %}
   </form>
@@ -45,7 +52,13 @@
     let allLotListLink = document.getElementById('all_lot_list');
     let originalHref = allLotListLink.getAttribute('href').split('?')[0];
     allLotListLink.setAttribute('href', `${originalHref}?query=${encodeURIComponent(query)}`);
-
+    // Update the #bulk_set_lots_won link with the query parameter
+    let bulkSetLotsWonLink = document.getElementById('bulk_set_lots_won');
+    if (bulkSetLotsWonLink) {
+      let hxVals = JSON.parse(bulkSetLotsWonLink.getAttribute('hx-vals') || '{}');
+      hxVals.query = query; // Update the query parameter
+      bulkSetLotsWonLink.setAttribute('hx-vals', JSON.stringify(hxVals));
+    }
     htmx.trigger('#filter-form', 'keyup');
   });
   </script>

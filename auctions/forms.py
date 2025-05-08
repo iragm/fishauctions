@@ -1170,6 +1170,45 @@ class AuctionNoShowForm(forms.Form):
         ]
 
 
+class BulkSellLotsToOnlineHighBidder(forms.Form):
+    """confirmation dialog for auction admins only"""
+
+    got_it = forms.BooleanField(required=True, label="Yes, I understand this cannot be undone")
+
+    def __init__(self, auction, query, queryset, *args, **kwargs):
+        self.auction = auction
+        self.queryset = queryset
+        # submit_button_html = f'<button hx-vals="{query":"{query}"} hx-post="{reverse("bulk_set_lots_won", kwargs={"slug": self.auction.slug})}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Mark {self.queryset.count()} lots sold</button>'
+        submit_button_html = f'<button hx-vals=\'{{"query": "{query}"}}\' hx-post="{reverse("bulk_set_lots_won", kwargs={"slug": self.auction.slug})}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Mark {self.queryset.count()} lots sold</button>'
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.form_class = "form"
+        self.helper.form_id = "lots-form"
+        self.helper.form_tag = True
+        self.helper.layout = Layout(
+            Div(
+                Div(
+                    "got_it",
+                    css_class="col-sm-12",
+                ),
+                css_class="row",
+            ),
+            Div(
+                HTML(
+                    '<button type="button" class="btn btn-secondary float-left" onclick="closeModal()">Cancel</button>'
+                ),
+                HTML(submit_button_html),
+                css_class="modal-footer",
+            ),
+        )
+
+    class Meta:
+        fields = [
+            "got_it",
+        ]
+
+
 class ChangeInvoiceStatusForm(forms.Form):
     """confirmation dialog for auction admins only"""
 
