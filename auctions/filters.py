@@ -299,6 +299,17 @@ class LotAdminFilter(django_filters.FilterSet):
                 | Q(custom_field_1=value)
             )
         else:
+            try:
+                auction = self.queryset.first().auction
+            except ValueError:
+                auction = None
+            if (
+                auction
+                and auction.use_custom_checkbox_field
+                and auction.custom_checkbox_name
+                and value.lower() == auction.custom_checkbox_name.lower()
+            ):
+                return queryset.filter(custom_checkbox=True)
 
             def get_colon_filter(key, val):
                 if key == "lot":
