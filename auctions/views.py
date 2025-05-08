@@ -3435,7 +3435,7 @@ class ImageCreateView(LoginRequiredMixin, CreateView):
                         uploaded_image.name.replace(".jpeg", "") + ".jpg", ContentFile(buffer.read()), save=False
                     )
         except Exception as e:
-            logging.error("Error processing image: %s", e)
+            logger.error("Error processing image: %s", e)
         try:
             image.save()
         except Exception as e:
