@@ -36,7 +36,7 @@
             {% if lot.auction.custom_field_1 != 'disable' and lot.auction.custom_field_1_name and lot.custom_field_1 %}
                 <b>{{ lot.auction.custom_field_1_name }}:</b> {{ lot.custom_field_1 }}<br>
             {% endif %}
-            {{ lot.description_cleaned | safe }}
+            {{ lot.summernote_description | safe }}
         </div>
     </div>
 </div>

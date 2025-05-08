@@ -75,3 +75,4 @@ django-webpush
 django-summernote
 django-weasyprint
 reportlab
+beautifulsoup4
