@@ -178,7 +178,6 @@ frozenlist==1.6.0
     #   aiohttp
     #   aiosignal
 gunicorn==23.0.0
-    # via -r ./requirements.in
 h11==0.16.0
     # via uvicorn
 heif-image-plugin==0.7.0
