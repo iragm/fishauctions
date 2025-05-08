@@ -8,6 +8,7 @@ from random import randint
 import channels.layers
 from asgiref.sync import async_to_sync
 from autoslug import AutoSlugField
+from bs4 import BeautifulSoup
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.contrib.auth.signals import user_logged_in
@@ -408,6 +409,37 @@ def guess_category(text):
     return None
 
 
+def remove_html_color_tags(text):
+    """Remove only color-related styles from HTML, preserving all other attributes"""
+    if not text:
+        return text
+
+    soup = BeautifulSoup(text, "html.parser")
+
+    # Remove 'color' attribute from <font> tags
+    for tag in soup.find_all("font"):
+        if tag.has_attr("color"):
+            del tag["color"]
+
+    # Clean color and background-color from style attributes in <span> and others
+    for tag in soup.find_all(style=True):
+        # Split and filter styles
+        styles = tag["style"].split(";")
+        cleaned_styles = []
+        for style in styles:
+            if not style.strip():
+                continue
+            name, *_ = style.split(":", 1)
+            if name.strip().lower() not in {"color", "background-color"}:
+                cleaned_styles.append(style)
+        if cleaned_styles:
+            tag["style"] = ";".join(cleaned_styles)
+        else:
+            del tag["style"]
+
+    return str(soup)
+
+
 class BlogPost(models.Model):
     """
     A simple markdown blog.  At the moment, I don't feel that adding a full CMS is necessary
@@ -741,6 +773,7 @@ class Auction(models.Model):
         if self.date_start.year < 2000:
             current_year = timezone.now().year
             self.date_start = self.date_start.replace(year=current_year)
+        self.summernote_description = remove_html_color_tags(self.summernote_description)
         super().save(*args, **kwargs)
 
     def find_user(self, name="", email="", exclude_pk=None):
@@ -2428,6 +2461,7 @@ class Lot(models.Model):
             and self.winning_price <= self.auction.force_donation_threshold
         ):
             self.donation = True
+        self.summernote_description = remove_html_color_tags(self.summernote_description)
         super().save(*args, **kwargs)
 
         # chat history subscription for the owner
@@ -3379,9 +3413,9 @@ class Lot(models.Model):
         """Strip all html except <br> from summernote description"""
         return re.sub(r"(?!<br\s*/?>)<.*?>", "", self.summernote_description)
 
-    @property
-    def description_cleaned(self):
-        return re.sub(r'(style="[^"]*?)color:[^;"]*;?([^"]*")', r"\1\2", self.summernote_description)
+    # @property
+    # def description_cleaned(self):
+    #     return re.sub(r'(style="[^"]*?)color:[^;"]*;?([^"]*")', r"\1\2", self.summernote_description)
 
 
 class Invoice(models.Model):
