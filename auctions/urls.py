@@ -423,6 +423,11 @@ urlpatterns = [
     ),
     path("api/lots/<int:pk>/refund", views.LotRefundDialog.as_view(), name="lot_refund"),
     path(
+        "api/lots/<slug:slug>/sell-to-highest-bidder",
+        views.BulkSetLotsWon.as_view(),
+        name="bulk_set_lots_won",
+    ),
+    path(
         "auctions/<slug:slug>/no-show/<str:tos>/",
         views.AuctionNoShow.as_view(),
         name="auction_no_show",

@@ -97,6 +97,7 @@ from .forms import (
     AuctionEditForm,
     AuctionJoin,
     AuctionNoShowForm,
+    BulkSellLotsToOnlineHighBidder,
     ChangeInvoiceStatusForm,
     ChangeUsernameForm,
     ChangeUserPreferencesForm,
@@ -1710,8 +1711,14 @@ def auctionLotList(request, slug):
     auction = Auction.objects.get(slug=slug, is_deleted=False)
     if auction.permission_check(request.user):
         # Create the HttpResponse object with the appropriate CSV header.
+        query = request.GET.get("query", None)
         response = HttpResponse(content_type="text/csv")
-        response["Content-Disposition"] = 'attachment; filename="' + slug + '-lot-list.csv"'
+        if not query:
+            filename = "all-lot-list"
+        else:
+            filename = "lot-list-" + query
+            query = unquote(query)
+        response["Content-Disposition"] = f'attachment; filename="{slug}-{filename}.csv"'
         writer = csv.writer(response)
         first_row_fields = [
             "Lot number",
@@ -1735,10 +1742,10 @@ def auctionLotList(request, slug):
             first_row_fields.append(auction.custom_field_1_name)
         writer.writerow(first_row_fields)
         # lots = Lot.objects.exclude(is_deleted=True).filter(auction__slug=slug, auctiontos_winner__isnull=False).select_related('user', 'winner')
-        lots = auction.lots_qs.filter(winning_price__isnull=False, auctiontos_winner__isnull=False).select_related(
-            "user", "winner"
-        )
+        lots = auction.lots_qs
         lots = add_price_info(lots)
+        if query:
+            lots = LotAdminFilter.generic(None, lots, query)
         for lot in lots:
             row = [
                 lot.lot_number_display,
@@ -1747,14 +1754,14 @@ def auctionLotList(request, slug):
                 lot.auctiontos_seller.email,
                 lot.auctiontos_seller.phone_as_string,
                 lot.location,
-                lot.auctiontos_winner.name,
-                lot.auctiontos_winner.email,
-                lot.auctiontos_winner.phone_as_string,
+                lot.auctiontos_winner.name if lot.auctiontos_winner else "",
+                lot.auctiontos_winner.email if lot.auctiontos_winner else "",
+                lot.auctiontos_winner.phone_as_string if lot.auctiontos_winner else "",
                 lot.winner_location,
                 lot.i_bred_this_fish_display,
-                f"{lot.winning_price:.2f}",
-                f"{lot.club_cut:.2f}",
-                f"{lot.your_cut:.2f}",
+                f"{lot.winning_price:.2f}" if lot.winning_price else "",
+                f"{lot.club_cut:.2f}" if lot.winning_price else "",
+                f"{lot.your_cut:.2f}" if lot.winning_price else "",
             ]
             if auction.use_custom_checkbox_field and auction.custom_checkbox_name:
                 row.append(lot.custom_checkbox_label)
@@ -5396,6 +5403,51 @@ def getClubs(request):
             "id", "name", "abbreviation"
         )
         return JsonResponse(list(result), safe=False)
+
+
+class BulkSetLotsWon(TemplateView, FormMixin, AuctionPermissionsMixin):
+    """Sell all lots based on the current filter to online high bidder"""
+
+    template_name = "auctions/generic_admin_form.html"
+    form_class = BulkSellLotsToOnlineHighBidder
+
+    def dispatch(self, request, *args, **kwargs):
+        self.auction = get_object_or_404(Auction, slug=kwargs.pop("slug"), is_deleted=False)
+        self.is_auction_admin
+        self.original_query = request.GET.get("query", "")
+        if not self.original_query:
+            self.original_query = request.POST.get("query", "")
+        self.query = unquote(self.original_query)
+        self.queryset = LotAdminFilter.generic(self, self.auction.lots_qs, self.query)
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        form = self.get_form()
+        if form.is_valid():
+            for lot in self.queryset:
+                lot.sell_to_online_high_bidder
+                if lot.auctiontos_winner:
+                    lot.add_winner_message(self.request.user, lot.auctiontos_winner, lot.winning_price)
+            return HttpResponse("<script>location.reload();</script>", status=200)
+        return self.form_invalid(form)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        tooltip = "This is intended to be used with silent auctions where people place bids on their phones, or with hybrid online auctions where some lots will be sold ahead of time.  It will sell any lots with online bids to the current online high bidder."
+        if not self.query:
+            tooltip += "<br><br><span class='text-warning'>You are about to set the winners of all lots.  This is a bad idea, you should click on cancel and then type in a filter first.</span>"
+        else:
+            tooltip += f"<br><br>You are about to set the winners of {self.queryset.count()} lots that match the filter <span class='text-warning'>{self.query}</span>"
+        context["tooltip"] = tooltip
+        context["modal_title"] = "Sell lots to online high bidders"
+        return context
+
+    def get_form_kwargs(self):
+        form_kwargs = super().get_form_kwargs()
+        form_kwargs["query"] = self.query
+        form_kwargs["auction"] = self.auction
+        form_kwargs["queryset"] = self.queryset
+        return form_kwargs
 
 
 class InvoiceBulkUpdateStatus(TemplateView, FormMixin, AuctionPermissionsMixin):

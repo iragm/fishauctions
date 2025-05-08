@@ -10,7 +10,7 @@
 		</div>
 		{% if unsold_lot_warning %}<div class="modal-header"><span class='text-warning'>{{ unsold_lot_warning }}</span></div>{% endif %}
 		<div class="modal-body">
-            <span class="">{{ tooltip }}</span>
+            <span class="">{{ tooltip|safe }}</span>
 			<p>{% crispy form form.helper %}</p>
 	  </div>
 	</div>
