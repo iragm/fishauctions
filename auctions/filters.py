@@ -301,7 +301,7 @@ class LotAdminFilter(django_filters.FilterSet):
         else:
             try:
                 auction = self.queryset.first().auction
-            except ValueError:
+            except (ValueError, AttributeError):
                 auction = None
             if (
                 auction
