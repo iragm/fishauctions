@@ -2153,7 +2153,9 @@ class CreateLotForm(forms.ModelForm):
         else:
             if self.cloned_from:
                 clone_from_lot = Lot.objects.filter(pk=self.cloned_from, is_deleted=False).first()
-                if clone_from_lot and ((clone_from_lot.user.pk == self.user.pk) or self.user.is_superuser):
+                if clone_from_lot and (
+                    (clone_from_lot.user and clone_from_lot.user.pk == self.user.pk) or self.user.is_superuser
+                ):
                     # you can only clone your lots
                     cloneFields = [
                         "lot_name",
