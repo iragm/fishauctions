@@ -4468,6 +4468,9 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
             if clone_from_auction.copy_users_when_copying_this_auction:
                 auctiontos = AuctionTOS.objects.filter(auction=clone_from_auction)
                 for tos in auctiontos:
+                    # in tos.save(), bid permissions are reset if there's no pk
+                    # to preserve them, we store them here, then resave again once the new instance is created
+                    original_bid_permission = tos.bidding_allowed
                     tos.pk = None
                     tos.createdon = None
                     tos.auction = auction
@@ -4482,6 +4485,8 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                     if new_location:
                         tos.pickup_location = new_location
                         tos.save()
+                        tos.bidding_allowed = original_bid_permission
+                        tos.save()  # see comment above
         return super().form_valid(form)
 
 
