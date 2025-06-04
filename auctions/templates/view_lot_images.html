@@ -289,7 +289,7 @@ function deactivate_lot() {
                         </tr>
                         {% endif %}
                         <tr>
-                            <td><b>Seller:</b></td><td>{% if lot.donation %} A donation from {% endif %}{% if lot.user %}<a href="{% url 'userpage' slug=lot.user %}">{{ lot.user }}</a> (<a href="/lots/user/?user={{lot.user}}">All lots from {{ lot.user }}</a>){% if not lot.auction %}
+                            <td><b>Seller:</b></td><td>{% if lot.donation %} A donation from {% endif %}{% if lot.user %}<a href="{% url 'userpage' slug=lot.user %}">{{ lot.user }}</a> (<a href="/lots/user/?user={{lot.user}}{% if lot.auction %}&auction={{auction.slug}}{% endif %}">All lots from {{ lot.user }}</a>){% if not lot.auction %}
                                 <span class='badge text-dark bg-light'>Lots sold: {{ lot.user.userdata.lots_sold }}</span> <span class='badge text-dark bg-success'>+{{ lot.user.userdata.positive_feedback_as_seller }}</span> <span class='badge bg-danger'>-{{ lot.user.userdata.negative_feedback_as_seller }}</span>
                                 {% endif %}{% else %}this{{lot.auctiontos_seller}}{% endif %}</td>
                         </tr>
