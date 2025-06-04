@@ -36,6 +36,9 @@ Your lots{% else %}
 <h3>
         <button class="btn btn-info" type="button" data-bs-toggle="offcanvas" data-bs-target="#search-form" aria-controls="search-form">&#9776;</button>
         {% if auction %}{% include 'auction_ribbon.html' %}{%endif%}
+    {% if auction and user %}
+    <br>You are viewing only lots from {{ user }}
+    {% else %}
     {% if not auction %}
     {% if view == "all" %}
       Lots
@@ -55,7 +58,7 @@ Your lots{% else %}
       {% if view == "mywonlots" %}
       Lots you've won
      <br><a href="{% url 'my_won_lot_csv' %}" class="btn btn-sm bg-primary"><i class="bi bi-download me-1"></i>Export my won lots CSV</a>
-
+     {% endif %}
       {% endif %}
       {% endif %}</h3>
 
