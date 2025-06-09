@@ -5293,6 +5293,12 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionPermissionsM
         labels_per_row = int(available_width // (context["label_width"] + context["label_margin_right"]))
         labels_per_column = int(available_height // (context["label_height"] + context["label_margin_bottom"]))
         context["labels_per_page"] = labels_per_row * labels_per_column
+        if context["labels_per_page"] == 0:
+            messages.error(
+                self.request,
+                "Your lot label setting may be wrong. The label size is too large for the page size.  <a href='/printing'>Adjust your label settings</a>",
+            )
+            context["labels_per_page"] = 1
 
         labels = self.get_queryset()
         for label in labels:
