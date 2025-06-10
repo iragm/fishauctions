@@ -302,7 +302,7 @@ redis==6.0.0
     # via channels-redis
 reportlab==4.4.0
     # via -r requirements.in
-requests==2.32.3
+requests==2.32.4
     # via
     #   -r requirements.in
     #   django-ses
