@@ -36,7 +36,7 @@ Your lots{% else %}
 <h3>
         <button class="btn btn-info" type="button" data-bs-toggle="offcanvas" data-bs-target="#search-form" aria-controls="search-form">&#9776;</button>
         {% if auction %}{% include 'auction_ribbon.html' %}{%endif%}
-    {% if auction and user %}
+    {% if auction and view == "user" %}
     <br>You are viewing only lots from {{ user }}
     {% else %}
     {% if not auction %}
