@@ -5264,6 +5264,22 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionPermissionsM
             context["unit"] = "in"
             # override the user selected setting for thermal labels
             context["print_border"] = False
+        elif user_label_prefs.preset == "thermal_very_sm":
+            # thermal label printer 30252 (1 1/8" x 3 1/2")
+            context["page_width"] = 3.5
+            context["page_height"] = 1.125
+            context["label_width"] = 3.3
+            context["label_height"] = 1.025
+            context["label_margin_right"] = 0
+            context["label_margin_bottom"] = 0
+            context["page_margin_top"] = 0.04
+            context["page_margin_bottom"] = 0.04
+            context["page_margin_left"] = 0.16
+            context["page_margin_right"] = 0.04
+            context["font_size"] = 12
+            context["first_column_width"] = 0.75
+            context["unit"] = "in"
+            context["print_border"] = False
         else:
             context.update(
                 {f"{field.name}": getattr(user_label_prefs, field.name) for field in UserLabelPrefs._meta.get_fields()}
