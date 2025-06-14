@@ -2,8 +2,7 @@
 <h3>{{auction}}</h3>
 <small><span class='text-muted'>An {{auction.auction_type_as_str}}, created by {{ auction.created_by }}{% if request.user.is_authenticated and auction.created_by.userdata.email_visible %}: {{ auction.created_by.email|urlize }}{% endif %}</span></small>
 {% if view.is_auction_admin or is_auction_admin %}
-{% if not auction.admin_checklist_completed %}
-  {% if not auction.admin_checklist_mostly_completed or not request.user.userdata.is_experienced %}
+{% if not auction.admin_checklist_completed and not auction.admin_checklist_mostly_completed or not auction.admin_checklist_completed and not request.user.userdata.is_experienced %}
 <div class='mt-4 mb-4 p-2 bg-primary text-white rounded bg-gradient bg-opacity-50'><h5>Finish setting up</h5>
   <ul class="list-unstyled">
     <li><i class="bi bi-check-square-fill text-success"></i> Create your auction</li>
@@ -17,11 +16,15 @@
     <li>{% if auction.admin_checklist_additional_admin %}<i class="bi bi-check-square-fill text-success"></i>{% else %}<i class="bi bi-exclamation-square-fill text-danger"></i>{%endif%} Click a name to edit that user and <a href="/auctions/{{auction.slug}}/users">add an additional admin</a> to help you set lot winners</li>
     {% endif %}
   </ul>
-  {% if not auction.promote_this_auction %}<small>This auction is not promoted.  It will appear in <a href={% url 'auctions' %}>the list of auctions</a> for you, for any users you manually add (based on email address), and for any users that have joined, but it won't be visible to anyone else unless you share the URL with them.  Promoted auctions are also included in a weekly promotional email sent every Wednesday to nearby users.</small><br>{% endif %}
   {% if enable_help %}<div>Having trouble?  <a href='{% url "auction_help" slug=auction.slug %}'>Click here to get help</a></div>{% endif %}
   <small class="text-muted">This message will disappear once you've finished setting up your auction.</small>
 </div>
-    {% endif %}
+{% else %}
+  {% if not auction.promote_this_auction %}
+  <div class='mt-4 mb-4 p-2 bg-primary text-white rounded bg-gradient bg-opacity-50'><h5>This auction is not promoted</h5>
+    <small>It will appear in <a href={% url 'auctions' %}>the list of auctions</a> for you, for any users you manually add (based on email address), and for any users that have joined, but it won't be visible to anyone else unless you share the URL with them.  Promoted auctions are also included in a weekly promotional email sent every Wednesday to nearby users.</small>
+  </div>
+  {% endif %}
 {% endif %}
 <ul class="nav nav-tabs">
     <li class="nav-item">
