@@ -215,7 +215,7 @@ class AuctionTOSFilter(django_filters.FilterSet):
             "no sell": {"selling_allowed": False},
             "email bad": {"email_address_status": "BAD"},
             "email good": {"email_address_status": "VALID"},
-            "no email": {"email_address__isnull": True},
+            "no email": {"email__isnull": True},
             "duplicate": {"possible_duplicate__isnull": False},
         }
 
