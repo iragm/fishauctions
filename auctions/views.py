@@ -2808,11 +2808,11 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
                             auction=self.auction,
                             pickup_location=self.auction.location_qs.first(),
                             manually_added=True,
-                            bidder_number=bidder_number,
-                            name=name,
-                            phone_number=phone,
-                            email=email,
-                            address=address,
+                            bidder_number=bidder_number[:20],
+                            name=name[:181],
+                            phone_number=phone[:20],
+                            email=email[:254],
+                            address=address[:500],
                             is_club_member=is_club_member,
                         )
                         total_tos += 1
