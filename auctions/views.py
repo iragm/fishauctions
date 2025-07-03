@@ -6951,7 +6951,7 @@ class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
         searches = (
             SearchHistory.objects.filter(user__isnull=False, auction=self.auction).values("user").distinct().count()
         )
-        seach_percent = int(searches / auctiontos_with_account.count() * 100)
+        seach_percent = int(searches / auctiontos_with_account.count() * 100) if auctiontos_with_account.count() else 0
         watch_qs = Watch.objects.filter(lot_number__auction=self.auction).values("user").distinct()
         watches = watch_qs.count()
         watch_percent = int(watches / auctiontos_with_account.count() * 100)
