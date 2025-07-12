@@ -698,7 +698,7 @@ class MyLots(SingleTableMixin, FilterView):
     model = Lot
     table_class = LotHTMxTableForUsers
     filterset_class = LotAdminFilter
-    paginate_by = 100
+    # paginate_by = 100
 
     def get_template_names(self):
         if self.request.htmx:
@@ -2125,7 +2125,7 @@ class AuctionLots(SingleTableMixin, AuctionViewMixin, FilterView):
     model = Lot
     table_class = LotHTMxTable
     filterset_class = LotAdminFilter
-    paginate_by = 50
+    # paginate_by = 50
 
     def get_queryset(self):
         return Lot.objects.exclude(is_deleted=True).filter(auction=self.auction).order_by("lot_number")
@@ -2170,7 +2170,7 @@ class AuctionUsers(SingleTableMixin, AuctionViewMixin, FilterView):
     model = AuctionTOS
     table_class = AuctionTOSHTMxTable
     filterset_class = AuctionTOSFilter
-    paginate_by = 100
+    # paginate_by = 100
 
     def get_queryset(self):
         return AuctionTOS.objects.filter(auction=self.auction).order_by("name")
@@ -4781,7 +4781,7 @@ class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
     no_location_message = "Set your location to see how far away auctions are"
     table_class = AuctionHTMxTable
     filterset_class = AuctionFilter
-    paginate_by = 100
+    # paginate_by = 100
 
     def get_template_names(self):
         if self.request.htmx:
