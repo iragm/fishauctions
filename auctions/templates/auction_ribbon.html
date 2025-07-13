@@ -48,7 +48,9 @@
           <a class="dropdown-item" href="/auctions/new?copy={{auction.slug}}"><i class="bi bi-plus-circle"></i> Copy to new auction</a>
           <a class="dropdown-item" href="/auctions/{{auction.slug}}/stats/"><i class="bi bi-graph-up"></i> Stats</a>
           {% if not auction.is_online %}<a class="dropdown-item" href='{% url "auction_printing" slug=auction.slug %}'><i class="bi bi-tags"></i> Print labels</a>{% endif %}
+          <a class="dropdown-item" href="{% url 'auction_history' slug=auction.slug %}"><i class="bi bi-clock-history"></i> Admin history</a>
           <a class="dropdown-item" href="/auctions/{{auction.slug}}/delete/"><i class="bi bi-x-circle"></i> Delete auction</a>
+
         </ul>
     </li>
 </ul>

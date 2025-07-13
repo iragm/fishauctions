@@ -2,7 +2,7 @@ import django_tables2 as tables
 from django.urls import reverse
 from django.utils.safestring import mark_safe
 
-from .models import Auction, AuctionTOS, Lot
+from .models import Auction, AuctionHistory, AuctionTOS, Lot
 
 
 class AuctionTOSHTMxTable(tables.Table):
@@ -104,6 +104,57 @@ class AuctionTOSHTMxTable(tables.Table):
     # }
     def __init__(self, *args, **kwargs):
         self.request = kwargs.pop("request", None)
+        super().__init__(*args, **kwargs)
+
+
+class AuctionHistoryHTMxTable(tables.Table):
+    name = tables.Column(
+        accessor="user",
+        verbose_name="User",
+        default="System",
+    )
+    action = tables.Column(
+        accessor="action",
+        verbose_name="Action",
+    )
+    applies_to = tables.Column(
+        accessor="applies_to",
+        verbose_name="Modified",
+    )
+    timestamp = tables.Column(
+        accessor="timestamp",
+        verbose_name="Time",
+    )
+
+    def render_applies_to(self, value, record):
+        if record.applies_to == "RULES":
+            result = "<i class='bi bi-gear-fill'></i>"
+        elif record.applies_to == "USERS":
+            result = "<i class='bi bi-people-fill'></i>"
+        elif record.applies_to == "INVOICES":
+            result = "<i class='bi bi-bag'></i>"
+        elif record.applies_to == "LOTS":
+            result = "<i class='bi bi-calendar'></i>"
+        elif record.applies_to == "LOT_WINNERS":
+            result = "<i class='bi bi-calendar-check'></i>"
+        else:
+            result = ""
+        result += f" {value}"
+        return mark_safe(result)
+
+    def render_name(self, value, record):
+        if record.user:
+            result = record.user.get_full_name()
+        return mark_safe(result)
+
+    class Meta:
+        model = AuctionHistory
+        template_name = "tables/bootstrap_htmx.html"
+
+        fields = ()
+
+    def __init__(self, *args, **kwargs):
+        self.auction = kwargs.pop("auction")
         super().__init__(*args, **kwargs)
 
 

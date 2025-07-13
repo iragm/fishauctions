@@ -1528,6 +1528,29 @@ class Auction(models.Model):
         """For use in querysets, pks only"""
         return self.auction_admins_qs.values_list("user__pk", flat=True)
 
+    def create_history(self, applies_to, action="Edited", user=None, form=None):
+        """Applies to can be RULES, USERS, INVOICES, LOTS, LOT_WINNERS, user should be the user making the change or None if it's a system change.
+        Action is a string describing the change, form is a form instance that has changed data
+        """
+        if form:
+            action += " "
+            for field_name in form.changed_data:
+                try:
+                    field = form.instance._meta.get_field(field_name)
+                    action += field.verbose_name
+                except Exception:
+                    action += field_name.replace("_", " ").title()
+                action += ", "
+            action = action[:-2]  # remove the last comma and space
+        if len(action) > 800:
+            action = action[:797] + "..."
+        AuctionHistory.objects.create(
+            auction=self,
+            user=user,
+            action=action,
+            applies_to=applies_to,
+        )
+
 
 class PickupLocation(models.Model):
     """
@@ -2312,6 +2335,7 @@ class Lot(models.Model):
         blank=True,
         on_delete=models.SET_NULL,
         related_name="auctiontos_winner",
+        verbose_name="Winner",
     )
     active = models.BooleanField(default=True, db_index=True)
     winning_price = models.PositiveIntegerField(null=True, blank=True, db_index=True)
@@ -4410,6 +4434,30 @@ class LotHistory(models.Model):
         verbose_name_plural = "Chat history"
         verbose_name = "Chat history"
         ordering = ["timestamp"]
+
+
+class AuctionHistory(models.Model):
+    """Changelog of changes made to an auction by admin users"""
+
+    auction = models.ForeignKey(Auction, on_delete=models.CASCADE)
+    user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+    action = models.CharField(max_length=800, blank=True, null=True)
+    timestamp = models.DateTimeField(auto_now_add=True)
+    applies_to = models.CharField(
+        null=True,
+        blank=True,
+        max_length=100,
+        choices=(
+            ("RULES", "Rules"),
+            ("USERS", "Users"),
+            ("INVOICES", "Invoices"),
+            ("LOTS", "Lots"),
+            ("LOT_WINNERS", "Set lot winners"),
+        ),
+    )
+
+    def __str__(self):
+        return f"{self.user.first_name} {self.user.last_name} {self.action}"
 
 
 class AdCampaignGroup(models.Model):

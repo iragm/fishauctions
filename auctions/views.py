@@ -84,6 +84,7 @@ from webpush.models import PushInformation
 
 from .filters import (
     AuctionFilter,
+    AuctionHistoryFilter,
     AuctionTOSFilter,
     LotAdminFilter,
     LotFilter,
@@ -126,6 +127,7 @@ from .models import (
     AdCampaignResponse,
     Auction,
     AuctionCampaign,
+    AuctionHistory,
     AuctionIgnore,
     AuctionTOS,
     Bid,
@@ -154,7 +156,7 @@ from .models import (
     median_value,
     nearby_auctions,
 )
-from .tables import AuctionHTMxTable, AuctionTOSHTMxTable, LotHTMxTable, LotHTMxTableForUsers
+from .tables import AuctionHistoryHTMxTable, AuctionHTMxTable, AuctionTOSHTMxTable, LotHTMxTable, LotHTMxTableForUsers
 
 logger = logging.getLogger(__name__)
 
@@ -1302,6 +1304,12 @@ def invoicePaid(request, pk, **kwargs):
         if checksPass:
             invoice.status = kwargs["status"]
             invoice.save()
+            if invoice.auction:
+                invoice.auction.create_history(
+                    applies_to="INVOICES",
+                    action=f"Set invoice for {invoice.auctiontos_user.name} to {invoice.get_status_display()}",
+                    user=request.user,
+                )
             return HttpResponse(
                 render_to_string("invoice_buttons.html", {"invoice": invoice}),
                 status=200,
@@ -1618,12 +1626,18 @@ def userReport(request):
     writer.writerow(["Name", "Email", "Phone"])
     auctions = Auction.objects.filter(
         Q(created_by=request.user) | Q(auctiontos__is_admin=True, auctiontos__user=request.user)
-    )
+    ).distinct()
     users = AuctionTOS.objects.filter(auction__in=auctions).exclude(email_address_status="BAD")
     for user in users:
         if user.email not in found:
             writer.writerow([user.name, user.email, user.phone_as_string])
             found.append(user.email)
+    for auction in auctions:
+        auction.create_history(
+            applies_to="USERS",
+            action="Exported marketing list CSV for all their auctions (including this one)",
+            user=request.user,
+        )
     return response
 
 
@@ -1700,6 +1714,7 @@ def auctionInvoicesPaypalCSV(request, slug, chunk):
                                 memoToSelf,
                             ]
                         )
+        auction.create_history(applies_to="USERS", action="Exported Paypal invoices CSV", user=request.user)
         return response
     messages.error(request, "Your account doesn't have permission to view this page")
     return redirect("/")
@@ -1870,6 +1885,11 @@ class AuctionChatDeleteUndelete(View, AuctionPermissionsMixin):
             result = f'<span id="message_{self.history.pk}" class="badge bg-info">Delete</span>'
         else:
             result = f'<span id="message_{self.history.pk}" class="badge bg-danger">Deleted</span>'
+            self.auction.create_history(
+                applies_to="USERS",
+                action="Deleted chat message",
+                user=self.request.user,
+            )
         return HttpResponse(result)
 
 
@@ -1947,6 +1967,12 @@ class PickupLocationsDelete(DeleteView, AuctionPermissionsMixin):
     def get_success_url(self):
         return self.success_url
 
+    def form_valid(self, form):
+        self.auction.create_history(
+            applies_to="RULES", action=f"Deleted location {self.object}", user=self.request.user
+        )
+        return super().form_valid(form)
+
 
 class PickupLocationForm:
     """Base form for create and update"""
@@ -2017,6 +2043,12 @@ class PickupLocationsUpdate(PickupLocationForm, UpdateView, AuctionPermissionsMi
         return super().dispatch(request, *args, **kwargs)
 
     def form_valid(self, form, **kwargs):
+        if form.has_changed():
+            self.auction.create_history(
+                applies_to="RULES",
+                action=f"Edited {self.get_object()}",
+                user=self.request.user,
+            )
         form = super().form_valid(form)
         messages.info(self.request, "Updated location")
         return form
@@ -2035,6 +2067,15 @@ class PickupLocationsCreate(PickupLocationForm, CreateView, AuctionPermissionsMi
         kwargs["is_edit_form"] = False
         kwargs["pickup_location"] = None
         return kwargs
+
+    def form_valid(self, form, **kwargs):
+        form = super().form_valid(form)
+        self.auction.create_history(
+            applies_to="RULES",
+            action=f"Added {self.object}",
+            user=self.request.user,
+        )
+        return form
 
 
 class AuctionUpdate(AuctionViewMixin, UpdateView):
@@ -2067,6 +2108,8 @@ class AuctionUpdate(AuctionViewMixin, UpdateView):
         return context
 
     def form_valid(self, form, **kwargs):
+        if form.has_changed():
+            self.get_object().create_history(applies_to="RULES", user=self.request.user, form=form)
         form = super().form_valid(form)
         if (
             not self.get_object().is_online
@@ -2113,7 +2156,34 @@ class AuctionUpdate(AuctionViewMixin, UpdateView):
                 self.request,
                 f"Don't set your {'end' if self.get_object().is_online else 'start'} time to midnight, users will find it confusing.  Use 23:59 instead.",
             )
+
         return form
+
+
+class AuctionHistoryView(SingleTableMixin, AuctionViewMixin, FilterView):
+    model = AuctionHistory
+    table_class = AuctionHistoryHTMxTable
+    filterset_class = AuctionHistoryFilter
+
+    def get_queryset(self):
+        return AuctionHistory.objects.filter(auction=self.auction).order_by("-timestamp")
+
+    def get_template_names(self):
+        if self.request.htmx:
+            template_name = "tables/table_generic.html"
+        else:
+            template_name = "auctions/auction_history.html"
+        return template_name
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["auction"] = self.auction
+        return context
+
+    def get_table_kwargs(self, **kwargs):
+        kwargs = super().get_table_kwargs(**kwargs)
+        kwargs["auction"] = self.auction
+        return kwargs
 
 
 class AuctionLots(SingleTableMixin, AuctionViewMixin, FilterView):
@@ -2525,12 +2595,22 @@ class DynamicSetLotWinner(AuctionViewMixin, TemplateView):
             result["success_message"] = lot.sell_to_online_high_bidder
             result["last_sold_lot_number"] = lot.lot_number_display
             lot.add_winner_message(self.request.user, lot.auctiontos_winner, lot.winning_price)
+            lot.auction.create_history(
+                applies_to="LOTS",
+                action=f"Sold lot {lot.lot_number_display} to online high bidder",
+                user=self.request.user,
+            )
             return JsonResponse(result)
         price, price_error = self.validate_price(price, action)
         winner, winner_error = self.validate_winner(winner, action)
         if lot and not lot_error and action == "end_unsold":
             result["success_message"] = self.end_unsold(lot)
             result["last_sold_lot_number"] = lot.lot_number_display
+            lot.auction.create_history(
+                applies_to="LOTS",
+                action=f"Marked lot {lot.lot_number_display} as ended without being sold",
+                user=self.request.user,
+            )
             return JsonResponse(result)
         if (
             not price_error
@@ -2553,6 +2633,11 @@ class DynamicSetLotWinner(AuctionViewMixin, TemplateView):
                 result["last_sold_lot_number"] = lot.lot_number_display
             if action == "force_save" or action == "save":
                 result["success_message"] = self.set_winner(lot, winner, price)
+                lot.auction.create_history(
+                    applies_to="LOTS",
+                    action=f"{'Ignored errors and set ' if action == 'force_save' else 'Set'} lot {lot.lot_number_display} as sold",
+                    user=self.request.user,
+                )
         # if two people are recording bids, we can validate whether or not a lot was sold
         if (
             lot
@@ -2618,6 +2703,11 @@ class AuctionUnsellLot(AuctionViewMixin, View):
             undo_lot.active = True
             undo_lot.admin_validated = False
             undo_lot.save()
+            undo_lot.auction.create_history(
+                applies_to="LOTS",
+                action=f"Cleared the winner on lot {undo_lot.lot_number_display} to make it unsold",
+                user=self.request.user,
+            )
         else:
             result = {"message": "No lot found"}
         return JsonResponse(result)
@@ -2659,7 +2749,7 @@ class QuickCheckoutHTMX(AuctionViewMixin, TemplateView):
 
 
 class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
-    """Add/edit lots of lots for a given auctiontos pk"""
+    """Add/edit lots of auctiontos"""
 
     template_name = "auctions/bulk_add_users.html"
     max_users_that_can_be_added_at_once = 200
@@ -2819,6 +2909,9 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
             if error:
                 messages.error(self.request, error)
             msg = f"{total_tos} users added"
+            self.auction.create_history(
+                applies_to="USERS", action="Added users from CSV file, " + msg, user=self.request.user
+            )
             if total_skipped:
                 msg += (
                     f", {total_skipped} users are already in this auction (matched by email, or name if email not set)"
@@ -2903,6 +2996,9 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
                 tos.manually_added = True
                 tos.save()
             messages.success(self.request, f"Added {len(auctiontos)} users")
+            self.auction.create_history(
+                applies_to="USERS", action=f"Bulk added {len(auctiontos)} users", user=self.request.user
+            )
             return redirect(reverse("auction_tos_list", kwargs={"slug": self.auction.slug}))
         self.tos_formset = tos_formset
         context = self.get_context_data(**kwargs)
@@ -2991,6 +3087,7 @@ class BulkAddLots(TemplateView, AuctionPermissionsMixin):
         )
         if lot_formset.is_valid():
             lots = lot_formset.save(commit=False)
+            new_lot_count = 0
             for lot in lots:
                 lot.auctiontos_seller = self.tos
                 lot.auction = self.auction
@@ -2999,15 +3096,19 @@ class BulkAddLots(TemplateView, AuctionPermissionsMixin):
                 # if not lot.description:
                 #    lot.description = ""
                 if not lot.pk:
+                    new_lot_count += 1
                     lot.added_by = self.request.user
                     if not self.is_admin:
-                        # you are adding lots for yourself, set custom lot number automatically
-                        # lot.custom_lot_number = None
-                        # we need to set lot.user here
                         if self.tos.user:
                             lot.user = self.tos.user
                 lot.save()
             if lots:
+                updated_lot_count = len(lots) - new_lot_count
+                self.auction.create_history(
+                    applies_to="LOTS",
+                    action=f"Bulk added {new_lot_count}{f' and updated {updated_lot_count}' if updated_lot_count else ''} lots for {self.tos.name}",
+                    user=self.request.user,
+                )
                 messages.success(self.request, f"Updated lots for {self.tos.name}")
                 invoice = Invoice.objects.filter(auctiontos_user=self.tos, auction=self.auction).first()
                 if not invoice:
@@ -3654,6 +3755,11 @@ class LotCreateView(LotValidation, CreateView):
             if not invoice:
                 invoice = Invoice.objects.create(auctiontos_user=lot.auctiontos_seller, auction=lot.auction)
             invoice.recalculate
+            lot.auction.create_history(
+                applies_to="LOTS",
+                action="Added lot",
+                user=self.request.user,
+            )
         return super().form_valid(form, **kwargs)
 
     def dispatch(self, request, *args, **kwargs):
@@ -3888,6 +3994,13 @@ class LotAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
     def post(self, request, *args, **kwargs):
         form = self.get_form()
         if form.is_valid():
+            if form.has_changed():
+                self.lot.auction.create_history(
+                    applies_to="LOTS",
+                    action=f"Edited lot {self.lot.lot_number_display}:",
+                    user=self.request.user,
+                    form=form,
+                )
             obj = self.lot
             # obj.custom_lot_number = form.cleaned_data["custom_lot_number"]
             obj.lot_name = form.cleaned_data["lot_name"] or "Unknown lot"
@@ -4002,6 +4115,7 @@ class AuctionTOSDelete(TemplateView, FormMixin, AuctionPermissionsMixin):
             # invoices = Invoice.objects.filter(auctiontos_user=self.auctiontos)
             # for invoice in invoices:
             #    invoice.delete()
+            self.auction.create_history(applies_to="USERS", action=f"Deleted {self.auctiontos.name}", user=request.user)
             self.auctiontos.delete()
             return redirect(success_url)
         else:
@@ -4223,11 +4337,23 @@ class AuctionTOSAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
         if form.is_valid():
             if self.auctiontos:
                 obj = self.auctiontos
+                if form.has_changed():
+                    self.auction.create_history(
+                        applies_to="USERS",
+                        action=f"Edited {obj.name}: ",
+                        user=request.user,
+                        form=form,
+                    )
             else:
                 obj = AuctionTOS.objects.create(
                     auction=self.auction,
                     pickup_location=form.cleaned_data["pickup_location"],
                     manually_added=True,
+                )
+                self.auction.create_history(
+                    applies_to="USERS",
+                    action=f"Added {form.cleaned_data['name']}",
+                    user=request.user,
                 )
             obj.bidder_number = form.cleaned_data["bidder_number"]
             obj.pickup_location = form.cleaned_data["pickup_location"]
@@ -4452,11 +4578,12 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 auction_time = clone_from_auction.date_start
                 if clone_from_auction.date_end:
                     auction_time = clone_from_auction.date_end
-                firstTimeDiff = location.pickup_time - auction_time
-                if auction.date_end:
-                    location.pickup_time = auction.date_end + firstTimeDiff
-                else:
-                    location.pickup_time = auction.date_start + firstTimeDiff
+                if location.pickup_time:
+                    firstTimeDiff = location.pickup_time - auction_time
+                    if auction.date_end:
+                        location.pickup_time = auction.date_end + firstTimeDiff
+                    else:
+                        location.pickup_time = auction.date_start + firstTimeDiff
                 if location.second_pickup_time:
                     secondTimeDiff = location.second_pickup_time - auction_time
                     if auction.date_end:
@@ -4487,6 +4614,14 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                         tos.save()
                         tos.bidding_allowed = original_bid_permission
                         tos.save()  # see comment above
+        action = "Created auction"
+        if clone_from_auction:
+            action += f" by copying {clone_from_auction}"
+        auction.create_history(
+            applies_to="RULES",
+            action=action,
+            user=self.request.user,
+        )
         return super().form_valid(form)
 
 
@@ -4657,6 +4792,11 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
             userData.last_auction_used = auction
             userData.last_activity = timezone.now()
             userData.save()
+            auction.create_history(
+                applies_to="USERS",
+                action=f"{obj.name} has joined this auction",
+                user=self.request.user,
+            )
             return self.form_valid(form)
         else:
             logger.debug(form.cleaned_data)
@@ -5077,6 +5217,11 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
                 adjustment.save()
             if adjustments:
                 messages.success(self.request, "Invoice adjusted")
+                self.auction.create_history(
+                    applies_to="INVOICES",
+                    action=f"Adjusted invoice for {self.get_object().auctiontos_user.name}",
+                    user=request.user,
+                )
             for form in adjustment_formset.deleted_forms:
                 if form.instance.pk:
                     form.instance.delete()
@@ -5455,6 +5600,11 @@ class BulkSetLotsWon(TemplateView, FormMixin, AuctionPermissionsMixin):
                 lot.sell_to_online_high_bidder
                 if lot.auctiontos_winner:
                     lot.add_winner_message(self.request.user, lot.auctiontos_winner, lot.winning_price)
+            self.auction.create_history(
+                applies_to="LOTS",
+                action=f"Sold {self.queryset.count()} lots to online high bidder",
+                user=request.user,
+            )
             return HttpResponse("<script>location.reload();</script>", status=200)
         return self.form_invalid(form)
 
@@ -5593,6 +5743,11 @@ class LotRefundDialog(DetailView, FormMixin, AuctionPermissionsMixin):
     def post(self, request, *args, **kwargs):
         form = self.get_form()
         if form.is_valid():
+            self.lot.auction.create_history(
+                applies_to="LOTS",
+                action=f"Removed/refunded lot {self.lot.lot_number_display}",
+                user=request.user,
+            )
             refund = form.cleaned_data["partial_refund_percent"] or 0
             self.lot.refund(refund, request.user)
             banned = form.cleaned_data["banned"]
@@ -7188,6 +7343,7 @@ class PickupLocationsIncoming(View, AuctionPermissionsMixin):
                     lot.seller_name,
                 ]
             )
+        self.auction.create_history(applies_to="LOTS", action="CSV download of incoming lots", user=request.user)
         return response
 
 
@@ -7218,6 +7374,7 @@ class PickupLocationsOutgoing(View, AuctionPermissionsMixin):
                     lot.winner_name,
                 ]
             )
+        self.auction.create_history(applies_to="LOTS", action="CSV download of outgoing lots", user=request.user)
         return response
 
 
@@ -7382,20 +7539,24 @@ class AuctionNoShowAction(AuctionNoShow, FormMixin):
     def post(self, request, *args, **kwargs):
         form = self.get_form()
         if form.is_valid():
+            actions = f"Took actions against {self.tos.name}: "
             refund_sold_lots = form.cleaned_data["refund_sold_lots"]
             refund_bought_lots = form.cleaned_data["refund_bought_lots"]
             leave_negative_feedback = form.cleaned_data["leave_negative_feedback"]
             ban_this_user = form.cleaned_data["ban_this_user"]
             if refund_sold_lots:
+                actions += "refunded sold lots, "
                 for lot in self.tos.lots_qs:
                     if lot.winning_price:
                         lot.refund(100, request.user)
                     else:
                         lot.remove(True, request.user)
             if refund_bought_lots:
+                actions += "refunded bought lots, "
                 for lot in self.tos.bought_lots_qs:
                     lot.refund(100, request.user)
             if leave_negative_feedback:
+                actions += "left negative feedback, "
                 for lot in self.tos.bought_lots_qs:
                     lot.winner_feedback_rating = -1
                     lot.winner_feedback_text = "Did not pay"
@@ -7405,6 +7566,7 @@ class AuctionNoShowAction(AuctionNoShow, FormMixin):
                     lot.feedback_text = "Did not provide lot"
                     lot.save()
             if ban_this_user:
+                actions += "banned user from future auctions, "
                 # we will ban the user whether or not the tos was manually added
                 # do not return any evidence to the caller of this request that the ban worked or didn't
                 # as that could be used to determine if someone has an account on the site
@@ -7415,6 +7577,7 @@ class AuctionNoShowAction(AuctionNoShow, FormMixin):
                         user=request.user,
                         defaults={},
                     )
+            self.auction.create_history(applies_to="USERS", action=actions[:-2], user=request.user)
             return HttpResponse("<script>location.reload();</script>", status=200)
         else:
             return self.form_invalid(form)
