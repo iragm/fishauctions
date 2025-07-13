@@ -443,6 +443,11 @@ urlpatterns = [
         name="auction_label_config",
     ),
     path(
+        "auctions/<slug:slug>/history/",
+        views.AuctionHistoryView.as_view(),
+        name="auction_history",
+    ),
+    path(
         "api/auctions/<slug:slug>/find-image/",
         views.FindImageIcon.as_view(),
         name="auto_image_available",
