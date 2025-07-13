@@ -1214,13 +1214,13 @@ class ChangeInvoiceStatusForm(forms.Form):
 
     send_invoice_ready_notification_emails = forms.BooleanField(required=False)
 
-    def __init__(self, auction, invoice_count, show_checkbox, *args, **kwargs):
+    def __init__(self, auction, invoice_count, show_checkbox, post_target_url, *args, **kwargs):
         self.auction = auction
         self.invoice_count = invoice_count
         submit_button_html = ""
         self.show_checkbox = show_checkbox
         if self.invoice_count:
-            submit_button_html = f'<button hx-post="{reverse("auction_invoices_ready", kwargs={"slug": self.auction.slug})}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Change invoices</button>'
+            submit_button_html = f'<button hx-post="{reverse(post_target_url, kwargs={"slug": self.auction.slug})}" hx-target="#modals-here" type="submit" class="btn btn-success float-right">Change invoices</button>'
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "post"
