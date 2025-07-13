@@ -1611,6 +1611,11 @@ def auctionReport(request, slug):
                     data.memo,
                 ]
             )
+        auction.create_history(
+            applies_to="USERS",
+            action="Exported user CSV",
+            user=request.user,
+        )
         return response
     messages.error(request, "Your account doesn't have permission to view this page")
     return redirect("/")
@@ -1783,6 +1788,11 @@ def auctionLotList(request, slug):
             if auction.custom_field_1 != "disable" and auction.custom_field_1_name:
                 row.append(lot.custom_field_1)
             writer.writerow(row)
+        auction.create_history(
+            applies_to="LOTS",
+            action=f"Exported lot list CSV for {query if query else 'all lots'}",
+            user=request.user,
+        )
         return response
     messages.error(request, "Your account doesn't have permission to view this page")
     return redirect("/")
@@ -5651,6 +5661,7 @@ class InvoiceBulkUpdateStatus(TemplateView, FormMixin, AuctionPermissionsMixin):
             form_kwargs["show_checkbox"] = self.show_checkbox
         else:
             form_kwargs["show_checkbox"] = False
+        form_kwargs["post_target_url"] = "auction_invoices_" + self.new_status_display.lower()
         return form_kwargs
 
     def get_context_data(self, **kwargs):
@@ -5663,12 +5674,21 @@ class InvoiceBulkUpdateStatus(TemplateView, FormMixin, AuctionPermissionsMixin):
             invoice.status = self.new_invoice_status
             invoice.recalculate
             invoice.save()
+        action = f"Set {invoices.count()} invoices from {self.old_status_display} to {self.new_status_display}"
+        self.auction.create_history(
+            applies_to="INVOICES",
+            action=action,
+            user=request.user,
+        )
         return HttpResponse("<script>location.reload();</script>", status=200)
 
 
 class MarkInvoicesReady(InvoiceBulkUpdateStatus):
     old_invoice_status = "DRAFT"
     new_invoice_status = "UNPAID"
+    old_status_display = "draft"
+    new_status_display = "ready"
+
     show_checkbox = True
 
     def post(self, request, *args, **kwargs):
@@ -5709,6 +5729,8 @@ class MarkInvoicesReady(InvoiceBulkUpdateStatus):
 class MarkInvoicesPaid(InvoiceBulkUpdateStatus):
     old_invoice_status = "UNPAID"
     new_invoice_status = "PAID"
+    old_status_display = "ready"
+    new_status_display = "paid"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
