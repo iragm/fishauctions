@@ -6,9 +6,9 @@
 #
 aiohappyeyeballs==2.6.1
     # via aiohttp
-aiohttp==3.11.18
+aiohttp==3.12.14
     # via pywebpush
-aiosignal==1.3.2
+aiosignal==1.4.0
     # via aiohttp
 annotated-types==0.7.0
     # via pydantic
@@ -353,6 +353,7 @@ txaio==23.1.1
     #   autobahn
 typing-extensions==4.13.2
     # via
+    #   aiosignal
     #   anyio
     #   beautifulsoup4
     #   django-bootstrap-datepicker-plus
