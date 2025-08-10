@@ -168,6 +168,7 @@ INSTALLED_APPS = [
     "location_field",
     "channels",
     # 'debug_toolbar', # having this enabled is handy for sql queries but silences errors in channels
+    # if enabling debug_toolbar, uncomment the line in MIDDLEWARE below and a line in urls.py
     "markdownfield",
     "qr_code",
     "django_tables2",
@@ -180,7 +181,7 @@ INSTALLED_APPS = [
 ]
 ASGI_APPLICATION = "fishauctions.asgi.application"
 MIDDLEWARE = [
-    "debug_toolbar.middleware.DebugToolbarMiddleware",
+    # "debug_toolbar.middleware.DebugToolbarMiddleware", # see line 170 above
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
