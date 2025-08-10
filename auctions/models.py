@@ -769,10 +769,24 @@ class Auction(models.Model):
         self.is_deleted = True
         self.save()
 
-    def save(self, *args, **kwargs):
-        if self.date_start.year < 2000:
+    def fix_year(self, date_field, low_cutoff=2000, high_cutoff=2050):
+        """If the year is a long time ago or in the future, assume they meant this year"""
+        if date_field and (date_field.year < low_cutoff or date_field.year > high_cutoff):
+            self.create_history("RULES", f"Changed invalid date {date_field.year} to current year")
             current_year = timezone.now().year
-            self.date_start = self.date_start.replace(year=current_year)
+            return date_field.replace(year=current_year)
+        return date_field
+
+    def save(self, *args, **kwargs):
+        self.date_start = self.fix_year(self.date_start)
+        self.lot_submission_start_date = self.fix_year(self.lot_submission_start_date)
+        self.lot_submission_end_date = self.fix_year(self.lot_submission_end_date)
+        self.date_end = self.fix_year(self.date_end)
+        self.date_online_bidding_starts = self.fix_year(self.date_online_bidding_starts)
+        self.date_online_bidding_ends = self.fix_year(self.date_online_bidding_ends)
+        # if self.date_start.year < 2000:
+        #    current_year = timezone.now().year
+        #    self.date_start = self.date_start.replace(year=current_year)
         self.summernote_description = remove_html_color_tags(self.summernote_description)
         super().save(*args, **kwargs)
 
