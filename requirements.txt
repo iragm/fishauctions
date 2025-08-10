@@ -16,7 +16,7 @@ anyio==4.10.0
     # via watchfiles
 asgiref==3.9.1
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   channels
     #   channels-redis
     #   daphne
@@ -25,23 +25,23 @@ asgiref==3.9.1
     #   django-htmx
 attrs==25.3.0
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   aiohttp
     #   service-identity
     #   twisted
 autobahn==24.4.2
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   daphne
 automat==25.4.16
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   twisted
 beautifulsoup4==4.13.4
-    # via -r ./requirements.in
+    # via -r requirements.in
 bleach[css]==6.2.0
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   django-markdownfield
     #   django-post-office
     #   django-summernote
@@ -55,17 +55,17 @@ brotli==1.1.0
     # via fonttools
 certifi==2025.8.3
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   requests
 cffi==1.17.1
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   cryptography
     #   pyheif
     #   weasyprint
 channels==4.3.1
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   channels-redis
 channels-redis==4.3.0
     # via -r ./requirements.in
@@ -79,13 +79,13 @@ click==8.2.1
     # via uvicorn
 constantly==23.10.4
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   twisted
 crispy-bootstrap5==2025.6
     # via -r ./requirements.in
 cryptography==45.0.6
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   autobahn
     #   django-ses
     #   http-ece
@@ -99,11 +99,11 @@ daphne==4.2.1
     # via -r ./requirements.in
 defusedxml==0.7.1
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   python3-openid
 django==5.2.5
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   channels
     #   crispy-bootstrap5
     #   django-allauth
@@ -126,31 +126,31 @@ django==5.2.5
     #   easy-thumbnails
     #   jsonfield
 django-allauth==65.10.0
-    # via -r ./requirements.in
+    # via -r requirements.in
 django-autocomplete-light==3.12.1
-    # via -r ./requirements.in
+    # via -r requirements.in
 django-autoslug==1.9.9
-    # via -r ./requirements.in
+    # via -r requirements.in
 django-bootstrap-datepicker-plus==5.0.5
-    # via -r ./requirements.in
+    # via -r requirements.in
 django-chartjs==2.3.0
-    # via -r ./requirements.in
+    # via -r requirements.in
 django-crispy-forms==2.4
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   crispy-bootstrap5
 django-debug-toolbar==6.0.0
     # via -r ./requirements.in
 django-el-pagination==4.1.2
-    # via -r ./requirements.in
+    # via -r requirements.in
 django-extensions==4.1
-    # via -r ./requirements.in
+    # via -r requirements.in
 django-filter==25.1
     # via -r ./requirements.in
 django-htmx==1.23.2
     # via -r ./requirements.in
 django-location-field==2.7.3
-    # via -r ./requirements.in
+    # via -r requirements.in
 django-markdownfield==0.11.0
     # via -r ./requirements.in
 django-post-office==3.10.1
@@ -158,17 +158,17 @@ django-post-office==3.10.1
 django-qr-code==4.2.0
     # via -r ./requirements.in
 django-recaptcha==4.1.0
-    # via -r ./requirements.in
+    # via -r requirements.in
 django-ses[events]==4.4.0
-    # via -r ./requirements.in
+    # via -r requirements.in
 django-summernote==0.8.20.0
-    # via -r ./requirements.in
+    # via -r requirements.in
 django-tables2==2.7.5
-    # via -r ./requirements.in
+    # via -r requirements.in
 django-weasyprint==2.4.0
-    # via -r ./requirements.in
+    # via -r requirements.in
 django-webpush==0.3.6
-    # via -r ./requirements.in
+    # via -r requirements.in
 easy-thumbnails==2.10
     # via -r ./requirements.in
 fonttools[woff]==4.59.0
@@ -182,19 +182,19 @@ gunicorn==23.0.0
 h11==0.16.0
     # via uvicorn
 heif-image-plugin==0.7.0
-    # via -r ./requirements.in
+    # via -r requirements.in
 http-ece==1.2.1
     # via pywebpush
 httptools==0.6.4
     # via uvicorn
 hyperlink==21.0.0
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   autobahn
     #   twisted
 idna==3.10
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   anyio
     #   hyperlink
     #   requests
@@ -202,7 +202,7 @@ idna==3.10
     #   yarl
 incremental==24.7.2
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   twisted
 jmespath==1.0.1
     # via
@@ -212,7 +212,7 @@ jsonfield==3.2.0
     # via -r ./requirements.in
 markdown==3.8.2
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   django-markdownfield
 msgpack==1.1.1
     # via channels-redis
@@ -224,18 +224,18 @@ mysqlclient==2.2.7
     # via -r ./requirements.in
 oauthlib==3.3.1
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   requests-oauthlib
 packaging==25.0
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   gunicorn
     #   pip-review
 piexif==1.1.3
     # via heif-image-plugin
 pillow==11.3.0
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   easy-thumbnails
     #   reportlab
     #   weasyprint
@@ -249,16 +249,16 @@ py-vapid==1.9.2
     # via pywebpush
 pyasn1==0.6.1
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   pyasn1-modules
     #   service-identity
 pyasn1-modules==0.4.2
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   service-identity
 pycparser==2.22
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   cffi
 pydantic==2.11.7
     # via
@@ -269,19 +269,19 @@ pydantic-core==2.33.2
 pydyf==0.11.0
     # via weasyprint
 pyhamcrest==2.1.0
-    # via -r ./requirements.in
+    # via -r requirements.in
 pyheif==0.8.0
     # via heif-image-plugin
 pyjwt==2.10.1
-    # via -r ./requirements.in
+    # via -r requirements.in
 pymysql==1.1.1
     # via -r ./requirements.in
 pyopenssl==25.1.0
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   twisted
 pyparsing==3.2.3
-    # via -r ./requirements.in
+    # via -r requirements.in
 pyphen==0.17.2
     # via weasyprint
 python-dateutil==2.9.0.post0
@@ -289,22 +289,21 @@ python-dateutil==2.9.0.post0
 python-dotenv==1.1.1
     # via uvicorn
 python3-openid==3.2.0
-    # via -r ./requirements.in
+    # via -r requirements.in
 pytz==2025.2
-    # via -r ./requirements.in
+    # via -r requirements.in
 pywebpush==2.0.3
     # via django-webpush
 pyyaml==6.0.2
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   uvicorn
 redis==6.4.0
     # via channels-redis
 reportlab==4.4.3
-    # via -r ./requirements.in
 requests==2.32.4
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   django-ses
     #   pywebpush
     #   requests-oauthlib
@@ -316,15 +315,15 @@ segno==1.6.6
     # via django-qr-code
 service-identity==24.2.0
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   twisted
 shortuuid==1.0.13
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   django-markdownfield
 six==1.17.0
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   python-dateutil
     #   pywebpush
 sniffio==1.3.1
@@ -333,7 +332,7 @@ soupsieve==2.7
     # via beautifulsoup4
 sqlparse==0.5.3
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   django
     #   django-debug-toolbar
 tinycss2==1.4.0
@@ -345,11 +344,11 @@ tinyhtml5==2.0.0
     # via weasyprint
 twisted[tls]==25.5.0
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   daphne
 txaio==25.6.1
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   autobahn
 typing-extensions==4.14.1
     # via
@@ -366,13 +365,13 @@ typing-inspection==0.4.1
     # via pydantic
 ua-parser==1.0.1
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   user-agents
 ua-parser-builtins==0.18.0.post1
     # via ua-parser
 urllib3==2.5.0
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   botocore
     #   requests
 user-agents==2.2.0
@@ -387,7 +386,7 @@ weasyprint==66.0
     # via django-weasyprint
 webencodings==0.5.1
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   bleach
     #   cssselect2
     #   tinycss2
@@ -398,7 +397,7 @@ yarl==1.20.1
     # via aiohttp
 zope-interface==7.2
     # via
-    #   -r ./requirements.in
+    #   -r requirements.in
     #   twisted
 zopfli==0.2.3.post1
     # via fonttools
