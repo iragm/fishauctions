@@ -87,6 +87,7 @@ RUN mkdir /home/user
 RUN mkdir -p $APP_HOME
 RUN mkdir -p $APP_HOME/staticfiles
 RUN mkdir -p $APP_HOME/mediafiles
+RUN mkdir -p $APP_HOME/mediafiles/images
 RUN mkdir /home/app/.cache
 
 WORKDIR $APP_HOME
@@ -143,6 +144,7 @@ RUN chown -R app:app /home/user
 RUN chown -R app:app /var/log/
 RUN chown -R app:app /var/log/
 RUN chown -R app:app /home/app/web/mediafiles
+RUN chown -R app:app /home/app/web/mediafiles/images
 RUN chown -R app:app /home/app/web/staticfiles
 RUN chown -R app:app /home/app/.cache
 USER app
