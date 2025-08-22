@@ -6,10 +6,9 @@ check_writable_dir() {
     # Get UID/GID of directory owner
     owner_uid=$(stat -c "%u" "$dir")
     owner_gid=$(stat -c "%g" "$dir")
-    echo "ERROR: User 'app' (UID: $(id -u), GID: $(id -g)) cannot write to $dir"
+    echo "WARNING: User 'app' (UID: $(id -u), GID: $(id -g)) cannot write to $dir"
     echo "       Directory is owned by UID:$owner_uid GID:$owner_gid"
     echo "       In your .env, set PUID=$owner_uid and PGID=$owner_gid"
-    exit 1
   fi
 }
 
