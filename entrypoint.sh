@@ -1,5 +1,17 @@
 #!/bin/sh
 
+# If we're root and not in CI, fix permissions on docker bind mounts, then re-run this script as app
+if [ "$(id -u)" = "0" ] && [ -z "$CI" ]; then
+  echo "Fixing ownership on media/static..."
+  chown -R app:app /home/app/web/mediafiles /home/app/web/staticfiles || true
+  chown -R app:app /home/app/web/logs || true
+
+  # Drop privileges and re-exec this script as app
+  exec su app -c "/entrypoint.sh $*"
+fi
+
+echo "Running as user: $(id -un)"
+
 # Wait for MariaDB to be ready
 python << END
 import sys
