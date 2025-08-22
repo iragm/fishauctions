@@ -147,10 +147,7 @@ RUN chown -R app:app /home/app/web/mediafiles
 RUN chown -R app:app /home/app/web/mediafiles/images
 RUN chown -R app:app /home/app/web/staticfiles
 RUN chown -R app:app /home/app/.cache
-#USER app
-
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+USER app
 
 EXPOSE 8000
 
