@@ -17,4 +17,7 @@ jobs:
 
       - run: docker compose exec web python3 manage.py test
 
+      - name: Print web container logs
+        run: docker compose logs web
+
       - run: docker compose down
