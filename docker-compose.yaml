@@ -24,6 +24,10 @@ services:
     entrypoint: [/bin/bash, /home/app/web/.github/scripts/test-and-lint.sh]
     env_file: .env
     profiles: [test]
+    deploy:
+      resources:
+        limits:
+          memory: 2g
 
   db:
     container_name: db
