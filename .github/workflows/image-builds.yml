@@ -26,6 +26,9 @@ jobs:
       - run: docker compose exec web python3 manage.py test --parallel=1
 
       - if: failure()
-        run: docker compose logs web
-
+        run: |
+          echo "Exit code: $?"
+          docker compose ps
+          docker compose logs web
+          dmesg | tail -n 50
       - run: docker compose down
