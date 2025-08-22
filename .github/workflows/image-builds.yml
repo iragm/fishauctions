@@ -11,18 +11,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Add swap space
-        run: |
-          sudo fallocate -l 4G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
-          free -h
-
       - run: ./.github/scripts/prepare-ci.sh
       - run: docker compose build
       - run: docker compose up --detach --wait --wait-timeout 60
 
-      # this runs the tests, but fails in CI, see the file test.yml for where tests are run
-      #- run: docker compose exec web python3 manage.py test --parallel=1
+      - run: docker compose exec web python3 manage.py test
+
+      - name: Print web container logs
+        run: docker compose logs web
+        continue-on-error: true
       - run: docker compose down

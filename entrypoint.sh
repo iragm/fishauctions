@@ -1,16 +1,21 @@
 #!/bin/sh
 
-# If we're root and not in CI, fix permissions on docker bind mounts, then re-run this script as app
-if [ "$(id -u)" = "0" ] && [ -z "$CI" ]; then
-  echo "Fixing ownership on media/static..."
-  chown -R app:app /home/app/web/mediafiles /home/app/web/staticfiles || true
-  chown -R app:app /home/app/web/logs || true
+check_writable_dir() {
+  local dir="$1"
+  if [ ! -w "$dir" ]; then
+    # Get UID/GID of directory owner
+    owner_uid=$(stat -c "%u" "$dir")
+    owner_gid=$(stat -c "%g" "$dir")
+    echo "WARNING: User 'app' (UID: $(id -u), GID: $(id -g)) cannot write to $dir"
+    echo "       Directory is owned by UID:$owner_uid GID:$owner_gid"
+    echo "       In your .env, set PUID=$owner_uid and PGID=$owner_gid"
+  fi
+}
 
-  # Drop privileges and re-exec this script as app
-  exec su app -c "/entrypoint.sh $*"
-fi
-
-echo "Running as user: $(id -un)"
+echo Checking directory permissions...
+check_writable_dir "/home/app/web/mediafiles/images"
+check_writable_dir "/home/app/web/staticfiles"
+check_writable_dir "/home/app/web/logs"
 
 # Wait for MariaDB to be ready
 python << END
