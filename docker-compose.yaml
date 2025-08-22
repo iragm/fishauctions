@@ -21,6 +21,9 @@ services:
       target: test
     volumes:
       - .:/home/app/web
+      - ./auctions/static:/home/app/web/staticfiles
+      - ./mediafiles:/home/app/web/mediafiles
+      - ./logs:/home/logs
     entrypoint: [/bin/bash, /home/app/web/.github/scripts/test-and-lint.sh]
     env_file: .env
     profiles: [test]
