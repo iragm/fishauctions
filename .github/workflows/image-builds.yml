@@ -19,5 +19,5 @@ jobs:
 
       - name: Print web container logs
         run: docker compose logs web
-
+        continue-on-error: true
       - run: docker compose down
