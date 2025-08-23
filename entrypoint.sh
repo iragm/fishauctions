@@ -2,20 +2,23 @@
 
 check_writable_dir() {
   local dir="$1"
+  local host_dir="$2"
   if [ ! -w "$dir" ]; then
     # Get UID/GID of directory owner
     owner_uid=$(stat -c "%u" "$dir")
     owner_gid=$(stat -c "%g" "$dir")
     echo "WARNING: User 'app' (UID: $(id -u), GID: $(id -g)) cannot write to $dir"
-    echo "       Directory is owned by UID:$owner_uid GID:$owner_gid"
-    echo "       In your .env, set PUID=$owner_uid and PGID=$owner_gid"
+    echo "       Directory is owned by UID:$owner_uid GID:$owner_gid on the host."
+    echo
+    echo "👉 Fix on the host by running (from your project root, the same directory as update.sh):"
+    echo "   sudo chown -R $(id -u):$(id -g) $host_dir"
   fi
 }
 
 echo Checking directory permissions...
-check_writable_dir "/home/app/web/mediafiles/images"
-check_writable_dir "/home/app/web/staticfiles"
-check_writable_dir "/home/app/web/logs"
+check_writable_dir "/home/app/web/mediafiles"   "./mediafiles"
+check_writable_dir "/home/app/web/staticfiles"  "./staticfiles"
+check_writable_dir "/home/app/web/logs"         "./logs"
 
 # Wait for MariaDB to be ready
 python << END
