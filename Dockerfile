@@ -137,6 +137,9 @@ RUN /tmp/python_file_hack.sh
 #COPY . $APP_HOME
 
 # chown all the files to the app user
+# I am not sure that these are actually doing anything
+# Docker bind mount permissions are from the host and need to be set there
+# There's a test in entrypoint.sh that will show the user and permissions
 RUN chown -R app:app $APP_HOME
 RUN chown -R app:app /home/logs
 RUN chown -R app:app /home/app/logs/

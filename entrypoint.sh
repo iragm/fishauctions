@@ -7,8 +7,10 @@ check_writable_dir() {
     owner_uid=$(stat -c "%u" "$dir")
     owner_gid=$(stat -c "%g" "$dir")
     echo "WARNING: User 'app' (UID: $(id -u), GID: $(id -g)) cannot write to $dir"
-    echo "       Directory is owned by UID:$owner_uid GID:$owner_gid"
-    echo "       In your .env, set PUID=$owner_uid and PGID=$owner_gid"
+    echo "       Directory is owned by UID:$owner_uid GID:$owner_gid on the host."
+    echo
+    echo "👉 Fix on the host by running (from your project root, the same directory as update.sh):"
+    echo "   sudo chown -R $(id -u):$(id -g) $dir"
   fi
 }
 
