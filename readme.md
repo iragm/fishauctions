@@ -179,8 +179,24 @@ docker compose --profile "*" build
 docker compose up
 ```
 
-Run `./update.sh` -- this is needed to configure the url.
+#### Configure the URL
+Run `./update.sh` this should automatically configure the URL you set up in your .env
 
+#### Configure folder permissions
+Static files, logs, and images are bound volumes from the host machine, so Docker is not able to configure permissions on them.
+
+On the host machine, from the same folder as update.sh, run:
+```
+sudo chown -R 1000:1000 ./mediafiles
+sudo chown -R 1000:1000 ./auctions/static
+sudo chown -R 1000:1000 ./logs
+```
+
+The UID and GID of the Docker user need to match the permissions on the host machine, so if for some reason your volumes have a different owner, you can alternatively change the UID/GID for app in the .env file by changing the `PUID` and `PGID` lines (the default is 1000 for both).
+
+If you haven't configured things properly, you'll see a couple warnings when starting the Django Web container, for example, `User 'app' (UID: 1000, GID: 1000) cannot write to "/home/app/web/mediafiles"`.  These should tell you the exact command to run on the host machine (your server) to fix permissions and get up and running.
+
+#### Add your TOS
 Finally, create a file called `tos.html` with your terms of service in the same directory as the .env file.
 
 With a little luck, things worked.  If not, open an issue and provide as much detail as possible.  Don't put your keys in the issue, but do include any logs.  Remember that support is very limited for custom production deployments.  If something isn't talked about in this guide, I'm not really interested in helping with it.
