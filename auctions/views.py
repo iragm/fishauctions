@@ -4979,6 +4979,7 @@ class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
         if self.request.user.is_superuser:
             # joined is disabled for admins because we need to return before filtering non-promoted auctions
             return qs.annotate(joined=Value(0, output_field=FloatField())).order_by("-date_posted").distinct()
+        qs = qs.exclude(is_deleted=True)
         qs = (
             qs.filter(
                 Q(auctiontos__user=self.request.user)
