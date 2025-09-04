@@ -2035,6 +2035,15 @@ class AuctionEditForm(forms.ModelForm):
             self.add_error("promote_this_auction", "Test auctions cannot be promoted.")
         elif cleaned_data.get("promote_this_auction") and not saved_instance.admin_checklist_location_set:
             self.add_error("promote_this_auction", "Set the location before promoting this auction")
+        elif cleaned_data.get(
+            "promote_this_auction"
+        ) and "You should remove this line and edit this section to suit your auction." in cleaned_data.get(
+            "summernote_description"
+        ):
+            self.add_error(
+                "promote_this_auction",
+                "Edit the text in the rules section above before promoting this auction.  There's still placeholder text in there that needs to be removed.",
+            )
         return cleaned_data
 
 
