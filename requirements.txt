@@ -68,9 +68,9 @@ channels==4.3.1
     #   -r requirements.in
     #   channels-redis
 channels-redis==4.3.0
-    # via -r ./requirements.in
+    # via -r requirements.in
 chardet==5.2.0
-    # via -r ./requirements.in
+    # via -r requirements.in
 charset-normalizer==3.4.3
     # via
     #   reportlab
@@ -82,7 +82,7 @@ constantly==23.10.4
     #   -r requirements.in
     #   twisted
 crispy-bootstrap5==2025.6
-    # via -r ./requirements.in
+    # via -r requirements.in
 cryptography==45.0.6
     # via
     #   -r requirements.in
@@ -96,12 +96,12 @@ cryptography==45.0.6
 cssselect2==0.8.0
     # via weasyprint
 daphne==4.2.1
-    # via -r ./requirements.in
+    # via -r requirements.in
 defusedxml==0.7.1
     # via
     #   -r requirements.in
     #   python3-openid
-django==5.2.5
+django==5.2.6
     # via
     #   -r requirements.in
     #   channels
@@ -140,23 +140,23 @@ django-crispy-forms==2.4
     #   -r requirements.in
     #   crispy-bootstrap5
 django-debug-toolbar==6.0.0
-    # via -r ./requirements.in
+    # via -r requirements.in
 django-el-pagination==4.1.2
     # via -r requirements.in
 django-extensions==4.1
     # via -r requirements.in
 django-filter==25.1
-    # via -r ./requirements.in
+    # via -r requirements.in
 django-htmx==1.23.2
-    # via -r ./requirements.in
+    # via -r requirements.in
 django-location-field==2.7.3
     # via -r requirements.in
 django-markdownfield==0.11.0
-    # via -r ./requirements.in
+    # via -r requirements.in
 django-post-office==3.10.1
-    # via -r ./requirements.in
+    # via -r requirements.in
 django-qr-code==4.2.0
-    # via -r ./requirements.in
+    # via -r requirements.in
 django-recaptcha==4.1.0
     # via -r requirements.in
 django-ses[events]==4.4.0
@@ -170,7 +170,7 @@ django-weasyprint==2.4.0
 django-webpush==0.3.6
     # via -r requirements.in
 easy-thumbnails==2.10
-    # via -r ./requirements.in
+    # via -r requirements.in
 fonttools[woff]==4.59.0
     # via weasyprint
 frozenlist==1.7.0
@@ -178,7 +178,7 @@ frozenlist==1.7.0
     #   aiohttp
     #   aiosignal
 gunicorn==23.0.0
-    # via -r ./requirements.in
+    # via -r requirements.in
 h11==0.16.0
     # via uvicorn
 heif-image-plugin==0.7.0
@@ -209,7 +209,7 @@ jmespath==1.0.1
     #   boto3
     #   botocore
 jsonfield==3.2.0
-    # via -r ./requirements.in
+    # via -r requirements.in
 markdown==3.8.2
     # via
     #   -r requirements.in
@@ -221,7 +221,7 @@ multidict==6.6.3
     #   aiohttp
     #   yarl
 mysqlclient==2.2.7
-    # via -r ./requirements.in
+    # via -r requirements.in
 oauthlib==3.3.1
     # via
     #   -r requirements.in
@@ -240,7 +240,7 @@ pillow==11.3.0
     #   reportlab
     #   weasyprint
 pip-review==1.3.0
-    # via -r ./requirements.in
+    # via -r requirements.in
 propcache==0.3.2
     # via
     #   aiohttp
@@ -275,7 +275,7 @@ pyheif==0.8.0
 pyjwt==2.10.1
     # via -r requirements.in
 pymysql==1.1.1
-    # via -r ./requirements.in
+    # via -r requirements.in
 pyopenssl==25.1.0
     # via
     #   -r requirements.in
@@ -301,6 +301,7 @@ pyyaml==6.0.2
 redis==6.4.0
     # via channels-redis
 reportlab==4.4.3
+    # via -r requirements.in
 requests==2.32.4
     # via
     #   -r requirements.in
@@ -308,7 +309,7 @@ requests==2.32.4
     #   pywebpush
     #   requests-oauthlib
 requests-oauthlib==2.0.0
-    # via -r ./requirements.in
+    # via -r requirements.in
 s3transfer==0.13.1
     # via boto3
 segno==1.6.6
@@ -375,9 +376,9 @@ urllib3==2.5.0
     #   botocore
     #   requests
 user-agents==2.2.0
-    # via -r ./requirements.in
+    # via -r requirements.in
 uvicorn[standard]==0.35.0
-    # via -r ./requirements.in
+    # via -r requirements.in
 uvloop==0.21.0
     # via uvicorn
 watchfiles==1.1.0
