@@ -22,7 +22,7 @@
 {% else %}
   {% if not auction.promote_this_auction %}
   <div class='mt-4 mb-4 p-2 bg-primary text-white rounded bg-gradient bg-opacity-50'><h5>This auction is not promoted</h5>
-    <small>It will appear in <a href={% url 'auctions' %}>the list of auctions</a> for you, for any users you manually add (based on email address), and for any users that have joined, but it won't be visible to anyone else unless you share the URL with them.  Promoted auctions are also included in a weekly promotional email sent every Wednesday to nearby users.</small>
+    <small>It will appear in <a href={% url 'auctions' %}>the list of auctions</a> for you, for any users you manually add (based on email address), and for any users that have joined, but it won't be visible to anyone else unless you share the URL with them.  Promoted auctions are also included in a weekly promotional email sent every Wednesday to nearby users.  <a href='/auctions/{{auction.slug}}/edit'>Click here to edit the rules</a> and check <b>promote this auction</b></small>
   </div>
   {% endif %}
 {% endif %}

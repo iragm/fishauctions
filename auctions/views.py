@@ -2056,7 +2056,7 @@ class PickupLocationsUpdate(PickupLocationForm, UpdateView, AuctionPermissionsMi
         if form.has_changed():
             self.auction.create_history(
                 applies_to="RULES",
-                action=f"Edited {self.get_object()}",
+                action=f"Edited location {self.get_object()}",
                 user=self.request.user,
             )
         form = super().form_valid(form)
