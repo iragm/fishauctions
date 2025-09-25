@@ -1784,12 +1784,12 @@ class AuctionTOS(models.Model):
 
     @property
     def bought_lots_qs(self):
-        lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_winner=self.pk)
+        lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_winner=self.pk, auction__isnull=False)
         return lots
 
     @property
     def lots_qs(self):
-        lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller=self.pk)
+        lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller=self.pk, auction__isnull=False)
         return lots
 
     @property
