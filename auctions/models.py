@@ -2500,6 +2500,8 @@ class Lot(models.Model):
         ):
             self.donation = True
         self.summernote_description = remove_html_color_tags(self.summernote_description)
+        if not self.quantity:
+            self.quantity = 1
         super().save(*args, **kwargs)
 
         # chat history subscription for the owner
