@@ -3428,7 +3428,7 @@ class Lot(models.Model):
 
     @property
     def quantity_label(self):
-        if self.auction.use_quantity_field or self.quantity > 1:
+        if self.auction and self.auction.use_quantity_field or self.quantity > 1:
             return f"QTY: {self.quantity}"
         return ""
 
