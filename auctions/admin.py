@@ -394,7 +394,6 @@ class LotAdmin(admin.ModelAdmin):
     search_fields = (
         "lot_number",
         "lot_name",
-        "description",
         "species_category__name",
         "user__first_name",
         "user__last_name",
