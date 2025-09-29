@@ -4647,15 +4647,16 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
 
     def get_object(self, *args, **kwargs):
         if self.auction:
-            return self.auction
+            self.object = self.auction
         else:
             try:
                 auction = Auction.objects.get(slug=self.kwargs.get(self.slug_url_kwarg), is_deleted=False)
                 self.auction = auction
-                return auction
+                self.object = self.auction
             except:
                 msg = "No auctions found matching the query"
                 raise Http404(msg)
+        return self.object
 
     def get_success_url(self):
         data = self.request.GET.copy()
