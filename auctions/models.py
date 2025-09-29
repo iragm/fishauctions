@@ -1766,8 +1766,12 @@ class AuctionTOS(models.Model):
         """Add proper dashes to phone"""
         if not self.phone_number:
             return ""
-        n = re.sub("[^0-9]", "", self.phone_number)
-        return format(int(n[:-1]), ",").replace(",", "-") + n[-1]
+        # n = re.sub("[^0-9]", "", self.phone_number)
+        # return format(int(n[:-1]), ",").replace(",", "-") + n[-1]
+        n = re.sub(r"\D", "", self.phone_number)
+        if len(n) == 10:
+            return f"{n[:3]}-{n[3:6]}-{n[6:]}"
+        return n
 
     @property
     def bulk_add_link_html(self):
