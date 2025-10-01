@@ -1246,7 +1246,7 @@ def pageview(request):
                     ip_address=ip[:100],
                     platform=parsed_ua.os.family,
                     os=os,
-                    referrer=referrer,
+                    referrer=referrer[:600],
                     title=data.get("title", "")[:600],
                     source=source,
                 )
@@ -1267,7 +1267,7 @@ def pageview(request):
                         auction=auction,
                         user=user,
                         email=user.email,
-                        source=source,
+                        source=source[:200],
                     )
                 except ValidationError:
                     # campaign already exists
