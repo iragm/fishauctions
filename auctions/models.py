@@ -2050,6 +2050,8 @@ class AuctionTOS(models.Model):
             self.memo = ""
         # update the email address as appropriate
         # if you changed the email of this tos, reset the email status
+        if not self.name:
+            self.name = "Unknown"
         if self.email and self.pk:
             saved_tos = AuctionTOS.objects.filter(pk=self.pk).first()
             if saved_tos and saved_tos.email and saved_tos.email != self.email:
