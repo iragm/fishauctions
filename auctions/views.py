@@ -1510,6 +1510,8 @@ def auctionReport(request, slug):
                 "Users who have banned this user",
                 "Account created on",
                 "Memo",
+                "Club member",
+                "Bidding allowed",
             ]
         )
         users = (
@@ -1609,6 +1611,8 @@ def auctionReport(request, slug):
                     number_of_userbans,
                     account_age,
                     data.memo,
+                    "Yes" if data.is_club_member else "",
+                    "No" if not data.bidding_allowed else "",
                 ]
             )
         auction.create_history(
