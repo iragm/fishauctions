@@ -1510,6 +1510,8 @@ def auctionReport(request, slug):
                 "Users who have banned this user",
                 "Account created on",
                 "Memo",
+                "Club member",
+                "Bidding allowed",
             ]
         )
         users = (
@@ -1609,6 +1611,8 @@ def auctionReport(request, slug):
                     number_of_userbans,
                     account_age,
                     data.memo,
+                    "Yes" if data.is_club_member else "",
+                    "No" if not data.bidding_allowed else "",
                 ]
             )
         auction.create_history(
@@ -2854,12 +2858,16 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
         address_field_names = ["address", "mailing address"]
         phone_field_names = ["phone", "phone number", "telephone", "telephone number"]
         is_club_member_fields = ["member", "club member"]
+        is_bidding_allowed_field_names = ["allow bidding", "bidding", "bidding allowed"]
         # we are not reading in location here, do we care??
         some_columns_exist = False
         error = ""
         # order matters here - the most important columns should be validated last,
         # so the error refers to the most important missing column
         try:
+            # we're not going to error out for club member or bidding allowed missing columns, but track it for updating existing users
+            is_club_member_field_exists = columns_exist(csv_reader.fieldnames, is_club_member_fields)
+            is_bidding_allowed_fields_exists = columns_exist(csv_reader.fieldnames, is_bidding_allowed_field_names)
             if not columns_exist(csv_reader.fieldnames, phone_field_names):
                 error = "Warning: This file does not contain a phone column"
             else:
@@ -2883,6 +2891,7 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
 
             total_tos = 0
             total_skipped = 0
+            total_updated = 0
             for row in csv_reader:
                 bidder_number = extract_info(row, bidder_number_fields)
                 email = extract_info(row, email_field_names)
@@ -2894,11 +2903,41 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
                     is_club_member = True
                 else:
                     is_club_member = False
-                if email or name or phone or address:
-                    if self.auction.find_user(name, email):
-                        # if self.tos_is_in_auction(self.auction, name, email):
-                        logger.debug("CSV import skipping %s", name)
-                        total_skipped += 1
+                is_bidding_allowed = extract_info(row, is_bidding_allowed_field_names, "yes")
+                if is_bidding_allowed.lower() in ["yes", "true"]:
+                    bidding_allowed = True
+                else:
+                    bidding_allowed = False
+                # if email or name or phone or address:
+                if email:
+                    # The old way -- skip anybody who is already in the auction
+                    # if self.auction.find_user(name, email):
+                    #     # if self.tos_is_in_auction(self.auction, name, email):
+                    #     logger.debug("CSV import skipping %s", name)
+                    #     total_skipped += 1
+                    # new way: update existing users with the same email
+                    existing_tos = self.auction.find_user(name="", email=email)
+                    if existing_tos:
+                        logger.debug("CSV import updating %s", email)
+                        total_updated += 1
+                        if phone:
+                            existing_tos.phone_number = phone[:20]
+                        if address:
+                            existing_tos.address = address[:500]
+                        if is_club_member_field_exists:
+                            existing_tos.is_club_member = is_club_member
+                        if is_bidding_allowed_fields_exists:
+                            existing_tos.bidding_allowed = bidding_allowed
+                        if name:
+                            existing_tos.name = name[:181]
+                        if bidder_number:
+                            if (
+                                not AuctionTOS.objects.filter(auction=self.auction, bidder_number=bidder_number)
+                                .exclude(pk=existing_tos.pk)
+                                .first()
+                            ):
+                                existing_tos.bidder_number = bidder_number[:20]
+                        existing_tos.save()
                     else:
                         logger.debug("CSV import adding %s", name)
                         if bidder_number:
@@ -2914,18 +2953,21 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
                             email=email[:254],
                             address=address[:500],
                             is_club_member=is_club_member,
+                            bidding_allowed=bidding_allowed,
                         )
                         total_tos += 1
+                else:
+                    total_skipped += 1
             if error:
                 messages.error(self.request, error)
             msg = f"{total_tos} users added"
             self.auction.create_history(
                 applies_to="USERS", action="Added users from CSV file, " + msg, user=self.request.user
             )
+            if total_updated:
+                msg += f", {total_updated} users are already in this auction (matched by email) and were updated"
             if total_skipped:
-                msg += (
-                    f", {total_skipped} users are already in this auction (matched by email, or name if email not set)"
-                )
+                msg += f", {total_skipped} users were skipped because they did not contain an email address"
             messages.info(self.request, msg)
             url = reverse("auction_tos_list", kwargs={"slug": self.auction.slug})
             response = HttpResponse(status=200)
