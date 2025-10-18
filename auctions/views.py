@@ -4832,7 +4832,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
                 # if it bounced in the past, the user may have a full inbox or something
                 obj.email_address_status = "VALID"
             # fill out some information in the tos if not already filled out
-            if not obj.name:
+            if not obj.name or obj.name == "Unknown":
                 obj.name = self.request.user.first_name + " " + self.request.user.last_name
             if not obj.email:
                 obj.email = self.request.user.email
