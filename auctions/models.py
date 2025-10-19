@@ -484,8 +484,8 @@ class GeneralInterest(models.Model):
 class Club(models.Model):
     """Users can self-select which club they belong to"""
 
-    name = models.CharField(max_length=255)
-    abbreviation = models.CharField(max_length=255, blank=True, null=True)
+    name = models.CharField(max_length=255, db_index=True)
+    abbreviation = models.CharField(max_length=255, blank=True, null=True, db_index=True)
     homepage = models.CharField(max_length=255, blank=True, null=True)
     facebook_page = models.CharField(max_length=255, blank=True, null=True)
     contact_email = models.CharField(max_length=255, blank=True, null=True)
