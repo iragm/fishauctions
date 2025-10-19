@@ -249,7 +249,7 @@ def bid_on_lot(lot, user, amount):
             if (not originalHighBidder) and (lot.high_bidder.pk == user.pk):
                 result["send_to"] = "everyone"
                 result["type"] = "NEW_HIGH_BIDDER"
-                result["message"] = f"{user} has placed the first bid on this lot"
+                result["message"] = f"{user_string} has placed the first bid on this lot"
                 result["current_high_bid"] = lot.reserve_price
                 result["high_bidder_pk"] = user.pk
                 result["high_bidder_name"] = user_string
