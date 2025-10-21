@@ -459,6 +459,7 @@ urlpatterns = [
         views.AuctionShowHighBidder.as_view(),
         name="auction_show_high_bidder",
     ),
+    path("calendar/add/", views.AddToCalendarView.as_view(), name="add_to_calendar"),
     re_path(
         r"^ses/event-webhook/$",
         SESEventWebhookView.as_view(),

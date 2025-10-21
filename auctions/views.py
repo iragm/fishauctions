@@ -3,6 +3,7 @@ import csv
 import logging
 import math
 import re
+import uuid
 from collections import Counter
 from datetime import datetime, timedelta
 from datetime import timezone as date_tz
@@ -1512,6 +1513,7 @@ def auctionReport(request, slug):
                 "Memo",
                 "Club member",
                 "Bidding allowed",
+                "Added auction to their calendar",
             ]
         )
         users = (
@@ -1555,7 +1557,9 @@ def auctionReport(request, slug):
                 previous_auctions = AuctionTOS.objects.filter(user=data.user).exclude(pk=data.pk).count()
                 number_of_userbans = data.number_of_userbans
                 account_age = data.user.date_joined
+                add_to_calendar = ("Yes" if data.add_to_calendar else "",)
             else:
+                add_to_calendar = ("",)
                 previous_auctions = ""
                 lotsViewed = ""
                 lotsBid = ""
@@ -1613,6 +1617,7 @@ def auctionReport(request, slug):
                     data.memo,
                     "Yes" if data.is_club_member else "",
                     "No" if not data.bidding_allowed else "",
+                    add_to_calendar,
                 ]
             )
         auction.create_history(
@@ -7442,6 +7447,139 @@ class PickupLocationsOutgoing(View, AuctionPermissionsMixin):
             )
         self.auction.create_history(applies_to="LOTS", action="CSV download of outgoing lots", user=request.user)
         return response
+
+
+class AddToCalendarView(LoginRequiredMixin, View):
+    """Redirect or generate an 'Add to Calendar' link for a pickup location"""
+
+    def dispatch(self, request, *args, **kwargs):
+        # Extract query params
+        self.calendar_type = request.GET.get("type")
+        self.second = request.GET.get("second") in ("1", "true", "yes", "True")
+        self.location_pk = request.GET.get("location")
+
+        # Validate location exists
+        self.location = get_object_or_404(PickupLocation, pk=self.location_pk)
+        self.auction = self.location.auction
+
+        if self.second and not self.location.second_pickup_time:
+            messages.error(
+                request,
+                "This location does not have a second pickup time",
+            )
+            return redirect(self.auction.get_absolute_url())
+
+        if not self.second and not self.location.pickup_time:
+            messages.error(
+                request,
+                "This location does not have a pickup time",
+            )
+            return redirect(self.auction.get_absolute_url())
+
+        # Confirm user has joined this auction
+        self.tos = AuctionTOS.objects.filter(
+            auction=self.location.auction,
+            user=request.user,
+        ).first()
+
+        if not self.tos:
+            messages.error(
+                request,
+                "You haven't joined this auction yet",
+            )
+            return redirect(self.auction.get_absolute_url())
+
+        if self.tos.pickup_location.pk is not self.location.pk:
+            messages.error(
+                request,
+                "You can't add a location to your calendar unless you've selected it",
+            )
+            return redirect(self.auction.get_absolute_url())
+
+        if self.calendar_type not in ("google", "outlook", "ics"):
+            messages.error(
+                request,
+                "Unknown calendar type requested",
+            )
+            return redirect(self.auction.get_absolute_url())
+
+        self.tos.add_to_calendar = self.calendar_type
+        self.tos.save()
+
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request, *args, **kwargs):
+        """Handle GET: redirect user or return ICS"""
+
+        # Select pickup time
+        start = self.location.second_pickup_time if self.second else self.location.pickup_time
+        if not start:
+            msg = "Pickup time not available"
+            raise Http404(msg)
+
+        # Convert to UTC and define end
+        end = start + timedelta(hours=1)
+
+        # Build common event info
+        title = f"{self.location.auction.title}"
+        if self.second:
+            title += " – second pickup"
+
+        details = f"{self.location.auction.title}\n{self.location.description or ''}".strip()
+        loc = self.location.address or f"{self.location.latitude},{self.location.longitude}"
+
+        if self.calendar_type == "google":
+            params = {
+                "action": "TEMPLATE",
+                "text": title,
+                "dates": f"{start.strftime('%Y%m%dT%H%M%SZ')}/{end.strftime('%Y%m%dT%H%M%SZ')}",
+                "details": details,
+                "location": loc,
+            }
+            url = f"https://calendar.google.com/calendar/render?{urlencode(params)}"
+            return redirect(url)
+
+        elif self.calendar_type == "outlook":
+            # Outlook supports ISO 8601 with UTC Z
+            params = {
+                "subject": title,
+                "body": details,
+                "startdt": start.isoformat().replace("+00:00", "Z"),
+                "enddt": end.isoformat().replace("+00:00", "Z"),
+                "location": loc,
+            }
+            url = f"https://outlook.live.com/calendar/0/deeplink/compose?{urlencode(params)}"
+            return redirect(url)
+
+        else:
+            ics_content = self._generate_ics(title, details, start, end, loc)
+            filename = f"{self.location.auction.slug}.ics"
+            response = HttpResponse(ics_content, content_type="text/calendar")
+            response["Content-Disposition"] = f'attachment; filename="{filename}"'
+            return response
+
+    def _generate_ics(self, title, description, start, end, location):
+        """Return a valid ICS file string (UTC-based, RFC5545 compliant)"""
+        uid = uuid.uuid4()
+        now_utc = timezone.now()
+        escaped_description = description.replace("\n", "\\n")
+        return (
+            "BEGIN:VCALENDAR\r\n"
+            "VERSION:2.0\r\n"
+            "PRODID:-//YourSite//Auction Pickup//EN\r\n"
+            "CALSCALE:GREGORIAN\r\n"
+            "METHOD:PUBLISH\r\n"
+            "BEGIN:VEVENT\r\n"
+            f"UID:{uid}@yourdomain.com\r\n"
+            f"DTSTAMP:{now_utc.strftime('%Y%m%dT%H%M%SZ')}\r\n"
+            f"DTSTART:{start.strftime('%Y%m%dT%H%M%SZ')}\r\n"
+            f"DTEND:{end.strftime('%Y%m%dT%H%M%SZ')}\r\n"
+            f"SUMMARY:{title}\r\n"
+            f"DESCRIPTION:{escaped_description}\r\n"
+            f"LOCATION:{location}\r\n"
+            "END:VEVENT\r\n"
+            "END:VCALENDAR\r\n"
+        )
 
 
 class CategoryFinder(View, LoginRequiredMixin):

@@ -1760,6 +1760,7 @@ class AuctionTOS(models.Model):
         "AuctionTOS", on_delete=models.SET_NULL, related_name="duplicate", blank=True, null=True
     )
     possible_duplicate.help_text = "There's a chance this user is a duplicate if this is set"
+    add_to_calendar = models.CharField(max_length=20, blank=True, null=True)
 
     @property
     def phone_as_string(self):

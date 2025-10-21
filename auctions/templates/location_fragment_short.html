@@ -1,13 +1,62 @@
 {% if not location.pickup_by_mail %}
     {%if location.has_coordinates %}
-    <a href="{{location.directions_link}}">Get directions</a>
+    <a href="{{location.directions_link}}" class="btn btn-sm mt-2 ms-2 btn-primary"><i class="bi bi-geo-alt-fill"></i>Get directions</a>
+
     {% endif %}
     {% if location.users_must_coordinate_pickup %}
         You must schedule your pickup time in advance.
     {% else %}
         <p><b>{{ location.pickup_time }}</b>
+            {% if hasChosenLocation == location.pk%}
+            <div class="dropdown d-inline">
+            <button class="btn btn-sm btn-primary dropdown-toggle" type="button" id="calendarDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                <i class="bi bi-calendar-day"></i> Add to calendar
+            </button>
+            <ul class="dropdown-menu" aria-labelledby="calendarDropdown">
+                <li>
+                <a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=google&location={{location.pk}}&second=False" target="_blank">
+                    <i class="bi bi-google"></i> Google Calendar
+                </a>
+                </li>
+                <li>
+                <a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=ics&location={{location.pk}}&second=False">
+                    <i class="bi bi-apple"></i> Apple Calendar (Download ICS)
+                </a>
+                </li>
+                <li>
+                <a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=outlook&location={{location.pk}}&second=False" target="_blank">
+                    <i class="bi bi-windows"></i> Microsoft Outlook Live
+                </a>
+                </li>
+            </ul>
+            </div>
+            {% endif %}
             {% if location.second_pickup_time %}
-            <br>You must return at <b>{{ location.second_pickup_time }}</b> to pick up lots from other locations.
+                <br>You must return on <b>{{ location.second_pickup_time }}</b> to pick up lots from other locations.<br>
+                {% if hasChosenLocation == location.pk%}
+                    <div class="dropdown d-inline">
+                    <button class="btn btn-sm btn-primary dropdown-toggle" type="button" id="calendarDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="bi bi-calendar-day"></i> Add return pickup to calendar
+                    </button>
+                    <ul class="dropdown-menu" aria-labelledby="calendarDropdown">
+                        <li>
+                        <a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=google&location={{location.pk}}&second=True" target="_blank">
+                            <i class="bi bi-google"></i> Google Calendar
+                        </a>
+                        </li>
+                        <li>
+                        <a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=ics&location={{location.pk}}&second=True">
+                            <i class="bi bi-apple"></i> Apple Calendar (Download ICS)
+                        </a>
+                        </li>
+                        <li>
+                        <a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=outlook&location={{location.pk}}&second=True" target="_blank">
+                            <i class="bi bi-windows"></i> Microsoft Outlook Live
+                        </a>
+                        </li>
+                    </ul>
+                    </div>
+                {% endif %}
             {% endif %}
         </p>
     {% endif %}
