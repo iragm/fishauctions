@@ -1557,9 +1557,9 @@ def auctionReport(request, slug):
                 previous_auctions = AuctionTOS.objects.filter(user=data.user).exclude(pk=data.pk).count()
                 number_of_userbans = data.number_of_userbans
                 account_age = data.user.date_joined
-                add_to_calendar = ("Yes" if data.add_to_calendar else "",)
+                add_to_calendar = "Yes" if data.add_to_calendar else ""
             else:
-                add_to_calendar = ("",)
+                add_to_calendar = ""
                 previous_auctions = ""
                 lotsViewed = ""
                 lotsBid = ""
