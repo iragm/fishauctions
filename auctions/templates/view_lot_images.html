@@ -235,7 +235,7 @@ function deactivate_lot() {
                             </div>
                         </div>
                         {% if lot.multimedia_count > 1 %}
-                        <div class="d-flex">
+                        <div class="d-flex overflow-x-auto flex-nowrap gap-2" style="scroll-snap-type: x mandatory;">
                             {% if lot.video_link %}
                             <button data-bs-target="#image_carousel" data-bs-slide-to="0" class="me-2 active thumbnail">
                                     <img style="min-width: 100px;" src="{% static 'youtube.png' %}" class="rounded">
