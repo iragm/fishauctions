@@ -2520,6 +2520,27 @@ class Lot(models.Model):
                     "unsubscribed": not self.user.userdata.email_me_when_people_comment_on_my_lots,
                 },
             )
+        # make sure lot_number_int is unique within the auction
+        # reported in a large auction where two lots had the same number but I have not been able to reproduce it
+        # https://github.com/iragm/fishauctions/issues/420
+        if self.lot_number_int and self.auction and not self.auction.use_seller_dash_lot_numbering:
+            duplicate_lot_number_check = (
+                Lot.objects.filter(
+                    auction=self.auction,
+                    lot_number_int=self.lot_number_int,
+                )
+                .exclude(pk=self.pk)
+                .first()
+            )
+            if duplicate_lot_number_check:
+                duplicate_lot_number_check.lot_number_int = None
+                duplicate_lot_number_check.label_printed = False
+                duplicate_lot_number_check.save()
+                self.auction.create_history(
+                    "LOTS",
+                    f"Duplicate lot number detected, changing lot number {self.lot_number_int} to {duplicate_lot_number_check.lot_number_int}",
+                    user=None,
+                )
 
     def __str__(self):
         return "" + str(self.lot_number_display) + " - " + self.lot_name
