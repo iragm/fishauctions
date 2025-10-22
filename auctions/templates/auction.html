@@ -239,10 +239,12 @@ function initMap() {
                     {% endif %}
                     {% if hasChosenLocation == location.pk%}<span class="badge bg-success text-dark">Your confirmed location</span><br>{% endif %}
                     {% include 'location_fragment.html' %}
-                    {% if location.contact_person and hasChosenLocation == location.pk or view.is_auction_admin %}Contact for this location: <b>{{location.contact_person.name | default:""}}</b><br>
+                    {% if location.contact_person %}
+                    {% if hasChosenLocation == location.pk or view.is_auction_admin %}Contact for this location: <b>{{location.contact_person.name | default:""}}</b><br>
                         {{location.contact_person.email | default:"" | urlize}}<br>
                         {{location.contact_person.phone_number | default:"" }}<br>
                         {% endif %}
+                    {% endif %}
                 </div>
                 {% endfor %}
             </div>

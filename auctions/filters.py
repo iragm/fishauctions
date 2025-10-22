@@ -61,7 +61,11 @@ class AuctionFilter(django_filters.FilterSet):
         if value.isnumeric():
             return queryset.filter(distance__lte=int(value))
         else:
-            return queryset.filter(title__icontains=value)
+            return queryset.filter(
+                Q(title__icontains=value)
+                | Q(created_by__userdata__club__name__icontains=value)
+                | Q(created_by__userdata__club__abbreviation=value)
+            )
 
 
 class AuctionTOSFilter(django_filters.FilterSet):

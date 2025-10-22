@@ -138,6 +138,7 @@ function deactivate_lot() {
                 <div class="row">
                 <div class="col-md-10 offset-md1">
                     {% if request.user.is_authenticated %}
+                        <div class="d-flex overflow-x-auto flex-nowrap gap-2" style="scroll-snap-type: x mandatory;">
                         <div class="btn-group" role="group">
                             {% if is_auction_admin %}
                                 <a class="btn btn-primary" href="/auctions/{{auction.slug}}/lots">
@@ -181,6 +182,7 @@ function deactivate_lot() {
                                     {% endfor %}
                                 </ul>
                         {% endif %}
+                        </div>
                         </div>
                     {% endif %}
                     <h3>{{ lot.lot_name }}</h3>
