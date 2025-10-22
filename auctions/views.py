@@ -782,14 +782,9 @@ def watchOrUnwatch(request, pk):
         lot = Lot.objects.filter(pk=pk, is_deleted=False).first()
         if not lot:
             return HttpResponse("Failure")
-        # have gotten a MultipleObjectsReturned error pointing here, not sure how that is possible,
-        # probably a race condition when multiple watches are fired off at once
-        # For now I am treating this as a one-off, but we can add some unique_together criteria to the database if it persists
-        obj, created = Watch.objects.update_or_create(
-            lot_number=lot,
-            user=user,
-            defaults={},
-        )
+        obj = Watch.objects.filter(lot_number=lot, user=user).first()
+        if not obj:
+            obj = Watch.objects.create(lot_number=lot, user=user)
         if watch == "false":  # string not bool...
             obj.delete()
         if obj:
