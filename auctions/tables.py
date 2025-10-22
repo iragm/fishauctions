@@ -341,15 +341,17 @@ class LotHTMxTableForUsers(tables.Table):
     auction = tables.Column(attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}})
 
     def render_active(self, value, record):
+        if record.banned:
+            return mark_safe('<span class="badge bg-danger">Removed</span>')
+        if record.deactivated:
+            return mark_safe('<span class="badge bg-secondary">Deactivated</span>')
+        if record.winner or record.auctiontos_winner:
+            return mark_safe('<span class="badge bg-success text-dark">Sold</span>')
+        if record.high_bidder:
+            return mark_safe('<span class="badge bg-info text-dark">Bids</span>')
         if value:
             return mark_safe('<span class="badge bg-primary">Active</span>')
         else:
-            if record.banned:
-                return mark_safe('<span class="badge bg-danger">Removed</span>')
-            elif record.deactivated:
-                return mark_safe('<span class="badge bg-secondary">Deactivated</span>')
-            if record.winner or record.auctiontos_winner:
-                return mark_safe('<span class="badge bg-success text-dark">Sold</span>')
             return mark_safe('<span class="badge bg-secondary">Unsold</span>')
 
     def render_price(self, value, record):
