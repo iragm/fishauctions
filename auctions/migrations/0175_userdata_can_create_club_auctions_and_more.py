@@ -397,7 +397,7 @@ Questions?  Just reply and we'll help!""",
 
 You've been outbid on lot {{ lot.lot_number_display }} - {{ lot.lot_name }}.
 
-Bid more here: {{ lot.full_lot_link }}
+Bid more here: https://{{ lot.full_lot_link }}
 
 Good luck!""",
             "html_content": """Hello {{ name }},<br><br>
@@ -406,7 +406,7 @@ You've been outbid on lot {{ lot.lot_number_display }} - <b>{{ lot.lot_name }}</
 
 {% if lot.thumbnail %}<img src='https://{{ domain }}{{ lot.thumbnail.image.lot_list.url }}'></img><br>{% endif %}
 
-<a href='{{ lot.full_lot_link }}?src=outbid'>Click here to increase your bid</a><br><br>
+<a href='https://{{ lot.full_lot_link }}?src=outbid'>Click here to increase your bid</a><br><br>
 
 Good luck!""",
         },
