@@ -7484,12 +7484,12 @@ class AddToCalendarView(LoginRequiredMixin, View):
             )
             return redirect(self.auction.get_absolute_url())
 
-        if self.tos.pickup_location.pk is not self.location.pk:
-            messages.error(
-                request,
-                "You can't add a location to your calendar unless you've selected it",
-            )
-            return redirect(self.auction.get_absolute_url())
+        # if self.tos.pickup_location.pk is not self.location.pk:
+        #     messages.error(
+        #         request,
+        #         "You can't add a location to your calendar unless you've selected it",
+        #     )
+        #     return redirect(self.auction.get_absolute_url())
 
         if self.calendar_type not in ("google", "outlook", "ics"):
             messages.error(
