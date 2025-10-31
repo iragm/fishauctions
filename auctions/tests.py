@@ -593,6 +593,71 @@ class ChatSubscriptionTests(TestCase):
         assert data.my_lot_subscriptions_count == 1
         assert data.other_lot_subscriptions_count == 1
 
+    def test_own_messages_not_counted_as_unread(self):
+        """Test that a user's own chat messages are not counted as unread"""
+        # Create two users: lot owner and another user
+        lot_owner = User.objects.create(username="lotowner")
+        other_user = User.objects.create(username="otheruser")
+        
+        # Create a lot owned by other_user
+        lot = Lot.objects.create(
+            lot_name="Test lot for own messages",
+            date_end=timezone.now() + datetime.timedelta(days=30),
+            reserve_price=5,
+            user=other_user,
+            quantity=1,
+        )
+        
+        # lot_owner creates a subscription to this lot
+        subscription = ChatSubscription.objects.create(
+            lot=lot, 
+            user=lot_owner
+        )
+        
+        # Verify no unread messages initially
+        lot_owner_data = lot_owner.userdata
+        assert lot_owner_data.other_lot_subscriptions_count == 0
+        assert lot_owner_data.unnotified_subscriptions_count == 0
+        
+        # other_user posts a message - this should count as unread for lot_owner
+        future_time = timezone.now() + datetime.timedelta(minutes=5)
+        history1 = LotHistory.objects.create(
+            user=other_user,
+            lot=lot,
+            message="Message from other user",
+            changed_price=False,
+        )
+        history1.timestamp = future_time
+        history1.save()
+        
+        # Verify lot_owner sees this as unread
+        assert lot_owner_data.other_lot_subscriptions_count == 1
+        assert lot_owner_data.unnotified_subscriptions_count == 1
+        
+        # lot_owner posts their own message - this should NOT count as unread for lot_owner
+        future_time2 = timezone.now() + datetime.timedelta(minutes=10)
+        history2 = LotHistory.objects.create(
+            user=lot_owner,
+            lot=lot,
+            message="Message from lot_owner themselves",
+            changed_price=False,
+        )
+        history2.timestamp = future_time2
+        history2.save()
+        
+        # lot_owner should still only see 1 unread (from other_user, not their own)
+        assert lot_owner_data.other_lot_subscriptions_count == 1
+        assert lot_owner_data.unnotified_subscriptions_count == 1
+        
+        # Mark subscription as seen
+        subscription.last_seen = timezone.now() + datetime.timedelta(minutes=15)
+        subscription.last_notification_sent = timezone.now() + datetime.timedelta(minutes=15)
+        subscription.save()
+        
+        # Now there should be no unread messages
+        assert lot_owner_data.other_lot_subscriptions_count == 0
+        assert lot_owner_data.unnotified_subscriptions_count == 0
+
 
 class InvoiceModelTests(StandardTestCase):
     def test_invoices(self):
