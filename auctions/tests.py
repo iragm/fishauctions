@@ -1096,12 +1096,8 @@ class AuctionHistoryTests(StandardTestCase):
             lot_submission_end_date=theFuture,
             winning_bid_percent_to_club=25,
         )
-        test_location = PickupLocation.objects.create(
-            name="test location", auction=test_auction, pickup_time=theFuture
-        )
-        test_tos = AuctionTOS.objects.create(
-            user=self.user, auction=test_auction, pickup_location=test_location
-        )
+        test_location = PickupLocation.objects.create(name="test location", auction=test_auction, pickup_time=theFuture)
+        test_tos = AuctionTOS.objects.create(user=self.user, auction=test_auction, pickup_location=test_location)
 
         # Create a lot that can be edited (no winner, no bids)
         editable_lot = Lot.objects.create(
@@ -1150,12 +1146,8 @@ class AuctionHistoryTests(StandardTestCase):
             lot_submission_end_date=theFuture,
             winning_bid_percent_to_club=25,
         )
-        test_location = PickupLocation.objects.create(
-            name="test location", auction=test_auction, pickup_time=theFuture
-        )
-        test_tos = AuctionTOS.objects.create(
-            user=self.user, auction=test_auction, pickup_location=test_location
-        )
+        test_location = PickupLocation.objects.create(name="test location", auction=test_auction, pickup_time=theFuture)
+        test_tos = AuctionTOS.objects.create(user=self.user, auction=test_auction, pickup_location=test_location)
 
         # Create a lot that can be deleted (no winner, no bids, created recently)
         deletable_lot = Lot.objects.create(
