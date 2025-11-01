@@ -1084,12 +1084,39 @@ class AuctionHistoryTests(StandardTestCase):
     def test_lot_edit_creates_history(self):
         """Test that editing a lot creates an audit history entry"""
         self.client.login(username="my_lot", password="testpassword")
+
+        # Create an auction with lot submission still open
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        test_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Test auction for editing",
+            is_online=True,
+            date_end=theFuture,
+            date_start=timezone.now(),
+            lot_submission_end_date=theFuture,
+            winning_bid_percent_to_club=25,
+        )
+        test_location = PickupLocation.objects.create(
+            name="test location", auction=test_auction, pickup_time=theFuture
+        )
+        test_tos = AuctionTOS.objects.create(
+            user=self.user, auction=test_auction, pickup_location=test_location
+        )
+
+        # Create a lot that can be edited (no winner, no bids)
+        editable_lot = Lot.objects.create(
+            lot_name="Editable test lot",
+            auction=test_auction,
+            auctiontos_seller=test_tos,
+            quantity=1,
+        )
+
         # Get initial history count
-        initial_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="LOTS").count()
+        initial_count = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").count()
 
         # Edit a lot - provide all required fields
         self.client.post(
-            reverse("edit_lot", kwargs={"pk": self.lot.pk}),
+            reverse("edit_lot", kwargs={"pk": editable_lot.pk}),
             {
                 "lot_name": "Updated Lot Name",
                 "quantity": 2,
@@ -1100,29 +1127,56 @@ class AuctionHistoryTests(StandardTestCase):
         )
 
         # Check that history was created
-        new_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="LOTS").count()
+        new_count = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").count()
         assert new_count == initial_count + 1
 
         # Verify the history entry
-        history = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="LOTS").latest("timestamp")
+        history = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").latest("timestamp")
         assert "Edited lot" in history.action
         assert history.user == self.user
 
     def test_lot_delete_creates_history(self):
         """Test that deleting a lot creates an audit history entry"""
         self.client.login(username="my_lot", password="testpassword")
-        # Get initial history count
-        initial_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="LOTS").count()
 
-        # Delete a lot
-        self.client.post(reverse("delete_lot", kwargs={"pk": self.lot.pk}))
+        # Create an auction with lot submission still open
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        test_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Test auction for deleting",
+            is_online=True,
+            date_end=theFuture,
+            date_start=timezone.now(),
+            lot_submission_end_date=theFuture,
+            winning_bid_percent_to_club=25,
+        )
+        test_location = PickupLocation.objects.create(
+            name="test location", auction=test_auction, pickup_time=theFuture
+        )
+        test_tos = AuctionTOS.objects.create(
+            user=self.user, auction=test_auction, pickup_location=test_location
+        )
+
+        # Create a lot that can be deleted (no winner, no bids, created recently)
+        deletable_lot = Lot.objects.create(
+            lot_name="Deletable test lot",
+            auction=test_auction,
+            auctiontos_seller=test_tos,
+            quantity=1,
+        )
+
+        # Get initial history count
+        initial_count = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").count()
+
+        # Delete the lot
+        self.client.post(reverse("delete_lot", kwargs={"pk": deletable_lot.pk}))
 
         # Check that history was created
-        new_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="LOTS").count()
+        new_count = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").count()
         assert new_count == initial_count + 1
 
         # Verify the history entry
-        history = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="LOTS").latest("timestamp")
+        history = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").latest("timestamp")
         assert "Deleted lot" in history.action
         assert history.user == self.user
 
