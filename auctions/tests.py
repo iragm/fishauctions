@@ -8,6 +8,7 @@ from django.utils import timezone
 
 from .models import (
     Auction,
+    AuctionHistory,
     AuctionTOS,
     Bid,
     ChatSubscription,
@@ -1075,3 +1076,94 @@ class DynamicSetLotWinnerViewTestCase(StandardTestCase):
         )
         data = response.json()
         assert "Multiple" in data.get("lot")
+
+
+class AuctionHistoryTests(StandardTestCase):
+    """Test that auction history is properly tracked for lot operations and user joins"""
+
+    def test_lot_edit_creates_history(self):
+        """Test that editing a lot creates an audit history entry"""
+        self.client.login(username="my_lot", password="testpassword")
+        # Get initial history count
+        initial_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="LOTS").count()
+
+        # Edit a lot
+        self.client.post(
+            reverse("edit_lot", kwargs={"pk": self.lot.pk}),
+            {
+                "lot_name": "Updated Lot Name",
+                "species_category": self.lot.species_category.pk,
+                "quantity": 2,
+                "auction": self.online_auction.pk,
+                "auctiontos_seller": self.online_tos.pk,
+            },
+        )
+
+        # Check that history was created
+        new_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="LOTS").count()
+        assert new_count == initial_count + 1
+
+        # Verify the history entry
+        history = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="LOTS").latest("timestamp")
+        assert "Edited lot" in history.action
+        assert history.user == self.user
+
+    def test_lot_delete_creates_history(self):
+        """Test that deleting a lot creates an audit history entry"""
+        self.client.login(username="my_lot", password="testpassword")
+        # Get initial history count
+        initial_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="LOTS").count()
+
+        # Delete a lot
+        self.client.post(reverse("delete_lot", kwargs={"pk": self.lot.pk}))
+
+        # Check that history was created
+        new_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="LOTS").count()
+        assert new_count == initial_count + 1
+
+        # Verify the history entry
+        history = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="LOTS").latest("timestamp")
+        assert "Deleted lot" in history.action
+        assert history.user == self.user
+
+    def test_user_join_creates_history_only_once(self):
+        """Test that joining an auction creates history only on first join"""
+        # Create a new user who hasn't joined yet
+        new_user = User.objects.create_user(username="new_user", password="testpassword", email="new@example.com")
+        UserData.objects.create(user=new_user)
+        self.client.login(username="new_user", password="testpassword")
+
+        # Get initial history count
+        initial_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").count()
+
+        # Join the auction for the first time
+        self.client.post(
+            reverse("auction_info", kwargs={"slug": self.online_auction.slug}),
+            {
+                "pickup_location": self.location.pk,
+                "i_agree": True,
+                "time_spent_reading_rules": 10,
+            },
+        )
+
+        # Check that history was created
+        new_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").count()
+        assert new_count == initial_count + 1
+
+        # Verify the history entry
+        history = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").latest("timestamp")
+        assert "has joined this auction" in history.action
+
+        # Join again (re-submit the same form)
+        self.client.post(
+            reverse("auction_info", kwargs={"slug": self.online_auction.slug}),
+            {
+                "pickup_location": self.location.pk,
+                "i_agree": True,
+                "time_spent_reading_rules": 20,
+            },
+        )
+
+        # Check that NO new history was created
+        final_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").count()
+        assert final_count == new_count  # Should be the same as after first join
