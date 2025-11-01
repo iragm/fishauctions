@@ -3880,6 +3880,8 @@ class LotUpdate(LotValidation, UpdateView):
     def form_valid(self, form):
         """Track history when a lot is edited"""
         lot = self.get_object()
+        result = super().form_valid(form)
+        # Create history after successful update
         if lot.auction and form.has_changed():
             lot.auction.create_history(
                 applies_to="LOTS",
@@ -3887,7 +3889,7 @@ class LotUpdate(LotValidation, UpdateView):
                 user=self.request.user,
                 form=form,
             )
-        return super().form_valid(form)
+        return result
 
 
 class AuctionDelete(AuctionViewMixin, DeleteView):
