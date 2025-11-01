@@ -1085,6 +1085,14 @@ class AuctionHistoryTests(StandardTestCase):
         """Test that editing a lot creates an audit history entry"""
         self.client.login(username="my_lot", password="testpassword")
 
+        # Set up user data required by LotValidation
+        self.user.first_name = "Test"
+        self.user.last_name = "User"
+        self.user.save()
+        user_data = UserData.objects.get(user=self.user)
+        user_data.address = "123 Test St"
+        user_data.save()
+
         # Create an auction with lot submission still open
         theFuture = timezone.now() + datetime.timedelta(days=3)
         test_auction = Auction.objects.create(
@@ -1139,6 +1147,14 @@ class AuctionHistoryTests(StandardTestCase):
         """Test that deleting a lot creates an audit history entry"""
         self.client.login(username="my_lot", password="testpassword")
 
+        # Set up user data required by LotValidation
+        self.user.first_name = "Test"
+        self.user.last_name = "User"
+        self.user.save()
+        user_data = UserData.objects.get(user=self.user)
+        user_data.address = "123 Test St"
+        user_data.save()
+
         # Create an auction with lot submission still open
         theFuture = timezone.now() + datetime.timedelta(days=3)
         test_auction = Auction.objects.create(
@@ -1191,7 +1207,7 @@ class AuctionHistoryTests(StandardTestCase):
 
         # Join the auction for the first time
         self.client.post(
-            reverse("auction_info", kwargs={"slug": self.online_auction.slug}),
+            reverse("auction_main", kwargs={"slug": self.online_auction.slug}),
             {
                 "pickup_location": self.location.pk,
                 "i_agree": True,
@@ -1209,7 +1225,7 @@ class AuctionHistoryTests(StandardTestCase):
 
         # Join again (re-submit the same form)
         self.client.post(
-            reverse("auction_info", kwargs={"slug": self.online_auction.slug}),
+            reverse("auction_main", kwargs={"slug": self.online_auction.slug}),
             {
                 "pickup_location": self.location.pk,
                 "i_agree": True,
