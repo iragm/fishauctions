@@ -3807,12 +3807,15 @@ class LotCreateView(LotValidation, CreateView):
             if not invoice:
                 invoice = Invoice.objects.create(auctiontos_user=lot.auctiontos_seller, auction=lot.auction)
             invoice.recalculate
+        result = super().form_valid(form, **kwargs)
+        # Create history after lot is saved and has a lot_number_display
+        if lot.auction and lot.auctiontos_seller:
             lot.auction.create_history(
                 applies_to="LOTS",
-                action="Added lot",
+                action=f"Added lot {lot.lot_number_display}",
                 user=self.request.user,
             )
-        return super().form_valid(form, **kwargs)
+        return result
 
     def dispatch(self, request, *args, **kwargs):
         userData, created = UserData.objects.get_or_create(
@@ -3885,7 +3888,7 @@ class LotUpdate(LotValidation, UpdateView):
         if lot.auction and form.has_changed():
             lot.auction.create_history(
                 applies_to="LOTS",
-                action="Edited lot",
+                action=f"Edited lot {lot.lot_number_display}",
                 user=self.request.user,
                 form=form,
             )
@@ -3927,7 +3930,7 @@ class LotDelete(LoginRequiredMixin, DeleteView):
         if lot.auction:
             lot.auction.create_history(
                 applies_to="LOTS",
-                action="Deleted lot",
+                action=f"Deleted lot {lot.lot_number_display}",
                 user=self.request.user,
             )
         return super().form_valid(form)
