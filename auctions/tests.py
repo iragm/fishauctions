@@ -1075,3 +1075,116 @@ class DynamicSetLotWinnerViewTestCase(StandardTestCase):
         )
         data = response.json()
         assert "Multiple" in data.get("lot")
+
+
+class LotAdminViewTestCase(StandardTestCase):
+    """Test the LotAdmin view, specifically the message about quick set lot winners"""
+
+    def get_url(self, lot_pk):
+        return reverse("auctionlotadmin", kwargs={"pk": lot_pk})
+
+    def test_message_shown_when_only_winner_and_price_changed(self):
+        """Test that a message is shown when only winner and winning_price are changed"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+
+        # Create a new AuctionTOS for the winner
+        winner_tos = AuctionTOS.objects.create(
+            user=self.user_with_no_lots,
+            auction=self.in_person_auction,
+            pickup_location=self.in_person_location,
+            bidder_number="999"
+        )
+
+        # Post only winner and price changes
+        response = self.client.post(
+            self.get_url(self.in_person_lot.pk),
+            data={
+                "lot_name": self.in_person_lot.lot_name,
+                "species_category": self.in_person_lot.species_category.pk if self.in_person_lot.species_category else "",
+                "summernote_description": self.in_person_lot.summernote_description,
+                "quantity": self.in_person_lot.quantity,
+                "donation": self.in_person_lot.donation,
+                "i_bred_this_fish": self.in_person_lot.i_bred_this_fish,
+                "reserve_price": self.in_person_lot.reserve_price or "",
+                "buy_now_price": self.in_person_lot.buy_now_price or "",
+                "banned": self.in_person_lot.banned,
+                "custom_checkbox": self.in_person_lot.custom_checkbox,
+                "custom_field_1": self.in_person_lot.custom_field_1 or "",
+                "auction": self.in_person_auction.pk,
+                "auctiontos_winner": winner_tos.pk,
+                "winning_price": "50",
+            },
+        )
+
+        # Check that the response contains the message
+        messages_list = list(response.wsgi_request._messages)
+        assert len(messages_list) == 1
+        assert "quick set lot winners" in str(messages_list[0])
+        assert "You're doing things the hard way" in str(messages_list[0])
+
+    def test_no_message_when_other_fields_changed(self):
+        """Test that no message is shown when other fields are also changed"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+
+        # Create a new AuctionTOS for the winner
+        winner_tos = AuctionTOS.objects.create(
+            user=self.user_with_no_lots,
+            auction=self.in_person_auction,
+            pickup_location=self.in_person_location,
+            bidder_number="998"
+        )
+
+        # Post winner, price, and lot_name changes
+        response = self.client.post(
+            self.get_url(self.in_person_lot.pk),
+            data={
+                "lot_name": "Changed lot name",  # Changed
+                "species_category": self.in_person_lot.species_category.pk if self.in_person_lot.species_category else "",
+                "summernote_description": self.in_person_lot.summernote_description,
+                "quantity": self.in_person_lot.quantity,
+                "donation": self.in_person_lot.donation,
+                "i_bred_this_fish": self.in_person_lot.i_bred_this_fish,
+                "reserve_price": self.in_person_lot.reserve_price or "",
+                "buy_now_price": self.in_person_lot.buy_now_price or "",
+                "banned": self.in_person_lot.banned,
+                "custom_checkbox": self.in_person_lot.custom_checkbox,
+                "custom_field_1": self.in_person_lot.custom_field_1 or "",
+                "auction": self.in_person_auction.pk,
+                "auctiontos_winner": winner_tos.pk,
+                "winning_price": "60",
+            },
+        )
+
+        # Check that the message is NOT shown when other fields are changed too
+        messages_list = list(response.wsgi_request._messages)
+        for msg in messages_list:
+            assert "quick set lot winners" not in str(msg)
+
+    def test_no_message_when_nothing_changed(self):
+        """Test that no message is shown when nothing changes"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+
+        # Post without any changes
+        response = self.client.post(
+            self.get_url(self.in_person_lot.pk),
+            data={
+                "lot_name": self.in_person_lot.lot_name,
+                "species_category": self.in_person_lot.species_category.pk if self.in_person_lot.species_category else "",
+                "summernote_description": self.in_person_lot.summernote_description,
+                "quantity": self.in_person_lot.quantity,
+                "donation": self.in_person_lot.donation,
+                "i_bred_this_fish": self.in_person_lot.i_bred_this_fish,
+                "reserve_price": self.in_person_lot.reserve_price or "",
+                "buy_now_price": self.in_person_lot.buy_now_price or "",
+                "banned": self.in_person_lot.banned,
+                "custom_checkbox": self.in_person_lot.custom_checkbox,
+                "custom_field_1": self.in_person_lot.custom_field_1 or "",
+                "auction": self.in_person_auction.pk,
+                "auctiontos_winner": self.in_person_lot.auctiontos_winner.pk if self.in_person_lot.auctiontos_winner else "",
+                "winning_price": self.in_person_lot.winning_price or "",
+            },
+        )
+
+        # Check that no message is shown
+        messages_list = list(response.wsgi_request._messages)
+        assert len(messages_list) == 0
