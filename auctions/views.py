@@ -3877,6 +3877,18 @@ class LotUpdate(LotValidation, UpdateView):
         context["title"] = f"Edit {self.get_object().lot_name}"
         return context
 
+    def form_valid(self, form):
+        """Track history when a lot is edited"""
+        lot = self.get_object()
+        if lot.auction and form.has_changed():
+            lot.auction.create_history(
+                applies_to="LOTS",
+                action="Edited lot",
+                user=self.request.user,
+                form=form,
+            )
+        return super().form_valid(form)
+
 
 class AuctionDelete(AuctionViewMixin, DeleteView):
     model = Auction
@@ -3906,6 +3918,17 @@ class LotDelete(LoginRequiredMixin, DeleteView):
 
     def get_success_url(self):
         return f"/lots/user/?user={self.request.user.pk}"
+
+    def form_valid(self, form):
+        """Track history when a lot is deleted"""
+        lot = self.get_object()
+        if lot.auction:
+            lot.auction.create_history(
+                applies_to="LOTS",
+                action="Deleted lot",
+                user=self.request.user,
+            )
+        return super().form_valid(form)
 
 
 class ImageDelete(LoginRequiredMixin, DeleteView):
@@ -4806,6 +4829,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
                 # manually_added=True,
                 # user__isnull=True
             ).first()
+            is_new_join = False
             if find_by_email:
                 obj = find_by_email
                 obj.user = self.request.user
@@ -4815,6 +4839,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
                     auction=auction,
                     defaults={"pickup_location": form.cleaned_data["pickup_location"]},
                 )
+                is_new_join = created
             obj.pickup_location = form.cleaned_data["pickup_location"]
             # check if mail was chosen
             if obj.pickup_location.pickup_by_mail:
@@ -4845,11 +4870,13 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
             userData.last_auction_used = auction
             userData.last_activity = timezone.now()
             userData.save()
-            auction.create_history(
-                applies_to="USERS",
-                action=f"{obj.name} has joined this auction",
-                user=self.request.user,
-            )
+            # Only create history if this is a new join
+            if is_new_join:
+                auction.create_history(
+                    applies_to="USERS",
+                    action=f"{obj.name} has joined this auction",
+                    user=self.request.user,
+                )
             return self.form_valid(form)
         else:
             logger.debug(form.cleaned_data)
