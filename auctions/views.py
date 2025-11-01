@@ -4060,8 +4060,9 @@ class LotAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
                     quick_set_url = reverse("auction_lot_winners_dynamic", kwargs={"slug": self.auction.slug})
                     messages.info(
                         self.request,
-                        mark_safe(
-                            f"You're doing things the hard way - <a href='{quick_set_url}'>quick set lot winners</a> page lets you mark lots sold much more quickly."
+                        format_html(
+                            "You're doing things the hard way - <a href='{}'>quick set lot winners</a> page lets you mark lots sold much more quickly.",
+                            quick_set_url,
                         ),
                     )
             obj = self.lot
