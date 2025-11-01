@@ -3883,9 +3883,12 @@ class LotUpdate(LotValidation, UpdateView):
     def form_valid(self, form):
         """Track history when a lot is edited"""
         lot = self.get_object()
+        # Check if we should create history before saving
+        should_create_history = lot.auction and form.has_changed()
+        # Save the form
         result = super().form_valid(form)
         # Create history after successful update
-        if lot.auction and form.has_changed():
+        if should_create_history:
             lot.auction.create_history(
                 applies_to="LOTS",
                 action=f"Edited lot {lot.lot_number_display}",

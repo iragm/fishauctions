@@ -1087,14 +1087,15 @@ class AuctionHistoryTests(StandardTestCase):
         # Get initial history count
         initial_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="LOTS").count()
 
-        # Edit a lot
+        # Edit a lot - provide all required fields
         self.client.post(
             reverse("edit_lot", kwargs={"pk": self.lot.pk}),
             {
                 "lot_name": "Updated Lot Name",
                 "quantity": 2,
-                "auction": self.online_auction.pk,
-                "auctiontos_seller": self.online_tos.pk,
+                "reserve_price": 2,
+                "summernote_description": "",
+                "donation": False,
             },
         )
 
