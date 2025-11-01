@@ -1092,7 +1092,6 @@ class AuctionHistoryTests(StandardTestCase):
             reverse("edit_lot", kwargs={"pk": self.lot.pk}),
             {
                 "lot_name": "Updated Lot Name",
-                "species_category": self.lot.species_category.pk,
                 "quantity": 2,
                 "auction": self.online_auction.pk,
                 "auctiontos_seller": self.online_tos.pk,
