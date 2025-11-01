@@ -1105,13 +1105,14 @@ class AuctionHistoryTests(StandardTestCase):
             auction=test_auction,
             auctiontos_seller=test_tos,
             quantity=1,
+            user=self.user,
         )
 
         # Get initial history count
         initial_count = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").count()
 
         # Edit a lot - provide all required fields
-        self.client.post(
+        response = self.client.post(
             reverse("edit_lot", kwargs={"pk": editable_lot.pk}),
             {
                 "lot_name": "Updated Lot Name",
@@ -1120,11 +1121,14 @@ class AuctionHistoryTests(StandardTestCase):
                 "summernote_description": "",
                 "donation": False,
             },
+            follow=True,
         )
 
         # Check that history was created
         new_count = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").count()
-        assert new_count == initial_count + 1
+        assert new_count == initial_count + 1, (
+            f"History not created. Response status: {response.status_code}, new_count={new_count}, initial_count={initial_count}"
+        )
 
         # Verify the history entry
         history = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").latest("timestamp")
@@ -1155,17 +1159,20 @@ class AuctionHistoryTests(StandardTestCase):
             auction=test_auction,
             auctiontos_seller=test_tos,
             quantity=1,
+            user=self.user,
         )
 
         # Get initial history count
         initial_count = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").count()
 
         # Delete the lot
-        self.client.post(reverse("delete_lot", kwargs={"pk": deletable_lot.pk}))
+        response = self.client.post(reverse("delete_lot", kwargs={"pk": deletable_lot.pk}), follow=True)
 
         # Check that history was created
         new_count = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").count()
-        assert new_count == initial_count + 1
+        assert new_count == initial_count + 1, (
+            f"History not created. Response status: {response.status_code}, new_count={new_count}, initial_count={initial_count}"
+        )
 
         # Verify the history entry
         history = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").latest("timestamp")
@@ -1175,8 +1182,8 @@ class AuctionHistoryTests(StandardTestCase):
     def test_user_join_creates_history_only_once(self):
         """Test that joining an auction creates history only on first join"""
         # Create a new user who hasn't joined yet
-        new_user = User.objects.create_user(username="new_user", password="testpassword", email="new@example.com")
-        UserData.objects.create(user=new_user)
+        User.objects.create_user(username="new_user", password="testpassword", email="new@example.com")
+        # UserData is automatically created by signal, so we don't need to create it manually
         self.client.login(username="new_user", password="testpassword")
 
         # Get initial history count
