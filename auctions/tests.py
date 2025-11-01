@@ -1092,7 +1092,7 @@ class LotAdminViewTestCase(StandardTestCase):
             user=self.user_with_no_lots,
             auction=self.in_person_auction,
             pickup_location=self.in_person_location,
-            bidder_number="999"
+            bidder_number="999",
         )
 
         # Post only winner and price changes
@@ -1100,7 +1100,9 @@ class LotAdminViewTestCase(StandardTestCase):
             self.get_url(self.in_person_lot.pk),
             data={
                 "lot_name": self.in_person_lot.lot_name,
-                "species_category": self.in_person_lot.species_category.pk if self.in_person_lot.species_category else "",
+                "species_category": self.in_person_lot.species_category.pk
+                if self.in_person_lot.species_category
+                else "",
                 "summernote_description": self.in_person_lot.summernote_description,
                 "quantity": self.in_person_lot.quantity,
                 "donation": self.in_person_lot.donation,
@@ -1131,7 +1133,7 @@ class LotAdminViewTestCase(StandardTestCase):
             user=self.user_with_no_lots,
             auction=self.in_person_auction,
             pickup_location=self.in_person_location,
-            bidder_number="998"
+            bidder_number="998",
         )
 
         # Post winner, price, and lot_name changes
@@ -1139,7 +1141,9 @@ class LotAdminViewTestCase(StandardTestCase):
             self.get_url(self.in_person_lot.pk),
             data={
                 "lot_name": "Changed lot name",  # Changed
-                "species_category": self.in_person_lot.species_category.pk if self.in_person_lot.species_category else "",
+                "species_category": self.in_person_lot.species_category.pk
+                if self.in_person_lot.species_category
+                else "",
                 "summernote_description": self.in_person_lot.summernote_description,
                 "quantity": self.in_person_lot.quantity,
                 "donation": self.in_person_lot.donation,
@@ -1169,7 +1173,9 @@ class LotAdminViewTestCase(StandardTestCase):
             self.get_url(self.in_person_lot.pk),
             data={
                 "lot_name": self.in_person_lot.lot_name,
-                "species_category": self.in_person_lot.species_category.pk if self.in_person_lot.species_category else "",
+                "species_category": self.in_person_lot.species_category.pk
+                if self.in_person_lot.species_category
+                else "",
                 "summernote_description": self.in_person_lot.summernote_description,
                 "quantity": self.in_person_lot.quantity,
                 "donation": self.in_person_lot.donation,
@@ -1180,7 +1186,9 @@ class LotAdminViewTestCase(StandardTestCase):
                 "custom_checkbox": self.in_person_lot.custom_checkbox,
                 "custom_field_1": self.in_person_lot.custom_field_1 or "",
                 "auction": self.in_person_auction.pk,
-                "auctiontos_winner": self.in_person_lot.auctiontos_winner.pk if self.in_person_lot.auctiontos_winner else "",
+                "auctiontos_winner": self.in_person_lot.auctiontos_winner.pk
+                if self.in_person_lot.auctiontos_winner
+                else "",
                 "winning_price": self.in_person_lot.winning_price or "",
             },
         )
