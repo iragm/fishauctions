@@ -1,4 +1,5 @@
 import datetime
+from decimal import Decimal
 
 from django.contrib.auth.models import User
 from django.test import TestCase
@@ -788,7 +789,7 @@ class LotPricesTests(TestCase):
         self.auction.save()
         invoice, created = Invoice.objects.get_or_create(auctiontos_user=self.tos)
         assert invoice.net == invoice.rounded_net
-        assert round(invoice.rounded_net, 2) == -3.2
+        self.assertAlmostEqual(Decimal(invoice.rounded_net), Decimal(-3.2))
 
 
 class LotRefundDialogTests(TestCase):
