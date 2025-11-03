@@ -8,7 +8,7 @@
       {% else %}
         {% if invoice.unsold_lot_warning %}<span class='text-warning'>{{unsold_lot_warning}}</span><br>{% endif %}
         {{ tos.name }} {{ invoice.invoice_summary_short }} {% include 'invoice_buttons.html' %}<br>
-        {% if tos.is_club_member %}<span class="badge bg-info ms-1 me-1" title="Alternate selling fees will be applied">Member</span>{% endif %}
+        {% if tos.is_club_member %}<span class="badge bg-info ms-1 me-1" title="Alternate selling fees will be applied">{{ tos.auction.alternative_split_label|capfirst }}</span>{% endif %}
         {% if tos.memo %}Memo: {{ tos.memo }}<br>{% endif %}
         {% if tos.possible_duplicate %}Note: This user may be a duplicate, confirm that this is their only bidder number<br>{% endif %}
         <a href="{{ invoice.get_absolute_url }}" target="_blank"><i class="bi bi-arrow-up-right-square-fill"></i> View or adjust invoice</a>

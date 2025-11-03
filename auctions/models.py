@@ -668,6 +668,12 @@ class Auction(models.Model):
     winning_bid_percent_to_club_for_club_members.help_text = (
         "Used instead of the standard split, when you designate someone as a club member"
     )
+    alternative_split_label = models.CharField(
+        max_length=50, default="club member", blank=False, verbose_name="Alternative split label"
+    )
+    alternative_split_label.help_text = (
+        "Label to use instead of 'club member' for users with alternate fees (appears in invoices, user tables, etc.)"
+    )
     SET_LOT_WINNER_URLS = (
         ("", "Standard, bidder number/lot number only"),
         ("presentation", "Show a picture of the lot"),

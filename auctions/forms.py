@@ -1689,6 +1689,7 @@ class AuctionEditForm(forms.ModelForm):
             "minimum_bid",
             "winning_bid_percent_to_club_for_club_members",
             "lot_entry_fee_for_club_members",
+            "alternative_split_label",
             "force_donation_threshold",
             "require_phone_number",
             "reserve_price",
@@ -1835,6 +1836,13 @@ class AuctionEditForm(forms.ModelForm):
                 css_class="row",
             ),
             HTML("<h4>Lot fee discounts</h4>"),
+            Div(
+                Div(
+                    "alternative_split_label",
+                    css_class="col-lg-12",
+                ),
+                css_class="row",
+            ),
             Div(
                 # PrependedAppendedText('pre_register_lot_entry_fee_discount', '$', '.00',wrapper_class='col-lg-3', ),
                 PrependedAppendedText(
