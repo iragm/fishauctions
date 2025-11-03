@@ -1,28 +1,82 @@
 {% extends "base.html" %}
 {% load i18n %}
 {% block title %}Quick checkout for {{ auction }}{% endblock %}
-
 {% block extra_js %}
 <script>
 $(document).ready(function() {
-  var tosSearch;
-  $('#tos').select();
-  function getTos() {
-    searchTerm = encodeURIComponent($("#tos").val());
-    if (searchTerm) {
-      htmx.ajax('get','/api/auctions/{{ auction.slug }}/checkout/' + searchTerm, {target: '#result'});
+  (function(){
+    let tosSearch = null;
+    let lastTosValue = null;
+    const $tos = $('#tos');
+    $tos.select();
+
+    function getTos() {
+      const raw = $tos.val() || "";
+      const value = raw.trim();
+      if (value === lastTosValue) {
+        return;
+      }
+      lastTosValue = value;
+      if (!value) {
+        $('#result').empty();
+        return;
+      }
+      const searchTerm = encodeURIComponent(value);
+      htmx.ajax('get', '/api/auctions/{{ auction.slug }}/checkout/' + searchTerm, { target: '#result' });
+    }
+
+    $tos.on('blur', function() {
+      clearTimeout(tosSearch);
+      getTos();
+    });
+
+    const input = document.getElementById('tos');
+    input.addEventListener('keyup', function () {
+      clearTimeout(tosSearch);
+      tosSearch = setTimeout(getTos, 300);
+    });
+  })();
+  var ws_protocol = (window.location.protocol === 'https:') ? 'wss://' : 'ws://'
+  const auctionWebSocket = new WebSocket(
+      ws_protocol
+      + window.location.host
+      + '/ws/auctions/{{ auction.pk }}/'
+  );
+  auctionWebSocket.onmessage = function(e) {
+    const data = JSON.parse(e.data);
+    console.log(data);
+    if (data.type == "invoice_approved") {
+      console.log(data);
+      document.getElementById("invoice_" + data.pk + "_qr_scan").innerHTML = "<span class='text-success'>Got it, processing payment...</span>";
+
+    }
+    else if (data.type == "capture_complete") {
+      paymentCompleted(data.pk);
+
+    }
+    else if (data.type == "invoice_paid") {
+      paymentCompleted(data.pk);
+
+
     }
   }
-    $("#tos").on('blur', function() {
-    clearTimeout(tosSearch);
-    getTos();
-  });
-  var input = document.getElementById('tos');
-  input.addEventListener('keyup', function () {
-    clearTimeout(tosSearch);
-    tosSearch = setTimeout(getTos, 300);
-  });
 });
+function paymentCompleted(pk) {
+  const btnWrapper = document.getElementById(`invoice_${pk}_button_wrapper`);
+  if (btnWrapper && btnWrapper.parentNode) {
+    btnWrapper.parentNode.removeChild(btnWrapper);
+  }
+
+  const qrWrapper = document.getElementById(`invoice_${pk}_qr_wrapper`);
+  if (qrWrapper) {
+    // Size the green check to approximately the same width as the QR code column
+    const w = Math.round(qrWrapper.getBoundingClientRect().width || qrWrapper.clientWidth || 0);
+    const sizePx = w > 0 ? w : 128; // fallback size
+    qrWrapper.innerHTML = `<i class="bi bi-check-circle-fill text-success d-inline-block"
+                              title="Paid" aria-label="Paid"
+                              style="font-size:${sizePx}px; line-height:1;"></i>`;
+  }
+}
 </script>
 {% endblock %}
 {% block content %}

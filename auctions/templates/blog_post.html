@@ -1,11 +1,17 @@
 {% extends "base.html" %}
 {% block title %} {{ blogpost.title }} {% endblock %}
 {% load static %}
-{% block content %}
 {% block extra_js %}
 <script type='text/javascript'>pageView();</script>
+<script>
+  window.__user = {
+    isAuthenticated: {{ request.user.is_authenticated|yesno:"true,false" }},
+    paypalEnabled: {% if request.user.is_authenticated and request.user.userdata.paypal_enabled %}true{% else %}false{% endif %}
+  };
+</script>
     {{ blogpost.extra_js | safe }}
 {% endblock %}
+{% block content %}
     <h3>{{ blogpost.title }}</h3>
     {{ formatted_contents | safe }}
 {% endblock %}

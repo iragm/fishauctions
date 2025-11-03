@@ -13,6 +13,7 @@ from crispy_forms.helper import FormHelper
 from crispy_forms.layout import HTML, Layout, Submit
 from dal import autocomplete
 from django import forms
+from django.conf import settings
 from django.contrib.auth.models import User
 from django.forms import (
     HiddenInput,
@@ -32,6 +33,7 @@ from .models import (
     InvoiceAdjustment,
     Lot,
     LotImage,
+    PayPalSeller,
     PickupLocation,
     UserBan,
     UserData,
@@ -333,6 +335,14 @@ class InvoiceAdjustmentFormSetHelper(FormHelper):
         super().__init__(*args, **kwargs)
         self.form_method = "post"
         self.template = "auctions/bulk_add_invoice_adjustments_row.html"
+        self.layout = Layout(
+            Div(
+                Div("adjustment_type", css_class="col-md-4"),
+                Div(PrependedAppendedText("amount", "$", ".00"), css_class="col-md-4"),
+                Div("notes", css_class="col-md-4"),
+                css_class="row",
+            )
+        )
 
 
 class InvoiceAdjustmentForm(forms.ModelForm):
@@ -343,12 +353,11 @@ class InvoiceAdjustmentForm(forms.ModelForm):
         #     'notes': forms.Textarea(attrs={'rows': 1, 'cols': 40}),
         # }
 
-        # fixme, remove the invoice form from below and combine it with this
-
     def __init__(self, *args, **kwargs):
         self.invoice = kwargs.pop("invoice")
         result = super().__init__(*args, **kwargs)
         self.fields["notes"].widget.attrs = {"placeholder": "ex: membership fee"}
+
         return result
 
     def clean(self):
@@ -1713,6 +1722,7 @@ class AuctionEditForm(forms.ModelForm):
             "use_custom_checkbox_field",
             "use_reference_link",
             "use_description",
+            "enable_online_payments",
         ]
         widgets = {
             "date_start": DateTimePickerInput(),
@@ -1739,6 +1749,14 @@ class AuctionEditForm(forms.ModelForm):
             "email_users_when_invoices_ready"
         ].help_text = "Send an email to users when their invoice is ready or paid"
         self.fields["invoice_payment_instructions"].widget.attrs = {"placeholder": "Send money to paypal.me/yourpaypal"}
+        paypal_seller = PayPalSeller.objects.filter(user=self.instance.created_by).first()
+        if paypal_seller:
+            self.fields["enable_online_payments"].help_text += f"<br>Payments sent to {paypal_seller}"
+        else:
+            if self.instance.created_by.is_superuser and settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET:
+                # show payments option
+                pass
+                self.fields["enable_online_payments"].widget = forms.HiddenInput()
         # self.fields['notes'].help_text = "Foo"
         if self.instance.is_online:
             self.fields[
@@ -1978,6 +1996,10 @@ class AuctionEditForm(forms.ModelForm):
                 Div(
                     "email_users_when_invoices_ready",
                     css_class="col-md-3",
+                ),
+                Div(
+                    "enable_online_payments",
+                    css_class="col-md-6",
                 ),
                 Div(
                     "invoice_payment_instructions",

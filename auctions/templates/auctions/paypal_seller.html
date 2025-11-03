@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}PayPal{% endblock %}
+{% block content %}
+{% include "preferences_ribbon.html" %}
+<div class="container py-4">
+  <h1 class="h4 mb-3">Accept payments with PayPal</h1>
+
+  {% if request.user.is_authenticated and not request.user.userdata.paypal_enabled %}
+    <div class="alert alert-info" role="alert">
+      PayPal is currently disabled for your account. A site administrator can re-enable it for you.  You can still connect your PayPal accout, but you won't be able to accept payments until it's enabled.
+    </div>
+  {% endif %}
+
+  <p class="mb-2">
+    Connect your PayPal account to let users pay their invoices directly on this site.
+  </p>
+
+  <ol class="mb-4">
+    <li>{% if seller %}Connect your PayPal account{% else %}<a href="{% url 'paypal_connect' %}">Connect your PayPal account</a>{% endif %}</li>
+    <li>That's it — users will see a Pay button on their invoices!</li>
+  </ol>
+
+  <h2 class="h5 mb-3">How it works</h2>
+  <div class="row g-3 mb-4">
+    <div class="col-12 col-lg-6">
+      <div class="card h-100">
+        <div class="card-body">
+          <h5 class="card-title mb-2">Online auctions</h5>
+          <ul class="mb-0">
+            <li>The Pay button appears on invoices after the auction end time.</li>
+            <li>Payments open 1 hour after the end to support dynamic endings (last‑minute bids can extend lot end times).</li>
+            <li>Set invoices to <span class="text-info fw-semibold">Ready</span> to email users a link to view and pay.</li>
+            <li>Once paid, the invoice updates to <span class="text-success fw-semibold">Paid</span> automatically.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12 col-lg-6">
+      <div class="card h-100">
+        <div class="card-body">
+          <h5 class="card-title mb-2">In‑person auctions</h5>
+
+          <h6 class="fw-semibold mt-2">Quick Checkout</h6>
+          <ol class="mb-3">
+            <li>
+              Auction admins can open
+              {% if auction %}
+                <a href="{% url 'auction_quick_checkout' slug=auction.slug %}">Quick Checkout Users</a>
+              {% else %}
+                Quick Checkout
+              {% endif %}
+              to mark invoices paid.
+            </li>
+            <li>Each invoice shows a QR code.</li>
+            <li>Users scan the code to pay in their browser or the PayPal app.</li>
+            <li>Payment confirmation usually takes less than 10 seconds.</li>
+          </ol>
+
+          <h6 class="fw-semibold mt-2">Hate QR codes?</h6>
+            No worries: The Pay button is also available on the invoice page at any time for users to access themselves.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="h5 mb-2">Tips</h2>
+  <ul class="mb-4">
+    <li>
+      Use filters on the Users page to quickly find who hasn’t paid.
+      {% if auction %}
+        For example:
+        <a href="/auctions/{{ auction.slug }}/users?query=+open+owes+club">
+          Here's the users in {{ auction }} with an open invoice who owe the club
+        </a>.
+      {% endif %}
+    </li>
+    <li>There are even filters for who has or hasn't viewed their invoice yet.</li>
+    <li>Refunds issued in PayPal will appear on the invoice automatically.</li>
+    <li>You can mix PayPal and other payment methods: an auction admin can mark the invoice Paid manually, and optionally record the payment method in the memo field.</li>
+    <li>Long lines at the end of in-person auctions? Not anymore: Multiple admins can run Quick Checkout Users at the same time on different devices to keep lines moving.</li>
+    <li>Under your auction's rules, you can turn PayPal payments off or on at any time.  This option only appears when you have a PayPal account connected.</li>
+    <li>The auction creator's PayPal account is used for all payments in the auction - no need for other auction admins to link their own</li>
+    <li>There's no fine print here, no fees beyond the standard PayPal fees, and you can disable payments at any time.</li>
+  </ul>
+
+  <h4>Ready to get started?</h4>
+  <div class="d-flex align-items-center gap-2 mb-4">
+    <a class="btn btn-primary btn-sm" href="{% url 'paypal_connect' %}">Connect your PayPal account</a>
+    {% if auction %}
+      <span class="small">and start accepting payments in {{ auction }} today!</span>
+    {% endif %}
+  </div>
+
+  {% if seller %}
+    <small class="text-muted d-block mb-2">
+      You can only have one PayPal account connected at a time. Connecting a new account will disconnect the current one.
+    </small>
+    <div class="card mb-3">
+      <div class="card-body">
+        <h5 class="card-title mb-3">Currently connected PayPal account</h5>
+        <dl class="row mb-0">
+          <dt class="col-sm-4">Merchant ID</dt>
+          <dd class="col-sm-8">{{ seller.paypal_merchant_id|default:"—" }}</dd>
+
+          <dt class="col-sm-4">Payer email</dt>
+          <dd class="col-sm-8">{{ seller.payer_email|default:"—" }}</dd>
+
+          <dt class="col-sm-4">Currency</dt>
+          <dd class="col-sm-8">{{ seller.currency|default:"USD" }}</dd>
+        </dl>
+      </div>
+      <div class="card-footer d-flex gap-2">
+        <a href="{% url 'paypal_seller_delete' %}" class="btn btn-danger btn-sm">Disconnect PayPal</a>
+      </div>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

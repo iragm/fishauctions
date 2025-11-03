@@ -66,13 +66,38 @@ $(document).ready(function(){
 });
 </script>
 {% endif %}
+
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+  var el = document.getElementById('pay-with-paypal');
+  if (!el || typeof bootstrap === 'undefined') return;
+  try {
+    var pop = new bootstrap.Popover(el, {
+      trigger: 'manual',
+      container: 'body',
+      html: true,
+      title: el.getAttribute('data-bs-title'),
+      content: el.getAttribute('data-bs-content'),
+      template: el.getAttribute('data-bs-template'),
+      sanitize: false
+    });
+    // show immediately if invoice has already been opened
+    {% if invoice.opened %}
+      pop.show();
+      el.focus();
+    {% endif %}
+  } catch (e) {
+    console.error('Popover init failed', e);
+  }
+});
+</script>
 {% endblock %}
 
 {% block content %}
 {% if show_links %}{% include 'auction_ribbon.html' %}{% endif %}
 
 <h3>{{ invoice.auctiontos_user.name }}</h3>
-<small>{{ invoice.invoice_summary_short }}</small>
+<small>{{ invoice.invoice_summary_short }} {% if invoice.status == "PAID" %}<span class="badge rounded-pill bg-success">Paid in full</span>{% endif %}</small>
 {% if invoice.auction.multi_location %}
 {% if location == 'No location selected' %}{% else %}
 <h5>{{location}}</h5>
@@ -83,8 +108,48 @@ $(document).ready(function(){
   <div class="col-auto">
     {% if show_links %}
       {% if is_admin %}
+        {% if debug %}
+        <a href='{% url "invoice_no_login" uuid=invoice.no_login_link %}' class='btn btn-secondary ml-1 mr-1 '>View as bidder</a>
+        {% endif %}
         <span id="invoice_control_buttons">{% include 'invoice_buttons.html' %}</span>
         <span style="display: none;" class='text-danger' id="form_dirty_warning">Save adjustments to mark ready or paid</span>
+      {% endif %}
+      {% if invoice.auctiontos_user.user == request.user or using_no_login_link %}
+
+        {% if invoice.show_payment_button %}
+          {% if invoice.reason_for_payment_not_available %}
+              <button
+                type="submit"
+                class="btn btn-secondary disabled mr-1 mt-1"
+                id="pay-with-paypal"
+                data-bs-toggle="popover"
+                data-bs-placement="bottom"
+                data-bs-html="true"
+                data-bs-title="Payment not available"
+                data-bs-content="{{ invoice.reason_for_payment_not_available }}"
+                data-bs-template='<div class="popover" role="tooltip"><div class="popover-header bg-secondary text-white"></div><div class="popover-body"></div></div>'
+              >
+                <i class="bi bi-paypal"></i> Pay now
+              </button>
+          {% else %}
+          <form action="{% url 'create_paypal_order' uuid=invoice.no_login_link %}" method="post" style="display: inline;">
+              {% csrf_token %}
+              <button
+                type="submit"
+                class="btn btn-success mr-1 mt-1"
+                id="pay-with-paypal"
+                data-bs-toggle="popover"
+                data-bs-placement="bottom"
+                data-bs-html="true"
+                data-bs-title="Ready to pay?"
+                data-bs-content="Pay this invoice using PayPal  "
+                data-bs-template='<div class="popover" role="tooltip"><div class="popover-header bg-info text-white"></div><div class="popover-body"></div></div>'
+              >
+                <i class="bi bi-paypal"></i> Pay now
+              </button>
+          </form>
+          {% endif %}
+        {% endif %}
       {% endif %}
       <a href="{{ request.path }}?print" class="btn btn-primary ml-1 mr-1 ">Print invoice</a>
       {% if show_links and print_label_link %}
@@ -202,6 +267,12 @@ $(document).ready(function(){
     <tr>
       <td>{{ adjustment.notes }}</td>
       <td>{{ adjustment.display }}</td>
+    </tr>
+  {% endfor %}
+  {% for payment in invoice.payments.all %}
+    <tr>
+      <td>{{ payment.payment_method }}{% if payment.external_id %} ({{ payment.external_id }}){% endif %}</td>
+      <td>${{ payment.amount|floatformat:2 }}</td>
     </tr>
   {% endfor %}
   <tr>
