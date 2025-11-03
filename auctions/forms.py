@@ -986,6 +986,7 @@ class CreateEditAuctionTOS(forms.ModelForm):
         else:
             help_text += " instead of the standard fee for sold lots"
         self.fields["is_club_member"].help_text = help_text
+        self.fields["is_club_member"].label = self.auction.alternative_split_label.capitalize()
         self.fields["memo"].help_text = None
         self.fields["bidder_number"].help_text = None
         self.fields["memo"].widget.attrs["placeholder"] = "Only visible to admins"
