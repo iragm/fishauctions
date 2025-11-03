@@ -3700,9 +3700,9 @@ class Invoice(models.Model):
                 output_field=DecimalField(max_digits=12, decimal_places=2),
             )
         )
-        total_final = totals["total_final"] or Decimal("0.00")
-        rate = Decimal(self.auction.tax or 0) / Decimal("100")
-        return (total_final * rate).quantize(Decimal("0.01"))
+        total_final = totals["total_final"] or Decimal(0.00)
+        rate = Decimal(self.auction.tax or 0) / Decimal(100)
+        return (total_final * rate).quantize(Decimal(0.01))
 
     @property
     def net(self):
