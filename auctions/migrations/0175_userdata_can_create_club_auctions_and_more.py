@@ -70,7 +70,7 @@ Please review the invoices for {{auction}} and mark them ready for payment: http
 
 * Users will get an email notification ONLY AFTER you mark these invoice ready for payment, so mark them ready as soon as possible to give users time to pay before they need to pickup and exchange lots.  You can change this behavior with the Invoice Notifications setting in your auction's rules.
 
-* This site does not handle payments, but we make it easy for you to import the automatically generated invoices into Paypal: https://{{ domain }}/blog/online-payments-suck/.
+* We make it easy for you to import the automatically generated invoices into PayPal: https://{{ domain }}/blog/online-payments-suck/.
 
 * If you want to make changes or adjustments to these invoices, make those before marking them ready.  You'll see editing tools on each invoice to manually adjust it.
 
@@ -85,7 +85,7 @@ Please review the <a href="https://{{domain}}/auctions/{{auction.slug}}/users/">
 
 <ul><li> Users will get an email notification <em>only after</em> you mark these invoice ready for payment, so mark them ready as soon as possible to give users time to pay before they need to pickup and exchange lots.  You can change this behavior with the Invoices Notification setting in your auction's rules</li>
 
-<li> This site does not handle payments, but we make it easy for you to <a href="https://{{ domain }}/blog/online-payments-suck/">import the automatically generated invoices into Paypal</a>.</li>
+<li> We make it easy for you to <a href="https://{{ domain }}/blog/online-payments-suck/">import the automatically generated invoices into PayPal</a>.</li>
 
 <li> If you want to make changes or adjustments to these invoices, make those before marking them ready.  You'll see editing tools on each invoice to manually adjust it.</li>
 
@@ -634,7 +634,7 @@ def create_or_update_blog_posts(apps, schema_editor):
 1. Go to your auction's page and and click on the **Users** tab.
 2. Make any necessary adjustments to your invoices, then click **Set Open Invoices to Ready**
 3. Click **Export**, then **PayPal Invoice CSV**.  You'll download a CSV file.
-4. Go to [Paypal's batch invoice page](https://www.paypal.com/invoice/batch) (you'll be prompted to sign into Paypal)
+4. Go to [PayPal's batch invoice page](https://www.paypal.com/invoice/batch) (you'll be prompted to sign into PayPal)
 5. Click **Browse**, then **Import Batch Invoice File**.  Select the file you downloaded earlier.
 6. Review the invoices to make sure they are correct, then click **Send Invoices**
 7. Use PayPal to keep track of who has paid.
@@ -644,16 +644,18 @@ def create_or_update_blog_posts(apps, schema_editor):
 #### My users page says **No PayPal invoices**
 Only invoices that are **Ready** get exported.  If everyone has paid, or if you forgot to do step 2 above, you won't have any invoices to export.
 
+If PayPal payments are enabled for your auction, you won't be able to export invoices.  This is to prevent "double-billing" people who have already paid online.
+
 #### PayPal takes you to a page that says "Let's get you back on track" instead of the batch invoice screen
-This is an issue on Paypal's end that impacts newly created Paypal accounts. You can open a case with them, by emailing Merchant Technical Support <merchanttechsupport@paypal.com>
+This is an issue on PayPal's end that impacts newly created PayPal accounts. You can open a case with them, by emailing Merchant Technical Support <merchanttechsupport@paypal.com>
 
-It may help to reference case 12959943, which is the same issue when my club encountered it. Typically, it takes about 2 weeks for Paypal to reply, so you may want to find some other method to send out invoices for now (such as using an older Paypal account).
+It may help to reference case 12959943, which is the same issue when my club encountered it. Typically, it takes about 2 weeks for PayPal to reply, so you may want to find some other method to send out invoices for now (such as using an older PayPal account).
 
-#### Paypal says *We had trouble reading your file*
+#### PayPal says *We had trouble reading your file*
 Make sure you're uploading the correct CSV.  The users CSV file won't work -- the correct file will have the word *paypal*  in the file name.
 
 #### There are multiple PayPal CSV files
-Paypal will only let you batch invoice 150 users at a time, so if there's more than one file listed, download them all, and repeat step 4-6 for each file.  Congrats on running an auction where more than 150 people owe you money!
+PayPal will only let you batch invoice 150 users at a time, so if there's more than one file listed, download them all, and repeat step 4-6 for each file.  Congrats on running an auction where more than 150 people owe you money!
 
 #### There's an invoice missing from the list
 Users who are owed money (sold more than they bought) are not included in this list. I am assuming most clubs will want to pay these people in cash when they drop off their lots, or by check afterwards (the seller's address is listed on the users page).  This will allow you to avoid the PayPal fees for these users.
@@ -671,10 +673,27 @@ And any payment method that doesn't allow charge backs (like Bitcoin) is very di
 #### Is there any risk here?
 Yes, of course:  By using this feature, your club is taking on all the risks of online payments -- like charge backs and an increased likelihood of getting audited on your taxes.  But, it's very handy to click a couple buttons and invoice all your users.
 
-#### But I don't want to use Paypal!
+#### But I don't want to use PayPal!
 
 At the moment I am not aware of other payment processors that support batch invoicing from a CSV file.  If there's one you'd like to use, let me know -- it's not difficult to export the data.""",
-            "extra_js": """""",
+            "extra_js": """<script>
+document.addEventListener('DOMContentLoaded', function () {
+  try {
+    if (window.__user && window.__user.isAuthenticated && window.__user.paypalEnabled) {
+      var el = document.createElement('div');
+      el.className = 'alert alert-info';
+      el.setAttribute('role', 'alert');
+      el.innerHTML = "Hey, don't follow this guide! This is the hard way — you should refer to <a href='/paypal/'>this page, which will walk you through connecting your PayPal account and handling payments directly</a>.";
+      var container = document.querySelector('.container') ||
+                      document.querySelector('main') ||
+                      document.body;
+      container.insertBefore(el, container.firstChild);
+    }
+  } catch (e) {
+    if (window.console) console.warn('extra_js inject failed', e);
+  }
+});
+</script>""",
         },
         {
             "title": "Encouraging participation",
@@ -910,7 +929,7 @@ The logistics of multiple pickup locations becomes a bit tricky.  Here are some 
 
 4. Confirm the pickup location with users ahead of time.
 
-5. Handle payments [with Paypal](/blog/online-payments-suck/) or require that buyers pay in the morning.  This avoids problems with "no show" buyers.
+5. Handle payments [with PayPal](/blog/online-payments-suck/) or require that buyers pay in the morning.  This avoids problems with "no show" buyers.
 
 Multiple pickup locations are quite a bit of extra work to coordinate, but they bring in a much greater diversity of lots and new buyers.""",
             "extra_js": """<script>

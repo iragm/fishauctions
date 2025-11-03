@@ -3,6 +3,7 @@ import logging
 import re
 import uuid
 from datetime import time
+from decimal import ROUND_HALF_UP, Decimal
 from random import randint
 
 import channels.layers
@@ -19,6 +20,7 @@ from django.db import models
 from django.db.models import (
     Case,
     Count,
+    DecimalField,
     ExpressionWrapper,
     F,
     FloatField,
@@ -32,7 +34,7 @@ from django.db.models import (
     When,
 )
 from django.db.models.expressions import RawSQL
-from django.db.models.functions import Coalesce
+from django.db.models.functions import Cast, Coalesce
 from django.db.models.query import QuerySet
 from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
@@ -756,6 +758,45 @@ class Auction(models.Model):
     )
     use_seller_dash_lot_numbering = models.BooleanField(default=False, blank=True)
     use_seller_dash_lot_numbering.help_text = "Include the seller's bidder number with the lot number.  This option is not recommended as users find it confusing."
+    paypal_email_address = models.EmailField(max_length=255, blank=True, null=True)
+    paypal_email_address.help_text = "Not currently used, this is configured in the model PayPalSeller"
+    enable_online_payments = models.BooleanField(default=False, blank=True, verbose_name="PayPal payments")
+    enable_online_payments.help_text = "Allow users to use PayPal to pay their invoices themselves."
+    dismissed_promo_banner = models.BooleanField(default=False, blank=True)
+    dismissed_paypal_banner = models.BooleanField(default=False, blank=True)
+
+    @property
+    def paypal_information(self):
+        """
+        Return the merchant ID for PayPal payments
+        Fallback for admin users to use the site-wide api keys
+        """
+
+        seller = PayPalSeller.objects.filter(user=self.created_by).first()
+        if seller:
+            return seller.paypal_merchant_id
+        if self.created_by.is_superuser:
+            return "admin"
+        return None
+
+    @property
+    def show_paypal_banner(self):
+        """Can we show the link your PayPal account banner?
+        One more check is needed on the template:
+        this banner should only be shown to the auction creator"""
+        if self.dismissed_paypal_banner:
+            return False
+        if not self.created_by.userdata.paypal_enabled:
+            return False
+        if self.created_by.is_superuser:
+            return False
+        if self.created_by.userdata.never_show_paypal_connect:
+            return False
+        # if self.enable_online_payments:
+        #    return False
+        if PayPalSeller.objects.filter(user=self.created_by).first():
+            return False
+        return True
 
     def __str__(self):
         result = self.title
@@ -815,25 +856,46 @@ class Auction(models.Model):
         try:
             if self.is_online:
                 return None
+
             expected_sell_percent = 95
             lots_to_use_for_estimate = 10
-            percent_complete = self.total_unsold_lots / self.total_lots
+
+            total_lots = int(self.total_lots or 0)
+            total_unsold = int(self.total_unsold_lots or 0)
+
+            if total_lots == 0:
+                return None
+
+            percent_complete = (total_unsold / total_lots) * 100  # percent scale
             if percent_complete > expected_sell_percent:
                 return None
-            lots = self.lots_qs.exclude(date_end__isnull=True).order_by("-date_end")[:lots_to_use_for_estimate]
-            if lots.count() < lots_to_use_for_estimate:
+
+            full_qs = self.lots_qs.exclude(date_end__isnull=True).order_by("-date_end")
+            if full_qs.count() < lots_to_use_for_estimate:
                 return None
-            first_lot = lots[0]
-            last_lot = lots[lots_to_use_for_estimate - 1]
+
+            # evaluate a stable list of items
+            recent = list(full_qs[:lots_to_use_for_estimate])
+            if len(recent) < lots_to_use_for_estimate:
+                return None
+
+            first_lot = recent[0]
+            last_lot = recent[-1]
+            if not getattr(first_lot, "date_end", None) or not getattr(last_lot, "date_end", None):
+                return None
+
             time_diff = first_lot.date_end - last_lot.date_end
             elapsed_seconds = time_diff.total_seconds()
-            rate = elapsed_seconds / lots_to_use_for_estimate
-            mintues_to_end = int(self.total_unsold_lots * rate / 60)
-            if mintues_to_end < 15:
+            if elapsed_seconds <= 0:
                 return None
-            return mintues_to_end
+
+            rate = elapsed_seconds / lots_to_use_for_estimate
+            minutes_to_end = int(total_unsold * rate / 60)
+            if minutes_to_end < 15:
+                return None
+            return minutes_to_end
         except Exception as e:
-            logger.error(e)
+            logger.exception("estimate_end failed for auction %s: %s", getattr(self, "pk", "<unknown>"), e)
             return None
 
     @property
@@ -1161,7 +1223,17 @@ class Auction(models.Model):
     @property
     def show_invoice_ready_button(self):
         """invoice status of 'ready' is very confusing for people
-        This is tied to several pieces of logic that are also not needed for in person auctions, like paypal integratiaon"""
+        This is tied to several pieces of logic that are also not needed for in person auctions, like paypal integratiaon
+        With PayPal integration, it may be needed for all auctions, let's see if it continues to be confusing"""
+        return True
+        # if self.is_online:
+        #    return True
+        # if self.online_bidding == "disable":
+        #    return False
+        # return True
+
+    @property
+    def show_paypal_csv_link(self):
         if self.is_online:
             return True
         if self.online_bidding == "disable":
@@ -1561,7 +1633,7 @@ class Auction(models.Model):
         AuctionHistory.objects.create(
             auction=self,
             user=user,
-            action=action,
+            action=action[:800],
             applies_to=applies_to,
         )
 
@@ -2419,7 +2491,7 @@ class Lot(models.Model):
 
     # Payment and shipping options, populated from last submitted lot
     # Only show these fields if auction is set to none
-    payment_paypal = models.BooleanField(default=False, verbose_name="Paypal accepted")
+    payment_paypal = models.BooleanField(default=False, verbose_name="PayPal accepted")
     payment_cash = models.BooleanField(default=False, verbose_name="Cash accepted")
     payment_other = models.BooleanField(default=False, verbose_name="Other payment method accepted")
     payment_other_method = models.CharField(max_length=80, blank=True, null=True, verbose_name="Payment method")
@@ -3517,6 +3589,57 @@ class Invoice(models.Model):
     memo = models.CharField(max_length=500, blank=True, null=True, default="")
     memo.help_text = "Only other auction admins can see this"
 
+    @property
+    def show_payment_button(self):
+        """True if we can show the PayPal button"""
+        if not (settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET):
+            return False
+        if self.auction and not self.auction.enable_online_payments:
+            return False
+        if self.status == "PAID":
+            return False
+        if self.net_after_payments >= 0:
+            return False
+        if (
+            self.auction
+            and not self.auction.created_by.is_superuser
+            and not self.auction.created_by.userdata.paypal_enabled
+            and not self.auction.paypal_information
+        ):
+            return False
+        if not self.auction:
+            # change this if we ever allow direct person to person PayPal
+            return False
+        return True
+
+    @property
+    def reason_for_payment_not_available(self):
+        """Always use this after invoice.show_payment_button
+        This assumes that the button will show up, but be grayed out
+         We will return a string reason to the user"""
+
+        if self.auction.is_online and not self.auction.closed and self.status == "DRAFT":
+            timedelta = self.dynamic_end - timezone.now()
+            seconds = timedelta.total_seconds()
+            if seconds > 0:
+                minutes = seconds // 60
+                return f"This auction hasn't ended yet.  You'll be able to pay in {minutes} minutes."
+        if not self.auction.is_online:
+            # in person auctions, users will see a pay button on any invoice
+            # even ones with online bidding enabled.  Not sure if this is a good idea or not,
+            # we can change it later
+            pass
+
+    @property
+    def soft_descriptor(self):
+        """Used for PayPal payments -- short string describing the merchant
+        https://developer.paypal.com/docs/multiparty/embedded-integration/reference/#soft-descriptors
+        """
+        if self.auction and self.auction.paypal_information == "admin":
+            return settings.NAVBAR_BRAND
+        # could add some logic here to return the club short name or the auction name
+        return None
+
     def sum_adjusments(self, adjustment_type):
         total = self.adjustments.filter(adjustment_type=adjustment_type).aggregate(total=Sum("amount"))["total"]
         if not total:
@@ -3548,12 +3671,12 @@ class Invoice(models.Model):
     @property
     def total_adjustment_amount(self):
         """There's a difference between the subtotal and the rounded net -- rounding, manual adjustments, fist bid payouts, etc"""
-        return self.subtotal - self.rounded_net
+        return Decimal(self.subtotal) - Decimal(self.rounded_net)
 
     @property
     def subtotal(self):
         """don't call this directly, use self.net or another property instead"""
-        return self.total_sold - self.total_bought
+        return Decimal(self.total_sold) - Decimal(self.total_bought)
 
     @property
     def first_bid_payout(self):
@@ -3567,9 +3690,20 @@ class Invoice(models.Model):
 
     @property
     def tax(self):
-        if self.auctiontos_user.auction and self.auctiontos_user.auction.tax:
-            return self.total_bought * self.auctiontos_user.auction.tax / 100
-        return 0
+        totals = self.bought_lots_queryset.aggregate(
+            total_final=Coalesce(
+                Sum(
+                    "final_price",
+                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                ),
+                Value(Decimal(0.00)),
+                output_field=DecimalField(max_digits=12, decimal_places=2),
+            )
+        )
+        total_final = totals["total_final"] or Decimal(0.00)
+        rate = Decimal(self.auction.tax or 0) / Decimal(100)
+        tax_amount = total_final * rate
+        return tax_amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     @property
     def net(self):
@@ -3579,15 +3713,20 @@ class Invoice(models.Model):
         Any auction-wide payout promotions
         Any manual adjustments made to this invoice
         """
-        subtotal = self.subtotal
+        subtotal = Decimal(self.subtotal)
         # if this auction is using the first bid payout system to encourage people to bid
-        subtotal += self.first_bid_payout
-        subtotal += self.flat_value_adjustments
-        subtotal += subtotal * self.percent_value_adjustments / 100
-        subtotal -= self.tax
+        subtotal += Decimal(self.first_bid_payout)
+        subtotal += Decimal(self.flat_value_adjustments)
+        subtotal += Decimal(subtotal * self.percent_value_adjustments / 100)
+        subtotal -= Decimal(self.tax)
         if not subtotal:
             subtotal = 0
-        return subtotal
+        return Decimal(subtotal)
+
+    @property
+    def net_after_payments(self):
+        """negative number means they owe the club payment"""
+        return self.rounded_net + self.total_payments
 
     @property
     def user_should_be_paid(self):
@@ -3606,14 +3745,14 @@ class Invoice(models.Model):
         if self.user_should_be_paid:
             if self.net > rounded:
                 # we rounded down against the customer
-                return rounded + 1
+                return Decimal(rounded + 1)
             else:
-                return rounded
+                return Decimal(rounded)
         else:
             if self.net <= rounded:
-                return rounded
+                return Decimal(rounded)
             else:
-                return rounded + 1
+                return Decimal(rounded + 1)
 
     @property
     def absolute_amount(self):
@@ -3641,7 +3780,42 @@ class Invoice(models.Model):
                 is_deleted=False,
             )
             .order_by("pk")
+            # Use Decimal math to avoid float rounding
+            .annotate(
+                final_price=ExpressionWrapper(
+                    Cast(F("winning_price"), DecimalField(max_digits=12, decimal_places=2))
+                    * (
+                        (
+                            Value(Decimal("100.00"))
+                            - Cast(F("partial_refund_percent"), DecimalField(max_digits=5, decimal_places=2))
+                        )
+                        / Value(Decimal("100.00"))
+                    ),
+                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                )
+            )
+            .annotate(
+                tax=ExpressionWrapper(
+                    Cast(F("final_price"), DecimalField(max_digits=12, decimal_places=2))
+                    * Cast(F("auction__tax"), DecimalField(max_digits=5, decimal_places=2))
+                    / Value(Decimal("100.00")),
+                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                )
+            )
+        )
+
+    @property
+    def bought_lots_queryset_old(self):
+        """Simple qs containing all lots BOUGHT by this user in this auction"""
+        return (
+            Lot.objects.filter(
+                winning_price__isnull=False,
+                auctiontos_winner=self.auctiontos_user,
+                is_deleted=False,
+            )
+            .order_by("pk")
             .annotate(final_price=F("winning_price") * (100 - F("partial_refund_percent")) / 100)
+            .annotate(tax=F("final_price") * F("auction__tax") / 100)
         )
 
     @property
@@ -3738,11 +3912,11 @@ class Invoice(models.Model):
     @property
     def invoice_summary_short(self):
         result = ""
-        if self.user_should_be_paid:
+        if self.net_after_payments > 0:
             result += "needs to be paid"
         else:
             result += "owes the club"
-        return result + " $" + f"{self.absolute_amount:.2f}"
+        return result + " $" + f"{abs(self.net_after_payments):.2f}"
 
     @property
     def invoice_summary(self):
@@ -3777,6 +3951,15 @@ class Invoice(models.Model):
     def pre_register_used(self):
         return self.sold_lots_queryset.filter(pre_register_discount__gt=0).exists()
 
+    @property
+    def total_payments(self):
+        """Sum of payments recorded against this invoice (Decimal)."""
+        total = self.payments.aggregate(total=Coalesce(Sum("amount"), Value(Decimal("0.00"))))["total"]
+        if total is None:
+            return Decimal("0.00")
+        # Ensure Decimal return type
+        return Decimal(total)
+
     def save(self, *args, **kwargs):
         if not self.auction:
             self.auction = self.auctiontos_user.auction
@@ -3795,8 +3978,9 @@ class InvoiceAdjustment(models.Model):
         choices=(
             ("ADD", "Charge extra"),
             ("DISCOUNT", "Discount"),
-            ("ADD_PERCENT", "Charge extra percent"),
-            ("DISCOUNT_PERCENT", "Discount percent"),
+            # so confusing and not used by most users
+            # ("ADD_PERCENT", "Charge extra percent"),
+            # ("DISCOUNT_PERCENT", "Discount percent"),
         ),
         default="ADD",
     )
@@ -3818,6 +4002,39 @@ class InvoiceAdjustment(models.Model):
         else:
             result += f"{self.amount}%"
         return result
+
+
+class InvoicePayment(models.Model):
+    """
+    Record of a payment applied to an Invoice (supports partial payments).
+    Payments are kept separate from InvoiceAdjustments.
+    """
+
+    PAYMENT_STATUS = (
+        ("PENDING", "Pending"),
+        ("COMPLETED", "Completed"),
+        ("FAILED", "Failed"),
+        ("REFUNDED", "Refunded"),
+    )
+
+    invoice = models.ForeignKey("Invoice", related_name="payments", on_delete=models.CASCADE)
+    amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0.00"))
+    amount_available_to_refund = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0.00"))
+    currency = models.CharField(max_length=10, default="USD")
+    # status = models.CharField(max_length=20, choices=PAYMENT_STATUS, default="COMPLETED", db_index=True)
+    external_id = models.CharField(max_length=255, blank=True, null=True, help_text="Provider transaction id")
+    payer_name = models.CharField(max_length=200, blank=True, null=True)
+    payer_email = models.CharField(max_length=200, blank=True, null=True)
+    payer_address = models.CharField(max_length=500, blank=True, null=True)
+    memo = models.CharField(max_length=500, blank=True, null=True)
+    # metadata = models.JSONField(blank=True, null=True)  # store provider payload if needed
+    payment_method = models.CharField(
+        max_length=50, blank=True, null=True, default="PayPal"
+    )  # e.g. 'paypal', 'stripe', 'cash'
+    createdon = models.DateTimeField(auto_now_add=True)
+
+    # def __str__(self):
+    #     return f"Payment {self.pk} for Invoice {self.invoice_id}: {self.amount} {self.currency} ({self.status})"
 
 
 class Bid(models.Model):
@@ -4038,6 +4255,10 @@ def get_default_can_submit_lots():
     # return getattr(settings, "ALLOW_USERS_TO_CREATE_LOTS", True)
 
 
+def get_default_paypal_enabled():
+    return settings.PAYPAL_ENABLED_FOR_USERS
+
+
 class UserData(models.Model):
     """
     Extension of user model to store additional info
@@ -4105,7 +4326,7 @@ class UserData(models.Model):
     email_me_about_new_lots_ship_to_location.help_text = (
         "Email me when new lots are created that can be shipped to my location"
     )
-    paypal_email_address = models.CharField(max_length=200, blank=True, null=True, verbose_name="Paypal Address")
+    paypal_email_address = models.CharField(max_length=200, blank=True, null=True, verbose_name="PayPal Address")
     paypal_email_address.help_text = "If different from your email address"
     unsubscribe_link = models.CharField(max_length=255, default=uuid.uuid4, blank=True)
     has_unsubscribed = models.BooleanField(default=False, blank=True)
@@ -4115,6 +4336,7 @@ class UserData(models.Model):
     )
     can_submit_standalone_lots = models.BooleanField(default=get_default_can_submit_lots)
     can_create_club_auctions = models.BooleanField(default=get_default_can_create_auctions)
+    paypal_enabled = models.BooleanField(default=get_default_paypal_enabled)
     dismissed_cookies_tos = models.BooleanField(default=False)
     show_ad_controls = models.BooleanField(default=False, blank=True)
     show_ad_controls.help_text = "Show a tab for ads on all pages"
@@ -4165,6 +4387,11 @@ class UserData(models.Model):
     volume_percentile = models.PositiveIntegerField(null=True, blank=True)
     has_bid = models.BooleanField(default=False)
     has_used_proxy_bidding = models.BooleanField(default=False)
+    never_show_paypal_connect = models.BooleanField(default=False)
+
+    @property
+    def last_auction_created(self):
+        return Auction.objects.filter(created_by=self.user).order_by("-date_posted").first()
 
     def __str__(self):
         return f"{self.user.username}'s data"
@@ -4419,6 +4646,53 @@ class UserData(models.Model):
         self.has_unsubscribed = True
         self.last_activity = timezone.now()
         self.save()
+
+    @property
+    def currency(self):
+        paypal_seller = PayPalSeller.objects.filter(user=self.user).first()
+        if paypal_seller and paypal_seller.currency:
+            return paypal_seller.currency
+        if not self.location:
+            return "USD"
+        if self.location.name == "Canada":
+            return "CAD"
+        return "USD"
+
+
+class PayPalSeller(models.Model):
+    """Extension of user model to store PayPal info for sellers
+    Initially it seemed like there would be a lot of data here so I created a model for it
+    but the reality is there's basically just one field
+    Still, this is at least easy to delete in a callback if the user disconnects their PayPal account
+    """
+
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    paypal_merchant_id = models.CharField(max_length=64, blank=True, null=True)
+    currency = models.CharField(max_length=10, default="USD")
+    payer_email = models.EmailField(blank=True, null=True)
+    connected_on = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        if self.currency != "USD":
+            result = f"{self.currency} to "
+        else:
+            result = ""
+        if self.payer_email:
+            result += self.payer_email
+        else:
+            result += f"{self.user.first_name} {self.user.last_name}'s PayPal account"
+        return result
+
+    def delete(self):
+        auctions = Auction.objects.filter(created_by=self.user, enable_online_payments=True)
+        for auction in auctions:
+            auction.create_history(
+                applies_to="INVOICES",
+                action=f"PayPal partner consent from {self.payer_email} has been revoked.  Relink your PayPal account to re-enable payments.",
+                user=None,
+            )
+            auction.save()
+        return super().delete()
 
 
 class UserInterestCategory(models.Model):

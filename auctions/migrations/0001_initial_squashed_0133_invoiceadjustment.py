@@ -924,7 +924,7 @@ class Migration(migrations.Migration):
                 ),
                 (
                     "payment_paypal",
-                    models.BooleanField(default=False, verbose_name="Paypal accepted"),
+                    models.BooleanField(default=False, verbose_name="PayPal accepted"),
                 ),
                 (
                     "shipping_locations",
@@ -2660,7 +2660,7 @@ class Migration(migrations.Migration):
                         help_text="If different from your email address",
                         max_length=200,
                         null=True,
-                        verbose_name="Paypal Address",
+                        verbose_name="PayPal Address",
                     ),
                 ),
                 (

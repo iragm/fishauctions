@@ -17,15 +17,19 @@
       </button>
       <div class="dropdown-menu" aria-labelledby="dropdownMenuButton">
         <a href="{% url 'user_list' slug=auction.slug %}" class="dropdown-item"><i class="bi bi-person-fill-down"></i> Users CSV</a>
-        {% if auction.show_invoice_ready_button %}
-        {% for chunk in auction.paypal_invoice_chunks %}
-        <a href="{% url 'paypal_csv' slug=auction.slug chunk=chunk %}" class="dropdown-item"><i class="bi bi-paypal"></i> PayPal Invoice CSV {% if auction.paypal_invoice_chunks|length > 1 %} #{{chunk}}{% endif %}</a>
-        {% endfor %}
-        {% if not auction.paypal_invoice_chunks|length %}<span class="text-muted dropdown-item"><i class="bi bi-paypal"></i> No PayPal invoices</span>
-        {% else %}
-        <a href="https://www.paypal.com/invoice/batch" class="dropdown-item"><i class="bi bi-paypal"></i> Paypal Batch Invoice Upload</span>
-        {% endif %}
-        <a href="/blog/online-payments-suck/" class="dropdown-item"><i class="bi bi-info-circle"></i> PayPal invoice help</a>
+        {% if auction.show_paypal_csv_link %}
+          {% if auction.enable_online_payments %}
+              <span class="text-muted dropdown-item"><i class="bi bi-paypal"></i> PayPal payments enabled, export not available</span>
+          {% else %}
+            {% for chunk in auction.paypal_invoice_chunks %}
+            <a href="{% url 'paypal_csv' slug=auction.slug chunk=chunk %}" class="dropdown-item"><i class="bi bi-paypal"></i> PayPal Invoice CSV {% if auction.paypal_invoice_chunks|length > 1 %} #{{chunk}}{% endif %}</a>
+            {% endfor %}
+            {% if not auction.paypal_invoice_chunks|length %}<span class="text-muted dropdown-item"><i class="bi bi-paypal"></i> No PayPal invoices</span>
+            {% else %}
+            <a href="https://www.paypal.com/invoice/batch" class="dropdown-item"><i class="bi bi-paypal"></i> PayPal Batch Invoice Upload</span>
+            {% endif %}
+            <a href="/blog/online-payments-suck/" class="dropdown-item"><i class="bi bi-info-circle"></i> PayPal invoice help</a>
+          {% endif %}
         {% endif %}
       </div>
     </span>
