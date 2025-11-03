@@ -6067,7 +6067,7 @@ class PayPalAPIMixin:
             purchase_unit["payee"] = {"merchant_id": invoice.auction.paypal_information}
             if settings.PAYPAL_PLATFORM_FEE and settings.PAYPAL_PLATFORM_FEE > 0:
                 amt_value = Decimal(purchase_unit["amount"]["value"])
-                fee_amount = (amt_value * settings.PAYPAL_PLATFORM_FEE / Decimal("100")).quantize(Decimal("0.01"))
+                fee_amount = (amt_value * settings.PAYPAL_PLATFORM_FEE / Decimal(100)).quantize(Decimal(0.01))
                 if fee_amount > 0:
                     purchase_unit["payment_instruction"] = {
                         "platform_fees": [
