@@ -605,7 +605,7 @@ class InvoiceModelTests(StandardTestCase):
         assert self.invoiceB.total_sold == 0
         assert self.invoiceB.total_bought == 30
         assert self.invoiceB.subtotal == -30
-        assert self.invoiceB.tax == 7.5
+        self.assertAlmostEqual(self.invoiceB.tax, Decimal(7.5))
         assert self.invoiceB.net == -37.5
         assert self.invoiceB.rounded_net == -37
         assert self.invoiceB.absolute_amount == 37

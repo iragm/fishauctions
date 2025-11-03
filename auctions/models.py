@@ -3690,14 +3690,19 @@ class Invoice(models.Model):
 
     @property
     def tax(self):
-        # Sum tax as a Decimal (never int), defaulting to Decimal('0.00')
-        return self.bought_lots_queryset.aggregate(
-            sum_tax=Coalesce(
-                Sum("tax", output_field=DecimalField(max_digits=12, decimal_places=2)),
+        totals = self.bought_lots_queryset.aggregate(
+            total_final=Coalesce(
+                Sum(
+                    "final_price",
+                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                ),
                 Value(Decimal("0.00")),
                 output_field=DecimalField(max_digits=12, decimal_places=2),
             )
-        )["sum_tax"]
+        )
+        total_final = totals["total_final"] or Decimal("0.00")
+        rate = Decimal(self.auction.tax or 0) / Decimal("100")
+        return (total_final * rate).quantize(Decimal("0.01"))
 
     @property
     def net(self):
