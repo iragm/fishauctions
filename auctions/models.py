@@ -3,7 +3,7 @@ import logging
 import re
 import uuid
 from datetime import time
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from random import randint
 
 import channels.layers
@@ -3696,13 +3696,14 @@ class Invoice(models.Model):
                     "final_price",
                     output_field=DecimalField(max_digits=12, decimal_places=2),
                 ),
-                Value(Decimal("0.00")),
+                Value(Decimal(0.00)),
                 output_field=DecimalField(max_digits=12, decimal_places=2),
             )
         )
         total_final = totals["total_final"] or Decimal(0.00)
         rate = Decimal(self.auction.tax or 0) / Decimal(100)
-        return (total_final * rate).quantize(Decimal(0.01))
+        tax_amount = total_final * rate
+        return tax_amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     @property
     def net(self):
