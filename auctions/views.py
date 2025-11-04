@@ -3792,12 +3792,15 @@ class LotCreateView(LotValidation, CreateView):
             if not invoice:
                 invoice = Invoice.objects.create(auctiontos_user=lot.auctiontos_seller, auction=lot.auction)
             invoice.recalculate
+        result = super().form_valid(form, **kwargs)
+        # Create history after lot is saved and has a lot_number_display
+        if lot.auction and lot.auctiontos_seller:
             lot.auction.create_history(
                 applies_to="LOTS",
-                action="Added lot",
+                action=f"Added lot {lot.lot_number_display} {lot.lot_name}",
                 user=self.request.user,
             )
-        return super().form_valid(form, **kwargs)
+        return result
 
     def dispatch(self, request, *args, **kwargs):
         userData, created = UserData.objects.get_or_create(
@@ -3862,6 +3865,23 @@ class LotUpdate(LotValidation, UpdateView):
         context["title"] = f"Edit {self.get_object().lot_name}"
         return context
 
+    def form_valid(self, form):
+        """Track history when a lot is edited"""
+        lot = self.get_object()
+        # Check if we should create history before saving
+        should_create_history = lot.auction and form.has_changed()
+        # Save the form
+        result = super().form_valid(form)
+        # Create history after successful update
+        if should_create_history:
+            lot.auction.create_history(
+                applies_to="LOTS",
+                action=f"Edited lot {lot.lot_number_display}",
+                user=self.request.user,
+                form=form,
+            )
+        return result
+
 
 class AuctionDelete(AuctionViewMixin, DeleteView):
     model = Auction
@@ -3891,6 +3911,17 @@ class LotDelete(LoginRequiredMixin, DeleteView):
 
     def get_success_url(self):
         return f"/lots/user/?user={self.request.user.pk}"
+
+    def form_valid(self, form):
+        """Track history when a lot is deleted"""
+        lot = self.get_object()
+        if lot.auction:
+            lot.auction.create_history(
+                applies_to="LOTS",
+                action=f"Deleted lot {lot.lot_number_display}",
+                user=self.request.user,
+            )
+        return super().form_valid(form)
 
 
 class ImageDelete(LoginRequiredMixin, DeleteView):
@@ -4038,6 +4069,18 @@ class LotAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
                     user=self.request.user,
                     form=form,
                 )
+                # Check if only winner and winning_price were changed
+                changed_fields = set(form.changed_data)
+                winner_fields = {"auctiontos_winner", "winning_price"}
+                if changed_fields and changed_fields.issubset(winner_fields):
+                    quick_set_url = reverse("auction_lot_winners_dynamic", kwargs={"slug": self.auction.slug})
+                    messages.info(
+                        self.request,
+                        format_html(
+                            "You're doing things the hard way - <a href='{}'>quick set lot winners</a> page lets you mark lots sold much more quickly.",
+                            quick_set_url,
+                        ),
+                    )
             obj = self.lot
             # obj.custom_lot_number = form.cleaned_data["custom_lot_number"]
             obj.lot_name = form.cleaned_data["lot_name"] or "Unknown lot"
@@ -4815,6 +4858,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
                 # manually_added=True,
                 # user__isnull=True
             ).first()
+            is_new_join = False
             if find_by_email:
                 obj = find_by_email
                 obj.user = self.request.user
@@ -4824,6 +4868,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
                     auction=auction,
                     defaults={"pickup_location": form.cleaned_data["pickup_location"]},
                 )
+                is_new_join = created
             obj.pickup_location = form.cleaned_data["pickup_location"]
             # check if mail was chosen
             if obj.pickup_location.pickup_by_mail:
@@ -4854,11 +4899,13 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
             userData.last_auction_used = auction
             userData.last_activity = timezone.now()
             userData.save()
-            auction.create_history(
-                applies_to="USERS",
-                action=f"{obj.name} has joined this auction",
-                user=self.request.user,
-            )
+            # Only create history if this is a new join
+            if is_new_join:
+                auction.create_history(
+                    applies_to="USERS",
+                    action=f"{obj.name} has joined this auction",
+                    user=self.request.user,
+                )
             return self.form_valid(form)
         else:
             logger.debug(form.cleaned_data)

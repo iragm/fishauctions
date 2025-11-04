@@ -4583,7 +4583,8 @@ class UserData(models.Model):
                     lot__lothistory__removed=False,
                     lot__lothistory__changed_price=False,
                     lot__lothistory__timestamp__gt=F("last_seen"),
-                ),
+                )
+                & ~Q(lot__lothistory__user=self.user),
             )
         )
 
@@ -4596,7 +4597,8 @@ class UserData(models.Model):
                     lot__lothistory__removed=False,
                     lot__lothistory__changed_price=False,
                     lot__lothistory__timestamp__gt=F("last_notification_sent"),
-                ),
+                )
+                & ~Q(lot__lothistory__user=self.user),
             )
         ).filter(unnotified_message_count__gt=0, new_message_count__gt=0)
 

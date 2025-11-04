@@ -9,6 +9,7 @@ from django.utils import timezone
 
 from .models import (
     Auction,
+    AuctionHistory,
     AuctionTOS,
     Bid,
     ChatSubscription,
@@ -594,6 +595,68 @@ class ChatSubscriptionTests(TestCase):
         assert data.my_lot_subscriptions_count == 1
         assert data.other_lot_subscriptions_count == 1
 
+    def test_own_messages_not_counted_as_unread(self):
+        """Test that a user's own chat messages are not counted as unread"""
+        # Create two users: lot owner and another user
+        lot_owner = User.objects.create(username="lotowner")
+        other_user = User.objects.create(username="otheruser")
+
+        # Create a lot owned by other_user
+        lot = Lot.objects.create(
+            lot_name="Test lot for own messages",
+            date_end=timezone.now() + datetime.timedelta(days=30),
+            reserve_price=5,
+            user=other_user,
+            quantity=1,
+        )
+
+        # lot_owner creates a subscription to this lot
+        subscription = ChatSubscription.objects.create(lot=lot, user=lot_owner)
+
+        # Verify no unread messages initially
+        lot_owner_data = lot_owner.userdata
+        assert lot_owner_data.other_lot_subscriptions_count == 0
+        assert lot_owner_data.unnotified_subscriptions_count == 0
+
+        # other_user posts a message - this should count as unread for lot_owner
+        future_time = timezone.now() + datetime.timedelta(minutes=5)
+        history1 = LotHistory.objects.create(
+            user=other_user,
+            lot=lot,
+            message="Message from other user",
+            changed_price=False,
+        )
+        history1.timestamp = future_time
+        history1.save()
+
+        # Verify lot_owner sees this as unread
+        assert lot_owner_data.other_lot_subscriptions_count == 1
+        assert lot_owner_data.unnotified_subscriptions_count == 1
+
+        # lot_owner posts their own message - this should NOT count as unread for lot_owner
+        future_time2 = timezone.now() + datetime.timedelta(minutes=10)
+        history2 = LotHistory.objects.create(
+            user=lot_owner,
+            lot=lot,
+            message="Message from lot_owner themselves",
+            changed_price=False,
+        )
+        history2.timestamp = future_time2
+        history2.save()
+
+        # lot_owner should still only see 1 unread (from other_user, not their own)
+        assert lot_owner_data.other_lot_subscriptions_count == 1
+        assert lot_owner_data.unnotified_subscriptions_count == 1
+
+        # Mark subscription as seen
+        subscription.last_seen = timezone.now() + datetime.timedelta(minutes=15)
+        subscription.last_notification_sent = timezone.now() + datetime.timedelta(minutes=15)
+        subscription.save()
+
+        # Now there should be no unread messages
+        assert lot_owner_data.other_lot_subscriptions_count == 0
+        assert lot_owner_data.unnotified_subscriptions_count == 0
+
 
 class InvoiceModelTests(StandardTestCase):
     def test_invoices(self):
@@ -1098,3 +1161,165 @@ class AlternativeSplitLabelTests(StandardTestCase):
         content = response.content.decode("utf-8")
         assert "Patron" in content
         assert "Club member" not in content
+class AuctionHistoryTests(StandardTestCase):
+    """Test that auction history is properly tracked for lot operations and user joins"""
+
+    def test_lot_edit_creates_history(self):
+        """Test that editing a lot creates an audit history entry"""
+        self.client.login(username="my_lot", password="testpassword")
+
+        # Set up user data required by LotValidation
+        self.user.first_name = "Test"
+        self.user.last_name = "User"
+        self.user.save()
+        user_data = UserData.objects.get(user=self.user)
+        user_data.address = "123 Test St"
+        user_data.save()
+
+        # Create an auction with lot submission still open
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        test_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Test auction for editing",
+            is_online=True,
+            date_end=theFuture,
+            date_start=timezone.now(),
+            lot_submission_end_date=theFuture,
+            winning_bid_percent_to_club=25,
+        )
+        test_location = PickupLocation.objects.create(name="test location", auction=test_auction, pickup_time=theFuture)
+        test_tos = AuctionTOS.objects.create(user=self.user, auction=test_auction, pickup_location=test_location)
+
+        # Create a lot that can be edited (no winner, no bids)
+        editable_lot = Lot.objects.create(
+            lot_name="Editable test lot",
+            auction=test_auction,
+            auctiontos_seller=test_tos,
+            quantity=1,
+            user=self.user,
+        )
+
+        # Get initial history count
+        initial_count = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").count()
+
+        # Edit a lot - provide all required fields
+        url = reverse("edit_lot", kwargs={"pk": editable_lot.pk})
+
+        response = self.client.post(
+            url,
+            {
+                "part_of_auction": True,
+                "auction": test_auction.pk,
+                "lot_name": "Updated Lot Name",
+                "quantity": 2,
+                "reserve_price": 2,
+                "summernote_description": "test",
+                "donation": False,
+                "i_bred_this_fish": False,
+                "buy_now_price": "",
+                "custom_checkbox": False,
+                "custom_field_1": "text",
+            },
+            follow=True,  # follow to the selling redirect
+        )
+        assert response.status_code == 200
+        # Check that history was created
+        new_count = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").count()
+        assert new_count == initial_count + 1
+
+        # Verify the history entry
+        history = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").latest("timestamp")
+        assert "Edited lot" in history.action
+        assert history.user == self.user
+
+    def test_lot_delete_creates_history(self):
+        """Test that deleting a lot creates an audit history entry"""
+        self.client.login(username="my_lot", password="testpassword")
+
+        # Set up user data required by LotValidation
+        self.user.first_name = "Test"
+        self.user.last_name = "User"
+        self.user.save()
+        user_data = UserData.objects.get(user=self.user)
+        user_data.address = "123 Test St"
+        user_data.save()
+
+        # Create an auction with lot submission still open
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        test_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Test auction for deleting",
+            is_online=True,
+            date_end=theFuture,
+            date_start=timezone.now(),
+            lot_submission_end_date=theFuture,
+            winning_bid_percent_to_club=25,
+        )
+        test_location = PickupLocation.objects.create(name="test location", auction=test_auction, pickup_time=theFuture)
+        test_tos = AuctionTOS.objects.create(user=self.user, auction=test_auction, pickup_location=test_location)
+
+        # Create a lot that can be deleted (no winner, no bids, created recently)
+        deletable_lot = Lot.objects.create(
+            lot_name="Deletable test lot",
+            auction=test_auction,
+            auctiontos_seller=test_tos,
+            quantity=1,
+            user=self.user,
+        )
+
+        # Get initial history count
+        initial_count = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").count()
+
+        # Delete the lot
+        self.client.post(reverse("delete_lot", kwargs={"pk": deletable_lot.pk}), follow=True)
+
+        # Check that history was created
+        new_count = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").count()
+        assert new_count == initial_count + 1
+
+        # Verify the history entry
+        history = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").latest("timestamp")
+        assert "Deleted lot" in history.action
+        assert history.user == self.user
+
+    def test_user_join_creates_history_only_once(self):
+        """Test that joining an auction creates history only on first join"""
+        # Create a new user who hasn't joined yet
+        User.objects.create_user(username="new_user", password="testpassword", email="new@example.com")
+        # UserData is automatically created by signal, so we don't need to create it manually
+        self.client.login(username="new_user", password="testpassword")
+
+        # Get initial history count
+        initial_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").count()
+
+        # Join the auction for the first time
+        self.client.post(
+            reverse("auction_main", kwargs={"slug": self.online_auction.slug}),
+            {
+                "pickup_location": self.location.pk,
+                "i_agree": True,
+                "time_spent_reading_rules": 10,
+            },
+        )
+
+        # Check that history was created
+        new_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").count()
+        assert new_count == initial_count + 1
+
+        # Verify the history entry
+        history = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").latest("timestamp")
+        assert "has joined this auction" in history.action
+
+        # Join again (re-submit the same form)
+        self.client.post(
+            reverse("auction_main", kwargs={"slug": self.online_auction.slug}),
+            {
+                "pickup_location": self.location.pk,
+                "i_agree": True,
+                "time_spent_reading_rules": 20,
+            },
+        )
+
+        # Check that NO new history was created
+        final_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").count()
+        assert final_count == new_count  # Should be the same as after first join
