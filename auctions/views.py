@@ -1517,7 +1517,7 @@ def auctionReport(request, slug):
                 "Users who have banned this user",
                 "Account created on",
                 "Memo",
-                "Club member",
+                auction.alternative_split_label.capitalize(),
                 "Bidding allowed",
                 "Added auction to their calendar",
             ]
@@ -2836,7 +2836,7 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
         name_field_names = ["name", "full name", "first name", "firstname"]
         address_field_names = ["address", "mailing address"]
         phone_field_names = ["phone", "phone number", "telephone", "telephone number"]
-        is_club_member_fields = ["member", "club member"]
+        is_club_member_fields = ["member", "club member", self.auction.alternative_split_label.lower()]
         is_bidding_allowed_field_names = ["allow bidding", "bidding", "bidding allowed"]
         # we are not reading in location here, do we care??
         some_columns_exist = False
@@ -2878,7 +2878,13 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
                 phone = extract_info(row, phone_field_names)
                 address = extract_info(row, address_field_names)
                 is_club_member = extract_info(row, is_club_member_fields)
-                if is_club_member.lower() in ["yes", "true", "member", "club member"]:
+                if is_club_member.lower() in [
+                    "yes",
+                    "true",
+                    "member",
+                    "club member",
+                    self.auction.alternative_split_label.lower(),
+                ]:
                     is_club_member = True
                 else:
                     is_club_member = False
@@ -4585,6 +4591,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "use_i_bred_this_fish_field",
                 "use_seller_dash_lot_numbering",
                 "enable_online_payments",
+                "alternative_split_label",
             ]
             for field in fields_to_clone:
                 setattr(auction, field, getattr(original_auction, field))

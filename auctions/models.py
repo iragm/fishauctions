@@ -661,14 +661,22 @@ class Auction(models.Model):
     lot_entry_fee_for_club_members = models.PositiveIntegerField(
         default=0, validators=[MinValueValidator(0), MaxValueValidator(10)]
     )
+    lot_entry_fee_for_club_members.verbose_name = "Alternate lot entry fee"
     lot_entry_fee_for_club_members.help_text = (
-        "Used instead of the standard entry fee, when you designate someone as a club member"
+        "Used instead of the standard entry fee, when you mark someone as using alternative fees"
     )
     winning_bid_percent_to_club_for_club_members = models.PositiveIntegerField(
         default=0, validators=[MinValueValidator(0), MaxValueValidator(100)]
     )
+    winning_bid_percent_to_club_for_club_members.verbose_name = "Alternate winning bid percent to club"
     winning_bid_percent_to_club_for_club_members.help_text = (
-        "Used instead of the standard split, when you designate someone as a club member"
+        "Used instead of the standard split, when you mark someone as using alternative fees"
+    )
+    alternative_split_label = models.CharField(
+        max_length=50, default="Alternate fees", blank=False, verbose_name="Alternate split label"
+    )
+    alternative_split_label.help_text = (
+        "Label used for people getting alternate fees.  For example, club member, vendor, etc."
     )
     SET_LOT_WINNER_URLS = (
         ("", "Standard, bidder number/lot number only"),
@@ -3540,7 +3548,7 @@ class Lot(models.Model):
 
     @property
     def i_bred_this_fish_label(self):
-        if self.i_bred_this_fish and self.auction.use_i_bred_this_fish_field:
+        if self.i_bred_this_fish and self.auction.use_i_bred_this_fish_field and not self.sold:
             return "(B)"
         return ""
 

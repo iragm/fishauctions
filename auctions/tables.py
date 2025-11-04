@@ -59,8 +59,9 @@ class AuctionTOSHTMxTable(tables.Table):
         if record.is_admin or (record.user and record.auction.created_by.pk == record.user.pk):
             result += '<span class="badge bg-danger ms-1 me-1" title="Can add users and lot">Admin</span>'
         if record.is_club_member:
+            label = record.auction.alternative_split_label.capitalize()
             result += (
-                '<span class="badge bg-info ms-1 me-1" title="Alternate selling fees will be applied">Member</span>'
+                f'<span class="badge bg-info ms-1 me-1" title="Alternate selling fees will be applied">{label}</span>'
             )
         if not record.bidding_allowed:
             result += '<i class="text-danger bi bi-exclamation-octagon-fill" title="Bidding not allowed"></i>'

@@ -1141,6 +1141,28 @@ class DynamicSetLotWinnerViewTestCase(StandardTestCase):
         assert "Multiple" in data.get("lot")
 
 
+class AlternativeSplitLabelTests(StandardTestCase):
+    """Test the alternative_split_label field"""
+
+    def test_custom_label(self):
+        """Test that a custom label can be set"""
+        self.online_auction.alternative_split_label = "supporter"
+        self.online_auction.save()
+        auction = Auction.objects.get(pk=self.online_auction.pk)
+        assert auction.alternative_split_label == "supporter"
+
+    def test_label_in_csv_export_header(self):
+        """Test that the custom label appears in CSV export header"""
+        self.online_auction.alternative_split_label = "patron"
+        self.online_auction.save()
+        self.client.force_login(self.admin_user)
+        response = self.client.get(reverse("user_list", kwargs={"slug": self.online_auction.slug}))
+        assert response.status_code == 200
+        content = response.content.decode("utf-8")
+        assert "Patron" in content
+        assert "Club member" not in content
+
+
 class AuctionHistoryTests(StandardTestCase):
     """Test that auction history is properly tracked for lot operations and user joins"""
 

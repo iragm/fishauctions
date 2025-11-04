@@ -283,7 +283,7 @@ document.addEventListener("DOMContentLoaded", function() {
 {%if invoice.lots_sold %}
   <h3>Lots sold</h3>
   {% if invoice.auctiontos_user.is_club_member %}
-    Note: Club member split has been applied<br>
+    Note: {{ invoice.auctiontos_user.auction.alternative_split_label|capfirst }} fees have been applied<br>
   {% endif %}
   <table class="table">
     <thead>
