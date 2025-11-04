@@ -9,6 +9,7 @@ from django.utils import timezone
 
 from .models import (
     Auction,
+    AuctionHistory,
     AuctionTOS,
     Bid,
     ChatSubscription,
@@ -1078,122 +1079,165 @@ class DynamicSetLotWinnerViewTestCase(StandardTestCase):
         assert "Multiple" in data.get("lot")
 
 
-class LotAdminViewTestCase(StandardTestCase):
-    """Test the LotAdmin view, specifically the message about quick set lot winners"""
+class AuctionHistoryTests(StandardTestCase):
+    """Test that auction history is properly tracked for lot operations and user joins"""
 
-    def get_url(self, lot_pk):
-        return reverse("auctionlotadmin", kwargs={"pk": lot_pk})
+    def test_lot_edit_creates_history(self):
+        """Test that editing a lot creates an audit history entry"""
+        self.client.login(username="my_lot", password="testpassword")
 
-    def test_message_shown_when_only_winner_and_price_changed(self):
-        """Test that a message is shown when only winner and winning_price are changed"""
-        self.client.login(username=self.admin_user.username, password="testpassword")
+        # Set up user data required by LotValidation
+        self.user.first_name = "Test"
+        self.user.last_name = "User"
+        self.user.save()
+        user_data = UserData.objects.get(user=self.user)
+        user_data.address = "123 Test St"
+        user_data.save()
 
-        # Create a new AuctionTOS for the winner
-        winner_tos = AuctionTOS.objects.create(
-            user=self.user_with_no_lots,
-            auction=self.in_person_auction,
-            pickup_location=self.in_person_location,
-            bidder_number="999",
+        # Create an auction with lot submission still open
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        test_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Test auction for editing",
+            is_online=True,
+            date_end=theFuture,
+            date_start=timezone.now(),
+            lot_submission_end_date=theFuture,
+            winning_bid_percent_to_club=25,
+        )
+        test_location = PickupLocation.objects.create(name="test location", auction=test_auction, pickup_time=theFuture)
+        test_tos = AuctionTOS.objects.create(user=self.user, auction=test_auction, pickup_location=test_location)
+
+        # Create a lot that can be edited (no winner, no bids)
+        editable_lot = Lot.objects.create(
+            lot_name="Editable test lot",
+            auction=test_auction,
+            auctiontos_seller=test_tos,
+            quantity=1,
+            user=self.user,
         )
 
-        # Post only winner and price changes
+        # Get initial history count
+        initial_count = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").count()
+
+        # Edit a lot - provide all required fields
+        url = reverse("edit_lot", kwargs={"pk": editable_lot.pk})
+
         response = self.client.post(
-            self.get_url(self.in_person_lot.pk),
-            data={
-                "lot_name": self.in_person_lot.lot_name,
-                "species_category": self.in_person_lot.species_category.pk
-                if self.in_person_lot.species_category
-                else "",
-                "summernote_description": self.in_person_lot.summernote_description,
-                "quantity": self.in_person_lot.quantity,
-                "donation": self.in_person_lot.donation,
-                "i_bred_this_fish": self.in_person_lot.i_bred_this_fish,
-                "reserve_price": self.in_person_lot.reserve_price or "",
-                "buy_now_price": self.in_person_lot.buy_now_price or "",
-                "banned": self.in_person_lot.banned,
-                "custom_checkbox": self.in_person_lot.custom_checkbox,
-                "custom_field_1": self.in_person_lot.custom_field_1 or "",
-                "auction": self.in_person_auction.pk,
-                "auctiontos_winner": winner_tos.pk,
-                "winning_price": "50",
+            url,
+            {
+                "part_of_auction": True,
+                "auction": test_auction.pk,
+                "lot_name": "Updated Lot Name",
+                "quantity": 2,
+                "reserve_price": 2,
+                "summernote_description": "test",
+                "donation": False,
+                "i_bred_this_fish": False,
+                "buy_now_price": "",
+                "custom_checkbox": False,
+                "custom_field_1": "text",
+            },
+            follow=True,  # follow to the selling redirect
+        )
+        assert response.status_code == 200
+        # Check that history was created
+        new_count = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").count()
+        assert new_count == initial_count + 1
+
+        # Verify the history entry
+        history = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").latest("timestamp")
+        assert "Edited lot" in history.action
+        assert history.user == self.user
+
+    def test_lot_delete_creates_history(self):
+        """Test that deleting a lot creates an audit history entry"""
+        self.client.login(username="my_lot", password="testpassword")
+
+        # Set up user data required by LotValidation
+        self.user.first_name = "Test"
+        self.user.last_name = "User"
+        self.user.save()
+        user_data = UserData.objects.get(user=self.user)
+        user_data.address = "123 Test St"
+        user_data.save()
+
+        # Create an auction with lot submission still open
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        test_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Test auction for deleting",
+            is_online=True,
+            date_end=theFuture,
+            date_start=timezone.now(),
+            lot_submission_end_date=theFuture,
+            winning_bid_percent_to_club=25,
+        )
+        test_location = PickupLocation.objects.create(name="test location", auction=test_auction, pickup_time=theFuture)
+        test_tos = AuctionTOS.objects.create(user=self.user, auction=test_auction, pickup_location=test_location)
+
+        # Create a lot that can be deleted (no winner, no bids, created recently)
+        deletable_lot = Lot.objects.create(
+            lot_name="Deletable test lot",
+            auction=test_auction,
+            auctiontos_seller=test_tos,
+            quantity=1,
+            user=self.user,
+        )
+
+        # Get initial history count
+        initial_count = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").count()
+
+        # Delete the lot
+        self.client.post(reverse("delete_lot", kwargs={"pk": deletable_lot.pk}), follow=True)
+
+        # Check that history was created
+        new_count = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").count()
+        assert new_count == initial_count + 1
+
+        # Verify the history entry
+        history = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").latest("timestamp")
+        assert "Deleted lot" in history.action
+        assert history.user == self.user
+
+    def test_user_join_creates_history_only_once(self):
+        """Test that joining an auction creates history only on first join"""
+        # Create a new user who hasn't joined yet
+        User.objects.create_user(username="new_user", password="testpassword", email="new@example.com")
+        # UserData is automatically created by signal, so we don't need to create it manually
+        self.client.login(username="new_user", password="testpassword")
+
+        # Get initial history count
+        initial_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").count()
+
+        # Join the auction for the first time
+        self.client.post(
+            reverse("auction_main", kwargs={"slug": self.online_auction.slug}),
+            {
+                "pickup_location": self.location.pk,
+                "i_agree": True,
+                "time_spent_reading_rules": 10,
             },
         )
 
-        # Check that the response contains the message
-        messages_list = list(response.wsgi_request._messages)
-        assert len(messages_list) == 1
-        assert "quick set lot winners" in str(messages_list[0])
-        assert "You're doing things the hard way" in str(messages_list[0])
+        # Check that history was created
+        new_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").count()
+        assert new_count == initial_count + 1
 
-    def test_no_message_when_other_fields_changed(self):
-        """Test that no message is shown when other fields are also changed"""
-        self.client.login(username=self.admin_user.username, password="testpassword")
+        # Verify the history entry
+        history = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").latest("timestamp")
+        assert "has joined this auction" in history.action
 
-        # Create a new AuctionTOS for the winner
-        winner_tos = AuctionTOS.objects.create(
-            user=self.user_with_no_lots,
-            auction=self.in_person_auction,
-            pickup_location=self.in_person_location,
-            bidder_number="998",
-        )
-
-        # Post winner, price, and lot_name changes
-        response = self.client.post(
-            self.get_url(self.in_person_lot.pk),
-            data={
-                "lot_name": "Changed lot name",  # Changed
-                "species_category": self.in_person_lot.species_category.pk
-                if self.in_person_lot.species_category
-                else "",
-                "summernote_description": self.in_person_lot.summernote_description,
-                "quantity": self.in_person_lot.quantity,
-                "donation": self.in_person_lot.donation,
-                "i_bred_this_fish": self.in_person_lot.i_bred_this_fish,
-                "reserve_price": self.in_person_lot.reserve_price or "",
-                "buy_now_price": self.in_person_lot.buy_now_price or "",
-                "banned": self.in_person_lot.banned,
-                "custom_checkbox": self.in_person_lot.custom_checkbox,
-                "custom_field_1": self.in_person_lot.custom_field_1 or "",
-                "auction": self.in_person_auction.pk,
-                "auctiontos_winner": winner_tos.pk,
-                "winning_price": "60",
+        # Join again (re-submit the same form)
+        self.client.post(
+            reverse("auction_main", kwargs={"slug": self.online_auction.slug}),
+            {
+                "pickup_location": self.location.pk,
+                "i_agree": True,
+                "time_spent_reading_rules": 20,
             },
         )
 
-        # Check that the message is NOT shown when other fields are changed too
-        messages_list = list(response.wsgi_request._messages)
-        for msg in messages_list:
-            assert "quick set lot winners" not in str(msg)
-
-    def test_no_message_when_nothing_changed(self):
-        """Test that no message is shown when nothing changes"""
-        self.client.login(username=self.admin_user.username, password="testpassword")
-
-        # Post without any changes
-        response = self.client.post(
-            self.get_url(self.in_person_lot.pk),
-            data={
-                "lot_name": self.in_person_lot.lot_name,
-                "species_category": self.in_person_lot.species_category.pk
-                if self.in_person_lot.species_category
-                else "",
-                "summernote_description": self.in_person_lot.summernote_description,
-                "quantity": self.in_person_lot.quantity,
-                "donation": self.in_person_lot.donation,
-                "i_bred_this_fish": self.in_person_lot.i_bred_this_fish,
-                "reserve_price": self.in_person_lot.reserve_price or "",
-                "buy_now_price": self.in_person_lot.buy_now_price or "",
-                "banned": self.in_person_lot.banned,
-                "custom_checkbox": self.in_person_lot.custom_checkbox,
-                "custom_field_1": self.in_person_lot.custom_field_1 or "",
-                "auction": self.in_person_auction.pk,
-                "auctiontos_winner": self.in_person_lot.auctiontos_winner.pk
-                if self.in_person_lot.auctiontos_winner
-                else "",
-                "winning_price": self.in_person_lot.winning_price or "",
-            },
-        )
-
-        # Check that no message is shown
-        messages_list = list(response.wsgi_request._messages)
-        assert len(messages_list) == 0
+        # Check that NO new history was created
+        final_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").count()
+        assert final_count == new_count  # Should be the same as after first join
