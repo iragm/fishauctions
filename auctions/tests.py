@@ -1120,23 +1120,31 @@ class AuctionHistoryTests(StandardTestCase):
         initial_count = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").count()
 
         # Edit a lot - provide all required fields
+        url = reverse("edit_lot", kwargs={"pk": editable_lot.pk})
+
         response = self.client.post(
-            reverse("edit_lot", kwargs={"pk": editable_lot.pk}),
+            url,
             {
+                "part_of_auction": True,
+                "auction": test_auction.pk,
                 "lot_name": "Updated Lot Name",
                 "quantity": 2,
                 "reserve_price": 2,
-                "summernote_description": "",
+                "summernote_description": "test",
                 "donation": False,
+                "i_bred_this_fish": False,
+                "buy_now_price": "",
+                "custom_checkbox": False,
+                "custom_field_1": "text",
             },
-            follow=True,
+            follow=True,  # follow to the selling redirect
         )
-
+        assert response.status_code == 200
         # Check that history was created
         new_count = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").count()
-        assert new_count == initial_count + 1, (
-            f"History not created. Response status: {response.status_code}, new_count={new_count}, initial_count={initial_count}"
-        )
+        assert (
+            new_count == initial_count + 1
+        ), f"History not created. Response status: {response.status_code}, new_count={new_count}, initial_count={initial_count}"
 
         # Verify the history entry
         history = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").latest("timestamp")
@@ -1186,9 +1194,9 @@ class AuctionHistoryTests(StandardTestCase):
 
         # Check that history was created
         new_count = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").count()
-        assert new_count == initial_count + 1, (
-            f"History not created. Response status: {response.status_code}, new_count={new_count}, initial_count={initial_count}"
-        )
+        assert (
+            new_count == initial_count + 1
+        ), f"History not created. Response status: {response.status_code}, new_count={new_count}, initial_count={initial_count}"
 
         # Verify the history entry
         history = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").latest("timestamp")
