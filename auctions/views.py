@@ -4032,6 +4032,18 @@ class LotAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
                     user=self.request.user,
                     form=form,
                 )
+                # Check if only winner and winning_price were changed
+                changed_fields = set(form.changed_data)
+                winner_fields = {"auctiontos_winner", "winning_price"}
+                if changed_fields and changed_fields.issubset(winner_fields):
+                    quick_set_url = reverse("auction_lot_winners_dynamic", kwargs={"slug": self.auction.slug})
+                    messages.info(
+                        self.request,
+                        format_html(
+                            "You're doing things the hard way - <a href='{}'>quick set lot winners</a> page lets you mark lots sold much more quickly.",
+                            quick_set_url,
+                        ),
+                    )
             obj = self.lot
             # obj.custom_lot_number = form.cleaned_data["custom_lot_number"]
             obj.lot_name = form.cleaned_data["lot_name"] or "Unknown lot"
