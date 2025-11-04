@@ -1,4 +1,6 @@
+import csv
 import datetime
+import io
 from decimal import Decimal
 
 from django.contrib.auth.models import User
@@ -1332,8 +1334,6 @@ class LotCSVImportTestCase(StandardTestCase):
 
     def test_csv_import_basic(self):
         """Test basic CSV import with lot name and quantity"""
-        import csv
-        import io
 
         # Create CSV content
         csv_content = io.StringIO()
@@ -1368,8 +1368,6 @@ class LotCSVImportTestCase(StandardTestCase):
 
     def test_csv_import_with_lot_number(self):
         """Test CSV import with custom lot number that's not in use"""
-        import csv
-        import io
 
         # Create CSV content with custom lot number
         csv_content = io.StringIO()
@@ -1404,8 +1402,6 @@ class LotCSVImportTestCase(StandardTestCase):
 
     def test_csv_import_with_lot_number_conflict(self):
         """Test CSV import with custom lot number already in use by another user"""
-        import csv
-        import io
 
         # Create an existing lot with a custom lot number from a different user
         Lot.objects.create(
@@ -1451,8 +1447,6 @@ class LotCSVImportTestCase(StandardTestCase):
 
     def test_csv_import_with_memo(self):
         """Test CSV import with memo field"""
-        import csv
-        import io
 
         # Create CSV content with memo
         csv_content = io.StringIO()
@@ -1487,8 +1481,6 @@ class LotCSVImportTestCase(StandardTestCase):
 
     def test_csv_import_with_admin_validated(self):
         """Test CSV import with admin/staff field"""
-        import csv
-        import io
 
         # Create CSV content with admin field
         csv_content = io.StringIO()
