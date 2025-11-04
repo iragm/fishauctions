@@ -2526,8 +2526,9 @@ class Lot(models.Model):
         User, null=True, blank=True, on_delete=models.SET_NULL, related_name="max_bid_revealed_by"
     )
     admin_validated = models.BooleanField(default=False)
-    memo = models.CharField(max_length=500, blank=True, null=True, default="")
-    memo.help_text = "Only auction admins can see this"
+    memo = models.CharField(
+        max_length=500, blank=True, null=True, default="", help_text="Only auction admins can see this"
+    )
 
     def save(self, *args, **kwargs):
         # for old and new auctions, generate a lot number int

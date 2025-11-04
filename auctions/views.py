@@ -3122,7 +3122,7 @@ class BulkAddLots(TemplateView, AuctionPermissionsMixin):
             for name in field_name_list:
                 try:
                     return case_insensitive_row[name]
-                except:
+                except KeyError:
                     pass
             return default_response
 
@@ -3262,7 +3262,7 @@ class BulkAddLots(TemplateView, AuctionPermissionsMixin):
             invoice = Invoice.objects.filter(auctiontos_user=self.tos, auction=self.auction).first()
             if not invoice:
                 invoice = Invoice.objects.create(auctiontos_user=self.tos, auction=self.auction)
-            invoice.recalculate
+            invoice.recalculate()
 
         except Exception as e:
             logger.error("CSV import error: %s", e)
