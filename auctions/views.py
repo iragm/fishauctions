@@ -3812,7 +3812,7 @@ class LotCreateView(LotValidation, CreateView):
         if lot.auction and lot.auctiontos_seller:
             lot.auction.create_history(
                 applies_to="LOTS",
-                action=f"Added lot {lot.lot_number_display}",
+                action=f"Added lot {lot.lot_number_display} {lot.lot_name}",
                 user=self.request.user,
             )
         return result
