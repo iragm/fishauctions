@@ -16,7 +16,7 @@ from channels.auth import AuthMiddlewareStack
 from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.security.websocket import AllowedHostsOriginValidator
 
-from auctions.consumers import LotConsumer, UserConsumer
+from auctions.consumers import LotConsumer, UserConsumer, AuctionConsumer  # ruff: noqa: E402
 
 application = ProtocolTypeRouter(
     {
@@ -29,6 +29,7 @@ application = ProtocolTypeRouter(
                     [
                         re_path(r"ws/lots/(?P<lot_number>\w+)/$", LotConsumer.as_asgi()),
                         re_path(r"ws/users/(?P<user_pk>\w+)/$", UserConsumer.as_asgi()),
+                        re_path(r"ws/auctions/(?P<auction_pk>\w+)/$", AuctionConsumer.as_asgi()),
                     ]
                 )
             )

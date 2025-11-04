@@ -8,6 +8,21 @@
         {% csrf_token %}
     {% endif %}
 
+    <!-- Hide number input spinners for this formset -->
+    <style>
+      /* Chrome, Safari, Edge, Opera */
+      #add-rows-here input[type=number]::-webkit-outer-spin-button,
+      #add-rows-here input[type=number]::-webkit-inner-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
+      }
+      /* Firefox (and generic) */
+      #add-rows-here input[type=number] {
+        -moz-appearance: textfield;
+        appearance: textfield;
+      }
+    </style>
+
     <div>
         {{ formset.management_form|crispy }}
     </div>
@@ -31,7 +46,19 @@
         <tbody id="add-rows-here">
             <tr class="d-none empty-form">
                 {% for field in formset.empty_form %}
-                    {% include 'bootstrap5/field.html' with tag="td" form_show_labels=False %}
+                    {% if field.is_hidden %}
+                        {{ field }}
+                    {% elif field.name == 'amount' %}
+                        <td>
+                            <div class="input-group input-group-sm">
+                                <span class="input-group-text">$</span>
+                                {% crispy_field field 'class' 'text-end' %}
+                                <span class="input-group-text">.00</span>
+                            </div>
+                        </td>
+                    {% else %}
+                        {% include 'bootstrap5/field.html' with tag="td" form_show_labels=False %}
+                    {% endif %}
                 {% endfor %}
             </tr>
 
@@ -42,7 +69,19 @@
 
                 <tr class='adjustment-form'>
                     {% for field in form %}
-                        {% include 'bootstrap5/field.html' with tag="td" form_show_labels=False %}
+                        {% if field.is_hidden %}
+                            {{ field }}
+                        {% elif field.name == 'amount' %}
+                            <td>
+                                <div class="input-group input-group-sm">
+                                    <span class="input-group-text">$</span>
+                                    {% crispy_field field 'class' 'text-end' %}
+                                    <span class="input-group-text">.00</span>
+                                </div>
+                            </td>
+                        {% else %}
+                            {% include 'bootstrap5/field.html' with tag="td" form_show_labels=False %}
+                        {% endif %}
                     {% endfor %}
                 </tr>
             {% endfor %}
