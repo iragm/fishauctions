@@ -12,6 +12,8 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name="lot",
             name="memo",
-            field=models.CharField(blank=True, default="", help_text="Only auction admins can see this", max_length=500, null=True),
+            field=models.CharField(
+                blank=True, default="", help_text="Only auction admins can see this", max_length=500, null=True
+            ),
         ),
     ]

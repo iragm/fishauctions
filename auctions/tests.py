@@ -1332,8 +1332,8 @@ class LotCSVImportTestCase(StandardTestCase):
 
     def test_csv_import_basic(self):
         """Test basic CSV import with lot name and quantity"""
-        import io
         import csv
+        import io
 
         # Create CSV content
         csv_content = io.StringIO()
@@ -1351,7 +1351,7 @@ class LotCSVImportTestCase(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
 
         # Post CSV file
-        response = self.client.post(
+        self.client.post(
             reverse(
                 "bulk_add_lots",
                 kwargs={"slug": self.online_auction.slug, "bidder_number": self.admin_online_tos.bidder_number},
@@ -1368,8 +1368,8 @@ class LotCSVImportTestCase(StandardTestCase):
 
     def test_csv_import_with_lot_number(self):
         """Test CSV import with custom lot number that's not in use"""
-        import io
         import csv
+        import io
 
         # Create CSV content with custom lot number
         csv_content = io.StringIO()
@@ -1386,7 +1386,7 @@ class LotCSVImportTestCase(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
 
         # Post CSV file
-        response = self.client.post(
+        self.client.post(
             reverse(
                 "bulk_add_lots",
                 kwargs={"slug": self.online_auction.slug, "bidder_number": self.admin_online_tos.bidder_number},
@@ -1404,11 +1404,11 @@ class LotCSVImportTestCase(StandardTestCase):
 
     def test_csv_import_with_lot_number_conflict(self):
         """Test CSV import with custom lot number already in use by another user"""
-        import io
         import csv
+        import io
 
         # Create an existing lot with a custom lot number from a different user
-        existing_lot = Lot.objects.create(
+        Lot.objects.create(
             auction=self.online_auction,
             auctiontos_seller=self.online_tos,
             user=self.user,
@@ -1432,7 +1432,7 @@ class LotCSVImportTestCase(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
 
         # Post CSV file
-        response = self.client.post(
+        self.client.post(
             reverse(
                 "bulk_add_lots",
                 kwargs={"slug": self.online_auction.slug, "bidder_number": self.admin_online_tos.bidder_number},
@@ -1451,8 +1451,8 @@ class LotCSVImportTestCase(StandardTestCase):
 
     def test_csv_import_with_memo(self):
         """Test CSV import with memo field"""
-        import io
         import csv
+        import io
 
         # Create CSV content with memo
         csv_content = io.StringIO()
@@ -1469,7 +1469,7 @@ class LotCSVImportTestCase(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
 
         # Post CSV file
-        response = self.client.post(
+        self.client.post(
             reverse(
                 "bulk_add_lots",
                 kwargs={"slug": self.online_auction.slug, "bidder_number": self.admin_online_tos.bidder_number},
@@ -1487,8 +1487,8 @@ class LotCSVImportTestCase(StandardTestCase):
 
     def test_csv_import_with_admin_validated(self):
         """Test CSV import with admin/staff field"""
-        import io
         import csv
+        import io
 
         # Create CSV content with admin field
         csv_content = io.StringIO()
@@ -1508,7 +1508,7 @@ class LotCSVImportTestCase(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
 
         # Post CSV file
-        response = self.client.post(
+        self.client.post(
             reverse(
                 "bulk_add_lots",
                 kwargs={"slug": self.online_auction.slug, "bidder_number": self.admin_online_tos.bidder_number},
@@ -1535,4 +1535,3 @@ class LotCSVImportTestCase(StandardTestCase):
         assert lot2.admin_validated is True
         assert lot3.admin_validated is True
         assert lot4.admin_validated is False
-

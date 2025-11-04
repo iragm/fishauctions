@@ -3161,7 +3161,6 @@ class BulkAddLots(TemplateView, AuctionPermissionsMixin):
 
             total_lots = 0
             total_skipped = 0
-            total_updated = 0
 
             for row in csv_reader:
                 lot_name = extract_info(row, lot_name_fields)
@@ -3230,7 +3229,7 @@ class BulkAddLots(TemplateView, AuctionPermissionsMixin):
                         custom_lot_number = ""
 
                 # Create the lot
-                lot = Lot.objects.create(
+                Lot.objects.create(
                     auctiontos_seller=self.tos,
                     auction=self.auction,
                     user=self.tos.user if self.tos.user else None,
@@ -3266,11 +3265,13 @@ class BulkAddLots(TemplateView, AuctionPermissionsMixin):
             invoice.recalculate
 
         except Exception as e:
-            logger.error(f"CSV import error: {e}")
+            logger.error("CSV import error: %s", e)
             messages.error(self.request, f"Error importing CSV: {str(e)}")
 
         # Redirect back to the bulk add lots page
-        return redirect(reverse("bulk_add_lots", kwargs={"slug": self.auction.slug, "bidder_number": self.tos.bidder_number}))
+        return redirect(
+            reverse("bulk_add_lots", kwargs={"slug": self.auction.slug, "bidder_number": self.tos.bidder_number})
+        )
 
     def post(self, *args, **kwargs):
         csv_file = self.request.FILES.get("csv_file", None)
