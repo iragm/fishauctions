@@ -3548,7 +3548,7 @@ class Lot(models.Model):
 
     @property
     def i_bred_this_fish_label(self):
-        if self.i_bred_this_fish and self.auction.use_i_bred_this_fish_field:
+        if self.i_bred_this_fish and self.auction.use_i_bred_this_fish_field and not self.sold:
             return "(B)"
         return ""
 
