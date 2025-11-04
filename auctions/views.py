@@ -3162,6 +3162,15 @@ class BulkAddLots(TemplateView, AuctionPermissionsMixin):
             total_lots = 0
             total_skipped = 0
 
+            # Prefetch existing custom lot numbers to avoid N+1 queries
+            existing_lot_numbers = set(
+                Lot.objects.filter(auction=self.auction)
+                .exclude(auctiontos_seller=self.tos)
+                .exclude(custom_lot_number__isnull=True)
+                .exclude(custom_lot_number="")
+                .values_list("custom_lot_number", flat=True)
+            )
+
             for row in csv_reader:
                 lot_name = extract_info(row, lot_name_fields)
                 if not lot_name:
@@ -3178,12 +3187,14 @@ class BulkAddLots(TemplateView, AuctionPermissionsMixin):
                 admin_validated = extract_info(row, admin_fields)
 
                 # Convert boolean fields
-                if donation.lower() in ["yes", "true", "1", "donation"]:
+                donation = donation.lower() if donation else ""
+                if donation in ["yes", "true", "1", "donation"]:
                     donation = True
                 else:
                     donation = False
 
-                if admin_validated.lower() in ["yes", "true", "1", "staff", "admin"]:
+                admin_validated = admin_validated.lower() if admin_validated else ""
+                if admin_validated in ["yes", "true", "1", "staff", "admin"]:
                     admin_validated = True
                 else:
                     admin_validated = False
@@ -3216,15 +3227,7 @@ class BulkAddLots(TemplateView, AuctionPermissionsMixin):
                 # Validate custom lot number
                 if custom_lot_number:
                     # Check if the lot number is already in use by a different user
-                    existing_lot = (
-                        Lot.objects.filter(
-                            auction=self.auction,
-                            custom_lot_number=custom_lot_number,
-                        )
-                        .exclude(auctiontos_seller=self.tos)
-                        .first()
-                    )
-                    if existing_lot:
+                    if custom_lot_number in existing_lot_numbers:
                         # Lot number is already in use by another user, don't use it
                         custom_lot_number = ""
 
@@ -3264,7 +3267,7 @@ class BulkAddLots(TemplateView, AuctionPermissionsMixin):
                 invoice = Invoice.objects.create(auctiontos_user=self.tos, auction=self.auction)
             invoice.recalculate()
 
-        except Exception as e:
+        except (UnicodeDecodeError, csv.Error, ValueError) as e:
             logger.error("CSV import error: %s", e)
             messages.error(self.request, f"Error importing CSV: {str(e)}")
 
