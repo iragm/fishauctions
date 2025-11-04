@@ -20,15 +20,36 @@
   <small class="text-muted">This message will disappear once you've finished setting up your auction.</small>
 </div>
 {% else %}
-  {% if not auction.promote_this_auction %}
+  {% if not auction.promote_this_auction and not auction.dismissed_promo_banner %}
   <div class='mt-4 mb-4 p-2 bg-primary text-white rounded bg-gradient bg-opacity-50'><h5>This auction is not promoted</h5>
-    <small>It will appear in <a href={% url 'auctions' %}>the list of auctions</a> for you, for any users you manually add (based on email address), and for any users that have joined, but it won't be visible to anyone else unless you share the URL with them.  Promoted auctions are also included in a weekly promotional email sent every Wednesday to nearby users.  <a href='/auctions/{{auction.slug}}/edit'>Click here to edit the rules</a> and check <b>promote this auction</b></small>
+    <small>It will appear in <a href="{% url 'auctions' %}">the list of auctions</a> for you, for any users you manually add (based on email address), and for any users that have joined, but it won't be visible to anyone else unless you share the URL with them.  Promoted auctions are also included in a weekly promotional email sent every Wednesday to nearby users.</small>
+    <div>
+    <a href='/auctions/{{auction.slug}}/edit' class="btn btn-info btn-sm mt-2">Edit the rules and check promote this auction</a>
+      <a href='{% url "auction_main" slug=auction.slug %}?dismissed_promo_banner=true' class="btn btn-outline-light btn-sm mt-2">Don't show again for this auction</a>
+    </div>
+  </div>
+  {% endif %}
+  {% if request.user.pk == auction.created_by.pk and auction.show_paypal_banner and auction.pk == request.user.userdata.last_auction_created.pk %}
+  <div class='mt-4 mb-4 p-2 bg-primary text-white rounded bg-gradient bg-opacity-50'><h5>Enable payments with your PayPal account</h5>
+    <small>
+      <ul>
+        <li>Users will see a button to pay on their invoices</li>
+        <li>Invoices will automatically be marked paid as users pay</li>
+        <li>Funds will go directly to your PayPal account</li>
+      </ul>
+      It's "free": we don't charge anything, but normal PayPal fees apply.  <a href='{% url "paypal_seller" %}'>Learn more about accepting payments with PayPal</a>.<br>
+    </small>
+    <div>
+      <a href="{% url 'paypal_connect' %}" class="btn btn-info btn-sm mt-2">Connect PayPal account and enable payments</a>
+      <a href='{% url "auction_main" slug=auction.slug %}?dismissed_paypal_banner=true' class="btn btn-outline-light btn-sm mt-2">Not this auction</a>
+      <a href='{% url "auction_main" slug=auction.slug %}?never_show_paypal_connect=true' class="btn btn-outline-light btn-sm mt-2">Never show this again</a>
+    </div>
   </div>
   {% endif %}
 {% endif %}
 <ul class="nav nav-tabs">
     <li class="nav-item">
-      <a class="nav-link {% if active_tab == 'main'%}active{% endif %}" href="/auctions/{{auction.slug}}/"><i class="bi bi-house-fill"></i><span class='d-none d-md-inline'> Main</span></a>
+      <a class="nav-link {% if active_tab == 'main'%}active{% endif %}" href='{% url "auction_main" slug=auction.slug %}'><i class="bi bi-house-fill"></i><span class='d-none d-md-inline'> Main</span></a>
     </li>
     <li class="nav-item">
       <a class="nav-link {% if active_tab == 'users'%}active{% endif %}" href='{% url "auction_tos_list" slug=auction.slug %}'><i class="bi bi-people-fill"></i><span class='d-none d-md-inline'> Users</span></a>

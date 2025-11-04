@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/3.1/ref/settings/
 import datetime
 import os
 import sys
+from decimal import Decimal
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -118,6 +119,13 @@ LOGGING = {
         },
     },
 }
+
+if DEBUG:
+    # Remove admin email handler if it exists
+    django_logger = LOGGING.get("loggers", {}).get("django.request")
+    if django_logger:
+        handlers = django_logger.get("handlers", [])
+        LOGGING["loggers"]["django.request"]["handlers"] = [h for h in handlers if h != "mail_admins"]
 
 # Channels
 CHANNEL_LAYERS = {
@@ -313,7 +321,7 @@ ACCOUNT_FORMS = {
 # ACCOUNT_AUTHENTICATION_METHOD = "username_email"
 ACCOUNT_LOGIN_METHODS = {"username", "email"}
 ACCOUNT_CONFIRM_EMAIL_ON_GET = True
-ACCOUNT_EMAIL_REQUIRED = True
+ACCOUNT_SIGNUP_FIELDS = ["email*", "username*", "password1*", "password2*", "first_name*", "last_name*"]
 ACCOUNT_EMAIL_VERIFICATION = "mandatory"
 ACCOUNT_LOGIN_ON_EMAIL_CONFIRMATION = True
 ACCOUNT_LOGIN_ON_PASSWORD_RESET = True
@@ -467,6 +475,7 @@ if os.environ.get("ALLOW_USERS_TO_CREATE_LOTS", "True") == "False":
     ALLOW_USERS_TO_CREATE_LOTS = False
 else:
     ALLOW_USERS_TO_CREATE_LOTS = True
+PAYPAL_ENABLED_FOR_USERS = os.environ.get("PAYPAL_ENABLED_FOR_USERS", "False") == "True"
 if os.environ.get("ENABLE_PROMO_PAGE", "True") == "False":
     ENABLE_PROMO_PAGE = False
 else:
@@ -557,7 +566,7 @@ ONLINE_TUTORIAL_CHAPTERS = (
     (8 * 60 + 58, "Bidding and proxy bidding"),
     (9 * 60 + 49, "Sniping and the end of the auction"),
     (11 * 60 + 11, "Invoices"),
-    (12 * 60 + 9, "Paypal Batch Invoicing"),
+    (12 * 60 + 9, "PayPal Batch Invoicing"),
     (13 * 60 + 12, "What happens if someone doesn't pay?"),
     (14 * 60 + 20, "Lot labels"),
     (15 * 60 + 23, "Stats"),
@@ -652,3 +661,16 @@ SUMMERNOTE_CONFIG = {
 }
 
 X_FRAME_OPTIONS = "SAMEORIGIN"
+
+PAYPAL_API_BASE = os.environ.get("PAYPAL_API_BASE", "")
+if not PAYPAL_API_BASE:
+    if DEBUG:
+        PAYPAL_API_BASE = "https://api-m.sandbox.paypal.com"
+    else:
+        PAYPAL_API_BASE = "https://api-m.paypal.com"
+PAYPAL_CLIENT_ID = os.environ.get("PAYPAL_CLIENT_ID", "")
+PAYPAL_SECRET = os.environ.get("PAYPAL_SECRET", "")
+# these next two are only used for making payments on behalf of others
+PARTNER_MERCHANT_ID = os.environ.get("PARTNER_MERCHANT_ID", "")
+PAYPAL_BN_CODE = os.environ.get("PAYPAL_BN_CODE", "")
+PAYPAL_PLATFORM_FEE = Decimal(str(os.environ.get("PAYPAL_PLATFORM_FEE", "0") or "0"))

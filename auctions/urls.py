@@ -129,12 +129,15 @@ urlpatterns = [
         login_required(views.InvoiceView.as_view()),
         name="invoice_by_pk",
     ),
-    path("invoices/<uuid:uuid>/", views.InvoiceNoLoginView.as_view()),
+    path("invoices/<uuid:uuid>/", views.InvoiceNoLoginView.as_view(), name="invoice_no_login"),
     path(
         "images/add_image/<int:lot>/",
         login_required(views.ImageCreateView.as_view()),
         name="add_image",
     ),
+    path("paypal/connect/", views.PayPalConnectView.as_view(), name="paypal_connect"),
+    path("paypal/onboard/success/", views.PayPalCallbackView.as_view(), name="paypal_callback"),
+    path("api/invoices/<uuid:uuid>/paypal/", views.CreatePayPalOrderView.as_view(), name="create_paypal_order"),
     path(
         "auctions/<slug:slug>/quick-add-images/<slug:bidder_number>",
         login_required(views.QuickBulkAddImages.as_view()),
@@ -460,10 +463,14 @@ urlpatterns = [
         name="auction_show_high_bidder",
     ),
     path("calendar/add/", views.AddToCalendarView.as_view(), name="add_to_calendar"),
+    path("paypal/success/", views.PayPalSuccessView.as_view(), name="paypal_success"),
+    path("paypal/", views.PayPalInfoView.as_view(), name="paypal_seller"),
+    path("paypal/unlink/", views.PayPalSellerDeleteView.as_view(), name="paypal_seller_delete"),
     re_path(
         r"^ses/event-webhook/$",
         SESEventWebhookView.as_view(),
         name="handle-event-webhook",
     ),
     re_path(r"^webpush/", include("webpush.urls")),
+    re_path(r"^paypal/webhook/$", views.PayPalWebhookView.as_view(), name="paypal-webhook"),
 ]

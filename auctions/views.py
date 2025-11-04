@@ -1,5 +1,7 @@
 import ast
+import base64
 import csv
+import json
 import logging
 import math
 import re
@@ -7,12 +9,16 @@ import uuid
 from collections import Counter
 from datetime import datetime, timedelta
 from datetime import timezone as date_tz
+from decimal import Decimal
 from io import BytesIO, TextIOWrapper
 from pathlib import Path
 from random import choice, randint, sample, uniform
-from urllib.parse import unquote, urlencode
+from urllib.parse import unquote, urlencode, urlparse
 
+import channels.layers
 import qr_code
+import requests
+from asgiref.sync import async_to_sync
 from chartjs.colors import next_color
 from chartjs.views.columns import BaseColumnsHighChartsView
 from chartjs.views.lines import BaseLineChartView
@@ -48,6 +54,7 @@ from django.forms import modelformset_factory
 from django.http import (
     Http404,
     HttpResponse,
+    HttpResponseBadRequest,
     HttpResponseNotAllowed,
     HttpResponseRedirect,
     JsonResponse,
@@ -57,8 +64,10 @@ from django.shortcuts import get_object_or_404, redirect
 from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.decorators import method_decorator
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
+from django.views.decorators.csrf import csrf_exempt
 from django.views.generic import DetailView, ListView, RedirectView, TemplateView, View
 from django.views.generic.base import ContextMixin
 from django.views.generic.edit import (
@@ -138,10 +147,12 @@ from .models import (
     Club,
     Invoice,
     InvoiceAdjustment,
+    InvoicePayment,
     Lot,
     LotHistory,
     LotImage,
     PageView,
+    PayPalSeller,
     PickupLocation,
     SearchHistory,
     UserBan,
@@ -1699,7 +1710,7 @@ def auctionInvoicesPaypalCSV(request, slug, chunk):
                     itemAmount = invoice.absolute_amount
                     shippingAmount = 0
                     discountAmount = 0
-                    currencyCode = "USD"
+                    currencyCode = auction.created_by.userdata.currency
                     noteToCustomer = f"https://{current_site.domain}/invoices/{invoice.pk}/"
                     termsAndConditions = ""
                     memoToSelf = invoice.auctiontos_user.memo
@@ -1723,7 +1734,7 @@ def auctionInvoicesPaypalCSV(request, slug, chunk):
                                 memoToSelf,
                             ]
                         )
-        auction.create_history(applies_to="USERS", action="Exported Paypal invoices CSV", user=request.user)
+        auction.create_history(applies_to="USERS", action="Exported PayPal invoices CSV", user=request.user)
         return response
     messages.error(request, "Your account doesn't have permission to view this page")
     return redirect("/")
@@ -2728,38 +2739,6 @@ class AuctionUnsellLot(AuctionViewMixin, View):
 
     def get(self, request, *args, **kwargs):
         return self.http_method_not_allowed
-
-
-class QuickCheckout(AuctionViewMixin, TemplateView):
-    """Enter a bidder number or name and mark their invoice as paid
-    For https://github.com/iragm/fishauctions/issues/292"""
-
-    template_name = "auctions/quick_checkout.html"
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["auction"] = self.auction
-        return context
-
-
-class QuickCheckoutHTMX(AuctionViewMixin, TemplateView):
-    """For use with HTMX calls on QuickCheckout"""
-
-    template_name = "auctions/quick_checkout_htmx.html"
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["auction"] = self.auction
-        qs = AuctionTOS.objects.filter(auction=self.auction)
-        filtered_qs = AuctionTOSFilter.generic(self, qs, kwargs.get("filter"))
-        if filtered_qs.count() > 1:
-            context["multiple_tos"] = True
-        else:
-            context["multiple_tos"] = False
-            context["tos"] = filtered_qs.first()
-            if context["tos"]:
-                context["invoice"] = context["tos"].invoice
-        return context
 
 
 class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
@@ -4290,7 +4269,8 @@ class AuctionTOSAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
         feedback = document.createElement("div");
         feedback.id = "id_name_feedback";
         feedback.className = "valid-feedback d-block cursor-pointer";
-        feedback.innerHTML = "<button role='button' class='btn btn-sm btn-info' id='autocompleteTosForm'>Click to use " + response.id_email + "</button>";
+        feedback.innerHTML = "<button role='button' class='btn btn-sm btn-info' id='autocompleteTosForm'>Click to use " + \
+            response.id_email + "</button>";
         var autocomplete = response;
         document.getElementById('id_name').parentNode.appendChild(feedback);
 
@@ -4567,6 +4547,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "use_donation_field",
                 "use_i_bred_this_fish_field",
                 "use_seller_dash_lot_numbering",
+                "enable_online_payments",
                 "alternative_split_label",
             ]
             for field in fields_to_clone:
@@ -4693,6 +4674,27 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
     rewrite_url = None
     auction = None
     allow_non_admins = True
+
+    def get(self, request, *args, **kwargs):
+        if self.is_auction_admin:
+            if str(request.GET.get("dismissed_promo_banner", "")).lower() in ("1", "true"):
+                self.auction.dismissed_promo_banner = True
+                self.auction.save()
+            if self.auction.created_by.pk == request.user.pk:
+                if str(request.GET.get("enable_online_payments", "")).lower() in ("1", "true"):
+                    self.auction.enable_online_payments = True
+                    self.auction.save()
+                if str(request.GET.get("dismissed_paypal_banner", "")).lower() in ("1", "true"):
+                    self.auction.dismissed_paypal_banner = True
+                    self.auction.save()
+                if str(request.GET.get("never_show_paypal_connect", "")).lower() in ("1", "true"):
+                    messages.info(
+                        request,
+                        "You won't see the PayPal connection prompt again.  You can always enable PayPal under Preferences>More>Connect your PayPal account.",
+                    )
+                    request.user.userdata.never_show_paypal_connect = True
+                    request.user.userdata.save()
+        return super().get(request, *args, **kwargs)
 
     def get_object(self, *args, **kwargs):
         if self.auction:
@@ -5180,6 +5182,7 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
     form_view = "opened"
     allow_non_admins = True
     authorized_by_default = False
+    using_no_login_link = False
 
     def get_object(self):
         """"""
@@ -5236,6 +5239,8 @@ class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
     def get_context_data(self, **kwargs):
         invoice = self.get_object()
         context = {}
+        context["debug"] = settings.DEBUG
+        context["using_no_login_link"] = self.using_no_login_link
         context["auction"] = self.auction
         context["is_admin"] = self.is_admin
         context["invoice"] = invoice
@@ -5318,6 +5323,7 @@ class InvoiceNoLoginView(InvoiceView):
     # need a template with a popup
     authorized_by_default = True
     form_view = "opened"
+    using_no_login_link = True
 
     def get_object(self):
         if not self.uuid:
@@ -5914,6 +5920,610 @@ class LotRefundDialog(DetailView, FormMixin, AuctionPermissionsMixin):
             context["tooltip"] = mark_safe(tooltip)
         context["modal_title"] = f"Remove or refund lot {self.lot.lot_number_display}"
         return context
+
+
+class PayPalAPIMixin:
+    """Couple API methods for PayPal stuff"""
+
+    def _get_access_token(self):
+        token_resp = requests.post(
+            f"{settings.PAYPAL_API_BASE}/v1/oauth2/token",
+            auth=(settings.PAYPAL_CLIENT_ID, settings.PAYPAL_SECRET),
+            headers={"Accept": "application/json", "Accept-Language": "en_US"},
+            data={"grant_type": "client_credentials"},
+        )
+        token_resp.raise_for_status()
+        return token_resp.json()["access_token"]
+
+    def _build_paypal_headers(self, merchant_id="", include_bn_code=True, token=None):
+        """Common header builder for PayPal API calls"""
+        headers = {
+            "Authorization": f"Bearer {token or self._get_access_token()}",
+            "Content-Type": "application/json",
+        }
+        if include_bn_code and getattr(settings, "PAYPAL_BN_CODE", None):
+            headers["PayPal-Partner-Attribution-Id"] = settings.PAYPAL_BN_CODE
+        if merchant_id:
+            headers["PayPal-Auth-Assertion"] = self._build_auth_assertion(merchant_id)
+        return headers
+
+    def _build_auth_assertion(self, merchant_payer_id):
+        """Build unsigned PayPal-Auth-Assertion JWT for acting on behalf of a merchant."""
+        header = {"alg": "none"}
+        payload = {
+            "iss": settings.PAYPAL_CLIENT_ID,
+            "payer_id": merchant_payer_id,  # obtained from partner referral flow
+        }
+
+        def b64(obj):
+            return base64.urlsafe_b64encode(json.dumps(obj, separators=(",", ":")).encode()).decode().rstrip("=")
+
+        unsigned_jwt = f"{b64(header)}.{b64(payload)}."
+        return unsigned_jwt
+
+    def _paypal_request(self, method, endpoint, *, json=None, params=None, merchant_id="", include_bn_code=True):
+        """Single request helper used by get_from_paypal and post_to_paypal."""
+        url = f"{settings.PAYPAL_API_BASE}/{str(endpoint).lstrip('/')}"
+        headers = self._build_paypal_headers(merchant_id=merchant_id, include_bn_code=include_bn_code)
+        self.paypal_debug = ""
+        try:
+            resp = requests.request(method, url, headers=headers, json=json, params=params)
+            resp.raise_for_status()
+            self.paypal_debug = resp.headers.get("Paypal-Debug-Id")
+            return resp.json()
+        except requests.HTTPError:
+            safe_headers = dict(headers or {})
+            if "Authorization" in safe_headers:
+                safe_headers["Authorization"] = "Bearer ****"
+            log_kwargs = {
+                "method": method,
+                "url": url,
+                "status": resp.status_code,
+                "Paypal-Debug-Id": self.paypal_debug,
+                "req_headers": safe_headers,
+                "req_params": params,
+                "req_json": json,
+                "resp_headers": dict(resp.headers),
+                "resp_text": resp.text,
+            }
+            msg = (
+                """PayPal API call failed: %(method)s %(url)s status=%(status)s debug_id=%(debug_id)s
+                         req_headers=%(req_headers)s req_params=%(req_params)s req_json=%(req_json)s
+                         resp_headers=%(resp_headers)s resp_text=%(resp_text)s""",
+                log_kwargs,
+            )
+            logger.error(msg)
+            raise Exception(msg)
+
+    def post_to_paypal(self, endpoint, payload, include_bn_code=True):
+        """POST JSON to a PayPal API endpoint and return parsed JSON."""
+        return self._paypal_request("POST", endpoint, json=payload, include_bn_code=include_bn_code)
+
+    def get_from_paypal(self, endpoint, include_bn_code=True, params=None):
+        """GET from a PayPal API endpoint and return parsed JSON."""
+        return self._paypal_request("GET", endpoint, params=params, include_bn_code=include_bn_code)
+
+    def create_order(self, invoice):
+        """Pass an invoice object and create an order for it.
+        Returns an approval URL or None if the request failed"""
+        currency = invoice.auction.created_by.userdata.currency
+
+        items = []
+        for lot in invoice.bought_lots_queryset:
+            items.append(
+                {
+                    "name": f"{lot.lot_number_display} - {lot.lot_name}",
+                    "quantity": "1",
+                    "unit_amount": {"currency_code": currency, "value": f"{lot.winning_price:.2f}"},
+                    "category": "PHYSICAL_GOODS",
+                    "url": lot.full_lot_link,
+                    "tax": {"currency_code": currency, "value": f"{lot.tax:.2f}"},
+                }
+            )
+
+        target_total = (Decimal("0.00") - Decimal(invoice.net_after_payments)).quantize(Decimal("0.01"))
+        # Base components from items
+        item_total = Decimal(str(invoice.total_bought)).quantize(Decimal("0.01"))
+        tax_total = Decimal(str(invoice.tax)).quantize(Decimal("0.01"))
+
+        # Adjustment needed to make breakdown sum to target_total
+        # target_total = item_total + tax_total + handling/shipping/insurance - discount
+        # We’ll use:
+        #  - discount for negative adjustments
+        #  - an explicit “Adjustments” line item for positive adjustments (and include it in item_total)
+        adjustment = (target_total - (item_total + tax_total)).quantize(Decimal("0.01"))
+
+        discount_value = Decimal("0.00")
+        if adjustment > 0:
+            # Add an adjustment item and include in item_total
+            items.append(
+                {
+                    "name": "Adjustments",
+                    "quantity": "1",
+                    "unit_amount": {"currency_code": currency, "value": f"{adjustment:.2f}"},
+                    "category": "PHYSICAL_GOODS",
+                }
+            )
+            item_total = (item_total + adjustment).quantize(Decimal("0.01"))
+            adjustment = Decimal("0.00")
+        elif adjustment < 0:
+            # Use discount as a positive number
+            discount_value = abs(adjustment)
+
+        breakdown = {
+            "item_total": {"currency_code": currency, "value": f"{item_total:.2f}"},
+            "tax_total": {"currency_code": currency, "value": f"{tax_total:.2f}"},
+        }
+        if discount_value > 0:
+            breakdown["discount"] = {"currency_code": currency, "value": f"{discount_value:.2f}"}
+
+        purchase_unit = {
+            "description": f"Bidder {invoice.auctiontos_user.bidder_number} in {invoice.auction.title}"[:127],
+            "reference_id": str(invoice.pk),
+            "amount": {
+                "currency_code": currency,
+                "value": f"{Decimal(-invoice.net_after_payments):.2f}",
+                "breakdown": breakdown,
+            },
+            "items": items,
+        }
+        if invoice.soft_descriptor:
+            purchase_unit["soft_descriptor"] = invoice.soft_descriptor[:22]
+        if invoice.auction.paypal_information and invoice.auction.paypal_information != "admin":
+            # if this is not set, payment will go to the platform account whose keys are in the .env
+            purchase_unit["payee"] = {"merchant_id": invoice.auction.paypal_information}
+            if settings.PAYPAL_PLATFORM_FEE and settings.PAYPAL_PLATFORM_FEE > 0:
+                amt_value = Decimal(purchase_unit["amount"]["value"])
+                fee_amount = (amt_value * settings.PAYPAL_PLATFORM_FEE / Decimal(100)).quantize(Decimal(0.01))
+                if fee_amount > 0:
+                    purchase_unit["payment_instruction"] = {
+                        "platform_fees": [
+                            {
+                                "amount": {
+                                    "currency_code": currency,
+                                    "value": str(fee_amount),
+                                }
+                            }
+                        ],
+                        "disbursement_mode": "INSTANT",
+                    }
+
+        payload = {
+            "intent": "CAPTURE",
+            "purchase_units": [purchase_unit],
+            # This code forces payment from the auctiontos.email and will fail if the user
+            # doesn't have that email address as their primary PayPal address
+            # "payment_source": {
+            #     "paypal": {
+            #         "email_address": invoice.auctiontos_user.email,
+            #     },
+            # },
+            "application_context": {
+                "brand_name": settings.NAVBAR_BRAND,
+                "return_url": self.request.build_absolute_uri("/paypal/success/"),
+                "cancel_url": self.request.build_absolute_uri(
+                    reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link})
+                ),
+            },
+        }
+
+        order_data = self.post_to_paypal("v2/checkout/orders", payload)
+        approval_url = None
+        for link in order_data.get("links") or []:
+            if link.get("rel") == "approve":
+                approval_url = link.get("href")
+                break
+        self.order_id = order_data.get("id", "")
+        if not approval_url:
+            logger.error("PayPal order creation failed (platform): %s, debug_id %s", order_data, self.paypal_debug)
+        return approval_url
+
+    def handle_order(self, order_id):
+        """Find an invoice associated with a given order ID, and create a payment for it.  Returns error string and invoice object"""
+        order_data = self.post_to_paypal(f"v2/checkout/orders/{order_id}/capture", {})
+        if order_data.get("status") != "COMPLETED":
+            return (
+                "PayPal payment has not yet been completed, please ask the auction administrator to manually confirm payment.",
+                None,
+            )
+
+        # Extract identifiers
+        purchase_unit = order_data.get("purchase_units", [{}])[0]
+        invoice_id = purchase_unit.get("reference_id")
+
+        # Load invoice
+        invoice = Invoice.objects.filter(pk=invoice_id).first()
+        if not invoice:
+            return (
+                "No invoice associated with this PayPal order, please ask the auction administrator to manually confirm payment.",
+                None,
+            )
+
+        # Safely extract capture info (amount, currency, external id, payer info)
+        capture = None
+        try:
+            capture = purchase_unit.get("payments", {}).get("captures", [None])[0]
+        except Exception:
+            capture = None
+
+        amount_value = None
+        currency = "USD"
+        external_id = order_data.get("id")
+        if capture:
+            amount_value = capture.get("amount", {}).get("value")
+            currency = capture.get("amount", {}).get("currency_code", currency)
+            external_id = capture.get("id") or external_id
+
+        # fallback to purchase_unit.amount
+        if not amount_value:
+            pu_amount = purchase_unit.get("amount", {}) or {}
+            amount_value = pu_amount.get("value")
+            currency = pu_amount.get("currency_code", currency)
+
+        # payer info
+        payer = order_data.get("payer", {}) or {}
+        payer_name = None
+        try:
+            payer_name_parts = payer.get("name", {}) or {}
+            given = payer_name_parts.get("given_name", "")
+            surname = payer_name_parts.get("surname", "")
+            payer_name = " ".join(p for p in (given, surname) if p).strip() or None
+        except Exception:
+            payer_name = None
+        payer_email = payer.get("email_address")
+
+        payer_address = None
+        # prefer purchase_unit.shipping.address, fallback to payer.address
+        shipping = purchase_unit.get("shipping", {}) or {}
+        address_obj = (shipping.get("address") or {}) or (payer.get("address") or {})
+        if address_obj:
+            parts = []
+            for k in (
+                "address_line_1",
+                "address_line_2",
+                "admin_area_2",
+                "admin_area_1",
+                "postal_code",
+                "country_code",
+            ):
+                v = address_obj.get(k)
+                if v:
+                    parts.append(v)
+            if parts:
+                payer_address = ", ".join(parts)
+
+        if payer_email and not invoice.auctiontos_user.email:
+            invoice.auctiontos_user.email = payer_email
+            invoice.auctiontos_user.save()
+            invoice.auction.create_history(
+                applies_to="USERS",
+                action=f"Added email {payer_email} to user {invoice.auctiontos_user.name} from PayPal payment",
+                user=None,
+            )
+        if payer_address and payer_address != invoice.auctiontos_user.address:
+            # always overwrite the address with the one from PayPal
+            invoice.auction.create_history(
+                applies_to="USERS",
+                action=f"Updated address for user {invoice.auctiontos_user.name} from PayPal payment.  Old address {invoice.auctiontos_user.address}",
+                user=None,
+            )
+            invoice.auctiontos_user.address = payer_address[:500]
+            invoice.auctiontos_user.save()
+
+            # also save the address site-wide
+            if invoice.auctiontos_user.user and not invoice.auctiontos_user.user.userdata.address:
+                invoice.auctiontos_user.user.userdata.address = payer_address[:500]
+                invoice.auctiontos_user.user.userdata.save()
+
+        amt = Decimal(str(amount_value)) if amount_value else Decimal("0.00")
+        if not amt:
+            return (
+                "Unable to determine payment amount from PayPal order, please ask the auction administrator to manually confirm payment.",
+                invoice,
+            )
+        payment, created = InvoicePayment.objects.update_or_create(
+            external_id=external_id,
+            defaults={
+                "invoice": invoice,
+                "amount": amt,
+                "currency": currency,
+                "payer_name": payer_name,
+                "payer_email": payer_email,
+                "payer_address": payer_address,
+                "payment_method": "PayPal",
+                "amount_available_to_refund": amt,
+            },
+        )
+        invoice.recalculate
+        if created:
+            action = f"Payment received via PayPal for {invoice.auctiontos_user.name} ${payment.amount} ({payment.external_id})"
+            invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
+        # If the total owed is zero or less and invoice is DRAFT/UNPAID, mark PAID
+        if invoice.net_after_payments >= 0 and invoice.status in ("DRAFT", "UNPAID"):
+            invoice.status = "PAID"
+            invoice.save()
+            invoice.auction.create_history(
+                applies_to="INVOICES",
+                action=f"Invoice {invoice.auctiontos_user.name} automatically marked PAID after PayPal payment",
+            )
+            # I have given some thought to putting this in a model property instead
+            # Putting it here only sends the message when an invoice is paid via PayPal
+            channel_layer = channels.layers.get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                f"auctions_{invoice.auction.pk}",
+                {"type": "invoice_paid", "pk": invoice.pk},
+            )
+
+        return None, invoice
+
+    def can_refund_invoice(self, invoice, amount):
+        """Check if we can refund the given amount on this invoice via PayPal."""
+        payment = (
+            InvoicePayment.objects.filter(invoice=invoice, payment_method="PayPal")
+            .exclude(amount__lt=0)
+            .order_by("-amount_available_to_refund")
+            .first()
+        )
+        # if multiple payments have been made, we will only refund the largest one
+        # I am too lazy to implement partial refunds across multiple payments right now
+        total_available = payment.amount_available_to_refund if payment else Decimal("0.00")
+        if total_available >= amount:
+            return True
+        return False
+
+    def refund_invoice(self, invoice, amount):
+        """Refund the given amount on this invoice via PayPal.
+        Returns error or none on success"""
+        if not self.can_refund_invoice(invoice, amount):
+            return "Unable to automatically refund payment"
+        payment = (
+            InvoicePayment.objects.filter(invoice=invoice, payment_method="PayPal")
+            .exclude(amount__lt=0)
+            .order_by("-amount_available_to_refund")
+            .first()
+        )
+        payload = {"amount": {"value": str(amount), "currency_code": str(payment.currency)}}
+        result = self.post_to_paypal(f"v2/payments/captures/{payment.external_id}/refund", payload)
+        if result.get("status") != "COMPLETED":
+            logger.exception("PayPal refund failed: %s, debug_id: %s", result, self.paypal_debug)
+            return "PayPal refund failed"
+        # no database recording happens here, that goes through the webhook, see handle_refund()
+        return None
+
+    def handle_refund(self, refund_resource):
+        """
+        Process a refund webhook resource:
+          - find the capture id (payment reference) from resource.links where rel == 'up'
+          - find the InvoicePayment with external_id == capture_id
+          - create a new InvoicePayment with negative amount and external_id == refund_id
+        Returns: (invoice, refund_payment) or (None, None) on failure
+        """
+        refund_id = refund_resource.get("id")
+        note_to_payer = refund_resource.get("note_to_payer") or refund_resource.get("note") or ""
+        amount_obj = refund_resource.get("amount") or {}
+        amount_value = amount_obj.get("value")
+        currency = amount_obj.get("currency_code") or amount_obj.get("currency")
+
+        # find capture id from the `up` link in the resource
+        capture_id = None
+        for item in refund_resource.get("links") or []:
+            if item.get("rel") == "up" and item.get("href"):
+                try:
+                    capture_id = urlparse(item["href"]).path.rstrip("/").split("/")[-1]
+                except Exception:
+                    capture_id = None
+                break
+
+        if not capture_id:
+            logger.warning("Refund resource missing capture 'up' link; resource=%s", refund_resource)
+            return None, None
+
+        # Find the original InvoicePayment by external_id == capture_id
+        original_payment = InvoicePayment.objects.filter(external_id=capture_id).first()
+        if not original_payment:
+            logger.warning("No InvoicePayment found for capture id %s (refund %s)", capture_id, refund_id)
+            return None, None
+        invoice = original_payment.invoice
+
+        # parse amount as Decimal and make negative
+        try:
+            refund_amt = Decimal(str(amount_value)) if amount_value is not None else None
+        except Exception:
+            logger.exception("Invalid refund amount in resource: %s", amount_value)
+            refund_amt = None
+
+        if refund_amt is None:
+            logger.warning("Refund amount missing or invalid in refund resource %s", refund_id)
+            return invoice, None
+
+        refund_amt_signed = -abs(refund_amt)  # ensure negative
+
+        original_payment.amount_available_to_refund = original_payment.amount_available_to_refund - abs(refund_amt)
+        original_payment.save()
+        # Create a new InvoicePayment record for the refund.
+        refund_payment, created = InvoicePayment.objects.update_or_create(
+            external_id=refund_id,
+            defaults={
+                "invoice": invoice,
+                "amount": refund_amt_signed,
+                "currency": currency or original_payment.currency,
+                "payer_name": (refund_resource.get("payer") or {}).get("name") or None,
+                "payer_email": (refund_resource.get("payer") or {}).get("email_address") or None,
+                "payer_address": None,
+                "payment_method": "PayPal Refund",
+                "memo": note_to_payer[:500],
+            },
+        )
+
+        invoice.recalculate
+        action = f"Refund received via PayPal {refund_id} for capture {capture_id}: {refund_amt_signed} {currency}. Note: {note_to_payer}"
+        invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
+        return invoice, refund_payment
+
+
+class PayPalConnectView(LoginRequiredMixin, PayPalAPIMixin, View):
+    """Start the PayPal onboarding process for a seller"""
+
+    def get(self, request):
+        tracking_id = request.user.userdata.unsubscribe_link
+        payload = {
+            "tracking_id": tracking_id,
+            "operations": [
+                {
+                    "operation": "API_INTEGRATION",
+                    "api_integration_preference": {
+                        "rest_api_integration": {
+                            "integration_method": "PAYPAL",
+                            "integration_type": "THIRD_PARTY",
+                            "third_party_details": {"features": ["PAYMENT", "REFUND", "ACCESS_MERCHANT_INFORMATION"]},
+                        }
+                    },
+                }
+            ],
+            "products": ["EXPRESS_CHECKOUT"],
+            "legal_consents": [{"type": "SHARE_DATA_CONSENT", "granted": True}],
+            # take us to PayPalCallbackView when we are done
+            "partner_config_override": {
+                "return_url": request.build_absolute_uri("/paypal/onboard/success/"),
+                # "return_url_description": f"Continue on {settings.NAVBAR_BRAND}",
+            },
+        }
+        data = self.post_to_paypal("v2/customer/partner-referrals", payload)
+
+        # Extract the action_url from the links list
+        action_url = next((link["href"] for link in data.get("links", []) if link.get("rel") == "action_url"), None)
+        if not action_url:
+            logger.exception("PayPal onboarding failed %s, debug_id %s", data, self.paypal_debug)
+            messages.error(request, "Unable to start PayPal onboarding process, please try again later.")
+            return redirect("/")
+        # Redirect seller to PayPal to complete onboarding
+        return redirect(action_url)
+
+
+class PayPalCallbackView(LoginRequiredMixin, PayPalAPIMixin, View):
+    """After onboarding, PayPal redirects here"""
+
+    def get_success_url(self):
+        success_url = "/"
+        if self.request.user.userdata.last_auction_created:
+            success_url = self.request.user.userdata.last_auction_created.get_absolute_url()
+        if self.error:
+            messages.error(self.request, self.error)
+        else:
+            messages.success(
+                self.request,
+                "You're all set - PayPal account linked!  Your users will see a PayPal button on invoices.",
+            )
+            success_url += "?enable_online_payments=True"
+        return redirect(success_url)
+
+    def get(self, request):
+        self.error = None
+        self.valid = False
+        tracking_id = request.GET.get("merchantId")
+        merchant_id = request.GET.get("merchantIdInPayPal")
+        partner_merchant_id = settings.PARTNER_MERCHANT_ID
+
+        if not tracking_id or not merchant_id:
+            self.error = "Missing ID from PayPal callback"
+            return self.get_success_url()
+
+        data = UserData.objects.filter(unsubscribe_link=tracking_id).first()
+        if not data:
+            self.error = "Could not find user for PayPal onboarding"
+            return self.get_success_url()
+        else:
+            user = data.user
+
+        # Fetch referral info from PayPal
+        merchant_info = self.get_from_paypal(
+            f"v1/customer/partners/{partner_merchant_id}/merchant-integrations/{merchant_id}"
+        )
+        # Integration checklist: ensure payments_receivable, email confirmed and oauth_third_party present
+        currency = merchant_info.get("primary_currency", "USD")
+        if not merchant_info.get("payments_receivable"):
+            self.error = "Attention: You currently cannot receive payments due to restriction on your PayPal account. Please resolve any issues with PayPal and re-link your account here."
+            return self.get_success_url()
+        if not merchant_info.get("primary_email_confirmed"):
+            self.error = "Attention: Please confirm your email address on https://www.paypal.com/businessprofile/settings in order to receive payments! You currently cannot receive payments.  Re-link your account here when finished."
+            return self.get_success_url()
+        oauth_integrations = merchant_info.get("oauth_integrations") or []
+        oauth_ok = any(
+            oi.get("integration_type") == "OAUTH_THIRD_PARTY" and oi.get("oauth_third_party")
+            for oi in oauth_integrations
+        )
+        if not oauth_ok:
+            self.error = "It doesn't look like you've granted us the third-party oauth integrations permissions. Please re-link your PayPal account and be sure to accept all requested permissions."
+            return self.get_success_url()
+
+        # update model
+        seller, _ = PayPalSeller.objects.get_or_create(user=user)
+        seller.paypal_merchant_id = merchant_id
+        seller.payer_email = merchant_info.get("primary_email") or seller.payer_email
+        seller.currency = currency
+        seller.save()
+        return self.get_success_url()
+
+
+class CreatePayPalOrderView(PayPalAPIMixin, View):
+    """Create a PayPal order for an invoice and redirect to PayPal checkout"""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.invoice = get_object_or_404(Invoice, no_login_link=kwargs.pop("uuid"))
+        error = self.invoice.reason_for_payment_not_available
+        if not self.invoice.show_payment_button:
+            error = "PayPal payments are not possible in this auction"
+        if error:
+            messages.error(request, error)
+            return redirect(reverse("invoice_no_login", kwargs={"uuid": self.invoice.no_login_link}))
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        """Create the order"""
+        approval_url = self.create_order(self.invoice)
+        if not approval_url:
+            messages.error(
+                request, "Payment provider rejected the order. Contact the auction administrator to confirm payment."
+            )
+            return redirect(self.invoice.get_absolute_url())
+        return redirect(approval_url)
+
+
+class PayPalSuccessView(PayPalAPIMixin, View):
+    """Capture PayPal order after approval and mark payment complete"""
+
+    def get(self, request, *args, **kwargs):
+        order_id = request.GET.get("token")
+        error, invoice = self.handle_order(order_id)
+        if error:
+            messages.error(request, error)
+        else:
+            messages.success(request, "Payment completed successfully. Thank you!")
+        if invoice:
+            return redirect(reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link}))
+        return redirect("/")
+
+
+class PayPalInfoView(TemplateView):
+    template_name = "auctions/paypal_seller.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["seller"] = PayPalSeller.objects.filter(user=self.request.user).first()
+        if self.request.user.is_authenticated:
+            context["auction"] = self.request.user.userdata.last_auction_created
+        return context
+
+
+class PayPalSellerDeleteView(LoginRequiredMixin, DeleteView):
+    template_name = "auctions/paypal_seller_confirm_delete.html"
+    model = PayPalSeller
+
+    def get_object(self, queryset=None):
+        return get_object_or_404(PayPalSeller, user=self.request.user)
+
+    def get_success_url(self):
+        return reverse("paypal_seller")
 
 
 class UserView(DetailView):
@@ -7787,3 +8397,235 @@ class AuctionNoShowAction(AuctionNoShow, FormMixin):
             return HttpResponse("<script>location.reload();</script>", status=200)
         else:
             return self.form_invalid(form)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class PayPalWebhookView(PayPalAPIMixin, View):
+    """
+    Minimal PayPal webhook handler that:
+      - validates the webhook signature with PayPal (verify-webhook-signature)
+      - processes a few important event types (onboarding, consent revoke, capture/refund, disputes)
+    Requirements:
+      - settings.PAYPAL_API_BASE (e.g. https://api-m.sandbox.paypal.com)
+      - settings.PAYPAL_CLIENT_ID, settings.PAYPAL_CLIENT_SECRET
+      - settings.PAYPAL_WEBHOOK_ID (the webhook id you registered in PayPal dashboard)
+      - (optional) settings.PAYPAL_PARTNER_ATTRIBUTION_ID (BN code) if you want to include it in calls
+    """
+
+    def post(self, request, *args, **kwargs):
+        # Read raw body and parse JSON
+        raw_body = request.body
+        try:
+            event = json.loads(raw_body.decode("utf-8"))
+        except Exception as exc:
+            logger.exception("Invalid JSON in PayPal webhook: %s", exc)
+            return HttpResponseBadRequest("invalid json")
+
+        # Extract PayPal transmission headers (case-insensitive)
+        # Django exposes headers as HTTP_<HEADER_NAME> in request.META
+        def hdr(name):
+            return request.META.get(f"HTTP_{name.upper().replace('-', '_')}", request.headers.get(name))
+
+        transmission_id = hdr("PayPal-Transmission-Id")
+        transmission_time = hdr("PayPal-Transmission-Time")
+        cert_url = hdr("PayPal-Cert-Url")
+        auth_algo = hdr("PayPal-Auth-Algo")
+        transmission_sig = hdr("PayPal-Transmission-Sig")
+        # webhook_id = getattr(settings, "PAYPAL_WEBHOOK_ID", None)
+
+        if not all([transmission_id, transmission_time, cert_url, auth_algo, transmission_sig]):
+            logger.warning(
+                "Missing PayPal webhook headers; rejecting. headers=%s webhook_id=%s",
+                {
+                    k: hdr(k)
+                    for k in [
+                        "PayPal-Transmission-Id",
+                        "PayPal-Transmission-Time",
+                        "PayPal-Cert-Url",
+                        "PayPal-Auth-Algo",
+                        "PayPal-Transmission-Sig",
+                    ]
+                },
+            )
+            return HttpResponseBadRequest("missing verification headers or webhook_id")
+
+        # Build verification payload
+        verify_payload = {
+            "transmission_id": transmission_id,
+            "transmission_time": transmission_time,
+            "cert_url": cert_url,
+            "auth_algo": auth_algo,
+            "transmission_sig": transmission_sig,
+            # "webhook_id": webhook_id,
+            "webhook_event": event,
+        }
+
+        # Get platform token using client credentials
+        response = self.post_to_paypal("/v1/oauth2/token", payload=verify_payload)
+        platform_token = response.get("access_token", None)
+        if not platform_token:
+            logger.error(
+                "Failed to obtain PayPal platform access token for webhook verification, debug_id %s", self.paypal_debug
+            )
+            return HttpResponse(status=500)
+
+        # Call PayPal verify endpoint
+        verify_data = self.post_to_paypal("/v1/notifications/verify-webhook-signature", payload={})
+        verification_status = verify_data.get("verification_status")
+        if verification_status != "SUCCESS":
+            logger.warning(
+                "PayPal webhook signature verification failed: %s (verify_resp=%s) debug_id=%s",
+                verification_status,
+                verify_data,
+                self.paypal_debug,
+            )
+            return HttpResponseBadRequest("webhook verification failed")
+
+        # At this point, the webhook is verified as coming from PayPal.
+        event_type = event.get("event_type")
+        resource = event.get("resource", {}) or {}
+
+        logger.info("Verified PayPal webhook: %s", event_type)
+
+        if event_type == "MERCHANT.ONBOARDING.COMPLETED":
+            # Example: merchant onboarding completed
+            # resource may contain merchantId / merchantIdInPayPal / tracking_id
+            merchant_id_in_paypal = resource.get("merchant_id")
+            tracking_id = resource.get("tracking_id")
+            # try find user via tracking_id first
+            user = None
+            if tracking_id:
+                ud = UserData.objects.filter(unsubscribe_link=tracking_id).first()
+                if ud:
+                    user = ud.user
+            # fallback: attempt to find PayPalSeller by merchant id
+            if not user and merchant_id_in_paypal:
+                seller = PayPalSeller.objects.filter(paypal_merchant_id=merchant_id_in_paypal).first()
+                user = seller.user if seller else None
+
+            # Create or update PayPalSeller record (if user found)
+            if user:
+                seller, _ = PayPalSeller.objects.get_or_create(user=user)
+                if merchant_id_in_paypal:
+                    seller.paypal_merchant_id = merchant_id_in_paypal
+                # email may not be present in the resource; if present, update
+                email = resource.get("payerEmail") or resource.get("primary_email") or resource.get("primaryEmail")
+                if email:
+                    seller.payer_email = email
+                seller.save()
+                logger.info("Updated PayPalSeller for user %s after onboarding webhook", user.pk)
+            else:
+                logger.info(
+                    "Onboarding webhook: no local user found for merchant %s tracking_id=%s",
+                    merchant_id_in_paypal,
+                    tracking_id,
+                )
+
+        elif event_type == "MERCHANT.PARTNER-CONSENT.REVOKED":
+            # Mark seller as disconnected / revoke tokens
+            merchant_id_in_paypal = resource.get("merchant_id")
+            seller = None
+            if merchant_id_in_paypal:
+                seller = PayPalSeller.objects.filter(paypal_merchant_id=merchant_id_in_paypal).first()
+            if seller:
+                seller.delete()
+                logger.info("Revoked selling for", seller.pk)
+            else:
+                logger.info("Partner-consent revoked for unknown merchant %s", merchant_id_in_paypal)
+
+        elif event_type in ("CHECKOUT.ORDER.COMPLETED"):
+            """Actually mark the invoice paid and save payment"""
+            capture_id = resource.get("purchase_units", [{}])[0].get("payments", {}).get("captures", [{}])[0].get("id")
+            if capture_id:
+                error, _ = self.handle_order(capture_id)
+                if error:
+                    logger.error("Error handling completed order for capture_id=%s: %s", capture_id, error)
+                else:
+                    logger.info("Payment capture completed: capture_id=%s", capture_id)
+
+        elif event_type in ("CHECKOUT.CAPTURE.COMPLETED"):
+            """This one doesn't save the invoice"""
+            try:
+                order_id = resource.get("supplementary_data", {}).get("related_ids", {}).get("order_id")
+                # Fetch the order details to get purchase_units[0].reference_id (our invoice pk)
+                order_data = self.get_from_paypal(f"v2/checkout/orders/{order_id}")
+                purchase_unit = (order_data.get("purchase_units") or [{}])[0]
+                reference_id = purchase_unit.get("reference_id")
+                logger.info("Capture webhook resolved order_id=%s reference_id=%s", order_id, reference_id)
+
+                invoice = Invoice.objects.filter(pk=reference_id).first()
+                if invoice:
+                    channel_layer = channels.layers.get_channel_layer()
+                    async_to_sync(channel_layer.group_send)(
+                        f"auctions_{invoice.auction.pk}",
+                        {"type": "capture_complete", "pk": invoice.pk},
+                    )
+            except Exception:
+                logger.exception(
+                    "Error processing capture webhook for resource: %s, debug_id %s", resource, self.paypal_debug
+                )
+            return JsonResponse({"status": "ok"})
+        elif event_type in ("CHECKOUT.ORDER.APPROVED",):
+            # Extract the reference_id (our invoice reference) from the approved order and print/log it.
+            try:
+                purchase_unit = resource.get("purchase_units", [{}])[0]
+                reference_id = purchase_unit.get("reference_id")
+                logger.info("PayPal webhook CHECKOUT.ORDER.APPROVED reference_id=%s", reference_id)
+                invoice = Invoice.objects.filter(pk=reference_id).first()
+                if invoice:
+                    channel_layer = channels.layers.get_channel_layer()
+                    async_to_sync(channel_layer.group_send)(
+                        f"auctions_{invoice.auction.pk}",
+                        {"type": "invoice_approved", "pk": invoice.pk},
+                    )
+            except ValueError:
+                logger.exception("Failed to extract reference_id for CHECKOUT.ORDER.APPROVED: %s", resource)
+            return JsonResponse({"status": "ok"})
+
+        elif event_type in ("PAYMENT.CAPTURE.REFUNDED", "PAYMENT.SALE.REFUNDED"):
+            self.handle_refund(resource)
+            logger.info("Refund received")
+
+        else:
+            # Unhandled event types: log for inspection
+            logger.info("Unhandled PayPal webhook event_type=%s resource_keys=%s", event_type, list(resource.keys()))
+
+        # Return success to PayPal
+        return JsonResponse({"status": "ok"})
+
+
+class QuickCheckout(AuctionViewMixin, TemplateView):
+    """Enter a bidder number or name and mark their invoice as paid
+    For https://github.com/iragm/fishauctions/issues/292"""
+
+    template_name = "auctions/quick_checkout.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["auction"] = self.auction
+        return context
+
+
+class QuickCheckoutHTMX(AuctionViewMixin, PayPalAPIMixin, TemplateView):
+    """For use with HTMX calls on QuickCheckout"""
+
+    template_name = "auctions/quick_checkout_htmx.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["auction"] = self.auction
+        qs = AuctionTOS.objects.filter(auction=self.auction)
+        filtered_qs = AuctionTOSFilter.generic(self, qs, kwargs.get("filter"))
+        invoice = None
+        if filtered_qs.count() > 1:
+            context["multiple_tos"] = True
+        else:
+            context["multiple_tos"] = False
+            context["tos"] = filtered_qs.first()
+            if context["tos"]:
+                invoice = context["tos"].invoice
+                context["invoice"] = invoice
+            if invoice and invoice.show_payment_button and not invoice.reason_for_payment_not_available:
+                # generate a paypal order to be placed in a QR code for the user to scan
+                context["qr_code_link"] = self.create_order(invoice)
+        return context

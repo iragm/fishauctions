@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Disconnect PayPal{% endblock %}
+{% block content %}
+<div class="container py-4">
+  <h1 class="h5">Disconnect PayPal</h1>
+  <p>Disconnecting your PayPal account will prevent you from offering PayPal services and products on your website. Do you wish to continue?</p>
+  <form method="post" class="d-flex gap-2">
+    {% csrf_token %}
+    <a href="{% url 'paypal_seller' %}" class="btn btn-secondary btn-sm">Cancel</a>
+    <button type="submit" class="btn btn-danger btn-sm">Disconnect</button>
+  </form>
+</div>
+{% endblock %}

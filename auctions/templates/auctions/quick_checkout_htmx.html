@@ -1,3 +1,4 @@
+{% load qr_code %}
 <div class="container mt-4">
   {% if multiple_tos %}
     Multiple users found.  Use a more specific search term.
@@ -11,6 +12,21 @@
         {% if tos.is_club_member %}<span class="badge bg-info ms-1 me-1" title="Alternate selling fees will be applied">{{ tos.auction.alternative_split_label|capfirst }}</span>{% endif %}
         {% if tos.memo %}Memo: {{ tos.memo }}<br>{% endif %}
         {% if tos.possible_duplicate %}Note: This user may be a duplicate, confirm that this is their only bidder number<br>{% endif %}
+        {% if qr_code_link %}
+          <div class="row justify-content-center my-2">
+            <div class="col-12 col-lg-4 text-center">
+              <!-- Tiny inline CSS to force any img inside this wrapper to be responsive -->
+              <style>
+                #invoice_{{invoice.pk}}_qr_wrapper img { max-width: 100%; height: auto; }
+              </style>
+              <div id="invoice_{{invoice.pk}}_qr_wrapper" aria-label="Payment QR code">
+                {% qr_from_text qr_code_link size="L" image_format="png" %}
+                <!-- <a href="{{ qr_code_link }}" class="d-block small mb-2">{{ qr_code_link }}</a> -->
+                <span id="invoice_{{invoice.pk}}_qr_scan" class="d-block mb-2">Scan this code to pay with PayPal</span>
+              </div>
+            </div>
+          </div>
+        {% endif %}
         <a href="{{ invoice.get_absolute_url }}" target="_blank"><i class="bi bi-arrow-up-right-square-fill"></i> View or adjust invoice</a>
         <a href="{{ invoice.get_absolute_url }}?print" target="_blank"><i class="bi bi-printer-fill"></i> Print invoice</a>
       {% endif %}

@@ -119,6 +119,7 @@ Support for you running your own auction website is extremely limited (read: non
 * Get a [Google Maps API key](https://console.cloud.google.com/)
 * Get a Google OAUTH key by following the [app registration section here](https://docs.allauth.org/en/latest/socialaccount/providers/google.html).  Just do steps 1 and 2 and make a note of the secret keys, the Django configuration has already been done.
 * Get a [Recaptcha v2 invisible key](https://cloud.google.com/security/products/recaptcha)
+* For Payments, create a [PayPal App](https://developer.paypal.com/dashboard/applications/live) and note the client id and secret.
 
 ### Deploy the website
 Log into your VM and enter the following:
@@ -148,6 +149,18 @@ AWS_SES_REGION_NAME="us-east-1"
 AWS_SES_REGION_ENDPOINT="email.us-east-1.amazonaws.com"
 AWS_SES_CONFIGURATION_SET="secret"
 ```
+
+To set up payments for your auctions, note that:
+* Only auctions created by a site admin (superuser) will be able process payments with the configuration described below (but see the next point for the one exception).
+
+* To allow anyone to connect their PayPal accounts, you need to get an approved platform partner BN code from PayPal and then configure env settings `PARTNER_MERCHANT_ID`, `PAYPAL_BN_CODE`, and `PAYPAL_ENABLED_FOR_USERS=True`.  A management command exists (`docker exec -it django python3 manage.py change_paypal on`) to activate PayPal for existing accounts once you've tested your integration.
+
+Set `PAYPAL_ENABLED_FOR_USERS=False` (this is the default).  This prevents new accounts from seeing a connect PayPal account button, which as noted above, shouldn't be done unless you've configured the partner API.
+
+Set `PAYPAL_CLIENT_ID="client-id"` and `PAYPAL_SECRET="secret"` to the values you got from the pre setup checklist.
+
+If payments are not working after setting this up, make sure your API keys are for live, not sandbox.  To use the sandbox for testing, add `PAYPAL_API_BASE="https://api-m.sandbox.paypal.com"` to your .env.  Note that if this isn't set, sandbox is used in dev and live is used in production.
+
 A few other settings, and what they do:
 
 `NAVBAR_BRAND` This is what's shown on the top of every page.
@@ -158,7 +171,9 @@ A few other settings, and what they do:
 
 `ALLOW_USERS_TO_CREATE_AUCTIONS` Set this to False (case sensitive) to allow only admin users to create club auctions
 
-`ALLOW_USERS_TO_CREATE_LOTS` Set this to False (case sensitive) to disable creating stand-alone lots not associated with any auction.  Users will still be able to add lots to club auctions.
+`ALLOW_USERS_TO_CREATE_LOTS` Set this to False (case sensitive) to disable creating stand-alone lots not associated with any auction for newly created users.  Users will still be able to add lots to club auctions.
+
+Directly related to this is a management command `change_standalone_lots` which can be used to enable/disable this for all existing users.  Example: `docker exec -it django python3 manage.py change_standalone_lots on` will allow users to create their own lots.
 
 `ENABLE_PROMO_PAGE` This should be left at False so the main auctions list is the landing page.
 

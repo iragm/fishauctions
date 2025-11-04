@@ -20,6 +20,7 @@ from .models import (
     Club,
     GeneralInterest,
     Invoice,
+    InvoicePayment,
     Location,
     Lot,
     LotHistory,
@@ -150,6 +151,23 @@ class AdCampaignGroupAdmin(admin.ModelAdmin):
         AdCampaignInline,
     ]
     search_fields = ("title",)
+
+
+class InvoicePaymentInline(admin.TabularInline):
+    model = InvoicePayment
+    extra = 0
+
+    def get_readonly_fields(self, request, obj=None):
+        # make all InvoicePayment fields readonly (except the FK back to Invoice which is implied)
+        return tuple(
+            f.name
+            for f in self.model._meta.get_fields()
+            if not (f.many_to_many or f.one_to_many) and f.name != "invoice"
+        )
+
+    def has_add_permission(self, request, obj=None):
+        # disallow creating payments from the invoice admin inline (payments should come from payment handlers)
+        return False
 
 
 class BlogPostAdmin(admin.ModelAdmin):
@@ -549,14 +567,16 @@ class InvoiceAdmin(admin.ModelAdmin):
         "status",
     )
     search_fields = ("auctiontos_user__name",)
-    readonly_fields = (
-        "opened",
-        "printed",
-    )
+    readonly_fields = ()  # overridden by get_readonly_fields
     inlines = [
         SoldLotInline,
         BoughtLotInline,
+        InvoicePaymentInline,
     ]
+
+    def get_readonly_fields(self, request, obj=None):
+        # make all Invoice model fields readonly in the admin
+        return tuple(f.name for f in self.model._meta.get_fields() if not (f.many_to_many or f.one_to_many))
 
 
 class ChatAdmin(admin.ModelAdmin):

@@ -76,3 +76,4 @@ django-summernote
 django-weasyprint
 reportlab
 beautifulsoup4
+django-encrypted-model-fields

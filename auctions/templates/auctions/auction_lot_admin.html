@@ -12,7 +12,7 @@
     {% if not auction.is_online %}<a class='btn btn-sm btn-primary' href="{{ auction.set_lot_winners_link }}"><i class="bi bi-calendar-check"></i> Set winners</a>{% endif %}
     <a id='all_lot_list' href="{% url 'lot_list' slug=auction.slug %}" class="btn btn-sm mt-2 mb-2 btn-primary"><i class="bi bi-download"></i> Export lot CSV</a>
     <a href="{{auction.view_lot_link}}" class="btn btn-sm btn-primary"><i class="bi bi-calendar"></i> See user view</a>
-{% if auction.show_invoice_ready_button and not auction.is_online%}
+{% if auction.online_bidding != "disable" and not auction.is_online%}
 <a id='bulk_set_lots_won' href="#" class="btn btn-sm mt-2  mb-2 btn-primary"
     hx-get="{% url 'bulk_set_lots_won' auction.slug %}"
     hx-vals='{"query": ""}'

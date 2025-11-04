@@ -19,6 +19,13 @@
         <li><a class="dropdown-item" href="/password/change/"><i class="bi bi-person-fill-lock"></i> Change password</a></li>
         <li><a class="dropdown-item" href="/email/"><i class="bi bi-envelope"></i> Change email</a></li>
         <li><a class="dropdown-item" href="/social/connections/"><i class="bi bi-google"></i> Sign in with Google</a></li>
+        {% if request.user.userdata.paypal_enabled or request.user.paypalseller %}
+        <li>
+          <a class="dropdown-item" href="{% url 'paypal_seller' %}">
+            <i class="bi bi-paypal"></i> PayPal account
+          </a>
+        </li>
+        {% endif %}
         <li><a class="dropdown-item" href="/account/"><i class="bi bi-person-fill"></i> My account</a></li>
       </ul>
   </li>

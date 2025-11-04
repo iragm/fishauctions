@@ -13,6 +13,7 @@ from django.utils import timezone
 from post_office import mail
 
 from .models import (
+    Auction,
     AuctionTOS,
     Bid,
     ChatSubscription,
@@ -596,3 +597,43 @@ class UserConsumer(WebsocketConsumer):
         message = event["message"]
         bg = event.get("bg", "info")
         self.send(text_data=json.dumps({"type": "toast", "message": message, "bg": bg}))
+
+
+class AuctionConsumer(WebsocketConsumer):
+    """Auction Admins only.  Catch signals to mark invoices paid"""
+
+    def connect(self):
+        try:
+            self.pk = self.scope["url_route"]["kwargs"]["auction_pk"]
+            auction = Auction.objects.filter(pk=self.pk).first()
+            if not auction:
+                self.close()
+            self.user = self.scope["user"]
+            if self.user.is_anonymous:
+                self.close()
+            if not auction.permission_check(self.user):
+                self.close()
+            self.accept()
+            async_to_sync(self.channel_layer.group_add)(f"auctions_{self.pk}", self.channel_name)
+
+        except Exception as e:
+            logger.exception(e)
+            self.close()
+
+    def invoice_approved(self, event):
+        """Step 1, NOT PAID YET"""
+        self.send(text_data=json.dumps({"type": "invoice_approved", "pk": event["pk"]}))
+
+    def capture_complete(self, event):
+        """This is good enough to send to the front end and hide payment QR
+        but don't mark invoice paid just yet"""
+        self.send(text_data=json.dumps({"type": "capture_complete", "pk": event["pk"]}))
+
+    def invoice_paid(self, event):
+        """When PayPal payment completes"""
+        self.send(text_data=json.dumps({"type": "invoice_paid", "pk": event["pk"]}))
+
+    def disconnect(self, close_code):
+        # Leave room group
+        async_to_sync(self.channel_layer.group_discard)(f"invoices_{self.pk}", self.channel_name)
+        logger.debug("disconnected")
