@@ -3111,7 +3111,171 @@ class BulkAddLots(TemplateView, AuctionPermissionsMixin):
         context["helper"] = helper
         return self.render_to_response(context)
 
+    def handle_csv_file(self, csv_file, *args, **kwargs):
+        """If a CSV file has been uploaded, parse it and redirect"""
+
+        def extract_info(row, field_name_list, default_response=""):
+            """Pass a row, and a lowercase list of field names
+            extract the first match found (case insensitive) and return the value from the row
+            empty string returned if the value is not found in the row"""
+            case_insensitive_row = {k.lower(): v for k, v in row.items()}
+            for name in field_name_list:
+                try:
+                    return case_insensitive_row[name]
+                except:
+                    pass
+            return default_response
+
+        def columns_exist(field_names, columns):
+            """returns True if any value in the list `columns` exists in the file"""
+            case_insensitive_row = {k.lower() for k in field_names}
+            for column in columns:
+                if column in case_insensitive_row:
+                    return True
+            return False
+
+        csv_file.seek(0)
+        csv_reader = csv.DictReader(TextIOWrapper(csv_file.file))
+        lot_name_fields = ["lot name", "name", "lot_name", "item", "item name"]
+        lot_number_fields = ["lot number", "lot_number", "custom lot number", "custom_lot_number"]
+        quantity_fields = ["quantity", "qty", "count"]
+        description_fields = ["description", "desc", "details"]
+        reserve_price_fields = ["reserve price", "reserve_price", "minimum bid", "min bid", "starting bid"]
+        buy_now_price_fields = ["buy now price", "buy_now_price", "buy now", "buynow"]
+        donation_fields = ["donation", "donate"]
+        memo_fields = ["memo", "note", "notes", "admin note"]
+        admin_fields = ["admin", "staff", "admin_validated", "validated"]
+
+        error = ""
+        some_columns_exist = False
+
+        try:
+            # Check for required columns
+            if not columns_exist(csv_reader.fieldnames, lot_name_fields):
+                error = "Warning: This file does not contain a lot name column"
+            else:
+                some_columns_exist = True
+
+            if not some_columns_exist:
+                error = "Unable to read information from this CSV file. Make sure it contains a lot name column"
+
+            total_lots = 0
+            total_skipped = 0
+            total_updated = 0
+
+            for row in csv_reader:
+                lot_name = extract_info(row, lot_name_fields)
+                if not lot_name:
+                    total_skipped += 1
+                    continue
+
+                custom_lot_number = extract_info(row, lot_number_fields)
+                quantity = extract_info(row, quantity_fields, "1")
+                description = extract_info(row, description_fields)
+                reserve_price = extract_info(row, reserve_price_fields, "2")
+                buy_now_price = extract_info(row, buy_now_price_fields)
+                donation = extract_info(row, donation_fields)
+                memo = extract_info(row, memo_fields)
+                admin_validated = extract_info(row, admin_fields)
+
+                # Convert boolean fields
+                if donation.lower() in ["yes", "true", "1", "donation"]:
+                    donation = True
+                else:
+                    donation = False
+
+                if admin_validated.lower() in ["yes", "true", "1", "staff", "admin"]:
+                    admin_validated = True
+                else:
+                    admin_validated = False
+
+                # Convert numeric fields
+                try:
+                    quantity = int(quantity)
+                    if quantity < 1:
+                        quantity = 1
+                except ValueError:
+                    quantity = 1
+
+                try:
+                    reserve_price = int(reserve_price)
+                    if reserve_price < 1:
+                        reserve_price = 2
+                except ValueError:
+                    reserve_price = 2
+
+                if buy_now_price:
+                    try:
+                        buy_now_price = int(buy_now_price)
+                        if buy_now_price < 1:
+                            buy_now_price = None
+                    except ValueError:
+                        buy_now_price = None
+                else:
+                    buy_now_price = None
+
+                # Validate custom lot number
+                if custom_lot_number:
+                    # Check if the lot number is already in use by a different user
+                    existing_lot = (
+                        Lot.objects.filter(
+                            auction=self.auction,
+                            custom_lot_number=custom_lot_number,
+                        )
+                        .exclude(auctiontos_seller=self.tos)
+                        .first()
+                    )
+                    if existing_lot:
+                        # Lot number is already in use by another user, don't use it
+                        custom_lot_number = ""
+
+                # Create the lot
+                lot = Lot.objects.create(
+                    auctiontos_seller=self.tos,
+                    auction=self.auction,
+                    user=self.tos.user if self.tos.user else None,
+                    lot_name=lot_name[:40],
+                    summernote_description=description,
+                    quantity=quantity,
+                    reserve_price=reserve_price,
+                    buy_now_price=buy_now_price,
+                    donation=donation,
+                    admin_validated=admin_validated if self.is_admin else False,
+                    memo=memo[:500] if memo else "",
+                    custom_lot_number=custom_lot_number[:9] if custom_lot_number else None,
+                    added_by=self.request.user,
+                )
+                total_lots += 1
+
+            if error:
+                messages.error(self.request, error)
+
+            msg = f"{total_lots} lots added"
+            if total_skipped:
+                msg += f", {total_skipped} skipped"
+
+            self.auction.create_history(
+                applies_to="LOTS", action="Added lots from CSV file, " + msg, user=self.request.user
+            )
+            messages.success(self.request, msg)
+
+            # Recalculate invoice
+            invoice = Invoice.objects.filter(auctiontos_user=self.tos, auction=self.auction).first()
+            if not invoice:
+                invoice = Invoice.objects.create(auctiontos_user=self.tos, auction=self.auction)
+            invoice.recalculate
+
+        except Exception as e:
+            logger.error(f"CSV import error: {e}")
+            messages.error(self.request, f"Error importing CSV: {str(e)}")
+
+        # Redirect back to the bulk add lots page
+        return redirect(reverse("bulk_add_lots", kwargs={"slug": self.auction.slug, "bidder_number": self.tos.bidder_number}))
+
     def post(self, *args, **kwargs):
+        csv_file = self.request.FILES.get("csv_file", None)
+        if csv_file:
+            return self.handle_csv_file(csv_file)
         lot_formset = self.LotFormSet(
             self.request.POST,
             form_kwargs={

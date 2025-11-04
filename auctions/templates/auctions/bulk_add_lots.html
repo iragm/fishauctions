@@ -12,6 +12,11 @@
   {% endif %}
   </p>
 
+  <div class="btn-group mb-2">
+    <input type="file" name="csv_file" id="csv_file" accept=".csv" hx-encoding="multipart/form-data" hx-post="{% url 'bulk_add_lots' slug=auction.slug bidder_number=tos.bidder_number %}" hx-swap="outerHTML" hx-target="body" style="display: none;">
+    <button class="btn btn-primary btn-sm ms-2 me-2" onclick="document.getElementById('csv_file').click()"><i class="bi bi-upload"></i> Import lots from CSV</button>
+  </div>
+
   {{ link_formset.management_form }}
   <form id="form-container" method="POST" action="{% url 'bulk_add_lots' slug=auction.slug bidder_number=tos.bidder_number%}">
     {% crispy formset helper %}

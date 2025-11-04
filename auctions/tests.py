@@ -1325,3 +1325,214 @@ class AuctionHistoryTests(StandardTestCase):
         # Check that NO new history was created
         final_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").count()
         assert final_count == new_count  # Should be the same as after first join
+
+
+class LotCSVImportTestCase(StandardTestCase):
+    """Test CSV import functionality for lots"""
+
+    def test_csv_import_basic(self):
+        """Test basic CSV import with lot name and quantity"""
+        import io
+        import csv
+
+        # Create CSV content
+        csv_content = io.StringIO()
+        csv_writer = csv.writer(csv_content)
+        csv_writer.writerow(["lot name", "quantity", "description"])
+        csv_writer.writerow(["Test Lot 1", "5", "Test description 1"])
+        csv_writer.writerow(["Test Lot 2", "3", "Test description 2"])
+        csv_content.seek(0)
+
+        # Convert to BytesIO
+        csv_file = io.BytesIO(csv_content.getvalue().encode("utf-8"))
+        csv_file.name = "test_lots.csv"
+
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+
+        # Post CSV file
+        response = self.client.post(
+            reverse(
+                "bulk_add_lots",
+                kwargs={"slug": self.online_auction.slug, "bidder_number": self.admin_online_tos.bidder_number},
+            ),
+            {"csv_file": csv_file},
+            format="multipart",
+        )
+
+        # Check that lots were created
+        lots = Lot.objects.filter(auction=self.online_auction, auctiontos_seller=self.admin_online_tos)
+        assert lots.count() == 2
+        assert lots.filter(lot_name="Test Lot 1", quantity=5).exists()
+        assert lots.filter(lot_name="Test Lot 2", quantity=3).exists()
+
+    def test_csv_import_with_lot_number(self):
+        """Test CSV import with custom lot number that's not in use"""
+        import io
+        import csv
+
+        # Create CSV content with custom lot number
+        csv_content = io.StringIO()
+        csv_writer = csv.writer(csv_content)
+        csv_writer.writerow(["lot name", "lot number", "quantity"])
+        csv_writer.writerow(["Test Lot", "LOT-001", "1"])
+        csv_content.seek(0)
+
+        # Convert to BytesIO
+        csv_file = io.BytesIO(csv_content.getvalue().encode("utf-8"))
+        csv_file.name = "test_lots.csv"
+
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+
+        # Post CSV file
+        response = self.client.post(
+            reverse(
+                "bulk_add_lots",
+                kwargs={"slug": self.online_auction.slug, "bidder_number": self.admin_online_tos.bidder_number},
+            ),
+            {"csv_file": csv_file},
+            format="multipart",
+        )
+
+        # Check that lot was created with custom lot number
+        lot = Lot.objects.filter(
+            auction=self.online_auction, auctiontos_seller=self.admin_online_tos, lot_name="Test Lot"
+        ).first()
+        assert lot is not None
+        assert lot.custom_lot_number == "LOT-001"
+
+    def test_csv_import_with_lot_number_conflict(self):
+        """Test CSV import with custom lot number already in use by another user"""
+        import io
+        import csv
+
+        # Create an existing lot with a custom lot number from a different user
+        existing_lot = Lot.objects.create(
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            user=self.user,
+            lot_name="Existing Lot",
+            quantity=1,
+            custom_lot_number="LOT-001",
+        )
+
+        # Create CSV content with the same lot number
+        csv_content = io.StringIO()
+        csv_writer = csv.writer(csv_content)
+        csv_writer.writerow(["lot name", "lot number", "quantity"])
+        csv_writer.writerow(["Test Lot", "LOT-001", "1"])
+        csv_content.seek(0)
+
+        # Convert to BytesIO
+        csv_file = io.BytesIO(csv_content.getvalue().encode("utf-8"))
+        csv_file.name = "test_lots.csv"
+
+        # Login as admin (different user)
+        self.client.login(username="admin_user", password="testpassword")
+
+        # Post CSV file
+        response = self.client.post(
+            reverse(
+                "bulk_add_lots",
+                kwargs={"slug": self.online_auction.slug, "bidder_number": self.admin_online_tos.bidder_number},
+            ),
+            {"csv_file": csv_file},
+            format="multipart",
+        )
+
+        # Check that lot was created but without the custom lot number
+        lot = Lot.objects.filter(
+            auction=self.online_auction, auctiontos_seller=self.admin_online_tos, lot_name="Test Lot"
+        ).first()
+        assert lot is not None
+        # The custom lot number should not be set because it's already in use
+        assert lot.custom_lot_number != "LOT-001"
+
+    def test_csv_import_with_memo(self):
+        """Test CSV import with memo field"""
+        import io
+        import csv
+
+        # Create CSV content with memo
+        csv_content = io.StringIO()
+        csv_writer = csv.writer(csv_content)
+        csv_writer.writerow(["lot name", "quantity", "memo"])
+        csv_writer.writerow(["Test Lot", "1", "This is a test memo"])
+        csv_content.seek(0)
+
+        # Convert to BytesIO
+        csv_file = io.BytesIO(csv_content.getvalue().encode("utf-8"))
+        csv_file.name = "test_lots.csv"
+
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+
+        # Post CSV file
+        response = self.client.post(
+            reverse(
+                "bulk_add_lots",
+                kwargs={"slug": self.online_auction.slug, "bidder_number": self.admin_online_tos.bidder_number},
+            ),
+            {"csv_file": csv_file},
+            format="multipart",
+        )
+
+        # Check that lot was created with memo
+        lot = Lot.objects.filter(
+            auction=self.online_auction, auctiontos_seller=self.admin_online_tos, lot_name="Test Lot"
+        ).first()
+        assert lot is not None
+        assert lot.memo == "This is a test memo"
+
+    def test_csv_import_with_admin_validated(self):
+        """Test CSV import with admin/staff field"""
+        import io
+        import csv
+
+        # Create CSV content with admin field
+        csv_content = io.StringIO()
+        csv_writer = csv.writer(csv_content)
+        csv_writer.writerow(["lot name", "quantity", "admin"])
+        csv_writer.writerow(["Test Lot 1", "1", "yes"])
+        csv_writer.writerow(["Test Lot 2", "1", "true"])
+        csv_writer.writerow(["Test Lot 3", "1", "1"])
+        csv_writer.writerow(["Test Lot 4", "1", "no"])
+        csv_content.seek(0)
+
+        # Convert to BytesIO
+        csv_file = io.BytesIO(csv_content.getvalue().encode("utf-8"))
+        csv_file.name = "test_lots.csv"
+
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+
+        # Post CSV file
+        response = self.client.post(
+            reverse(
+                "bulk_add_lots",
+                kwargs={"slug": self.online_auction.slug, "bidder_number": self.admin_online_tos.bidder_number},
+            ),
+            {"csv_file": csv_file},
+            format="multipart",
+        )
+
+        # Check that lots were created with admin_validated field
+        lot1 = Lot.objects.filter(
+            auction=self.online_auction, auctiontos_seller=self.admin_online_tos, lot_name="Test Lot 1"
+        ).first()
+        lot2 = Lot.objects.filter(
+            auction=self.online_auction, auctiontos_seller=self.admin_online_tos, lot_name="Test Lot 2"
+        ).first()
+        lot3 = Lot.objects.filter(
+            auction=self.online_auction, auctiontos_seller=self.admin_online_tos, lot_name="Test Lot 3"
+        ).first()
+        lot4 = Lot.objects.filter(
+            auction=self.online_auction, auctiontos_seller=self.admin_online_tos, lot_name="Test Lot 4"
+        ).first()
+
+        assert lot1.admin_validated is True
+        assert lot2.admin_validated is True
+        assert lot3.admin_validated is True
+        assert lot4.admin_validated is False
+
