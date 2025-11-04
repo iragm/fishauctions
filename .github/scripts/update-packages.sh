@@ -34,5 +34,9 @@ process_args "$@"
 
 docker compose up -d
 
-eval "docker exec django pip-compile ./requirements.in ${UPGRADE_DEPS}"
-eval "docker exec django pip-compile ./requirements-test.in ${UPGRADE_DEPS}"
+# Ensure pip is compatible with pip-tools 7.5.1
+docker exec -u root django python -m pip install --upgrade --no-cache-dir "pip<25" setuptools wheel
+
+# Run pip-compile inside the container
+docker exec django pip-compile ./requirements.in $UPGRADE_DEPS
+docker exec django pip-compile ./requirements-test.in $UPGRADE_DEPS
