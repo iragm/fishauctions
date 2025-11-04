@@ -1189,13 +1189,11 @@ class AuctionHistoryTests(StandardTestCase):
         initial_count = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").count()
 
         # Delete the lot
-        response = self.client.post(reverse("delete_lot", kwargs={"pk": deletable_lot.pk}), follow=True)
+        self.client.post(reverse("delete_lot", kwargs={"pk": deletable_lot.pk}), follow=True)
 
         # Check that history was created
         new_count = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").count()
-        assert (
-            new_count == initial_count + 1
-        ), f"History not created. Response status: {response.status_code}, new_count={new_count}, initial_count={initial_count}"
+        assert new_count == initial_count + 1
 
         # Verify the history entry
         history = AuctionHistory.objects.filter(auction=test_auction, applies_to="LOTS").latest("timestamp")
