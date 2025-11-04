@@ -14,8 +14,10 @@
 
   <div class="btn-group mb-2">
     <input type="file" name="csv_file" id="csv_file" accept=".csv" hx-encoding="multipart/form-data" hx-post="{% url 'bulk_add_lots' slug=auction.slug bidder_number=tos.bidder_number %}" hx-swap="outerHTML" hx-target="body" style="display: none;">
-    <button class="btn btn-primary btn-sm ms-2 me-2" onclick="document.getElementById('csv_file').click()"><i class="bi bi-upload"></i> Import lots from CSV</button>
+    <button class="btn btn-primary btn-sm ms-2 me-2" onclick="document.getElementById('csv_file').click()" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Upload a CSV file with columns: lot name (required), lot number, quantity, description, reserve price, buy now price, donation, memo, admin"><i class="bi bi-upload"></i> Import lots from CSV</button>
   </div>
+  <small class="text-muted">CSV columns: <b>lot name</b> (required), lot number, quantity, description, reserve price, buy now price, donation, memo{% if is_admin %}, admin{% endif %}</small>
+  <br>
 
   {{ link_formset.management_form }}
   <form id="form-container" method="POST" action="{% url 'bulk_add_lots' slug=auction.slug bidder_number=tos.bidder_number%}">
