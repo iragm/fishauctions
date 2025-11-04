@@ -1161,6 +1161,8 @@ class AlternativeSplitLabelTests(StandardTestCase):
         content = response.content.decode("utf-8")
         assert "Patron" in content
         assert "Club member" not in content
+
+
 class AuctionHistoryTests(StandardTestCase):
     """Test that auction history is properly tracked for lot operations and user joins"""
 
