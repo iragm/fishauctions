@@ -2,6 +2,63 @@
   {% load el_pagination_tags %}
   {% paginate filter.qs as object_list %}
 {% endif %}
+<style>
+  .watch-icon {
+    cursor: pointer;
+    font-size: 1.5em;
+    text-shadow: 0px 0px 10px #000000;
+    transition: all 0.2s ease;
+  }
+  .watch-icon:hover {
+    transform: scale(1.2);
+  }
+  .watch-icon-overlay {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    z-index: 10;
+    background: rgba(0, 0, 0, 0.5);
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .lot-thumbnail-container {
+    position: relative;
+  }
+</style>
+<script>
+function toggleWatch(lotPk, element) {
+    var isWatched = element.classList.contains('watched');
+    var data = { watch: !isWatched };
+    
+    fetch('/api/watchitem/' + lotPk + '/', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'X-CSRFToken': '{{ csrf_token }}'
+        },
+        body: 'watch=' + (!isWatched)
+    })
+    .then(response => response.text())
+    .then(result => {
+        if (result === 'Success' || result === 'Failure') {
+            if (!isWatched) {
+                element.classList.add('watched');
+                element.innerHTML = '<i class="bi bi-star-fill"></i>';
+            } else {
+                element.classList.remove('watched');
+                element.innerHTML = '<i class="bi bi-star"></i>';
+            }
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+    });
+}
+</script>
 <div class="container">
   <div class="row">
 {% if not object_list %}
@@ -27,7 +84,7 @@ box-shadow: 0px 0px 1px 2px rgba(238, 59, 59, 0.281),
 0px 0px 5px 4px rgba(255, 20, 20, 0.336);{%endif%}">
       <div class="card-header">
         {% if lot.auction and display_auction_on_lots %}<span class='text-info'><small>{{ lot.auction }}</small></span><br>{%endif%}
-        {% if lot.promoted %}<span class="badge bg-success">Promoted</span>{% endif %}{% if lot.is_watched_by_req_user %}<span class="badge text-warning" style='font-size:1.2em; text-shadow: 0px 0px 10px #000000;'>&#9733;</span>{% endif %}
+        {% if lot.promoted %}<span class="badge bg-success">Promoted</span>{% endif %}
         Lot {{ lot.lot_number_display }}
         {% if lot.auction %}
         <!--<span class="badge bg-light">Auction</span>-->
@@ -65,7 +122,34 @@ box-shadow: 0px 0px 1px 2px rgba(238, 59, 59, 0.281),
       <div class="card-body">
         <h5 class="card-title">{{ lot.lot_name }}</h5>
         {% if not lot.auction.ended and lot.sold %}<h1 class='text-danger font-weight-bold' style="position: absolute;-ms-transform: rotate(-20deg);transform: rotate(-20deg);">SOLD</h1>{%endif%}
-          {% if lot.thumbnail %}<img class="card-img-top" src="{{ lot.thumbnail.image.lot_list.url }}" style="max-width:100%;"></img>{% endif %}
+          {% if lot.thumbnail %}
+          <div class="lot-thumbnail-container">
+            <img class="card-img-top" src="{{ lot.thumbnail.image.lot_list.url }}" style="max-width:100%;"></img>
+            {% if request.user.is_authenticated %}
+            <div class="watch-icon-overlay">
+              <span class="watch-icon text-warning{% if lot.is_watched_by_req_user %} watched{% endif %}" onclick="toggleWatch({{ lot.pk }}, this)">
+                {% if lot.is_watched_by_req_user %}
+                <i class="bi bi-star-fill"></i>
+                {% else %}
+                <i class="bi bi-star"></i>
+                {% endif %}
+              </span>
+            </div>
+            {% endif %}
+          </div>
+          {% else %}
+          {% if request.user.is_authenticated %}
+          <div class="text-center mb-2">
+            <span class="watch-icon text-warning{% if lot.is_watched_by_req_user %} watched{% endif %}" onclick="toggleWatch({{ lot.pk }}, this)">
+              {% if lot.is_watched_by_req_user %}
+              <i class="bi bi-star-fill"></i>
+              {% else %}
+              <i class="bi bi-star"></i>
+              {% endif %}
+            </span>
+          </div>
+          {% endif %}
+          {% endif %}
         <p class="card-text">
           {% if not lot.auction or lot.auction.use_categories %}<span class="text-muted"><small>{{ lot.species_category }}</small></span><br>{% endif %}
           {% if not lot.auction or lot.auction.online_bidding != 'disable' %}<b>{% if lot.high_bid %}${{ lot.high_bid }}{% endif %}</b> {{ lot.high_bidder_display }}
