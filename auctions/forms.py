@@ -1661,8 +1661,8 @@ class AuctionEditForm(forms.ModelForm):
     user_cut = forms.IntegerField(required=False, help_text="This plus the club cut must be 100%")
     club_member_cut = forms.IntegerField(
         required=False,
-        help_text="This plus the club cut for members must be 100%",
-        label="User cut (members)",
+        help_text="This plus the alternate club cut must be 100%",
+        label="Alternate user cut",
     )
 
     class Meta:
@@ -1733,13 +1733,14 @@ class AuctionEditForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         # self.fields["summernote_description"].widget.attrs = {"rows": 10}
         self.fields["winning_bid_percent_to_club"].label = "Club cut"
-        self.fields["winning_bid_percent_to_club_for_club_members"].label = "Club cut (members)"
+        self.fields["winning_bid_percent_to_club_for_club_members"].label = "Alternate club cut"
         self.fields["date_start"].label = "Bidding opens"
         self.fields["date_end"].label = "Bidding ends"
         self.fields["email_users_when_invoices_ready"].label = "Invoice notifications"
         self.fields[
             "email_users_when_invoices_ready"
         ].help_text = "Send an email to users when their invoice is ready or paid"
+        self.fields["alternative_split_label"].widget.attrs = {"placeholder": "Club Member"}
         self.fields["invoice_payment_instructions"].widget.attrs = {"placeholder": "Send money to paypal.me/yourpaypal"}
         # self.fields['notes'].help_text = "Foo"
         if self.instance.is_online:

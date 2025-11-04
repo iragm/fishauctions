@@ -2899,7 +2899,13 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
                 phone = extract_info(row, phone_field_names)
                 address = extract_info(row, address_field_names)
                 is_club_member = extract_info(row, is_club_member_fields)
-                if is_club_member.lower() in ["yes", "true", "member", "club member", self.auction.alternative_split_label.lower()]:
+                if is_club_member.lower() in [
+                    "yes",
+                    "true",
+                    "member",
+                    "club member",
+                    self.auction.alternative_split_label.lower(),
+                ]:
                     is_club_member = True
                 else:
                     is_club_member = False
@@ -4561,6 +4567,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "use_donation_field",
                 "use_i_bred_this_fish_field",
                 "use_seller_dash_lot_numbering",
+                "alternative_split_label",
             ]
             for field in fields_to_clone:
                 setattr(auction, field, getattr(original_auction, field))
