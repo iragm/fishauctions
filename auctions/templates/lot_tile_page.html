@@ -32,7 +32,6 @@
 <script>
 function toggleWatch(lotPk, element) {
     var isWatched = element.classList.contains('watched');
-    var data = { watch: !isWatched };
     
     fetch('/api/watchitem/' + lotPk + '/', {
         method: 'POST',
@@ -42,9 +41,14 @@ function toggleWatch(lotPk, element) {
         },
         body: 'watch=' + (!isWatched)
     })
-    .then(response => response.text())
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('Network response was not ok');
+        }
+        return response.text();
+    })
     .then(result => {
-        if (result === 'Success' || result === 'Failure') {
+        if (result === 'Success') {
             if (!isWatched) {
                 element.classList.add('watched');
                 element.innerHTML = '<i class="bi bi-star-fill"></i>';
@@ -55,7 +59,7 @@ function toggleWatch(lotPk, element) {
         }
     })
     .catch(error => {
-        console.error('Error:', error);
+        console.error('Error toggling watch status:', error);
     });
 }
 </script>
