@@ -1960,35 +1960,30 @@ class PickupLocationTests(StandardTestCase):
 class AuctionStatsViewTests(StandardTestCase):
     """Test auction stats view with different user types"""
 
-    def test_auction_stats_anonymous_public(self):
-        """Anonymous users can view stats if make_stats_public is True"""
-        # Stats are public by default in StandardTestCase
+    def test_auction_stats_anonymous(self):
+        """Anonymous users cannot view stats - requires login and admin permissions"""
         url = f"/auctions/{self.online_auction.slug}/stats/"
         response = self.client.get(url)
-        assert response.status_code == 200
+        # Should redirect to login (AuctionViewMixin requires admin)
+        assert response.status_code == 302
 
-    def test_auction_stats_anonymous_private(self):
-        """Anonymous users cannot view stats if make_stats_public is False"""
-        self.online_auction.make_stats_public = False
-        self.online_auction.save()
+    def test_auction_stats_non_admin(self):
+        """Non-admin users cannot view stats"""
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
         url = f"/auctions/{self.online_auction.slug}/stats/"
         response = self.client.get(url)
-        # Should be denied (302 redirect or 403)
+        # Should be denied (403) or redirect (302)
         assert response.status_code in [302, 403]
 
-    def test_auction_stats_creator_private(self):
-        """Creator can always view stats even if private"""
-        self.online_auction.make_stats_public = False
-        self.online_auction.save()
+    def test_auction_stats_creator(self):
+        """Creator can view stats"""
         self.client.login(username=self.user.username, password="testpassword")
         url = f"/auctions/{self.online_auction.slug}/stats/"
         response = self.client.get(url)
         assert response.status_code == 200
 
-    def test_auction_stats_admin_private(self):
-        """Admin can always view stats even if private"""
-        self.online_auction.make_stats_public = False
-        self.online_auction.save()
+    def test_auction_stats_admin(self):
+        """Admin can view stats"""
         self.client.login(username=self.admin_user.username, password="testpassword")
         url = f"/auctions/{self.online_auction.slug}/stats/"
         response = self.client.get(url)
