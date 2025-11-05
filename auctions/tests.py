@@ -1801,9 +1801,7 @@ class DistanceUnitTests(StandardTestCase):
 
         # Verify values are stored in miles
         self.assertEqual(saved_instance.local_distance, 50)  # 80 km / 1.60934 ≈ 50 miles
-        self.assertEqual(
-            saved_instance.email_me_about_new_auctions_distance, 99
-        )  # 160 km / 1.60934 ≈ 99 miles
+        self.assertEqual(saved_instance.email_me_about_new_auctions_distance, 99)  # 160 km / 1.60934 ≈ 99 miles
 
     def test_preference_form_keeps_miles_when_unit_is_miles(self):
         """Test that form doesn't convert when unit is miles"""
@@ -1874,10 +1872,10 @@ class DistanceUnitTests(StandardTestCase):
 
     def test_distance_filter_defaults_to_miles_for_anonymous_users(self):
         """Test that distance_display filter defaults to miles for anonymous users"""
-        from auctions.templatetags.distance_filters import distance_display
         from django.contrib.auth.models import AnonymousUser
+
+        from auctions.templatetags.distance_filters import distance_display
 
         anonymous = AnonymousUser()
         result = distance_display(10, anonymous)
         self.assertEqual(result, "10 miles")
-
