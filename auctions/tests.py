@@ -1745,3 +1745,139 @@ class WeeklyPromoEmailTrackingTestCase(StandardTestCase):
 
         # With 0 clicks and 100 emails, rate should be 0%
         assert auction.weekly_promo_email_click_rate == 0.0
+
+
+class DistanceUnitTests(StandardTestCase):
+    """Test distance unit conversion functionality"""
+
+    def test_default_distance_unit_is_miles(self):
+        """Test that default distance unit is miles"""
+        self.assertEqual(self.user.userdata.distance_unit, "mi")
+
+    def test_distance_unit_can_be_set_to_km(self):
+        """Test that distance unit can be set to kilometers"""
+        userdata = self.user.userdata
+        userdata.distance_unit = "km"
+        userdata.save()
+        userdata.refresh_from_db()
+        self.assertEqual(userdata.distance_unit, "km")
+
+    def test_preference_form_converts_km_to_miles_on_save(self):
+        """Test that ChangeUserPreferencesForm converts km to miles when saving"""
+        from auctions.forms import ChangeUserPreferencesForm
+
+        userdata = self.user.userdata
+        userdata.distance_unit = "km"
+        userdata.local_distance = 100  # 100 miles in DB
+        userdata.save()
+
+        # Form should display ~161 km (100 * 1.60934)
+        form = ChangeUserPreferencesForm(user=self.user, instance=userdata)
+        self.assertEqual(form.initial["local_distance"], 161)
+
+        # When user submits with 80 km, it should save as ~50 miles
+        form_data = {
+            "distance_unit": "km",
+            "local_distance": 80,
+            "email_me_about_new_auctions_distance": 160,
+            "email_me_about_new_in_person_auctions_distance": 160,
+            "email_visible": False,
+            "show_ads": True,
+            "email_me_about_new_auctions": True,
+            "email_me_about_new_local_lots": True,
+            "email_me_about_new_lots_ship_to_location": True,
+            "email_me_when_people_comment_on_my_lots": True,
+            "email_me_about_new_chat_replies": True,
+            "email_me_about_new_in_person_auctions": True,
+            "send_reminder_emails_about_joining_auctions": True,
+            "username_visible": True,
+            "share_lot_images": True,
+            "auto_add_images": True,
+            "push_notifications_when_lots_sell": False,
+        }
+        form = ChangeUserPreferencesForm(user=self.user, data=form_data, instance=userdata)
+        self.assertTrue(form.is_valid())
+        saved_instance = form.save()
+
+        # Verify values are stored in miles
+        self.assertEqual(saved_instance.local_distance, 50)  # 80 km / 1.60934 ≈ 50 miles
+        self.assertEqual(
+            saved_instance.email_me_about_new_auctions_distance, 99
+        )  # 160 km / 1.60934 ≈ 99 miles
+
+    def test_preference_form_keeps_miles_when_unit_is_miles(self):
+        """Test that form doesn't convert when unit is miles"""
+        from auctions.forms import ChangeUserPreferencesForm
+
+        userdata = self.user.userdata
+        userdata.distance_unit = "mi"
+        userdata.local_distance = 100
+        userdata.save()
+
+        form_data = {
+            "distance_unit": "mi",
+            "local_distance": 50,
+            "email_me_about_new_auctions_distance": 100,
+            "email_me_about_new_in_person_auctions_distance": 100,
+            "email_visible": False,
+            "show_ads": True,
+            "email_me_about_new_auctions": True,
+            "email_me_about_new_local_lots": True,
+            "email_me_about_new_lots_ship_to_location": True,
+            "email_me_when_people_comment_on_my_lots": True,
+            "email_me_about_new_chat_replies": True,
+            "email_me_about_new_in_person_auctions": True,
+            "send_reminder_emails_about_joining_auctions": True,
+            "username_visible": True,
+            "share_lot_images": True,
+            "auto_add_images": True,
+            "push_notifications_when_lots_sell": False,
+        }
+        form = ChangeUserPreferencesForm(user=self.user, data=form_data, instance=userdata)
+        self.assertTrue(form.is_valid())
+        saved_instance = form.save()
+
+        # Values should be saved as-is in miles
+        self.assertEqual(saved_instance.local_distance, 50)
+        self.assertEqual(saved_instance.email_me_about_new_auctions_distance, 100)
+
+    def test_distance_filter_converts_miles_to_km(self):
+        """Test that distance_display filter converts miles to km for km users"""
+        from auctions.templatetags.distance_filters import distance_display
+
+        userdata = self.user.userdata
+        userdata.distance_unit = "km"
+        userdata.save()
+
+        # 10 miles should display as 16 km
+        result = distance_display(10, self.user)
+        self.assertEqual(result, "16 km")
+
+    def test_distance_filter_keeps_miles_for_miles_users(self):
+        """Test that distance_display filter keeps miles for miles users"""
+        from auctions.templatetags.distance_filters import distance_display
+
+        userdata = self.user.userdata
+        userdata.distance_unit = "mi"
+        userdata.save()
+
+        # 10 miles should display as 10 miles
+        result = distance_display(10, self.user)
+        self.assertEqual(result, "10 miles")
+
+    def test_distance_filter_handles_negative_distance(self):
+        """Test that distance_display filter handles negative distance (unknown)"""
+        from auctions.templatetags.distance_filters import distance_display
+
+        result = distance_display(-1, self.user)
+        self.assertEqual(result, "? miles")
+
+    def test_distance_filter_defaults_to_miles_for_anonymous_users(self):
+        """Test that distance_display filter defaults to miles for anonymous users"""
+        from auctions.templatetags.distance_filters import distance_display
+        from django.contrib.auth.models import AnonymousUser
+
+        anonymous = AnonymousUser()
+        result = distance_display(10, anonymous)
+        self.assertEqual(result, "10 miles")
+

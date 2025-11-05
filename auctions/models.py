@@ -4388,6 +4388,14 @@ class UserData(models.Model):
     auto_add_images.help_text = "If another lot with the same name has been added previously.  Images are only added to lots that are part of an auction."
     push_notifications_when_lots_sell = models.BooleanField(default=False, blank=True)
     push_notifications_when_lots_sell.help_text = "For in-person auctions, get a notification when bidding starts on a lot that you've watched<span class='d-none' id='subscribe_message_area'></span>"
+    distance_unit = models.CharField(
+        max_length=10,
+        choices=[("mi", "Miles"), ("km", "Kilometers")],
+        default="mi",
+        blank=True,
+        verbose_name="Distance unit",
+    )
+    distance_unit.help_text = "Unit for displaying distances"
 
     # breederboard info
     rank_unique_species = models.PositiveIntegerField(null=True, blank=True)
