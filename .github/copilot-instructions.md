@@ -61,6 +61,7 @@ ruff.toml           # Linting/format config
 5. **DB out of sync**: `docker exec -it django python3 manage.py migrate`
 6. **Test failures**: Ensure `docker compose up -d` first
 7. **Build fails**: `docker compose down && docker system prune -a -f && docker compose --profile "*" build --no-cache`
+8. **When adding fields to model Auction, there's a good chance they need to be added to the list `fields_to_clone` in `AuctionCreateView`, make sure to check as appropriate
 
 ## Workflow
 1. Make changes (Python/templates/static)
@@ -68,7 +69,7 @@ ruff.toml           # Linting/format config
 3. Lint: `docker compose run --rm test --lint`
 4. Test: `docker exec -it django python3 manage.py test`
 5. Verify browser: `http://127.0.0.1`
-6. CI check: `docker compose run --rm test --ci --verbose`
+6. CI check: `docker compose run --rm test --ci --verbose` always run this before commit
 
 **Testing:** Extend `StandardTestCase` in `auctions/tests.py` (sets up users, auctions, lots). Test admin permissions, auth checks, no data leaks.
 
