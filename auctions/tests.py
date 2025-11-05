@@ -1688,6 +1688,74 @@ class CSVImportTests(StandardTestCase):
         self.assertTrue(existing_tos.is_admin)
 
 
+class GoogleDriveImportTests(StandardTestCase):
+    """Test Google Drive import functionality"""
+
+    def test_auction_has_google_drive_fields(self):
+        """Test that the new fields exist"""
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="Test auction for Google Drive",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=2),
+            date_start=timezone.now() - datetime.timedelta(days=1),
+        )
+        self.assertIsNone(auction.google_drive_link)
+        self.assertIsNone(auction.last_sync_time)
+
+    def test_save_google_drive_link(self):
+        """Test that we can save a Google Drive link"""
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="Test auction for Google Drive link",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=2),
+            date_start=timezone.now() - datetime.timedelta(days=1),
+        )
+        test_link = "https://docs.google.com/spreadsheets/d/test123/edit#gid=0"
+        auction.google_drive_link = test_link
+        auction.save()
+
+        # Refresh from database
+        auction.refresh_from_db()
+        self.assertEqual(auction.google_drive_link, test_link)
+
+    def test_google_drive_import_view_requires_login(self):
+        """Test that the Google Drive import view requires login"""
+        response = self.client.get(
+            reverse("import_from_google_drive", kwargs={"slug": self.online_auction.slug})
+        )
+        # Should redirect to login
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/accounts/login/", response.url)
+
+    def test_google_drive_import_view_accessible_by_admin(self):
+        """Test that admin can access the Google Drive import view"""
+        self.client.login(username="admin_user", password="testpassword")
+        response = self.client.get(
+            reverse("import_from_google_drive", kwargs={"slug": self.online_auction.slug})
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "auctions/import_from_google_drive.html")
+
+    def test_sync_button_visible_when_link_set(self):
+        """Test that sync button appears on users page when google_drive_link is set"""
+        self.online_auction.google_drive_link = "https://docs.google.com/spreadsheets/d/test123/edit#gid=0"
+        self.online_auction.save()
+
+        self.client.login(username="admin_user", password="testpassword")
+        response = self.client.get(reverse("auction_tos_list", kwargs={"slug": self.online_auction.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Sync from Google Drive")
+
+    def test_sync_button_not_visible_when_no_link(self):
+        """Test that sync button does not appear when no google_drive_link is set"""
+        self.client.login(username="admin_user", password="testpassword")
+        response = self.client.get(reverse("auction_tos_list", kwargs={"slug": self.online_auction.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Sync from Google Drive")
+
+
 class WeeklyPromoEmailTrackingTestCase(StandardTestCase):
     """Test that the weekly_promo_emails_sent field is incremented correctly"""
 
