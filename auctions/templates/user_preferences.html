@@ -35,7 +35,7 @@
     // Handle distance unit conversion
     const MILES_TO_KM = 1.60934;
     const KM_TO_MILES = 1 / MILES_TO_KM;
-    
+
     $(document).ready(function() {
         const distanceUnitSelect = $('#id_distance_unit');
         const distanceFields = [
@@ -43,17 +43,17 @@
             '#id_email_me_about_new_in_person_auctions_distance',
             '#id_local_distance'
         ];
-        
+
         let previousUnit = distanceUnitSelect.val();
-        
+
         distanceUnitSelect.change(function() {
             const newUnit = $(this).val();
-            
+
             // Convert all distance field values
             distanceFields.forEach(function(fieldSelector) {
                 const field = $(fieldSelector);
                 const currentValue = parseFloat(field.val());
-                
+
                 if (!isNaN(currentValue) && currentValue > 0) {
                     let newValue;
                     if (newUnit === 'km' && previousUnit === 'mi') {
@@ -68,7 +68,7 @@
                     field.val(newValue);
                 }
             });
-            
+
             // Update help text
             const unit = newUnit === 'km' ? 'km' : 'miles';
             distanceFields.forEach(function(fieldSelector) {
@@ -77,7 +77,7 @@
                     helpText.text(unit + ', from your address');
                 }
             });
-            
+
             previousUnit = newUnit;
         });
     });
