@@ -1925,21 +1925,21 @@ class PickupLocationTests(StandardTestCase):
 
     def test_pickup_location_create_anonymous(self):
         """Anonymous users cannot create pickup locations"""
-        url = reverse("add_pickup", kwargs={"slug": self.online_auction.slug})
+        url = reverse("create_auction_pickup_location", kwargs={"slug": self.online_auction.slug})
         response = self.client.get(url)
         assert response.status_code == 302
 
     def test_pickup_location_create_non_admin(self):
         """Non-admin users cannot create pickup locations"""
         self.client.login(username=self.user_with_no_lots.username, password="testpassword")
-        url = reverse("add_pickup", kwargs={"slug": self.online_auction.slug})
+        url = reverse("create_auction_pickup_location", kwargs={"slug": self.online_auction.slug})
         response = self.client.get(url)
         assert response.status_code in [302, 403]
 
     def test_pickup_location_create_admin(self):
         """Admin users can create pickup locations"""
         self.client.login(username=self.admin_user.username, password="testpassword")
-        url = reverse("add_pickup", kwargs={"slug": self.online_auction.slug})
+        url = reverse("create_auction_pickup_location", kwargs={"slug": self.online_auction.slug})
         response = self.client.get(url)
         assert response.status_code == 200
 
@@ -1963,7 +1963,7 @@ class AuctionStatsViewTests(StandardTestCase):
     def test_auction_stats_anonymous_public(self):
         """Anonymous users can view stats if make_stats_public is True"""
         # Stats are public by default in StandardTestCase
-        url = reverse("auction_stats", kwargs={"slug": self.online_auction.slug})
+        url = f"/auctions/{self.online_auction.slug}/stats/"
         response = self.client.get(url)
         assert response.status_code == 200
 
@@ -1971,7 +1971,7 @@ class AuctionStatsViewTests(StandardTestCase):
         """Anonymous users cannot view stats if make_stats_public is False"""
         self.online_auction.make_stats_public = False
         self.online_auction.save()
-        url = reverse("auction_stats", kwargs={"slug": self.online_auction.slug})
+        url = f"/auctions/{self.online_auction.slug}/stats/"
         response = self.client.get(url)
         # Should be denied (302 redirect or 403)
         assert response.status_code in [302, 403]
@@ -1981,7 +1981,7 @@ class AuctionStatsViewTests(StandardTestCase):
         self.online_auction.make_stats_public = False
         self.online_auction.save()
         self.client.login(username=self.user.username, password="testpassword")
-        url = reverse("auction_stats", kwargs={"slug": self.online_auction.slug})
+        url = f"/auctions/{self.online_auction.slug}/stats/"
         response = self.client.get(url)
         assert response.status_code == 200
 
@@ -1990,7 +1990,7 @@ class AuctionStatsViewTests(StandardTestCase):
         self.online_auction.make_stats_public = False
         self.online_auction.save()
         self.client.login(username=self.admin_user.username, password="testpassword")
-        url = reverse("auction_stats", kwargs={"slug": self.online_auction.slug})
+        url = f"/auctions/{self.online_auction.slug}/stats/"
         response = self.client.get(url)
         assert response.status_code == 200
 
