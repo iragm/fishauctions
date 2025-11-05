@@ -2252,14 +2252,14 @@ class WatchViewTests(StandardTestCase):
     def test_watch_anonymous(self):
         """Anonymous users cannot watch lots"""
         # watchOrUnwatch is a function-based view
-        response = self.client.post(f"/lots/watch/{self.lot.pk}/")
+        response = self.client.post(f"/api/watchitem/{self.lot.pk}/")
         # Should redirect to login
         assert response.status_code == 302
 
     def test_watch_logged_in(self):
         """Logged in users can watch lots"""
         self.client.login(username=self.user_with_no_lots.username, password="testpassword")
-        response = self.client.post(f"/lots/watch/{self.lot.pk}/")
+        response = self.client.post(f"/api/watchitem/{self.lot.pk}/")
         # Should succeed or redirect
         assert response.status_code in [200, 302]
 
