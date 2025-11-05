@@ -1325,3 +1325,278 @@ class AuctionHistoryTests(StandardTestCase):
         # Check that NO new history was created
         final_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").count()
         assert final_count == new_count  # Should be the same as after first join
+
+
+class CSVImportTests(StandardTestCase):
+    """Test CSV import functionality for bulk adding users"""
+
+    def test_csv_import_with_memo_field(self):
+        """Test that memo field is correctly imported from CSV"""
+        from io import BytesIO
+        import csv
+        
+        # Create CSV content with memo field
+        csv_content = BytesIO()
+        writer = csv.writer(csv_content, quoting=csv.QUOTE_ALL)
+        writer.writerow(['email', 'name', 'memo'])
+        writer.writerow(['test1@example.com', 'Test User 1', 'This is a test memo'])
+        writer.writerow(['test2@example.com', 'Test User 2', 'Another memo'])
+        csv_content.seek(0)
+        
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+        
+        # Import CSV
+        response = self.client.post(
+            reverse('bulk_add_users', kwargs={'slug': self.online_auction.slug}),
+            {'csv_file': csv_content},
+            format='multipart'
+        )
+        
+        # Check that users were created with memo
+        tos1 = AuctionTOS.objects.filter(auction=self.online_auction, email='test1@example.com').first()
+        tos2 = AuctionTOS.objects.filter(auction=self.online_auction, email='test2@example.com').first()
+        
+        self.assertIsNotNone(tos1)
+        self.assertIsNotNone(tos2)
+        self.assertEqual(tos1.memo, 'This is a test memo')
+        self.assertEqual(tos2.memo, 'Another memo')
+
+    def test_csv_import_with_admin_field(self):
+        """Test that admin/staff field is correctly imported from CSV with various boolean values"""
+        from io import BytesIO
+        import csv
+        
+        # Create CSV content with admin field and different boolean values
+        csv_content = BytesIO()
+        writer = csv.writer(csv_content, quoting=csv.QUOTE_ALL)
+        writer.writerow(['email', 'name', 'admin'])
+        writer.writerow(['admin1@example.com', 'Admin 1', 'yes'])
+        writer.writerow(['admin2@example.com', 'Admin 2', 'true'])
+        writer.writerow(['admin3@example.com', 'Admin 3', '1'])
+        writer.writerow(['regular@example.com', 'Regular User', 'no'])
+        csv_content.seek(0)
+        
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+        
+        # Import CSV
+        response = self.client.post(
+            reverse('bulk_add_users', kwargs={'slug': self.online_auction.slug}),
+            {'csv_file': csv_content},
+            format='multipart'
+        )
+        
+        # Check that admin users were created correctly
+        admin1 = AuctionTOS.objects.filter(auction=self.online_auction, email='admin1@example.com').first()
+        admin2 = AuctionTOS.objects.filter(auction=self.online_auction, email='admin2@example.com').first()
+        admin3 = AuctionTOS.objects.filter(auction=self.online_auction, email='admin3@example.com').first()
+        regular = AuctionTOS.objects.filter(auction=self.online_auction, email='regular@example.com').first()
+        
+        self.assertIsNotNone(admin1)
+        self.assertIsNotNone(admin2)
+        self.assertIsNotNone(admin3)
+        self.assertIsNotNone(regular)
+        
+        self.assertTrue(admin1.is_admin)
+        self.assertTrue(admin2.is_admin)
+        self.assertTrue(admin3.is_admin)
+        self.assertFalse(regular.is_admin)
+
+    def test_csv_import_with_staff_field(self):
+        """Test that 'staff' column name also works for admin field"""
+        from io import BytesIO
+        import csv
+        
+        # Create CSV content with staff field
+        csv_content = BytesIO()
+        writer = csv.writer(csv_content, quoting=csv.QUOTE_ALL)
+        writer.writerow(['email', 'name', 'staff'])
+        writer.writerow(['staff1@example.com', 'Staff 1', 'yes'])
+        csv_content.seek(0)
+        
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+        
+        # Import CSV
+        response = self.client.post(
+            reverse('bulk_add_users', kwargs={'slug': self.online_auction.slug}),
+            {'csv_file': csv_content},
+            format='multipart'
+        )
+        
+        # Check that admin user was created
+        staff1 = AuctionTOS.objects.filter(auction=self.online_auction, email='staff1@example.com').first()
+        self.assertIsNotNone(staff1)
+        self.assertTrue(staff1.is_admin)
+
+    def test_csv_import_bidder_number_not_in_use(self):
+        """Test that bidder number from CSV is used if not already in use"""
+        from io import BytesIO
+        import csv
+        
+        # Create CSV content with bidder number
+        csv_content = BytesIO()
+        writer = csv.writer(csv_content, quoting=csv.QUOTE_ALL)
+        writer.writerow(['email', 'name', 'bidder number'])
+        writer.writerow(['bidder1@example.com', 'Bidder 1', '999'])
+        csv_content.seek(0)
+        
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+        
+        # Import CSV
+        response = self.client.post(
+            reverse('bulk_add_users', kwargs={'slug': self.online_auction.slug}),
+            {'csv_file': csv_content},
+            format='multipart'
+        )
+        
+        # Check that bidder number was assigned
+        bidder1 = AuctionTOS.objects.filter(auction=self.online_auction, email='bidder1@example.com').first()
+        self.assertIsNotNone(bidder1)
+        self.assertEqual(bidder1.bidder_number, '999')
+
+    def test_csv_import_bidder_number_in_use_new_user(self):
+        """Test that bidder number is not assigned if already in use for a new user"""
+        from io import BytesIO
+        import csv
+        
+        # Create an existing user with bidder number 777
+        existing_tos = AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            email='existing@example.com',
+            name='Existing User',
+            bidder_number='777'
+        )
+        
+        # Create CSV content with same bidder number
+        csv_content = BytesIO()
+        writer = csv.writer(csv_content, quoting=csv.QUOTE_ALL)
+        writer.writerow(['email', 'name', 'bidder number'])
+        writer.writerow(['newuser@example.com', 'New User', '777'])
+        csv_content.seek(0)
+        
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+        
+        # Import CSV
+        response = self.client.post(
+            reverse('bulk_add_users', kwargs={'slug': self.online_auction.slug}),
+            {'csv_file': csv_content},
+            format='multipart'
+        )
+        
+        # Check that new user was created but without the conflicting bidder number
+        new_user = AuctionTOS.objects.filter(auction=self.online_auction, email='newuser@example.com').first()
+        self.assertIsNotNone(new_user)
+        self.assertEqual(new_user.bidder_number, '')  # Should be empty since 777 is taken
+
+    def test_csv_import_bidder_number_update_existing_user(self):
+        """Test that existing user's bidder number is updated if new number is not in use"""
+        from io import BytesIO
+        import csv
+        
+        # Create an existing user without bidder number
+        existing_tos = AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            email='existing@example.com',
+            name='Existing User',
+            bidder_number=''
+        )
+        
+        # Create CSV content to update with bidder number
+        csv_content = BytesIO()
+        writer = csv.writer(csv_content, quoting=csv.QUOTE_ALL)
+        writer.writerow(['email', 'name', 'bidder number'])
+        writer.writerow(['existing@example.com', 'Existing User', '888'])
+        csv_content.seek(0)
+        
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+        
+        # Import CSV
+        response = self.client.post(
+            reverse('bulk_add_users', kwargs={'slug': self.online_auction.slug}),
+            {'csv_file': csv_content},
+            format='multipart'
+        )
+        
+        # Check that bidder number was updated
+        existing_tos.refresh_from_db()
+        self.assertEqual(existing_tos.bidder_number, '888')
+
+    def test_csv_import_bidder_number_exclude_self(self):
+        """Test that bidder number check excludes the user being updated"""
+        from io import BytesIO
+        import csv
+        
+        # Create an existing user with bidder number
+        existing_tos = AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            email='existing@example.com',
+            name='Existing User',
+            bidder_number='666'
+        )
+        
+        # Create CSV content with same bidder number (re-importing same user)
+        csv_content = BytesIO()
+        writer = csv.writer(csv_content, quoting=csv.QUOTE_ALL)
+        writer.writerow(['email', 'name', 'bidder number'])
+        writer.writerow(['existing@example.com', 'Existing User Updated', '666'])
+        csv_content.seek(0)
+        
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+        
+        # Import CSV
+        response = self.client.post(
+            reverse('bulk_add_users', kwargs={'slug': self.online_auction.slug}),
+            {'csv_file': csv_content},
+            format='multipart'
+        )
+        
+        # Check that bidder number was kept (not cleared)
+        existing_tos.refresh_from_db()
+        self.assertEqual(existing_tos.bidder_number, '666')
+        self.assertEqual(existing_tos.name, 'Existing User Updated')
+
+    def test_csv_import_update_existing_user_memo_and_admin(self):
+        """Test that existing user's memo and admin status are updated from CSV"""
+        from io import BytesIO
+        import csv
+        
+        # Create an existing user
+        existing_tos = AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            email='existing@example.com',
+            name='Existing User',
+            memo='',
+            is_admin=False
+        )
+        
+        # Create CSV content to update memo and admin status
+        csv_content = BytesIO()
+        writer = csv.writer(csv_content, quoting=csv.QUOTE_ALL)
+        writer.writerow(['email', 'name', 'memo', 'admin'])
+        writer.writerow(['existing@example.com', 'Existing User', 'Updated memo', 'yes'])
+        csv_content.seek(0)
+        
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+        
+        # Import CSV
+        response = self.client.post(
+            reverse('bulk_add_users', kwargs={'slug': self.online_auction.slug}),
+            {'csv_file': csv_content},
+            format='multipart'
+        )
+        
+        # Check that memo and admin were updated
+        existing_tos.refresh_from_db()
+        self.assertEqual(existing_tos.memo, 'Updated memo')
+        self.assertTrue(existing_tos.is_admin)

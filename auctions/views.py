@@ -2838,6 +2838,8 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
         phone_field_names = ["phone", "phone number", "telephone", "telephone number"]
         is_club_member_fields = ["member", "club member", self.auction.alternative_split_label.lower()]
         is_bidding_allowed_field_names = ["allow bidding", "bidding", "bidding allowed"]
+        memo_field_names = ["memo", "note", "notes"]
+        is_admin_field_names = ["admin", "staff", "is_admin", "is_staff"]
         # we are not reading in location here, do we care??
         some_columns_exist = False
         error = ""
@@ -2847,6 +2849,8 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
             # we're not going to error out for club member or bidding allowed missing columns, but track it for updating existing users
             is_club_member_field_exists = columns_exist(csv_reader.fieldnames, is_club_member_fields)
             is_bidding_allowed_fields_exists = columns_exist(csv_reader.fieldnames, is_bidding_allowed_field_names)
+            memo_field_exists = columns_exist(csv_reader.fieldnames, memo_field_names)
+            is_admin_field_exists = columns_exist(csv_reader.fieldnames, is_admin_field_names)
             if not columns_exist(csv_reader.fieldnames, phone_field_names):
                 error = "Warning: This file does not contain a phone column"
             else:
@@ -2877,6 +2881,7 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
                 name = extract_info(row, name_field_names)
                 phone = extract_info(row, phone_field_names)
                 address = extract_info(row, address_field_names)
+                memo = extract_info(row, memo_field_names)
                 is_club_member = extract_info(row, is_club_member_fields)
                 if is_club_member.lower() in [
                     "yes",
@@ -2893,6 +2898,11 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
                     bidding_allowed = True
                 else:
                     bidding_allowed = False
+                is_admin = extract_info(row, is_admin_field_names)
+                if is_admin.lower() in ["yes", "true", "1"]:
+                    is_admin = True
+                else:
+                    is_admin = False
                 # if email or name or phone or address:
                 if email:
                     # The old way -- skip anybody who is already in the auction
@@ -2922,6 +2932,10 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
                                 .first()
                             ):
                                 existing_tos.bidder_number = bidder_number[:20]
+                        if memo_field_exists and memo:
+                            existing_tos.memo = memo[:500]
+                        if is_admin_field_exists:
+                            existing_tos.is_admin = is_admin
                         existing_tos.save()
                     else:
                         logger.debug("CSV import adding %s", name)
@@ -2939,6 +2953,8 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
                             address=address[:500],
                             is_club_member=is_club_member,
                             bidding_allowed=bidding_allowed,
+                            memo=memo[:500] if memo else "",
+                            is_admin=is_admin,
                         )
                         total_tos += 1
                 else:
