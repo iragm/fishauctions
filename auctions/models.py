@@ -1449,6 +1449,12 @@ class Auction(models.Model):
         return PageView.objects.filter(source="weekly_email", auction=self.pk).count()
 
     @property
+    def weekly_promo_email_click_rate(self):
+        if self.weekly_promo_emails_sent == 0:
+            return 0
+        return (self.weekly_promo_email_clicks / self.weekly_promo_emails_sent) * 100
+
+    @property
     def multi_location(self):
         """
         True if there's more than one location at this auction
