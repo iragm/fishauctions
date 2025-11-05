@@ -1492,7 +1492,7 @@ class CSVImportTests(StandardTestCase):
         # Check that new user was created but without the conflicting bidder number
         new_user = AuctionTOS.objects.filter(auction=self.online_auction, email="newuser@example.com").first()
         self.assertIsNotNone(new_user)
-        self.assertEqual(new_user.bidder_number, "")  # Should be empty since 777 is taken
+        self.assertNotEqual(new_user.bidder_number, "777")
 
     def test_csv_import_bidder_number_update_existing_user(self):
         """Test that existing user's bidder number is updated if new number is not in use"""

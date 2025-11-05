@@ -2899,7 +2899,7 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
                 else:
                     bidding_allowed = False
                 is_admin = extract_info(row, is_admin_field_names)
-                if is_admin.lower() in ["yes", "true", "1"]:
+                if is_admin and is_admin.lower() in ["yes", "true", "1"]:
                     is_admin = True
                 else:
                     is_admin = False
