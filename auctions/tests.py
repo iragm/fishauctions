@@ -1484,14 +1484,28 @@ class AuctionPropertyTests(StandardTestCase):
         assert self.in_person_auction.auction_type == "inperson_one_location"
         assert self.in_person_auction.auction_type_as_str == "in-person auction"
 
-        # Online auction with multiple locations
+        # Create a new auction with multiple locations for this test
+        multi_location_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Multi-location auction",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
         PickupLocation.objects.create(
-            name="second location",
-            auction=self.online_auction,
+            name="first location",
+            auction=multi_location_auction,
             pickup_time=timezone.now() + datetime.timedelta(days=3),
         )
-        assert self.online_auction.auction_type == "online_multi_location"
-        assert self.online_auction.auction_type_as_str == "online auction with in-person pickup at multiple locations"
+        PickupLocation.objects.create(
+            name="second location",
+            auction=multi_location_auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+        assert multi_location_auction.auction_type == "online_multi_location"
+        assert (
+            multi_location_auction.auction_type_as_str == "online auction with in-person pickup at multiple locations"
+        )
 
     def test_auction_timing_properties(self):
         """Test auction start/end related properties"""
@@ -1532,17 +1546,25 @@ class AuctionPropertyTests(StandardTestCase):
 
     def test_allow_mailing_lots(self):
         """Test the allow_mailing_lots property"""
+        # Create a separate auction for this test to avoid test isolation issues
+        mail_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Mail test auction",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
         # Initially should be False
-        assert self.online_auction.allow_mailing_lots is False
+        assert mail_auction.allow_mailing_lots is False
 
         # Add a mail pickup location
         PickupLocation.objects.create(
             name="Mail pickup",
-            auction=self.online_auction,
+            auction=mail_auction,
             pickup_by_mail=True,
             pickup_time=timezone.now() + datetime.timedelta(days=3),
         )
-        assert self.online_auction.allow_mailing_lots is True
+        assert mail_auction.allow_mailing_lots is True
 
     def test_permission_check(self):
         """Test the permission_check method"""
@@ -1651,7 +1673,7 @@ class LotPropertyTests(StandardTestCase):
         # Add a bid
         Bid.objects.create(user=self.userB, lot_number=lot, amount=15)
         # Refresh lot to get updated calculations
-        lot = Lot.objects.get(pk=lot.pk)
+        lot.refresh_from_db()
         assert lot.high_bidder.pk == self.userB.pk
 
     def test_lot_with_auction_inherits_end_date(self):
@@ -1750,7 +1772,8 @@ class AuctionEditViewTests(StandardTestCase):
         """Non-admin users should not be able to edit"""
         self.client.login(username=self.user_with_no_lots.username, password="testpassword")
         response = self.client.get(self.online_auction.get_edit_url())
-        # Should be denied (302 redirect or 403)
+        # Should be denied - can be either 302 (redirect to error/login page) or 403 (forbidden)
+        # depending on permission middleware configuration
         assert response.status_code in [302, 403]
 
     def test_auction_edit_admin_user(self):
