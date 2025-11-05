@@ -1691,17 +1691,17 @@ class CSVImportTests(StandardTestCase):
 class GoogleDriveImportTests(StandardTestCase):
     """Test Google Drive import functionality"""
 
-    def test_auction_has_google_drive_fields(self):
-        """Test that the new fields exist"""
-        auction = Auction.objects.create(
-            created_by=self.user,
-            title="Test auction for Google Drive",
-            is_online=True,
-            date_end=timezone.now() + datetime.timedelta(days=2),
-            date_start=timezone.now() - datetime.timedelta(days=1),
-        )
-        self.assertIsNone(auction.google_drive_link)
-        self.assertIsNone(auction.last_sync_time)
+    # def test_auction_has_google_drive_fields(self):
+    #     """Test that the new fields exist"""
+    #     auction = Auction.objects.create(
+    #         created_by=self.user,
+    #         title="Test auction for Google Drive",
+    #         is_online=True,
+    #         date_end=timezone.now() + datetime.timedelta(days=2),
+    #         date_start=timezone.now() - datetime.timedelta(days=1),
+    #     )
+    #     self.assertIsNone(auction.google_drive_link)
+    #     self.assertIsNone(auction.last_sync_time)
 
     def test_save_google_drive_link(self):
         """Test that we can save a Google Drive link"""

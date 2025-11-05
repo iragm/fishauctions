@@ -49,7 +49,7 @@
   {% if auction.google_drive_link %}
     <hr>
     <p>
-      <strong>Current Google Drive link:</strong> {{ auction.google_drive_link }}<br>
+      <strong>Current Google Drive link:</strong> {{ auction.google_drive_link|urlize }}<br>
       {% if auction.last_sync_time %}
         <strong>Last synced:</strong> {{ auction.last_sync_time|timesince }} ago
       {% else %}

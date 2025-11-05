@@ -2979,9 +2979,7 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
             if error:
                 messages.error(self.request, error)
             msg = f"{total_tos} users added"
-            self.auction.create_history(
-                applies_to="USERS", action="Added users from CSV file, " + msg, user=self.request.user
-            )
+            self.auction.create_history(applies_to="USERS", action=msg, user=self.request.user)
             if total_updated:
                 msg += f", {total_updated} users are already in this auction (matched by email) and were updated"
             if total_skipped:
@@ -3203,7 +3201,7 @@ class ImportFromGoogleDrive(AuctionViewMixin, TemplateView, ContextMixin):
             # Update the last sync time
             self.auction.last_sync_time = timezone.now()
             self.auction.save()
-
+            self.auction.create_history("USERS", action="Google Drive sync complete")
             # Redirect to the users list
             url = reverse("auction_tos_list", kwargs={"slug": self.auction.slug})
             return redirect(url)
