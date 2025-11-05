@@ -20,7 +20,7 @@ def set_distance_unit_based_on_location(apps, schema_editor):
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("auctions", "0200_userdata_distance_unit"),
+        ("auctions", "0201_userdata_distance_unit"),
     ]
 
     operations = [
