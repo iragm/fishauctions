@@ -3201,14 +3201,16 @@ class ImportFromGoogleDrive(AuctionViewMixin, TemplateView, ContextMixin):
             bulk_add_view.request = self.request
             bulk_add_view.auction = self.auction
 
-            # Process the CSV data
-            result = bulk_add_view.process_csv_data(csv_reader)
+            # Process the CSV data (this adds messages and returns a response)
+            bulk_add_view.process_csv_data(csv_reader)
 
             # Update the last sync time
             self.auction.last_sync_time = timezone.now()
             self.auction.save()
 
-            return result
+            # Redirect to the users list
+            url = reverse("auction_tos_list", kwargs={"slug": self.auction.slug})
+            return redirect(url)
 
         except requests.RequestException as e:
             messages.error(
