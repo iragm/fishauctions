@@ -10,6 +10,7 @@
   <div class="btn-group">
   <input type="file" name="csv_file" id="csv_file" accept=".csv" hx-encoding="multipart/form-data" hx-post="{% url 'bulk_add_users' auction.slug %}" hx-swap="outerHTML" hx-target="body" style="display: none;">
   <button class="btn btn-primary btn-sm  ms-2 me-2" onclick="document.getElementById('csv_file').click()"><i class="bi bi-person-fill-up"></i> Import from CSV</button>
+  <a href="{% url 'import_from_google_drive' slug=auction.slug %}" class="btn btn-primary btn-sm ms-2 me-2"><i class="bi bi-cloud-arrow-down"></i> Import from Google Drive</a>
   <div class="dropdown">
     <button class="btn btn-sm btn-primary dropdown-toggle" type="button" id="dropdownMenuButton" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
       <i class="bi bi-person-fill-add"></i> Import from old auctions

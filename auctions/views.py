@@ -2806,8 +2806,8 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
         context = self.get_context_data(**kwargs)
         return self.render_to_response(context)
 
-    def handle_csv_file(self, csv_file, *args, **kwargs):
-        """If a CSV file has been uploaded, parse it and redirect"""
+    def process_csv_data(self, csv_reader, *args, **kwargs):
+        """Process CSV data from a DictReader object and add/update users"""
 
         def extract_info(row, field_name_list, default_response=""):
             """Pass a row, and a lowercase list of field names
@@ -2828,9 +2828,6 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
                 if column in case_insensitive_row:
                     return True
             return False
-
-        csv_file.seek(0)
-        csv_reader = csv.DictReader(TextIOWrapper(csv_file.file))
         email_field_names = ["email", "e-mail", "email address", "e-mail address"]
         bidder_number_fields = ["bidder number", "bidder"]
         name_field_names = ["name", "full name", "first name", "firstname"]
@@ -2983,6 +2980,21 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
             response["HX-Redirect"] = url
             return response
 
+    def handle_csv_file(self, csv_file, *args, **kwargs):
+        """If a CSV file has been uploaded, parse it and redirect"""
+        try:
+            csv_file.seek(0)
+            csv_reader = csv.DictReader(TextIOWrapper(csv_file.file))
+            return self.process_csv_data(csv_reader)
+        except (UnicodeDecodeError, ValueError) as e:
+            messages.error(
+                self.request, f"Unable to read file.  Make sure this is a valid UTF-8 CSV file.  Error was: {e}"
+            )
+            url = reverse("bulk_add_users", kwargs={"slug": self.auction.slug})
+            response = HttpResponse(status=200)
+            response["HX-Redirect"] = url
+            return response
+
         # The code below would populate the formset with the info from the CSV.
         # This process is simply not working, and it fails silently with no log.
 
@@ -3103,6 +3115,95 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
                 ),
                 form=QuickAddTOS,
             )
+
+
+class ImportFromGoogleDrive(AuctionViewMixin, TemplateView, ContextMixin):
+    """Import users from a Google Drive spreadsheet"""
+
+    template_name = "auctions/import_from_google_drive.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["auction"] = self.auction
+        return context
+
+    def post(self, request, *args, **kwargs):
+        # Check if this is a sync request (no google_drive_link in POST)
+        google_drive_link = request.POST.get("google_drive_link", "").strip()
+        
+        # If google_drive_link is provided, update it and sync
+        if google_drive_link:
+            self.auction.google_drive_link = google_drive_link
+            self.auction.save()
+        
+        # Perform the sync (whether it's a new link or existing link)
+        return self.sync_google_drive()
+
+    def sync_google_drive(self):
+        """Read data from Google Drive and import users"""
+        if not self.auction.google_drive_link:
+            messages.error(self.request, "No Google Drive link configured")
+            url = reverse("bulk_add_users", kwargs={"slug": self.auction.slug})
+            return redirect(url)
+
+        try:
+            # Convert Google Sheets sharing link to export CSV URL
+            # Example: https://docs.google.com/spreadsheets/d/SPREADSHEET_ID/edit#gid=0
+            # Convert to: https://docs.google.com/spreadsheets/d/SPREADSHEET_ID/export?format=csv&gid=0
+            link = self.auction.google_drive_link
+
+            # Extract the spreadsheet ID from the URL
+            if "/spreadsheets/d/" in link:
+                spreadsheet_id = link.split("/spreadsheets/d/")[1].split("/")[0]
+                # Extract gid if present
+                gid = "0"
+                if "gid=" in link:
+                    gid = link.split("gid=")[1].split("&")[0].split("#")[0]
+                csv_url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?format=csv&gid={gid}"
+            else:
+                messages.error(
+                    self.request,
+                    "Invalid Google Drive link. Please use a link to a Google Sheets document.",
+                )
+                url = reverse("bulk_add_users", kwargs={"slug": self.auction.slug})
+                return redirect(url)
+
+            # Fetch the CSV data
+            response = requests.get(csv_url)
+            response.raise_for_status()
+
+            # Create a CSV reader from the response content
+            csv_content = response.content.decode("utf-8")
+            csv_reader = csv.DictReader(csv_content.splitlines())
+
+            # Create a BulkAddUsers instance to use its process_csv_data method
+            bulk_add_view = BulkAddUsers()
+            bulk_add_view.request = self.request
+            bulk_add_view.auction = self.auction
+
+            # Process the CSV data
+            result = bulk_add_view.process_csv_data(csv_reader)
+
+            # Update the last sync time
+            self.auction.last_sync_time = timezone.now()
+            self.auction.save()
+
+            return result
+
+        except requests.RequestException as e:
+            messages.error(
+                self.request,
+                f"Unable to fetch data from Google Drive. Make sure the link is shared with 'anyone with the link can view'. Error: {e}",
+            )
+            url = reverse("bulk_add_users", kwargs={"slug": self.auction.slug})
+            return redirect(url)
+        except Exception as e:
+            messages.error(
+                self.request,
+                f"An error occurred while importing from Google Drive: {e}",
+            )
+            url = reverse("bulk_add_users", kwargs={"slug": self.auction.slug})
+            return redirect(url)
 
 
 class BulkAddLots(TemplateView, AuctionPermissionsMixin):

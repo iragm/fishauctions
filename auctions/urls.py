@@ -202,6 +202,16 @@ urlpatterns = [
         name="bulk_add_users",
     ),
     path(
+        "auctions/<slug:slug>/users/import-google-drive/",
+        login_required(views.ImportFromGoogleDrive.as_view()),
+        name="import_from_google_drive",
+    ),
+    path(
+        "auctions/<slug:slug>/users/sync-google-drive/",
+        login_required(views.ImportFromGoogleDrive.as_view()),
+        name="sync_google_drive",
+    ),
+    path(
         "auctions/<slug:slug>/users/<str:bidder_number>/",
         login_required(views.BulkAddLots.as_view()),
         name="bulk_add_lots",
