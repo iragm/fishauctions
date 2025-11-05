@@ -709,6 +709,91 @@ class InvoiceModelTests(StandardTestCase):
         assert self.invoiceB.net == -37.5
 
 
+class InvoiceCreateViewTests(StandardTestCase):
+    """Test invoice creation view"""
+
+    def test_invoice_create_success(self):
+        """Test creating an invoice for a user without one"""
+        # Create a new user without an invoice
+        new_tos = AuctionTOS.objects.create(
+            user=self.user_who_does_not_join,
+            auction=self.online_auction,
+            pickup_location=self.location,
+        )
+
+        # Ensure no invoice exists
+        assert new_tos.invoice is None
+
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+
+        # Create invoice
+        response = self.client.get(f"/invoices/create/{new_tos.pk}/")
+
+        # Check redirect to invoice page
+        assert response.status_code == 302
+
+        # Verify invoice was created
+        new_tos = AuctionTOS.objects.get(pk=new_tos.pk)
+        assert new_tos.invoice is not None
+        assert new_tos.invoice.auctiontos_user == new_tos
+        assert new_tos.invoice.auction == self.online_auction
+
+    def test_invoice_create_duplicate_handling(self):
+        """Test that duplicate invoices are deleted and oldest is kept"""
+        # Create a user with one invoice
+        new_tos = AuctionTOS.objects.create(
+            user=self.user_who_does_not_join,
+            auction=self.online_auction,
+            pickup_location=self.location,
+        )
+
+        # Create first invoice (oldest)
+        first_invoice = Invoice.objects.create(auctiontos_user=new_tos, auction=self.online_auction)
+        first_invoice_pk = first_invoice.pk
+
+        # Create a duplicate invoice (newer)
+        Invoice.objects.create(auctiontos_user=new_tos, auction=self.online_auction)
+
+        # Verify both exist
+        assert Invoice.objects.filter(auctiontos_user=new_tos).count() == 2
+
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+
+        # Try to create another invoice
+        response = self.client.get(f"/invoices/create/{new_tos.pk}/")
+
+        # Check redirect to existing invoice
+        assert response.status_code == 302
+
+        # Verify only one invoice remains (the oldest)
+        assert Invoice.objects.filter(auctiontos_user=new_tos).count() == 1
+        assert Invoice.objects.filter(auctiontos_user=new_tos).first().pk == first_invoice_pk
+
+    def test_invoice_create_non_admin_denied(self):
+        """Test that non-admins cannot create invoices"""
+        # Create a new user without an invoice
+        new_tos = AuctionTOS.objects.create(
+            user=self.user_who_does_not_join,
+            auction=self.online_auction,
+            pickup_location=self.location,
+        )
+
+        # Login as non-admin user
+        self.client.login(username=self.user_who_does_not_join.username, password="testpassword")
+
+        # Try to create invoice
+        response = self.client.get(f"/invoices/create/{new_tos.pk}/")
+
+        # Check for permission error (403 or redirect)
+        assert response.status_code in [302, 403]
+
+        # Verify no invoice was created
+        new_tos = AuctionTOS.objects.get(pk=new_tos.pk)
+        assert new_tos.invoice is None
+
+
 class LotPricesTests(TestCase):
     def setUp(self):
         time = timezone.now() - datetime.timedelta(days=2)

@@ -5218,6 +5218,55 @@ class Invoices(ListView, LoginRequiredMixin):
     #     return context
 
 
+class InvoiceCreateView(View, AuctionPermissionsMixin):
+    """Create a new invoice for a user in an auction"""
+
+    def get(self, request, *args, **kwargs):
+        """Create invoice and redirect to invoice detail page"""
+        # Get the auctiontos
+        auctiontos_pk = self.kwargs.get("pk")
+        try:
+            auctiontos = AuctionTOS.objects.get(pk=auctiontos_pk)
+        except AuctionTOS.DoesNotExist:
+            messages.error(request, "User not found")
+            return redirect("/")
+
+        # Set auction for permission check
+        self.auction = auctiontos.auction
+
+        # Check if user is auction admin
+        if not self.is_auction_admin:
+            messages.error(request, "You don't have permission to create invoices for this auction")
+            return redirect("/")
+
+        # Check for existing invoices - get the oldest one (first created)
+        existing_invoice = (
+            Invoice.objects.filter(auctiontos_user=auctiontos, auction=auctiontos.auction).order_by("date").first()
+        )
+
+        if existing_invoice:
+            # Check for and delete any duplicate invoices (keep the oldest)
+            duplicate_invoices = Invoice.objects.filter(auctiontos_user=auctiontos, auction=auctiontos.auction).exclude(
+                pk=existing_invoice.pk
+            )
+
+            duplicate_count = duplicate_invoices.count()
+            if duplicate_count > 0:
+                duplicate_invoices.delete()
+                messages.info(request, f"Removed {duplicate_count} duplicate invoice(s)")
+
+            # Redirect to existing invoice
+            messages.info(request, "Invoice already exists for this user")
+            return redirect(existing_invoice.get_absolute_url())
+
+        # Create new invoice
+        invoice = Invoice.objects.create(auctiontos_user=auctiontos, auction=auctiontos.auction)
+        invoice.recalculate
+
+        messages.success(request, f"Invoice created for {auctiontos.name}")
+        return redirect(invoice.get_absolute_url())
+
+
 # password protected in views.py
 class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
     """Show a single invoice"""

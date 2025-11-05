@@ -2005,7 +2005,7 @@ class AuctionTOS(models.Model):
 
     @property
     def invoice_link_html(self):
-        """HTML snippet with a link to the invoice for this auctionTOS, if set.  Otherwise, empty"""
+        """HTML snippet with a link to the invoice for this auctionTOS, if set.  Otherwise, show create link"""
         if self.invoice:
             status = "bag"
             if self.invoice.status == "UNPAID":
@@ -2016,7 +2016,11 @@ class AuctionTOS(models.Model):
                 f"<a href='{self.invoice.get_absolute_url()}' hx-noget><i class='bi bi-{status} me-1'></i>View<span class='d-sm-inline d-md-none'> invoice</span></a>"
             )
         else:
-            return ""
+            # Show create link for admins
+            create_url = reverse("create_invoice", kwargs={"pk": self.pk})
+            return html.format_html(
+                f"<a href='{create_url}' hx-noget><i class='bi bi-plus me-1'></i>Create<span class='d-sm-inline d-md-none'> invoice</span></a>"
+            )
 
     @property
     def gross_sold(self):
