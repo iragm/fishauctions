@@ -32,7 +32,6 @@
 <script>
 function toggleWatch(lotPk, element) {
     const isWatched = element.classList.contains('watched');
-    
     fetch('/api/watchitem/' + lotPk + '/', {
         method: 'POST',
         headers: {
