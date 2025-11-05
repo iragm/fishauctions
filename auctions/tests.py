@@ -1601,6 +1601,8 @@ class CSVImportTests(StandardTestCase):
         existing_tos.refresh_from_db()
         self.assertEqual(existing_tos.memo, "Updated memo")
         self.assertTrue(existing_tos.is_admin)
+
+
 class WeeklyPromoEmailTrackingTestCase(StandardTestCase):
     """Test that the weekly_promo_emails_sent field is incremented correctly"""
 
