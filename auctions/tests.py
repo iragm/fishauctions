@@ -2055,21 +2055,21 @@ class SetLotWinnersViewTests(StandardTestCase):
 
     def test_set_lot_winners_anonymous(self):
         """Anonymous users cannot access set lot winners"""
-        url = reverse("set_lot_winners", kwargs={"slug": self.in_person_auction.slug})
+        url = reverse("auction_lot_winners_dynamic", kwargs={"slug": self.in_person_auction.slug})
         response = self.client.get(url)
         assert response.status_code == 302
 
     def test_set_lot_winners_non_admin(self):
         """Non-admin users cannot access set lot winners"""
         self.client.login(username=self.user_with_no_lots.username, password="testpassword")
-        url = reverse("set_lot_winners", kwargs={"slug": self.in_person_auction.slug})
+        url = reverse("auction_lot_winners_dynamic", kwargs={"slug": self.in_person_auction.slug})
         response = self.client.get(url)
         assert response.status_code in [302, 403]
 
     def test_set_lot_winners_admin(self):
         """Admin users can access set lot winners"""
         self.client.login(username=self.admin_user.username, password="testpassword")
-        url = reverse("set_lot_winners", kwargs={"slug": self.in_person_auction.slug})
+        url = reverse("auction_lot_winners_dynamic", kwargs={"slug": self.in_person_auction.slug})
         response = self.client.get(url)
         assert response.status_code == 200
 
@@ -2079,21 +2079,21 @@ class AuctionDeleteViewTests(StandardTestCase):
 
     def test_auction_delete_anonymous(self):
         """Anonymous users cannot delete auctions"""
-        url = reverse("auction_delete", kwargs={"slug": self.online_auction.slug})
+        url = f"/auctions/{self.online_auction.slug}/delete/"
         response = self.client.get(url)
         assert response.status_code == 302
 
     def test_auction_delete_non_creator(self):
         """Non-creator users cannot delete auctions"""
         self.client.login(username=self.user_with_no_lots.username, password="testpassword")
-        url = reverse("auction_delete", kwargs={"slug": self.online_auction.slug})
+        url = f"/auctions/{self.online_auction.slug}/delete/"
         response = self.client.get(url)
         assert response.status_code in [302, 403]
 
     def test_auction_delete_creator(self):
         """Creator can access delete page"""
         self.client.login(username=self.user.username, password="testpassword")
-        url = reverse("auction_delete", kwargs={"slug": self.online_auction.slug})
+        url = f"/auctions/{self.online_auction.slug}/delete/"
         response = self.client.get(url)
         assert response.status_code == 200
 
