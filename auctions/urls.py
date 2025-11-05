@@ -131,6 +131,11 @@ urlpatterns = [
     ),
     path("invoices/<uuid:uuid>/", views.InvoiceNoLoginView.as_view(), name="invoice_no_login"),
     path(
+        "invoices/create/<int:pk>/",
+        login_required(views.InvoiceCreateView.as_view()),
+        name="create_invoice",
+    ),
+    path(
         "images/add_image/<int:lot>/",
         login_required(views.ImageCreateView.as_view()),
         name="add_image",
