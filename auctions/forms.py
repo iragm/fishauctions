@@ -40,6 +40,9 @@ from .models import (
     UserLabelPrefs,
 )
 
+# Distance conversion constant
+MILES_TO_KM = 1.60934
+
 # class DateInput(forms.DateInput):
 #     input_type = 'datetime-local'
 
@@ -2776,14 +2779,14 @@ class ChangeUserPreferencesForm(forms.ModelForm):
         if self.instance and self.instance.distance_unit == "km":
             if self.instance.email_me_about_new_auctions_distance:
                 self.initial["email_me_about_new_auctions_distance"] = round(
-                    self.instance.email_me_about_new_auctions_distance * 1.60934
+                    self.instance.email_me_about_new_auctions_distance * MILES_TO_KM
                 )
             if self.instance.email_me_about_new_in_person_auctions_distance:
                 self.initial["email_me_about_new_in_person_auctions_distance"] = round(
-                    self.instance.email_me_about_new_in_person_auctions_distance * 1.60934
+                    self.instance.email_me_about_new_in_person_auctions_distance * MILES_TO_KM
                 )
             if self.instance.local_distance:
-                self.initial["local_distance"] = round(self.instance.local_distance * 1.60934)
+                self.initial["local_distance"] = round(self.instance.local_distance * MILES_TO_KM)
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_id = "user-form"
@@ -2906,14 +2909,14 @@ class ChangeUserPreferencesForm(forms.ModelForm):
             # Convert km to miles for storage
             if cleaned_data.get("email_me_about_new_auctions_distance"):
                 cleaned_data["email_me_about_new_auctions_distance"] = round(
-                    cleaned_data["email_me_about_new_auctions_distance"] / 1.60934
+                    cleaned_data["email_me_about_new_auctions_distance"] / MILES_TO_KM
                 )
             if cleaned_data.get("email_me_about_new_in_person_auctions_distance"):
                 cleaned_data["email_me_about_new_in_person_auctions_distance"] = round(
-                    cleaned_data["email_me_about_new_in_person_auctions_distance"] / 1.60934
+                    cleaned_data["email_me_about_new_in_person_auctions_distance"] / MILES_TO_KM
                 )
             if cleaned_data.get("local_distance"):
-                cleaned_data["local_distance"] = round(cleaned_data["local_distance"] / 1.60934)
+                cleaned_data["local_distance"] = round(cleaned_data["local_distance"] / MILES_TO_KM)
         return cleaned_data
 
 

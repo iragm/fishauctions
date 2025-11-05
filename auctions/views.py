@@ -170,6 +170,9 @@ from .models import (
 )
 from .tables import AuctionHistoryHTMxTable, AuctionHTMxTable, AuctionTOSHTMxTable, LotHTMxTable, LotHTMxTableForUsers
 
+# Distance conversion constant
+MILES_TO_KM = 1.60934
+
 logger = logging.getLogger(__name__)
 
 
@@ -937,7 +940,7 @@ def auctionNotifications(request):
             try:
                 user_unit = request.user.userdata.distance_unit
                 if user_unit == "km":
-                    distance_value = round(distance * 1.60934)
+                    distance_value = round(distance * MILES_TO_KM)
                     distance_unit = "km"
                 else:
                     distance_value = round(distance)

@@ -2,6 +2,9 @@ from django import template
 
 register = template.Library()
 
+# Distance conversion constant
+MILES_TO_KM = 1.60934
+
 
 @register.filter
 def convert_distance(miles, user):
@@ -29,7 +32,7 @@ def convert_distance(miles, user):
 
     if distance_unit == "km":
         # Convert miles to kilometers
-        km = miles * 1.60934
+        km = miles * MILES_TO_KM
         return int(round(km)), "km"
     else:
         # Default to miles
