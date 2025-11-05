@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}Import from Google Drive - {{ auction }}{% endblock %}
+
+{% block content %}
+  {% include 'auction_ribbon.html' %}
+  <br>
+
+  <h3>Import Users from Google Drive</h3>
+  <p>
+    Share your Google Sheet with "anyone with the link can view", then paste the link below.
+    The sheet should contain columns for user information like email, name, phone, address, etc.
+  </p>
+
+  <form method="POST" action="{% url 'import_from_google_drive' slug=auction.slug %}">
+    {% csrf_token %}
+    <div class="mb-3">
+      <label for="google_drive_link" class="form-label">Google Drive Link</label>
+      <input 
+        type="url" 
+        class="form-control" 
+        id="google_drive_link" 
+        name="google_drive_link" 
+        placeholder="https://docs.google.com/spreadsheets/d/..." 
+        value="{{ auction.google_drive_link }}"
+        required>
+      <small class="form-text text-muted">
+        Make sure your Google Sheet is shared with "anyone with the link can view"
+      </small>
+    </div>
+    <button type="submit" class="btn btn-primary">Save and Sync</button>
+    <a href="{% url 'bulk_add_users' slug=auction.slug %}" class="btn btn-secondary">Cancel</a>
+  </form>
+
+  {% if auction.google_drive_link %}
+    <hr>
+    <p>
+      <strong>Current Google Drive link:</strong> {{ auction.google_drive_link }}<br>
+      {% if auction.last_sync_time %}
+        <strong>Last synced:</strong> {{ auction.last_sync_time|timesince }} ago
+      {% else %}
+        <strong>Last synced:</strong> Never
+      {% endif %}
+    </p>
+  {% endif %}
+{% endblock %}
