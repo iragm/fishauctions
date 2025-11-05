@@ -2932,8 +2932,8 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
                                 .first()
                             ):
                                 existing_tos.bidder_number = bidder_number[:20]
-                        if memo_field_exists and memo:
-                            existing_tos.memo = memo[:500]
+                        if memo_field_exists:
+                            existing_tos.memo = memo[:500] if memo else ""
                         if is_admin_field_exists:
                             existing_tos.is_admin = is_admin
                         existing_tos.save()
