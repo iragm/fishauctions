@@ -6743,9 +6743,12 @@ class PayPalInfoView(TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["seller"] = PayPalSeller.objects.filter(user=self.request.user).first()
         if self.request.user.is_authenticated:
+            context["seller"] = PayPalSeller.objects.filter(user=self.request.user).first()
             context["auction"] = self.request.user.userdata.last_auction_created
+        else:
+            context["seller"] = None
+            context["auction"] = None
         return context
 
 

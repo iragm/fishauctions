@@ -1950,3 +1950,23 @@ class DistanceUnitTests(StandardTestCase):
         anonymous = AnonymousUser()
         result = distance_display(10, anonymous)
         self.assertEqual(result, "10 miles")
+
+
+class PayPalInfoViewTests(TestCase):
+    """Test that the PayPal info page works for both logged in and non-logged in users"""
+
+    def test_paypal_info_non_logged_in_user(self):
+        """Test that non-logged-in users can access the PayPal info page"""
+        url = reverse("paypal_seller")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Accept payments with PayPal")
+
+    def test_paypal_info_logged_in_user(self):
+        """Test that logged-in users can access the PayPal info page"""
+        User.objects.create_user(username="testuser", password="testpassword")
+        self.client.login(username="testuser", password="testpassword")
+        url = reverse("paypal_seller")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Accept payments with PayPal")
