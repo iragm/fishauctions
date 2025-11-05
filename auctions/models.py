@@ -629,6 +629,8 @@ class Auction(models.Model):
     email_fourth_sent = models.BooleanField(default=False)
     email_fifth_sent = models.BooleanField(default=False)
     reprint_reminder_sent = models.BooleanField(default=False)
+    weekly_promo_emails_sent = models.PositiveIntegerField(default=0)
+    weekly_promo_emails_sent.help_text = "Number of times this auction was included in weekly promotional emails"
     make_stats_public = models.BooleanField(default=True)
     make_stats_public.help_text = "Allow any user who has a link to this auction's stats to see them.  Uncheck to only allow the auction creator to view stats"
     bump_cost = models.PositiveIntegerField(blank=True, default=1, validators=[MinValueValidator(1)])
