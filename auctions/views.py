@@ -170,6 +170,9 @@ from .models import (
 )
 from .tables import AuctionHistoryHTMxTable, AuctionHTMxTable, AuctionTOSHTMxTable, LotHTMxTable, LotHTMxTableForUsers
 
+# Distance conversion constant
+MILES_TO_KM = 1.60934
+
 logger = logging.getLogger(__name__)
 
 
@@ -930,13 +933,29 @@ def auctionNotifications(request):
             pass
         if not new:
             new = ""
+        # Convert distance to user's preferred unit
+        distance_value = distance
+        distance_unit = "miles"
+        if request.user.is_authenticated:
+            try:
+                user_unit = request.user.userdata.distance_unit
+                if user_unit == "km":
+                    distance_value = round(distance * MILES_TO_KM)
+                    distance_unit = "km"
+                else:
+                    distance_value = round(distance)
+            except AttributeError:
+                distance_value = round(distance)
+        else:
+            distance_value = round(distance)
         return JsonResponse(
             data={
                 "new": new,
                 "name": name,
                 "link": link,
                 "slug": slug,
-                "distance": distance,
+                "distance": distance_value,
+                "distance_unit": distance_unit,
             }
         )
     messages.error(request, "Your account doesn't have permission to view this page")
