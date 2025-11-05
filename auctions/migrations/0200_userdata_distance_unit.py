@@ -3,6 +3,21 @@
 from django.db import migrations, models
 
 
+def set_distance_unit_based_on_location(apps, schema_editor):
+    """Set distance_unit to km for users in Canada, mi for others"""
+    UserData = apps.get_model("auctions", "UserData")
+    Location = apps.get_model("auctions", "Location")
+
+    # Get Canada location
+    canada = Location.objects.filter(name="Canada").first()
+
+    if canada:
+        # Set km for Canadian users
+        UserData.objects.filter(location=canada).update(distance_unit="km")
+
+    # All others default to mi (already set by default)
+
+
 class Migration(migrations.Migration):
     dependencies = [
         ("auctions", "0199_auction_weekly_promo_emails_sent"),
@@ -13,7 +28,6 @@ class Migration(migrations.Migration):
             model_name="userdata",
             name="distance_unit",
             field=models.CharField(
-                blank=True,
                 choices=[("mi", "Miles"), ("km", "Kilometers")],
                 default="mi",
                 help_text="Unit for displaying distances",
@@ -21,4 +35,5 @@ class Migration(migrations.Migration):
                 verbose_name="Distance unit",
             ),
         ),
+        migrations.RunPython(set_distance_unit_based_on_location, reverse_code=migrations.RunPython.noop),
     ]

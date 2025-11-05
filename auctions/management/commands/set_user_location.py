@@ -52,6 +52,15 @@ class Command(BaseCommand):
                                         user.location = next(
                                             value for value in [continent, country, default] if value is not None
                                         )
+                                    # Set distance_unit based on country
+                                    country_name = value.get("country", "")
+                                    if country_name == "United States":
+                                        user.distance_unit = "mi"
+                                    elif country_name == "Canada":
+                                        user.distance_unit = "km"
+                                    else:
+                                        # Default to km for all other countries
+                                        user.distance_unit = "km"
                                     user.save()
                                     logger.info(
                                         "assigning %s with IP %s a location", user.user.email, user.last_ip_address

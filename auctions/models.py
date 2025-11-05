@@ -4392,7 +4392,6 @@ class UserData(models.Model):
         max_length=10,
         choices=[("mi", "Miles"), ("km", "Kilometers")],
         default="mi",
-        blank=True,
         verbose_name="Distance unit",
     )
     distance_unit.help_text = "Unit for displaying distances"

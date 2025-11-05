@@ -260,6 +260,8 @@ class AuctionHTMxTable(tables.Table):
     #    return mark_safe(f"{record.template_status}{localized_date}{record.ended_badge}")
 
     def render_auction(self, value, record):
+        from auctions.templatetags.distance_filters import convert_distance
+
         auction = record
         result = f"<a href='{auction.get_absolute_url()}'>{auction.title}</a><br class='d-md-none'>"
         if auction.is_last_used:
@@ -273,7 +275,12 @@ class AuctionHTMxTable(tables.Table):
         if not auction.promote_this_auction:
             result += " <span class='badge bg-dark'>Not promoted</span>"
         if auction.distance:
-            result += f" <span class='badge bg-primary'>{int(auction.distance)} miles from you</span>"
+            # Use distance conversion filter
+            user = self.request.user if self.request else None
+            distance_result = convert_distance(auction.distance, user)
+            if distance_result:
+                distance_value, distance_unit = distance_result
+                result += f" <span class='badge bg-primary'>{distance_value} {distance_unit} from you</span>"
         if auction.joined and not auction.is_last_used:
             result += " <span class='badge bg-success text-black'>Joined</span>"
         user = self.request.user if self.request else None
