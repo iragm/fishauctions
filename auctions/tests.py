@@ -1892,7 +1892,7 @@ class InvoiceViewTests(StandardTestCase):
 
     def test_invoice_view_anonymous(self):
         """Anonymous users should not view invoices"""
-        url = reverse("invoice", kwargs={"pk": self.invoice.pk})
+        url = reverse("invoice_by_pk", kwargs={"pk": self.invoice.pk})
         response = self.client.get(url)
         # Should redirect to login
         assert response.status_code == 302
@@ -1900,14 +1900,14 @@ class InvoiceViewTests(StandardTestCase):
     def test_invoice_view_owner(self):
         """Invoice owner can view their invoice"""
         self.client.login(username=self.user.username, password="testpassword")
-        url = reverse("invoice", kwargs={"pk": self.invoice.pk})
+        url = reverse("invoice_by_pk", kwargs={"pk": self.invoice.pk})
         response = self.client.get(url)
         assert response.status_code == 200
 
     def test_invoice_view_other_user(self):
         """Other users should not view someone else's invoice"""
         self.client.login(username=self.user_with_no_lots.username, password="testpassword")
-        url = reverse("invoice", kwargs={"pk": self.invoice.pk})
+        url = reverse("invoice_by_pk", kwargs={"pk": self.invoice.pk})
         response = self.client.get(url)
         # Should be denied
         assert response.status_code in [302, 403]
@@ -1915,7 +1915,7 @@ class InvoiceViewTests(StandardTestCase):
     def test_invoice_view_admin(self):
         """Admin can view any invoice"""
         self.client.login(username=self.admin_user.username, password="testpassword")
-        url = reverse("invoice", kwargs={"pk": self.invoice.pk})
+        url = reverse("invoice_by_pk", kwargs={"pk": self.invoice.pk})
         response = self.client.get(url)
         assert response.status_code == 200
 
@@ -2215,21 +2215,21 @@ class UserViewTests(StandardTestCase):
 
     def test_user_view_anonymous(self):
         """Anonymous users can view user profiles"""
-        url = reverse("user_detail", kwargs={"pk": self.user.pk})
+        url = reverse("userpage", kwargs={"slug": self.user.username})
         response = self.client.get(url)
         assert response.status_code == 200
 
     def test_user_view_logged_in(self):
         """Logged in users can view user profiles"""
         self.client.login(username=self.user_with_no_lots.username, password="testpassword")
-        url = reverse("user_detail", kwargs={"pk": self.user.pk})
+        url = reverse("userpage", kwargs={"slug": self.user.username})
         response = self.client.get(url)
         assert response.status_code == 200
 
     def test_user_view_own_profile(self):
         """Users can view their own profile"""
         self.client.login(username=self.user.username, password="testpassword")
-        url = reverse("user_detail", kwargs={"pk": self.user.pk})
+        url = reverse("userpage", kwargs={"slug": self.user.username})
         response = self.client.get(url)
         assert response.status_code == 200
 
@@ -2239,14 +2239,14 @@ class ImageViewTests(StandardTestCase):
 
     def test_image_create_anonymous(self):
         """Anonymous users cannot create images"""
-        url = reverse("new_image", kwargs={"lot_number": self.lot.lot_number})
+        url = reverse("add_image", kwargs={"lot": self.lot.pk})
         response = self.client.get(url)
         assert response.status_code == 302
 
     def test_image_create_logged_in(self):
         """Logged in users can access image create form"""
         self.client.login(username=self.user.username, password="testpassword")
-        url = reverse("new_image", kwargs={"lot_number": self.lot.lot_number})
+        url = reverse("add_image", kwargs={"lot": self.lot.pk})
         response = self.client.get(url)
         assert response.status_code == 200
 
