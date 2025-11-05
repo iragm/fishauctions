@@ -2,6 +2,7 @@ import datetime
 from decimal import Decimal
 
 from django.contrib.auth.models import User
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.test.client import Client
 from django.urls import reverse
@@ -1333,15 +1334,16 @@ class CSVImportTests(StandardTestCase):
     def test_csv_import_with_memo_field(self):
         """Test that memo field is correctly imported from CSV"""
         import csv
-        from io import BytesIO
+        from io import StringIO
 
         # Create CSV content with memo field
-        csv_content = BytesIO()
-        writer = csv.writer(csv_content, quoting=csv.QUOTE_ALL)
+        csv_buffer = StringIO()
+        writer = csv.writer(csv_buffer)
         writer.writerow(["email", "name", "memo"])
         writer.writerow(["test1@example.com", "Test User 1", "This is a test memo"])
         writer.writerow(["test2@example.com", "Test User 2", "Another memo"])
-        csv_content.seek(0)
+
+        csv_file = SimpleUploadedFile("test.csv", csv_buffer.getvalue().encode("utf-8"), content_type="text/csv")
 
         # Login as admin
         self.client.login(username="admin_user", password="testpassword")
@@ -1349,8 +1351,7 @@ class CSVImportTests(StandardTestCase):
         # Import CSV
         self.client.post(
             reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
-            {"csv_file": csv_content},
-            format="multipart",
+            {"csv_file": csv_file},
         )
 
         # Check that users were created with memo
@@ -1365,17 +1366,18 @@ class CSVImportTests(StandardTestCase):
     def test_csv_import_with_admin_field(self):
         """Test that admin/staff field is correctly imported from CSV with various boolean values"""
         import csv
-        from io import BytesIO
+        from io import StringIO
 
-        # Create CSV content with admin field and different boolean values
-        csv_content = BytesIO()
-        writer = csv.writer(csv_content, quoting=csv.QUOTE_ALL)
+        # Create CSV content with proper formatting
+        csv_buffer = StringIO()
+        writer = csv.writer(csv_buffer)
         writer.writerow(["email", "name", "admin"])
         writer.writerow(["admin1@example.com", "Admin 1", "yes"])
         writer.writerow(["admin2@example.com", "Admin 2", "true"])
         writer.writerow(["admin3@example.com", "Admin 3", "1"])
         writer.writerow(["regular@example.com", "Regular User", "no"])
-        csv_content.seek(0)
+
+        csv_file = SimpleUploadedFile("test.csv", csv_buffer.getvalue().encode("utf-8"), content_type="text/csv")
 
         # Login as admin
         self.client.login(username="admin_user", password="testpassword")
@@ -1383,8 +1385,7 @@ class CSVImportTests(StandardTestCase):
         # Import CSV
         self.client.post(
             reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
-            {"csv_file": csv_content},
-            format="multipart",
+            {"csv_file": csv_file},
         )
 
         # Check that admin users were created correctly
@@ -1406,14 +1407,15 @@ class CSVImportTests(StandardTestCase):
     def test_csv_import_with_staff_field(self):
         """Test that 'staff' column name also works for admin field"""
         import csv
-        from io import BytesIO
+        from io import StringIO
 
-        # Create CSV content with staff field
-        csv_content = BytesIO()
-        writer = csv.writer(csv_content, quoting=csv.QUOTE_ALL)
+        # Create CSV content with proper formatting
+        csv_buffer = StringIO()
+        writer = csv.writer(csv_buffer)
         writer.writerow(["email", "name", "staff"])
         writer.writerow(["staff1@example.com", "Staff 1", "yes"])
-        csv_content.seek(0)
+
+        csv_file = SimpleUploadedFile("test.csv", csv_buffer.getvalue().encode("utf-8"), content_type="text/csv")
 
         # Login as admin
         self.client.login(username="admin_user", password="testpassword")
@@ -1421,8 +1423,7 @@ class CSVImportTests(StandardTestCase):
         # Import CSV
         self.client.post(
             reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
-            {"csv_file": csv_content},
-            format="multipart",
+            {"csv_file": csv_file},
         )
 
         # Check that admin user was created
@@ -1433,14 +1434,15 @@ class CSVImportTests(StandardTestCase):
     def test_csv_import_bidder_number_not_in_use(self):
         """Test that bidder number from CSV is used if not already in use"""
         import csv
-        from io import BytesIO
+        from io import StringIO
 
-        # Create CSV content with bidder number
-        csv_content = BytesIO()
-        writer = csv.writer(csv_content, quoting=csv.QUOTE_ALL)
+        # Create CSV content with proper formatting
+        csv_buffer = StringIO()
+        writer = csv.writer(csv_buffer)
         writer.writerow(["email", "name", "bidder number"])
         writer.writerow(["bidder1@example.com", "Bidder 1", "999"])
-        csv_content.seek(0)
+
+        csv_file = SimpleUploadedFile("test.csv", csv_buffer.getvalue().encode("utf-8"), content_type="text/csv")
 
         # Login as admin
         self.client.login(username="admin_user", password="testpassword")
@@ -1448,8 +1450,7 @@ class CSVImportTests(StandardTestCase):
         # Import CSV
         self.client.post(
             reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
-            {"csv_file": csv_content},
-            format="multipart",
+            {"csv_file": csv_file},
         )
 
         # Check that bidder number was assigned
@@ -1460,7 +1461,7 @@ class CSVImportTests(StandardTestCase):
     def test_csv_import_bidder_number_in_use_new_user(self):
         """Test that bidder number is not assigned if already in use for a new user"""
         import csv
-        from io import BytesIO
+        from io import StringIO
 
         # Create an existing user with bidder number 777
         AuctionTOS.objects.create(
@@ -1472,11 +1473,12 @@ class CSVImportTests(StandardTestCase):
         )
 
         # Create CSV content with same bidder number
-        csv_content = BytesIO()
-        writer = csv.writer(csv_content, quoting=csv.QUOTE_ALL)
+        csv_buffer = StringIO()
+        writer = csv.writer(csv_buffer)
         writer.writerow(["email", "name", "bidder number"])
         writer.writerow(["newuser@example.com", "New User", "777"])
-        csv_content.seek(0)
+
+        csv_file = SimpleUploadedFile("test.csv", csv_buffer.getvalue().encode("utf-8"), content_type="text/csv")
 
         # Login as admin
         self.client.login(username="admin_user", password="testpassword")
@@ -1484,8 +1486,7 @@ class CSVImportTests(StandardTestCase):
         # Import CSV
         self.client.post(
             reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
-            {"csv_file": csv_content},
-            format="multipart",
+            {"csv_file": csv_file},
         )
 
         # Check that new user was created but without the conflicting bidder number
@@ -1496,7 +1497,7 @@ class CSVImportTests(StandardTestCase):
     def test_csv_import_bidder_number_update_existing_user(self):
         """Test that existing user's bidder number is updated if new number is not in use"""
         import csv
-        from io import BytesIO
+        from io import StringIO
 
         # Create an existing user without bidder number
         existing_tos = AuctionTOS.objects.create(
@@ -1508,11 +1509,12 @@ class CSVImportTests(StandardTestCase):
         )
 
         # Create CSV content to update with bidder number
-        csv_content = BytesIO()
-        writer = csv.writer(csv_content, quoting=csv.QUOTE_ALL)
+        csv_buffer = StringIO()
+        writer = csv.writer(csv_buffer)
         writer.writerow(["email", "name", "bidder number"])
         writer.writerow(["existing@example.com", "Existing User", "888"])
-        csv_content.seek(0)
+
+        csv_file = SimpleUploadedFile("test.csv", csv_buffer.getvalue().encode("utf-8"), content_type="text/csv")
 
         # Login as admin
         self.client.login(username="admin_user", password="testpassword")
@@ -1520,8 +1522,7 @@ class CSVImportTests(StandardTestCase):
         # Import CSV
         self.client.post(
             reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
-            {"csv_file": csv_content},
-            format="multipart",
+            {"csv_file": csv_file},
         )
 
         # Check that bidder number was updated
@@ -1531,7 +1532,7 @@ class CSVImportTests(StandardTestCase):
     def test_csv_import_bidder_number_exclude_self(self):
         """Test that bidder number check excludes the user being updated"""
         import csv
-        from io import BytesIO
+        from io import StringIO
 
         # Create an existing user with bidder number
         existing_tos = AuctionTOS.objects.create(
@@ -1543,11 +1544,12 @@ class CSVImportTests(StandardTestCase):
         )
 
         # Create CSV content with same bidder number (re-importing same user)
-        csv_content = BytesIO()
-        writer = csv.writer(csv_content, quoting=csv.QUOTE_ALL)
+        csv_buffer = StringIO()
+        writer = csv.writer(csv_buffer)
         writer.writerow(["email", "name", "bidder number"])
         writer.writerow(["existing@example.com", "Existing User Updated", "666"])
-        csv_content.seek(0)
+
+        csv_file = SimpleUploadedFile("test.csv", csv_buffer.getvalue().encode("utf-8"), content_type="text/csv")
 
         # Login as admin
         self.client.login(username="admin_user", password="testpassword")
@@ -1555,8 +1557,7 @@ class CSVImportTests(StandardTestCase):
         # Import CSV
         self.client.post(
             reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
-            {"csv_file": csv_content},
-            format="multipart",
+            {"csv_file": csv_file},
         )
 
         # Check that bidder number was kept (not cleared)
@@ -1567,7 +1568,7 @@ class CSVImportTests(StandardTestCase):
     def test_csv_import_update_existing_user_memo_and_admin(self):
         """Test that existing user's memo and admin status are updated from CSV"""
         import csv
-        from io import BytesIO
+        from io import StringIO
 
         # Create an existing user
         existing_tos = AuctionTOS.objects.create(
@@ -1580,11 +1581,12 @@ class CSVImportTests(StandardTestCase):
         )
 
         # Create CSV content to update memo and admin status
-        csv_content = BytesIO()
-        writer = csv.writer(csv_content, quoting=csv.QUOTE_ALL)
+        csv_buffer = StringIO()
+        writer = csv.writer(csv_buffer)
         writer.writerow(["email", "name", "memo", "admin"])
         writer.writerow(["existing@example.com", "Existing User", "Updated memo", "yes"])
-        csv_content.seek(0)
+
+        csv_file = SimpleUploadedFile("test.csv", csv_buffer.getvalue().encode("utf-8"), content_type="text/csv")
 
         # Login as admin
         self.client.login(username="admin_user", password="testpassword")
@@ -1592,8 +1594,7 @@ class CSVImportTests(StandardTestCase):
         # Import CSV
         self.client.post(
             reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
-            {"csv_file": csv_content},
-            format="multipart",
+            {"csv_file": csv_file},
         )
 
         # Check that memo and admin were updated
