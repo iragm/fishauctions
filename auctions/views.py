@@ -2828,6 +2828,7 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
                 if column in case_insensitive_row:
                     return True
             return False
+
         email_field_names = ["email", "e-mail", "email address", "e-mail address"]
         bidder_number_fields = ["bidder number", "bidder"]
         name_field_names = ["name", "full name", "first name", "firstname"]
@@ -3130,12 +3131,12 @@ class ImportFromGoogleDrive(AuctionViewMixin, TemplateView, ContextMixin):
     def post(self, request, *args, **kwargs):
         # Check if this is a sync request (no google_drive_link in POST)
         google_drive_link = request.POST.get("google_drive_link", "").strip()
-        
+
         # If google_drive_link is provided, update it and sync
         if google_drive_link:
             self.auction.google_drive_link = google_drive_link
             self.auction.save()
-        
+
         # Perform the sync (whether it's a new link or existing link)
         return self.sync_google_drive()
 
