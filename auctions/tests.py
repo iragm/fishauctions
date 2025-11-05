@@ -1363,4 +1363,3 @@ class WeeklyPromoEmailTrackingTestCase(StandardTestCase):
         Auction.objects.filter(pk=auction.pk).update(weekly_promo_emails_sent=F("weekly_promo_emails_sent") + 1)
         auction.refresh_from_db()
         assert auction.weekly_promo_emails_sent == 2
-

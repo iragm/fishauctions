@@ -4,7 +4,7 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.contrib.sites.models import Site
 from django.core.management.base import BaseCommand
-from django.db.models import Q, F
+from django.db.models import F, Q
 from django.utils import timezone
 from post_office import mail
 
@@ -71,7 +71,9 @@ class Command(BaseCommand):
                         }
                     )
                     # Increment the weekly promo email counter for this auction
-                    Auction.objects.filter(slug=auction).update(weekly_promo_emails_sent=F("weekly_promo_emails_sent") + 1)
+                    Auction.objects.filter(slug=auction).update(
+                        weekly_promo_emails_sent=F("weekly_promo_emails_sent") + 1
+                    )
             # see #130; request to differentiate between online and in-person
             if user.userdata.email_me_about_new_in_person_auctions:
                 locations = (
@@ -111,7 +113,9 @@ class Command(BaseCommand):
                         }
                     )
                     # Increment the weekly promo email counter for this auction
-                    Auction.objects.filter(slug=auction).update(weekly_promo_emails_sent=F("weekly_promo_emails_sent") + 1)
+                    Auction.objects.filter(slug=auction).update(
+                        weekly_promo_emails_sent=F("weekly_promo_emails_sent") + 1
+                    )
             template_nearby_lots = []
             if user.userdata.email_me_about_new_local_lots:
                 template_nearby_lots = get_recommended_lots(user=user, listType="local")
