@@ -1601,3 +1601,60 @@ class CSVImportTests(StandardTestCase):
         existing_tos.refresh_from_db()
         self.assertEqual(existing_tos.memo, "Updated memo")
         self.assertTrue(existing_tos.is_admin)
+class WeeklyPromoEmailTrackingTestCase(StandardTestCase):
+    """Test that the weekly_promo_emails_sent field is incremented correctly"""
+
+    def test_auction_has_weekly_promo_emails_sent_field(self):
+        """Test that the new field exists and defaults to 0"""
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="Test auction for weekly promo",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=2),
+            date_start=timezone.now() - datetime.timedelta(days=1),
+        )
+        assert auction.weekly_promo_emails_sent == 0
+
+    def test_weekly_promo_emails_sent_increments(self):
+        """Test that we can increment the weekly_promo_emails_sent field"""
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="Test auction for weekly promo increment",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=2),
+            date_start=timezone.now() - datetime.timedelta(days=1),
+        )
+        from django.db.models import F
+
+        # Simulate what the management command does
+        Auction.objects.filter(pk=auction.pk).update(weekly_promo_emails_sent=F("weekly_promo_emails_sent") + 1)
+
+        # Refresh from database
+        auction.refresh_from_db()
+        assert auction.weekly_promo_emails_sent == 1
+
+        # Increment again
+        Auction.objects.filter(pk=auction.pk).update(weekly_promo_emails_sent=F("weekly_promo_emails_sent") + 1)
+        auction.refresh_from_db()
+        assert auction.weekly_promo_emails_sent == 2
+
+    def test_weekly_promo_email_click_rate(self):
+        """Test that the click rate calculation handles div/0 correctly"""
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="Test auction for click rate",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=2),
+            date_start=timezone.now() - datetime.timedelta(days=1),
+        )
+
+        # Test div/0 case - should return 0 when no emails sent
+        assert auction.weekly_promo_emails_sent == 0
+        assert auction.weekly_promo_email_click_rate == 0
+
+        # Set some emails sent
+        Auction.objects.filter(pk=auction.pk).update(weekly_promo_emails_sent=100)
+        auction.refresh_from_db()
+
+        # With 0 clicks and 100 emails, rate should be 0%
+        assert auction.weekly_promo_email_click_rate == 0.0
