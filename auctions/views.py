@@ -3190,9 +3190,15 @@ class ImportFromGoogleDrive(AuctionViewMixin, TemplateView, ContextMixin):
             return redirect(url)
 
         except requests.RequestException as e:
-            return self._error_redirect(
-                f"Unable to fetch data from Google Drive. Make sure the link is shared with 'anyone with the link can view'. Error: {e}"
-            )
+            if "401" in str(e):
+                return self._error_redirect(
+                    "Unable to fetch data from Google Drive. Make sure the link is shared with 'anyone with the link can view'"
+                )
+            elif "404" in str(e):
+                return self._error_redirect("Link not found or invalid")
+            else:
+                return self._error_redirect(f"Unable to fetch data from Google Drive. Error was {e}")
+
         except Exception as e:
             return self._error_redirect(f"An error occurred while importing from Google Drive: {e}")
 
@@ -4706,6 +4712,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "use_seller_dash_lot_numbering",
                 "enable_online_payments",
                 "alternative_split_label",
+                "google_drive_link",
             ]
             for field in fields_to_clone:
                 setattr(auction, field, getattr(original_auction, field))
