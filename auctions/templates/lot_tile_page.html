@@ -124,35 +124,38 @@ box-shadow: 0px 0px 1px 2px rgba(238, 59, 59, 0.281),
           <div style='float: right; overflow: hidden;'>{% if lot.donation %}Donation{% else %}{% if lot.auction.is_online or not lot.auction %} {{ lot.seller_as_str }}{% endif %}{% endif %}</div></div>
 
       <div class="card-body">
-        <h5 class="card-title">{{ lot.lot_name }}</h5>
-        {% if not lot.auction.ended and lot.sold %}<h1 class='text-danger font-weight-bold' style="position: absolute;-ms-transform: rotate(-20deg);transform: rotate(-20deg);">SOLD</h1>{%endif%}
-          {% if lot.thumbnail %}
-          <div class="lot-thumbnail-container">
-            <img class="card-img-top" src="{{ lot.thumbnail.image.lot_list.url }}" style="max-width:100%;"></img>
-            {% if request.user.is_authenticated %}
-            <div class="watch-icon-overlay">
-              <span class="watch-icon text-warning{% if lot.is_watched_by_req_user %} watched{% endif %}" onclick="toggleWatch({{ lot.pk }}, this)">
-                {% if lot.is_watched_by_req_user %}
-                <i class="bi bi-star-fill"></i>
-                {% else %}
-                <i class="bi bi-star"></i>
-                {% endif %}
-              </span>
-            </div>
-            {% endif %}
-          </div>
-          {% else %}
-          {% if request.user.is_authenticated %}
-          <div class="text-center mb-2">
-            <span class="watch-icon text-warning{% if lot.is_watched_by_req_user %} watched{% endif %}" onclick="toggleWatch({{ lot.pk }}, this)">
+        <h5 class="card-title">
+          {{ lot.lot_name }}
+          {% if not lot.thumbnail and request.user.is_authenticated %}
+            {% if lot.is_watched_by_req_user or not lot.ended %}
+            <span class="watch-icon text-warning{% if lot.is_watched_by_req_user %} watched{% endif %}" onclick="toggleWatch({{ lot.pk }}, this)" style="float: right;">
               {% if lot.is_watched_by_req_user %}
               <i class="bi bi-star-fill"></i>
               {% else %}
               <i class="bi bi-star"></i>
               {% endif %}
             </span>
-          </div>
+            {% endif %}
           {% endif %}
+        </h5>
+        {% if not lot.auction.ended and lot.sold %}<h1 class='text-danger font-weight-bold' style="position: absolute;-ms-transform: rotate(-20deg);transform: rotate(-20deg);">SOLD</h1>{%endif%}
+          {% if lot.thumbnail %}
+          <div class="lot-thumbnail-container">
+            <img class="card-img-top" src="{{ lot.thumbnail.image.lot_list.url }}" style="max-width:100%;"></img>
+            {% if request.user.is_authenticated %}
+              {% if lot.is_watched_by_req_user or not lot.ended %}
+              <div class="watch-icon-overlay">
+                <span class="watch-icon text-warning{% if lot.is_watched_by_req_user %} watched{% endif %}" onclick="toggleWatch({{ lot.pk }}, this)">
+                  {% if lot.is_watched_by_req_user %}
+                  <i class="bi bi-star-fill"></i>
+                  {% else %}
+                  <i class="bi bi-star"></i>
+                  {% endif %}
+                </span>
+              </div>
+              {% endif %}
+            {% endif %}
+          </div>
           {% endif %}
         <p class="card-text">
           {% if not lot.auction or lot.auction.use_categories %}<span class="text-muted"><small>{{ lot.species_category }}</small></span><br>{% endif %}
