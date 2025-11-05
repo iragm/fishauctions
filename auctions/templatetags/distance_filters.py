@@ -14,13 +14,17 @@ def convert_distance(miles, user):
         miles: Distance in miles (as stored in the database)
         user: The user object to check preferred unit
     Returns:
-        Tuple of (converted_value, unit_string)
+        Tuple of (converted_value, unit_string) or None if distance is 0 or invalid
     """
+    # Don't show distance if it's 0 (user location not set or lot is part of an auction)
+    if miles == 0:
+        return None
+
     if not user or not user.is_authenticated:
         # Default to miles for non-authenticated users
-        if miles >= 0:
+        if miles > 0:
             return int(round(miles)), "miles"
-        return "?", "miles"
+        return None
 
     try:
         distance_unit = user.userdata.distance_unit
@@ -28,7 +32,7 @@ def convert_distance(miles, user):
         distance_unit = "mi"
 
     if miles < 0:
-        return "?", "km" if distance_unit == "km" else "miles"
+        return None
 
     if distance_unit == "km":
         # Convert miles to kilometers
@@ -47,7 +51,10 @@ def distance_display(miles, user):
         miles: Distance in miles (as stored in the database)
         user: The user object to check preferred unit
     Returns:
-        Formatted string like "10 miles" or "16 km"
+        Formatted string like "10 miles" or "16 km", or empty string if distance is 0 or invalid
     """
-    value, unit = convert_distance(miles, user)
+    result = convert_distance(miles, user)
+    if result is None:
+        return ""
+    value, unit = result
     return f"{value} {unit}"

@@ -1864,11 +1864,18 @@ class DistanceUnitTests(StandardTestCase):
         self.assertEqual(result, "10 miles")
 
     def test_distance_filter_handles_negative_distance(self):
-        """Test that distance_display filter handles negative distance (unknown)"""
+        """Test that distance_display filter handles negative distance (returns empty)"""
         from auctions.templatetags.distance_filters import distance_display
 
         result = distance_display(-1, self.user)
-        self.assertEqual(result, "? miles")
+        self.assertEqual(result, "")
+
+    def test_distance_filter_handles_zero_distance(self):
+        """Test that distance_display filter handles zero distance (returns empty)"""
+        from auctions.templatetags.distance_filters import distance_display
+
+        result = distance_display(0, self.user)
+        self.assertEqual(result, "")
 
     def test_distance_filter_defaults_to_miles_for_anonymous_users(self):
         """Test that distance_display filter defaults to miles for anonymous users"""
