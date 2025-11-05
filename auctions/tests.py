@@ -1722,9 +1722,7 @@ class GoogleDriveImportTests(StandardTestCase):
 
     def test_google_drive_import_view_requires_login(self):
         """Test that the Google Drive import view requires login"""
-        response = self.client.get(
-            reverse("import_from_google_drive", kwargs={"slug": self.online_auction.slug})
-        )
+        response = self.client.get(reverse("import_from_google_drive", kwargs={"slug": self.online_auction.slug}))
         # Should redirect to login
         self.assertEqual(response.status_code, 302)
         self.assertIn("/accounts/login/", response.url)
@@ -1732,9 +1730,7 @@ class GoogleDriveImportTests(StandardTestCase):
     def test_google_drive_import_view_accessible_by_admin(self):
         """Test that admin can access the Google Drive import view"""
         self.client.login(username="admin_user", password="testpassword")
-        response = self.client.get(
-            reverse("import_from_google_drive", kwargs={"slug": self.online_auction.slug})
-        )
+        response = self.client.get(reverse("import_from_google_drive", kwargs={"slug": self.online_auction.slug}))
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, "auctions/import_from_google_drive.html")
 
