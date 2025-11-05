@@ -3166,16 +3166,14 @@ class ImportFromGoogleDrive(AuctionViewMixin, TemplateView, ContextMixin):
                     self.request,
                     "Invalid Google Drive link. Please use a link to a Google Sheets document.",
                 )
-                url = reverse("bulk_add_users", kwargs={"slug": self.auction.slug})
-                return redirect(url)
+                return self._error_redirect("Invalid Google Drive link. Please use a link to a Google Sheets document.")
 
-            # Fetch the CSV data
-            response = requests.get(csv_url)
+            # Fetch the CSV data with timeout to prevent hanging
+            response = requests.get(csv_url, timeout=30)
             response.raise_for_status()
 
-            # Create a CSV reader from the response content
-            csv_content = response.content.decode("utf-8")
-            csv_reader = csv.DictReader(csv_content.splitlines())
+            # Create a CSV reader from the response text (handles encoding automatically)
+            csv_reader = csv.DictReader(response.text.splitlines())
 
             # Create a BulkAddUsers instance to use its process_csv_data method
             bulk_add_view = BulkAddUsers()
@@ -3194,19 +3192,17 @@ class ImportFromGoogleDrive(AuctionViewMixin, TemplateView, ContextMixin):
             return redirect(url)
 
         except requests.RequestException as e:
-            messages.error(
-                self.request,
-                f"Unable to fetch data from Google Drive. Make sure the link is shared with 'anyone with the link can view'. Error: {e}",
+            return self._error_redirect(
+                f"Unable to fetch data from Google Drive. Make sure the link is shared with 'anyone with the link can view'. Error: {e}"
             )
-            url = reverse("bulk_add_users", kwargs={"slug": self.auction.slug})
-            return redirect(url)
         except Exception as e:
-            messages.error(
-                self.request,
-                f"An error occurred while importing from Google Drive: {e}",
-            )
-            url = reverse("bulk_add_users", kwargs={"slug": self.auction.slug})
-            return redirect(url)
+            return self._error_redirect(f"An error occurred while importing from Google Drive: {e}")
+
+    def _error_redirect(self, error_message):
+        """Helper method to display error and redirect to bulk add users page"""
+        messages.error(self.request, error_message)
+        url = reverse("bulk_add_users", kwargs={"slug": self.auction.slug})
+        return redirect(url)
 
 
 class BulkAddLots(TemplateView, AuctionPermissionsMixin):
