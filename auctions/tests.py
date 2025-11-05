@@ -781,7 +781,7 @@ class InvoiceCreateViewTests(StandardTestCase):
         )
 
         # Login as non-admin user
-        self.client.login(username="my_lot", password="testpassword")
+        self.client.login(username=self.user_who_does_not_join.username, password="testpassword")
 
         # Try to create invoice
         response = self.client.get(f"/invoices/create/{new_tos.pk}/")
