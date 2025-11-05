@@ -3181,10 +3181,6 @@ class ImportFromGoogleDrive(AuctionViewMixin, TemplateView, ContextMixin):
                     gid = link.split("gid=")[1].split("&")[0].split("#")[0]
                 csv_url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?format=csv&gid={gid}"
             else:
-                messages.error(
-                    self.request,
-                    "Invalid Google Drive link. Please use a link to a Google Sheets document.",
-                )
                 return self._error_redirect("Invalid Google Drive link. Please use a link to a Google Sheets document.")
 
             # Fetch the CSV data with timeout to prevent hanging
@@ -3195,11 +3191,13 @@ class ImportFromGoogleDrive(AuctionViewMixin, TemplateView, ContextMixin):
             csv_reader = csv.DictReader(response.text.splitlines())
 
             # Create a BulkAddUsers instance to use its process_csv_data method
+            # Note: This reuses existing CSV processing logic. Any exceptions from
+            # process_csv_data will be caught by the outer try/except blocks.
             bulk_add_view = BulkAddUsers()
             bulk_add_view.request = self.request
             bulk_add_view.auction = self.auction
 
-            # Process the CSV data (this adds messages and returns a response)
+            # Process the CSV data (this adds messages via self.request)
             bulk_add_view.process_csv_data(csv_reader)
 
             # Update the last sync time
