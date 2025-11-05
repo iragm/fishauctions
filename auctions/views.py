@@ -2806,8 +2806,8 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
         context = self.get_context_data(**kwargs)
         return self.render_to_response(context)
 
-    def handle_csv_file(self, csv_file, *args, **kwargs):
-        """If a CSV file has been uploaded, parse it and redirect"""
+    def process_csv_data(self, csv_reader, *args, **kwargs):
+        """Process CSV data from a DictReader object and add/update users"""
 
         def extract_info(row, field_name_list, default_response=""):
             """Pass a row, and a lowercase list of field names
@@ -2829,8 +2829,6 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
                     return True
             return False
 
-        csv_file.seek(0)
-        csv_reader = csv.DictReader(TextIOWrapper(csv_file.file))
         email_field_names = ["email", "e-mail", "email address", "e-mail address"]
         bidder_number_fields = ["bidder number", "bidder"]
         name_field_names = ["name", "full name", "first name", "firstname"]
@@ -2962,9 +2960,7 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
             if error:
                 messages.error(self.request, error)
             msg = f"{total_tos} users added"
-            self.auction.create_history(
-                applies_to="USERS", action="Added users from CSV file, " + msg, user=self.request.user
-            )
+            self.auction.create_history(applies_to="USERS", action=msg, user=self.request.user)
             if total_updated:
                 msg += f", {total_updated} users are already in this auction (matched by email) and were updated"
             if total_skipped:
@@ -2974,6 +2970,21 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
             response = HttpResponse(status=200)
             response["HX-Redirect"] = url
             return response
+        except (UnicodeDecodeError, ValueError) as e:
+            messages.error(
+                self.request, f"Unable to read file.  Make sure this is a valid UTF-8 CSV file.  Error was: {e}"
+            )
+            url = reverse("bulk_add_users", kwargs={"slug": self.auction.slug})
+            response = HttpResponse(status=200)
+            response["HX-Redirect"] = url
+            return response
+
+    def handle_csv_file(self, csv_file, *args, **kwargs):
+        """If a CSV file has been uploaded, parse it and redirect"""
+        try:
+            csv_file.seek(0)
+            csv_reader = csv.DictReader(TextIOWrapper(csv_file.file))
+            return self.process_csv_data(csv_reader)
         except (UnicodeDecodeError, ValueError) as e:
             messages.error(
                 self.request, f"Unable to read file.  Make sure this is a valid UTF-8 CSV file.  Error was: {e}"
@@ -3103,6 +3114,97 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
                 ),
                 form=QuickAddTOS,
             )
+
+
+class ImportFromGoogleDrive(AuctionViewMixin, TemplateView, ContextMixin):
+    """Import users from a Google Drive spreadsheet"""
+
+    template_name = "auctions/import_from_google_drive.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["auction"] = self.auction
+        return context
+
+    def post(self, request, *args, **kwargs):
+        # Check if this is a sync request (no google_drive_link in POST)
+        google_drive_link = request.POST.get("google_drive_link", "").strip()
+
+        # If google_drive_link is provided, update it and sync
+        if google_drive_link:
+            self.auction.google_drive_link = google_drive_link
+            self.auction.save()
+
+        # Perform the sync (whether it's a new link or existing link)
+        return self.sync_google_drive()
+
+    def sync_google_drive(self):
+        """Read data from Google Drive and import users"""
+        if not self.auction.google_drive_link:
+            messages.error(self.request, "No Google Drive link configured")
+            url = reverse("bulk_add_users", kwargs={"slug": self.auction.slug})
+            return redirect(url)
+
+        try:
+            # Convert Google Sheets sharing link to export CSV URL
+            # Example: https://docs.google.com/spreadsheets/d/SPREADSHEET_ID/edit#gid=0
+            # Convert to: https://docs.google.com/spreadsheets/d/SPREADSHEET_ID/export?format=csv&gid=0
+            link = self.auction.google_drive_link
+
+            # Extract the spreadsheet ID from the URL
+            if "/spreadsheets/d/" in link:
+                spreadsheet_id = link.split("/spreadsheets/d/")[1].split("/")[0]
+                # Extract gid if present
+                gid = "0"
+                if "gid=" in link:
+                    gid = link.split("gid=")[1].split("&")[0].split("#")[0]
+                csv_url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?format=csv&gid={gid}"
+            else:
+                return self._error_redirect("Invalid Google Drive link. Please use a link to a Google Sheets document.")
+
+            # Fetch the CSV data with timeout to prevent hanging
+            response = requests.get(csv_url, timeout=30)
+            response.raise_for_status()
+
+            # Create a CSV reader from the response text (handles encoding automatically)
+            csv_reader = csv.DictReader(response.text.splitlines())
+
+            # Create a BulkAddUsers instance to use its process_csv_data method
+            # Note: This reuses existing CSV processing logic. Any exceptions from
+            # process_csv_data will be caught by the outer try/except blocks.
+            bulk_add_view = BulkAddUsers()
+            bulk_add_view.request = self.request
+            bulk_add_view.auction = self.auction
+
+            # Process the CSV data (this adds messages via self.request)
+            bulk_add_view.process_csv_data(csv_reader)
+
+            # Update the last sync time
+            self.auction.last_sync_time = timezone.now()
+            self.auction.save()
+            self.auction.create_history("USERS", action="Google Drive sync complete")
+            # Redirect to the users list
+            url = reverse("auction_tos_list", kwargs={"slug": self.auction.slug})
+            return redirect(url)
+
+        except requests.RequestException as e:
+            if "401" in str(e):
+                return self._error_redirect(
+                    "Unable to fetch data from Google Drive. Make sure the link is shared with 'anyone with the link can view'"
+                )
+            elif "404" in str(e):
+                return self._error_redirect("Link not found or invalid")
+            else:
+                return self._error_redirect(f"Unable to fetch data from Google Drive. Error was {e}")
+
+        except Exception as e:
+            return self._error_redirect(f"An error occurred while importing from Google Drive: {e}")
+
+    def _error_redirect(self, error_message):
+        """Helper method to display error and redirect to bulk add users page"""
+        messages.error(self.request, error_message)
+        url = reverse("bulk_add_users", kwargs={"slug": self.auction.slug})
+        return redirect(url)
 
 
 class BulkAddLots(TemplateView, AuctionPermissionsMixin):
@@ -4608,6 +4710,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "use_seller_dash_lot_numbering",
                 "enable_online_payments",
                 "alternative_split_label",
+                "google_drive_link",
             ]
             for field in fields_to_clone:
                 setattr(auction, field, getattr(original_auction, field))

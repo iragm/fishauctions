@@ -34,6 +34,19 @@
       </div>
     </span>
     <a href="{% url 'bulk_add_users' auction.slug %}" class="btn btn-sm mt-2  mb-2 btn-primary"><i class="bi bi-node-plus"></i> Bulk add users</a>
+    {% if auction.google_drive_link %}
+    <form method="POST" action="{% url 'sync_google_drive' slug=auction.slug %}" style="display: inline;">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-sm mt-2 mb-2 btn-success"><i class="bi bi-arrow-repeat"></i> Sync from Google Drive</button>
+    </form>
+    <small class="text-muted">
+      {% if auction.last_sync_time %}
+        Last synced {{ auction.last_sync_time|timesince }} ago
+      {% else %}
+        Never synced
+      {% endif %}
+    </small>
+    {% endif %}
     {% if not auction.is_online %}<a class="btn btn-sm btn-primary" href='{% url "auction_quick_checkout" slug=auction.slug %}'><i class="bi bi-bag-heart"></i> Quick checkout users</a>{% endif %}
     {% if auction.show_invoice_ready_button %}
     <a href="#" class="btn btn-sm mt-2  mb-2 btn-primary"

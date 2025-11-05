@@ -774,6 +774,10 @@ class Auction(models.Model):
     enable_online_payments.help_text = "Allow users to use PayPal to pay their invoices themselves."
     dismissed_promo_banner = models.BooleanField(default=False, blank=True)
     dismissed_paypal_banner = models.BooleanField(default=False, blank=True)
+    google_drive_link = models.URLField(max_length=500, blank=True, null=True, default="")
+    google_drive_link.help_text = "Link to a Google Sheet with user information.  Make sure the sheet is shared with 'anyone with the link can view'."
+    last_sync_time = models.DateTimeField(blank=True, null=True)
+    last_sync_time.help_text = "Last time user data was synchronized from Google Drive"
 
     @property
     def paypal_information(self):

@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}Import from Google Drive - {{ auction }}{% endblock %}
+
+{% block content %}
+  {% include 'auction_ribbon.html' %}
+  <br>
+
+  <h5>Import Users from Google Drive</h5>
+  <p>
+    <small>Got your club roster in a shared Google sheet?  You can sync it quickly and automatically without needing to export and import a CSV.</small>
+    Put some or all of these as your column names:
+    <ul>
+      <li><b>Email</b> or e-mail, email address, e-mail address</li>
+      <li><b>Bidder number</b> or bidder</li>
+      <li><b>Name</b> or full name</li>
+      <li><b>Address</b> or mailing address</li>
+      <li><b>Phone</b> or phone number, telephone, telephone number</li>
+      <li><b>Club member</b> or {{ auction.alternative_split_label|lower }} (and you can change the alternate split label in the rules)</li>
+      <li><b>Allow bidding</b> or bidding, bidding allowed</li>
+      <li><b>Memo</b> or note, notes</li>
+      <li><b>Admin</b> or staff</li>
+    </ul>
+    Note that this is a one-way sync - we'll pull data from the Google sheet but we won't write to it.
+
+    <br>If you're using this, you should probably not enter or edit users manually, as your changes may be overwritten on the next sync.</div>
+  </p>
+
+  <form method="POST" action="{% url 'import_from_google_drive' slug=auction.slug %}">
+    {% csrf_token %}
+    <div class="mb-3">
+      <label for="google_drive_link" class="form-label">Google Drive Link</label>
+      <input
+        type="url"
+        class="form-control"
+        id="google_drive_link"
+        name="google_drive_link"
+        placeholder="https://docs.google.com/spreadsheets/d/..."
+        value="{{ auction.google_drive_link }}"
+        required>
+      <small class="form-text text-muted">
+        Make sure your Google Sheet is shared with "anyone with the link can view"
+      </small>
+    </div>
+    <button type="submit" class="btn btn-primary">Save and Sync</button>
+    <a href="{% url 'bulk_add_users' slug=auction.slug %}" class="btn btn-secondary">Cancel</a>
+  </form>
+
+  {% if auction.google_drive_link %}
+    <hr>
+    <p>
+      <strong>Current Google Drive link:</strong> {{ auction.google_drive_link|urlize }}<br>
+      {% if auction.last_sync_time %}
+        <strong>Last synced:</strong> {{ auction.last_sync_time|timesince }} ago
+      {% else %}
+        <strong>Last synced:</strong> Never
+      {% endif %}
+    </p>
+  {% endif %}
+{% endblock %}
