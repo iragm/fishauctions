@@ -5129,8 +5129,9 @@ def on_save_auction(sender, instance, **kwargs):
                     "pickup_time": instance.date_start,
                 },
             )
-        except:
-            logger.warning("Somehow there's two pickup locations for this auction -- how is this possible?")
+        except Exception:
+            pass
+            # logger.warning("Somehow there's two pickup locations for this auction -- how is this possible?")
 
 
 @receiver(pre_save, sender=UserData)

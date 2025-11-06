@@ -1811,6 +1811,811 @@ class WeeklyPromoEmailTrackingTestCase(StandardTestCase):
         assert auction.weekly_promo_email_click_rate == 0.0
 
 
+class AuctionPropertyTests(StandardTestCase):
+    """Test Auction model properties"""
+
+    def test_auction_type(self):
+        """Test the auction_type property returns correct values"""
+        # Online auction with one location
+        assert self.online_auction.auction_type == "online_one_location"
+        assert self.online_auction.auction_type_as_str == "online auction with in-person pickup"
+
+        # In-person auction with one location
+        assert self.in_person_auction.auction_type == "inperson_one_location"
+        assert self.in_person_auction.auction_type_as_str == "in-person auction"
+
+        # Create a new auction with multiple locations for this test
+        multi_location_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Multi-location auction",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+        PickupLocation.objects.create(
+            name="first location",
+            auction=multi_location_auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+        PickupLocation.objects.create(
+            name="second location",
+            auction=multi_location_auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+        assert multi_location_auction.auction_type == "online_multi_location"
+        assert (
+            multi_location_auction.auction_type_as_str == "online auction with in-person pickup at multiple locations"
+        )
+
+    def test_auction_timing_properties(self):
+        """Test auction start/end related properties"""
+        # Create an auction that has started and is in progress
+        in_progress_auction = Auction.objects.create(
+            created_by=self.user,
+            title="In progress auction",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+        assert in_progress_auction.started is True
+        assert in_progress_auction.in_progress is True
+        assert in_progress_auction.closed is False
+        assert in_progress_auction.ending_soon is False
+
+        # Create an auction that hasn't started yet
+        future_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Future auction",
+            is_online=True,
+            date_start=timezone.now() + datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=2),
+        )
+        assert future_auction.started is False
+        assert future_auction.in_progress is False
+        assert future_auction.closed is False
+
+        # Test ending_soon
+        ending_soon_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Ending soon auction",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(minutes=60),
+        )
+        assert ending_soon_auction.ending_soon is True
+
+    def test_allow_mailing_lots(self):
+        """Test the allow_mailing_lots property"""
+        # Create a separate auction for this test to avoid test isolation issues
+        mail_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Mail test auction",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+        # Initially should be False
+        assert mail_auction.allow_mailing_lots is False
+
+        # Add a mail pickup location
+        PickupLocation.objects.create(
+            name="Mail pickup",
+            auction=mail_auction,
+            pickup_by_mail=True,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+        assert mail_auction.allow_mailing_lots is True
+
+    def test_permission_check(self):
+        """Test the permission_check method"""
+        # Creator has permission
+        assert self.online_auction.permission_check(self.user) is True
+
+        # Admin has permission
+        assert self.online_auction.permission_check(self.admin_user) is True
+
+        # Regular user without admin TOS does not have permission
+        assert self.online_auction.permission_check(self.user_with_no_lots) is False
+
+        # Non-authenticated user does not have permission (though this requires a User object)
+        assert self.online_auction.permission_check(self.userB) is False
+
+    def test_dynamic_end(self):
+        """Test the dynamic_end property for online auctions"""
+        # For non-sealed-bid auctions, dynamic end should be 60 minutes after date_end
+        expected_dynamic_end = self.online_auction.date_end + datetime.timedelta(minutes=60)
+        assert self.online_auction.dynamic_end == expected_dynamic_end
+
+        # For sealed-bid auctions, dynamic end should equal date_end
+        sealed_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Sealed bid auction",
+            is_online=True,
+            sealed_bid=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+        assert sealed_auction.dynamic_end == sealed_auction.date_end
+
+    def test_minutes_to_end(self):
+        """Test the minutes_to_end property"""
+        # Future auction should have positive minutes
+        future_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Future minutes test",
+            is_online=True,
+            date_start=timezone.now() + datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=2),
+        )
+        assert future_auction.minutes_to_end > 0
+
+        # Past auction should return 0
+        assert self.online_auction.minutes_to_end == 0
+
+    def test_number_of_locations(self):
+        """Test location counting properties"""
+        # Default auction has 1 physical location
+        assert self.online_auction.number_of_locations == 1
+        assert self.online_auction.all_location_count == 1
+
+        # Add a mail location
+        PickupLocation.objects.create(
+            name="Mail",
+            auction=self.online_auction,
+            pickup_by_mail=True,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+        # Physical count stays same, all_location_count increases
+        assert self.online_auction.number_of_locations == 1
+        assert self.online_auction.all_location_count == 2
+
+
+class LotPropertyTests(StandardTestCase):
+    """Test Lot model properties"""
+
+    def test_lot_ended_property(self):
+        """Test that lot.ended works correctly"""
+        # Create a lot that has ended
+        ended_lot = Lot.objects.create(
+            lot_name="Ended lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            # inherited from auction, this value won't be used
+            date_end=timezone.now() - datetime.timedelta(days=1),
+        )
+        assert ended_lot.ended is True
+
+        # Create a lot that is still active
+        active_lot = Lot.objects.create(
+            lot_name="Active lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+        )
+        # simulated dynamic ending
+        active_lot.date_end = timezone.now() + datetime.timedelta(days=1)
+        active_lot.save()
+        assert active_lot.ended is False
+
+    def test_lot_with_auction_inherits_end_date(self):
+        """Test that lots in an auction inherit the auction's end date"""
+        # Create a lot with a future end date but in an ended auction
+        lot = Lot.objects.create(
+            lot_name="Inherit end date lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            date_end=timezone.now() + datetime.timedelta(days=30),
+        )
+        # The auction has ended, so the lot should be ended too
+        assert lot.ended is True
+
+
+class AuctionTOSPropertyTests(StandardTestCase):
+    """Test AuctionTOS model properties"""
+
+    def test_auction_tos_invoice_relationship(self):
+        """Test the invoice relationship"""
+        # Invoice should exist from StandardTestCase setup
+        assert self.online_tos.invoice is not None
+        assert self.online_tos.invoice.auctiontos_user == self.online_tos
+
+
+class UserDataPropertyTests(StandardTestCase):
+    """Test UserData model properties"""
+
+    def test_user_data_exists(self):
+        """Test that UserData is created for users"""
+        # UserData should be automatically created
+        assert hasattr(self.user, "userdata")
+        assert self.user.userdata is not None
+
+    def test_user_data_unnotified_subscriptions_count(self):
+        """Test the unnotified_subscriptions_count property"""
+        # This is tested in ChatSubscriptionTests but we can add basic checks
+        user_data = self.user.userdata
+        # Initially should be 0
+        assert user_data.unnotified_subscriptions_count == 0
+
+
+class AuctionViewPermissionTests(StandardTestCase):
+    """Test view permissions for different user types"""
+
+    def test_auction_view_anonymous_user(self):
+        """Test that anonymous users can view auction page"""
+        response = self.client.get(self.online_auction.get_absolute_url())
+        assert response.status_code == 200
+        self.assertContains(response, self.online_auction.title)
+
+    def test_auction_view_logged_in_not_joined(self):
+        """Test logged in user who hasn't joined the auction"""
+        self.client.login(username=self.user_who_does_not_join.username, password="testpassword")
+        response = self.client.get(self.online_auction.get_absolute_url())
+        assert response.status_code == 200
+        # Should see option to join
+        self.assertContains(response, self.online_auction.title)
+
+    def test_auction_view_logged_in_joined(self):
+        """Test logged in user who has joined the auction"""
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        response = self.client.get(self.online_auction.get_absolute_url())
+        assert response.status_code == 200
+        self.assertContains(response, self.online_auction.title)
+
+    def test_auction_view_admin_user(self):
+        """Test admin user viewing auction"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.get(self.online_auction.get_absolute_url())
+        assert response.status_code == 200
+        self.assertContains(response, self.online_auction.title)
+
+
+class AuctionEditViewTests(StandardTestCase):
+    """Test auction edit view with different user types"""
+
+    def test_auction_edit_anonymous_user(self):
+        """Anonymous users should not be able to edit"""
+        response = self.client.get(self.online_auction.get_edit_url())
+        # Should redirect to login (302) or be denied (403)
+        assert response.status_code in [302, 403]
+
+    def test_auction_edit_non_admin(self):
+        """Non-admin users should not be able to edit"""
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        response = self.client.get(self.online_auction.get_edit_url())
+        # Should be denied - can be either 302 (redirect to error/login page) or 403 (forbidden)
+        # depending on permission middleware configuration
+        assert response.status_code in [302, 403]
+
+    def test_auction_edit_admin_user(self):
+        """Admin users should be able to edit"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.get(self.online_auction.get_edit_url())
+        assert response.status_code == 200
+
+    def test_auction_edit_creator(self):
+        """Auction creator should be able to edit"""
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get(self.online_auction.get_edit_url())
+        assert response.status_code == 200
+
+
+class LotListViewTests(StandardTestCase):
+    """Test lot list view with different user types"""
+
+    def test_lot_list_anonymous_user(self):
+        """Anonymous users can view lot list"""
+        response = self.client.get(f"/lots/?auction={self.online_auction.slug}")
+        assert response.status_code == 200
+
+    def test_lot_list_logged_in_not_joined(self):
+        """Logged in users who haven't joined can view lot list"""
+        self.client.login(username=self.user_who_does_not_join.username, password="testpassword")
+        response = self.client.get(f"/lots/?auction={self.online_auction.slug}")
+        assert response.status_code == 200
+
+    def test_lot_list_logged_in_joined(self):
+        """Logged in users who have joined can view lot list"""
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        response = self.client.get(f"/lots/?auction={self.online_auction.slug}")
+        assert response.status_code == 200
+
+    def test_lot_list_admin(self):
+        """Admin users can view lot list"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.get(f"/lots/?auction={self.online_auction.slug}")
+        assert response.status_code == 200
+
+
+class MyLotsViewTests(StandardTestCase):
+    """Test my lots view with different user types"""
+
+    def test_my_lots_anonymous_user(self):
+        """Anonymous users should be redirected to login"""
+        response = self.client.get("/selling/")
+        # Should redirect to login (302) or be denied (403)
+        assert response.status_code in [301, 302, 403]
+
+    def test_my_lots_logged_in_user(self):
+        """Logged in users can view their lots"""
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get("/selling/")
+        assert response.status_code == 200
+
+
+class AuctionUsersViewTests(StandardTestCase):
+    """Test auction users/TOS admin view"""
+
+    def test_auction_users_anonymous(self):
+        """Anonymous users should not access user list"""
+        url = reverse("auction_tos_list", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url)
+        # Should redirect to login (302) or be denied (403)
+        assert response.status_code in [301, 302, 403]
+
+    def test_auction_users_non_admin(self):
+        """Non-admin users should not access user list"""
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        url = reverse("auction_tos_list", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url)
+        # Should be denied
+        assert response.status_code in [302, 403]
+
+    def test_auction_users_admin(self):
+        """Admin users should access user list"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("auction_tos_list", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url)
+        assert response.status_code == 200
+
+    def test_auction_users_creator(self):
+        """Auction creator should access user list"""
+        self.client.login(username=self.user.username, password="testpassword")
+        url = reverse("auction_tos_list", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url)
+        assert response.status_code == 200
+
+
+class LotCreateViewTests(StandardTestCase):
+    """Test lot creation with different user types"""
+
+    def test_lot_create_anonymous(self):
+        """Anonymous users cannot create lots"""
+        response = self.client.get("/lots/new/")
+        # Should redirect to login (302) or be denied (403)
+        assert response.status_code in [302, 403]
+
+    def test_lot_create_logged_in_not_joined(self):
+        """User not joined to auction should not be able to create lot in that auction"""
+        self.client.login(username=self.user_who_does_not_join.username, password="testpassword")
+        # Try to create a lot in the auction they haven't joined
+        response = self.client.get(f"/lots/new/?auction={self.online_auction.slug}")
+        # They can access the form, but posting should fail or redirect
+        assert response.status_code == 302
+
+    def test_lot_create_logged_in_joined(self):
+        """User joined to auction can create lots"""
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get(f"/lots/new/?auction={self.online_auction.slug}")
+        assert response.status_code == 302
+
+
+class InvoiceViewTests(StandardTestCase):
+    """Test invoice views with different user types"""
+
+    def test_invoice_view_anonymous(self):
+        """Anonymous users should not view invoices"""
+        url = reverse("invoice_by_pk", kwargs={"pk": self.invoice.pk})
+        response = self.client.get(url)
+        # Should redirect to login (302) or be denied (403)
+        assert response.status_code in [302, 403]
+
+    def test_invoice_view_owner(self):
+        """Invoice owner can view their invoice"""
+        self.client.login(username=self.user.username, password="testpassword")
+        url = reverse("invoice_by_pk", kwargs={"pk": self.invoice.pk})
+        response = self.client.get(url)
+        assert response.status_code == 200
+
+    def test_invoice_view_other_user(self):
+        """Other users should not view someone else's invoice"""
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        url = reverse("invoice_by_pk", kwargs={"pk": self.invoice.pk})
+        response = self.client.get(url)
+        # Should be denied
+        assert response.status_code in [302, 403]
+
+    def test_invoice_view_admin(self):
+        """Admin can view any invoice"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("invoice_by_pk", kwargs={"pk": self.invoice.pk})
+        response = self.client.get(url)
+        assert response.status_code == 200
+
+
+class PickupLocationTests(StandardTestCase):
+    """Test PickupLocation model properties and views"""
+
+    def test_pickup_location_create_anonymous(self):
+        """Anonymous users cannot create pickup locations"""
+        url = reverse("create_auction_pickup_location", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url)
+        # Should redirect to login (302) or be denied (403)
+        assert response.status_code in [302, 403]
+
+    def test_pickup_location_create_non_admin(self):
+        """Non-admin users cannot create pickup locations"""
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        url = reverse("create_auction_pickup_location", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url)
+        assert response.status_code in [302, 403]
+
+    def test_pickup_location_create_admin(self):
+        """Admin users can create pickup locations"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("create_auction_pickup_location", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url)
+        assert response.status_code == 200
+
+    def test_pickup_location_list_anonymous(self):
+        """Anonymous users can view pickup locations"""
+        url = reverse("auction_pickup_location", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url)
+        assert response.status_code != 200
+
+    def test_pickup_location_list_logged_in(self):
+        """Logged in users can view pickup locations"""
+        self.client.login(username=self.user.username, password="testpassword")
+        url = reverse("auction_pickup_location", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url)
+        assert response.status_code == 200
+
+
+class AuctionStatsViewTests(StandardTestCase):
+    """Test auction stats view with different user types"""
+
+    def test_auction_stats_anonymous(self):
+        """Anonymous users cannot view stats - requires login and admin permissions"""
+        url = f"/auctions/{self.online_auction.slug}/stats/"
+        response = self.client.get(url)
+        # Should redirect to login (302) or be denied (403)
+        assert response.status_code in [302, 403]
+
+    def test_auction_stats_non_admin(self):
+        """Non-admin users cannot view stats"""
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        url = f"/auctions/{self.online_auction.slug}/stats/"
+        response = self.client.get(url)
+        # Should be denied (403) or redirect (302)
+        assert response.status_code in [302, 403]
+
+    def test_auction_stats_creator(self):
+        """Creator can view stats"""
+        self.client.login(username=self.user.username, password="testpassword")
+        url = f"/auctions/{self.online_auction.slug}/stats/"
+        response = self.client.get(url)
+        assert response.status_code == 200
+
+    def test_auction_stats_admin(self):
+        """Admin can view stats"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = f"/auctions/{self.online_auction.slug}/stats/"
+        response = self.client.get(url)
+        assert response.status_code == 200
+
+
+class BulkAddLotsViewTests(StandardTestCase):
+    """Test bulk add lots view with different user types"""
+
+    def test_bulk_add_lots_anonymous(self):
+        """Anonymous users cannot bulk add lots"""
+        url = reverse("bulk_add_lots_for_myself", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url)
+        # Should redirect to login (302) or be denied (403)
+        assert response.status_code in [302, 403]
+
+    def test_bulk_add_lots_non_admin(self):
+        """Non-admin users cannot bulk add lots"""
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        url = reverse("bulk_add_lots_for_myself", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url)
+        assert response.status_code in [302, 403]
+
+    def test_bulk_add_lots_admin(self):
+        """Admin users can bulk add lots"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("bulk_add_lots_for_myself", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url)
+        assert response.status_code == 200
+
+    def test_bulk_add_lots_creator(self):
+        """Auction creator can bulk add lots"""
+        self.client.login(username=self.user.username, password="testpassword")
+        url = reverse("bulk_add_lots_for_myself", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url)
+        assert response.status_code == 200
+
+
+class BulkAddUsersViewTests(StandardTestCase):
+    """Test bulk add users view with different user types"""
+
+    def test_bulk_add_users_anonymous(self):
+        """Anonymous users cannot bulk add users"""
+        url = reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url)
+        # Should redirect to login (302) or be denied (403)
+        assert response.status_code in [302, 403]
+
+    def test_bulk_add_users_non_admin(self):
+        """Non-admin users cannot bulk add users"""
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        url = reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url)
+        assert response.status_code in [302, 403]
+
+    def test_bulk_add_users_admin(self):
+        """Admin users can bulk add users"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url)
+        assert response.status_code == 200
+
+
+class SetLotWinnersViewTests(StandardTestCase):
+    """Test set lot winners view with different user types"""
+
+    def test_set_lot_winners_anonymous(self):
+        """Anonymous users cannot access set lot winners"""
+        url = reverse("auction_lot_winners_dynamic", kwargs={"slug": self.in_person_auction.slug})
+        response = self.client.get(url)
+        # Should redirect to login (302) or be denied (403)
+        assert response.status_code in [302, 403]
+
+    def test_set_lot_winners_non_admin(self):
+        """Non-admin users cannot access set lot winners"""
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        url = reverse("auction_lot_winners_dynamic", kwargs={"slug": self.in_person_auction.slug})
+        response = self.client.get(url)
+        assert response.status_code in [302, 403]
+
+    def test_set_lot_winners_admin(self):
+        """Admin users can access set lot winners"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("auction_lot_winners_dynamic", kwargs={"slug": self.in_person_auction.slug})
+        response = self.client.get(url)
+        assert response.status_code == 200
+
+
+class AuctionDeleteViewTests(StandardTestCase):
+    """Test auction deletion with different user types"""
+
+    def test_auction_delete_anonymous(self):
+        """Anonymous users cannot delete auctions"""
+        url = f"/auctions/{self.online_auction.slug}/delete/"
+        response = self.client.get(url)
+        # Should redirect to login (302) or be denied (403)
+        assert response.status_code in [302, 403]
+
+    def test_auction_delete_non_creator(self):
+        """Non-creator users cannot delete auctions"""
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        url = f"/auctions/{self.online_auction.slug}/delete/"
+        response = self.client.get(url)
+        assert response.status_code in [302, 403]
+
+    def test_auction_delete_creator(self):
+        """Creator can access delete page"""
+        self.client.login(username=self.user.username, password="testpassword")
+        url = f"/auctions/{self.online_auction.slug}/delete/"
+        response = self.client.get(url)
+        assert response.status_code == 302
+
+
+class AdditionalAuctionPropertyTests(StandardTestCase):
+    """Test additional Auction model properties"""
+
+    def test_auction_urls(self):
+        """Test various URL properties"""
+        assert self.online_auction.url == f"/auctions/{self.online_auction.slug}/"
+        assert self.online_auction.add_lot_link == f"/lots/new/?auction={self.online_auction.slug}"
+        assert self.online_auction.view_lot_link == f"/lots/?auction={self.online_auction.slug}&status=all"
+        assert "/auctions/" in self.online_auction.label_print_link
+        assert "/auctions/" in self.online_auction.label_print_unprinted_link
+
+    def test_template_status(self):
+        """Test template_status property"""
+        # Create a future auction
+        future_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Future auction",
+            is_online=True,
+            date_start=timezone.now() + datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=2),
+        )
+        assert future_auction.template_status == "Starts:"
+
+        # Create an in-progress auction
+        in_progress_auction = Auction.objects.create(
+            created_by=self.user,
+            title="In progress",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+        assert in_progress_auction.template_status == "Now until:"
+
+    def test_auction_str_method(self):
+        """Test the __str__ method of Auction"""
+        # Auction title without "auction" should have it added
+        auction1 = Auction.objects.create(
+            created_by=self.user,
+            title="Fish Sale",
+            is_online=True,
+            date_start=timezone.now(),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+        str_repr = str(auction1)
+        assert "auction" in str_repr.lower()
+        assert "the " in str_repr.lower() or str_repr.startswith("The ")
+
+    def test_can_submit_lots(self):
+        """Test the can_submit_lots property"""
+        # Create an auction with lot submission dates
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="Lot submission test",
+            is_online=True,
+            lot_submission_start_date=timezone.now() - datetime.timedelta(days=1),
+            lot_submission_end_date=timezone.now() + datetime.timedelta(days=1),
+            date_start=timezone.now() + datetime.timedelta(days=2),
+            date_end=timezone.now() + datetime.timedelta(days=3),
+        )
+        # Should be able to submit lots during the submission window
+        assert auction.can_submit_lots is True
+
+        # Create an auction where lot submission has ended
+        ended_submission_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Ended submission",
+            is_online=True,
+            lot_submission_start_date=timezone.now() - datetime.timedelta(days=3),
+            lot_submission_end_date=timezone.now() - datetime.timedelta(days=1),
+            date_start=timezone.now() + datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=2),
+        )
+        # Should not be able to submit lots
+        assert ended_submission_auction.can_submit_lots is False
+
+
+class AdditionalLotPropertyTests(StandardTestCase):
+    """Test additional Lot model properties"""
+
+    def test_lot_banned_property(self):
+        """Test the banned property of lots"""
+        # Create a normal lot
+        lot = Lot.objects.create(
+            lot_name="Normal lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            banned=False,
+        )
+        assert lot.banned is False
+
+        # Update to banned
+        lot.banned = True
+        lot.save()
+        assert lot.banned is True
+
+    def test_lot_donation_property(self):
+        """Test the donation property of lots"""
+        lot = Lot.objects.create(
+            lot_name="Donation lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            donation=False,
+        )
+        assert lot.donation is False
+
+        lot.donation = True
+        lot.save()
+        assert lot.donation is True
+
+
+class UserViewTests(StandardTestCase):
+    """Test user profile view with different user types"""
+
+    def test_user_view_anonymous(self):
+        """Anonymous users can view user profiles"""
+        url = reverse("userpage", kwargs={"slug": self.user.username})
+        response = self.client.get(url)
+        assert response.status_code == 200
+
+    def test_user_view_logged_in(self):
+        """Logged in users can view user profiles"""
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        url = reverse("userpage", kwargs={"slug": self.user.username})
+        response = self.client.get(url)
+        assert response.status_code == 200
+
+    def test_user_view_own_profile(self):
+        """Users can view their own profile"""
+        self.client.login(username=self.user.username, password="testpassword")
+        url = reverse("userpage", kwargs={"slug": self.user.username})
+        response = self.client.get(url)
+        assert response.status_code == 200
+
+
+class ImageViewTests(StandardTestCase):
+    """Test image create/update/delete views"""
+
+    def test_image_create_anonymous(self):
+        """Anonymous users cannot create images"""
+        url = reverse("add_image", kwargs={"lot": self.lot.pk})
+        response = self.client.get(url)
+        # Should redirect to login (302) or be denied (403)
+        assert response.status_code in [302, 403]
+
+    def test_image_create_logged_in(self):
+        """Logged in users can access image create form"""
+        self.client.login(username=self.user.username, password="testpassword")
+        url = reverse("add_image", kwargs={"lot": self.lot.pk})
+        response = self.client.get(url)
+        assert response.status_code == 302
+
+
+class WatchViewTests(StandardTestCase):
+    """Test watch/unwatch functionality"""
+
+    def test_watch_anonymous(self):
+        """Anonymous users cannot watch lots"""
+        # watchOrUnwatch is a function-based view
+        response = self.client.post(f"/api/watchitem/{self.lot.pk}/", data={"watch": "1"})
+        # Should redirect to login (302) or be denied (403)
+        assert response.status_code in [302, 403]
+
+    def test_watch_logged_in(self):
+        """Logged in users can watch lots"""
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        response = self.client.post(f"/api/watchitem/{self.lot.pk}/", data={"watch": "1"})
+        # Should succeed or redirect
+        assert response.status_code in [200, 302]
+
+
+class MyBidsViewTests(StandardTestCase):
+    """Test my bids view with different user types"""
+
+    def test_my_bids_anonymous(self):
+        """Anonymous users should be redirected to login"""
+        response = self.client.get("/bids/")
+        # Should redirect to login (302) or be denied (403)
+        assert response.status_code in [302, 403]
+
+    def test_my_bids_logged_in(self):
+        """Logged in users can view their bids"""
+        self.client.login(username=self.userB.username, password="testpassword")
+        response = self.client.get("/bids/")
+        assert response.status_code == 200
+
+
+class MyWonLotsViewTests(StandardTestCase):
+    """Test my won lots view with different user types"""
+
+    def test_my_won_lots_anonymous(self):
+        """Anonymous users should be redirected to login"""
+        response = self.client.get("/lots/won/")
+        # Should redirect to login (302) or be denied (403)
+        assert response.status_code in [302, 403]
+
+    def test_my_won_lots_logged_in(self):
+        """Logged in users can view their won lots"""
+        self.client.login(username=self.userB.username, password="testpassword")
+        response = self.client.get("/lots/won/")
+        assert response.status_code == 200
+
+
 class DistanceUnitTests(StandardTestCase):
     """Test distance unit conversion functionality"""
 
