@@ -2614,6 +2614,8 @@ class MyWonLotsViewTests(StandardTestCase):
         self.client.login(username=self.userB.username, password="testpassword")
         response = self.client.get("/lots/won/")
         assert response.status_code == 200
+
+
 class DistanceUnitTests(StandardTestCase):
     """Test distance unit conversion functionality"""
 
