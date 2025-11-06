@@ -13,7 +13,7 @@ from decimal import Decimal
 from io import BytesIO, TextIOWrapper
 from pathlib import Path
 from random import choice, randint, sample, uniform
-from urllib.parse import unquote, urlencode, urlparse
+from urllib.parse import quote_plus, unquote, urlencode, urlparse
 
 import channels.layers
 import qr_code
@@ -1682,10 +1682,7 @@ def composeEmailToUsers(request, slug):
         users = AuctionTOSFilter.generic(None, users, query)
     
     # Collect valid emails
-    emails = []
-    for tos in users:
-        if tos.email:
-            emails.append(tos.email)
+    emails = list(users.filter(email__isnull=False).values_list('email', flat=True))
     
     # Create mailto link
     if emails:
@@ -1703,7 +1700,7 @@ def composeEmailToUsers(request, slug):
         subject = f"Message from {auction.title}"
         body = f"This message is being sent to participants in {auction.title}.\n\n"
         
-        mailto_url = f"mailto:?bcc={urlencode({'': bcc})[1:]}&subject={urlencode({'': subject})[1:]}&body={urlencode({'': body})[1:]}"
+        mailto_url = f"mailto:?bcc={quote_plus(bcc)}&subject={quote_plus(subject)}&body={quote_plus(body)}"
         
         auction.create_history(
             applies_to="USERS",

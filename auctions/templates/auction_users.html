@@ -147,14 +147,14 @@
 <script type='text/javascript'>pageView();</script>
 <script type="text/javascript">
 $(document).ready(function(){
-  // Add tooltip to user export button
-  $('#user_csv_export').mouseover(function() {
-    $('#user_csv_export').attr('data-bs-title', "This export uses your current filter").tooltip('show');
-  });
+  // Initialize tooltips with titles
+  $('#user_csv_export').attr('data-bs-title', "This export uses your current filter");
+  $('#email_all_users').attr('data-bs-title', "This will compose an email with BCC for filtered users");
   
-  // Add tooltip to email all users button
-  $('#email_all_users').mouseover(function() {
-    $('#email_all_users').attr('data-bs-title', "This will compose an email with BCC for filtered users").tooltip('show');
+  // Initialize Bootstrap tooltips
+  var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-title]'));
+  var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+    return new bootstrap.Tooltip(tooltipTriggerEl);
   });
 
   $("#id_query").blur(function(){
@@ -199,6 +199,13 @@ $(document).ready(function(){
       );
     }
 });
+// Helper function to update link href with query parameter
+function updateLinkWithQuery(linkId, query) {
+  let link = document.getElementById(linkId);
+  let originalHref = link.getAttribute('href').split('?')[0];
+  link.setAttribute('href', `${originalHref}?query=${encodeURIComponent(query)}`);
+}
+
 // update url to allow bookmarking searches
 document.getElementById('id_query').addEventListener('input', function(event) {
     let query = event.target.value;
@@ -206,15 +213,9 @@ document.getElementById('id_query').addEventListener('input', function(event) {
     newUrl.searchParams.set('query', query);
     history.replaceState({}, '', newUrl);
     
-    // Update the #user_csv_export link with the query parameter
-    let userCsvExportLink = document.getElementById('user_csv_export');
-    let originalHref = userCsvExportLink.getAttribute('href').split('?')[0];
-    userCsvExportLink.setAttribute('href', `${originalHref}?query=${encodeURIComponent(query)}`);
-    
-    // Update the #email_all_users link with the query parameter
-    let emailAllUsersLink = document.getElementById('email_all_users');
-    let emailOriginalHref = emailAllUsersLink.getAttribute('href').split('?')[0];
-    emailAllUsersLink.setAttribute('href', `${emailOriginalHref}?query=${encodeURIComponent(query)}`);
+    // Update links with the query parameter
+    updateLinkWithQuery('user_csv_export', query);
+    updateLinkWithQuery('email_all_users', query);
     
     htmx.trigger('#filter-form', 'keyup');
   });
