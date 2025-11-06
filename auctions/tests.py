@@ -2879,3 +2879,493 @@ class UserExportTests(StandardTestCase):
         url = reverse("compose_email_to_users", kwargs={"slug": self.online_auction.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 403)
+
+
+class WatchOrUnwatchViewTests(StandardTestCase):
+    """Test watchOrUnwatch function-based view"""
+
+    def test_watch_anonymous_denied(self):
+        """Anonymous users cannot watch lots"""
+        response = self.client.post(f"/api/watchitem/{self.lot.pk}/", data={"watch": "true"})
+        self.assertIn(response.status_code, [302, 403])
+
+    def test_watch_logged_in(self):
+        """Logged in users can watch lots"""
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        response = self.client.post(f"/api/watchitem/{self.lot.pk}/", data={"watch": "true"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Success")
+
+    def test_unwatch_logged_in(self):
+        """Logged in users can unwatch lots"""
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        # First watch
+        self.client.post(f"/api/watchitem/{self.lot.pk}/", data={"watch": "true"})
+        # Then unwatch
+        response = self.client.post(f"/api/watchitem/{self.lot.pk}/", data={"watch": "false"})
+        self.assertEqual(response.status_code, 200)
+
+    def test_get_request_denied(self):
+        """GET requests should be denied"""
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get(f"/api/watchitem/{self.lot.pk}/")
+        self.assertEqual(response.status_code, 302)
+
+
+class LotNotificationsViewTests(StandardTestCase):
+    """Test lotNotifications function-based view"""
+
+    def test_lot_notifications_anonymous_denied(self):
+        """Anonymous users cannot access lot notifications"""
+        response = self.client.post("/api/users/lot_notifications/")
+        self.assertIn(response.status_code, [302, 403])
+
+    def test_lot_notifications_logged_in(self):
+        """Logged in users can check lot notifications"""
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.post("/api/users/lot_notifications/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/json')
+
+    def test_get_request_denied(self):
+        """GET requests should redirect"""
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get("/api/users/lot_notifications/")
+        self.assertEqual(response.status_code, 302)
+
+
+class IgnoreAuctionViewTests(StandardTestCase):
+    """Test ignoreAuction function-based view"""
+
+    def test_ignore_auction_anonymous_denied(self):
+        """Anonymous users cannot ignore auctions"""
+        response = self.client.post("/api/ignore_auction/", data={"auction": self.online_auction.slug})
+        self.assertIn(response.status_code, [302, 403])
+
+    def test_ignore_auction_logged_in(self):
+        """Logged in users can ignore auctions"""
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        response = self.client.post("/api/ignore_auction/", data={"auction": self.online_auction.slug})
+        self.assertEqual(response.status_code, 200)
+
+    def test_get_request_denied(self):
+        """GET requests should redirect"""
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get("/api/ignore_auction/")
+        self.assertEqual(response.status_code, 302)
+
+
+class SetCoordinatesViewTests(StandardTestCase):
+    """Test setCoordinates function-based view"""
+
+    def test_set_coordinates_anonymous_denied(self):
+        """Anonymous users cannot set coordinates"""
+        response = self.client.post("/api/setcoordinates/", data={"latitude": "40.7128", "longitude": "-74.0060"})
+        self.assertIn(response.status_code, [302, 403])
+
+    def test_set_coordinates_logged_in(self):
+        """Logged in users can set coordinates"""
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.post("/api/setcoordinates/", data={"latitude": "40.7128", "longitude": "-74.0060"})
+        self.assertEqual(response.status_code, 200)
+
+    def test_get_request_denied(self):
+        """GET requests should redirect"""
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get("/api/setcoordinates/")
+        self.assertEqual(response.status_code, 302)
+
+
+class UserBanViewTests(StandardTestCase):
+    """Test userBan function-based view"""
+
+    def test_user_ban_anonymous_denied(self):
+        """Anonymous users cannot ban users"""
+        response = self.client.post(f"/api/userban/{self.userB.pk}/")
+        self.assertIn(response.status_code, [302, 403])
+
+    def test_user_ban_logged_in(self):
+        """Logged in users can ban other users"""
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.post(f"/api/userban/{self.userB.pk}/")
+        self.assertEqual(response.status_code, 302)  # Redirects to user page
+
+    def test_get_request_denied(self):
+        """GET requests should redirect"""
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get(f"/api/userban/{self.userB.pk}/")
+        self.assertEqual(response.status_code, 302)
+
+
+class UserUnbanViewTests(StandardTestCase):
+    """Test userUnban function-based view"""
+
+    def test_user_unban_anonymous_denied(self):
+        """Anonymous users cannot unban users"""
+        response = self.client.post(f"/api/userunban/{self.userB.pk}/")
+        self.assertIn(response.status_code, [302, 403])
+
+    def test_user_unban_logged_in(self):
+        """Logged in users can unban other users"""
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.post(f"/api/userunban/{self.userB.pk}/")
+        self.assertEqual(response.status_code, 302)  # Redirects to user page
+
+    def test_get_request_denied(self):
+        """GET requests should redirect"""
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get(f"/api/userunban/{self.userB.pk}/")
+        self.assertEqual(response.status_code, 302)
+
+
+class ImagesPrimaryViewTests(StandardTestCase):
+    """Test imagesPrimary function-based view"""
+
+    def test_images_primary_anonymous_denied(self):
+        """Anonymous users cannot set primary images"""
+        response = self.client.post("/api/imageprimary/", data={"pk": "1"})
+        self.assertIn(response.status_code, [302, 403])
+
+    def test_images_primary_owner(self):
+        """Lot owners can set primary images"""
+        # This test would need an actual image to work properly
+        # For now, just test the access control
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.post("/api/imageprimary/", data={"pk": "999"})
+        # Should fail because image doesn't exist, but won't be a permission error
+        self.assertNotEqual(response.status_code, 403)
+
+    def test_get_request_denied(self):
+        """GET requests should redirect"""
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get("/api/imageprimary/")
+        self.assertEqual(response.status_code, 302)
+
+
+class ImagesRotateViewTests(StandardTestCase):
+    """Test imagesRotate function-based view"""
+
+    def test_images_rotate_anonymous_denied(self):
+        """Anonymous users cannot rotate images"""
+        response = self.client.post("/api/imagerotate/", data={"pk": "1", "angle": "90"})
+        self.assertIn(response.status_code, [302, 403])
+
+    def test_images_rotate_owner(self):
+        """Lot owners can rotate images"""
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.post("/api/imagerotate/", data={"pk": "999", "angle": "90"})
+        # Should fail because image doesn't exist, but won't be a permission error
+        self.assertNotEqual(response.status_code, 403)
+
+    def test_get_request_denied(self):
+        """GET requests should redirect"""
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get("/api/imagerotate/")
+        self.assertEqual(response.status_code, 302)
+
+
+class FeedbackViewTests(StandardTestCase):
+    """Test feedback function-based view"""
+
+    def test_feedback_anonymous_denied(self):
+        """Anonymous users cannot leave feedback"""
+        response = self.client.post(f"/api/feedback/{self.lot.pk}/winner/", data={"rating": "5", "text": "Great!"})
+        self.assertIn(response.status_code, [302, 403])
+
+    def test_feedback_winner(self):
+        """Winners can leave feedback"""
+        self.client.login(username=self.userB.username, password="testpassword")
+        response = self.client.post(f"/api/feedback/{self.lot.pk}/winner/", data={"rating": "5", "text": "Great!"})
+        self.assertEqual(response.status_code, 200)
+
+    def test_feedback_seller(self):
+        """Sellers can leave feedback"""
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.post(f"/api/feedback/{self.lot.pk}/seller/", data={"rating": "5", "text": "Great!"})
+        self.assertEqual(response.status_code, 200)
+
+    def test_feedback_unauthorized_user(self):
+        """Unauthorized users cannot leave feedback"""
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        response = self.client.post(f"/api/feedback/{self.lot.pk}/winner/", data={"rating": "5", "text": "Great!"})
+        self.assertEqual(response.status_code, 302)
+
+    def test_get_request_denied(self):
+        """GET requests should redirect"""
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get(f"/api/feedback/{self.lot.pk}/winner/")
+        self.assertEqual(response.status_code, 302)
+
+
+class PageviewViewTests(StandardTestCase):
+    """Test pageview function-based view"""
+
+    def test_pageview_anonymous(self):
+        """Anonymous users can record pageviews"""
+        response = self.client.post(
+            "/api/pageview/",
+            data={"url": "/lots/1/", "first_view": "true", "referrer": "http://google.com"},
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def test_pageview_logged_in(self):
+        """Logged in users can record pageviews"""
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.post(
+            "/api/pageview/",
+            data={"url": "/lots/1/", "first_view": "true", "referrer": "http://google.com"},
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def test_get_request_denied(self):
+        """GET requests should redirect"""
+        response = self.client.get("/api/pageview/")
+        self.assertEqual(response.status_code, 302)
+
+
+class InvoicePaidViewTests(StandardTestCase):
+    """Test invoicePaid function-based view"""
+
+    def test_invoice_paid_anonymous_denied(self):
+        """Anonymous users cannot mark invoices as paid"""
+        response = self.client.post(f"/invoices/{self.invoice.pk}/paid/", status="PAID")
+        self.assertIn(response.status_code, [302, 403])
+
+    def test_invoice_paid_admin(self):
+        """Auction admins can mark invoices as paid"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.post(f"/invoices/{self.invoice.pk}/paid/", status="PAID")
+        self.assertEqual(response.status_code, 200)
+
+    def test_invoice_paid_non_admin_denied(self):
+        """Non-admins cannot mark invoices as paid"""
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        response = self.client.post(f"/invoices/{self.invoice.pk}/paid/", status="PAID")
+        self.assertIn(response.status_code, [302, 403])
+
+    def test_get_request_denied(self):
+        """GET requests should redirect"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.get(f"/invoices/{self.invoice.pk}/paid/")
+        self.assertEqual(response.status_code, 302)
+
+
+class MyWonLotCSVViewTests(StandardTestCase):
+    """Test my_won_lot_csv function-based view"""
+
+    def test_won_lot_csv_anonymous_denied(self):
+        """Anonymous users cannot download won lots CSV"""
+        response = self.client.get("/my_won_lots.csv")
+        self.assertIn(response.status_code, [302, 403])
+
+    def test_won_lot_csv_logged_in(self):
+        """Logged in users can download their won lots CSV"""
+        self.client.login(username=self.userB.username, password="testpassword")
+        response = self.client.get("/my_won_lots.csv")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'text/csv')
+
+
+class MyLotReportViewTests(StandardTestCase):
+    """Test my_lot_report function-based view"""
+
+    def test_lot_report_anonymous_denied(self):
+        """Anonymous users cannot download lot report"""
+        response = self.client.get("/my_lot_report.csv")
+        self.assertIn(response.status_code, [302, 403])
+
+    def test_lot_report_logged_in(self):
+        """Logged in users can download their lot report"""
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get("/my_lot_report.csv")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'text/csv')
+
+
+class AuctionReportViewTests(StandardTestCase):
+    """Test auctionReport function-based view"""
+
+    def test_auction_report_anonymous_denied(self):
+        """Anonymous users cannot download auction report"""
+        response = self.client.get(f"/auctions/{self.online_auction.slug}/report.csv")
+        self.assertIn(response.status_code, [302, 403])
+
+    def test_auction_report_admin(self):
+        """Auction admins can download auction report"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.get(f"/auctions/{self.online_auction.slug}/report.csv")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'text/csv')
+
+    def test_auction_report_non_admin_denied(self):
+        """Non-admins cannot download auction report"""
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        response = self.client.get(f"/auctions/{self.online_auction.slug}/report.csv")
+        self.assertEqual(response.status_code, 302)
+
+
+class UserReportViewTests(StandardTestCase):
+    """Test userReport function-based view"""
+
+    def test_user_report_anonymous_denied(self):
+        """Anonymous users cannot download user report"""
+        response = self.client.get("/all_auction_contacts.csv")
+        self.assertIn(response.status_code, [302, 403])
+
+    def test_user_report_logged_in(self):
+        """Logged in users can download their auction contacts"""
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get("/all_auction_contacts.csv")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'text/csv')
+
+
+class AuctionInvoicesPaypalCSVViewTests(StandardTestCase):
+    """Test auctionInvoicesPaypalCSV function-based view"""
+
+    def test_paypal_csv_anonymous_denied(self):
+        """Anonymous users cannot download PayPal invoices CSV"""
+        response = self.client.get(f"/auctions/{self.online_auction.slug}/invoices-paypal/1/")
+        self.assertIn(response.status_code, [302, 403])
+
+    def test_paypal_csv_admin(self):
+        """Auction admins can download PayPal invoices CSV"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.get(f"/auctions/{self.online_auction.slug}/invoices-paypal/1/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'text/csv')
+
+    def test_paypal_csv_non_admin_denied(self):
+        """Non-admins cannot download PayPal invoices CSV"""
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        response = self.client.get(f"/auctions/{self.online_auction.slug}/invoices-paypal/1/")
+        self.assertEqual(response.status_code, 302)
+
+
+class AuctionLotListViewTests(StandardTestCase):
+    """Test auctionLotList function-based view"""
+
+    def test_lot_list_anonymous_denied(self):
+        """Anonymous users cannot download lot list CSV"""
+        response = self.client.get(f"/auctions/{self.online_auction.slug}/lots.csv")
+        self.assertIn(response.status_code, [302, 403])
+
+    def test_lot_list_admin(self):
+        """Auction admins can download lot list CSV"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.get(f"/auctions/{self.online_auction.slug}/lots.csv")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'text/csv')
+
+    def test_lot_list_non_admin_denied(self):
+        """Non-admins cannot download lot list CSV"""
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        response = self.client.get(f"/auctions/{self.online_auction.slug}/lots.csv")
+        self.assertEqual(response.status_code, 302)
+
+
+class ToDefaultLandingPageViewTests(StandardTestCase):
+    """Test toDefaultLandingPage function-based view"""
+
+    def test_landing_page_anonymous(self):
+        """Anonymous users can access landing page"""
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+
+    def test_landing_page_logged_in(self):
+        """Logged in users can access landing page"""
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get("/")
+        self.assertIn(response.status_code, [200, 302])
+
+
+class ToAccountViewTests(StandardTestCase):
+    """Test toAccount function-based view"""
+
+    def test_to_account_anonymous_denied(self):
+        """Anonymous users cannot access account redirect"""
+        response = self.client.get("/account/")
+        self.assertIn(response.status_code, [302, 403])
+
+    def test_to_account_logged_in(self):
+        """Logged in users are redirected to their account"""
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get("/account/")
+        self.assertEqual(response.status_code, 302)
+
+
+class GetClubsViewTests(StandardTestCase):
+    """Test getClubs function-based view"""
+
+    def test_get_clubs_post(self):
+        """Users can search for clubs via POST"""
+        response = self.client.post("/api/getclubs/", data={"search": "test"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/json')
+
+    def test_get_clubs_get_fails(self):
+        """GET requests should not work"""
+        response = self.client.get("/api/getclubs/")
+        self.assertNotEqual(response.status_code, 200)
+
+
+class AuctionNotificationsViewTests(StandardTestCase):
+    """Test auctionNotifications function-based view"""
+
+    def test_auction_notifications_post(self):
+        """Users can get auction notifications via POST"""
+        response = self.client.post("/api/users/auction_notifications/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/json')
+
+    def test_auction_notifications_get_fails(self):
+        """GET requests should redirect"""
+        response = self.client.get("/api/users/auction_notifications/")
+        self.assertEqual(response.status_code, 302)
+
+
+class NoLotAuctionsViewTests(StandardTestCase):
+    """Test no_lot_auctions function-based view"""
+
+    def test_no_lot_auctions_post(self):
+        """Users can check auction submission status via POST"""
+        response = self.client.post("/api/lots/new_lot_last_auction/")
+        self.assertEqual(response.status_code, 200)
+
+    def test_no_lot_auctions_get_fails(self):
+        """GET requests should fail"""
+        response = self.client.get("/api/lots/new_lot_last_auction/")
+        self.assertNotEqual(response.status_code, 200)
+
+
+class LotDeactivateViewTests(StandardTestCase):
+    """Test lotDeactivate function-based view"""
+
+    def test_lot_deactivate_anonymous_denied(self):
+        """Anonymous users cannot deactivate lots"""
+        response = self.client.post(f"/api/lotdeactivate/{self.lot.pk}/")
+        self.assertIn(response.status_code, [302, 403])
+
+    def test_lot_deactivate_owner(self):
+        """Lot owners can deactivate their lots if not in auction"""
+        # Create a lot not in an auction
+        lot = Lot.objects.create(
+            lot_name="Test lot for deactivation",
+            user=self.user,
+            quantity=1,
+        )
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.post(f"/api/lotdeactivate/{lot.pk}/")
+        self.assertEqual(response.status_code, 200)
+
+    def test_lot_deactivate_in_auction_denied(self):
+        """Lots in auctions cannot be deactivated"""
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.post(f"/api/lotdeactivate/{self.lot.pk}/")
+        self.assertEqual(response.status_code, 302)
+
+    def test_get_request_denied(self):
+        """GET requests should redirect"""
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get(f"/api/lotdeactivate/{self.lot.pk}/")
+        self.assertEqual(response.status_code, 302)
