@@ -799,7 +799,7 @@ class WatchOrUnwatch(LoginRequiredMixin, View):
     """Watch or unwatch a lot - POST only"""
 
     def post(self, request, pk):
-        watch = request.POST.get("watch")
+        watch = request.POST.get("watch", "")
         user = request.user
         lot = Lot.objects.filter(pk=pk, is_deleted=False).first()
         if not lot:
@@ -834,8 +834,10 @@ class IgnoreAuction(LoginRequiredMixin, View):
     """Ignore an auction - POST only"""
 
     def post(self, request):
-        auction = request.POST.get("auction")
+        auction = request.POST.get("auction", "")
         user = request.user
+        if not auction:
+            return HttpResponse("Failure: auction parameter required")
         try:
             auction = Auction.objects.get(slug=auction, is_deleted=False)
             obj, created = AuctionIgnore.objects.update_or_create(
@@ -1020,16 +1022,14 @@ class LotDeactivate(View):
 
     def post(self, request, pk):
         lot = Lot.objects.get(pk=pk, is_deleted=False)
-        checksPass = False
-        if request.user.is_superuser:
-            checksPass = True
-        elif lot.user.pk == request.user.pk:
-            checksPass = True
         
+        # Check permissions: lot owner or superuser can deactivate
+        # Lots in auctions cannot be deactivated
         if lot.auction:
-            checksPass = False
+            messages.error(request, "Your account doesn't have permission to view this page")
+            return redirect("/")
         
-        if not checksPass:
+        if lot.user.pk != request.user.pk and not request.user.is_superuser:
             messages.error(request, "Your account doesn't have permission to view this page")
             return redirect("/")
         
@@ -3280,7 +3280,7 @@ class ImportFromGoogleDrive(AuctionViewMixin, TemplateView, ContextMixin):
         return redirect(url)
 
 
-class BulkAddLots(TemplateView, AuctionViewMixin):
+class BulkAddLots(AuctionViewMixin, TemplateView):
     """Add/edit lots of lots for a given auctiontos pk"""
 
     template_name = "auctions/bulk_add_lots.html"
