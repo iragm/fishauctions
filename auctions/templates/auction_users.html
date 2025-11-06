@@ -29,14 +29,12 @@
           <i class="bi bi-person-fill-up"></i> Import from CSV
         </a>
       </li>
-      {% if auction.google_drive_link %}
       <li><hr class="dropdown-divider"></li>
       <li>
-        <a href="{% url 'import_from_google_drive' slug=auction.slug %}" class="dropdown-item"><i class="bi bi-cloud-arrow-down"></i> Import from Google Drive</a>
+        <a href="{% url 'import_from_google_drive' slug=auction.slug %}" class="dropdown-item"><i class="bi bi-gear"></i> {% if auction.google_drive_link %}Manage{% else %}Set up{% endif %} Google Drive sync</a>
       </li>
-      {% if auction.last_sync_time %}
+      {% if auction.google_drive_link and auction.last_sync_time %}
       <li><span class="dropdown-item text-muted"><small>Last synced {{ auction.last_sync_time|timesince }} ago</small></span></li>
-      {% endif %}
       {% endif %}
     </ul>
   </div>
@@ -215,8 +213,10 @@ if (queryInput) {
     // Update email button using htmx
     let emailContainer = document.getElementById('email_all_users_container');
     if (emailContainer) {
-      let emailUrl = emailContainer.getAttribute('hx-get').split('?')[0];
-      emailContainer.setAttribute('hx-get', `${emailUrl}?query=${encodeURIComponent(query)}`);
+      let baseUrl = "{% url 'compose_email_to_users' slug=auction.slug %}";
+      let newUrl = query ? `${baseUrl}?query=${encodeURIComponent(query)}` : baseUrl;
+      emailContainer.setAttribute('hx-get', newUrl);
+      htmx.process(emailContainer);
       htmx.trigger(emailContainer, 'load');
     }
     
