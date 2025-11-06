@@ -13,6 +13,7 @@ from .models import (
     AdCampaignResponse,
     Auction,
     AuctionCampaign,
+    AuctionHistory,
     AuctionTOS,
     Bid,
     BlogPost,
@@ -664,6 +665,35 @@ class AuctionCampaignAdmin(admin.ModelAdmin):
     list_display = ("auction", "source", "result")
 
 
+class AuctionHistoryAdmin(admin.ModelAdmin):
+    model = AuctionHistory
+    list_display = (
+        "auction",
+        "user",
+        "action",
+        "applies_to",
+        "timestamp",
+    )
+    list_filter = (
+        "timestamp",
+        "applies_to",
+    )
+    search_fields = (
+        "user__first_name",
+        "user__last_name",
+        "action",
+        "auction__title",
+    )
+    readonly_fields = (
+        "auction",
+        "user",
+        "action",
+        "timestamp",
+        "applies_to",
+    )
+    ordering = ("-timestamp",)
+
+
 admin.site.register(PickupLocation, PickupLocationAdmin)
 admin.site.unregister(User)
 admin.site.register(User, UserAdmin)
@@ -686,3 +716,4 @@ admin.site.register(LotAutoCategory, LotAutoCategoryAdmin)
 admin.site.register(AuctionTOS, AuctionTOSAdmin)
 admin.site.register(PageView, PageViewAdmin)
 admin.site.register(AuctionCampaign, AuctionCampaignAdmin)
+admin.site.register(AuctionHistory, AuctionHistoryAdmin)
