@@ -1663,49 +1663,53 @@ def auctionReport(request, slug):
     return redirect("/")
 
 
-@login_required
-def composeEmailToUsers(request, slug):
-    """Generate a mailto: link with BCC for filtered users"""
-    auction = get_object_or_404(Auction, slug=slug, is_deleted=False)
-    if not auction.permission_check(request.user):
-        return HttpResponse("Unauthorized", status=403)
+class ComposeEmailToUsers(View, AuctionPermissionsMixin):
+    """Generate a mailto: link with BCC for filtered users - HTMX endpoint"""
 
-    # Get query parameter
-    query = request.GET.get("query", "")
+    def dispatch(self, request, *args, **kwargs):
+        slug = kwargs.get("slug")
+        self.auction = get_object_or_404(Auction, slug=slug, is_deleted=False)
+        self.is_auction_admin
+        return super().dispatch(request, *args, **kwargs)
 
-    # Get all users for the auction
-    users = AuctionTOS.objects.filter(auction=auction).select_related("user")
+    def get(self, request, *args, **kwargs):
+        # Get query parameter
+        query = request.GET.get("query", "")
 
-    # Apply filter if query is provided
-    if query:
-        users = AuctionTOSFilter.generic(None, users, query)
+        # Get all users for the auction
+        users = AuctionTOS.objects.filter(auction=self.auction).select_related("user")
 
-    # Collect valid emails (non-null and non-empty)
-    emails = list(users.filter(email__isnull=False).exclude(email="").values_list("email", flat=True))
+        # Apply filter if query is provided
+        if query:
+            users = AuctionTOSFilter.generic(None, users, query)
 
-    # Create mailto link
-    mailto_url = "#"
-    email_count = 0
-    
-    if emails:
-        # Limit to prevent URL from being too long (typical limit is 2000 chars)
-        # Average email is ~30 chars, so limit to around 60 emails in BCC
-        max_emails = 60
-        if len(emails) > max_emails:
-            emails = emails[:max_emails]
+        # Collect valid emails (non-null and non-empty)
+        emails = list(users.filter(email__isnull=False).exclude(email="").values_list("email", flat=True))
 
-        bcc = ",".join(emails)
-        subject = f"Message from {auction.title}"
-        body = f"This message is being sent to participants in {auction.title}.\n\n"
+        # Create mailto link
+        mailto_url = "#"
+        email_count = 0
 
-        mailto_url = f"mailto:?bcc={quote_plus(bcc)}&subject={quote_plus(subject)}&body={quote_plus(body)}"
-        email_count = len(emails)
+        if emails:
+            # Limit to prevent URL from being too long (typical limit is 2000 chars)
+            # Average email is ~30 chars, so limit to around 60 emails in BCC
+            max_emails = 60
+            if len(emails) > max_emails:
+                emails = emails[:max_emails]
 
-    # Render the button snippet for htmx
-    return render(request, "email_users_button.html", {
-        "mailto_url": mailto_url,
-        "email_count": email_count,
-    })
+            bcc = ",".join(emails)
+            subject = f"Message from {self.auction.title}"
+            body = f"This message is being sent to participants in {self.auction.title}.\n\n"
+
+            mailto_url = f"mailto:?bcc={quote_plus(bcc)}&subject={quote_plus(subject)}&body={quote_plus(body)}"
+            email_count = len(emails)
+
+        # Render the button snippet for htmx
+        return render(request, "email_users_button.html", {
+            "mailto_url": mailto_url,
+            "email_count": email_count,
+        })
+
 
 
 @login_required

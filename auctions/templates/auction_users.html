@@ -33,8 +33,16 @@
       <li>
         <a href="{% url 'import_from_google_drive' slug=auction.slug %}" class="dropdown-item"><i class="bi bi-gear"></i> {% if auction.google_drive_link %}Manage{% else %}Set up{% endif %} Google Drive sync</a>
       </li>
-      {% if auction.google_drive_link and auction.last_sync_time %}
+      {% if auction.google_drive_link %}
+      <li>
+        <form method="POST" action="{% url 'sync_google_drive' slug=auction.slug %}" style="margin: 0;">
+          {% csrf_token %}
+          <button type="submit" class="dropdown-item"><i class="bi bi-arrow-repeat"></i> Sync from Google Drive now</button>
+        </form>
+      </li>
+      {% if auction.last_sync_time %}
       <li><span class="dropdown-item text-muted"><small>Last synced {{ auction.last_sync_time|timesince }} ago</small></span></li>
+      {% endif %}
       {% endif %}
     </ul>
   </div>
@@ -182,11 +190,14 @@ $(document).ready(function(){
       }
       $("#id_query").val(queryValue);
       // simulate keystroke to fire off htmx
-      document.getElementById("id_query").dispatchEvent(new KeyboardEvent("keyup", {
-        bubbles: true,
-        cancelable: true,
-        })
-      );
+      var queryInput = document.getElementById("id_query");
+      if (queryInput) {
+        queryInput.dispatchEvent(new KeyboardEvent("keyup", {
+          bubbles: true,
+          cancelable: true,
+          })
+        );
+      }
     }
 });
 // Helper function to update link href with query parameter
