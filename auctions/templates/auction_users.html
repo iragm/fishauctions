@@ -19,11 +19,11 @@
       <li><a href="{% url 'bulk_add_users' auction.slug %}" class="dropdown-item"><i class="bi bi-node-plus"></i> Bulk add users</a></li>
       <li><hr class="dropdown-divider"></li>
       <li>
-        <input type="file" name="csv_file_quick" id="csv_file_quick" accept=".csv" 
-               hx-encoding="multipart/form-data" 
-               hx-post="{% url 'bulk_add_users' auction.slug %}" 
-               hx-swap="outerHTML" 
-               hx-target="body" 
+        <input type="file" name="csv_file_quick" id="csv_file_quick" accept=".csv"
+               hx-encoding="multipart/form-data"
+               hx-post="{% url 'bulk_add_users' auction.slug %}"
+               hx-swap="outerHTML"
+               hx-target="body"
                style="display: none;">
         <a href="#" class="dropdown-item" onclick="document.getElementById('csv_file_quick').click(); return false;">
           <i class="bi bi-person-fill-up"></i> Import from CSV
@@ -52,9 +52,19 @@
       </button>
       <div class="dropdown-menu" aria-labelledby="dropdownMenuButton">
         <a href="{% url 'user_list' slug=auction.slug %}" id="user_csv_export" class="dropdown-item"><i class="bi bi-person-fill-down"></i> Users CSV</a>
-        <span hx-get="{% url 'compose_email_to_users' slug=auction.slug %}" hx-trigger="load" hx-swap="outerHTML" id="email_all_users_container">
-          <a href="#" id="email_all_users" class="dropdown-item"><i class="bi bi-envelope-fill"></i> Email all users</a>
+
+        <!-- Stable container: swap only inner HTML; re-fetch on input changes -->
+        <span
+          hx-get="{% url 'compose_email_to_users' slug=auction.slug %}"
+          hx-trigger="load, keyup from:#id_query delay:300ms, change from:#id_query delay:300ms"
+          hx-swap="innerHTML"
+          id="email_all_users_container"
+          hx-include="#id_query">
+          <a href="#" id="email_all_users" class="dropdown-item">
+            <i class="bi bi-envelope-fill"></i> Email all users
+          </a>
         </span>
+
         {% if auction.show_paypal_csv_link %}
           {% if auction.enable_online_payments %}
               <span class="text-muted dropdown-item"><i class="bi bi-paypal"></i> PayPal payments enabled, export not available</span>
@@ -141,20 +151,19 @@
     </span>
 <form class="col-sm-12 mt-2">
   {% crispy filter.form %}
-  </form>
-  {# Progress indicator #}
-  {# <div class="progress"> <div class="indeterminate"></div>      </div>  #}
-  {# The actual table #}
-  {% render_table table %}
+</form>
+{% render_table table %}
 {% endblock %}
+
 {% block extra_js %}
 <script type='text/javascript'>pageView();</script>
 <script type="text/javascript">
 $(document).ready(function(){
-  // Initialize tooltip for CSV export
+  // Tooltip for CSV export
   $('#user_csv_export').attr('data-bs-title', "This export uses your current filter");
   new bootstrap.Tooltip(document.getElementById('user_csv_export'));
 
+  // Sync checkboxes into the query input, then dispatch keyup on #id_query (htmx listens to that)
   $("#id_query").blur(function(){
     var value = this.value;
     var idsToUncheck = [];
@@ -167,40 +176,28 @@ $(document).ready(function(){
             idsToUncheck.push(this.id);
         }
     });
-
-    // Loop through the list of ids to uncheck and uncheck them all
-    idsToUncheck.forEach(function(id) {
-        $("#" + id).prop("checked", false);
-    });
+    idsToUncheck.forEach(function(id) { $("#" + id).prop("checked", false); });
   });
-    $(".invoice_filter").change(function(){
-        var cmd = this.id.replace("checkbox_", "").replace("_", " ");
-        if($(this).is(":checked")) {
-          update_cmd(cmd, true);
-        } else {
-          update_cmd(cmd, false);
-        }
-    });
-    function update_cmd(cmd, add_cmd) {
-      var queryValue = $("#id_query").val();
-      var regex = new RegExp("(^|\\s)" + cmd + "(?=\\s|$)", "g");
-      queryValue = queryValue.replace(regex, "");
-      if (add_cmd) {
-        queryValue += " " + cmd;
-      }
-      $("#id_query").val(queryValue);
-      // simulate keystroke to fire off htmx
-      var queryInput = document.getElementById("id_query");
-      if (queryInput) {
-        queryInput.dispatchEvent(new KeyboardEvent("keyup", {
-          bubbles: true,
-          cancelable: true,
-          })
-        );
-      }
-    }
+
+  $(".invoice_filter").change(function(){
+    var cmd = this.id.replace("checkbox_", "").replace("_", " ");
+    update_cmd(cmd, $(this).is(":checked"));
+  });
+
+  function update_cmd(cmd, add_cmd) {
+    var queryInput = $("#id_query");
+    var queryValue = queryInput.val();
+    var regex = new RegExp("(^|\\s)" + cmd + "(?=\\s|$)", "g");
+    queryValue = queryValue.replace(regex, "");
+    if (add_cmd) queryValue += " " + cmd;
+    queryInput.val(queryValue.trim());
+    // Fire keyup on #id_query so htmx refreshes the email button
+    var el = document.getElementById("id_query");
+    if (el) el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, cancelable: true }));
+  }
 });
-// Helper function to update link href with query parameter
+
+// Helper: keep CSV export link in sync with the query param
 function updateLinkWithQuery(linkId, query) {
   let link = document.getElementById(linkId);
   if (link) {
@@ -209,7 +206,7 @@ function updateLinkWithQuery(linkId, query) {
   }
 }
 
-// update url to allow bookmarking searches
+// Update URL + CSV link as user types
 let queryInput = document.getElementById('id_query');
 if (queryInput) {
   queryInput.addEventListener('input', function(event) {
@@ -217,21 +214,7 @@ if (queryInput) {
     let newUrl = new URL(window.location);
     newUrl.searchParams.set('query', query);
     history.replaceState({}, '', newUrl);
-    
-    // Update CSV export link with the query parameter
     updateLinkWithQuery('user_csv_export', query);
-    
-    // Update email button using htmx
-    let emailContainer = document.getElementById('email_all_users_container');
-    if (emailContainer) {
-      let baseUrl = "{% url 'compose_email_to_users' slug=auction.slug %}";
-      let newUrl = query ? `${baseUrl}?query=${encodeURIComponent(query)}` : baseUrl;
-      emailContainer.setAttribute('hx-get', newUrl);
-      htmx.process(emailContainer);
-      htmx.trigger(emailContainer, 'load');
-    }
-    
-    htmx.trigger('#filter-form', 'keyup');
   });
 }
 </script>

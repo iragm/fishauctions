@@ -1663,8 +1663,10 @@ def auctionReport(request, slug):
     return redirect("/")
 
 
-class ComposeEmailToUsers(View, AuctionPermissionsMixin):
+class ComposeEmailToUsers(TemplateView, AuctionPermissionsMixin):
     """Generate a mailto: link with BCC for filtered users - HTMX endpoint"""
+
+    template_name = "email_users_button.html"
 
     def dispatch(self, request, *args, **kwargs):
         slug = kwargs.get("slug")
@@ -1672,10 +1674,10 @@ class ComposeEmailToUsers(View, AuctionPermissionsMixin):
         self.is_auction_admin
         return super().dispatch(request, *args, **kwargs)
 
-    def get(self, request, *args, **kwargs):
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
         # Get query parameter
-        query = request.GET.get("query", "")
-
+        query = self.request.GET.get("query", "")
         # Get all users for the auction
         users = AuctionTOS.objects.filter(auction=self.auction).select_related("user")
 
@@ -1686,30 +1688,33 @@ class ComposeEmailToUsers(View, AuctionPermissionsMixin):
         # Collect valid emails (non-null and non-empty)
         emails = list(users.filter(email__isnull=False).exclude(email="").values_list("email", flat=True))
 
-        # Create mailto link
+        # Default values
         mailto_url = "#"
         email_count = 0
 
         if emails:
-            # Limit to prevent URL from being too long (typical limit is 2000 chars)
-            # Average email is ~30 chars, so limit to around 60 emails in BCC
+            # Limit to avoid overly long URLs (conservative cap)
             max_emails = 60
             if len(emails) > max_emails:
                 emails = emails[:max_emails]
 
             bcc = ",".join(emails)
-            subject = f"Message from {self.auction.title}"
-            body = f"This message is being sent to participants in {self.auction.title}.\n\n"
+            subject = f"{self.auction.title}"
+            body = f"Hello,\n\nThis message is being sent to participants in {self.auction.title}.\n\n"
 
+            if "open" in query or "ready" in query:
+                url = reverse("my_auction_invoice", kwargs={"slug": self.auction.slug})
+                body += f"You can view your invoice here: https://{Site.objects.get_current().domain}{url}\n\n"
             mailto_url = f"mailto:?bcc={quote_plus(bcc)}&subject={quote_plus(subject)}&body={quote_plus(body)}"
             email_count = len(emails)
 
-        # Render the button snippet for htmx
-        return render(request, "email_users_button.html", {
-            "mailto_url": mailto_url,
-            "email_count": email_count,
-        })
-
+        context.update(
+            {
+                "mailto_url": mailto_url,
+                "email_count": email_count,
+            }
+        )
+        return context
 
 
 @login_required
