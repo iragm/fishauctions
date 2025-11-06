@@ -666,7 +666,6 @@ class AuctionCampaignAdmin(admin.ModelAdmin):
 
 
 class AuctionHistoryAdmin(admin.ModelAdmin):
-    model = AuctionHistory
     list_display = (
         "auction",
         "user",
