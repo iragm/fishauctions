@@ -1668,8 +1668,7 @@ def composeEmailToUsers(request, slug):
     """Generate a mailto: link with BCC for filtered users"""
     auction = get_object_or_404(Auction, slug=slug, is_deleted=False)
     if not auction.permission_check(request.user):
-        messages.error(request, "Your account doesn't have permission to view this page")
-        return redirect("/")
+        return HttpResponse("Unauthorized", status=403)
 
     # Get query parameter
     query = request.GET.get("query", "")
@@ -1685,15 +1684,14 @@ def composeEmailToUsers(request, slug):
     emails = list(users.filter(email__isnull=False).exclude(email="").values_list("email", flat=True))
 
     # Create mailto link
+    mailto_url = "#"
+    email_count = 0
+    
     if emails:
         # Limit to prevent URL from being too long (typical limit is 2000 chars)
         # Average email is ~30 chars, so limit to around 60 emails in BCC
         max_emails = 60
         if len(emails) > max_emails:
-            messages.warning(
-                request,
-                f"Only including first {max_emails} emails in BCC to avoid URL length limits. Consider using smaller filters.",
-            )
             emails = emails[:max_emails]
 
         bcc = ",".join(emails)
@@ -1701,18 +1699,13 @@ def composeEmailToUsers(request, slug):
         body = f"This message is being sent to participants in {auction.title}.\n\n"
 
         mailto_url = f"mailto:?bcc={quote_plus(bcc)}&subject={quote_plus(subject)}&body={quote_plus(body)}"
+        email_count = len(emails)
 
-        auction.create_history(
-            applies_to="USERS",
-            action=f"Composed email to {len(emails)} users",
-            user=request.user,
-        )
-
-        # Redirect to the mailto URL
-        return redirect(mailto_url)
-    else:
-        messages.error(request, "No users with valid emails found for the current filter")
-        return redirect("auction_tos_list", slug=slug)
+    # Render the button snippet for htmx
+    return render(request, "email_users_button.html", {
+        "mailto_url": mailto_url,
+        "email_count": email_count,
+    })
 
 
 @login_required

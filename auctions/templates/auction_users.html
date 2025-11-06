@@ -6,43 +6,39 @@
 {% block content %}
   {% include 'auction_ribbon.html' %}
   <small>This is a list of people in your auction.  Click on a name to edit that user.<br></small>
-  <div class="dropdown">
-    <button class="btn btn-sm btn-info dropdown-toggle" type="button" id="addUserDropdown" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-      <i class="bi bi-person-fill-add"></i> Add user
+  <div class="btn-group">
+    <button class='btn btn-sm btn-info'
+      hx-get="/api/auctiontos/{{auction.slug}}/"
+      hx-target="#modals-here"
+      hx-trigger="click"
+      _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"><i class="bi bi-person-fill-add"></i> Add user</button>
+    <button type="button" class="btn btn-sm btn-info dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false">
+      <span class="visually-hidden">Toggle Dropdown</span>
     </button>
-    <div class="dropdown-menu" aria-labelledby="addUserDropdown">
-      <a href="#" class="dropdown-item"
-         hx-get="/api/auctiontos/{{auction.slug}}/"
-         hx-target="#modals-here"
-         hx-trigger="click"
-         _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">
-        <i class="bi bi-person-fill-add"></i> Add single user
-      </a>
-      <a href="{% url 'bulk_add_users' auction.slug %}" class="dropdown-item"><i class="bi bi-node-plus"></i> Bulk add users</a>
-      <div class="dropdown-divider"></div>
-      <input type="file" name="csv_file_quick" id="csv_file_quick" accept=".csv" 
-             hx-encoding="multipart/form-data" 
-             hx-post="{% url 'bulk_add_users' auction.slug %}" 
-             hx-swap="outerHTML" 
-             hx-target="body" 
-             style="display: none;">
-      <a href="#" class="dropdown-item" onclick="document.getElementById('csv_file_quick').click(); return false;">
-        <i class="bi bi-person-fill-up"></i> Import from CSV
-      </a>
+    <ul class="dropdown-menu">
+      <li><a href="{% url 'bulk_add_users' auction.slug %}" class="dropdown-item"><i class="bi bi-node-plus"></i> Bulk add users</a></li>
+      <li><hr class="dropdown-divider"></li>
+      <li>
+        <input type="file" name="csv_file_quick" id="csv_file_quick" accept=".csv" 
+               hx-encoding="multipart/form-data" 
+               hx-post="{% url 'bulk_add_users' auction.slug %}" 
+               hx-swap="outerHTML" 
+               hx-target="body" 
+               style="display: none;">
+        <a href="#" class="dropdown-item" onclick="document.getElementById('csv_file_quick').click(); return false;">
+          <i class="bi bi-person-fill-up"></i> Import from CSV
+        </a>
+      </li>
       {% if auction.google_drive_link %}
-      <div class="dropdown-divider"></div>
-      <form method="POST" action="{% url 'sync_google_drive' slug=auction.slug %}" style="display: inline; width: 100%;">
-        {% csrf_token %}
-        <button type="submit" class="dropdown-item"><i class="bi bi-arrow-repeat"></i> Sync from Google Drive</button>
-      </form>
+      <li><hr class="dropdown-divider"></li>
+      <li>
+        <a href="{% url 'import_from_google_drive' slug=auction.slug %}" class="dropdown-item"><i class="bi bi-cloud-arrow-down"></i> Import from Google Drive</a>
+      </li>
       {% if auction.last_sync_time %}
-        <span class="dropdown-item text-muted"><small>Last synced {{ auction.last_sync_time|timesince }} ago</small></span>
+      <li><span class="dropdown-item text-muted"><small>Last synced {{ auction.last_sync_time|timesince }} ago</small></span></li>
       {% endif %}
-      {% else %}
-      <div class="dropdown-divider"></div>
-      <span class="dropdown-item text-muted disabled"><i class="bi bi-arrow-repeat"></i> Sync from Google Drive (not set up)</span>
       {% endif %}
-    </div>
+    </ul>
   </div>
     <span class="dropdown">
       <button class="btn btn-sm mt-2 mb-2 btn-primary dropdown-toggle" type="button" id="dropdownMenuButton" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
@@ -50,7 +46,9 @@
       </button>
       <div class="dropdown-menu" aria-labelledby="dropdownMenuButton">
         <a href="{% url 'user_list' slug=auction.slug %}" id="user_csv_export" class="dropdown-item"><i class="bi bi-person-fill-down"></i> Users CSV</a>
-        <a href="{% url 'compose_email_to_users' slug=auction.slug %}" id="email_all_users" class="dropdown-item"><i class="bi bi-envelope-fill"></i> Email all users</a>
+        <span hx-get="{% url 'compose_email_to_users' slug=auction.slug %}" hx-trigger="load" hx-swap="outerHTML" id="email_all_users_container">
+          <a href="#" id="email_all_users" class="dropdown-item"><i class="bi bi-envelope-fill"></i> Email all users</a>
+        </span>
         {% if auction.show_paypal_csv_link %}
           {% if auction.enable_online_payments %}
               <span class="text-muted dropdown-item"><i class="bi bi-paypal"></i> PayPal payments enabled, export not available</span>
@@ -147,15 +145,9 @@
 <script type='text/javascript'>pageView();</script>
 <script type="text/javascript">
 $(document).ready(function(){
-  // Initialize tooltips with titles
+  // Initialize tooltip for CSV export
   $('#user_csv_export').attr('data-bs-title', "This export uses your current filter");
-  $('#email_all_users').attr('data-bs-title', "This will compose an email with BCC for filtered users");
-  
-  // Initialize Bootstrap tooltips
-  var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-title]'));
-  var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
-    return new bootstrap.Tooltip(tooltipTriggerEl);
-  });
+  new bootstrap.Tooltip(document.getElementById('user_csv_export'));
 
   $("#id_query").blur(function(){
     var value = this.value;
@@ -217,9 +209,16 @@ if (queryInput) {
     newUrl.searchParams.set('query', query);
     history.replaceState({}, '', newUrl);
     
-    // Update links with the query parameter
+    // Update CSV export link with the query parameter
     updateLinkWithQuery('user_csv_export', query);
-    updateLinkWithQuery('email_all_users', query);
+    
+    // Update email button using htmx
+    let emailContainer = document.getElementById('email_all_users_container');
+    if (emailContainer) {
+      let emailUrl = emailContainer.getAttribute('hx-get').split('?')[0];
+      emailContainer.setAttribute('hx-get', `${emailUrl}?query=${encodeURIComponent(query)}`);
+      htmx.trigger(emailContainer, 'load');
+    }
     
     htmx.trigger('#filter-form', 'keyup');
   });
