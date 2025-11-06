@@ -6,17 +6,51 @@
 {% block content %}
   {% include 'auction_ribbon.html' %}
   <small>This is a list of people in your auction.  Click on a name to edit that user.<br></small>
-  <button class='btn btn-sm btn-info'
-    hx-get="/api/auctiontos/{{auction.slug}}/"
-    hx-target="#modals-here"
-    hx-trigger="click"
-    _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"><i class="bi bi-person-fill-add"></i> Add user</button>
+  <div class="dropdown">
+    <button class="btn btn-sm btn-info dropdown-toggle" type="button" id="addUserDropdown" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+      <i class="bi bi-person-fill-add"></i> Add user
+    </button>
+    <div class="dropdown-menu" aria-labelledby="addUserDropdown">
+      <a href="#" class="dropdown-item"
+         hx-get="/api/auctiontos/{{auction.slug}}/"
+         hx-target="#modals-here"
+         hx-trigger="click"
+         _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">
+        <i class="bi bi-person-fill-add"></i> Add single user
+      </a>
+      <a href="{% url 'bulk_add_users' auction.slug %}" class="dropdown-item"><i class="bi bi-node-plus"></i> Bulk add users</a>
+      <div class="dropdown-divider"></div>
+      <input type="file" name="csv_file_quick" id="csv_file_quick" accept=".csv" 
+             hx-encoding="multipart/form-data" 
+             hx-post="{% url 'bulk_add_users' auction.slug %}" 
+             hx-swap="outerHTML" 
+             hx-target="body" 
+             style="display: none;">
+      <a href="#" class="dropdown-item" onclick="document.getElementById('csv_file_quick').click(); return false;">
+        <i class="bi bi-person-fill-up"></i> Import from CSV
+      </a>
+      {% if auction.google_drive_link %}
+      <div class="dropdown-divider"></div>
+      <form method="POST" action="{% url 'sync_google_drive' slug=auction.slug %}" style="display: inline; width: 100%;">
+        {% csrf_token %}
+        <button type="submit" class="dropdown-item"><i class="bi bi-arrow-repeat"></i> Sync from Google Drive</button>
+      </form>
+      {% if auction.last_sync_time %}
+        <span class="dropdown-item text-muted"><small>Last synced {{ auction.last_sync_time|timesince }} ago</small></span>
+      {% endif %}
+      {% else %}
+      <div class="dropdown-divider"></div>
+      <span class="dropdown-item text-muted disabled"><i class="bi bi-arrow-repeat"></i> Sync from Google Drive (not set up)</span>
+      {% endif %}
+    </div>
+  </div>
     <span class="dropdown">
       <button class="btn btn-sm mt-2 mb-2 btn-primary dropdown-toggle" type="button" id="dropdownMenuButton" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
         <i class="bi bi-download"></i> Export
       </button>
       <div class="dropdown-menu" aria-labelledby="dropdownMenuButton">
-        <a href="{% url 'user_list' slug=auction.slug %}" class="dropdown-item"><i class="bi bi-person-fill-down"></i> Users CSV</a>
+        <a href="{% url 'user_list' slug=auction.slug %}" id="user_csv_export" class="dropdown-item"><i class="bi bi-person-fill-down"></i> Users CSV</a>
+        <a href="{% url 'compose_email_to_users' slug=auction.slug %}" id="email_all_users" class="dropdown-item"><i class="bi bi-envelope-fill"></i> Email all users</a>
         {% if auction.show_paypal_csv_link %}
           {% if auction.enable_online_payments %}
               <span class="text-muted dropdown-item"><i class="bi bi-paypal"></i> PayPal payments enabled, export not available</span>
@@ -33,20 +67,6 @@
         {% endif %}
       </div>
     </span>
-    <a href="{% url 'bulk_add_users' auction.slug %}" class="btn btn-sm mt-2  mb-2 btn-primary"><i class="bi bi-node-plus"></i> Bulk add users</a>
-    {% if auction.google_drive_link %}
-    <form method="POST" action="{% url 'sync_google_drive' slug=auction.slug %}" style="display: inline;">
-      {% csrf_token %}
-      <button type="submit" class="btn btn-sm mt-2 mb-2 btn-success"><i class="bi bi-arrow-repeat"></i> Sync from Google Drive</button>
-    </form>
-    <small class="text-muted">
-      {% if auction.last_sync_time %}
-        Last synced {{ auction.last_sync_time|timesince }} ago
-      {% else %}
-        Never synced
-      {% endif %}
-    </small>
-    {% endif %}
     {% if not auction.is_online %}<a class="btn btn-sm btn-primary" href='{% url "auction_quick_checkout" slug=auction.slug %}'><i class="bi bi-bag-heart"></i> Quick checkout users</a>{% endif %}
     {% if auction.show_invoice_ready_button %}
     <a href="#" class="btn btn-sm mt-2  mb-2 btn-primary"
@@ -127,6 +147,16 @@
 <script type='text/javascript'>pageView();</script>
 <script type="text/javascript">
 $(document).ready(function(){
+  // Add tooltip to user export button
+  $('#user_csv_export').mouseover(function() {
+    $('#user_csv_export').attr('data-bs-title', "This export uses your current filter").tooltip('show');
+  });
+  
+  // Add tooltip to email all users button
+  $('#email_all_users').mouseover(function() {
+    $('#email_all_users').attr('data-bs-title', "This will compose an email with BCC for filtered users").tooltip('show');
+  });
+
   $("#id_query").blur(function(){
     var value = this.value;
     var idsToUncheck = [];
@@ -175,6 +205,17 @@ document.getElementById('id_query').addEventListener('input', function(event) {
     let newUrl = new URL(window.location);
     newUrl.searchParams.set('query', query);
     history.replaceState({}, '', newUrl);
+    
+    // Update the #user_csv_export link with the query parameter
+    let userCsvExportLink = document.getElementById('user_csv_export');
+    let originalHref = userCsvExportLink.getAttribute('href').split('?')[0];
+    userCsvExportLink.setAttribute('href', `${originalHref}?query=${encodeURIComponent(query)}`);
+    
+    // Update the #email_all_users link with the query parameter
+    let emailAllUsersLink = document.getElementById('email_all_users');
+    let emailOriginalHref = emailAllUsersLink.getAttribute('href').split('?')[0];
+    emailAllUsersLink.setAttribute('href', `${emailOriginalHref}?query=${encodeURIComponent(query)}`);
+    
     htmx.trigger('#filter-form', 'keyup');
   });
 </script>

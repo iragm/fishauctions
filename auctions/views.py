@@ -1502,9 +1502,14 @@ def auctionReport(request, slug):
     auction = get_object_or_404(Auction, slug=slug, is_deleted=False)
     if auction.permission_check(request.user):
         # Create the HttpResponse object with the appropriate CSV header.
+        query = request.GET.get("query", None)
         response = HttpResponse(content_type="text/csv")
         end = timezone.now().strftime("%Y-%m-%d")
-        response["Content-Disposition"] = 'attachment; filename="' + slug + "-report-" + end + '.csv"'
+        if not query:
+            filename = slug + "-report-" + end
+        else:
+            filename = slug + "-report-" + query + "-" + end
+        response["Content-Disposition"] = f'attachment; filename="{filename}.csv"'
         writer = csv.writer(response)
         writer.writerow(
             [
@@ -1547,6 +1552,9 @@ def auctionReport(request, slug):
             .select_related("pickup_location")
             .order_by("createdon")
         )
+        # Apply filter if query is provided
+        if query:
+            users = AuctionTOSFilter.generic(None, users, query)
         # .annotate(distance_traveled=distance_to(\
         # '`auctions_userdata`.`latitude`', '`auctions_userdata`.`longitude`', \
         # lat_field_name='`auctions_pickuplocation`.`latitude`',\
@@ -1653,6 +1661,61 @@ def auctionReport(request, slug):
         return response
     messages.error(request, "Your account doesn't have permission to view this page")
     return redirect("/")
+
+
+@login_required
+def composeEmailToUsers(request, slug):
+    """Generate a mailto: link with BCC for filtered users"""
+    auction = get_object_or_404(Auction, slug=slug, is_deleted=False)
+    if not auction.permission_check(request.user):
+        messages.error(request, "Your account doesn't have permission to view this page")
+        return redirect("/")
+    
+    # Get query parameter
+    query = request.GET.get("query", "")
+    
+    # Get all users for the auction
+    users = AuctionTOS.objects.filter(auction=auction).select_related("user")
+    
+    # Apply filter if query is provided
+    if query:
+        users = AuctionTOSFilter.generic(None, users, query)
+    
+    # Collect valid emails
+    emails = []
+    for tos in users:
+        if tos.email:
+            emails.append(tos.email)
+    
+    # Create mailto link
+    if emails:
+        # Limit to prevent URL from being too long (typical limit is 2000 chars)
+        # Average email is ~30 chars, so limit to around 60 emails in BCC
+        max_emails = 60
+        if len(emails) > max_emails:
+            messages.warning(
+                request,
+                f"Only including first {max_emails} emails in BCC to avoid URL length limits. Consider using smaller filters.",
+            )
+            emails = emails[:max_emails]
+        
+        bcc = ",".join(emails)
+        subject = f"Message from {auction.title}"
+        body = f"This message is being sent to participants in {auction.title}.\n\n"
+        
+        mailto_url = f"mailto:?bcc={urlencode({'': bcc})[1:]}&subject={urlencode({'': subject})[1:]}&body={urlencode({'': body})[1:]}"
+        
+        auction.create_history(
+            applies_to="USERS",
+            action=f"Composed email to {len(emails)} users",
+            user=request.user,
+        )
+        
+        # Redirect to the mailto URL
+        return redirect(mailto_url)
+    else:
+        messages.error(request, "No users with valid emails found for the current filter")
+        return redirect("auction_tos_list", slug=slug)
 
 
 @login_required
