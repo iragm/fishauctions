@@ -3369,3 +3369,69 @@ class LotDeactivateViewTests(StandardTestCase):
         self.client.login(username=self.user.username, password="testpassword")
         response = self.client.get(f"/api/lotdeactivate/{self.lot.pk}/")
         self.assertEqual(response.status_code, 302)
+
+
+class LotAutocompleteSecurityTests(StandardTestCase):
+    """Security tests for LotAutocomplete view"""
+
+    def test_lot_autocomplete_requires_auction_admin(self):
+        """Non-admins cannot access lot autocomplete for an auction"""
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        response = self.client.get(
+            "/api/lot-autocomplete/",
+            {"forward": f'{{"auction": "{self.online_auction.pk}"}}'},
+        )
+        self.assertEqual(response.status_code, 200)
+        # Response should be JSON with empty results
+        data = response.json()
+        self.assertEqual(data["results"], [])
+
+    def test_lot_autocomplete_allows_auction_admin(self):
+        """Auction admins can access lot autocomplete"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.get(
+            "/api/lot-autocomplete/",
+            {"forward": f'{{"auction": "{self.online_auction.pk}"}}'},
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def test_lot_autocomplete_no_auction_returns_empty(self):
+        """Without auction parameter, returns empty results"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.get("/api/lot-autocomplete/")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["results"], [])
+
+
+class AuctionTOSAutocompleteSecurityTests(StandardTestCase):
+    """Security tests for AuctionTOSAutocomplete view"""
+
+    def test_auctiontos_autocomplete_requires_auction_admin(self):
+        """Non-admins cannot access auction TOS autocomplete"""
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        response = self.client.get(
+            "/api/auctiontos-autocomplete/",
+            {"forward": f'{{"auction": "{self.online_auction.pk}"}}'},
+        )
+        self.assertEqual(response.status_code, 200)
+        # Response should be JSON with empty results
+        data = response.json()
+        self.assertEqual(data["results"], [])
+
+    def test_auctiontos_autocomplete_allows_auction_admin(self):
+        """Auction admins can access auction TOS autocomplete"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.get(
+            "/api/auctiontos-autocomplete/",
+            {"forward": f'{{"auction": "{self.online_auction.pk}"}}'},
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def test_auctiontos_autocomplete_no_auction_returns_empty(self):
+        """Without auction parameter, returns empty results"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.get("/api/auctiontos-autocomplete/")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["results"], [])
