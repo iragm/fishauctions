@@ -1,6 +1,9 @@
 services:
   web:
-    build: .
+    build:
+      context: .
+      args:
+        - DISABLE_PIP_SSL_VERIFY=${DISABLE_PIP_SSL_VERIFY:-0}
     container_name: django
     volumes:
       - .:/home/app/web
@@ -19,6 +22,8 @@ services:
       context: .
       dockerfile: Dockerfile
       target: test
+      args:
+        - DISABLE_PIP_SSL_VERIFY=${DISABLE_PIP_SSL_VERIFY:-0}
     volumes:
       - .:/home/app/web
     entrypoint: [/bin/bash, /home/app/web/.github/scripts/test-and-lint.sh]

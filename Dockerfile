@@ -5,12 +5,20 @@
 # pull official base image
 FROM python:3.11.9 AS builder
 
+# Build argument to optionally disable SSL verification
+ARG DISABLE_PIP_SSL_VERIFY=0
+
 # set work directory
 WORKDIR /usr/src/app
 
 # set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+
+# Configure pip to bypass SSL if needed (affects all pip operations including build dependencies)
+RUN if [ "$DISABLE_PIP_SSL_VERIFY" = "1" ]; then \
+        pip config set global.trusted-host "pypi.org pypi.python.org files.pythonhosted.org"; \
+    fi
 
 # install system dependencies
 RUN apt-get update && \
@@ -29,6 +37,7 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
+# Install pip and pip-tools
 RUN pip install --upgrade pip pip-tools
 
 # This is a lot of stuff, not really needed
@@ -48,6 +57,22 @@ RUN pip wheel --no-cache-dir --no-deps --wheel-dir /usr/src/app/wheels -r requir
 
 # pull official base image
 FROM python:3.11.9-slim AS test
+
+# Build argument to optionally disable SSL verification (for corporate/CI environments with SSL inspection)
+# Set DISABLE_PIP_SSL_VERIFY=1 during build if needed: docker compose build --build-arg DISABLE_PIP_SSL_VERIFY=1
+ARG DISABLE_PIP_SSL_VERIFY=0
+
+# Configure pip to bypass SSL if needed (affects all pip operations including build dependencies)
+RUN if [ "$DISABLE_PIP_SSL_VERIFY" = "1" ]; then \
+        pip config set global.trusted-host "pypi.org pypi.python.org files.pythonhosted.org"; \
+    fi
+
+# Update CA certificates to handle SSL certificate issues
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
 COPY ./requirements-test.txt .
 RUN pip install -r requirements-test.txt
 
@@ -58,9 +83,15 @@ RUN pip install -r requirements-test.txt
 
 
 FROM builder AS dev
+
+# Inherit build arg
+ARG DISABLE_PIP_SSL_VERIFY=0
+
+# Pip config is inherited from builder stage
+
 COPY ./requirements*.txt .
-RUN pip install -r requirements.txt
-RUN pip install -r requirements-test.txt
+RUN pip install -r requirements.txt && \
+    pip install -r requirements-test.txt
 
 #########
 # FINAL #
@@ -68,6 +99,14 @@ RUN pip install -r requirements-test.txt
 
 # pull official base image
 FROM python:3.11.9-slim
+
+# Build argument to optionally disable SSL verification
+ARG DISABLE_PIP_SSL_VERIFY=0
+
+# Configure pip to bypass SSL if needed
+RUN if [ "$DISABLE_PIP_SSL_VERIFY" = "1" ]; then \
+        pip config set global.trusted-host "pypi.org pypi.python.org files.pythonhosted.org"; \
+    fi
 
 # create directory for the app user
 RUN mkdir -p /home/app
@@ -111,6 +150,8 @@ RUN apt-get update && \
     && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
+
+# Install pip-tools
 RUN pip install pip-tools
 
 # cron setup
@@ -123,9 +164,11 @@ RUN touch /var/log/cron.log
 
 COPY --from=builder /usr/src/app/wheels /wheels
 COPY --from=builder /usr/src/app/requirements.txt .
-RUN pip install --upgrade pip
-RUN pip install --no-cache /wheels/*
-RUN pip install mysql-connector-python
+
+# Install packages
+RUN pip install --upgrade pip && \
+    pip install --no-cache /wheels/* && \
+    pip install mysql-connector-python
 
 # Sometimes we need customizations made to python packages
 # List changes in the .sh script, making sure it fails gracefully
