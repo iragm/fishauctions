@@ -17,8 +17,12 @@ def convert_distance(miles, user):
         Tuple of (converted_value, unit_string) or None if distance is 0 or invalid
     """
     # Convert miles to float to handle both numeric and string inputs from database
+    # Return None for None/invalid inputs or zero distance
+    if miles is None:
+        return None
+
     try:
-        miles = float(miles) if miles is not None else 0
+        miles = float(miles)
     except (ValueError, TypeError):
         return None
 
