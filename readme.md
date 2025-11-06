@@ -39,6 +39,11 @@ docker compose up -d
 
 **Note on SSL Certificate Errors:** If you encounter SSL certificate verification errors during the Docker build (common in corporate environments with SSL inspection), add `DISABLE_PIP_SSL_VERIFY=1` to your `.env` file before building. This is already configured in the CI environment.
 
+**Note on Network Timeouts:** In some network environments (especially those with SSL inspection or strict firewalls), you may experience connection timeouts when downloading Python packages from PyPI. If you encounter timeout errors during the build, try:
+- Building on a different network or using a VPN
+- Using a PyPI mirror if your organization provides one
+- Increasing your Docker daemon's network timeout settings
+
 You should now be able to access a development site at 127.0.0.1 (Note: unlike most Django projects, you probably won't use port 8000)
 
 One last thing to do is to create an admin.  Back in the shell, enter:

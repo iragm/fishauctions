@@ -16,9 +16,11 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 # Configure pip to bypass SSL if needed (affects all pip operations including build dependencies)
+# Also increase timeout for slow connections
 RUN if [ "$DISABLE_PIP_SSL_VERIFY" = "1" ]; then \
         pip config set global.trusted-host "pypi.org pypi.python.org files.pythonhosted.org"; \
-    fi
+    fi && \
+    pip config set global.timeout 300
 
 # install system dependencies
 RUN apt-get update && \
