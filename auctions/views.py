@@ -1687,7 +1687,6 @@ class ComposeEmailToUsers(TemplateView, AuctionPermissionsMixin):
 
         # Collect valid emails (non-null and non-empty)
         emails = list(users.filter(email__isnull=False).exclude(email="").values_list("email", flat=True))
-
         # Default values
         mailto_url = "#"
         email_count = 0

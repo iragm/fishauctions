@@ -2005,20 +2005,21 @@ class UserExportTests(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
         url = reverse("compose_email_to_users", kwargs={"slug": self.online_auction.slug})
         response = self.client.get(url)
-        self.assertEqual(response.status_code, 302)  # Redirect to mailto URL
-        self.assertTrue(response.url.startswith("mailto:"))
+        self.assertEqual(response.status_code, 200)
+        # The view renders a button snippet with a mailto href, not a redirect
+        self.assertContains(response, 'id="email_all_users"')
 
     def test_compose_email_with_filter(self):
         """Test composing email with a filter"""
         self.client.login(username="admin_user", password="testpassword")
         url = reverse("compose_email_to_users", kwargs={"slug": self.online_auction.slug})
         response = self.client.get(url, {"query": "admin"})
-        self.assertEqual(response.status_code, 302)  # Redirect to mailto URL
-        self.assertTrue(response.url.startswith("mailto:"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="email_all_users"')
 
     def test_compose_email_permission_denied(self):
         """Test that non-admin users cannot compose emails"""
         self.client.login(username="no_lots", password="testpassword")
         url = reverse("compose_email_to_users", kwargs={"slug": self.online_auction.slug})
         response = self.client.get(url)
-        self.assertEqual(response.status_code, 302)  # Redirect to home
+        self.assertEqual(response.status_code, 403)
