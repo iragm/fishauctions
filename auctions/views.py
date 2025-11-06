@@ -310,9 +310,15 @@ class AuctionPermissionsMixin:
 class AuctionViewMixin(AuctionPermissionsMixin):
     """Subclass this when you need auction permissions, it's easier than using AuctionPermissionsMixin"""
 
+    auction = None
+
+    def get_auction(self, slug):
+        if not self.auction and slug:
+            self.auction = get_object_or_404(Auction, slug=slug, is_deleted=False)
+            self.is_auction_admin
+
     def dispatch(self, request, *args, **kwargs):
-        self.auction = get_object_or_404(Auction, slug=kwargs.pop("slug"), is_deleted=False)
-        self.is_auction_admin
+        self.get_auction(kwargs.pop("slug", ""))
         return super().dispatch(request, *args, **kwargs)
 
 
