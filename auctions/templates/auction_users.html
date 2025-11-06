@@ -202,12 +202,16 @@ $(document).ready(function(){
 // Helper function to update link href with query parameter
 function updateLinkWithQuery(linkId, query) {
   let link = document.getElementById(linkId);
-  let originalHref = link.getAttribute('href').split('?')[0];
-  link.setAttribute('href', `${originalHref}?query=${encodeURIComponent(query)}`);
+  if (link) {
+    let originalHref = link.getAttribute('href').split('?')[0];
+    link.setAttribute('href', `${originalHref}?query=${encodeURIComponent(query)}`);
+  }
 }
 
 // update url to allow bookmarking searches
-document.getElementById('id_query').addEventListener('input', function(event) {
+let queryInput = document.getElementById('id_query');
+if (queryInput) {
+  queryInput.addEventListener('input', function(event) {
     let query = event.target.value;
     let newUrl = new URL(window.location);
     newUrl.searchParams.set('query', query);
@@ -219,5 +223,6 @@ document.getElementById('id_query').addEventListener('input', function(event) {
     
     htmx.trigger('#filter-form', 'keyup');
   });
+}
 </script>
 {% endblock %}

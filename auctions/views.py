@@ -1681,8 +1681,8 @@ def composeEmailToUsers(request, slug):
     if query:
         users = AuctionTOSFilter.generic(None, users, query)
     
-    # Collect valid emails
-    emails = list(users.filter(email__isnull=False).values_list('email', flat=True))
+    # Collect valid emails (non-null and non-empty)
+    emails = list(users.filter(email__isnull=False).exclude(email='').values_list('email', flat=True))
     
     # Create mailto link
     if emails:
