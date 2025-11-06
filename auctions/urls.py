@@ -114,7 +114,7 @@ urlpatterns = [
         login_required(views.SingleLotLabelView.as_view()),
         name="single_lot_label",
     ),
-    path("selling", login_required(views.MyLots.as_view()), name="selling"),
+    path("selling/", login_required(views.MyLots.as_view()), name="selling"),
     path("lots/all/", views.AllLots.as_view(), name="allLots"),
     path("lots/user/", views.LotsByUser.as_view(), name="user_lots"),
     path("lots/<int:pk>/<slug:slug>/", views.ViewLot.as_view()),
