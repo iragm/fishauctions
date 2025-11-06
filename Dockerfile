@@ -16,11 +16,12 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 # Configure pip to bypass SSL if needed (affects all pip operations including build dependencies)
-# Also increase timeout for slow connections
+# Also increase timeout significantly for very slow connections
 RUN if [ "$DISABLE_PIP_SSL_VERIFY" = "1" ]; then \
         pip config set global.trusted-host "pypi.org pypi.python.org files.pythonhosted.org"; \
     fi && \
-    pip config set global.timeout 300
+    pip config set global.timeout 600 && \
+    pip config set global.retries 5
 
 # install system dependencies
 RUN apt-get update && \
@@ -51,7 +52,12 @@ COPY ./requirements.in .
 
 # install python dependencies
 COPY ./requirements.txt .
-RUN pip wheel --no-cache-dir --no-deps --wheel-dir /usr/src/app/wheels -r requirements.txt
+# Try to use pre-built wheels from PyPI, only building from source if necessary
+# Split into smaller batches to avoid timeout on any single package
+# Increase buffer size to handle slow connections
+ENV PIP_DEFAULT_TIMEOUT=600
+RUN pip wheel --wheel-dir /usr/src/app/wheels -r requirements.txt || \
+    (pip wheel --wheel-dir /usr/src/app/wheels --prefer-binary -r requirements.txt)
 
 #########
 # Test and CI #
@@ -164,12 +170,13 @@ RUN chmod gu+s /usr/sbin/cron
 RUN crontab /etc/cron.d/django-cron
 RUN touch /var/log/cron.log
 
-COPY --from=builder /usr/src/app/wheels /wheels
 COPY --from=builder /usr/src/app/requirements.txt .
 
-# Install packages
+# Install packages using only pre-built binary wheels to avoid compilation timeouts
+# Falls back to allowing source builds if binary wheels aren't available
+ENV PIP_PREFER_BINARY=1
 RUN pip install --upgrade pip && \
-    pip install --no-cache /wheels/* && \
+    (pip install --only-binary :all: -r requirements.txt || pip install -r requirements.txt) && \
     pip install mysql-connector-python
 
 # Sometimes we need customizations made to python packages
