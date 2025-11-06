@@ -1970,3 +1970,55 @@ class PayPalInfoViewTests(TestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Accept payments with PayPal")
+
+
+class UserExportTests(StandardTestCase):
+    """Test user export and email composition functionality"""
+
+    def test_user_export_without_filter(self):
+        """Test that user export works without a filter"""
+        self.client.login(username="admin_user", password="testpassword")
+        url = reverse("user_list", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "text/csv")
+
+    def test_user_export_with_filter(self):
+        """Test that user export works with a filter query parameter"""
+        self.client.login(username="admin_user", password="testpassword")
+        url = reverse("user_list", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url, {"query": "admin"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "text/csv")
+        # Check that filename includes query
+        self.assertIn("admin", response["Content-Disposition"])
+
+    def test_user_export_permission_denied(self):
+        """Test that non-admin users cannot export users"""
+        self.client.login(username="no_lots", password="testpassword")
+        url = reverse("user_list", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)  # Redirect
+
+    def test_compose_email_without_filter(self):
+        """Test composing email to all users"""
+        self.client.login(username="admin_user", password="testpassword")
+        url = reverse("compose_email_to_users", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)  # Redirect to mailto URL
+        self.assertTrue(response.url.startswith("mailto:"))
+
+    def test_compose_email_with_filter(self):
+        """Test composing email with a filter"""
+        self.client.login(username="admin_user", password="testpassword")
+        url = reverse("compose_email_to_users", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url, {"query": "admin"})
+        self.assertEqual(response.status_code, 302)  # Redirect to mailto URL
+        self.assertTrue(response.url.startswith("mailto:"))
+
+    def test_compose_email_permission_denied(self):
+        """Test that non-admin users cannot compose emails"""
+        self.client.login(username="no_lots", password="testpassword")
+        url = reverse("compose_email_to_users", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)  # Redirect to home
