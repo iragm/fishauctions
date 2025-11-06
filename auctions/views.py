@@ -795,9 +795,11 @@ class LotsByUser(LotListView):
 
 
 @login_required
-def watchOrUnwatch(request, pk):
-    if request.method == "POST":
-        watch = request.POST["watch"]
+class WatchOrUnwatch(LoginRequiredMixin, View):
+    """Watch or unwatch a lot - POST only"""
+
+    def post(self, request, pk):
+        watch = request.POST.get("watch")
         user = request.user
         lot = Lot.objects.filter(pk=pk, is_deleted=False).first()
         if not lot:
@@ -811,13 +813,12 @@ def watchOrUnwatch(request, pk):
             return HttpResponse("Success")
         else:
             return HttpResponse("Failure")
-    messages.error(request, "Your account doesn't have permission to view this page")
-    return redirect("/")
 
 
-@login_required
-def lotNotifications(request):
-    if request.method == "POST":
+class LotNotifications(LoginRequiredMixin, View):
+    """Get count of new lot notifications - POST only"""
+
+    def post(self, request):
         user = request.user
         new = (
             LotHistory.objects.filter(lot__user=user.pk, seen=False, changed_price=False)
@@ -827,14 +828,13 @@ def lotNotifications(request):
         if not new:
             new = ""
         return JsonResponse(data={"new": new})
-    messages.error(request, "Your account doesn't have permission to view this page")
-    return redirect("/")
 
 
-@login_required
-def ignoreAuction(request):
-    if request.method == "POST":
-        auction = request.POST["auction"]
+class IgnoreAuction(LoginRequiredMixin, View):
+    """Ignore an auction - POST only"""
+
+    def post(self, request):
+        auction = request.POST.get("auction")
         user = request.user
         try:
             auction = Auction.objects.get(slug=auction, is_deleted=False)
@@ -845,16 +845,15 @@ def ignoreAuction(request):
             )
             return HttpResponse("Success")
         except Exception as e:
-            return HttpResponse("Failure: " + e)
-    messages.error(request, "Your account doesn't have permission to view this page")
-    return redirect("/")
+            return HttpResponse(f"Failure: {e}")
 
 
-def no_lot_auctions(request):
+class NoLotAuctions(View):
     """POST-only method that returns an empty string if most recent auction you've used accepts lots
     or the name of the auction and the end date
     Used on the lot creation form"""
-    if request.method == "POST":
+
+    def post(self, request):
         result = ""
         if request.user.is_authenticated:
             userData, created = UserData.objects.get_or_create(
@@ -896,17 +895,16 @@ def no_lot_auctions(request):
                 "result": result,
             }
         )
-    messages.error(request, "Your account doesn't have permission to view this page")
-    return redirect("/")
 
 
-def auctionNotifications(request):
+class AuctionNotifications(View):
     """
     POST-only method that will return a count of auctions as well as some info about the closest one.
     Used to put an icon next to auctions button in main view
     This is mostly a wrapper to go around models.nearby_auctions so that all info isn't accessible to anyone
     """
-    if request.method == "POST":
+
+    def post(self, request):
         new = 0
         name = ""
         link = ""
@@ -964,13 +962,12 @@ def auctionNotifications(request):
                 "distance_unit": distance_unit,
             }
         )
-    messages.error(request, "Your account doesn't have permission to view this page")
-    return redirect("/")
 
 
-@login_required
-def setCoordinates(request):
-    if request.method == "POST":
+class SetCoordinates(LoginRequiredMixin, View):
+    """Set user location coordinates - POST only"""
+
+    def post(self, request):
         userData, created = UserData.objects.get_or_create(
             user=request.user,
             defaults={},
@@ -979,12 +976,12 @@ def setCoordinates(request):
         userData.last_activity = timezone.now()
         userData.save()
         return HttpResponse("Success")
-    messages.error(request, "Your account doesn't have permission to view this page")
-    return redirect("/")
 
 
-def userBan(request, pk):
-    if request.method == "POST" and request.user.is_authenticated:
+class UserBan(LoginRequiredMixin, View):
+    """Ban a user - POST only"""
+
+    def post(self, request, pk):
         user = request.user
         bannedUser = User.objects.get(pk=pk)
         obj, created = UserBan.objects.update_or_create(
@@ -1015,14 +1012,13 @@ def userBan(request, pk):
                     lot.banned = True
                     lot.ban_reason = "The seller of this lot has been banned from this auction"
                     lot.save()
-        # return #redirect('/users/' + str(pk))
         return redirect(reverse("userpage", kwargs={"slug": bannedUser.username}))
-    messages.error(request, "Your account doesn't have permission to view this page")
-    return redirect("/")
 
 
-def lotDeactivate(request, pk):
-    if request.method == "POST":
+class LotDeactivate(View):
+    """Deactivate or activate a lot - POST only"""
+
+    def post(self, request, pk):
         lot = Lot.objects.get(pk=pk, is_deleted=False)
         checksPass = False
         if request.user.is_superuser:
@@ -1041,13 +1037,14 @@ def lotDeactivate(request, pk):
                 lot.deactivated = True
             lot.save()
             return HttpResponse("success")
-    messages.error(request, "Your account doesn't have permission to view this page")
-    return redirect("/")
+        messages.error(request, "Your account doesn't have permission to view this page")
+        return redirect("/")
 
 
-def userUnban(request, pk):
-    """Delete the UserBan"""
-    if request.method == "POST" and request.user.is_authenticated:
+class UserUnban(LoginRequiredMixin, View):
+    """Unban a user - POST only"""
+
+    def post(self, request, pk):
         user = request.user
         bannedUser = User.objects.get(pk=pk)
         obj, created = UserBan.objects.update_or_create(
@@ -1056,19 +1053,16 @@ def userUnban(request, pk):
             defaults={},
         )
         obj.delete()
-        # return redirect('/users/' + str(pk))
         return redirect(reverse("userpage", kwargs={"slug": bannedUser.username}))
-    messages.error(request, "Your account doesn't have permission to view this page")
-    return redirect("/")
 
 
-def imagesPrimary(request):
+class ImagesPrimary(View):
     """Make the specified image the default image for the lot
     Takes pk of image as post param
     this does not check lot.can_add_images, which is deliberate (who cares if you rotate...)
-    at some point, this function and the rotate function should be converted into classes
     """
-    if request.method == "POST":
+
+    def post(self, request):
         try:
             pk = int(request.POST["pk"])
         except:
@@ -1084,15 +1078,14 @@ def imagesPrimary(request):
         lotImage.is_primary = True
         lotImage.save()
         return HttpResponse("Success")
-    messages.error(request, "Your account doesn't have permission to view this page")
-    return redirect("/")
 
 
-def imagesRotate(request):
+class ImagesRotate(View):
     """Rotate an image associated with a lot
     Takes pk of image and angle as post params
     """
-    if request.method == "POST":
+
+    def post(self, request):
         try:
             pk = int(request.POST["pk"])
             angle = int(request.POST["angle"])
@@ -1121,22 +1114,21 @@ def imagesRotate(request):
             save=True,
         )
         return HttpResponse("Success")
-    messages.error(request, "Your account doesn't have permission to view this page")
-    return redirect("/")
 
 
-def feedback(request, pk, leave_as):
+class Feedback(View):
     """Leave feedback on a lot
     This can be done as a buyer or a seller
     api/feedback/lot_number/buyer
     api/feedback/lot_number/seller
     """
-    if request.method == "POST":
+
+    def post(self, request, pk, leave_as):
         data = request.POST
         try:
             lot = Lot.objects.get(pk=pk, is_deleted=False)
         except:
-            msg = f"No lot found with key {lot}"
+            msg = f"No lot found with key {pk}"
             raise Http404(msg)
         winner_checks_pass = False
         seller_checks_pass = False
@@ -1184,8 +1176,6 @@ def feedback(request, pk, leave_as):
             messages.error(request, "Only the seller or winner of a lot can leave feedback")
             return redirect("/")
         return HttpResponse("Success")
-    messages.error(request, "Your account doesn't have permission to view this page")
-    return redirect("/")
 
 
 def clean_referrer(url):
