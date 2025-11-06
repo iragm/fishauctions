@@ -13,7 +13,7 @@ from decimal import Decimal
 from io import BytesIO, TextIOWrapper
 from pathlib import Path
 from random import choice, randint, sample, uniform
-from urllib.parse import unquote, urlencode, urlparse
+from urllib.parse import quote_plus, unquote, urlencode, urlparse
 
 import channels.layers
 import qr_code
@@ -170,6 +170,9 @@ from .models import (
 )
 from .tables import AuctionHistoryHTMxTable, AuctionHTMxTable, AuctionTOSHTMxTable, LotHTMxTable, LotHTMxTableForUsers
 
+# Distance conversion constant
+MILES_TO_KM = 1.60934
+
 logger = logging.getLogger(__name__)
 
 
@@ -307,9 +310,15 @@ class AuctionPermissionsMixin:
 class AuctionViewMixin(AuctionPermissionsMixin):
     """Subclass this when you need auction permissions, it's easier than using AuctionPermissionsMixin"""
 
+    auction = None
+
+    def get_auction(self, slug):
+        if not self.auction and slug:
+            self.auction = get_object_or_404(Auction, slug=slug, is_deleted=False)
+            self.is_auction_admin
+
     def dispatch(self, request, *args, **kwargs):
-        self.auction = get_object_or_404(Auction, slug=kwargs.pop("slug"), is_deleted=False)
-        self.is_auction_admin
+        self.get_auction(kwargs.pop("slug", ""))
         return super().dispatch(request, *args, **kwargs)
 
 
@@ -930,13 +939,29 @@ def auctionNotifications(request):
             pass
         if not new:
             new = ""
+        # Convert distance to user's preferred unit
+        distance_value = distance
+        distance_unit = "miles"
+        if request.user.is_authenticated:
+            try:
+                user_unit = request.user.userdata.distance_unit
+                if user_unit == "km":
+                    distance_value = round(distance * MILES_TO_KM)
+                    distance_unit = "km"
+                else:
+                    distance_value = round(distance)
+            except AttributeError:
+                distance_value = round(distance)
+        else:
+            distance_value = round(distance)
         return JsonResponse(
             data={
                 "new": new,
                 "name": name,
                 "link": link,
                 "slug": slug,
-                "distance": distance,
+                "distance": distance_value,
+                "distance_unit": distance_unit,
             }
         )
     messages.error(request, "Your account doesn't have permission to view this page")
@@ -1483,9 +1508,14 @@ def auctionReport(request, slug):
     auction = get_object_or_404(Auction, slug=slug, is_deleted=False)
     if auction.permission_check(request.user):
         # Create the HttpResponse object with the appropriate CSV header.
+        query = request.GET.get("query", None)
         response = HttpResponse(content_type="text/csv")
         end = timezone.now().strftime("%Y-%m-%d")
-        response["Content-Disposition"] = 'attachment; filename="' + slug + "-report-" + end + '.csv"'
+        if not query:
+            filename = slug + "-report-" + end
+        else:
+            filename = slug + "-report-" + query + "-" + end
+        response["Content-Disposition"] = f'attachment; filename="{filename}.csv"'
         writer = csv.writer(response)
         writer.writerow(
             [
@@ -1528,6 +1558,9 @@ def auctionReport(request, slug):
             .select_related("pickup_location")
             .order_by("createdon")
         )
+        # Apply filter if query is provided
+        if query:
+            users = AuctionTOSFilter.generic(None, users, query)
         # .annotate(distance_traveled=distance_to(\
         # '`auctions_userdata`.`latitude`', '`auctions_userdata`.`longitude`', \
         # lat_field_name='`auctions_pickuplocation`.`latitude`',\
@@ -1634,6 +1667,59 @@ def auctionReport(request, slug):
         return response
     messages.error(request, "Your account doesn't have permission to view this page")
     return redirect("/")
+
+
+class ComposeEmailToUsers(TemplateView, AuctionPermissionsMixin):
+    """Generate a mailto: link with BCC for filtered users - HTMX endpoint"""
+
+    template_name = "email_users_button.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        slug = kwargs.get("slug")
+        self.auction = get_object_or_404(Auction, slug=slug, is_deleted=False)
+        self.is_auction_admin
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        # Get query parameter
+        query = self.request.GET.get("query", "")
+        # Get all users for the auction
+        users = AuctionTOS.objects.filter(auction=self.auction).select_related("user")
+
+        # Apply filter if query is provided
+        if query:
+            users = AuctionTOSFilter.generic(None, users, query)
+
+        # Collect valid emails (non-null and non-empty)
+        emails = list(users.filter(email__isnull=False).exclude(email="").values_list("email", flat=True))
+        # Default values
+        mailto_url = "#"
+        email_count = 0
+
+        if emails:
+            # Limit to avoid overly long URLs (conservative cap)
+            max_emails = 60
+            if len(emails) > max_emails:
+                emails = emails[:max_emails]
+
+            bcc = ",".join(emails)
+            subject = f"{self.auction.title}"
+            body = f"Hello,\n\nThis message is being sent to participants in {self.auction.title}.\n\n"
+
+            if "open" in query or "ready" in query:
+                url = reverse("my_auction_invoice", kwargs={"slug": self.auction.slug})
+                body += f"You can view your invoice here: https://{Site.objects.get_current().domain}{url}\n\n"
+            mailto_url = f"mailto:?bcc={quote_plus(bcc)}&subject={quote_plus(subject)}&body={quote_plus(body)}"
+            email_count = len(emails)
+
+        context.update(
+            {
+                "mailto_url": mailto_url,
+                "email_count": email_count,
+            }
+        )
+        return context
 
 
 @login_required
@@ -2806,8 +2892,8 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
         context = self.get_context_data(**kwargs)
         return self.render_to_response(context)
 
-    def handle_csv_file(self, csv_file, *args, **kwargs):
-        """If a CSV file has been uploaded, parse it and redirect"""
+    def process_csv_data(self, csv_reader, *args, **kwargs):
+        """Process CSV data from a DictReader object and add/update users"""
 
         def extract_info(row, field_name_list, default_response=""):
             """Pass a row, and a lowercase list of field names
@@ -2829,8 +2915,6 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
                     return True
             return False
 
-        csv_file.seek(0)
-        csv_reader = csv.DictReader(TextIOWrapper(csv_file.file))
         email_field_names = ["email", "e-mail", "email address", "e-mail address"]
         bidder_number_fields = ["bidder number", "bidder"]
         name_field_names = ["name", "full name", "first name", "firstname"]
@@ -2838,6 +2922,8 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
         phone_field_names = ["phone", "phone number", "telephone", "telephone number"]
         is_club_member_fields = ["member", "club member", self.auction.alternative_split_label.lower()]
         is_bidding_allowed_field_names = ["allow bidding", "bidding", "bidding allowed"]
+        memo_field_names = ["memo", "note", "notes"]
+        is_admin_field_names = ["admin", "staff", "is_admin", "is_staff"]
         # we are not reading in location here, do we care??
         some_columns_exist = False
         error = ""
@@ -2847,6 +2933,8 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
             # we're not going to error out for club member or bidding allowed missing columns, but track it for updating existing users
             is_club_member_field_exists = columns_exist(csv_reader.fieldnames, is_club_member_fields)
             is_bidding_allowed_fields_exists = columns_exist(csv_reader.fieldnames, is_bidding_allowed_field_names)
+            memo_field_exists = columns_exist(csv_reader.fieldnames, memo_field_names)
+            is_admin_field_exists = columns_exist(csv_reader.fieldnames, is_admin_field_names)
             if not columns_exist(csv_reader.fieldnames, phone_field_names):
                 error = "Warning: This file does not contain a phone column"
             else:
@@ -2877,6 +2965,7 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
                 name = extract_info(row, name_field_names)
                 phone = extract_info(row, phone_field_names)
                 address = extract_info(row, address_field_names)
+                memo = extract_info(row, memo_field_names)
                 is_club_member = extract_info(row, is_club_member_fields)
                 if is_club_member.lower() in [
                     "yes",
@@ -2893,6 +2982,11 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
                     bidding_allowed = True
                 else:
                     bidding_allowed = False
+                is_admin = extract_info(row, is_admin_field_names)
+                if is_admin and is_admin.lower() in ["yes", "true", "1"]:
+                    is_admin = True
+                else:
+                    is_admin = False
                 # if email or name or phone or address:
                 if email:
                     # The old way -- skip anybody who is already in the auction
@@ -2922,6 +3016,10 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
                                 .first()
                             ):
                                 existing_tos.bidder_number = bidder_number[:20]
+                        if memo_field_exists:
+                            existing_tos.memo = memo[:500] if memo else ""
+                        if is_admin_field_exists:
+                            existing_tos.is_admin = is_admin
                         existing_tos.save()
                     else:
                         logger.debug("CSV import adding %s", name)
@@ -2939,6 +3037,8 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
                             address=address[:500],
                             is_club_member=is_club_member,
                             bidding_allowed=bidding_allowed,
+                            memo=memo[:500] if memo else "",
+                            is_admin=is_admin,
                         )
                         total_tos += 1
                 else:
@@ -2946,9 +3046,7 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
             if error:
                 messages.error(self.request, error)
             msg = f"{total_tos} users added"
-            self.auction.create_history(
-                applies_to="USERS", action="Added users from CSV file, " + msg, user=self.request.user
-            )
+            self.auction.create_history(applies_to="USERS", action=msg, user=self.request.user)
             if total_updated:
                 msg += f", {total_updated} users are already in this auction (matched by email) and were updated"
             if total_skipped:
@@ -2958,6 +3056,21 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
             response = HttpResponse(status=200)
             response["HX-Redirect"] = url
             return response
+        except (UnicodeDecodeError, ValueError) as e:
+            messages.error(
+                self.request, f"Unable to read file.  Make sure this is a valid UTF-8 CSV file.  Error was: {e}"
+            )
+            url = reverse("bulk_add_users", kwargs={"slug": self.auction.slug})
+            response = HttpResponse(status=200)
+            response["HX-Redirect"] = url
+            return response
+
+    def handle_csv_file(self, csv_file, *args, **kwargs):
+        """If a CSV file has been uploaded, parse it and redirect"""
+        try:
+            csv_file.seek(0)
+            csv_reader = csv.DictReader(TextIOWrapper(csv_file.file))
+            return self.process_csv_data(csv_reader)
         except (UnicodeDecodeError, ValueError) as e:
             messages.error(
                 self.request, f"Unable to read file.  Make sure this is a valid UTF-8 CSV file.  Error was: {e}"
@@ -3087,6 +3200,97 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
                 ),
                 form=QuickAddTOS,
             )
+
+
+class ImportFromGoogleDrive(AuctionViewMixin, TemplateView, ContextMixin):
+    """Import users from a Google Drive spreadsheet"""
+
+    template_name = "auctions/import_from_google_drive.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["auction"] = self.auction
+        return context
+
+    def post(self, request, *args, **kwargs):
+        # Check if this is a sync request (no google_drive_link in POST)
+        google_drive_link = request.POST.get("google_drive_link", "").strip()
+
+        # If google_drive_link is provided, update it and sync
+        if google_drive_link:
+            self.auction.google_drive_link = google_drive_link
+            self.auction.save()
+
+        # Perform the sync (whether it's a new link or existing link)
+        return self.sync_google_drive()
+
+    def sync_google_drive(self):
+        """Read data from Google Drive and import users"""
+        if not self.auction.google_drive_link:
+            messages.error(self.request, "No Google Drive link configured")
+            url = reverse("bulk_add_users", kwargs={"slug": self.auction.slug})
+            return redirect(url)
+
+        try:
+            # Convert Google Sheets sharing link to export CSV URL
+            # Example: https://docs.google.com/spreadsheets/d/SPREADSHEET_ID/edit#gid=0
+            # Convert to: https://docs.google.com/spreadsheets/d/SPREADSHEET_ID/export?format=csv&gid=0
+            link = self.auction.google_drive_link
+
+            # Extract the spreadsheet ID from the URL
+            if "/spreadsheets/d/" in link:
+                spreadsheet_id = link.split("/spreadsheets/d/")[1].split("/")[0]
+                # Extract gid if present
+                gid = "0"
+                if "gid=" in link:
+                    gid = link.split("gid=")[1].split("&")[0].split("#")[0]
+                csv_url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?format=csv&gid={gid}"
+            else:
+                return self._error_redirect("Invalid Google Drive link. Please use a link to a Google Sheets document.")
+
+            # Fetch the CSV data with timeout to prevent hanging
+            response = requests.get(csv_url, timeout=30)
+            response.raise_for_status()
+
+            # Create a CSV reader from the response text (handles encoding automatically)
+            csv_reader = csv.DictReader(response.text.splitlines())
+
+            # Create a BulkAddUsers instance to use its process_csv_data method
+            # Note: This reuses existing CSV processing logic. Any exceptions from
+            # process_csv_data will be caught by the outer try/except blocks.
+            bulk_add_view = BulkAddUsers()
+            bulk_add_view.request = self.request
+            bulk_add_view.auction = self.auction
+
+            # Process the CSV data (this adds messages via self.request)
+            bulk_add_view.process_csv_data(csv_reader)
+
+            # Update the last sync time
+            self.auction.last_sync_time = timezone.now()
+            self.auction.save()
+            self.auction.create_history("USERS", action="Google Drive sync complete")
+            # Redirect to the users list
+            url = reverse("auction_tos_list", kwargs={"slug": self.auction.slug})
+            return redirect(url)
+
+        except requests.RequestException as e:
+            if "401" in str(e):
+                return self._error_redirect(
+                    "Unable to fetch data from Google Drive. Make sure the link is shared with 'anyone with the link can view'"
+                )
+            elif "404" in str(e):
+                return self._error_redirect("Link not found or invalid")
+            else:
+                return self._error_redirect(f"Unable to fetch data from Google Drive. Error was {e}")
+
+        except Exception as e:
+            return self._error_redirect(f"An error occurred while importing from Google Drive: {e}")
+
+    def _error_redirect(self, error_message):
+        """Helper method to display error and redirect to bulk add users page"""
+        messages.error(self.request, error_message)
+        url = reverse("bulk_add_users", kwargs={"slug": self.auction.slug})
+        return redirect(url)
 
 
 class BulkAddLots(TemplateView, AuctionPermissionsMixin):
@@ -4592,6 +4796,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "use_seller_dash_lot_numbering",
                 "enable_online_payments",
                 "alternative_split_label",
+                "google_drive_link",
             ]
             for field in fields_to_clone:
                 setattr(auction, field, getattr(original_auction, field))
@@ -6605,9 +6810,12 @@ class PayPalInfoView(TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["seller"] = PayPalSeller.objects.filter(user=self.request.user).first()
         if self.request.user.is_authenticated:
+            context["seller"] = PayPalSeller.objects.filter(user=self.request.user).first()
             context["auction"] = self.request.user.userdata.last_auction_created
+        else:
+            context["seller"] = None
+            context["auction"] = None
         return context
 
 

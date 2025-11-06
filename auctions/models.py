@@ -774,6 +774,10 @@ class Auction(models.Model):
     enable_online_payments.help_text = "Allow users to use PayPal to pay their invoices themselves."
     dismissed_promo_banner = models.BooleanField(default=False, blank=True)
     dismissed_paypal_banner = models.BooleanField(default=False, blank=True)
+    google_drive_link = models.URLField(max_length=500, blank=True, null=True, default="")
+    google_drive_link.help_text = "Link to a Google Sheet with user information.  Make sure the sheet is shared with 'anyone with the link can view'."
+    last_sync_time = models.DateTimeField(blank=True, null=True)
+    last_sync_time.help_text = "Last time user data was synchronized from Google Drive"
 
     @property
     def paypal_information(self):
@@ -4388,6 +4392,13 @@ class UserData(models.Model):
     auto_add_images.help_text = "If another lot with the same name has been added previously.  Images are only added to lots that are part of an auction."
     push_notifications_when_lots_sell = models.BooleanField(default=False, blank=True)
     push_notifications_when_lots_sell.help_text = "For in-person auctions, get a notification when bidding starts on a lot that you've watched<span class='d-none' id='subscribe_message_area'></span>"
+    distance_unit = models.CharField(
+        max_length=10,
+        choices=[("mi", "Miles"), ("km", "Kilometers")],
+        default="mi",
+        verbose_name="Distance unit",
+    )
+    distance_unit.help_text = "Unit for displaying distances"
 
     # breederboard info
     rank_unique_species = models.PositiveIntegerField(null=True, blank=True)

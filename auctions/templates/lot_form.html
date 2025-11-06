@@ -208,7 +208,8 @@ $(document).ready(function() {
         success : function(result) {
         if (result.new) {
             redirectLink = result.link + "?next={% firstof request.path '/' %}";
-            $('#auctionText').html("The " + result.name + " is happening now<br><small>" + result.distance + " miles from you</small>");
+            var distanceUnit = result.distance_unit || 'miles';
+            $('#auctionText').html("The " + result.name + " is happening now<br><small>" + result.distance + " " + distanceUnit + " from you</small>");
             $('#joinAuction').modal('show');
             ignoreAuction = result.slug;
         }

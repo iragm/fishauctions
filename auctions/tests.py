@@ -2,6 +2,7 @@ import datetime
 from decimal import Decimal
 
 from django.contrib.auth.models import User
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.test.client import Client
 from django.urls import reverse
@@ -1412,6 +1413,345 @@ class AuctionHistoryTests(StandardTestCase):
         assert final_count == new_count  # Should be the same as after first join
 
 
+class CSVImportTests(StandardTestCase):
+    """Test CSV import functionality for bulk adding users"""
+
+    def test_csv_import_with_memo_field(self):
+        """Test that memo field is correctly imported from CSV"""
+        import csv
+        from io import StringIO
+
+        # Create CSV content with memo field
+        csv_buffer = StringIO()
+        writer = csv.writer(csv_buffer)
+        writer.writerow(["email", "name", "memo"])
+        writer.writerow(["test1@example.com", "Test User 1", "This is a test memo"])
+        writer.writerow(["test2@example.com", "Test User 2", "Another memo"])
+
+        csv_file = SimpleUploadedFile("test.csv", csv_buffer.getvalue().encode("utf-8"), content_type="text/csv")
+
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+
+        # Import CSV
+        self.client.post(
+            reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
+            {"csv_file": csv_file},
+        )
+
+        # Check that users were created with memo
+        tos1 = AuctionTOS.objects.filter(auction=self.online_auction, email="test1@example.com").first()
+        tos2 = AuctionTOS.objects.filter(auction=self.online_auction, email="test2@example.com").first()
+
+        self.assertIsNotNone(tos1)
+        self.assertIsNotNone(tos2)
+        self.assertEqual(tos1.memo, "This is a test memo")
+        self.assertEqual(tos2.memo, "Another memo")
+
+    def test_csv_import_with_admin_field(self):
+        """Test that admin/staff field is correctly imported from CSV with various boolean values"""
+        import csv
+        from io import StringIO
+
+        # Create CSV content with proper formatting
+        csv_buffer = StringIO()
+        writer = csv.writer(csv_buffer)
+        writer.writerow(["email", "name", "admin"])
+        writer.writerow(["admin1@example.com", "Admin 1", "yes"])
+        writer.writerow(["admin2@example.com", "Admin 2", "true"])
+        writer.writerow(["admin3@example.com", "Admin 3", "1"])
+        writer.writerow(["regular@example.com", "Regular User", "no"])
+
+        csv_file = SimpleUploadedFile("test.csv", csv_buffer.getvalue().encode("utf-8"), content_type="text/csv")
+
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+
+        # Import CSV
+        self.client.post(
+            reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
+            {"csv_file": csv_file},
+        )
+
+        # Check that admin users were created correctly
+        admin1 = AuctionTOS.objects.filter(auction=self.online_auction, email="admin1@example.com").first()
+        admin2 = AuctionTOS.objects.filter(auction=self.online_auction, email="admin2@example.com").first()
+        admin3 = AuctionTOS.objects.filter(auction=self.online_auction, email="admin3@example.com").first()
+        regular = AuctionTOS.objects.filter(auction=self.online_auction, email="regular@example.com").first()
+
+        self.assertIsNotNone(admin1)
+        self.assertIsNotNone(admin2)
+        self.assertIsNotNone(admin3)
+        self.assertIsNotNone(regular)
+
+        self.assertTrue(admin1.is_admin)
+        self.assertTrue(admin2.is_admin)
+        self.assertTrue(admin3.is_admin)
+        self.assertFalse(regular.is_admin)
+
+    def test_csv_import_with_staff_field(self):
+        """Test that 'staff' column name also works for admin field"""
+        import csv
+        from io import StringIO
+
+        # Create CSV content with proper formatting
+        csv_buffer = StringIO()
+        writer = csv.writer(csv_buffer)
+        writer.writerow(["email", "name", "staff"])
+        writer.writerow(["staff1@example.com", "Staff 1", "yes"])
+
+        csv_file = SimpleUploadedFile("test.csv", csv_buffer.getvalue().encode("utf-8"), content_type="text/csv")
+
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+
+        # Import CSV
+        self.client.post(
+            reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
+            {"csv_file": csv_file},
+        )
+
+        # Check that admin user was created
+        staff1 = AuctionTOS.objects.filter(auction=self.online_auction, email="staff1@example.com").first()
+        self.assertIsNotNone(staff1)
+        self.assertTrue(staff1.is_admin)
+
+    def test_csv_import_bidder_number_not_in_use(self):
+        """Test that bidder number from CSV is used if not already in use"""
+        import csv
+        from io import StringIO
+
+        # Create CSV content with proper formatting
+        csv_buffer = StringIO()
+        writer = csv.writer(csv_buffer)
+        writer.writerow(["email", "name", "bidder number"])
+        writer.writerow(["bidder1@example.com", "Bidder 1", "999"])
+
+        csv_file = SimpleUploadedFile("test.csv", csv_buffer.getvalue().encode("utf-8"), content_type="text/csv")
+
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+
+        # Import CSV
+        self.client.post(
+            reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
+            {"csv_file": csv_file},
+        )
+
+        # Check that bidder number was assigned
+        bidder1 = AuctionTOS.objects.filter(auction=self.online_auction, email="bidder1@example.com").first()
+        self.assertIsNotNone(bidder1)
+        self.assertEqual(bidder1.bidder_number, "999")
+
+    def test_csv_import_bidder_number_in_use_new_user(self):
+        """Test that bidder number is not assigned if already in use for a new user"""
+        import csv
+        from io import StringIO
+
+        # Create an existing user with bidder number 777
+        AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            email="existing@example.com",
+            name="Existing User",
+            bidder_number="777",
+        )
+
+        # Create CSV content with same bidder number
+        csv_buffer = StringIO()
+        writer = csv.writer(csv_buffer)
+        writer.writerow(["email", "name", "bidder number"])
+        writer.writerow(["newuser@example.com", "New User", "777"])
+
+        csv_file = SimpleUploadedFile("test.csv", csv_buffer.getvalue().encode("utf-8"), content_type="text/csv")
+
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+
+        # Import CSV
+        self.client.post(
+            reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
+            {"csv_file": csv_file},
+        )
+
+        # Check that new user was created but without the conflicting bidder number
+        new_user = AuctionTOS.objects.filter(auction=self.online_auction, email="newuser@example.com").first()
+        self.assertIsNotNone(new_user)
+        self.assertNotEqual(new_user.bidder_number, "777")
+
+    def test_csv_import_bidder_number_update_existing_user(self):
+        """Test that existing user's bidder number is updated if new number is not in use"""
+        import csv
+        from io import StringIO
+
+        # Create an existing user without bidder number
+        existing_tos = AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            email="existing@example.com",
+            name="Existing User",
+            bidder_number="",
+        )
+
+        # Create CSV content to update with bidder number
+        csv_buffer = StringIO()
+        writer = csv.writer(csv_buffer)
+        writer.writerow(["email", "name", "bidder number"])
+        writer.writerow(["existing@example.com", "Existing User", "888"])
+
+        csv_file = SimpleUploadedFile("test.csv", csv_buffer.getvalue().encode("utf-8"), content_type="text/csv")
+
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+
+        # Import CSV
+        self.client.post(
+            reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
+            {"csv_file": csv_file},
+        )
+
+        # Check that bidder number was updated
+        existing_tos.refresh_from_db()
+        self.assertEqual(existing_tos.bidder_number, "888")
+
+    def test_csv_import_bidder_number_exclude_self(self):
+        """Test that bidder number check excludes the user being updated"""
+        import csv
+        from io import StringIO
+
+        # Create an existing user with bidder number
+        existing_tos = AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            email="existing@example.com",
+            name="Existing User",
+            bidder_number="666",
+        )
+
+        # Create CSV content with same bidder number (re-importing same user)
+        csv_buffer = StringIO()
+        writer = csv.writer(csv_buffer)
+        writer.writerow(["email", "name", "bidder number"])
+        writer.writerow(["existing@example.com", "Existing User Updated", "666"])
+
+        csv_file = SimpleUploadedFile("test.csv", csv_buffer.getvalue().encode("utf-8"), content_type="text/csv")
+
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+
+        # Import CSV
+        self.client.post(
+            reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
+            {"csv_file": csv_file},
+        )
+
+        # Check that bidder number was kept (not cleared)
+        existing_tos.refresh_from_db()
+        self.assertEqual(existing_tos.bidder_number, "666")
+        self.assertEqual(existing_tos.name, "Existing User Updated")
+
+    def test_csv_import_update_existing_user_memo_and_admin(self):
+        """Test that existing user's memo and admin status are updated from CSV"""
+        import csv
+        from io import StringIO
+
+        # Create an existing user
+        existing_tos = AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            email="existing@example.com",
+            name="Existing User",
+            memo="",
+            is_admin=False,
+        )
+
+        # Create CSV content to update memo and admin status
+        csv_buffer = StringIO()
+        writer = csv.writer(csv_buffer)
+        writer.writerow(["email", "name", "memo", "admin"])
+        writer.writerow(["existing@example.com", "Existing User", "Updated memo", "yes"])
+
+        csv_file = SimpleUploadedFile("test.csv", csv_buffer.getvalue().encode("utf-8"), content_type="text/csv")
+
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+
+        # Import CSV
+        self.client.post(
+            reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
+            {"csv_file": csv_file},
+        )
+
+        # Check that memo and admin were updated
+        existing_tos.refresh_from_db()
+        self.assertEqual(existing_tos.memo, "Updated memo")
+        self.assertTrue(existing_tos.is_admin)
+
+
+class GoogleDriveImportTests(StandardTestCase):
+    """Test Google Drive import functionality"""
+
+    # def test_auction_has_google_drive_fields(self):
+    #     """Test that the new fields exist"""
+    #     auction = Auction.objects.create(
+    #         created_by=self.user,
+    #         title="Test auction for Google Drive",
+    #         is_online=True,
+    #         date_end=timezone.now() + datetime.timedelta(days=2),
+    #         date_start=timezone.now() - datetime.timedelta(days=1),
+    #     )
+    #     self.assertIsNone(auction.google_drive_link)
+    #     self.assertIsNone(auction.last_sync_time)
+
+    def test_save_google_drive_link(self):
+        """Test that we can save a Google Drive link"""
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="Test auction for Google Drive link",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=2),
+            date_start=timezone.now() - datetime.timedelta(days=1),
+        )
+        test_link = "https://docs.google.com/spreadsheets/d/test123/edit#gid=0"
+        auction.google_drive_link = test_link
+        auction.save()
+
+        # Refresh from database
+        auction.refresh_from_db()
+        self.assertEqual(auction.google_drive_link, test_link)
+
+    def test_google_drive_import_view_requires_login(self):
+        """Test that the Google Drive import view requires login"""
+        response = self.client.get(reverse("import_from_google_drive", kwargs={"slug": self.online_auction.slug}))
+        # Should redirect to login
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login/", response.url)
+
+    def test_google_drive_import_view_accessible_by_admin(self):
+        """Test that admin can access the Google Drive import view"""
+        self.client.login(username="admin_user", password="testpassword")
+        response = self.client.get(reverse("import_from_google_drive", kwargs={"slug": self.online_auction.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "auctions/import_from_google_drive.html")
+
+    def test_sync_button_visible_when_link_set(self):
+        """Test that sync button appears on users page when google_drive_link is set"""
+        self.online_auction.google_drive_link = "https://docs.google.com/spreadsheets/d/test123/edit#gid=0"
+        self.online_auction.save()
+
+        self.client.login(username="admin_user", password="testpassword")
+        response = self.client.get(reverse("auction_tos_list", kwargs={"slug": self.online_auction.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Sync from Google Drive")
+
+    def test_sync_button_not_visible_when_no_link(self):
+        """Test that sync button does not appear when no google_drive_link is set"""
+        self.client.login(username="admin_user", password="testpassword")
+        response = self.client.get(reverse("auction_tos_list", kwargs={"slug": self.online_auction.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Sync from Google Drive")
+
+
 class WeeklyPromoEmailTrackingTestCase(StandardTestCase):
     """Test that the weekly_promo_emails_sent field is incremented correctly"""
 
@@ -2274,3 +2614,266 @@ class MyWonLotsViewTests(StandardTestCase):
         self.client.login(username=self.userB.username, password="testpassword")
         response = self.client.get("/lots/won/")
         assert response.status_code == 200
+class DistanceUnitTests(StandardTestCase):
+    """Test distance unit conversion functionality"""
+
+    def test_default_distance_unit_is_miles(self):
+        """Test that default distance unit is miles"""
+        self.assertEqual(self.user.userdata.distance_unit, "mi")
+
+    def test_distance_unit_can_be_set_to_km(self):
+        """Test that distance unit can be set to kilometers"""
+        userdata = self.user.userdata
+        userdata.distance_unit = "km"
+        userdata.save()
+        userdata.refresh_from_db()
+        self.assertEqual(userdata.distance_unit, "km")
+
+    def test_preference_form_converts_km_to_miles_on_save(self):
+        """Test that ChangeUserPreferencesForm converts km to miles when saving"""
+        from auctions.forms import ChangeUserPreferencesForm
+
+        userdata = self.user.userdata
+        userdata.distance_unit = "km"
+        userdata.local_distance = 100  # 100 miles in DB
+        userdata.save()
+
+        # Form should display ~161 km (100 * 1.60934)
+        form = ChangeUserPreferencesForm(user=self.user, instance=userdata)
+        self.assertEqual(form.initial["local_distance"], 161)
+
+        # When user submits with 80 km, it should save as ~50 miles
+        form_data = {
+            "distance_unit": "km",
+            "local_distance": 80,
+            "email_me_about_new_auctions_distance": 160,
+            "email_me_about_new_in_person_auctions_distance": 160,
+            "email_visible": False,
+            "show_ads": True,
+            "email_me_about_new_auctions": True,
+            "email_me_about_new_local_lots": True,
+            "email_me_about_new_lots_ship_to_location": True,
+            "email_me_when_people_comment_on_my_lots": True,
+            "email_me_about_new_chat_replies": True,
+            "email_me_about_new_in_person_auctions": True,
+            "send_reminder_emails_about_joining_auctions": True,
+            "username_visible": True,
+            "share_lot_images": True,
+            "auto_add_images": True,
+            "push_notifications_when_lots_sell": False,
+        }
+        form = ChangeUserPreferencesForm(user=self.user, data=form_data, instance=userdata)
+        self.assertTrue(form.is_valid())
+        saved_instance = form.save()
+
+        # Verify values are stored in miles
+        self.assertEqual(saved_instance.local_distance, 50)  # 80 km / 1.60934 ≈ 50 miles
+        self.assertEqual(saved_instance.email_me_about_new_auctions_distance, 99)  # 160 km / 1.60934 ≈ 99 miles
+
+    def test_preference_form_keeps_miles_when_unit_is_miles(self):
+        """Test that form doesn't convert when unit is miles"""
+        from auctions.forms import ChangeUserPreferencesForm
+
+        userdata = self.user.userdata
+        userdata.distance_unit = "mi"
+        userdata.local_distance = 100
+        userdata.save()
+
+        form_data = {
+            "distance_unit": "mi",
+            "local_distance": 50,
+            "email_me_about_new_auctions_distance": 100,
+            "email_me_about_new_in_person_auctions_distance": 100,
+            "email_visible": False,
+            "show_ads": True,
+            "email_me_about_new_auctions": True,
+            "email_me_about_new_local_lots": True,
+            "email_me_about_new_lots_ship_to_location": True,
+            "email_me_when_people_comment_on_my_lots": True,
+            "email_me_about_new_chat_replies": True,
+            "email_me_about_new_in_person_auctions": True,
+            "send_reminder_emails_about_joining_auctions": True,
+            "username_visible": True,
+            "share_lot_images": True,
+            "auto_add_images": True,
+            "push_notifications_when_lots_sell": False,
+        }
+        form = ChangeUserPreferencesForm(user=self.user, data=form_data, instance=userdata)
+        self.assertTrue(form.is_valid())
+        saved_instance = form.save()
+
+        # Values should be saved as-is in miles
+        self.assertEqual(saved_instance.local_distance, 50)
+        self.assertEqual(saved_instance.email_me_about_new_auctions_distance, 100)
+
+    def test_distance_filter_converts_miles_to_km(self):
+        """Test that distance_display filter converts miles to km for km users"""
+        from auctions.templatetags.distance_filters import distance_display
+
+        userdata = self.user.userdata
+        userdata.distance_unit = "km"
+        userdata.save()
+
+        # 10 miles should display as 16 km
+        result = distance_display(10, self.user)
+        self.assertEqual(result, "16 km")
+
+    def test_distance_filter_keeps_miles_for_miles_users(self):
+        """Test that distance_display filter keeps miles for miles users"""
+        from auctions.templatetags.distance_filters import distance_display
+
+        userdata = self.user.userdata
+        userdata.distance_unit = "mi"
+        userdata.save()
+
+        # 10 miles should display as 10 miles
+        result = distance_display(10, self.user)
+        self.assertEqual(result, "10 miles")
+
+    def test_distance_filter_handles_negative_distance(self):
+        """Test that distance_display filter handles negative distance (returns empty)"""
+        from auctions.templatetags.distance_filters import distance_display
+
+        result = distance_display(-1, self.user)
+        self.assertEqual(result, "")
+
+    def test_distance_filter_handles_zero_distance(self):
+        """Test that distance_display filter handles zero distance (returns empty)"""
+        from auctions.templatetags.distance_filters import distance_display
+
+        result = distance_display(0, self.user)
+        self.assertEqual(result, "")
+
+    def test_distance_filter_defaults_to_miles_for_anonymous_users(self):
+        """Test that distance_display filter defaults to miles for anonymous users"""
+        from django.contrib.auth.models import AnonymousUser
+
+        from auctions.templatetags.distance_filters import distance_display
+
+        anonymous = AnonymousUser()
+        result = distance_display(10, anonymous)
+        self.assertEqual(result, "10 miles")
+
+    def test_distance_filter_handles_string_input(self):
+        """Test that distance_display filter handles string input from database"""
+        from auctions.templatetags.distance_filters import distance_display
+
+        userdata = self.user.userdata
+        userdata.distance_unit = "mi"
+        userdata.save()
+
+        # String input should be converted to float
+        result = distance_display("10", self.user)
+        self.assertEqual(result, "10 miles")
+
+    def test_distance_filter_handles_string_input_with_km(self):
+        """Test that distance_display filter handles string input and converts to km"""
+        from auctions.templatetags.distance_filters import distance_display
+
+        userdata = self.user.userdata
+        userdata.distance_unit = "km"
+        userdata.save()
+
+        # String input "10" miles should display as 16 km
+        result = distance_display("10", self.user)
+        self.assertEqual(result, "16 km")
+
+    def test_distance_filter_handles_string_input_for_anonymous_users(self):
+        """Test that distance_display filter handles string input for anonymous users"""
+        from django.contrib.auth.models import AnonymousUser
+
+        from auctions.templatetags.distance_filters import distance_display
+
+        anonymous = AnonymousUser()
+        # String input should work for anonymous users
+        result = distance_display("10", anonymous)
+        self.assertEqual(result, "10 miles")
+
+    def test_distance_filter_handles_invalid_string_input(self):
+        """Test that distance_display filter handles invalid string input"""
+        from auctions.templatetags.distance_filters import distance_display
+
+        # Invalid string should return empty string
+        result = distance_display("invalid", self.user)
+        self.assertEqual(result, "")
+
+    def test_distance_filter_handles_none_input(self):
+        """Test that distance_display filter handles None input"""
+        from auctions.templatetags.distance_filters import distance_display
+
+        # None input should return empty string
+        result = distance_display(None, self.user)
+        self.assertEqual(result, "")
+
+
+class PayPalInfoViewTests(TestCase):
+    """Test that the PayPal info page works for both logged in and non-logged in users"""
+
+    def test_paypal_info_non_logged_in_user(self):
+        """Test that non-logged-in users can access the PayPal info page"""
+        url = reverse("paypal_seller")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Accept payments with PayPal")
+
+    def test_paypal_info_logged_in_user(self):
+        """Test that logged-in users can access the PayPal info page"""
+        User.objects.create_user(username="testuser", password="testpassword")
+        self.client.login(username="testuser", password="testpassword")
+        url = reverse("paypal_seller")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Accept payments with PayPal")
+
+
+class UserExportTests(StandardTestCase):
+    """Test user export and email composition functionality"""
+
+    def test_user_export_without_filter(self):
+        """Test that user export works without a filter"""
+        self.client.login(username="admin_user", password="testpassword")
+        url = reverse("user_list", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "text/csv")
+
+    def test_user_export_with_filter(self):
+        """Test that user export works with a filter query parameter"""
+        self.client.login(username="admin_user", password="testpassword")
+        url = reverse("user_list", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url, {"query": "admin"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "text/csv")
+        # Check that filename includes query
+        self.assertIn("admin", response["Content-Disposition"])
+
+    def test_user_export_permission_denied(self):
+        """Test that non-admin users cannot export users"""
+        self.client.login(username="no_lots", password="testpassword")
+        url = reverse("user_list", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)  # Redirect
+
+    def test_compose_email_without_filter(self):
+        """Test composing email to all users"""
+        self.client.login(username="admin_user", password="testpassword")
+        url = reverse("compose_email_to_users", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        # The view renders a button snippet with a mailto href, not a redirect
+        self.assertContains(response, 'id="email_all_users"')
+
+    def test_compose_email_with_filter(self):
+        """Test composing email with a filter"""
+        self.client.login(username="admin_user", password="testpassword")
+        url = reverse("compose_email_to_users", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url, {"query": "admin"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="email_all_users"')
+
+    def test_compose_email_permission_denied(self):
+        """Test that non-admin users cannot compose emails"""
+        self.client.login(username="no_lots", password="testpassword")
+        url = reverse("compose_email_to_users", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 403)

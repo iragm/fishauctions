@@ -40,6 +40,9 @@ from .models import (
     UserLabelPrefs,
 )
 
+# Distance conversion constant
+MILES_TO_KM = 1.60934
+
 # class DateInput(forms.DateInput):
 #     input_type = 'datetime-local'
 
@@ -2752,6 +2755,7 @@ class ChangeUserPreferencesForm(forms.ModelForm):
         fields = (
             "email_visible",
             "show_ads",
+            "distance_unit",
             "email_me_about_new_auctions",
             "email_me_about_new_auctions_distance",
             "email_me_about_new_local_lots",
@@ -2771,6 +2775,18 @@ class ChangeUserPreferencesForm(forms.ModelForm):
     def __init__(self, user, *args, **kwargs):
         self.user = user
         super().__init__(*args, **kwargs)
+        # Convert distances from miles to km for display if user prefers km
+        if self.instance and self.instance.distance_unit == "km":
+            if self.instance.email_me_about_new_auctions_distance:
+                self.initial["email_me_about_new_auctions_distance"] = round(
+                    self.instance.email_me_about_new_auctions_distance * MILES_TO_KM
+                )
+            if self.instance.email_me_about_new_in_person_auctions_distance:
+                self.initial["email_me_about_new_in_person_auctions_distance"] = round(
+                    self.instance.email_me_about_new_in_person_auctions_distance * MILES_TO_KM
+                )
+            if self.instance.local_distance:
+                self.initial["local_distance"] = round(self.instance.local_distance * MILES_TO_KM)
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_id = "user-form"
@@ -2782,6 +2798,11 @@ class ChangeUserPreferencesForm(forms.ModelForm):
         self.fields[
             "email_me_about_new_chat_replies"
         ].help_text = f"Only for lots that don't belong to you.  Unchecking this will turn off notifications for {self.subscriptions} lot(s) you've already commented on."
+        # Update help text for distance fields based on selected unit
+        unit = "km" if self.instance and self.instance.distance_unit == "km" else "miles"
+        self.fields["email_me_about_new_auctions_distance"].help_text = f"{unit}, from your address"
+        self.fields["email_me_about_new_in_person_auctions_distance"].help_text = f"{unit}, from your address"
+        self.fields["local_distance"].help_text = f"{unit}, from your address"
         self.helper.layout = Layout(
             Div(
                 Div(
@@ -2806,6 +2827,10 @@ class ChangeUserPreferencesForm(forms.ModelForm):
                 Div(
                     "push_notifications_when_lots_sell",
                     css_class="col-md-6",
+                ),
+                Div(
+                    "distance_unit",
+                    css_class="col-md-4",
                 ),
                 css_class="row",
             ),
@@ -2877,11 +2902,22 @@ class ChangeUserPreferencesForm(forms.ModelForm):
         )
 
     def clean(self):
-        super().clean()
-        # image = cleaned_data.get("image")
-        # image_source = cleaned_data.get("image_source")
-        # if image and not image_source:
-        #    self.add_error('image_source', "Is this your picture?")
+        cleaned_data = super().clean()
+        # Convert distance values from km to miles if needed, as we store everything in miles
+        distance_unit = cleaned_data.get("distance_unit")
+        if distance_unit == "km":
+            # Convert km to miles for storage
+            if cleaned_data.get("email_me_about_new_auctions_distance"):
+                cleaned_data["email_me_about_new_auctions_distance"] = round(
+                    cleaned_data["email_me_about_new_auctions_distance"] / MILES_TO_KM
+                )
+            if cleaned_data.get("email_me_about_new_in_person_auctions_distance"):
+                cleaned_data["email_me_about_new_in_person_auctions_distance"] = round(
+                    cleaned_data["email_me_about_new_in_person_auctions_distance"] / MILES_TO_KM
+                )
+            if cleaned_data.get("local_distance"):
+                cleaned_data["local_distance"] = round(cleaned_data["local_distance"] / MILES_TO_KM)
+        return cleaned_data
 
 
 class LabelPrintFieldsForm(forms.Form):

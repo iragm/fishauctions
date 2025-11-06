@@ -31,6 +31,56 @@
         // Start observing the target node for configured mutations
         observer.observe(targetNode, config);
     }
+
+    // Handle distance unit conversion
+    const MILES_TO_KM = 1.60934;
+    const KM_TO_MILES = 1 / MILES_TO_KM;
+
+    $(document).ready(function() {
+        const distanceUnitSelect = $('#id_distance_unit');
+        const distanceFields = [
+            '#id_email_me_about_new_auctions_distance',
+            '#id_email_me_about_new_in_person_auctions_distance',
+            '#id_local_distance'
+        ];
+
+        let previousUnit = distanceUnitSelect.val();
+
+        distanceUnitSelect.change(function() {
+            const newUnit = $(this).val();
+
+            // Convert all distance field values
+            distanceFields.forEach(function(fieldSelector) {
+                const field = $(fieldSelector);
+                const currentValue = parseFloat(field.val());
+
+                if (!isNaN(currentValue) && currentValue > 0) {
+                    let newValue;
+                    if (newUnit === 'km' && previousUnit === 'mi') {
+                        // Convert miles to km
+                        newValue = Math.round(currentValue * MILES_TO_KM);
+                    } else if (newUnit === 'mi' && previousUnit === 'km') {
+                        // Convert km to miles
+                        newValue = Math.round(currentValue * KM_TO_MILES);
+                    } else {
+                        newValue = currentValue;
+                    }
+                    field.val(newValue);
+                }
+            });
+
+            // Update help text
+            const unit = newUnit === 'km' ? 'km' : 'miles';
+            distanceFields.forEach(function(fieldSelector) {
+                const helpText = $(fieldSelector).parent().find('.form-text');
+                if (helpText.length) {
+                    helpText.text(unit + ', from your address');
+                }
+            });
+
+            previousUnit = newUnit;
+        });
+    });
 </script>
 {% endblock %}
 {% block content %}

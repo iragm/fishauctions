@@ -1,6 +1,7 @@
 {% if embed == 'all_lots' %}
   {% load el_pagination_tags %}
 {% endif %}
+{% load distance_filters %}
 {% if not object_list %}
   {% if embed == 'all_lots' %}
   <h5>No lots found</h5>
@@ -32,7 +33,7 @@
             Lot {{ lot.lot_number_display }}
           {% else %}
             {% if lot.local_pickup %}
-            {% if lot.distance >= 0 %}{{ lot.distance|floatformat:0 }}{% else %}?{%endif%} miles
+            {{ lot.distance|distance_display:request.user }}
             {% else %}
               {% if request.user.userdata.location in lot.shipping_locations.all %}
                 Ships

@@ -2,6 +2,7 @@
   {% load el_pagination_tags %}
   {% paginate filter.qs as object_list %}
 {% endif %}
+{% load distance_filters %}
 <style>
   .watch-icon {
     cursor: pointer;
@@ -93,7 +94,7 @@ box-shadow: 0px 0px 1px 2px rgba(238, 59, 59, 0.281),
         <!--<span class="badge bg-light">Auction</span>-->
           {% else %}
             {% if lot.local_pickup %}
-            <span class="badge bg-dark">{% if lot.distance >= 0 %}{{ lot.distance|floatformat:0 }}{% else %}?{%endif%} miles</span>
+            <span class="badge bg-dark">{{ lot.distance|distance_display:request.user }}</span>
             {% else %}
               {% if request.user.userdata.location in lot.shipping_locations.all %}
               <span class="badge bg-light text-black">Ships</span>

@@ -45,13 +45,13 @@ bleach[css]==6.3.0
     #   django-markdownfield
     #   django-post-office
     #   django-summernote
-boto3==1.40.65
+boto3==1.40.67
     # via django-ses
-botocore==1.40.65
+botocore==1.40.67
     # via
     #   boto3
     #   s3transfer
-brotli==1.1.0
+brotli==1.2.0
     # via fonttools
 certifi==2025.10.5
     # via
@@ -102,7 +102,7 @@ defusedxml==0.7.1
     # via
     #   -r requirements.in
     #   python3-openid
-django==5.2.7
+django==5.2.8
     # via
     #   -r requirements.in
     #   channels
@@ -264,11 +264,11 @@ pycparser==2.23
     # via
     #   -r requirements.in
     #   cffi
-pydantic==2.12.3
+pydantic==2.12.4
     # via
     #   django-bootstrap-datepicker-plus
     #   django-qr-code
-pydantic-core==2.41.4
+pydantic-core==2.41.5
     # via pydantic
 pydyf==0.11.0
     # via weasyprint
