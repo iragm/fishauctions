@@ -683,14 +683,11 @@ class AuctionHistoryAdmin(admin.ModelAdmin):
         "action",
         "auction__title",
     )
-    readonly_fields = (
-        "auction",
-        "user",
-        "action",
-        "timestamp",
-        "applies_to",
-    )
     ordering = ("-timestamp",)
+
+    def get_readonly_fields(self, request, obj=None):
+        # make all AuctionHistory model fields readonly in the admin (this is an audit log)
+        return tuple(f.name for f in self.model._meta.get_fields() if not (f.many_to_many or f.one_to_many))
 
 
 admin.site.register(PickupLocation, PickupLocationAdmin)
