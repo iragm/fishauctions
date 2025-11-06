@@ -11,11 +11,21 @@ def convert_distance(miles, user):
     """
     Convert distance from miles to the user's preferred unit.
     Args:
-        miles: Distance in miles (as stored in the database)
+        miles: Distance in miles (as stored in the database) - can be a number or string
         user: The user object to check preferred unit
     Returns:
         Tuple of (converted_value, unit_string) or None if distance is 0 or invalid
     """
+    # Convert miles to float to handle both numeric and string inputs from database
+    # Return None for None/invalid inputs or zero distance
+    if miles is None:
+        return None
+
+    try:
+        miles = float(miles)
+    except (ValueError, TypeError):
+        return None
+
     # Don't show distance if it's 0 (user location not set or lot is part of an auction)
     if miles == 0:
         return None
