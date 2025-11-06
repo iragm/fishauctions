@@ -274,6 +274,11 @@ urlpatterns = [
     path("auctions/<slug:slug>/stats/", login_required(views.AuctionStats.as_view())),
     path("auctions/<slug:slug>/report/", views.auctionReport, name="user_list"),
     path(
+        "auctions/<slug:slug>/email-users/",
+        login_required(views.ComposeEmailToUsers.as_view()),
+        name="compose_email_to_users",
+    ),
+    path(
         "auctions/<slug:slug>/print/",
         views.AuctionBulkPrinting.as_view(),
         name="auction_printing",

@@ -13,7 +13,7 @@ from decimal import Decimal
 from io import BytesIO, TextIOWrapper
 from pathlib import Path
 from random import choice, randint, sample, uniform
-from urllib.parse import unquote, urlencode, urlparse
+from urllib.parse import quote_plus, unquote, urlencode, urlparse
 
 import channels.layers
 import qr_code
@@ -1502,9 +1502,14 @@ def auctionReport(request, slug):
     auction = get_object_or_404(Auction, slug=slug, is_deleted=False)
     if auction.permission_check(request.user):
         # Create the HttpResponse object with the appropriate CSV header.
+        query = request.GET.get("query", None)
         response = HttpResponse(content_type="text/csv")
         end = timezone.now().strftime("%Y-%m-%d")
-        response["Content-Disposition"] = 'attachment; filename="' + slug + "-report-" + end + '.csv"'
+        if not query:
+            filename = slug + "-report-" + end
+        else:
+            filename = slug + "-report-" + query + "-" + end
+        response["Content-Disposition"] = f'attachment; filename="{filename}.csv"'
         writer = csv.writer(response)
         writer.writerow(
             [
@@ -1547,6 +1552,9 @@ def auctionReport(request, slug):
             .select_related("pickup_location")
             .order_by("createdon")
         )
+        # Apply filter if query is provided
+        if query:
+            users = AuctionTOSFilter.generic(None, users, query)
         # .annotate(distance_traveled=distance_to(\
         # '`auctions_userdata`.`latitude`', '`auctions_userdata`.`longitude`', \
         # lat_field_name='`auctions_pickuplocation`.`latitude`',\
@@ -1653,6 +1661,59 @@ def auctionReport(request, slug):
         return response
     messages.error(request, "Your account doesn't have permission to view this page")
     return redirect("/")
+
+
+class ComposeEmailToUsers(TemplateView, AuctionPermissionsMixin):
+    """Generate a mailto: link with BCC for filtered users - HTMX endpoint"""
+
+    template_name = "email_users_button.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        slug = kwargs.get("slug")
+        self.auction = get_object_or_404(Auction, slug=slug, is_deleted=False)
+        self.is_auction_admin
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        # Get query parameter
+        query = self.request.GET.get("query", "")
+        # Get all users for the auction
+        users = AuctionTOS.objects.filter(auction=self.auction).select_related("user")
+
+        # Apply filter if query is provided
+        if query:
+            users = AuctionTOSFilter.generic(None, users, query)
+
+        # Collect valid emails (non-null and non-empty)
+        emails = list(users.filter(email__isnull=False).exclude(email="").values_list("email", flat=True))
+        # Default values
+        mailto_url = "#"
+        email_count = 0
+
+        if emails:
+            # Limit to avoid overly long URLs (conservative cap)
+            max_emails = 60
+            if len(emails) > max_emails:
+                emails = emails[:max_emails]
+
+            bcc = ",".join(emails)
+            subject = f"{self.auction.title}"
+            body = f"Hello,\n\nThis message is being sent to participants in {self.auction.title}.\n\n"
+
+            if "open" in query or "ready" in query:
+                url = reverse("my_auction_invoice", kwargs={"slug": self.auction.slug})
+                body += f"You can view your invoice here: https://{Site.objects.get_current().domain}{url}\n\n"
+            mailto_url = f"mailto:?bcc={quote_plus(bcc)}&subject={quote_plus(subject)}&body={quote_plus(body)}"
+            email_count = len(emails)
+
+        context.update(
+            {
+                "mailto_url": mailto_url,
+                "email_count": email_count,
+            }
+        )
+        return context
 
 
 @login_required
