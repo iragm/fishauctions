@@ -1023,22 +1023,25 @@ class LotDeactivate(View):
         checksPass = False
         if request.user.is_superuser:
             checksPass = True
-        if lot.user.pk == request.user.pk:
+        elif lot.user.pk == request.user.pk:
             checksPass = True
+        
         if lot.auction:
             checksPass = False
-        if checksPass:
-            if lot.deactivated:
-                lot.deactivated = False
-            else:
-                bids = Bid.objects.exclude(is_deleted=True).filter(lot_number=lot.lot_number)
-                for bid in bids:
-                    bid.delete()
-                lot.deactivated = True
-            lot.save()
-            return HttpResponse("success")
-        messages.error(request, "Your account doesn't have permission to view this page")
-        return redirect("/")
+        
+        if not checksPass:
+            messages.error(request, "Your account doesn't have permission to view this page")
+            return redirect("/")
+        
+        if lot.deactivated:
+            lot.deactivated = False
+        else:
+            bids = Bid.objects.exclude(is_deleted=True).filter(lot_number=lot.lot_number)
+            for bid in bids:
+                bid.delete()
+            lot.deactivated = True
+        lot.save()
+        return HttpResponse("success")
 
 
 class UserUnban(LoginRequiredMixin, View):
