@@ -1951,6 +1951,57 @@ class DistanceUnitTests(StandardTestCase):
         result = distance_display(10, anonymous)
         self.assertEqual(result, "10 miles")
 
+    def test_distance_filter_handles_string_input(self):
+        """Test that distance_display filter handles string input from database"""
+        from auctions.templatetags.distance_filters import distance_display
+
+        userdata = self.user.userdata
+        userdata.distance_unit = "mi"
+        userdata.save()
+
+        # String input should be converted to float
+        result = distance_display("10", self.user)
+        self.assertEqual(result, "10 miles")
+
+    def test_distance_filter_handles_string_input_with_km(self):
+        """Test that distance_display filter handles string input and converts to km"""
+        from auctions.templatetags.distance_filters import distance_display
+
+        userdata = self.user.userdata
+        userdata.distance_unit = "km"
+        userdata.save()
+
+        # String input "10" miles should display as 16 km
+        result = distance_display("10", self.user)
+        self.assertEqual(result, "16 km")
+
+    def test_distance_filter_handles_string_input_for_anonymous_users(self):
+        """Test that distance_display filter handles string input for anonymous users"""
+        from django.contrib.auth.models import AnonymousUser
+
+        from auctions.templatetags.distance_filters import distance_display
+
+        anonymous = AnonymousUser()
+        # String input should work for anonymous users
+        result = distance_display("10", anonymous)
+        self.assertEqual(result, "10 miles")
+
+    def test_distance_filter_handles_invalid_string_input(self):
+        """Test that distance_display filter handles invalid string input"""
+        from auctions.templatetags.distance_filters import distance_display
+
+        # Invalid string should return empty string
+        result = distance_display("invalid", self.user)
+        self.assertEqual(result, "")
+
+    def test_distance_filter_handles_none_input(self):
+        """Test that distance_display filter handles None input"""
+        from auctions.templatetags.distance_filters import distance_display
+
+        # None input should return empty string
+        result = distance_display(None, self.user)
+        self.assertEqual(result, "")
+
 
 class PayPalInfoViewTests(TestCase):
     """Test that the PayPal info page works for both logged in and non-logged in users"""
