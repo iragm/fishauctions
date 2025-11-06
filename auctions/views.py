@@ -1670,20 +1670,20 @@ def composeEmailToUsers(request, slug):
     if not auction.permission_check(request.user):
         messages.error(request, "Your account doesn't have permission to view this page")
         return redirect("/")
-    
+
     # Get query parameter
     query = request.GET.get("query", "")
-    
+
     # Get all users for the auction
     users = AuctionTOS.objects.filter(auction=auction).select_related("user")
-    
+
     # Apply filter if query is provided
     if query:
         users = AuctionTOSFilter.generic(None, users, query)
-    
+
     # Collect valid emails (non-null and non-empty)
-    emails = list(users.filter(email__isnull=False).exclude(email='').values_list('email', flat=True))
-    
+    emails = list(users.filter(email__isnull=False).exclude(email="").values_list("email", flat=True))
+
     # Create mailto link
     if emails:
         # Limit to prevent URL from being too long (typical limit is 2000 chars)
@@ -1695,19 +1695,19 @@ def composeEmailToUsers(request, slug):
                 f"Only including first {max_emails} emails in BCC to avoid URL length limits. Consider using smaller filters.",
             )
             emails = emails[:max_emails]
-        
+
         bcc = ",".join(emails)
         subject = f"Message from {auction.title}"
         body = f"This message is being sent to participants in {auction.title}.\n\n"
-        
+
         mailto_url = f"mailto:?bcc={quote_plus(bcc)}&subject={quote_plus(subject)}&body={quote_plus(body)}"
-        
+
         auction.create_history(
             applies_to="USERS",
             action=f"Composed email to {len(emails)} users",
             user=request.user,
         )
-        
+
         # Redirect to the mailto URL
         return redirect(mailto_url)
     else:
