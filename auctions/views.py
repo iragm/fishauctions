@@ -1659,16 +1659,10 @@ def auctionReport(request, slug):
     return redirect("/")
 
 
-class ComposeEmailToUsers(TemplateView, AuctionPermissionsMixin):
+class ComposeEmailToUsers(AuctionViewMixin, TemplateView):
     """Generate a mailto: link with BCC for filtered users - HTMX endpoint"""
 
     template_name = "email_users_button.html"
-
-    def dispatch(self, request, *args, **kwargs):
-        slug = kwargs.get("slug")
-        self.auction = get_object_or_404(Auction, slug=slug, is_deleted=False)
-        self.is_auction_admin
-        return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -1966,7 +1960,7 @@ class AuctionChats(AuctionViewMixin, LoginRequiredMixin, ListView):
         return context
 
 
-class AuctionChatDeleteUndelete(View, AuctionPermissionsMixin):
+class AuctionChatDeleteUndelete(AuctionViewMixin, View):
     """HTMX for auction admins only"""
 
     def dispatch(self, request, *args, **kwargs):
@@ -1994,7 +1988,7 @@ class AuctionChatDeleteUndelete(View, AuctionPermissionsMixin):
         return HttpResponse(result)
 
 
-class AuctionShowHighBidder(View, AuctionPermissionsMixin):
+class AuctionShowHighBidder(AuctionViewMixin, View):
     """HTMX for auction admins only"""
 
     def dispatch(self, request, *args, **kwargs):
@@ -2044,7 +2038,7 @@ class PickupLocations(AuctionViewMixin, ListView):
         return context
 
 
-class PickupLocationsDelete(DeleteView, AuctionPermissionsMixin):
+class PickupLocationsDelete(AuctionViewMixin, DeleteView):
     model = PickupLocation
 
     def dispatch(self, request, *args, **kwargs):
@@ -2120,7 +2114,7 @@ class PickupLocationForm:
         return super().form_valid(form)
 
 
-class PickupLocationsUpdate(PickupLocationForm, UpdateView, AuctionPermissionsMixin):
+class PickupLocationsUpdate(AuctionViewMixin, PickupLocationForm, UpdateView):
     """Edit pickup locations"""
 
     def get_form_kwargs(self):
@@ -2155,7 +2149,7 @@ class PickupLocationsUpdate(PickupLocationForm, UpdateView, AuctionPermissionsMi
         return form
 
 
-class PickupLocationsCreate(PickupLocationForm, CreateView, AuctionPermissionsMixin):
+class PickupLocationsCreate(AuctionViewMixin, PickupLocationForm, CreateView):
     """Create a new pickup location"""
 
     def dispatch(self, request, *args, **kwargs):
@@ -3283,7 +3277,7 @@ class ImportFromGoogleDrive(AuctionViewMixin, TemplateView, ContextMixin):
         return redirect(url)
 
 
-class BulkAddLots(TemplateView, AuctionPermissionsMixin):
+class BulkAddLots(TemplateView, AuctionViewMixin):
     """Add/edit lots of lots for a given auctiontos pk"""
 
     template_name = "auctions/bulk_add_lots.html"
@@ -3659,7 +3653,7 @@ class ViewLot(DetailView):
         return context
 
 
-class ViewLotSimple(ViewLot, AuctionPermissionsMixin):
+class ViewLotSimple(ViewLot, AuctionViewMixin):
     """Minimalist view of a lot, just image and description.  For htmx calls"""
 
     template_name = "view_lot_simple.html"
@@ -4215,7 +4209,7 @@ class BidDelete(LoginRequiredMixin, DeleteView):
         return f"/lots/{self.get_object().lot_number.pk}/{self.get_object().lot_number.slug}/"
 
 
-class LotAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
+class LotAdmin(TemplateView, FormMixin, AuctionViewMixin):
     """Creation and management for Lots that are part of an auction"""
 
     template_name = "auctions/generic_admin_form.html"
@@ -4316,7 +4310,7 @@ class LotAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
             return self.form_invalid(form)
 
 
-class AuctionTOSDelete(TemplateView, FormMixin, AuctionPermissionsMixin):
+class AuctionTOSDelete(TemplateView, FormMixin, AuctionViewMixin):
     """Delete AuctionTOSs"""
 
     template_name = "auctions/auctiontos_confirm_delete.html"
@@ -4396,7 +4390,7 @@ class AuctionTOSDelete(TemplateView, FormMixin, AuctionPermissionsMixin):
             return self.form_invalid(form)
 
 
-class AuctionTOSAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
+class AuctionTOSAdmin(TemplateView, FormMixin, AuctionViewMixin):
     """Creation and management for AuctionTOSs"""
 
     template_name = "auctions/generic_admin_form.html"
@@ -4903,7 +4897,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
         return super().form_valid(form)
 
 
-class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
+class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
     """Main view of a single auction"""
 
     template_name = "auction.html"
@@ -5328,7 +5322,7 @@ class Leaderboard(ListView):
         return context
 
 
-class AllLots(LotListView, AuctionPermissionsMixin):
+class AllLots(LotListView, AuctionViewMixin):
     """Show all lots"""
 
     rewrite_url = (
@@ -5413,7 +5407,7 @@ class Invoices(ListView, LoginRequiredMixin):
     #     return context
 
 
-class InvoiceCreateView(View, AuctionPermissionsMixin):
+class InvoiceCreateView(View, AuctionViewMixin):
     """Create a new invoice for a user in an auction"""
 
     def get(self, request, *args, **kwargs):
@@ -5463,7 +5457,7 @@ class InvoiceCreateView(View, AuctionPermissionsMixin):
 
 
 # password protected in views.py
-class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
+class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
     """Show a single invoice"""
 
     template_name = "invoice.html"
@@ -5635,7 +5629,7 @@ class InvoiceNoLoginView(InvoiceView):
         return super().dispatch(request, *args, **kwargs)
 
 
-class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionPermissionsMixin):
+class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
     """View and print labels for an auction"""
 
     # these are defined in urls.py and used in get_object(), below
@@ -5935,7 +5929,7 @@ def getClubs(request):
         return JsonResponse(list(result), safe=False)
 
 
-class BulkSetLotsWon(TemplateView, FormMixin, AuctionPermissionsMixin):
+class BulkSetLotsWon(TemplateView, FormMixin, AuctionViewMixin):
     """Sell all lots based on the current filter to online high bidder"""
 
     template_name = "auctions/generic_admin_form.html"
@@ -5985,7 +5979,7 @@ class BulkSetLotsWon(TemplateView, FormMixin, AuctionPermissionsMixin):
         return form_kwargs
 
 
-class InvoiceBulkUpdateStatus(TemplateView, FormMixin, AuctionPermissionsMixin):
+class InvoiceBulkUpdateStatus(TemplateView, FormMixin, AuctionViewMixin):
     """Change invoice statuses in bulk"""
 
     template_name = "auctions/generic_admin_form.html"
@@ -6103,7 +6097,7 @@ class MarkInvoicesPaid(InvoiceBulkUpdateStatus):
         return context
 
 
-class LotRefundDialog(DetailView, FormMixin, AuctionPermissionsMixin):
+class LotRefundDialog(DetailView, FormMixin, AuctionViewMixin):
     model = Lot
     template_name = "auctions/generic_admin_form.html"
     form_class = LotRefundForm
@@ -8285,7 +8279,7 @@ class AuctionBulkPrintingPDF(LotLabelView):
         return handler(request, *args, **kwargs)
 
 
-class PickupLocationsIncoming(View, AuctionPermissionsMixin):
+class PickupLocationsIncoming(View, AuctionViewMixin):
     """All lots destined for this location"""
 
     def dispatch(self, request, *args, **kwargs):
@@ -8324,7 +8318,7 @@ class PickupLocationsIncoming(View, AuctionPermissionsMixin):
         return response
 
 
-class PickupLocationsOutgoing(View, AuctionPermissionsMixin):
+class PickupLocationsOutgoing(View, AuctionViewMixin):
     """CSV of all lots coming from this location"""
 
     def dispatch(self, request, *args, **kwargs):
@@ -8578,7 +8572,7 @@ class ChatSubscriptions(LoginRequiredMixin, TemplateView):
         return context
 
 
-class AddTosMemo(View, LoginRequiredMixin, AuctionPermissionsMixin):
+class AddTosMemo(View, LoginRequiredMixin, AuctionViewMixin):
     """API view to update the memo field of an auctiontos"""
 
     def dispatch(self, request, *args, **kwargs):
@@ -8602,7 +8596,7 @@ class AddTosMemo(View, LoginRequiredMixin, AuctionPermissionsMixin):
         raise Http404
 
 
-class AuctionNoShow(TemplateView, LoginRequiredMixin, AuctionPermissionsMixin):
+class AuctionNoShow(TemplateView, LoginRequiredMixin, AuctionViewMixin):
     """When someone doesn't show up for an auction, offer some tools to clean up the situation"""
 
     template_name = "auctions/noshow.html"
