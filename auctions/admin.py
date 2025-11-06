@@ -13,6 +13,7 @@ from .models import (
     AdCampaignResponse,
     Auction,
     AuctionCampaign,
+    AuctionHistory,
     AuctionTOS,
     Bid,
     BlogPost,
@@ -664,6 +665,31 @@ class AuctionCampaignAdmin(admin.ModelAdmin):
     list_display = ("auction", "source", "result")
 
 
+class AuctionHistoryAdmin(admin.ModelAdmin):
+    list_display = (
+        "auction",
+        "user",
+        "action",
+        "applies_to",
+        "timestamp",
+    )
+    list_filter = (
+        "timestamp",
+        "applies_to",
+    )
+    search_fields = (
+        "user__first_name",
+        "user__last_name",
+        "action",
+        "auction__title",
+    )
+    ordering = ("-timestamp",)
+
+    def get_readonly_fields(self, request, obj=None):
+        # make all AuctionHistory model fields readonly in the admin (this is an audit log)
+        return tuple(f.name for f in self.model._meta.get_fields() if not (f.many_to_many or f.one_to_many))
+
+
 admin.site.register(PickupLocation, PickupLocationAdmin)
 admin.site.unregister(User)
 admin.site.register(User, UserAdmin)
@@ -686,3 +712,4 @@ admin.site.register(LotAutoCategory, LotAutoCategoryAdmin)
 admin.site.register(AuctionTOS, AuctionTOSAdmin)
 admin.site.register(PageView, PageViewAdmin)
 admin.site.register(AuctionCampaign, AuctionCampaignAdmin)
+admin.site.register(AuctionHistory, AuctionHistoryAdmin)
