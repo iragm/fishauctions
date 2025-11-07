@@ -2925,7 +2925,7 @@ class LotNotificationsViewTests(StandardTestCase):
         self.client.login(username=self.user.username, password="testpassword")
         response = self.client.post("/api/users/lot_notifications/")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response['Content-Type'], 'application/json')
+        self.assertEqual(response["Content-Type"], "application/json")
 
     def test_get_request_denied(self):
         """GET requests should redirect"""
@@ -3163,7 +3163,7 @@ class MyWonLotCSVViewTests(StandardTestCase):
         self.client.login(username=self.userB.username, password="testpassword")
         response = self.client.get("/my_won_lots.csv")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response['Content-Type'], 'text/csv')
+        self.assertEqual(response["Content-Type"], "text/csv")
 
 
 class MyLotReportViewTests(StandardTestCase):
@@ -3179,7 +3179,7 @@ class MyLotReportViewTests(StandardTestCase):
         self.client.login(username=self.user.username, password="testpassword")
         response = self.client.get("/my_lot_report.csv")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response['Content-Type'], 'text/csv')
+        self.assertEqual(response["Content-Type"], "text/csv")
 
 
 class AuctionReportViewTests(StandardTestCase):
@@ -3195,7 +3195,7 @@ class AuctionReportViewTests(StandardTestCase):
         self.client.login(username=self.admin_user.username, password="testpassword")
         response = self.client.get(f"/auctions/{self.online_auction.slug}/report.csv")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response['Content-Type'], 'text/csv')
+        self.assertEqual(response["Content-Type"], "text/csv")
 
     def test_auction_report_non_admin_denied(self):
         """Non-admins cannot download auction report"""
@@ -3217,7 +3217,7 @@ class UserReportViewTests(StandardTestCase):
         self.client.login(username=self.user.username, password="testpassword")
         response = self.client.get("/all_auction_contacts.csv")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response['Content-Type'], 'text/csv')
+        self.assertEqual(response["Content-Type"], "text/csv")
 
 
 class AuctionInvoicesPaypalCSVViewTests(StandardTestCase):
@@ -3225,15 +3225,15 @@ class AuctionInvoicesPaypalCSVViewTests(StandardTestCase):
 
     def test_paypal_csv_anonymous_denied(self):
         """Anonymous users cannot download PayPal invoices CSV"""
-        response = self.client.get(f"/auctions/{self.online_auction.slug}/invoices-paypal/1/")
+        response = self.client.get(f"/auctions/{self.online_auction.slug}/invoices/paypal/1/")
         self.assertIn(response.status_code, [302, 403])
 
     def test_paypal_csv_admin(self):
         """Auction admins can download PayPal invoices CSV"""
         self.client.login(username=self.admin_user.username, password="testpassword")
-        response = self.client.get(f"/auctions/{self.online_auction.slug}/invoices-paypal/1/")
+        response = self.client.get(f"/auctions/{self.online_auction.slug}/invoices/paypal/1/")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response['Content-Type'], 'text/csv')
+        self.assertEqual(response["Content-Type"], "text/csv")
 
     def test_paypal_csv_non_admin_denied(self):
         """Non-admins cannot download PayPal invoices CSV"""
@@ -3255,7 +3255,7 @@ class AuctionLotListViewTests(StandardTestCase):
         self.client.login(username=self.admin_user.username, password="testpassword")
         response = self.client.get(f"/auctions/{self.online_auction.slug}/lots.csv")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response['Content-Type'], 'text/csv')
+        self.assertEqual(response["Content-Type"], "text/csv")
 
     def test_lot_list_non_admin_denied(self):
         """Non-admins cannot download lot list CSV"""
@@ -3301,7 +3301,7 @@ class GetClubsViewTests(StandardTestCase):
         """Users can search for clubs via POST"""
         response = self.client.post("/api/getclubs/", data={"search": "test"})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response['Content-Type'], 'application/json')
+        self.assertEqual(response["Content-Type"], "application/json")
 
     def test_get_clubs_get_fails(self):
         """GET requests should not work"""
@@ -3316,7 +3316,7 @@ class AuctionNotificationsViewTests(StandardTestCase):
         """Users can get auction notifications via POST"""
         response = self.client.post("/api/users/auction_notifications/")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response['Content-Type'], 'application/json')
+        self.assertEqual(response["Content-Type"], "application/json")
 
     def test_auction_notifications_get_fails(self):
         """GET requests should redirect"""
