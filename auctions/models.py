@@ -4808,7 +4808,10 @@ class AuctionHistory(models.Model):
     )
 
     def __str__(self):
-        return f"{self.user.first_name} {self.user.last_name} {self.action}"
+        if self.user:
+            return f"{self.user.first_name} {self.user.last_name} {self.action}"
+        else:
+            return f"System {self.action}"
 
 
 class AdCampaignGroup(models.Model):
