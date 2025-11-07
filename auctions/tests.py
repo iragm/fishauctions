@@ -1072,17 +1072,17 @@ class LotLabelViewTestCase(StandardTestCase):
                 auctiontos_winner=self.tosB,
                 active=False,
             )
-        
+
         user_label_prefs, created = UserLabelPrefs.objects.get_or_create(user=self.user)
         user_label_prefs.preset = "thermal_sm"
         user_label_prefs.save()
         self.client.login(username=self.user, password="testpassword")
         self.endAuction()
         response = self.client.get(self.url)
-        
+
         assert response.status_code == 200
         assert "attachment;filename=" in response.headers["Content-Disposition"]
-        
+
         # Check that a warning message was added
         messages_list = list(response.wsgi_request._messages)
         assert len(messages_list) > 0
@@ -1107,21 +1107,21 @@ class LotLabelViewTestCase(StandardTestCase):
                 auctiontos_winner=self.tosB,
                 active=False,
             )
-        
+
         user_label_prefs, created = UserLabelPrefs.objects.get_or_create(user=self.user)
         user_label_prefs.preset = "lg"  # Non-thermal preset
         user_label_prefs.save()
         self.client.login(username=self.user, password="testpassword")
         self.endAuction()
         response = self.client.get(self.url)
-        
+
         assert response.status_code == 200
         assert "attachment;filename=" in response.headers["Content-Disposition"]
-        
+
         # Check that NO warning message was added
         messages_list = list(response.wsgi_request._messages)
         for message in messages_list:
-            assert "100 labels" not in str(message), f"Should not have 100 label warning for non-thermal labels"
+            assert "100 labels" not in str(message), "Should not have 100 label warning for non-thermal labels"
 
     def test_non_admin_cannot_print_others_labels(self):
         """Test that a non-admin user cannot print labels for other users."""
