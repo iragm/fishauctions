@@ -1059,6 +1059,70 @@ class LotLabelViewTestCase(StandardTestCase):
         assert response.status_code == 200
         assert "attachment;filename=" in response.headers["Content-Disposition"]
 
+    def test_thermal_labels_capped_at_100(self):
+        """Test that thermal labels are capped at 100 per PDF."""
+        # Create 150 lots for testing the cap
+        for i in range(150):
+            Lot.objects.create(
+                lot_name=f"Test lot {i}",
+                auction=self.online_auction,
+                auctiontos_seller=self.online_tos,
+                quantity=1,
+                winning_price=10,
+                auctiontos_winner=self.tosB,
+                active=False,
+            )
+        
+        user_label_prefs, created = UserLabelPrefs.objects.get_or_create(user=self.user)
+        user_label_prefs.preset = "thermal_sm"
+        user_label_prefs.save()
+        self.client.login(username=self.user, password="testpassword")
+        self.endAuction()
+        response = self.client.get(self.url)
+        
+        assert response.status_code == 200
+        assert "attachment;filename=" in response.headers["Content-Disposition"]
+        
+        # Check that a warning message was added
+        messages_list = list(response.wsgi_request._messages)
+        assert len(messages_list) > 0
+        # The message should mention the 100 label limit
+        warning_found = False
+        for message in messages_list:
+            if "100 labels" in str(message) and "Print unprinted labels" in str(message):
+                warning_found = True
+                break
+        assert warning_found, f"Expected warning message about 100 label cap, got: {[str(m) for m in messages_list]}"
+
+    def test_non_thermal_labels_not_capped(self):
+        """Test that non-thermal labels are NOT capped at 100."""
+        # Create 150 lots for testing
+        for i in range(150):
+            Lot.objects.create(
+                lot_name=f"Test lot {i}",
+                auction=self.online_auction,
+                auctiontos_seller=self.online_tos,
+                quantity=1,
+                winning_price=10,
+                auctiontos_winner=self.tosB,
+                active=False,
+            )
+        
+        user_label_prefs, created = UserLabelPrefs.objects.get_or_create(user=self.user)
+        user_label_prefs.preset = "lg"  # Non-thermal preset
+        user_label_prefs.save()
+        self.client.login(username=self.user, password="testpassword")
+        self.endAuction()
+        response = self.client.get(self.url)
+        
+        assert response.status_code == 200
+        assert "attachment;filename=" in response.headers["Content-Disposition"]
+        
+        # Check that NO warning message was added
+        messages_list = list(response.wsgi_request._messages)
+        for message in messages_list:
+            assert "100 labels" not in str(message), f"Should not have 100 label warning for non-thermal labels"
+
     def test_non_admin_cannot_print_others_labels(self):
         """Test that a non-admin user cannot print labels for other users."""
         self.client.login(username="no_tos", password="testpassword")
