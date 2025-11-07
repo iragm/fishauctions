@@ -5830,6 +5830,27 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionPermissionsM
             context["labels_per_page"] = 1
 
         labels = self.get_queryset()
+
+        # Cap thermal labels at 100 per PDF
+        is_thermal = user_label_prefs.preset in ["thermal_sm", "thermal_very_sm"]
+
+        if is_thermal:
+            # Check if we have more than 100 labels efficiently
+            # We fetch 101 labels to determine if there are more than 100
+            labels_list = list(labels[:101])
+            if len(labels_list) > 100:
+                # Show warning and limit to first 100
+                total_labels_count = labels.count()
+                labels = labels_list[:100]
+                messages.warning(
+                    self.request,
+                    f"Only the first 100 labels are included in this PDF (you have {total_labels_count} total labels). "
+                    f"To print the remaining labels, use the 'Print unprinted labels' option.",
+                )
+            else:
+                # Use the list we already fetched (100 or fewer labels)
+                labels = labels_list
+
         for label in labels:
             label.label_printed = True
             label.label_needs_reprinting = False

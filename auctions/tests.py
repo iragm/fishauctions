@@ -1026,6 +1026,17 @@ class LotLabelViewTestCase(StandardTestCase):
             "my_labels_by_username", kwargs={"slug": self.online_auction.slug, "username": self.user.username}
         )
 
+    def assert_message_contains(self, response, expected_text, should_exist=True):
+        """Helper method to check if a message contains expected text."""
+        messages_list = list(response.wsgi_request._messages)
+        found = any(expected_text in str(message) for message in messages_list)
+        if should_exist:
+            assert found, f"Expected message containing '{expected_text}', got: {[str(m) for m in messages_list]}"
+        else:
+            assert not found, (
+                f"Should not have message containing '{expected_text}', got: {[str(m) for m in messages_list]}"
+            )
+
     def test_user_can_print_own_labels(self):
         """Test that a regular user can print their own labels."""
         self.client.login(username=self.user, password="testpassword")
@@ -1058,6 +1069,89 @@ class LotLabelViewTestCase(StandardTestCase):
         response = self.client.get(self.url)
         assert response.status_code == 200
         assert "attachment;filename=" in response.headers["Content-Disposition"]
+
+    def test_thermal_labels_capped_at_100(self):
+        """Test that thermal labels are capped at 100 per PDF."""
+        # Create 150 lots for testing the cap
+        for i in range(150):
+            Lot.objects.create(
+                lot_name=f"Test lot {i}",
+                auction=self.online_auction,
+                auctiontos_seller=self.online_tos,
+                quantity=1,
+                winning_price=10,
+                auctiontos_winner=self.tosB,
+                active=False,
+            )
+
+        user_label_prefs, created = UserLabelPrefs.objects.get_or_create(user=self.user)
+        user_label_prefs.preset = "thermal_sm"
+        user_label_prefs.save()
+        self.client.login(username=self.user, password="testpassword")
+        self.endAuction()
+        response = self.client.get(self.url)
+
+        assert response.status_code == 200
+        assert "attachment;filename=" in response.headers["Content-Disposition"]
+
+        # Check that a warning message was added about the 100 label cap
+        self.assert_message_contains(response, "100 labels")
+        self.assert_message_contains(response, "Print unprinted labels")
+
+    def test_thermal_very_sm_labels_capped_at_100(self):
+        """Test that thermal_very_sm labels are also capped at 100 per PDF."""
+        # Create 120 lots for testing the cap
+        for i in range(120):
+            Lot.objects.create(
+                lot_name=f"Test lot {i}",
+                auction=self.online_auction,
+                auctiontos_seller=self.online_tos,
+                quantity=1,
+                winning_price=10,
+                auctiontos_winner=self.tosB,
+                active=False,
+            )
+
+        user_label_prefs, created = UserLabelPrefs.objects.get_or_create(user=self.user)
+        user_label_prefs.preset = "thermal_very_sm"
+        user_label_prefs.save()
+        self.client.login(username=self.user, password="testpassword")
+        self.endAuction()
+        response = self.client.get(self.url)
+
+        assert response.status_code == 200
+        assert "attachment;filename=" in response.headers["Content-Disposition"]
+
+        # Check that a warning message was added about the 100 label cap
+        self.assert_message_contains(response, "100 labels")
+        self.assert_message_contains(response, "Print unprinted labels")
+
+    def test_non_thermal_labels_not_capped(self):
+        """Test that non-thermal labels are NOT capped at 100."""
+        # Create 150 lots for testing
+        for i in range(150):
+            Lot.objects.create(
+                lot_name=f"Test lot {i}",
+                auction=self.online_auction,
+                auctiontos_seller=self.online_tos,
+                quantity=1,
+                winning_price=10,
+                auctiontos_winner=self.tosB,
+                active=False,
+            )
+
+        user_label_prefs, created = UserLabelPrefs.objects.get_or_create(user=self.user)
+        user_label_prefs.preset = "lg"  # Non-thermal preset
+        user_label_prefs.save()
+        self.client.login(username=self.user, password="testpassword")
+        self.endAuction()
+        response = self.client.get(self.url)
+
+        assert response.status_code == 200
+        assert "attachment;filename=" in response.headers["Content-Disposition"]
+
+        # Check that NO warning message was added
+        self.assert_message_contains(response, "100 labels", should_exist=False)
 
     def test_non_admin_cannot_print_others_labels(self):
         """Test that a non-admin user cannot print labels for other users."""
