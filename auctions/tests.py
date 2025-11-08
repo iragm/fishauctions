@@ -3021,7 +3021,7 @@ class UserTrustSystemTests(StandardTestCase):
         self.client.login(username="superuser", password="testpassword")
         url = reverse("auction_main", kwargs={"slug": self.untrusted_auction.slug})
         # Join the auction first
-        tos = AuctionTOS.objects.create(
+        AuctionTOS.objects.create(
             user=self.superuser,
             auction=self.untrusted_auction,
             pickup_location=PickupLocation.objects.create(
@@ -3041,7 +3041,7 @@ class UserTrustSystemTests(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
         url = reverse("auction_main", kwargs={"slug": self.untrusted_auction.slug})
         initial_trust = self.untrusted_user.userdata.is_trusted
-        response = self.client.get(url + "?trust_user=true")
+        self.client.get(url + "?trust_user=true")
         # Reload user data
         self.untrusted_user.userdata.refresh_from_db()
         # Trust status should not change
@@ -3051,9 +3051,7 @@ class UserTrustSystemTests(StandardTestCase):
         """Test that invoices for untrusted users don't show payment button"""
         # Create invoice for untrusted auction
         theFuture = timezone.now() + datetime.timedelta(days=3)
-        location = PickupLocation.objects.create(
-            name="location", auction=self.untrusted_auction, pickup_time=theFuture
-        )
+        location = PickupLocation.objects.create(name="location", auction=self.untrusted_auction, pickup_time=theFuture)
         tos = AuctionTOS.objects.create(
             user=self.user_with_no_lots, auction=self.untrusted_auction, pickup_location=location
         )
@@ -3073,10 +3071,9 @@ class UserTrustSystemTests(StandardTestCase):
         # Enable online payments
         self.online_auction.enable_online_payments = True
         self.online_auction.save()
-        # Check invoice
-        invoice = Invoice.objects.get(auctiontos_user=self.online_tos)
-        # Note: show_payment_button may still be False due to other checks (e.g., balance, PayPal config)
-        # We're mainly testing that the is_trusted check doesn't block it
+        # Get invoice - show_payment_button may still be False due to other checks
+        # (e.g., balance, PayPal config), we're mainly testing that the is_trusted check doesn't block it
+        Invoice.objects.get(auctiontos_user=self.online_tos)
 
     def test_invoice_template_shows_email_message_for_trusted(self):
         """Test that invoice template shows email notification message for trusted users"""
@@ -3110,7 +3107,7 @@ class UserTrustSystemTests(StandardTestCase):
                 auction=self.untrusted_auction,
                 pickup_time=timezone.now() + datetime.timedelta(days=3),
             )
-        tos = AuctionTOS.objects.create(user=self.superuser, auction=self.untrusted_auction, pickup_location=location)
+        AuctionTOS.objects.create(user=self.superuser, auction=self.untrusted_auction, pickup_location=location)
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
         # Check that response contains trust link (only if auction is not promoted)
@@ -3123,9 +3120,7 @@ class UserTrustSystemTests(StandardTestCase):
 
         # Create an invoice for untrusted auction
         theFuture = timezone.now() + datetime.timedelta(days=3)
-        location = PickupLocation.objects.create(
-            name="location", auction=self.untrusted_auction, pickup_time=theFuture
-        )
+        location = PickupLocation.objects.create(name="location", auction=self.untrusted_auction, pickup_time=theFuture)
         tos = AuctionTOS.objects.create(
             user=self.user_with_no_lots, auction=self.untrusted_auction, pickup_location=location
         )
