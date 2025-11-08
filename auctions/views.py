@@ -4928,6 +4928,11 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
             if str(request.GET.get("dismissed_promo_banner", "")).lower() in ("1", "true"):
                 self.auction.dismissed_promo_banner = True
                 self.auction.save()
+            if request.user.is_superuser:
+                if str(request.GET.get("trust_user", "")).lower() in ("1", "true"):
+                    self.auction.created_by.userdata.is_trusted = True
+                    self.auction.created_by.userdata.save()
+                    messages.success(request, f"{self.auction.created_by.username} is now trusted")
             if self.auction.created_by.pk == request.user.pk:
                 if str(request.GET.get("enable_online_payments", "")).lower() in ("1", "true"):
                     self.auction.enable_online_payments = True
@@ -4985,6 +4990,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["pickup_locations"] = self.auction.location_qs
+        context["untrusted_message"] = settings.UNTRUSTED_MESSAGE
         current_site = Site.objects.get_current()
         context["domain"] = current_site.domain
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]

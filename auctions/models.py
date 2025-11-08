@@ -3620,6 +3620,8 @@ class Invoice(models.Model):
             return False
         if self.auction and not self.auction.enable_online_payments:
             return False
+        if self.auction and not self.auction.created_by.userdata.is_trusted:
+            return False
         if self.status == "PAID":
             return False
         if self.net_after_payments >= 0:
@@ -4283,6 +4285,10 @@ def get_default_paypal_enabled():
     return settings.PAYPAL_ENABLED_FOR_USERS
 
 
+def get_default_is_trusted():
+    return settings.USERS_ARE_TRUSTED_BY_DEFAULT
+
+
 class UserData(models.Model):
     """
     Extension of user model to store additional info
@@ -4361,6 +4367,8 @@ class UserData(models.Model):
     can_submit_standalone_lots = models.BooleanField(default=get_default_can_submit_lots)
     can_create_club_auctions = models.BooleanField(default=get_default_can_create_auctions)
     paypal_enabled = models.BooleanField(default=get_default_paypal_enabled)
+    is_trusted = models.BooleanField(default=get_default_is_trusted)
+    is_trusted.help_text = "Trusted users can promote auctions, accept payments, and send invoice notification emails"
     dismissed_cookies_tos = models.BooleanField(default=False)
     show_ad_controls = models.BooleanField(default=False, blank=True)
     show_ad_controls.help_text = "Show a tab for ads on all pages"
