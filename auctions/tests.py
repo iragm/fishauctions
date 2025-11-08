@@ -1,4 +1,3 @@
-import base64
 import datetime
 from decimal import Decimal
 
@@ -19,7 +18,6 @@ from .models import (
     InvoiceAdjustment,
     Lot,
     LotHistory,
-    LotImage,
     PickupLocation,
     UserData,
     UserLabelPrefs,
@@ -120,14 +118,15 @@ class StandardTestCase(TestCase):
             auctiontos_winner=self.tosB,
             active=False,
         )
-        png_bytes = base64.b64decode(
-            b"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAH0KzMgAAAABJRU5ErkJggg=="
-        )
-        self.lot_image = LotImage.objects.create(
-            lot_number=self.lot,
-            image=SimpleUploadedFile("test.png", png_bytes, content_type="image/png"),
-            is_primary=True,
-        )
+        # no permission to save images by default, so this is a no-go
+        # png_bytes = base64.b64decode(
+        #     b"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAH0KzMgAAAABJRU5ErkJggg=="
+        # )
+        # self.lot_image = LotImage.objects.create(
+        #     lot_number=self.lot,
+        #     image=SimpleUploadedFile("test.png", png_bytes, content_type="image/png"),
+        #     is_primary=True,
+        # )
         self.lotB = Lot.objects.create(
             lot_name="B test lot",
             auction=self.online_auction,
