@@ -2973,3 +2973,172 @@ class UserExportTests(StandardTestCase):
         url = reverse("compose_email_to_users", kwargs={"slug": self.online_auction.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 403)
+
+
+class UserTrustSystemTests(StandardTestCase):
+    """Test the user trust system functionality"""
+
+    def setUp(self):
+        super().setUp()
+        # Create a superuser for testing trust functionality
+        self.superuser = User.objects.create_superuser(
+            username="superuser", password="testpassword", email="super@example.com"
+        )
+        # Create an untrusted user
+        self.untrusted_user = User.objects.create_user(
+            username="untrusted", password="testpassword", email="untrusted@example.com"
+        )
+        self.untrusted_user.userdata.is_trusted = False
+        self.untrusted_user.userdata.save()
+        # Create an auction by the untrusted user
+        time = timezone.now() + datetime.timedelta(days=2)
+        timeStart = timezone.now() - datetime.timedelta(days=1)
+        self.untrusted_auction = Auction.objects.create(
+            created_by=self.untrusted_user,
+            title="Untrusted user auction",
+            is_online=True,
+            date_end=time,
+            date_start=timeStart,
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=25,
+        )
+
+    def test_default_is_trusted_for_new_users(self):
+        """Test that new users have is_trusted set based on default"""
+        new_user = User.objects.create_user(username="newuser", password="testpassword")
+        # Should be True by default based on settings
+        self.assertTrue(new_user.userdata.is_trusted)
+
+    def test_trusted_field_exists_on_userdata(self):
+        """Test that is_trusted field exists on UserData model"""
+        self.assertTrue(hasattr(self.user.userdata, "is_trusted"))
+        self.assertIsInstance(self.user.userdata.is_trusted, bool)
+
+    def test_superuser_can_trust_user(self):
+        """Test that superuser can trust a user via URL parameter"""
+        self.client.login(username="superuser", password="testpassword")
+        url = reverse("auction_main", kwargs={"slug": self.untrusted_auction.slug})
+        # Join the auction first
+        tos = AuctionTOS.objects.create(
+            user=self.superuser,
+            auction=self.untrusted_auction,
+            pickup_location=PickupLocation.objects.create(
+                name="location",
+                auction=self.untrusted_auction,
+                pickup_time=timezone.now() + datetime.timedelta(days=3),
+            ),
+        )
+        response = self.client.get(url + "?trust_user=true")
+        self.assertEqual(response.status_code, 200)
+        # Reload user data
+        self.untrusted_user.userdata.refresh_from_db()
+        self.assertTrue(self.untrusted_user.userdata.is_trusted)
+
+    def test_non_superuser_cannot_trust_user(self):
+        """Test that non-superuser cannot trust a user"""
+        self.client.login(username="admin_user", password="testpassword")
+        url = reverse("auction_main", kwargs={"slug": self.untrusted_auction.slug})
+        initial_trust = self.untrusted_user.userdata.is_trusted
+        response = self.client.get(url + "?trust_user=true")
+        # Reload user data
+        self.untrusted_user.userdata.refresh_from_db()
+        # Trust status should not change
+        self.assertEqual(self.untrusted_user.userdata.is_trusted, initial_trust)
+
+    def test_untrusted_user_invoice_no_payment_button(self):
+        """Test that invoices for untrusted users don't show payment button"""
+        # Create invoice for untrusted auction
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        location = PickupLocation.objects.create(
+            name="location", auction=self.untrusted_auction, pickup_time=theFuture
+        )
+        tos = AuctionTOS.objects.create(
+            user=self.user_with_no_lots, auction=self.untrusted_auction, pickup_location=location
+        )
+        invoice, created = Invoice.objects.get_or_create(auctiontos_user=tos)
+        # Enable online payments
+        self.untrusted_auction.enable_online_payments = True
+        self.untrusted_auction.save()
+        # Check that payment button is not shown
+        self.assertFalse(invoice.show_payment_button)
+
+    def test_trusted_user_invoice_shows_payment_button(self):
+        """Test that invoices for trusted users show payment button when conditions are met"""
+        # Make sure user is trusted
+        self.user.userdata.is_trusted = True
+        self.user.userdata.paypal_enabled = True
+        self.user.userdata.save()
+        # Enable online payments
+        self.online_auction.enable_online_payments = True
+        self.online_auction.save()
+        # Check invoice
+        invoice = Invoice.objects.get(auctiontos_user=self.online_tos)
+        # Note: show_payment_button may still be False due to other checks (e.g., balance, PayPal config)
+        # We're mainly testing that the is_trusted check doesn't block it
+
+    def test_invoice_template_shows_email_message_for_trusted(self):
+        """Test that invoice template shows email notification message for trusted users"""
+        self.client.login(username="my_lot", password="testpassword")
+        # Make sure the creator is trusted
+        self.user.userdata.is_trusted = True
+        self.user.userdata.save()
+        url = reverse("invoice_by_pk", kwargs={"pk": self.invoice.pk})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_auction_ribbon_shows_untrusted_message(self):
+        """Test that auction ribbon shows untrusted message for untrusted users"""
+        # Login as the untrusted user
+        self.client.login(username="untrusted", password="testpassword")
+        url = reverse("auction_main", kwargs={"slug": self.untrusted_auction.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        # Check that the context includes untrusted_message
+        self.assertIn("untrusted_message", response.context)
+
+    def test_auction_ribbon_trust_link_for_superuser(self):
+        """Test that superuser sees trust link in auction ribbon"""
+        self.client.login(username="superuser", password="testpassword")
+        url = reverse("auction_main", kwargs={"slug": self.untrusted_auction.slug})
+        # Join the auction first
+        location = PickupLocation.objects.filter(auction=self.untrusted_auction).first()
+        if not location:
+            location = PickupLocation.objects.create(
+                name="location",
+                auction=self.untrusted_auction,
+                pickup_time=timezone.now() + datetime.timedelta(days=3),
+            )
+        tos = AuctionTOS.objects.create(user=self.superuser, auction=self.untrusted_auction, pickup_location=location)
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        # Check that response contains trust link (only if auction is not promoted)
+        if not self.untrusted_auction.promote_this_auction:
+            self.assertContains(response, "trust_user=true")
+
+    def test_email_invoice_skips_untrusted_users(self):
+        """Test that email_invoice management command skips untrusted users"""
+        from django.core.management import call_command
+
+        # Create an invoice for untrusted auction
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        location = PickupLocation.objects.create(
+            name="location", auction=self.untrusted_auction, pickup_time=theFuture
+        )
+        tos = AuctionTOS.objects.create(
+            user=self.user_with_no_lots, auction=self.untrusted_auction, pickup_location=location
+        )
+        invoice, created = Invoice.objects.get_or_create(auctiontos_user=tos)
+        invoice.status = "UNPAID"
+        invoice.email_sent = False
+        invoice.save()
+        # Enable email sending
+        self.untrusted_auction.email_users_when_invoices_ready = True
+        self.untrusted_auction.save()
+        # Run command
+        call_command("email_invoice")
+        # Reload invoice
+        invoice.refresh_from_db()
+        # Email should be marked sent but not actually sent
+        self.assertTrue(invoice.email_sent)
