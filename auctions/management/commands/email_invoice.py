@@ -11,12 +11,11 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         invoices = Invoice.objects.exclude(status="DRAFT").filter(auction__isnull=False, email_sent=False)
         for invoice in invoices:
-            # Skip sending emails if the auction creator is not trusted
-            if not invoice.auction.created_by.userdata.is_trusted:
-                invoice.email_sent = True
-                invoice.save()
-                continue
-            if invoice.auction.email_users_when_invoices_ready and invoice.auctiontos_user.email:
+            if (
+                invoice.auction.created_by.userdata.is_trusted
+                and invoice.auction.email_users_when_invoices_ready
+                and invoice.auctiontos_user.email
+            ):
                 email = invoice.auctiontos_user.email
                 subject = f"Your invoice for {invoice.label} is ready"
                 if invoice.status == "PAID":
