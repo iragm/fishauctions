@@ -25,7 +25,6 @@ from chartjs.views.lines import BaseLineChartView
 from dal import autocomplete
 from django.conf import settings
 from django.contrib import messages
-from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.models import User
 from django.contrib.messages.views import SuccessMessageMixin
@@ -1412,81 +1411,83 @@ class AuctionTOSValidation(AuctionViewMixin, APIPostView):
         return JsonResponse(result)
 
 
-@login_required
-def my_won_lot_csv(request):
+class MyWonLotCSV(LoginRequiredMixin, View):
     """CSV file showing won lots"""
-    lots = add_price_info(
-        Lot.objects.filter(Q(winner=request.user) | Q(auctiontos_winner__email=request.user.email)).exclude(
-            is_deleted=True
+
+    def get(self, request):
+        lots = add_price_info(
+            Lot.objects.filter(Q(winner=request.user) | Q(auctiontos_winner__email=request.user.email)).exclude(
+                is_deleted=True
+            )
         )
-    )
-    current_site = Site.objects.get_current()
-    response = HttpResponse(content_type="text/csv")
-    response["Content-Disposition"] = (
-        f'attachment; filename="my_won_lots_from_{current_site.domain.replace(".", "_")}.csv"'
-    )
-    writer = csv.writer(response)
-    writer.writerow(["Lot number", "Name", "Auction", "Winning price", "Link"])
-    for lot in lots:
-        writer.writerow(
-            [
-                lot.lot_number_display,
-                lot.lot_name,
-                lot.auction,
-                f"${lot.winning_price}",
-                "https://" + lot.full_lot_link,
-            ]
+        current_site = Site.objects.get_current()
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = (
+            f'attachment; filename="my_won_lots_from_{current_site.domain.replace(".", "_")}.csv"'
         )
-    return response
+        writer = csv.writer(response)
+        writer.writerow(["Lot number", "Name", "Auction", "Winning price", "Link"])
+        for lot in lots:
+            writer.writerow(
+                [
+                    lot.lot_number_display,
+                    lot.lot_name,
+                    lot.auction,
+                    f"${lot.winning_price}",
+                    "https://" + lot.full_lot_link,
+                ]
+            )
+        return response
 
 
-@login_required
-def my_lot_report(request):
+class MyLotReportView(LoginRequiredMixin, View):
     """CSV file showing sold lots"""
-    lots = add_price_info(
-        Lot.objects.filter(Q(user=request.user) | Q(auctiontos_seller__email=request.user.email)).exclude(
-            is_deleted=True
+
+    def get(self, request):
+        lots = add_price_info(
+            Lot.objects.filter(Q(user=request.user) | Q(auctiontos_seller__email=request.user.email)).exclude(
+                is_deleted=True
+            )
         )
-    )
-    current_site = Site.objects.get_current()
-    response = HttpResponse(content_type="text/csv")
-    response["Content-Disposition"] = f'attachment; filename="my_lots_from_{current_site.domain.replace(".", "_")}.csv"'
-    writer = csv.writer(response)
-    writer.writerow(["Lot number", "Name", "Auction", "Status", "Winning price", "My cut"])
-    for lot in lots:
-        status = "Unsold"
-        if lot.banned:
-            status = "Removed"
-        elif lot.deactivated:
-            status = "Deactivated"
-        elif lot.winner or lot.auctiontos_winner:
-            status = "Sold"
-        writer.writerow(
-            [
-                lot.lot_number_display,
-                lot.lot_name,
-                lot.auction,
-                status,
-                lot.winning_price,
-                lot.your_cut,
-            ]
+        current_site = Site.objects.get_current()
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = (
+            f'attachment; filename="my_lots_from_{current_site.domain.replace(".", "_")}.csv"'
         )
-    return response
+        writer = csv.writer(response)
+        writer.writerow(["Lot number", "Name", "Auction", "Status", "Winning price", "My cut"])
+        for lot in lots:
+            status = "Unsold"
+            if lot.banned:
+                status = "Removed"
+            elif lot.deactivated:
+                status = "Deactivated"
+            elif lot.winner or lot.auctiontos_winner:
+                status = "Sold"
+            writer.writerow(
+                [
+                    lot.lot_number_display,
+                    lot.lot_name,
+                    lot.auction,
+                    status,
+                    lot.winning_price,
+                    lot.your_cut,
+                ]
+            )
+        return response
 
 
-@login_required
-def auctionReport(request, slug):
+class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
     """Get a CSV file showing all users who are participating in this auction"""
-    auction = get_object_or_404(Auction, slug=slug, is_deleted=False)
-    if auction.permission_check(request.user):
-        # Create the HttpResponse object with the appropriate CSV header.
+
+    def get(self, request):
         query = request.GET.get("query", None)
         response = HttpResponse(content_type="text/csv")
         end = timezone.now().strftime("%Y-%m-%d")
         if not query:
-            filename = slug + "-report-" + end
+            filename = self.auction.slug + "-report-" + end
         else:
-            filename = slug + "-report-" + query + "-" + end
+            filename = self.auction.slug + "-report-" + query + "-" + end
         response["Content-Disposition"] = f'attachment; filename="{filename}.csv"'
         writer = csv.writer(response)
         writer.writerow(
@@ -1519,13 +1520,13 @@ def auctionReport(request, slug):
                 "Users who have banned this user",
                 "Account created on",
                 "Memo",
-                auction.alternative_split_label.capitalize(),
+                self.auction.alternative_split_label.capitalize(),
                 "Bidding allowed",
                 "Added auction to their calendar",
             ]
         )
         users = (
-            AuctionTOS.objects.filter(auction=auction)
+            AuctionTOS.objects.filter(auction=self.auction)
             .select_related("user__userdata")
             .select_related("pickup_location")
             .order_by("createdon")
@@ -1544,17 +1545,17 @@ def auctionReport(request, slug):
             club = ""
             if data.user and not data.manually_added:
                 # these things will only be written out if the user wants you to have it
-                lotsViewed = PageView.objects.filter(lot_number__auction=auction, user=data.user)
-                lotsBid = Bid.objects.exclude(is_deleted=True).filter(lot_number__auction=auction, user=data.user)
+                lotsViewed = PageView.objects.filter(lot_number__auction=self.auction, user=data.user)
+                lotsBid = Bid.objects.exclude(is_deleted=True).filter(lot_number__auction=self.auction, user=data.user)
                 lot_qs = Lot.objects.exclude(is_deleted=True).filter(
                     user=data.user,
                     auction__isnull=True,
-                    date_posted__gte=auction.date_start - timedelta(days=2),
+                    date_posted__gte=self.auction.date_start - timedelta(days=2),
                 )
-                if auction.is_online:
-                    lotsOutsideAuction = lot_qs.filter(date_posted__lte=auction.date_end + timedelta(days=2))
+                if self.auction.is_online:
+                    lotsOutsideAuction = lot_qs.filter(date_posted__lte=self.auction.date_end + timedelta(days=2))
                 else:
-                    lotsOutsideAuction = lot_qs.filter(date_posted__lte=auction.date_start + timedelta(days=5))
+                    lotsOutsideAuction = lot_qs.filter(date_posted__lte=self.auction.date_start + timedelta(days=5))
                 numberLotsOutsideAuction = lotsOutsideAuction.count()
                 profitOutsideAuction = lotsOutsideAuction.aggregate(total=Sum("winning_price"))["total"]
                 if not profitOutsideAuction:
@@ -1579,14 +1580,14 @@ def auctionReport(request, slug):
                 username = ""
                 number_of_userbans = 0
                 account_age = ""
-            lotsSumbitted = Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller=data, auction=auction)
-            lotsWon = Lot.objects.exclude(is_deleted=True).filter(auctiontos_winner=data, auction=auction)
+            lotsSumbitted = Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller=data, auction=self.auction)
+            lotsWon = Lot.objects.exclude(is_deleted=True).filter(auctiontos_winner=data, auction=self.auction)
             breederPoints = Lot.objects.exclude(is_deleted=True).filter(
-                auctiontos_seller=data, auction=auction, i_bred_this_fish=True
+                auctiontos_seller=data, auction=self.auction, i_bred_this_fish=True
             )
             address = data.address or ""
             try:
-                invoice = Invoice.objects.get(auction=auction, auctiontos_user=data)
+                invoice = Invoice.objects.get(auction=self.auction, auctiontos_user=data)
                 invoiceStatus = invoice.get_status_display()
                 totalSpent = invoice.total_bought
                 totalPaid = invoice.total_sold
@@ -1631,17 +1632,15 @@ def auctionReport(request, slug):
                     add_to_calendar,
                 ]
             )
-        auction.create_history(
+        self.auction.create_history(
             applies_to="USERS",
             action="Exported user CSV",
             user=request.user,
         )
         return response
-    messages.error(request, "Your account doesn't have permission to view this page")
-    return redirect("/")
 
 
-class ComposeEmailToUsers(AuctionViewMixin, TemplateView):
+class ComposeEmailToUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView):
     """Generate a mailto: link with BCC for filtered users - HTMX endpoint"""
 
     template_name = "email_users_button.html"
@@ -1688,29 +1687,30 @@ class ComposeEmailToUsers(AuctionViewMixin, TemplateView):
         return context
 
 
-@login_required
-def userReport(request):
+class MarketingList(LoginRequiredMixin, View):
     """Get a CSV file showing all users from all auctions you're an admin for"""
-    response = HttpResponse(content_type="text/csv")
-    response["Content-Disposition"] = "attachment; filename=all_auction_contacts.csv"
-    writer = csv.writer(response)
-    found = []
-    writer.writerow(["Name", "Email", "Phone"])
-    auctions = Auction.objects.filter(
-        Q(created_by=request.user) | Q(auctiontos__is_admin=True, auctiontos__user=request.user)
-    ).distinct()
-    users = AuctionTOS.objects.filter(auction__in=auctions).exclude(email_address_status="BAD")
-    for user in users:
-        if user.email not in found:
-            writer.writerow([user.name, user.email, user.phone_as_string])
-            found.append(user.email)
-    for auction in auctions:
-        auction.create_history(
-            applies_to="USERS",
-            action="Exported marketing list CSV for all their auctions (including this one)",
-            user=request.user,
-        )
-    return response
+
+    def get(self, request):
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = "attachment; filename=all_auction_contacts.csv"
+        writer = csv.writer(response)
+        found = []
+        writer.writerow(["Name", "Email", "Phone"])
+        auctions = Auction.objects.filter(
+            Q(created_by=request.user) | Q(auctiontos__is_admin=True, auctiontos__user=request.user)
+        ).distinct()
+        users = AuctionTOS.objects.filter(auction__in=auctions).exclude(email_address_status="BAD")
+        for user in users:
+            if user.email not in found:
+                writer.writerow([user.name, user.email, user.phone_as_string])
+                found.append(user.email)
+        for auction in auctions:
+            auction.create_history(
+                applies_to="USERS",
+                action="Exported marketing list CSV for all their auctions (including this one)",
+                user=request.user,
+            )
+        return response
 
 
 class AuctionInvoicesPayPalCSV(LoginRequiredMixin, AuctionViewMixin, View):
@@ -2331,7 +2331,7 @@ class AuctionUsers(SingleTableMixin, AuctionViewMixin, FilterView):
         return super().get(*args, **kwargs)
 
 
-class AuctionStats(AuctionViewMixin, DetailView):
+class AuctionStats(LoginRequiredMixin, AuctionViewMixin, DetailView):
     """Fun facts about an auction"""
 
     model = Auction
@@ -5103,12 +5103,12 @@ class PromoSite(TemplateView):
         return context
 
 
-def toDefaultLandingPage(request):
+class ToDefaultLandingPage(View):
     """
     Allow the user to pick up where they left off
     """
 
-    def tos_check(request, auction, routeByLastAuction):
+    def tos_check(self, request, auction, routeByLastAuction):
         if not auction:
             if request.user.is_authenticated:
                 return AllLots.as_view()(request)
@@ -5131,56 +5131,56 @@ def toDefaultLandingPage(request):
             # No tos?  Take them there so they can sign
             return AuctionInfo.as_view(rewrite_url=f"/?{auction.slug}", auction=auction)(request)
 
-    data = request.GET.copy()
-    routeByLastAuction = False
-    try:
-        userData, created = UserData.objects.get_or_create(
-            user=request.user,
-            defaults={},
-        )
-        userData.last_activity = timezone.now()
-        userData.save()
-    except:
-        # probably not signed in
-        pass
-    try:
-        # if the slug was set in the URL
-        auction = Auction.objects.exclude(is_deleted=True).filter(slug=list(data.keys())[0])[0]
-        # return tos_check(request, auction, routeByLastAuction)
-    except Exception:
-        # if not, check and see if the user has been participating in an auction
+    def get(self, request, *args, **kwargs):
+        data = request.GET.copy()
+        routeByLastAuction = False
         try:
-            auction = UserData.objects.get(user=request.user).last_auction_used
-            invoice = (
-                Invoice.objects.filter(auctiontos_user__user=request.user, auctiontos_user__auction=auction)
-                .exclude(status="DRAFT")
-                .first()
+            userData, created = UserData.objects.get_or_create(
+                user=request.user,
+                defaults={},
             )
-            if invoice:
-                messages.info(
-                    request,
-                    f'{auction} has ended.  <a href="/invoices/{invoice.pk}">View your invoice</a> or <a href="/feedback/">leave feedback</a> on lots you bought or sold',
-                )
-                return redirect("/lots/")
-            else:
-                try:
-                    # in progress online auctions get routed
-                    AuctionTOS.objects.get(user=request.user, auction=auction, auction__is_online=True)
-                    # only show the banner if the TOS is signed
-                    # messages.add_message(request, messages.INFO, f'{auction} is the last auction you joined.  <a href="/lots/">View all lots instead</a>')
-                    routeByLastAuction = True
-                except:
-                    pass
+            userData.last_activity = timezone.now()
+            userData.save()
         except:
-            # probably no userdata or userdata.auction is None
-            auction = None
-    return tos_check(request, auction, routeByLastAuction)
+            # probably not signed in
+            pass
+        try:
+            # if the slug was set in the URL
+            auction = Auction.objects.exclude(is_deleted=True).filter(slug=list(data.keys())[0])[0]
+            # return tos_check(request, auction, routeByLastAuction)
+        except Exception:
+            # if not, check and see if the user has been participating in an auction
+            try:
+                auction = UserData.objects.get(user=request.user).last_auction_used
+                invoice = (
+                    Invoice.objects.filter(auctiontos_user__user=request.user, auctiontos_user__auction=auction)
+                    .exclude(status="DRAFT")
+                    .first()
+                )
+                if invoice:
+                    messages.info(
+                        request,
+                        f'{auction} has ended.  <a href="/invoices/{invoice.pk}">View your invoice</a> or <a href="/feedback/">leave feedback</a> on lots you bought or sold',
+                    )
+                    return redirect("/lots/")
+                else:
+                    try:
+                        # in progress online auctions get routed
+                        AuctionTOS.objects.get(user=request.user, auction=auction, auction__is_online=True)
+                        # only show the banner if the TOS is signed
+                        # messages.add_message(request, messages.INFO, f'{auction} is the last auction you joined.  <a href="/lots/">View all lots instead</a>')
+                        routeByLastAuction = True
+                    except:
+                        pass
+            except:
+                # probably no userdata or userdata.auction is None
+                auction = None
+        return self.tos_check(request, auction, routeByLastAuction)
 
 
-@login_required
-def toAccount(request):
-    # response = redirect(f'/users/{request.user.username}/')
-    return redirect(reverse("userpage", kwargs={"slug": request.user.username}))
+class MyAccount(LoginRequiredMixin, RedirectView):
+    def get_redirect_url(self, *args, **kwargs):
+        return reverse("userpage", kwargs={"slug": self.request.user.username})
 
 
 class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
