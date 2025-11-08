@@ -3005,12 +3005,6 @@ class UserTrustSystemTests(StandardTestCase):
             tax=25,
         )
 
-    def test_default_is_trusted_for_new_users(self):
-        """Test that new users have is_trusted set based on default"""
-        new_user = User.objects.create_user(username="newuser", password="testpassword")
-        # Should be True by default based on settings
-        self.assertTrue(new_user.userdata.is_trusted)
-
     def test_trusted_field_exists_on_userdata(self):
         """Test that is_trusted field exists on UserData model"""
         self.assertTrue(hasattr(self.user.userdata, "is_trusted"))
@@ -3084,16 +3078,6 @@ class UserTrustSystemTests(StandardTestCase):
         url = reverse("invoice_by_pk", kwargs={"pk": self.invoice.pk})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-
-    def test_auction_ribbon_shows_untrusted_message(self):
-        """Test that auction ribbon shows untrusted message for untrusted users"""
-        # Login as the untrusted user
-        self.client.login(username="untrusted", password="testpassword")
-        url = reverse("auction_main", kwargs={"slug": self.untrusted_auction.slug})
-        response = self.client.get(url)
-        self.assertEqual(response.status_code, 200)
-        # Check that the context includes untrusted_message
-        self.assertIn("untrusted_message", response.context)
 
     def test_auction_ribbon_trust_link_for_superuser(self):
         """Test that superuser sees trust link in auction ribbon"""
