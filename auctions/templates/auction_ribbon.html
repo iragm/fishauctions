@@ -2,6 +2,9 @@
 <h3>{{auction}}</h3>
 <small><span class='text-muted'>An {{auction.auction_type_as_str}}, created by {{ auction.created_by }}{% if request.user.is_authenticated and auction.created_by.userdata.email_visible %}: {{ auction.created_by.email|urlize }}{% endif %}</span></small>
 {% if view.is_auction_admin or is_auction_admin %}
+{% if request.user.is_superuser and not auction.created_by.userdata.is_trusted %}
+      <br><a href='{% url "auction_main" slug=auction.slug %}?trust_user=true' class="btn btn-warning btn-sm mt-2">Trust this user</a>
+{% endif %}
 {% if not auction.admin_checklist_completed and not auction.admin_checklist_mostly_completed or not auction.admin_checklist_completed and not request.user.userdata.is_experienced %}
 <div class='mt-4 mb-4 p-2 bg-primary text-white rounded bg-gradient bg-opacity-50'><h5>Finish setting up</h5>
   <ul class="list-unstyled">
@@ -22,16 +25,21 @@
 {% else %}
   {% if not auction.promote_this_auction and not auction.dismissed_promo_banner %}
   <div class='mt-4 mb-4 p-2 bg-primary text-white rounded bg-gradient bg-opacity-50'><h5>This auction is not promoted</h5>
-    <small>It will appear in <a href="{% url 'auctions' %}">the list of auctions</a> for you, for any users you manually add (based on email address), and for any users that have joined, but it won't be visible to anyone else unless you share the URL with them.  Promoted auctions are also included in a weekly promotional email sent every Wednesday to nearby users.</small>
     {% if not auction.created_by.userdata.is_trusted %}
-    <br><small>{{ untrusted_message|safe }}</small>
+    <small>{{ auction.untrusted_message|safe }}</small>
+    {% else %}
+    <small>It will appear in <a href="{% url 'auctions' %}">the list of auctions</a> for you, for any users you manually add (based on email address), and for any users that have joined, but it won't be visible to anyone else unless you share the URL with them.  Promoted auctions are also included in a weekly promotional email sent every Wednesday to nearby users.</small>
     {% endif %}
     <div>
-    <a href='/auctions/{{auction.slug}}/edit' class="btn btn-info btn-sm mt-2">Edit the rules and check promote this auction</a>
-      <a href='{% url "auction_main" slug=auction.slug %}?dismissed_promo_banner=true' class="btn btn-outline-light btn-sm mt-2">Don't show again for this auction</a>
-      {% if request.user.is_superuser and not auction.created_by.userdata.is_trusted %}
-      <a href='{% url "auction_main" slug=auction.slug %}?trust_user=true' class="btn btn-warning btn-sm mt-2">Trust this user</a>
+      {% if auction.created_by.userdata.is_trusted %}
+      <a href='/auctions/{{auction.slug}}/edit' class="btn btn-info btn-sm mt-2">Edit the rules and check promote this auction</a>
+      {% else %}
+        <a href="mailto:{{ auction.promotion_request_mailto_query }}"
+          class="btn btn-info btn-sm mt-2">
+          Contact us and request access
+        </a>
       {% endif %}
+      <a href='{% url "auction_main" slug=auction.slug %}?dismissed_promo_banner=true' class="btn btn-outline-light btn-sm mt-2">Don't show again for this auction</a>
     </div>
   </div>
   {% endif %}

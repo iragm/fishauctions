@@ -4990,7 +4990,6 @@ class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["pickup_locations"] = self.auction.location_qs
-        context["untrusted_message"] = settings.UNTRUSTED_MESSAGE
         current_site = Site.objects.get_current()
         context["domain"] = current_site.domain
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]

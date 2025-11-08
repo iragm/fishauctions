@@ -5,6 +5,7 @@ import uuid
 from datetime import time
 from decimal import ROUND_HALF_UP, Decimal
 from random import randint
+from urllib.parse import quote_plus
 
 import channels.layers
 from asgiref.sync import async_to_sync
@@ -778,6 +779,36 @@ class Auction(models.Model):
     google_drive_link.help_text = "Link to a Google Sheet with user information.  Make sure the sheet is shared with 'anyone with the link can view'."
     last_sync_time = models.DateTimeField(blank=True, null=True)
     last_sync_time.help_text = "Last time user data was synchronized from Google Drive"
+
+    @property
+    def promotion_request_mailto_query(self):
+        """
+        Pre-encoded subject/body for the 'request promoted auction access' mailto link.
+        Uses SITE_DOMAIN to build an absolute URL to this auction.
+        """
+        domain = getattr(settings, "SITE_DOMAIN", "").strip()
+        if domain:
+            if not domain.startswith("http"):
+                base = f"https://{domain}"
+            else:
+                base = domain.rstrip("/")
+        else:
+            base = ""
+        absolute_url = f"{base}{self.get_absolute_url()}"
+        admin_email = settings.ADMINS[0][1]
+        subject = "Request access to create promoted auctions"
+        body = (
+            "Hello, I would like to request permission to create promoted auctions.\n\n"
+            "My club's website/Facebook page is:\n\n"
+            f"I've created a test auction here: {absolute_url}\n\n"
+            "Thank you!"
+        )
+        return f"{admin_email}?subject={quote_plus(subject)}&body={quote_plus(body)}"
+
+    @property
+    def untrusted_message(self):
+        """If this auction is marked as untrusted, return the message to show users"""
+        return settings.UNTRUSTED_MESSAGE
 
     @property
     def paypal_information(self):
