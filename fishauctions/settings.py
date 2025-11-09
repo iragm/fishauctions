@@ -476,6 +476,13 @@ if os.environ.get("ALLOW_USERS_TO_CREATE_LOTS", "True") == "False":
 else:
     ALLOW_USERS_TO_CREATE_LOTS = True
 PAYPAL_ENABLED_FOR_USERS = os.environ.get("PAYPAL_ENABLED_FOR_USERS", "False") == "True"
+if os.environ.get("USERS_ARE_TRUSTED_BY_DEFAULT", "True") == "False":
+    USERS_ARE_TRUSTED_BY_DEFAULT = False
+else:
+    USERS_ARE_TRUSTED_BY_DEFAULT = True
+UNTRUSTED_MESSAGE = os.environ.get(
+    "UNTRUSTED_MESSAGE", "You cannot currently promote auctions.  Please contact the website administrator for access."
+)
 if os.environ.get("ENABLE_PROMO_PAGE", "True") == "False":
     ENABLE_PROMO_PAGE = False
 else:

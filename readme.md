@@ -169,7 +169,9 @@ A few other settings, and what they do:
 
 `MAILING_ADDRESS` Your physical mailing address, shown next to the unsubscribe link on promo emails.
 
-`ALLOW_USERS_TO_CREATE_AUCTIONS` Set this to False (case sensitive) to allow only admin users to create club auctions
+`ALLOW_USERS_TO_CREATE_AUCTIONS` Set this to False (case sensitive) to allow only admin users to create club auctions.  A closely related setting, `USERS_ARE_TRUSTED_BY_DEFAULT`, allows users to promote auctions, manage payments, and send invoice notifications.
+
+If you plan to allow anyone to create auctions, set `ALLOW_USERS_TO_CREATE_AUCTIONS=True` and `USERS_ARE_TRUSTED_BY_DEFAULT=False`, which will let people create test auctions any time, and promoted auctions once an admin has marked them as trusted.  Setting both settings to True will allow anyone to create a promoted auction any time and is not recommended.
 
 `ALLOW_USERS_TO_CREATE_LOTS` Set this to False (case sensitive) to disable creating stand-alone lots not associated with any auction for newly created users.  Users will still be able to add lots to club auctions.
 

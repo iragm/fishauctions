@@ -4709,6 +4709,11 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
             if str(request.GET.get("dismissed_promo_banner", "")).lower() in ("1", "true"):
                 self.auction.dismissed_promo_banner = True
                 self.auction.save()
+            if request.user.is_superuser:
+                if str(request.GET.get("trust_user", "")).lower() in ("1", "true"):
+                    self.auction.created_by.userdata.is_trusted = True
+                    self.auction.created_by.userdata.save()
+                    messages.success(request, f"{self.auction.created_by.username} is now trusted")
             if self.auction.created_by.pk == request.user.pk:
                 if str(request.GET.get("enable_online_payments", "")).lower() in ("1", "true"):
                     self.auction.enable_online_payments = True
