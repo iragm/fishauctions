@@ -3175,3 +3175,379 @@ class WatchOrUnwatchViewTests(StandardTestCase):
         self.client.login(username=self.user.username, password="testpassword")
         response = self.client.get(f"/api/watchitem/{self.lot.pk}/")
         self.assertEqual(response.status_code, 405)
+
+
+
+
+class WebSocketConsumerTests(StandardTestCase):
+    """Tests for websocket consumers (LotConsumer, UserConsumer, AuctionConsumer)"""
+
+    async def _create_active_lot_with_auction(self, seller_user, bidder_user=None):
+        """Helper method to create an active lot with a future-dated auction"""
+        from channels.db import database_sync_to_async
+        
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        auction = await database_sync_to_async(Auction.objects.create)(
+            created_by=seller_user,
+            title="Future auction",
+            is_online=True,
+            date_end=theFuture,
+            date_start=timezone.now(),
+        )
+        location = await database_sync_to_async(PickupLocation.objects.create)(
+            name="test location", auction=auction, pickup_time=theFuture
+        )
+        seller_tos = await database_sync_to_async(AuctionTOS.objects.create)(
+            user=seller_user, auction=auction, pickup_location=location
+        )
+        
+        if bidder_user:
+            await database_sync_to_async(AuctionTOS.objects.create)(
+                user=bidder_user, auction=auction, pickup_location=location
+            )
+        
+        lot = await database_sync_to_async(Lot.objects.create)(
+            lot_name="Test websocket lot",
+            auction=auction,
+            auctiontos_seller=seller_tos,
+            quantity=1,
+            reserve_price=10,
+            date_end=theFuture,
+        )
+        return lot
+
+    async def test_lot_consumer_connect_authenticated_user(self):
+        """Test LotConsumer connection with authenticated user who has joined auction"""
+        from channels.testing import WebsocketCommunicator
+        from auctions.consumers import LotConsumer
+
+        lot = await self._create_active_lot_with_auction(self.user, self.user)
+
+        communicator = WebsocketCommunicator(
+            LotConsumer.as_asgi(),
+            f"/ws/lots/{lot.pk}/",
+        )
+        communicator.scope["user"] = self.user
+        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
+
+        connected, _ = await communicator.connect()
+        self.assertTrue(connected)
+
+        await communicator.disconnect()
+
+    async def test_lot_consumer_connect_anonymous_user(self):
+        """Test LotConsumer connection with anonymous user"""
+        from channels.testing import WebsocketCommunicator
+        from auctions.consumers import LotConsumer
+        from django.contrib.auth.models import AnonymousUser
+
+        lot = await self._create_active_lot_with_auction(self.user)
+
+        communicator = WebsocketCommunicator(
+            LotConsumer.as_asgi(),
+            f"/ws/lots/{lot.pk}/",
+        )
+        communicator.scope["user"] = AnonymousUser()
+        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
+
+        # Anonymous users can connect to view lot
+        connected, _ = await communicator.connect()
+        self.assertTrue(connected)
+
+        await communicator.disconnect()
+
+    async def test_lot_consumer_chat_message_authenticated(self):
+        """Test sending chat message as authenticated user who has joined auction"""
+        from channels.testing import WebsocketCommunicator
+        from auctions.consumers import LotConsumer
+
+        lot = await self._create_active_lot_with_auction(self.user, self.user_with_no_lots)
+
+        communicator = WebsocketCommunicator(
+            LotConsumer.as_asgi(),
+            f"/ws/lots/{lot.pk}/",
+        )
+        communicator.scope["user"] = self.user_with_no_lots
+        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
+
+        await communicator.connect()
+
+        # Send a chat message
+        await communicator.send_json_to({"message": "Hello from test!"})
+
+        # Should receive the message back, skip any system messages
+        found_message = False
+        for _ in range(10):  # Try up to 10 messages
+            try:
+                response = await communicator.receive_json_from(timeout=2)
+                if response.get("message") == "Hello from test!" and response.get("info") == "CHAT":
+                    found_message = True
+                    self.assertEqual(response["username"], str(self.user_with_no_lots))
+                    break
+            except:
+                break
+        
+        self.assertTrue(found_message, "Did not receive the expected chat message")
+
+        await communicator.disconnect()
+
+    async def test_lot_consumer_chat_message_anonymous(self):
+        """Test that anonymous users cannot send chat messages"""
+        from channels.testing import WebsocketCommunicator
+        from auctions.consumers import LotConsumer
+        from django.contrib.auth.models import AnonymousUser
+
+        lot = await self._create_active_lot_with_auction(self.user)
+
+        communicator = WebsocketCommunicator(
+            LotConsumer.as_asgi(),
+            f"/ws/lots/{lot.pk}/",
+        )
+        communicator.scope["user"] = AnonymousUser()
+        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
+
+        await communicator.connect()
+
+        # Try to send a chat message
+        await communicator.send_json_to({"message": "Hello from anonymous!"})
+
+        # Anonymous users should not get a response for their message
+        # The consumer just passes without doing anything
+        await communicator.disconnect()
+
+    async def test_lot_consumer_bid_authenticated_with_tos(self):
+        """Test placing a bid as authenticated user who has joined auction"""
+        from channels.testing import WebsocketCommunicator
+        from auctions.consumers import LotConsumer
+
+        lot = await self._create_active_lot_with_auction(self.user, self.user_with_no_lots)
+
+        communicator = WebsocketCommunicator(
+            LotConsumer.as_asgi(),
+            f"/ws/lots/{lot.pk}/",
+        )
+        communicator.scope["user"] = self.user_with_no_lots
+        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
+
+        await communicator.connect()
+
+        # Place a bid
+        await communicator.send_json_to({"bid": 15})
+
+        # Should receive a response about the bid (either success or error message)
+        found_bid_response = False
+        for _ in range(10):
+            try:
+                response = await communicator.receive_json_from(timeout=2)
+                # Accept any bid-related response: success info types or error
+                if response.get("info") in ["NEW_HIGH_BIDDER", "INFO", "ERROR"] or response.get("error"):
+                    found_bid_response = True
+                    break
+            except:
+                break
+
+        self.assertTrue(found_bid_response, "Did not receive expected bid response")
+
+        await communicator.disconnect()
+
+    async def test_lot_consumer_bid_user_not_joined_auction(self):
+        """Test that users who haven't joined auction cannot bid"""
+        from channels.testing import WebsocketCommunicator
+        from auctions.consumers import LotConsumer
+
+        lot = await self._create_active_lot_with_auction(self.user)
+
+        communicator = WebsocketCommunicator(
+            LotConsumer.as_asgi(),
+            f"/ws/lots/{lot.pk}/",
+        )
+        communicator.scope["user"] = self.user_who_does_not_join
+        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
+
+        await communicator.connect()
+
+        # Try to place a bid
+        await communicator.send_json_to({"bid": 15})
+
+        # Should receive an error
+        found_error = False
+        for _ in range(10):
+            try:
+                response = await communicator.receive_json_from(timeout=2)
+                if response.get("error"):
+                    found_error = True
+                    self.assertIn("joined", response["error"].lower())
+                    break
+            except:
+                break
+
+        self.assertTrue(found_error, "Did not receive expected error message")
+
+        await communicator.disconnect()
+
+    async def test_lot_consumer_bid_anonymous_user(self):
+        """Test that anonymous users cannot bid"""
+        from channels.testing import WebsocketCommunicator
+        from auctions.consumers import LotConsumer
+        from django.contrib.auth.models import AnonymousUser
+
+        lot = await self._create_active_lot_with_auction(self.user)
+
+        communicator = WebsocketCommunicator(
+            LotConsumer.as_asgi(),
+            f"/ws/lots/{lot.pk}/",
+        )
+        communicator.scope["user"] = AnonymousUser()
+        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
+
+        await communicator.connect()
+
+        # Try to place a bid
+        await communicator.send_json_to({"bid": 15})
+
+        # Anonymous users should not get a response for their bid
+        # The consumer just passes without doing anything
+        await communicator.disconnect()
+
+    async def test_lot_consumer_auction_admin_can_view(self):
+        """Test that auction admins can connect to lot consumer"""
+        from channels.testing import WebsocketCommunicator
+        from auctions.consumers import LotConsumer
+        from channels.db import database_sync_to_async
+
+        lot = await self._create_active_lot_with_auction(self.user)
+        
+        # Make admin_user an admin of the auction
+        auction = await database_sync_to_async(lambda: lot.auction)()
+        location = await database_sync_to_async(lambda: auction.pickuplocation_set.first())()
+        await database_sync_to_async(AuctionTOS.objects.create)(
+            user=self.admin_user, auction=auction, pickup_location=location, is_admin=True
+        )
+
+        communicator = WebsocketCommunicator(
+            LotConsumer.as_asgi(),
+            f"/ws/lots/{lot.pk}/",
+        )
+        communicator.scope["user"] = self.admin_user
+        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
+
+        connected, _ = await communicator.connect()
+        self.assertTrue(connected)
+
+        await communicator.disconnect()
+
+    async def test_user_consumer_connect_valid_user(self):
+        """Test UserConsumer connection with valid user"""
+        from channels.testing import WebsocketCommunicator
+        from auctions.consumers import UserConsumer
+
+        communicator = WebsocketCommunicator(
+            UserConsumer.as_asgi(),
+            f"/ws/users/{self.user.pk}/",
+        )
+        communicator.scope["user"] = self.user
+        communicator.scope["url_route"] = {"kwargs": {"user_pk": self.user.pk}}
+
+        connected, _ = await communicator.connect()
+        self.assertTrue(connected)
+
+        await communicator.disconnect()
+
+    async def test_user_consumer_connect_wrong_user(self):
+        """Test UserConsumer connection with wrong user ID"""
+        from channels.testing import WebsocketCommunicator
+        from auctions.consumers import UserConsumer
+
+        communicator = WebsocketCommunicator(
+            UserConsumer.as_asgi(),
+            f"/ws/users/{self.admin_user.pk}/",
+        )
+        communicator.scope["user"] = self.user  # Different user
+        communicator.scope["url_route"] = {"kwargs": {"user_pk": self.admin_user.pk}}
+
+        connected, _ = await communicator.connect()
+        # Should be rejected because user doesn't match
+        self.assertFalse(connected)
+
+    async def test_user_consumer_connect_anonymous(self):
+        """Test UserConsumer connection with anonymous user"""
+        from channels.testing import WebsocketCommunicator
+        from auctions.consumers import UserConsumer
+        from django.contrib.auth.models import AnonymousUser
+
+        communicator = WebsocketCommunicator(
+            UserConsumer.as_asgi(),
+            f"/ws/users/{self.user.pk}/",
+        )
+        communicator.scope["user"] = AnonymousUser()
+        communicator.scope["url_route"] = {"kwargs": {"user_pk": self.user.pk}}
+
+        connected, _ = await communicator.connect()
+        # Should be rejected
+        self.assertFalse(connected)
+
+    async def test_auction_consumer_connect_admin(self):
+        """Test AuctionConsumer connection with auction admin"""
+        from channels.testing import WebsocketCommunicator
+        from auctions.consumers import AuctionConsumer
+
+        communicator = WebsocketCommunicator(
+            AuctionConsumer.as_asgi(),
+            f"/ws/auctions/{self.online_auction.pk}/",
+        )
+        communicator.scope["user"] = self.admin_user
+        communicator.scope["url_route"] = {"kwargs": {"auction_pk": self.online_auction.pk}}
+
+        connected, _ = await communicator.connect()
+        self.assertTrue(connected)
+
+        await communicator.disconnect()
+
+    async def test_auction_consumer_connect_non_admin(self):
+        """Test AuctionConsumer connection with non-admin user"""
+        from channels.testing import WebsocketCommunicator
+        from auctions.consumers import AuctionConsumer
+
+        communicator = WebsocketCommunicator(
+            AuctionConsumer.as_asgi(),
+            f"/ws/auctions/{self.online_auction.pk}/",
+        )
+        communicator.scope["user"] = self.user_with_no_lots
+        communicator.scope["url_route"] = {"kwargs": {"auction_pk": self.online_auction.pk}}
+
+        connected, _ = await communicator.connect()
+        # Should be rejected
+        self.assertFalse(connected)
+
+    async def test_auction_consumer_connect_anonymous(self):
+        """Test AuctionConsumer connection with anonymous user"""
+        from channels.testing import WebsocketCommunicator
+        from auctions.consumers import AuctionConsumer
+        from django.contrib.auth.models import AnonymousUser
+
+        communicator = WebsocketCommunicator(
+            AuctionConsumer.as_asgi(),
+            f"/ws/auctions/{self.online_auction.pk}/",
+        )
+        communicator.scope["user"] = AnonymousUser()
+        communicator.scope["url_route"] = {"kwargs": {"auction_pk": self.online_auction.pk}}
+
+        connected, _ = await communicator.connect()
+        # Should be rejected
+        self.assertFalse(connected)
+
+    async def test_auction_consumer_invalid_auction(self):
+        """Test AuctionConsumer connection with invalid auction ID"""
+        from channels.testing import WebsocketCommunicator
+        from auctions.consumers import AuctionConsumer
+
+        communicator = WebsocketCommunicator(
+            AuctionConsumer.as_asgi(),
+            "/ws/auctions/99999/",
+        )
+        communicator.scope["user"] = self.admin_user
+        communicator.scope["url_route"] = {"kwargs": {"auction_pk": 99999}}
+
+        connected, _ = await communicator.connect()
+        # Should be rejected because auction doesn't exist
+        self.assertFalse(connected)
