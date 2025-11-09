@@ -3873,7 +3873,8 @@ class AuctionDelete(LoginRequiredMixin, AuctionViewMixin, DeleteView):
 
     def dispatch(self, request, *args, **kwargs):
         result = super().dispatch(request, *args, **kwargs)
-        if not self.auction.can_be_deleted:
+        # self.auction may not be set if LoginRequiredMixin redirected
+        if hasattr(self, 'auction') and self.auction and not self.auction.can_be_deleted:
             messages.error(request, "There are already lots in this auction, it can't be deleted")
             return redirect("/")
         return result
@@ -7264,13 +7265,10 @@ class DeleteUserIgnoreCategory(View):
             return JsonResponse(data={"error": str(e)})
 
 
-class GetUserIgnoreCategory(View):
+class GetUserIgnoreCategory(LoginRequiredMixin, View):
     """Get a list of all user ignore categories for the request user"""
 
     def get(self, request, *args, **kwargs):
-        if not self.request.user.is_authenticated:
-            messages.error(request, "Sign in to use this feature")
-            return redirect("/")
         categories = Category.objects.all().order_by("name")
         results = []
         for category in categories:

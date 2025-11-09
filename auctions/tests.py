@@ -1215,9 +1215,9 @@ class DynamicSetLotWinnerViewTestCase(StandardTestCase):
 
     def test_anonymous_user(self):
         response = self.client.get(self.get_url())
-        assert response.status_code == 403
+        assert response.status_code == 302  # Redirect to login
         response = self.client.post(self.get_url())
-        assert response.status_code == 403
+        assert response.status_code == 302  # Redirect to login
 
     def test_non_admin_user(self):
         self.client.login(username=self.user_who_does_not_join.username, password="testpassword")
