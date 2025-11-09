@@ -275,16 +275,26 @@ class AdminEmailMixin:
         return context
 
 
-class AuctionPermissionsMixin:
-    """For any auction-related views, adds view.is_auction_admin to be used for any kind of permissions-checking
-    Based on whether this user's auctionTOS for this auction has is_admin or not
-    Not to be called directly: sub-class this, typically as the last class, set self.auction, then use self.is_auction_admin
-    DO NOT FORGET TO CALL self.is_auction_admin somewhere or this will do nothing!
+class AuctionViewMixin:
+    """For auction permissions, this will try to set self.auction based on the url's slug,
+    then see if the user has permission or not
     """
 
     # this can be set to true for views that are shared between admins and regular users, while providing a different view to each.
-    # this is most often used in the context as context['is_auction_admin'] = self.is_auction_admin
+    # often used in get_context_data, as: context['is_auction_admin'] = self.is_auction_admin
     allow_non_admins = False
+
+    # set automatically in dispatch, unless you manually set it
+    auction = None
+
+    def get_auction(self, slug):
+        if not self.auction and slug:
+            self.auction = get_object_or_404(Auction, slug=slug, is_deleted=False)
+            self.is_auction_admin
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_auction(kwargs.pop("slug", ""))
+        return super().dispatch(request, *args, **kwargs)
 
     @property
     def is_auction_admin(self):
@@ -296,29 +306,14 @@ class AuctionPermissionsMixin:
         result = self.auction.permission_check(self.request.user)
         if not result:
             if self.allow_non_admins:
-                logger.debug("non-admins allowed")
+                # logger.debug("non-admins allowed")
                 pass
             else:
                 raise PermissionDenied()
         else:
-            logger.debug("allowing user %s to view %s", self.request.user, self.auction)
+            # logger.debug("allowing user %s to view %s", self.request.user, self.auction)
             pass
         return result
-
-
-class AuctionViewMixin(AuctionPermissionsMixin):
-    """Subclass this when you need auction permissions, it's easier than using AuctionPermissionsMixin"""
-
-    auction = None
-
-    def get_auction(self, slug):
-        if not self.auction and slug:
-            self.auction = get_object_or_404(Auction, slug=slug, is_deleted=False)
-            self.is_auction_admin
-
-    def dispatch(self, request, *args, **kwargs):
-        self.get_auction(kwargs.pop("slug", ""))
-        return super().dispatch(request, *args, **kwargs)
 
 
 class AdminOnlyViewMixin:
@@ -560,7 +555,6 @@ class LotAutocomplete(autocomplete.Select2QuerySetView):
             return format_html("<b>{}</b>: {}", result.lot_number_display, result.lot_name)
 
     def dispatch(self, request, *args, **kwargs):
-        # we are not using self.is_auction_admin and the AuctionPermissionsMixinMixin here because self.forwarded.get is not available in dispatch
         return super().dispatch(request, *args, **kwargs)
 
     def get_queryset(self):
@@ -587,7 +581,6 @@ class AuctionTOSAutocomplete(autocomplete.Select2QuerySetView):
         return format_html("<b>{}</b>: {}", result.bidder_number, result.name)
 
     def dispatch(self, request, *args, **kwargs):
-        # we are not using self.is_auction_admin and the AuctionPermissionsMixinMixin here because self.forwarded.get is not available in dispatch
         return super().dispatch(request, *args, **kwargs)
 
     def get_queryset(self):
