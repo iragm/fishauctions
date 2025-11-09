@@ -401,45 +401,28 @@ class LotFilter(django_filters.FilterSet):
     def __init__(self, *args, **kwargs):
         self.canShowAuction = True
         self.listType = None  # a special filter for recommended lot views
-        self.latitude = None
-        self.longitude = None
-        try:
-            self.latitude = kwargs.pop("latitude")
-            self.longitude = kwargs.pop("longitude")
-        except:
-            pass
-        try:
-            self.listType = kwargs.pop("listType")
-        except:
-            pass
-        try:
-            self.keywords = kwargs.pop("keywords")
-        except:
-            self.keywords = []
-        try:
+        self.latitude = kwargs.pop("latitude", None)
+        self.longitude = kwargs.pop("longitude", None)
+        self.listType = kwargs.pop("listType", None)
+        self.keywords = kwargs.pop("keywords", [])
+        
+        # Get request and user
+        if "request" in kwargs:
             self.request = kwargs["request"]
             self.user = self.request.user
             # get location from cookie
-            try:
-                self.latitude = self.request.COOKIES["latitude"]
-                self.longitude = self.request.COOKIES["longitude"]
-            except:
-                pass
-        except:
+            self.latitude = self.request.COOKIES.get("latitude", self.latitude)
+            self.longitude = self.request.COOKIES.get("longitude", self.longitude)
+        else:
             self.user = kwargs.pop("user")
-        try:
-            if not self.latitude and not self.longitude:
-                self.latitude = self.user.userdata.latitude
-                self.longitude = self.user.userdata.longitude
-        except:
-            pass
+        
+        # Try to get location from userdata if not set
+        if not self.latitude and not self.longitude and self.user.is_authenticated:
+            self.latitude = self.user.userdata.latitude
+            self.longitude = self.user.userdata.longitude
+        
         # annotate lots with the distance to the request user, requires self.latitude and self.longitude
-        self.showLocal = True
-        try:
-            if not self.latitude and not self.longitude:
-                self.showLocal = False
-        except:
-            self.showLocal = False
+        self.showLocal = bool(self.latitude and self.longitude)
         self.showOwnLots = True  # show lots from the request user. I don't think this is used anywhere
         self.maxRange = 70  # only applies if self.showLocal = True
         self.showDeactivated = False  # show lots that users have deliberately deactivated
@@ -450,11 +433,8 @@ class LotFilter(django_filters.FilterSet):
             self.showBanned = False
         # could be "yes" or "no", only matters for authenticated users, set to no to only see unseen things
         self.showViewed = "all"
-        try:
-            if kwargs.pop("onlyUnviewed"):
-                self.showViewed = "no"
-        except:
-            pass
+        if kwargs.pop("onlyUnviewed", False):
+            self.showViewed = "no"
         # "all", "open", "unsold", or "ended".  If regarding an auction, should default to all
         self.status = "open"
         self.showShipping = True
@@ -466,38 +446,26 @@ class LotFilter(django_filters.FilterSet):
             # lots that can be shipped to the user's location
             if self.user.userdata.location:
                 self.shippingLocation = self.user.userdata.location
-        try:
-            self.ignore = kwargs.pop("ignore")
-        except:
-            self.ignore = False
-        try:
-            self.regardingAuction = kwargs.pop("regardingAuction")
-        except:
-            self.regardingAuction = None  # force only displaying lots from a particular auction
-        try:
-            self.regardingUser = kwargs.pop("regardingUser")
-        except:
-            # force only displaying lots for a particular user (not necessarily the request user)
-            self.regardingUser = None
-        try:
-            self.order = kwargs.pop("order")  # default ordering is just the most recent on top
-        except:
-            self.order = "-lot_number"  # default ordering is just the most recent on top
-        forceAuction = None
-        try:
-            forceAuction = kwargs.pop("auction")
-            if self.listType == "auction":
+        self.ignore = kwargs.pop("ignore", False)
+        self.regardingAuction = kwargs.pop("regardingAuction", None)  # force only displaying lots from a particular auction
+        # force only displaying lots for a particular user (not necessarily the request user)
+        self.regardingUser = kwargs.pop("regardingUser", None)
+        self.order = kwargs.pop("order", "-lot_number")  # default ordering is just the most recent on top
+        forceAuction = kwargs.pop("auction", None)
+        if forceAuction and self.listType == "auction":
+            try:
                 self.regardingAuction = Auction.objects.get(slug=forceAuction, is_deleted=False)
-        except:
-            pass
-        try:
-            forceAuction = self.request.GET["auction"]
+            except Auction.DoesNotExist:
+                pass
+        forceAuction = self.request.GET.get("auction") if hasattr(self, 'request') else None
+        if forceAuction:
             if forceAuction != "no_auction":
-                self.regardingAuction = Auction.objects.get(slug=forceAuction, is_deleted=False)
+                try:
+                    self.regardingAuction = Auction.objects.get(slug=forceAuction, is_deleted=False)
+                except Auction.DoesNotExist:
+                    pass
             else:
                 self.regardingAuction = None
-        except:
-            pass
         if self.regardingAuction:
             regardingAuctionSlug = self.regardingAuction.slug
             self.showLocal = False
@@ -896,14 +864,11 @@ class LotFilter(django_filters.FilterSet):
         if value:
             self.shippingLocation = value
             self.showShipping = True
-        try:
-            if self.request.GET["auction"]:
-                if self.request.GET["auction"] != "no_auction":
-                    # if both this and auction are specified, auction wins and this does nothing
-                    self.showShipping = False
-                    return queryset
-        except:
-            pass
+        auction_param = self.request.GET.get("auction")
+        if auction_param and auction_param != "no_auction":
+            # if both this and auction are specified, auction wins and this does nothing
+            self.showShipping = False
+            return queryset
         if value == "local_only":
             self.showShipping = False
             return queryset.filter(Q(local_pickup=True) | Q(auction__isnull=False))

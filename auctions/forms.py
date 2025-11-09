@@ -955,10 +955,7 @@ class CreateEditAuctionTOS(forms.ModelForm):
                 self.fields[
                     "email"
                 ].help_text = f"<span class='text-warning'>Emails sent to {self.auctiontos.email} have bounced</span>, try to get an updated email from this user."
-            try:
-                self.fields["phone_number"].initial = self.auctiontos.phone_as_string
-            except:
-                self.fields["phone_number"].initial = self.auctiontos.phone_number
+            self.fields["phone_number"].initial = getattr(self.auctiontos, 'phone_as_string', self.auctiontos.phone_number)
             self.fields["address"].initial = self.auctiontos.address
             self.fields["pickup_location"].initial = self.auctiontos.pickup_location.pk
             self.fields["is_admin"].initial = self.auctiontos.is_admin
@@ -2240,7 +2237,7 @@ class CreateLotForm(forms.ModelForm):
                 self.fields["payment_other"].initial = lastLot.payment_other
                 self.fields["payment_other_method"].initial = lastLot.payment_other_method
                 self.fields["payment_other_address"].initial = lastLot.payment_other_address
-            except:
+            except Lot.DoesNotExist:
                 self.fields["show_payment_pickup_info"].initial = True
         if self.instance.auction:
             pass
@@ -2250,11 +2247,11 @@ class CreateLotForm(forms.ModelForm):
             else:
                 try:
                     # see if this user's last auction is still available
-                    userData, created = UserData.objects.get_or_create(user=self.user)
-                    lastUserAuction = userData.last_auction_used
-                    if lastUserAuction.lot_submission_end_date > timezone.now():
+                    # UserData is auto-created when user is saved
+                    lastUserAuction = self.user.userdata.last_auction_used
+                    if lastUserAuction and lastUserAuction.lot_submission_end_date > timezone.now():
                         self.fields["auction"].initial = lastUserAuction
-                except:
+                except (AttributeError, Auction.DoesNotExist):
                     pass
         self.helper = FormHelper()
         self.helper.form_method = "post"
@@ -2460,7 +2457,7 @@ class CreateLotForm(forms.ModelForm):
             try:
                 UserBan.objects.get(banned_user=self.user.pk, user=auction.created_by.pk)
                 self.add_error("auction", "You've been banned from selling lots in this auction")
-            except:
+            except UserBan.DoesNotExist:
                 pass
             # thisAuction = Auction.objects.get(pk=auction)
             if not self.instance.pk:  # only run this check when creating a lot, not when editing
