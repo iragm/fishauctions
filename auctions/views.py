@@ -1744,6 +1744,7 @@ class AuctionInvoicesPayPalCSV(LoginRequiredMixin, AuctionViewMixin, View):
         )
         count = 0
         chunkSize = 150  # attention: this is also set in models.auction.paypal_invoice_chunks
+        no_email_count = 0
         for invoice in self.auction.paypal_invoices:
             invoice.recalculate
             # we loop through everything regardless of which chunk
@@ -1759,27 +1760,34 @@ class AuctionInvoicesPayPalCSV(LoginRequiredMixin, AuctionViewMixin, View):
                     noteToCustomer = f"https://{current_site.domain}/invoices/{invoice.pk}/"
                     termsAndConditions = ""
                     memoToSelf = invoice.auctiontos_user.memo
-                    if invoice.absolute_amount > 0 and invoice.auctiontos_user.email:
-                        writer.writerow(
-                            [
-                                invoice.auctiontos_user.email,
-                                "",
-                                invoice.auctiontos_user.name,
-                                invoice.pk,
-                                due_date,
-                                reference,
-                                itemName,
-                                description,
-                                invoice.absolute_amount,
-                                shippingAmount,
-                                discountAmount,
-                                currencyCode,
-                                noteToCustomer,
-                                termsAndConditions,
-                                memoToSelf,
-                            ]
-                        )
-        self.auction.create_history(applies_to="USERS", action="Exported PayPal invoices CSV", user=request.user)
+                    if invoice.net_after_payments < 0:
+                        if invoice.auctiontos_user.email:
+                            writer.writerow(
+                                [
+                                    invoice.auctiontos_user.email,
+                                    "",
+                                    invoice.auctiontos_user.name,
+                                    invoice.pk,
+                                    due_date,
+                                    reference,
+                                    itemName,
+                                    description,
+                                    abs(invoice.net_after_payments),
+                                    shippingAmount,
+                                    discountAmount,
+                                    currencyCode,
+                                    noteToCustomer,
+                                    termsAndConditions,
+                                    memoToSelf,
+                                ]
+                            )
+                        else:
+                            no_email_count += 1
+        self.auction.create_history(
+            applies_to="USERS",
+            action=f"Exported PayPal invoices CSV.  {no_email_count} users had no email address and were not included in the CSV.",
+            user=request.user,
+        )
         return response
 
 
