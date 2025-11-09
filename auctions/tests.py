@@ -3230,19 +3230,24 @@ class LotEndauctionsMethodsTests(StandardTestCase):
 
     def test_send_lot_end_message_with_winner(self):
         """Test that correct message is sent when lot ends with a winner"""
-        # Create a lot with a high bidder
-        past_time = timezone.now() - datetime.timedelta(hours=1)
+        # Create a lot with a high bidder (without an auction to avoid complications)
+        lot_end_time = timezone.now() - datetime.timedelta(hours=1)
+        bid_time = timezone.now() - datetime.timedelta(hours=2)
+        
         lot = Lot.objects.create(
             lot_name="Lot with winner",
-            auction=self.online_auction,
-            auctiontos_seller=self.online_tos,
+            user=self.user,
             quantity=1,
-            date_end=past_time,
+            date_end=lot_end_time,
             active=True,
             reserve_price=5,
         )
-        # Add a bid
-        Bid.objects.create(lot_number=lot, user=self.userB, amount=10, was_high_bid=True)
+        # Add a bid with a time before the lot ended
+        bid = Bid.objects.create(lot_number=lot, user=self.userB, amount=10, was_high_bid=True)
+        # Set the bid time to before the lot ended
+        bid.bid_time = bid_time
+        bid.last_bid_time = bid_time
+        bid.save()
 
         # Send lot end message
         lot.send_lot_end_message()
@@ -3277,11 +3282,12 @@ class LotEndauctionsMethodsTests(StandardTestCase):
     def test_send_non_auction_lot_emails_with_winner(self):
         """Test that emails are sent for non-auction lots with winners"""
         # Create a non-auction lot with a winner
+        # Use user_with_no_lots which has a valid email
         lot = Lot.objects.create(
             lot_name="Non-auction lot",
             user=self.user,
             quantity=1,
-            winner=self.userB,
+            winner=self.user_with_no_lots,
             winning_price=10,
             active=False,
         )
