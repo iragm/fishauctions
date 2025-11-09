@@ -119,9 +119,6 @@ def update_user_location(sender, instance, **kwargs):
     To get around this, I'm storing the coordinates in a raw latitude and longitude column
 
     The custom function distance_to is used to annotate queries
-
-    It is bad practice to use a signal in models.py,
-    however with just a couple signals it makes more sense to have them here than to add a whole separate file for it
     """
     try:
         # if not instance.latitude and not instance.longitude:

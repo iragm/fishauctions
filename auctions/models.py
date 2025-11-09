@@ -2104,7 +2104,7 @@ class AuctionTOS(models.Model):
         # If someone creates an auction and adds every email address that's public
         # We must avoid allowing them to collect addresses/phone numbers/locations from these people
         # Having this code below run only on creation means that the user won't be filled out and prevents collecting data
-        # if making changes, remember that there's user_logged_in_callback below which sets the user field
+        # if making changes, remember that there's user_logged_in_callback in signals.py which sets the user field
         # if self.user and not self.pk:
         # moved to AuctionInfo.post()
         # if not self.name:
