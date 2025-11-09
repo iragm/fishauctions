@@ -69,7 +69,7 @@ def check_chat_permissions(lot, user):
                 else:
                     display = f"in {display.days} days"
                 return f"You can't chat.  Try again {display}"
-    except:
+    except (ChatBan.DoesNotExist, AttributeError):
         pass
     if not lot.chat_allowed:
         return "Chat is no longer allowed on this lot"
@@ -294,7 +294,7 @@ def bid_on_lot(lot, user, amount):
                         result["message"] = f"You've raised your proxy bid to ${bid.amount}"
                         logger.debug("%s has raised their bid on %s to $%s", user_string, lot, bid.amount)
                         return result
-                except:
+                except AttributeError:
                     pass
                 # New high bidder!  If we get to this point, the user has bid against someone else and changed the price
                 result["date_end"] = reset_lot_end_time(lot)
@@ -477,7 +477,7 @@ class LotConsumer(WebsocketConsumer):
                                     "username": str(self.user),
                                 },
                             )
-                    except:
+                    except (KeyError, ValueError):
                         pass
                     try:
                         # handle bids
@@ -525,7 +525,7 @@ class LotConsumer(WebsocketConsumer):
                                         "date_end": result["date_end"],
                                     },
                                 )
-                    except:
+                    except (KeyError, ValueError, TypeError):
                         pass
             except Exception as e:
                 logger.exception(e)

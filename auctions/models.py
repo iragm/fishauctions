@@ -1103,7 +1103,7 @@ class Auction(models.Model):
                 if location.second_pickup_time:
                     if location.second_pickup_time < time_to_use:
                         error = True
-            except:
+            except AttributeError:
                 error = False
             if error:
                 return reverse("edit_pickup", kwargs={"pk": location.pk})
@@ -1113,7 +1113,7 @@ class Auction(models.Model):
     def timezone(self):
         try:
             return pytz_timezone(self.created_by.userdata.timezone)
-        except:
+        except (AttributeError, pytz.exceptions.UnknownTimeZoneError):
             return pytz_timezone(settings.TIME_ZONE)
 
     @property
@@ -1386,7 +1386,7 @@ class Auction(models.Model):
     def percent_unsold_lots(self):
         try:
             return self.total_unsold_lots / self.total_lots * 100
-        except:
+        except (ZeroDivisionError, TypeError):
             return 100
 
     @property
@@ -2156,7 +2156,7 @@ class AuctionTOS(models.Model):
                         search = search[1:]
                     if str(search)[0] == "0":
                         search = search[1:]
-                except:
+                except IndexError:
                     pass
                 while failsafe < 6000:
                     search = str(search)
@@ -2333,7 +2333,7 @@ class AuctionTOS(models.Model):
     def timezone(self):
         try:
             return pytz_timezone(self.user.userdata.timezone)
-        except:
+        except (AttributeError, pytz.exceptions.UnknownTimeZoneError):
             return self.auction.timezone
 
     @property
@@ -2763,13 +2763,13 @@ class Lot(models.Model):
             if self.auctiontos_seller:
                 invoice = Invoice.objects.get(auctiontos_user=self.auctiontos_seller)
                 return f"/invoices/{invoice.pk}"
-        except:
+        except Invoice.DoesNotExist:
             pass
         try:
             if self.user:
                 invoice = Invoice.objects.get(user=self.user, auction=self.auction)
                 return f"/invoices/{invoice.pk}"
-        except:
+        except Invoice.DoesNotExist:
             pass
         return ""
 
@@ -2780,13 +2780,13 @@ class Lot(models.Model):
             if self.auctiontos_winner:
                 invoice = Invoice.objects.get(auctiontos_user=self.auctiontos_winner)
                 return f"/invoices/{invoice.pk}"
-        except:
+        except Invoice.DoesNotExist:
             pass
         try:
             if self.winner:
                 invoice = Invoice.objects.get(user=self.winner, auction=self.auction)
                 return f"/invoices/{invoice.pk}"
-        except:
+        except Invoice.DoesNotExist:
             pass
         return ""
 
@@ -2799,33 +2799,31 @@ class Lot(models.Model):
         try:
             AuctionTOS.objects.get(user=self.user, auction=self.auction)
             return False
-        except:
+        except AuctionTOS.DoesNotExist:
             return f"/auctions/{self.auction.slug}"
 
     @property
     def winner_location(self):
         """String of location of the winner for this lot"""
-        try:
+        if self.auctiontos_winner and self.auctiontos_winner.pickup_location:
             return str(self.auctiontos_winner.pickup_location)
-        except:
-            pass
-        try:
-            return str(AuctionTOS.objects.get(user=self.winner, auction=self.auction).pickup_location)
-        except:
-            pass
+        if self.winner and self.auction:
+            try:
+                return str(AuctionTOS.objects.get(user=self.winner, auction=self.auction).pickup_location)
+            except AuctionTOS.DoesNotExist:
+                pass
         return ""
 
     @property
     def location_as_object(self):
         """Pickup location of the seller"""
-        try:
+        if self.auctiontos_seller and self.auctiontos_seller.pickup_location:
             return self.auctiontos_seller.pickup_location
-        except:
-            pass
-        try:
-            return AuctionTOS.objects.get(user=self.user, auction=self.auction).pickup_location
-        except:
-            pass
+        if self.user and self.auction:
+            try:
+                return AuctionTOS.objects.get(user=self.user, auction=self.auction).pickup_location
+            except AuctionTOS.DoesNotExist:
+                pass
         return None
 
     @property
@@ -3264,7 +3262,7 @@ class Lot(models.Model):
             # $1 more than the second highest bid
             bidPrice = allBids[0].amount
             return bidPrice
-        except:
+        except IndexError:
             return self.reserve_price
 
     @property
@@ -3288,11 +3286,10 @@ class Lot(models.Model):
         if self.winning_price:
             return self.winning_price
         if self.sealed_bid:
-            try:
-                bids = self.bids
-                return self.bids[0].amount
-            except:
-                return 0
+            bids = self.bids
+            if bids:
+                return bids[0].amount
+            return 0
         else:
             if self.auction and self.auction.online_bidding == "buy_now_only" and not self.bids:
                 if self.buy_now_price:
@@ -3318,11 +3315,10 @@ class Lot(models.Model):
         """Name of the highest bidder"""
         if self.banned:
             return False
-        try:
-            bids = self.bids
+        bids = self.bids
+        if bids:
             return bids[0].user
-        except:
-            return False
+        return False
 
     @property
     def all_page_views(self):
@@ -3496,10 +3492,9 @@ class Lot(models.Model):
 
     @property
     def seller_ip(self):
-        try:
+        if self.user:
             return self.user.userdata.last_ip_address
-        except:
-            return None
+        return None
 
     @property
     def bidder_ip_same_as_seller(self):
@@ -3737,12 +3732,8 @@ class Invoice(models.Model):
 
     @property
     def first_bid_payout(self):
-        try:
-            if self.auction.first_bid_payout:
-                if self.lots_bought:
-                    return self.auction.first_bid_payout
-        except:
-            pass
+        if self.auction and self.auction.first_bid_payout and self.lots_bought:
+            return self.auction.first_bid_payout
         return 0
 
     @property
@@ -3879,7 +3870,7 @@ class Invoice(models.Model):
     def sold_lots_queryset_sorted(self):
         try:
             return sorted(self.sold_lots_queryset, key=lambda t: str(t.winner_location))
-        except:
+        except (AttributeError, TypeError):
             return self.sold_lots_queryset
 
     @property
@@ -5194,11 +5185,12 @@ def update_user_location(sender, instance, **kwargs):
         # some things to change here:
         # if sender has coords and they do not equal the instance coords, update instance lat/lng from sender
         # if sender has lat/lng and they do not equal the instance lat/lng, update instance coords
-        cutLocation = instance.location_coordinates.split(",")
-        instance.latitude = float(cutLocation[0])
-        instance.longitude = float(cutLocation[1])
-    except:
-        pass
+        try:
+            cutLocation = instance.location_coordinates.split(",")
+            instance.latitude = float(cutLocation[0])
+            instance.longitude = float(cutLocation[1])
+        except (ValueError, IndexError, AttributeError):
+            pass
 
 
 @receiver(pre_save, sender=Lot)
