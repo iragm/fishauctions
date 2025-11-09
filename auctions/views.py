@@ -1548,10 +1548,7 @@ class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
                 if not profitOutsideAuction:
                     profitOutsideAuction = 0
                 distance = data.distance_traveled or ""
-                try:
-                    club = data.user.userdata.club
-                except:
-                    pass
+                club = getattr(data.user.userdata, 'club', None)
                 username = data.user.username
                 previous_auctions = AuctionTOS.objects.filter(user=data.user).exclude(pk=data.pk).count()
                 number_of_userbans = data.number_of_userbans
@@ -1579,7 +1576,7 @@ class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
                 totalSpent = invoice.total_bought
                 totalPaid = invoice.total_sold
                 invoiceTotal = invoice.rounded_net
-            except:
+            except Invoice.DoesNotExist:
                 invoiceStatus = ""
                 totalSpent = 0
                 totalPaid = 0
@@ -2049,13 +2046,13 @@ class PickupLocationForm:
 
     def get_success_url(self):
         data = self.request.GET.copy()
-        try:
-            return data["next"]
-        except:
-            if self.auction.is_online:
-                return reverse("auction_pickup_location", kwargs={"slug": self.auction.slug})
-            else:
-                return self.auction.get_absolute_url()
+        next_url = data.get("next")
+        if next_url:
+            return next_url
+        if self.auction.is_online:
+            return reverse("auction_pickup_location", kwargs={"slug": self.auction.slug})
+        else:
+            return self.auction.get_absolute_url()
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -2676,10 +2673,9 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
             empty string returned if the value is not found in the row"""
             case_insensitive_row = {k.lower(): v for k, v in row.items()}
             for name in field_name_list:
-                try:
-                    return case_insensitive_row[name]
-                except:
-                    pass
+                value = case_insensitive_row.get(name)
+                if value is not None:
+                    return value
             return default_response
 
         def columns_exist(field_names, columns):
@@ -3250,18 +3246,15 @@ class ViewLot(DetailView):
     def get_queryset(self):
         pk = self.kwargs.get(self.pk_url_kwarg)
         qs = Lot.objects.exclude(is_deleted=True)
-        try:
-            latitude = self.request.COOKIES["latitude"]
-            longitude = self.request.COOKIES["longitude"]
+        latitude = self.request.COOKIES.get("latitude")
+        longitude = self.request.COOKIES.get("longitude")
+        if latitude and longitude:
             qs = qs.annotate(distance=distance_to(latitude, longitude))
-        except:
-            if self.request.user.is_authenticated:
-                userData, created = UserData.objects.get_or_create(
-                    user=self.request.user,
-                    defaults={},
-                )
-                latitude = userData.latitude
-                longitude = userData.longitude
+        elif self.request.user.is_authenticated:
+            # UserData is auto-created when user is saved
+            if self.request.user.userdata.latitude and self.request.user.userdata.longitude:
+                latitude = self.request.user.userdata.latitude
+                longitude = self.request.user.userdata.longitude
                 if latitude and longitude:
                     qs = qs.annotate(distance=distance_to(latitude, longitude))
         if pk:
@@ -3311,7 +3304,7 @@ class ViewLot(DetailView):
             context["viewer_bid_pk"] = Bid.objects.get(user=self.request.user, lot_number=lot.pk, is_deleted=False).pk
             context["viewer_bid"] = defaultBidAmount
             defaultBidAmount = defaultBidAmount + 1
-        except:
+        except Bid.DoesNotExist:
             defaultBidAmount = 0
             context["viewer_bid"] = None
         if lot.auction and lot.auction.online_bidding == "buy_now_only" and lot.buy_now_price:
@@ -3329,10 +3322,7 @@ class ViewLot(DetailView):
                 else:
                     defaultBidAmount = lot.high_bid + max(math.floor(lot.high_bid * 0.05), 1)
         context["viewer_pk"] = self.request.user.pk
-        try:
-            context["submitter_pk"] = lot.user.pk
-        except:
-            context["submitter_pk"] = 0
+        context["submitter_pk"] = getattr(lot.user, 'pk', 0)
         context["user_specific_bidding_error"] = False
         if not self.request.user.is_authenticated:
             context["user_specific_bidding_error"] = (
@@ -3406,7 +3396,7 @@ class ViewLot(DetailView):
                         break
                 if lot.distance > 3000:
                     context["distance"] = "over 3000 miles away"
-        except:
+        except AttributeError:
             context["distance"] = 0
         # for lots that are part of an auction, it's very handy to show the exchange info right on the lot page
         # this should be visible only to people running the auction or the seller
@@ -3589,7 +3579,7 @@ class ImageUpdateView(UpdateView):
     def dispatch(self, request, *args, **kwargs):
         try:
             self.lot = self.get_object().lot_number
-        except:
+        except AttributeError:
             raise Http404
         if not self.lot.image_permission_check(request.user):
             messages.error(request, "You can't change this image")
@@ -3687,7 +3677,7 @@ class LotValidation(LoginRequiredMixin):
             # this lot is NOT part of an auction
             try:
                 run_duration = int(form.cleaned_data["run_duration"])
-            except:
+            except (ValueError, KeyError):
                 run_duration = 10
             if not lot.date_posted:
                 lot.date_posted = timezone.now()
@@ -3930,7 +3920,7 @@ class ImageDelete(LoginRequiredMixin, DeleteView):
                 )
                 newImage.is_primary = True
                 newImage.save()
-            except:
+            except IndexError:
                 pass
         return f"/lots/{self.get_object().lot_number.lot_number}/{self.get_object().lot_number.slug}/"
 
@@ -4202,7 +4192,7 @@ class AuctionTOSAdmin(TemplateView, FormMixin, AuctionViewMixin):
             try:
                 self.auction = Auction.objects.get(slug=pk, is_deleted=False)
                 self.is_edit_form = False
-            except:
+            except Auction.DoesNotExist:
                 raise Http404
         self.is_auction_admin
         return super().dispatch(request, *args, **kwargs)
@@ -4232,7 +4222,7 @@ class AuctionTOSAdmin(TemplateView, FormMixin, AuctionViewMixin):
                 invoice_string = invoice.invoice_summary_short
                 context["top_buttons"] = render_to_string("invoice_buttons.html", {"invoice": invoice})
                 context["unsold_lot_warning"] = invoice.unsold_lot_warning
-            except:
+            except AttributeError:
                 invoice = None
                 invoice_string = ""
             context["modal_title"] = f"{self.auctiontos.name} {invoice_string}"
@@ -4732,7 +4722,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                 auction = Auction.objects.get(slug=self.kwargs.get(self.slug_url_kwarg), is_deleted=False)
                 self.auction = auction
                 self.object = self.auction
-            except:
+            except Auction.DoesNotExist:
                 msg = "No auctions found matching the query"
                 raise Http404(msg)
         return self.object
@@ -4781,7 +4771,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
             existingTos = existingTos.pickup_location
             i_agree = True
             context["hasChosenLocation"] = existingTos.pk
-        except:
+        except AuctionTOS.DoesNotExist:
             context["hasChosenLocation"] = False
             # if not self.get_object().no_location:
             #     # this selects the first location in multi-location auction as the default
@@ -4968,7 +4958,7 @@ class ToDefaultLandingPage(View):
             )
             userData.last_activity = timezone.now()
             userData.save()
-        except:
+        except (UserData.DoesNotExist, AttributeError):
             # probably not signed in
             pass
         try:
@@ -4997,9 +4987,9 @@ class ToDefaultLandingPage(View):
                         # only show the banner if the TOS is signed
                         # messages.add_message(request, messages.INFO, f'{auction} is the last auction you joined.  <a href="/lots/">View all lots instead</a>')
                         routeByLastAuction = True
-                    except:
+                    except AuctionTOS.DoesNotExist:
                         pass
-            except:
+            except (AttributeError, Auction.DoesNotExist):
                 # probably no userdata or userdata.auction is None
                 auction = None
         return self.tos_check(request, auction, routeByLastAuction)
@@ -5131,10 +5121,8 @@ class AllLots(LotListView, AuctionViewMixin):
     def render_to_response(self, context, **response_kwargs):
         """override the default just to add a cookie -- this will allow us to save ordering for subsequent views"""
         response = super().render_to_response(context, **response_kwargs)
-        try:
+        if hasattr(self, 'ordering'):
             response.set_cookie("lot_order", self.ordering)
-        except:
-            pass
         return response
 
     def get_context_data(self, **kwargs):
@@ -5269,7 +5257,7 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
         """"""
         try:
             return Invoice.objects.get(pk=self.kwargs.get(self.pk_url_kwarg))
-        except:
+        except Invoice.DoesNotExist:
             if self.request.user.is_authenticated:
                 return Invoice.objects.filter(
                     auctiontos_user__user=self.request.user,
@@ -6646,7 +6634,7 @@ class UserView(DetailView):
         )
         try:
             context["banned"] = UserBan.objects.get(user=self.request.user.pk, banned_user=self.object.pk)
-        except:
+        except UserBan.DoesNotExist:
             context["banned"] = False
         context["seller_feedback"] = (
             context["data"].my_lots_qs.exclude(feedback_text__isnull=True).order_by("-date_posted")
@@ -6667,7 +6655,7 @@ class UserByName(UserView):
     def get_object(self, *args, **kwargs):
         try:
             return User.objects.get(username=unquote(self.username))
-        except:
+        except User.DoesNotExist:
             pass
         # try:
         #     return User.objects.get(pk=self.username)
@@ -6685,7 +6673,7 @@ class UsernameUpdate(UpdateView, SuccessMessageMixin):
     def get_object(self, *args, **kwargs):
         try:
             return User.objects.get(pk=self.request.user.pk)
-        except:
+        except User.DoesNotExist:
             raise Http404
 
     def dispatch(self, request, *args, **kwargs):
@@ -6856,15 +6844,15 @@ class UserChartView(View):
             categories = {}
             for item in allBids:
                 category = str(item.lot_number.species_category)
-                try:
+                if category in categories:
                     categories[category]["bids"] += 1
-                except:
+                else:
                     categories[category] = {"bids": 1, "views": 0}
             for item in pageViews:
                 category = str(item.lot_number.species_category)
-                try:
+                if category in categories:
                     categories[category]["views"] += 1
-                except:
+                else:
                     # brand new category
                     categories[category] = {"bids": 0, "views": 1}
             # sort the result
@@ -7152,14 +7140,8 @@ class UserMap(TemplateView):
         context = super().get_context_data(**kwargs)
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
         data = self.request.GET.copy()
-        try:
-            view = data["view"]
-        except:
-            view = None
-        try:
-            filter1 = data["filter"]
-        except:
-            filter1 = None
+        view = data.get("view")
+        filter1 = data.get("filter")
         # view_qs = PageView.objects.exclude(latitude=0)
         qs = User.objects.filter(userdata__latitude__isnull=False, is_active=True).annotate(
             lots_sold=Count("lot"), lots_bought=Count("winner")
@@ -7194,11 +7176,11 @@ class ClubMap(AdminEmailMixin, TemplateView):
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
         context["clubs"] = Club.objects.filter(active=True, latitude__isnull=False)
         context["location_message"] = "Set your location to see clubs near you"
-        try:
-            context["latitude"] = self.request.COOKIES["latitude"]
-            context["longitude"] = self.request.COOKIES["longitude"]
-        except:
-            pass
+        latitude_cookie = self.request.COOKIES.get("latitude")
+        longitude_cookie = self.request.COOKIES.get("longitude")
+        if latitude_cookie:
+            context["latitude"] = latitude_cookie
+            context["longitude"] = longitude_cookie
         context["hide_google_login"] = True
         return context
 
@@ -7275,7 +7257,7 @@ class GetUserIgnoreCategory(View):
             try:
                 UserIgnoreCategory.objects.get(user=self.request.user, category=category.pk)
                 item["selected"] = True
-            except:
+            except UserIgnoreCategory.DoesNotExist:
                 pass
             results.append(item)
         return JsonResponse({"results": results}, safe=False)
@@ -7771,7 +7753,7 @@ class AuctionStatsImagesJSONView(AuctionStatsBarChartJSONView):
         ]:
             try:
                 medians.append(median_value(lots, "winning_price"))
-            except:
+            except (IndexError, TypeError):
                 medians.append(0)
             averages.append(lots.aggregate(avg_value=Avg("winning_price"))["avg_value"])
             counts.append(lots.count())
