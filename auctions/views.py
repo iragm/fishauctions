@@ -195,7 +195,7 @@ def bin_data(
     # some cleanup and validation first
     try:
         queryset = queryset.order_by(field_name)
-    except:
+    except Exception:  # Catch any ordering error (FieldError, AttributeError, etc.)
         if start_bin is None or end_bin is None:
             msg = f"queryset cannot be ordered by '{field_name}', so start_bin and end_bin are required"
             raise ValueError(msg)
@@ -394,7 +394,7 @@ class ClickAd(RedirectView):
             campaignResponse.clicked = True
             campaignResponse.save()
             return campaignResponse.campaign.external_url
-        except:
+        except AdCampaignResponse.DoesNotExist:
             return None
 
 
@@ -415,22 +415,24 @@ class RenderAd(DetailView):
             user = self.request.user
         else:
             user = None
-        try:
-            if data["auction"]:
-                auction = Auction.objects.get(slug=data["auction"], is_deleted=False)
-        except:
-            pass
-        try:
-            if data["category"]:
-                category = Category.objects.get(pk=data["category"])
-        except:
-            pass
+        auction_slug = data.get("auction")
+        if auction_slug:
+            try:
+                auction = Auction.objects.get(slug=auction_slug, is_deleted=False)
+            except Auction.DoesNotExist:
+                pass
+        category_pk = data.get("category")
+        if category_pk:
+            try:
+                category = Category.objects.get(pk=category_pk)
+            except Category.DoesNotExist:
+                pass
         if user and not category:
             # there wasn't a category on this page, pick one of the user's interests instead
             try:
                 categories = UserInterestCategory.objects.filter(user=user).order_by("-as_percent")[:5]
                 category = sample(categories, 1)
-            except:
+            except (IndexError, ValueError):
                 pass
         adCampaigns = (
             AdCampaign.objects.filter(begin_date__lte=timezone.now())
@@ -467,14 +469,8 @@ class LotListView(AjaxListView):
     routeByLastAuction = False
 
     def get_page_template(self):
-        try:
-            userData = UserData.objects.get(user=self.request.user.pk)
-            if userData.use_list_view:
-                return "lot_list_page.html"
-            else:
-                return "lot_tile_page.html"
-        except:
-            pass
+        if self.request.user.is_authenticated and self.request.user.userdata.use_list_view:
+            return "lot_list_page.html"
         return "lot_tile_page.html"  # tile view as default
         # return 'lot_list_page.html' # list view as default
 
@@ -487,12 +483,9 @@ class LotListView(AjaxListView):
         if self.request.GET.get("page"):
             del data["page"]  # required for pagination to work
         # gotta check to make sure we're not trying to filter by an auction, or no auction
-        try:
-            if "auction" in data.keys():
-                # now we have tried to search for something, so we should not override the auction
-                self.auction = None
-        except Exception:
-            pass
+        if "auction" in data.keys():
+            # now we have tried to search for something, so we should not override the auction
+            self.auction = None
         context["routeByLastAuction"] = self.routeByLastAuction
         context["filter"] = LotFilter(
             data,
@@ -502,40 +495,53 @@ class LotListView(AjaxListView):
             regardingAuction=self.auction,
         )
         context["embed"] = "all_lots"
-        try:
+        if self.request.user.is_authenticated:
             context["lotsAreHidden"] = len(UserIgnoreCategory.objects.filter(user=self.request.user))
-        except:
+        else:
             # probably not signed in
             context["lotsAreHidden"] = -1
-        try:
-            context["lastView"] = (
-                PageView.objects.filter(user=self.request.user, lot__isnull=False).order_by("-date_start")[0].date_start
-            )
-        except:
-            context["lastView"] = timezone.now()
-        try:
-            context["auction"] = Auction.objects.get(slug=data["auction"], is_deleted=False)
-        except:
+        if self.request.user.is_authenticated:
             try:
-                context["auction"] = Auction.objects.get(slug=data["a"], is_deleted=False)
-            except:
-                context["auction"] = self.auction
+                context["lastView"] = (
+                    PageView.objects.filter(user=self.request.user, lot__isnull=False).order_by("-date_start")[0].date_start
+                )
+            except IndexError:
+                context["lastView"] = timezone.now()
+        else:
+            context["lastView"] = timezone.now()
+        auction_slug = data.get("auction")
+        if auction_slug:
+            try:
+                context["auction"] = Auction.objects.get(slug=auction_slug, is_deleted=False)
+            except Auction.DoesNotExist:
+                a_slug = data.get("a")
+                if a_slug:
+                    try:
+                        context["auction"] = Auction.objects.get(slug=a_slug, is_deleted=False)
+                    except Auction.DoesNotExist:
+                        context["auction"] = self.auction
+                        context["no_filters"] = True
+                else:
+                    context["auction"] = self.auction
+                    context["no_filters"] = True
+        else:
+            context["auction"] = self.auction
+            if not auction_slug:
                 context["no_filters"] = True
         if context["auction"]:
-            try:
-                context["auction_tos"] = AuctionTOS.objects.get(
-                    auction=context["auction"].pk, user=self.request.user.pk
-                )
-            except:
-                pass
+            if self.request.user.is_authenticated:
+                try:
+                    context["auction_tos"] = AuctionTOS.objects.get(
+                        auction=context["auction"].pk, user=self.request.user.pk
+                    )
+                except AuctionTOS.DoesNotExist:
+                    pass
             #     # this message gets added to every scroll event.  Also, it's just noise
             #     messages.error(self.request, f"Please <a href='/auctions/{context['auction'].slug}/'>read the auction's rules and confirm your pickup location</a> to bid")
         else:
             # this will be a mix of auction and non-auction lots
             context["display_auction_on_lots"] = True
-        try:
-            self.request.COOKIES["longitude"]
-        except:
+        if not self.request.COOKIES.get("longitude"):
             context["location_message"] = "Set your location to see lots near you"
         context["src"] = "lot_list"
         return context
@@ -561,7 +567,7 @@ class LotAutocomplete(autocomplete.Select2QuerySetView):
         auction = self.forwarded.get("auction")
         try:
             auction = Auction.objects.get(pk=auction, is_deleted=False)
-        except:
+        except Auction.DoesNotExist:
             return Lot.objects.none()
         if not auction.permission_check(self.request.user):
             return Lot.objects.none()
@@ -588,7 +594,7 @@ class AuctionTOSAutocomplete(autocomplete.Select2QuerySetView):
         invoice = self.forwarded.get("invoice")
         try:
             auction = Auction.objects.get(pk=auction, is_deleted=False)
-        except:
+        except Auction.DoesNotExist:
             return AuctionTOS.objects.none()
         if not auction.permission_check(self.request.user):
             return AuctionTOS.objects.none()
@@ -640,42 +646,37 @@ class RecommendedLots(ListView):
                 return "lot_list_page.html"
             else:
                 return "lot_tile_page.html"
-        except:
+        except (UserData.DoesNotExist, AttributeError):
             pass
         return "lot_tile_page.html"  # tile view as default
 
     def get_queryset(self):
         data = self.request.GET.copy()
+        auction = data.get("auction")
         try:
-            auction = data["auction"]
-        except:
-            auction = None
-        try:
-            qty = int(data["qty"])
-        except:
+            qty = int(data.get("qty", 10))
+        except (ValueError, TypeError):
             qty = 10
-        try:
-            keywords = []
-            keywordsString = data["keywords"].lower()
-            lotWords = re.findall("[A-Z|a-z]{3,}", keywordsString)
+        keywords = []
+        keywords_string = data.get("keywords", "")
+        if keywords_string:
+            keywords_string = keywords_string.lower()
+            lotWords = re.findall("[A-Z|a-z]{3,}", keywords_string)
             for word in lotWords:
                 if word not in settings.IGNORE_WORDS:
                     keywords.append(word)
-        except:
-            keywords = []
         return get_recommended_lots(user=self.request.user, auction=auction, qty=qty, keywords=keywords)
 
     def get_context_data(self, **kwargs):
         data = self.request.GET.copy()
         context = super().get_context_data(**kwargs)
-        try:
-            context["embed"] = data["embed"]
-        except:
-            # if not specified in get data, assume this will be viewed by itself
-            context["embed"] = "standalone_page"
-        try:
-            context["lastView"] = PageView.objects.filter(user=self.request.user).order_by("-date_start")[0].date_start
-        except:
+        context["embed"] = data.get("embed", "standalone_page")
+        if self.request.user.is_authenticated:
+            try:
+                context["lastView"] = PageView.objects.filter(user=self.request.user).order_by("-date_start")[0].date_start
+            except IndexError:
+                context["lastView"] = timezone.now()
+        else:
             context["lastView"] = timezone.now()
         context["src"] = "recommended"
         return context
@@ -773,7 +774,7 @@ class LotsByUser(LotListView):
         try:
             context["user"] = User.objects.get(username=data["user"])
             context["view"] = "user"
-        except:
+        except User.DoesNotExist:
             context["user"] = None
         context["filter"] = LotFilter(
             data,
@@ -897,10 +898,9 @@ class AuctionNotifications(View):
         link = ""
         slug = ""
         distance = 0
-        try:
-            latitude = request.COOKIES["latitude"]
-            longitude = request.COOKIES["longitude"]
-        except:
+        latitude = request.COOKIES.get("latitude")
+        longitude = request.COOKIES.get("longitude")
+        if not latitude or not longitude:
             if request.user.is_authenticated:
                 if request.user.userdata.latitude:
                     latitude = request.user.userdata.latitude
@@ -913,13 +913,11 @@ class AuctionNotifications(View):
                 distance = 100
             auctions, distances = nearby_auctions(latitude, longitude, distance, user=request.user)
             new = len(auctions)
-            try:
+            if auctions:
                 name = str(auctions[0])
                 link = auctions[0].get_absolute_url()
                 slug = auctions[0].slug
                 distance = distances[0]
-            except:
-                pass
         except Exception:
             pass
         if not new:
@@ -1048,7 +1046,7 @@ class ImagesPrimary(View):
     def post(self, request):
         try:
             lotImage = LotImage.objects.get(pk=int(request.POST["pk"]))
-        except:
+        except (LotImage.DoesNotExist, ValueError, KeyError):
             return HttpResponse("Image not found, specify a valid pk")
         if not lotImage.lot_number.image_permission_check(request.user):
             messages.error(request, "Only the lot creator can change images")
@@ -1106,7 +1104,7 @@ class Feedback(LoginRequiredMixin, View):
         data = request.POST
         try:
             lot = Lot.objects.get(pk=pk, is_deleted=False)
-        except:
+        except Lot.DoesNotExist:
             msg = f"No lot found with key {pk}"
             raise Http404(msg)
         winner_checks_pass = False
@@ -1122,16 +1120,14 @@ class Feedback(LoginRequiredMixin, View):
                     ):
                         winner_checks_pass = True
         if winner_checks_pass:
-            try:
-                lot.feedback_rating = data["rating"]
+            rating = data.get("rating")
+            if rating:
+                lot.feedback_rating = rating
                 lot.save()
-            except:
-                pass
-            try:
-                lot.feedback_text = data["text"]
+            text = data.get("text")
+            if text:
+                lot.feedback_text = text
                 lot.save()
-            except:
-                pass
         if leave_as == "seller":
             if lot.user:
                 if lot.user.pk == request.user.pk:
@@ -1141,16 +1137,14 @@ class Feedback(LoginRequiredMixin, View):
                     if lot.auctiontos_seller.user.pk == request.user.pk:
                         seller_checks_pass = True
         if seller_checks_pass:
-            try:
-                lot.winner_feedback_rating = data["rating"]
+            rating = data.get("rating")
+            if rating:
+                lot.winner_feedback_rating = rating
                 lot.save()
-            except:
-                pass
-            try:
-                lot.winner_feedback_text = data["text"]
+            text = data.get("text")
+            if text:
+                lot.winner_feedback_text = text
                 lot.save()
-            except:
-                pass
         if not winner_checks_pass and not seller_checks_pass:
             messages.error(request, "Only the seller or winner of a lot can leave feedback")
             return redirect("/")
