@@ -3180,8 +3180,19 @@ class WatchOrUnwatchViewTests(StandardTestCase):
 
 
 class WebSocketConsumerTests(StandardTestCase):
-    """Tests for websocket consumers (LotConsumer, UserConsumer, AuctionConsumer)"""
-
+    """Tests for websocket consumers (LotConsumer, UserConsumer, AuctionConsumer)
+    
+    Best practices for websocket tests in CI:
+    - All operations have timeouts
+    - Proper cleanup with try-finally blocks
+    - Simplified message handling to avoid hanging
+    """
+    
+    # Timeout constants for CI reliability
+    CONNECT_TIMEOUT = 5
+    DISCONNECT_TIMEOUT = 5
+    RECEIVE_TIMEOUT = 3
+    
     async def _create_active_lot_with_auction(self, seller_user, bidder_user=None):
         """Helper method to create an active lot with a future-dated auction"""
         from channels.db import database_sync_to_async
@@ -3230,10 +3241,11 @@ class WebSocketConsumerTests(StandardTestCase):
         communicator.scope["user"] = self.user
         communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
 
-        connected, _ = await communicator.connect()
-        self.assertTrue(connected)
-
-        await communicator.disconnect()
+        try:
+            connected, _ = await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+            self.assertTrue(connected)
+        finally:
+            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
 
     async def test_lot_consumer_connect_anonymous_user(self):
         """Test LotConsumer connection with anonymous user"""
@@ -3250,11 +3262,12 @@ class WebSocketConsumerTests(StandardTestCase):
         communicator.scope["user"] = AnonymousUser()
         communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
 
-        # Anonymous users can connect to view lot
-        connected, _ = await communicator.connect()
-        self.assertTrue(connected)
-
-        await communicator.disconnect()
+        try:
+            # Anonymous users can connect to view lot
+            connected, _ = await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+            self.assertTrue(connected)
+        finally:
+            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
 
     async def test_lot_consumer_chat_message_authenticated(self):
         """Test sending chat message as authenticated user who has joined auction"""
@@ -3270,26 +3283,27 @@ class WebSocketConsumerTests(StandardTestCase):
         communicator.scope["user"] = self.user_with_no_lots
         communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
 
-        await communicator.connect()
+        try:
+            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
 
-        # Send a chat message
-        await communicator.send_json_to({"message": "Hello from test!"})
+            # Send a chat message
+            await communicator.send_json_to({"message": "Hello from test!"})
 
-        # Should receive the message back, skip any system messages
-        found_message = False
-        for _ in range(10):  # Try up to 10 messages
-            try:
-                response = await communicator.receive_json_from(timeout=2)
-                if response.get("message") == "Hello from test!" and response.get("info") == "CHAT":
-                    found_message = True
-                    self.assertEqual(response["username"], str(self.user_with_no_lots))
+            # Should receive the message back, skip any system messages
+            found_message = False
+            for _ in range(5):  # Reduced from 10 to 5 for faster failure
+                try:
+                    response = await communicator.receive_json_from(timeout=self.RECEIVE_TIMEOUT)
+                    if response.get("message") == "Hello from test!" and response.get("info") == "CHAT":
+                        found_message = True
+                        self.assertEqual(response["username"], str(self.user_with_no_lots))
+                        break
+                except:
                     break
-            except:
-                break
-        
-        self.assertTrue(found_message, "Did not receive the expected chat message")
-
-        await communicator.disconnect()
+            
+            self.assertTrue(found_message, "Did not receive the expected chat message")
+        finally:
+            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
 
     async def test_lot_consumer_chat_message_anonymous(self):
         """Test that anonymous users cannot send chat messages"""
@@ -3306,14 +3320,16 @@ class WebSocketConsumerTests(StandardTestCase):
         communicator.scope["user"] = AnonymousUser()
         communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
 
-        await communicator.connect()
+        try:
+            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
 
-        # Try to send a chat message
-        await communicator.send_json_to({"message": "Hello from anonymous!"})
+            # Try to send a chat message
+            await communicator.send_json_to({"message": "Hello from anonymous!"})
 
-        # Anonymous users should not get a response for their message
-        # The consumer just passes without doing anything
-        await communicator.disconnect()
+            # Anonymous users should not get a response for their message
+            # The consumer just passes without doing anything
+        finally:
+            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
 
     async def test_lot_consumer_bid_authenticated_with_tos(self):
         """Test placing a bid as authenticated user who has joined auction"""
@@ -3329,26 +3345,27 @@ class WebSocketConsumerTests(StandardTestCase):
         communicator.scope["user"] = self.user_with_no_lots
         communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
 
-        await communicator.connect()
+        try:
+            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
 
-        # Place a bid
-        await communicator.send_json_to({"bid": 15})
+            # Place a bid
+            await communicator.send_json_to({"bid": 15})
 
-        # Should receive a response about the bid (either success or error message)
-        found_bid_response = False
-        for _ in range(10):
-            try:
-                response = await communicator.receive_json_from(timeout=2)
-                # Accept any bid-related response: success info types or error
-                if response.get("info") in ["NEW_HIGH_BIDDER", "INFO", "ERROR"] or response.get("error"):
-                    found_bid_response = True
+            # Should receive a response about the bid (either success or error message)
+            found_bid_response = False
+            for _ in range(5):  # Reduced from 10 to 5
+                try:
+                    response = await communicator.receive_json_from(timeout=self.RECEIVE_TIMEOUT)
+                    # Accept any bid-related response: success info types or error
+                    if response.get("info") in ["NEW_HIGH_BIDDER", "INFO", "ERROR"] or response.get("error"):
+                        found_bid_response = True
+                        break
+                except:
                     break
-            except:
-                break
 
-        self.assertTrue(found_bid_response, "Did not receive expected bid response")
-
-        await communicator.disconnect()
+            self.assertTrue(found_bid_response, "Did not receive expected bid response")
+        finally:
+            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
 
     async def test_lot_consumer_bid_user_not_joined_auction(self):
         """Test that users who haven't joined auction cannot bid"""
@@ -3364,26 +3381,27 @@ class WebSocketConsumerTests(StandardTestCase):
         communicator.scope["user"] = self.user_who_does_not_join
         communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
 
-        await communicator.connect()
+        try:
+            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
 
-        # Try to place a bid
-        await communicator.send_json_to({"bid": 15})
+            # Try to place a bid
+            await communicator.send_json_to({"bid": 15})
 
-        # Should receive an error
-        found_error = False
-        for _ in range(10):
-            try:
-                response = await communicator.receive_json_from(timeout=2)
-                if response.get("error"):
-                    found_error = True
-                    self.assertIn("joined", response["error"].lower())
+            # Should receive an error
+            found_error = False
+            for _ in range(5):  # Reduced from 10 to 5
+                try:
+                    response = await communicator.receive_json_from(timeout=self.RECEIVE_TIMEOUT)
+                    if response.get("error"):
+                        found_error = True
+                        self.assertIn("joined", response["error"].lower())
+                        break
+                except:
                     break
-            except:
-                break
 
-        self.assertTrue(found_error, "Did not receive expected error message")
-
-        await communicator.disconnect()
+            self.assertTrue(found_error, "Did not receive expected error message")
+        finally:
+            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
 
     async def test_lot_consumer_bid_anonymous_user(self):
         """Test that anonymous users cannot bid"""
@@ -3400,14 +3418,16 @@ class WebSocketConsumerTests(StandardTestCase):
         communicator.scope["user"] = AnonymousUser()
         communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
 
-        await communicator.connect()
+        try:
+            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
 
-        # Try to place a bid
-        await communicator.send_json_to({"bid": 15})
+            # Try to place a bid
+            await communicator.send_json_to({"bid": 15})
 
-        # Anonymous users should not get a response for their bid
-        # The consumer just passes without doing anything
-        await communicator.disconnect()
+            # Anonymous users should not get a response for their bid
+            # The consumer just passes without doing anything
+        finally:
+            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
 
     async def test_lot_consumer_auction_admin_can_view(self):
         """Test that auction admins can connect to lot consumer"""
@@ -3431,10 +3451,11 @@ class WebSocketConsumerTests(StandardTestCase):
         communicator.scope["user"] = self.admin_user
         communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
 
-        connected, _ = await communicator.connect()
-        self.assertTrue(connected)
-
-        await communicator.disconnect()
+        try:
+            connected, _ = await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+            self.assertTrue(connected)
+        finally:
+            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
 
     async def test_user_consumer_connect_valid_user(self):
         """Test UserConsumer connection with valid user"""
@@ -3448,10 +3469,11 @@ class WebSocketConsumerTests(StandardTestCase):
         communicator.scope["user"] = self.user
         communicator.scope["url_route"] = {"kwargs": {"user_pk": self.user.pk}}
 
-        connected, _ = await communicator.connect()
-        self.assertTrue(connected)
-
-        await communicator.disconnect()
+        try:
+            connected, _ = await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+            self.assertTrue(connected)
+        finally:
+            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
 
     async def test_user_consumer_connect_wrong_user(self):
         """Test UserConsumer connection with wrong user ID"""
@@ -3465,9 +3487,16 @@ class WebSocketConsumerTests(StandardTestCase):
         communicator.scope["user"] = self.user  # Different user
         communicator.scope["url_route"] = {"kwargs": {"user_pk": self.admin_user.pk}}
 
-        connected, _ = await communicator.connect()
-        # Should be rejected because user doesn't match
-        self.assertFalse(connected)
+        try:
+            connected, _ = await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+            # Should be rejected because user doesn't match
+            self.assertFalse(connected)
+        finally:
+            # Even if connection failed, try to disconnect to clean up
+            try:
+                await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
+            except:
+                pass
 
     async def test_user_consumer_connect_anonymous(self):
         """Test UserConsumer connection with anonymous user"""
@@ -3482,9 +3511,16 @@ class WebSocketConsumerTests(StandardTestCase):
         communicator.scope["user"] = AnonymousUser()
         communicator.scope["url_route"] = {"kwargs": {"user_pk": self.user.pk}}
 
-        connected, _ = await communicator.connect()
-        # Should be rejected
-        self.assertFalse(connected)
+        try:
+            connected, _ = await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+            # Should be rejected
+            self.assertFalse(connected)
+        finally:
+            # Even if connection failed, try to disconnect to clean up
+            try:
+                await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
+            except:
+                pass
 
     async def test_auction_consumer_connect_admin(self):
         """Test AuctionConsumer connection with auction admin"""
@@ -3498,10 +3534,11 @@ class WebSocketConsumerTests(StandardTestCase):
         communicator.scope["user"] = self.admin_user
         communicator.scope["url_route"] = {"kwargs": {"auction_pk": self.online_auction.pk}}
 
-        connected, _ = await communicator.connect()
-        self.assertTrue(connected)
-
-        await communicator.disconnect()
+        try:
+            connected, _ = await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+            self.assertTrue(connected)
+        finally:
+            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
 
     async def test_auction_consumer_connect_non_admin(self):
         """Test AuctionConsumer connection with non-admin user"""
@@ -3515,9 +3552,16 @@ class WebSocketConsumerTests(StandardTestCase):
         communicator.scope["user"] = self.user_with_no_lots
         communicator.scope["url_route"] = {"kwargs": {"auction_pk": self.online_auction.pk}}
 
-        connected, _ = await communicator.connect()
-        # Should be rejected
-        self.assertFalse(connected)
+        try:
+            connected, _ = await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+            # Should be rejected
+            self.assertFalse(connected)
+        finally:
+            # Even if connection failed, try to disconnect to clean up
+            try:
+                await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
+            except:
+                pass
 
     async def test_auction_consumer_connect_anonymous(self):
         """Test AuctionConsumer connection with anonymous user"""
@@ -3532,9 +3576,16 @@ class WebSocketConsumerTests(StandardTestCase):
         communicator.scope["user"] = AnonymousUser()
         communicator.scope["url_route"] = {"kwargs": {"auction_pk": self.online_auction.pk}}
 
-        connected, _ = await communicator.connect()
-        # Should be rejected
-        self.assertFalse(connected)
+        try:
+            connected, _ = await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+            # Should be rejected
+            self.assertFalse(connected)
+        finally:
+            # Even if connection failed, try to disconnect to clean up
+            try:
+                await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
+            except:
+                pass
 
     async def test_auction_consumer_invalid_auction(self):
         """Test AuctionConsumer connection with invalid auction ID"""
@@ -3548,6 +3599,13 @@ class WebSocketConsumerTests(StandardTestCase):
         communicator.scope["user"] = self.admin_user
         communicator.scope["url_route"] = {"kwargs": {"auction_pk": 99999}}
 
-        connected, _ = await communicator.connect()
-        # Should be rejected because auction doesn't exist
-        self.assertFalse(connected)
+        try:
+            connected, _ = await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+            # Should be rejected because auction doesn't exist
+            self.assertFalse(connected)
+        finally:
+            # Even if connection failed, try to disconnect to clean up
+            try:
+                await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
+            except:
+                pass
