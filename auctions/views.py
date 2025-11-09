@@ -503,7 +503,7 @@ class LotListView(AjaxListView):
         if self.request.user.is_authenticated:
             try:
                 context["lastView"] = (
-                    PageView.objects.filter(user=self.request.user, lot__isnull=False).order_by("-date_start")[0].date_start
+                    PageView.objects.filter(user=self.request.user, lot_number__isnull=False).order_by("-date_start")[0].date_start
                 )
             except IndexError:
                 context["lastView"] = timezone.now()
