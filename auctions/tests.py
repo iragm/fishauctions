@@ -118,6 +118,15 @@ class StandardTestCase(TestCase):
             auctiontos_winner=self.tosB,
             active=False,
         )
+        # no permission to save images by default, so this is a no-go
+        # png_bytes = base64.b64decode(
+        #     b"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAH0KzMgAAAABJRU5ErkJggg=="
+        # )
+        # self.lot_image = LotImage.objects.create(
+        #     lot_number=self.lot,
+        #     image=SimpleUploadedFile("test.png", png_bytes, content_type="image/png"),
+        #     is_primary=True,
+        # )
         self.lotB = Lot.objects.create(
             lot_name="B test lot",
             auction=self.online_auction,
@@ -2468,13 +2477,12 @@ class SetLotWinnersViewTests(StandardTestCase):
 
     def test_set_lot_winners_non_admin(self):
         """Non-admin users cannot access set lot winners"""
-        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        self.client.login(username=self.user_who_does_not_join.username, password="testpassword")
         url = reverse("auction_lot_winners_dynamic", kwargs={"slug": self.in_person_auction.slug})
         response = self.client.get(url)
-        assert response.status_code in [302, 403]
+        assert response.status_code == 403
 
     def test_set_lot_winners_admin(self):
-        """Admin users can access set lot winners"""
         self.client.login(username=self.admin_user.username, password="testpassword")
         url = reverse("auction_lot_winners_dynamic", kwargs={"slug": self.in_person_auction.slug})
         response = self.client.get(url)
@@ -2674,8 +2682,23 @@ class WatchViewTests(StandardTestCase):
         """Logged in users can watch lots"""
         self.client.login(username=self.user_with_no_lots.username, password="testpassword")
         response = self.client.post(f"/api/watchitem/{self.lot.pk}/", data={"watch": "1"})
-        # Should succeed or redirect
-        assert response.status_code in [200, 302]
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Success")
+
+    def test_unwatch_logged_in(self):
+        """Logged in users can unwatch lots"""
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        # First watch
+        self.client.post(f"/api/watchitem/{self.lot.pk}/", data={"watch": "1"})
+        # Then unwatch
+        response = self.client.post(f"/api/watchitem/{self.lot.pk}/", data={"watch": "false"})
+        self.assertEqual(response.status_code, 200)
+
+    def test_get_request_denied(self):
+        """GET requests should be denied"""
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get(f"/api/watchitem/{self.lot.pk}/")
+        self.assertEqual(response.status_code, 405)
 
 
 class MyBidsViewTests(StandardTestCase):
@@ -2948,7 +2971,7 @@ class UserExportTests(StandardTestCase):
         self.client.login(username="no_lots", password="testpassword")
         url = reverse("user_list", kwargs={"slug": self.online_auction.slug})
         response = self.client.get(url)
-        self.assertEqual(response.status_code, 302)  # Redirect
+        self.assertIn(response.status_code, [302, 403])
 
     def test_compose_email_without_filter(self):
         """Test composing email to all users"""
@@ -3121,3 +3144,32 @@ class UserTrustSystemTests(StandardTestCase):
         invoice.refresh_from_db()
         # Email should be marked sent but not actually sent
         self.assertTrue(invoice.email_sent)
+class WatchOrUnwatchViewTests(StandardTestCase):
+    """Test watchOrUnwatch function-based view"""
+
+    def test_watch_anonymous_denied(self):
+        """Anonymous users cannot watch lots"""
+        response = self.client.post(f"/api/watchitem/{self.lot.pk}/", data={"watch": "true"})
+        self.assertIn(response.status_code, [302, 403])
+
+    def test_watch_logged_in(self):
+        """Logged in users can watch lots"""
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        response = self.client.post(f"/api/watchitem/{self.lot.pk}/", data={"watch": "true"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Success")
+
+    def test_unwatch_logged_in(self):
+        """Logged in users can unwatch lots"""
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        # First watch
+        self.client.post(f"/api/watchitem/{self.lot.pk}/", data={"watch": "true"})
+        # Then unwatch
+        response = self.client.post(f"/api/watchitem/{self.lot.pk}/", data={"watch": "false"})
+        self.assertEqual(response.status_code, 200)
+
+    def test_get_request_denied(self):
+        """GET requests should be denied"""
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get(f"/api/watchitem/{self.lot.pk}/")
+        self.assertEqual(response.status_code, 405)

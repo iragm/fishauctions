@@ -25,7 +25,6 @@ from chartjs.views.lines import BaseLineChartView
 from dal import autocomplete
 from django.conf import settings
 from django.contrib import messages
-from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.models import User
 from django.contrib.messages.views import SuccessMessageMixin
@@ -276,16 +275,26 @@ class AdminEmailMixin:
         return context
 
 
-class AuctionPermissionsMixin:
-    """For any auction-related views, adds view.is_auction_admin to be used for any kind of permissions-checking
-    Based on whether this user's auctionTOS for this auction has is_admin or not
-    Not to be called directly: sub-class this, typically as the last class, set self.auction, then use self.is_auction_admin
-    DO NOT FORGET TO CALL self.is_auction_admin somewhere or this will do nothing!
+class AuctionViewMixin:
+    """For auction permissions, this will try to set self.auction based on the url's slug,
+    then see if the user has permission or not
     """
 
     # this can be set to true for views that are shared between admins and regular users, while providing a different view to each.
-    # this is most often used in the context as context['is_auction_admin'] = self.is_auction_admin
+    # often used in get_context_data, as: context['is_auction_admin'] = self.is_auction_admin
     allow_non_admins = False
+
+    # set automatically in dispatch, unless you manually set it
+    auction = None
+
+    def get_auction(self, slug):
+        if not self.auction and slug:
+            self.auction = get_object_or_404(Auction, slug=slug, is_deleted=False)
+            self.is_auction_admin
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_auction(kwargs.pop("slug", ""))
+        return super().dispatch(request, *args, **kwargs)
 
     @property
     def is_auction_admin(self):
@@ -297,29 +306,14 @@ class AuctionPermissionsMixin:
         result = self.auction.permission_check(self.request.user)
         if not result:
             if self.allow_non_admins:
-                logger.debug("non-admins allowed")
+                # logger.debug("non-admins allowed")
                 pass
             else:
                 raise PermissionDenied()
         else:
-            logger.debug("allowing user %s to view %s", self.request.user, self.auction)
+            # logger.debug("allowing user %s to view %s", self.request.user, self.auction)
             pass
         return result
-
-
-class AuctionViewMixin(AuctionPermissionsMixin):
-    """Subclass this when you need auction permissions, it's easier than using AuctionPermissionsMixin"""
-
-    auction = None
-
-    def get_auction(self, slug):
-        if not self.auction and slug:
-            self.auction = get_object_or_404(Auction, slug=slug, is_deleted=False)
-            self.is_auction_admin
-
-    def dispatch(self, request, *args, **kwargs):
-        self.get_auction(kwargs.pop("slug", ""))
-        return super().dispatch(request, *args, **kwargs)
 
 
 class AdminOnlyViewMixin:
@@ -561,7 +555,6 @@ class LotAutocomplete(autocomplete.Select2QuerySetView):
             return format_html("<b>{}</b>: {}", result.lot_number_display, result.lot_name)
 
     def dispatch(self, request, *args, **kwargs):
-        # we are not using self.is_auction_admin and the AuctionPermissionsMixinMixin here because self.forwarded.get is not available in dispatch
         return super().dispatch(request, *args, **kwargs)
 
     def get_queryset(self):
@@ -588,7 +581,6 @@ class AuctionTOSAutocomplete(autocomplete.Select2QuerySetView):
         return format_html("<b>{}</b>: {}", result.bidder_number, result.name)
 
     def dispatch(self, request, *args, **kwargs):
-        # we are not using self.is_auction_admin and the AuctionPermissionsMixinMixin here because self.forwarded.get is not available in dispatch
         return super().dispatch(request, *args, **kwargs)
 
     def get_queryset(self):
@@ -794,10 +786,11 @@ class LotsByUser(LotListView):
         return context
 
 
-@login_required
-def watchOrUnwatch(request, pk):
-    if request.method == "POST":
-        watch = request.POST["watch"]
+class WatchOrUnwatch(LoginRequiredMixin, View):
+    """Watch or unwatch a lot - POST only"""
+
+    def post(self, request, pk):
+        watch = request.POST.get("watch", "")
         user = request.user
         lot = Lot.objects.filter(pk=pk, is_deleted=False).first()
         if not lot:
@@ -811,13 +804,12 @@ def watchOrUnwatch(request, pk):
             return HttpResponse("Success")
         else:
             return HttpResponse("Failure")
-    messages.error(request, "Your account doesn't have permission to view this page")
-    return redirect("/")
 
 
-@login_required
-def lotNotifications(request):
-    if request.method == "POST":
+class LotNotifications(LoginRequiredMixin, View):
+    """Get count of new lot notifications - POST only"""
+
+    def post(self, request):
         user = request.user
         new = (
             LotHistory.objects.filter(lot__user=user.pk, seen=False, changed_price=False)
@@ -827,15 +819,16 @@ def lotNotifications(request):
         if not new:
             new = ""
         return JsonResponse(data={"new": new})
-    messages.error(request, "Your account doesn't have permission to view this page")
-    return redirect("/")
 
 
-@login_required
-def ignoreAuction(request):
-    if request.method == "POST":
-        auction = request.POST["auction"]
+class IgnoreAuction(LoginRequiredMixin, View):
+    """Ignore an auction - POST only"""
+
+    def post(self, request):
+        auction = request.POST.get("auction", "")
         user = request.user
+        if not auction:
+            return HttpResponse("Failure: auction parameter required")
         try:
             auction = Auction.objects.get(slug=auction, is_deleted=False)
             obj, created = AuctionIgnore.objects.update_or_create(
@@ -845,68 +838,60 @@ def ignoreAuction(request):
             )
             return HttpResponse("Success")
         except Exception as e:
-            return HttpResponse("Failure: " + e)
-    messages.error(request, "Your account doesn't have permission to view this page")
-    return redirect("/")
+            return HttpResponse(f"Failure: {e}")
 
 
-def no_lot_auctions(request):
+class NoLotAuctions(LoginRequiredMixin, View):
     """POST-only method that returns an empty string if most recent auction you've used accepts lots
     or the name of the auction and the end date
     Used on the lot creation form"""
-    if request.method == "POST":
+
+    def post(self, request):
         result = ""
-        if request.user.is_authenticated:
-            userData, created = UserData.objects.get_or_create(
-                user=request.user,
-                defaults={},
-            )
-            auction = userData.last_auction_used
-            now = timezone.now()
-            if auction:
-                if auction.lot_submission_start_date > now:
-                    result = f"Lot submission is not yet open for {auction}"
-                if auction.lot_submission_end_date < now:
-                    result = f"Lot submission has ended for {auction}"
-                if auction.date_end:
-                    if auction.date_end < now:
-                        result = f"{auction} has ended"
-                if not result:
-                    tos = AuctionTOS.objects.filter(user=request.user, auction=auction).first()
-                    if tos:
-                        if not tos.selling_allowed:
-                            result = f"You don't have permission to add lots to {auction}"
-                if not result:
-                    if auction.max_lots_per_user:
-                        lot_list = Lot.objects.filter(
-                            user=request.user,
-                            banned=False,
-                            deactivated=False,
-                            auction=auction,
-                            is_deleted=False,
-                        )
-                        if auction.allow_additional_lots_as_donation:
-                            lot_list = lot_list.filter(donation=False)
-                        lot_list = lot_list.count()
-                        result = f"You've added {lot_list} of {auction.max_lots_per_user} lots to {auction}"
-            if result:
-                result += "<br>"
+        auction = request.user.userdata.last_auction_used
+        now = timezone.now()
+        if auction:
+            if auction.lot_submission_start_date > now:
+                result = f"Lot submission is not yet open for {auction}"
+            if auction.lot_submission_end_date < now:
+                result = f"Lot submission has ended for {auction}"
+            if auction.date_end:
+                if auction.date_end < now:
+                    result = f"{auction} has ended"
+            if not result:
+                tos = AuctionTOS.objects.filter(user=request.user, auction=auction).first()
+                if tos:
+                    if not tos.selling_allowed:
+                        result = f"You don't have permission to add lots to {auction}"
+            if not result:
+                if auction.max_lots_per_user:
+                    lot_list = Lot.objects.filter(
+                        user=request.user,
+                        banned=False,
+                        deactivated=False,
+                        auction=auction,
+                        is_deleted=False,
+                    )
+                    if auction.allow_additional_lots_as_donation:
+                        lot_list = lot_list.filter(donation=False)
+                    lot_list = lot_list.count()
+                    result = f"You've added {lot_list} of {auction.max_lots_per_user} lots to {auction}"
+        if result:
+            result += "<br>"
         return JsonResponse(
             data={
                 "result": result,
             }
         )
-    messages.error(request, "Your account doesn't have permission to view this page")
-    return redirect("/")
 
 
-def auctionNotifications(request):
+class AuctionNotifications(View):
     """
     POST-only method that will return a count of auctions as well as some info about the closest one.
-    Used to put an icon next to auctions button in main view
     This is mostly a wrapper to go around models.nearby_auctions so that all info isn't accessible to anyone
     """
-    if request.method == "POST":
+
+    def post(self, request):
         new = 0
         name = ""
         link = ""
@@ -964,27 +949,21 @@ def auctionNotifications(request):
                 "distance_unit": distance_unit,
             }
         )
-    messages.error(request, "Your account doesn't have permission to view this page")
-    return redirect("/")
 
 
-@login_required
-def setCoordinates(request):
-    if request.method == "POST":
-        userData, created = UserData.objects.get_or_create(
-            user=request.user,
-            defaults={},
-        )
-        userData.location_coordinates = f"{request.POST['latitude']},{request.POST['longitude']}"
-        userData.last_activity = timezone.now()
-        userData.save()
+class SetCoordinates(LoginRequiredMixin, View):
+    """Set user location coordinates - POST only.  I don't think this is used anywhere any more"""
+
+    def post(self, request):
+        request.user.userdata.location_coordinates = f"{request.POST['latitude']},{request.POST['longitude']}"
+        request.user.userdata.save()
         return HttpResponse("Success")
-    messages.error(request, "Your account doesn't have permission to view this page")
-    return redirect("/")
 
 
-def userBan(request, pk):
-    if request.method == "POST" and request.user.is_authenticated:
+class CreateUserBan(LoginRequiredMixin, View):
+    """Ban a user - POST only"""
+
+    def post(self, request, pk):
         user = request.user
         bannedUser = User.objects.get(pk=pk)
         obj, created = UserBan.objects.update_or_create(
@@ -1015,39 +994,40 @@ def userBan(request, pk):
                     lot.banned = True
                     lot.ban_reason = "The seller of this lot has been banned from this auction"
                     lot.save()
-        # return #redirect('/users/' + str(pk))
         return redirect(reverse("userpage", kwargs={"slug": bannedUser.username}))
-    messages.error(request, "Your account doesn't have permission to view this page")
-    return redirect("/")
 
 
-def lotDeactivate(request, pk):
-    if request.method == "POST":
+class LotDeactivate(View):
+    """Deactivate or activate a lot - POST only"""
+
+    def post(self, request, pk):
         lot = Lot.objects.get(pk=pk, is_deleted=False)
-        checksPass = False
-        if request.user.is_superuser:
-            checksPass = True
-        if lot.user.pk == request.user.pk:
-            checksPass = True
+
+        # Check permissions: lot owner or superuser can deactivate
+        # Lots in auctions cannot be deactivated
         if lot.auction:
-            checksPass = False
-        if checksPass:
-            if lot.deactivated:
-                lot.deactivated = False
-            else:
-                bids = Bid.objects.exclude(is_deleted=True).filter(lot_number=lot.lot_number)
-                for bid in bids:
-                    bid.delete()
-                lot.deactivated = True
-            lot.save()
-            return HttpResponse("success")
-    messages.error(request, "Your account doesn't have permission to view this page")
-    return redirect("/")
+            messages.error(request, "Your account doesn't have permission to view this page")
+            return redirect("/")
+
+        if lot.user.pk != request.user.pk and not request.user.is_superuser:
+            messages.error(request, "Your account doesn't have permission to view this page")
+            return redirect("/")
+
+        if lot.deactivated:
+            lot.deactivated = False
+        else:
+            bids = Bid.objects.exclude(is_deleted=True).filter(lot_number=lot.lot_number)
+            for bid in bids:
+                bid.delete()
+            lot.deactivated = True
+        lot.save()
+        return HttpResponse("success")
 
 
-def userUnban(request, pk):
-    """Delete the UserBan"""
-    if request.method == "POST" and request.user.is_authenticated:
+class UserUnban(LoginRequiredMixin, View):
+    """Unban a user - POST only"""
+
+    def post(self, request, pk):
         user = request.user
         bannedUser = User.objects.get(pk=pk)
         obj, created = UserBan.objects.update_or_create(
@@ -1056,27 +1036,20 @@ def userUnban(request, pk):
             defaults={},
         )
         obj.delete()
-        # return redirect('/users/' + str(pk))
         return redirect(reverse("userpage", kwargs={"slug": bannedUser.username}))
-    messages.error(request, "Your account doesn't have permission to view this page")
-    return redirect("/")
 
 
-def imagesPrimary(request):
+class ImagesPrimary(View):
     """Make the specified image the default image for the lot
     Takes pk of image as post param
     this does not check lot.can_add_images, which is deliberate (who cares if you rotate...)
-    at some point, this function and the rotate function should be converted into classes
     """
-    if request.method == "POST":
+
+    def post(self, request):
         try:
-            pk = int(request.POST["pk"])
+            lotImage = LotImage.objects.get(pk=int(request.POST["pk"]))
         except:
-            return HttpResponse("user and pk are required")
-        try:
-            lotImage = LotImage.objects.get(pk=pk)
-        except:
-            return HttpResponse(f"Image {pk} not found")
+            return HttpResponse("Image not found, specify a valid pk")
         if not lotImage.lot_number.image_permission_check(request.user):
             messages.error(request, "Only the lot creator can change images")
             return redirect("/")
@@ -1084,15 +1057,14 @@ def imagesPrimary(request):
         lotImage.is_primary = True
         lotImage.save()
         return HttpResponse("Success")
-    messages.error(request, "Your account doesn't have permission to view this page")
-    return redirect("/")
 
 
-def imagesRotate(request):
+class ImagesRotate(View):
     """Rotate an image associated with a lot
     Takes pk of image and angle as post params
     """
-    if request.method == "POST":
+
+    def post(self, request):
         try:
             pk = int(request.POST["pk"])
             angle = int(request.POST["angle"])
@@ -1121,22 +1093,21 @@ def imagesRotate(request):
             save=True,
         )
         return HttpResponse("Success")
-    messages.error(request, "Your account doesn't have permission to view this page")
-    return redirect("/")
 
 
-def feedback(request, pk, leave_as):
+class Feedback(LoginRequiredMixin, View):
     """Leave feedback on a lot
     This can be done as a buyer or a seller
     api/feedback/lot_number/buyer
     api/feedback/lot_number/seller
     """
-    if request.method == "POST":
+
+    def post(self, request, pk, leave_as):
         data = request.POST
         try:
             lot = Lot.objects.get(pk=pk, is_deleted=False)
         except:
-            msg = f"No lot found with key {lot}"
+            msg = f"No lot found with key {pk}"
             raise Http404(msg)
         winner_checks_pass = False
         seller_checks_pass = False
@@ -1184,8 +1155,6 @@ def feedback(request, pk, leave_as):
             messages.error(request, "Only the seller or winner of a lot can leave feedback")
             return redirect("/")
         return HttpResponse("Success")
-    messages.error(request, "Your account doesn't have permission to view this page")
-    return redirect("/")
 
 
 def clean_referrer(url):
@@ -1206,9 +1175,10 @@ def clean_referrer(url):
     return url
 
 
-def pageview(request):
+class PageViewCreate(View):
     """Record page views"""
-    if request.method == "POST":
+
+    def post(self, request):
         data = request.POST
         auction = data.get("auction", None)
         if auction:
@@ -1318,36 +1288,30 @@ def pageview(request):
         #         pageview.date_end = timezone.now()
         #         pageview.save()
         return HttpResponse("Success")
-    messages.error(request, "Your account doesn't have permission to view this page")
-    return redirect("/")
 
 
-def invoicePaid(request, pk, **kwargs):
-    if request.method == "POST":
-        try:
-            invoice = Invoice.objects.get(pk=pk)
-        except:
-            msg = f"No invoice found with key {pk}"
-            raise Http404(msg)
-        checksPass = False
-        if invoice.auction:
-            if invoice.auction.permission_check(request.user):
-                checksPass = True
-        if checksPass:
-            invoice.status = kwargs["status"]
-            invoice.save()
-            if invoice.auction:
-                invoice.auction.create_history(
-                    applies_to="INVOICES",
-                    action=f"Set invoice for {invoice.auctiontos_user.name} to {invoice.get_status_display()}",
-                    user=request.user,
-                )
-            return HttpResponse(
-                render_to_string("invoice_buttons.html", {"invoice": invoice}),
-                status=200,
-            )
-    messages.error(request, "Your account doesn't have permission to view this page")
-    return redirect("/")
+class InvoicePaid(LoginRequiredMixin, AuctionViewMixin, View):
+    """Mark an invoice as paid/ready/open - POST only"""
+
+    allow_non_admins = False
+
+    def dispatch(self, request, *args, **kwargs):
+        self.invoice = get_object_or_404(Invoice, pk=kwargs["pk"])
+        self.auction = self.invoice.auction
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        self.invoice.status = kwargs["status"]
+        self.invoice.save()
+        self.auction.create_history(
+            applies_to="INVOICES",
+            action=f"Set invoice for {self.invoice.auctiontos_user.name} to {self.invoice.get_status_display()}",
+            user=request.user,
+        )
+        return HttpResponse(
+            render_to_string("invoice_buttons.html", {"invoice": self.invoice}),
+            status=200,
+        )
 
 
 class APIPostView(LoginRequiredMixin, View):
@@ -1440,81 +1404,83 @@ class AuctionTOSValidation(AuctionViewMixin, APIPostView):
         return JsonResponse(result)
 
 
-@login_required
-def my_won_lot_csv(request):
+class MyWonLotCSV(LoginRequiredMixin, View):
     """CSV file showing won lots"""
-    lots = add_price_info(
-        Lot.objects.filter(Q(winner=request.user) | Q(auctiontos_winner__email=request.user.email)).exclude(
-            is_deleted=True
+
+    def get(self, request):
+        lots = add_price_info(
+            Lot.objects.filter(Q(winner=request.user) | Q(auctiontos_winner__email=request.user.email)).exclude(
+                is_deleted=True
+            )
         )
-    )
-    current_site = Site.objects.get_current()
-    response = HttpResponse(content_type="text/csv")
-    response["Content-Disposition"] = (
-        f'attachment; filename="my_won_lots_from_{current_site.domain.replace(".", "_")}.csv"'
-    )
-    writer = csv.writer(response)
-    writer.writerow(["Lot number", "Name", "Auction", "Winning price", "Link"])
-    for lot in lots:
-        writer.writerow(
-            [
-                lot.lot_number_display,
-                lot.lot_name,
-                lot.auction,
-                f"${lot.winning_price}",
-                "https://" + lot.full_lot_link,
-            ]
+        current_site = Site.objects.get_current()
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = (
+            f'attachment; filename="my_won_lots_from_{current_site.domain.replace(".", "_")}.csv"'
         )
-    return response
+        writer = csv.writer(response)
+        writer.writerow(["Lot number", "Name", "Auction", "Winning price", "Link"])
+        for lot in lots:
+            writer.writerow(
+                [
+                    lot.lot_number_display,
+                    lot.lot_name,
+                    lot.auction,
+                    f"${lot.winning_price}",
+                    "https://" + lot.full_lot_link,
+                ]
+            )
+        return response
 
 
-@login_required
-def my_lot_report(request):
+class MyLotReportView(LoginRequiredMixin, View):
     """CSV file showing sold lots"""
-    lots = add_price_info(
-        Lot.objects.filter(Q(user=request.user) | Q(auctiontos_seller__email=request.user.email)).exclude(
-            is_deleted=True
+
+    def get(self, request):
+        lots = add_price_info(
+            Lot.objects.filter(Q(user=request.user) | Q(auctiontos_seller__email=request.user.email)).exclude(
+                is_deleted=True
+            )
         )
-    )
-    current_site = Site.objects.get_current()
-    response = HttpResponse(content_type="text/csv")
-    response["Content-Disposition"] = f'attachment; filename="my_lots_from_{current_site.domain.replace(".", "_")}.csv"'
-    writer = csv.writer(response)
-    writer.writerow(["Lot number", "Name", "Auction", "Status", "Winning price", "My cut"])
-    for lot in lots:
-        status = "Unsold"
-        if lot.banned:
-            status = "Removed"
-        elif lot.deactivated:
-            status = "Deactivated"
-        elif lot.winner or lot.auctiontos_winner:
-            status = "Sold"
-        writer.writerow(
-            [
-                lot.lot_number_display,
-                lot.lot_name,
-                lot.auction,
-                status,
-                lot.winning_price,
-                lot.your_cut,
-            ]
+        current_site = Site.objects.get_current()
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = (
+            f'attachment; filename="my_lots_from_{current_site.domain.replace(".", "_")}.csv"'
         )
-    return response
+        writer = csv.writer(response)
+        writer.writerow(["Lot number", "Name", "Auction", "Status", "Winning price", "My cut"])
+        for lot in lots:
+            status = "Unsold"
+            if lot.banned:
+                status = "Removed"
+            elif lot.deactivated:
+                status = "Deactivated"
+            elif lot.winner or lot.auctiontos_winner:
+                status = "Sold"
+            writer.writerow(
+                [
+                    lot.lot_number_display,
+                    lot.lot_name,
+                    lot.auction,
+                    status,
+                    lot.winning_price,
+                    lot.your_cut,
+                ]
+            )
+        return response
 
 
-@login_required
-def auctionReport(request, slug):
+class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
     """Get a CSV file showing all users who are participating in this auction"""
-    auction = get_object_or_404(Auction, slug=slug, is_deleted=False)
-    if auction.permission_check(request.user):
-        # Create the HttpResponse object with the appropriate CSV header.
+
+    def get(self, request):
         query = request.GET.get("query", None)
         response = HttpResponse(content_type="text/csv")
         end = timezone.now().strftime("%Y-%m-%d")
         if not query:
-            filename = slug + "-report-" + end
+            filename = self.auction.slug + "-report-" + end
         else:
-            filename = slug + "-report-" + query + "-" + end
+            filename = self.auction.slug + "-report-" + query + "-" + end
         response["Content-Disposition"] = f'attachment; filename="{filename}.csv"'
         writer = csv.writer(response)
         writer.writerow(
@@ -1547,13 +1513,13 @@ def auctionReport(request, slug):
                 "Users who have banned this user",
                 "Account created on",
                 "Memo",
-                auction.alternative_split_label.capitalize(),
+                self.auction.alternative_split_label.capitalize(),
                 "Bidding allowed",
                 "Added auction to their calendar",
             ]
         )
         users = (
-            AuctionTOS.objects.filter(auction=auction)
+            AuctionTOS.objects.filter(auction=self.auction)
             .select_related("user__userdata")
             .select_related("pickup_location")
             .order_by("createdon")
@@ -1572,17 +1538,17 @@ def auctionReport(request, slug):
             club = ""
             if data.user and not data.manually_added:
                 # these things will only be written out if the user wants you to have it
-                lotsViewed = PageView.objects.filter(lot_number__auction=auction, user=data.user)
-                lotsBid = Bid.objects.exclude(is_deleted=True).filter(lot_number__auction=auction, user=data.user)
+                lotsViewed = PageView.objects.filter(lot_number__auction=self.auction, user=data.user)
+                lotsBid = Bid.objects.exclude(is_deleted=True).filter(lot_number__auction=self.auction, user=data.user)
                 lot_qs = Lot.objects.exclude(is_deleted=True).filter(
                     user=data.user,
                     auction__isnull=True,
-                    date_posted__gte=auction.date_start - timedelta(days=2),
+                    date_posted__gte=self.auction.date_start - timedelta(days=2),
                 )
-                if auction.is_online:
-                    lotsOutsideAuction = lot_qs.filter(date_posted__lte=auction.date_end + timedelta(days=2))
+                if self.auction.is_online:
+                    lotsOutsideAuction = lot_qs.filter(date_posted__lte=self.auction.date_end + timedelta(days=2))
                 else:
-                    lotsOutsideAuction = lot_qs.filter(date_posted__lte=auction.date_start + timedelta(days=5))
+                    lotsOutsideAuction = lot_qs.filter(date_posted__lte=self.auction.date_start + timedelta(days=5))
                 numberLotsOutsideAuction = lotsOutsideAuction.count()
                 profitOutsideAuction = lotsOutsideAuction.aggregate(total=Sum("winning_price"))["total"]
                 if not profitOutsideAuction:
@@ -1607,14 +1573,14 @@ def auctionReport(request, slug):
                 username = ""
                 number_of_userbans = 0
                 account_age = ""
-            lotsSumbitted = Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller=data, auction=auction)
-            lotsWon = Lot.objects.exclude(is_deleted=True).filter(auctiontos_winner=data, auction=auction)
+            lotsSumbitted = Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller=data, auction=self.auction)
+            lotsWon = Lot.objects.exclude(is_deleted=True).filter(auctiontos_winner=data, auction=self.auction)
             breederPoints = Lot.objects.exclude(is_deleted=True).filter(
-                auctiontos_seller=data, auction=auction, i_bred_this_fish=True
+                auctiontos_seller=data, auction=self.auction, i_bred_this_fish=True
             )
             address = data.address or ""
             try:
-                invoice = Invoice.objects.get(auction=auction, auctiontos_user=data)
+                invoice = Invoice.objects.get(auction=self.auction, auctiontos_user=data)
                 invoiceStatus = invoice.get_status_display()
                 totalSpent = invoice.total_bought
                 totalPaid = invoice.total_sold
@@ -1659,26 +1625,18 @@ def auctionReport(request, slug):
                     add_to_calendar,
                 ]
             )
-        auction.create_history(
+        self.auction.create_history(
             applies_to="USERS",
             action="Exported user CSV",
             user=request.user,
         )
         return response
-    messages.error(request, "Your account doesn't have permission to view this page")
-    return redirect("/")
 
 
-class ComposeEmailToUsers(TemplateView, AuctionPermissionsMixin):
+class ComposeEmailToUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView):
     """Generate a mailto: link with BCC for filtered users - HTMX endpoint"""
 
     template_name = "email_users_button.html"
-
-    def dispatch(self, request, *args, **kwargs):
-        slug = kwargs.get("slug")
-        self.auction = get_object_or_404(Auction, slug=slug, is_deleted=False)
-        self.is_auction_admin
-        return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -1722,41 +1680,41 @@ class ComposeEmailToUsers(TemplateView, AuctionPermissionsMixin):
         return context
 
 
-@login_required
-def userReport(request):
+class MarketingList(LoginRequiredMixin, View):
     """Get a CSV file showing all users from all auctions you're an admin for"""
-    response = HttpResponse(content_type="text/csv")
-    response["Content-Disposition"] = "attachment; filename=all_auction_contacts.csv"
-    writer = csv.writer(response)
-    found = []
-    writer.writerow(["Name", "Email", "Phone"])
-    auctions = Auction.objects.filter(
-        Q(created_by=request.user) | Q(auctiontos__is_admin=True, auctiontos__user=request.user)
-    ).distinct()
-    users = AuctionTOS.objects.filter(auction__in=auctions).exclude(email_address_status="BAD")
-    for user in users:
-        if user.email not in found:
-            writer.writerow([user.name, user.email, user.phone_as_string])
-            found.append(user.email)
-    for auction in auctions:
-        auction.create_history(
-            applies_to="USERS",
-            action="Exported marketing list CSV for all their auctions (including this one)",
-            user=request.user,
-        )
-    return response
+
+    def get(self, request):
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = "attachment; filename=all_auction_contacts.csv"
+        writer = csv.writer(response)
+        found = []
+        writer.writerow(["Name", "Email", "Phone"])
+        auctions = Auction.objects.filter(
+            Q(created_by=request.user) | Q(auctiontos__is_admin=True, auctiontos__user=request.user)
+        ).distinct()
+        users = AuctionTOS.objects.filter(auction__in=auctions).exclude(email_address_status="BAD")
+        for user in users:
+            if user.email not in found:
+                writer.writerow([user.name, user.email, user.phone_as_string])
+                found.append(user.email)
+        for auction in auctions:
+            auction.create_history(
+                applies_to="USERS",
+                action="Exported marketing list CSV for all their auctions (including this one)",
+                user=request.user,
+            )
+        return response
 
 
-@login_required
-def auctionInvoicesPaypalCSV(request, slug, chunk):
+class AuctionInvoicesPayPalCSV(LoginRequiredMixin, AuctionViewMixin, View):
     """Get a CSV file of all unpaid invoices that owe the club money"""
-    auction = Auction.objects.get(slug=slug, is_deleted=False)
-    if auction.permission_check(request.user):
+
+    def get(self, request, chunk):
         # Create the HttpResponse object with the appropriate CSV header.
         response = HttpResponse(content_type="text/csv")
-        dueDate = timezone.now().strftime("%m/%d/%Y")
+        due_date = timezone.now().strftime("%m/%d/%Y")
         current_site = Site.objects.get_current()
-        response["Content-Disposition"] = f'attachment; filename="{slug}-paypal-{chunk}.csv"'
+        response["Content-Disposition"] = f'attachment; filename="{self.auction.slug}-paypal-{chunk}.csv"'
         writer = csv.writer(response)
         writer.writerow(
             [
@@ -1777,60 +1735,59 @@ def auctionInvoicesPaypalCSV(request, slug, chunk):
                 "Memo to Self",
             ]
         )
-        invoices = auction.paypal_invoices
         count = 0
         chunkSize = 150  # attention: this is also set in models.auction.paypal_invoice_chunks
-        for invoice in invoices:
+        no_email_count = 0
+        for invoice in self.auction.paypal_invoices:
             invoice.recalculate
             # we loop through everything regardless of which chunk
             if not invoice.user_should_be_paid:
                 count += 1
                 if count <= chunkSize * chunk and count > chunkSize * (chunk - 1):
-                    email = invoice.auctiontos_user.email
-                    firstName = ""
-                    lastName = invoice.auctiontos_user.name
-                    invoiceNumber = invoice.pk
                     reference = ""
                     itemName = "Auction total"
                     description = ""
-                    itemAmount = invoice.absolute_amount
                     shippingAmount = 0
                     discountAmount = 0
-                    currencyCode = auction.created_by.userdata.currency
+                    currencyCode = self.auction.created_by.userdata.currency
                     noteToCustomer = f"https://{current_site.domain}/invoices/{invoice.pk}/"
                     termsAndConditions = ""
                     memoToSelf = invoice.auctiontos_user.memo
-                    if itemAmount > 0 and email:
-                        writer.writerow(
-                            [
-                                email,
-                                firstName,
-                                lastName,
-                                invoiceNumber,
-                                dueDate,
-                                reference,
-                                itemName,
-                                description,
-                                itemAmount,
-                                shippingAmount,
-                                discountAmount,
-                                currencyCode,
-                                noteToCustomer,
-                                termsAndConditions,
-                                memoToSelf,
-                            ]
-                        )
-        auction.create_history(applies_to="USERS", action="Exported PayPal invoices CSV", user=request.user)
+                    if invoice.net_after_payments < 0:
+                        if invoice.auctiontos_user.email:
+                            writer.writerow(
+                                [
+                                    invoice.auctiontos_user.email,
+                                    "",
+                                    invoice.auctiontos_user.name,
+                                    invoice.pk,
+                                    due_date,
+                                    reference,
+                                    itemName,
+                                    description,
+                                    abs(invoice.net_after_payments),
+                                    shippingAmount,
+                                    discountAmount,
+                                    currencyCode,
+                                    noteToCustomer,
+                                    termsAndConditions,
+                                    memoToSelf,
+                                ]
+                            )
+                        else:
+                            no_email_count += 1
+        self.auction.create_history(
+            applies_to="USERS",
+            action=f"Exported PayPal invoices CSV.  {no_email_count} users had no email address and were not included in the CSV.",
+            user=request.user,
+        )
         return response
-    messages.error(request, "Your account doesn't have permission to view this page")
-    return redirect("/")
 
 
-@login_required
-def auctionLotList(request, slug):
+class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
     """Get a CSV file showing all sold lots, who bought/sold them, and the winner's location"""
-    auction = Auction.objects.get(slug=slug, is_deleted=False)
-    if auction.permission_check(request.user):
+
+    def get(self, request):
         # Create the HttpResponse object with the appropriate CSV header.
         query = request.GET.get("query", None)
         response = HttpResponse(content_type="text/csv")
@@ -1839,7 +1796,7 @@ def auctionLotList(request, slug):
         else:
             filename = "lot-list-" + query
             query = unquote(query)
-        response["Content-Disposition"] = f'attachment; filename="{slug}-{filename}.csv"'
+        response["Content-Disposition"] = f'attachment; filename="{self.auction.slug}-{filename}.csv"'
         writer = csv.writer(response)
         first_row_fields = [
             "Lot number",
@@ -1857,13 +1814,12 @@ def auctionLotList(request, slug):
             "Club Cut",
             "Seller cut",
         ]
-        if auction.use_custom_checkbox_field and auction.custom_checkbox_name:
-            first_row_fields.append(auction.custom_checkbox_name)
-        if auction.custom_field_1 != "disable" and auction.custom_field_1_name:
-            first_row_fields.append(auction.custom_field_1_name)
+        if self.auction.use_custom_checkbox_field and self.auction.custom_checkbox_name:
+            first_row_fields.append(self.auction.custom_checkbox_name)
+        if self.auction.custom_field_1 != "disable" and self.auction.custom_field_1_name:
+            first_row_fields.append(self.auction.custom_field_1_name)
         writer.writerow(first_row_fields)
-        # lots = Lot.objects.exclude(is_deleted=True).filter(auction__slug=slug, auctiontos_winner__isnull=False).select_related('user', 'winner')
-        lots = auction.lots_qs
+        lots = self.auction.lots_qs
         lots = add_price_info(lots)
         if query:
             lots = LotAdminFilter.generic(None, lots, query)
@@ -1884,19 +1840,17 @@ def auctionLotList(request, slug):
                 f"{lot.club_cut:.2f}" if lot.winning_price else "",
                 f"{lot.your_cut:.2f}" if lot.winning_price else "",
             ]
-            if auction.use_custom_checkbox_field and auction.custom_checkbox_name:
+            if self.auction.use_custom_checkbox_field and self.auction.custom_checkbox_name:
                 row.append(lot.custom_checkbox_label)
-            if auction.custom_field_1 != "disable" and auction.custom_field_1_name:
+            if self.auction.custom_field_1 != "disable" and self.auction.custom_field_1_name:
                 row.append(lot.custom_field_1)
             writer.writerow(row)
-        auction.create_history(
+        self.auction.create_history(
             applies_to="LOTS",
             action=f"Exported lot list CSV for {query if query else 'all lots'}",
             user=request.user,
         )
         return response
-    messages.error(request, "Your account doesn't have permission to view this page")
-    return redirect("/")
 
 
 class LeaveFeedbackView(LoginRequiredMixin, ListView):
@@ -1976,7 +1930,7 @@ class AuctionChats(AuctionViewMixin, LoginRequiredMixin, ListView):
         return context
 
 
-class AuctionChatDeleteUndelete(View, AuctionPermissionsMixin):
+class AuctionChatDeleteUndelete(AuctionViewMixin, View):
     """HTMX for auction admins only"""
 
     def dispatch(self, request, *args, **kwargs):
@@ -2004,7 +1958,7 @@ class AuctionChatDeleteUndelete(View, AuctionPermissionsMixin):
         return HttpResponse(result)
 
 
-class AuctionShowHighBidder(View, AuctionPermissionsMixin):
+class AuctionShowHighBidder(AuctionViewMixin, View):
     """HTMX for auction admins only"""
 
     def dispatch(self, request, *args, **kwargs):
@@ -2054,7 +2008,7 @@ class PickupLocations(AuctionViewMixin, ListView):
         return context
 
 
-class PickupLocationsDelete(DeleteView, AuctionPermissionsMixin):
+class PickupLocationsDelete(AuctionViewMixin, DeleteView):
     model = PickupLocation
 
     def dispatch(self, request, *args, **kwargs):
@@ -2130,7 +2084,7 @@ class PickupLocationForm:
         return super().form_valid(form)
 
 
-class PickupLocationsUpdate(PickupLocationForm, UpdateView, AuctionPermissionsMixin):
+class PickupLocationsUpdate(AuctionViewMixin, PickupLocationForm, UpdateView):
     """Edit pickup locations"""
 
     def get_form_kwargs(self):
@@ -2165,7 +2119,7 @@ class PickupLocationsUpdate(PickupLocationForm, UpdateView, AuctionPermissionsMi
         return form
 
 
-class PickupLocationsCreate(PickupLocationForm, CreateView, AuctionPermissionsMixin):
+class PickupLocationsCreate(AuctionViewMixin, PickupLocationForm, CreateView):
     """Create a new pickup location"""
 
     def dispatch(self, request, *args, **kwargs):
@@ -2378,7 +2332,7 @@ class AuctionUsers(SingleTableMixin, AuctionViewMixin, FilterView):
         return super().get(*args, **kwargs)
 
 
-class AuctionStats(AuctionViewMixin, DetailView):
+class AuctionStats(LoginRequiredMixin, AuctionViewMixin, DetailView):
     """Fun facts about an auction"""
 
     model = Auction
@@ -2394,179 +2348,6 @@ class AuctionStats(AuctionViewMixin, DetailView):
         if self.get_object().date_posted < datetime(year=2024, month=1, day=1, tzinfo=date_tz.utc):
             messages.info(self.request, "Not all stats are available for old auctions.")
         return context
-
-
-# The following lines of code can most likely be removed unless some club complains about the current system to set winners
-# class QuickSetLotWinner(FormView, AuctionPermissionsMixin):
-#     """A form to let people record the winners of lots (really just for in-person auctions). Just 3 fields:
-#     lot number
-#     winner
-#     winning price
-#     """
-
-#     template_name = "auctions/quick_set_winner.html"
-#     form_class = WinnerLot
-#     model = Lot
-
-#     def get_success_url(self):
-#         return reverse("auction_lot_winners_autocomplete", kwargs={"slug": self.auction.slug})
-
-#     def get_queryset(self):
-#         return self.auction.lots_qs
-
-#     def dispatch(self, request, *args, **kwargs):
-#         self.auction = Auction.objects.get(slug=kwargs.pop("slug"), is_deleted=False)
-#         self.is_auction_admin
-#         undo = self.request.GET.get("undo")
-#         if undo and request.method == "GET":
-#             undo_lot = Lot.objects.filter(custom_lot_number=undo, auction=self.auction).first()
-#             if undo_lot:
-#                 undo_lot.winner = None
-#                 undo_lot.auctiontos_winner = None
-#                 undo_lot.winning_price = None
-#                 if not self.auction.is_online:
-#                     undo_lot.date_end = None
-#                 undo_lot.active = False
-#                 undo_lot.save()
-#                 undo_lot.create_update_invoices
-#                 messages.info(
-#                     request,
-#                     f"{undo_lot.custom_lot_number} {undo_lot.lot_name} now has no winner and can be sold",
-#                 )
-#         return super().dispatch(request, *args, **kwargs)
-
-#     def get_form_kwargs(self):
-#         form_kwargs = super().get_form_kwargs()
-#         form_kwargs["auction"] = self.auction
-#         return form_kwargs
-
-#     def get_context_data(self, **kwargs):
-#         context = super().get_context_data(**kwargs)
-#         context["auction"] = self.auction
-#         return context
-
-#     def form_valid(self, form, **kwargs):
-#         """A bit of cleanup"""
-#         lot = form.cleaned_data.get("lot")
-#         winner = form.cleaned_data.get("winner")
-#         winning_price = form.cleaned_data.get("winning_price")
-#         lot = Lot.objects.get(pk=lot, is_deleted=False)
-#         tos = AuctionTOS.objects.get(pk=winner)
-#         # check auction, find a lot that matches this one, confirm it belongs to this auction
-#         if lot.auction and lot.auction == self.auction:
-#             if (not tos and not winning_price) or (tos.auction and tos.auction == self.auction):
-#                 return self.set_winner(lot, tos, winning_price)
-#         return self.form_invalid(form)
-
-#     def set_winner(self, lot, winning_tos, winning_price):
-#         """Set the winner (or mark lot unsold),
-#         add a success message
-#         This does not do permissions or validation checks, do those first
-#         Call this once the form is valid"""
-#         if not winning_price:
-#             lot.date_end = timezone.now()
-#             lot.save()
-#             messages.success(
-#                 self.request,
-#                 f"Lot {lot.custom_lot_number} has been ended with no winner",
-#             )
-#         else:
-#             lot.auctiontos_winner = winning_tos
-#             lot.winning_price = winning_price
-#             lot.date_end = timezone.now()
-#             lot.save()
-#             lot.create_update_invoices
-#             lot.add_winner_message(self.request.user, winning_tos, winning_price)
-#             undo_url = self.get_success_url() + f"?undo={lot.custom_lot_number}"
-#             messages.success(
-#                 self.request,
-#                 f"Bidder {winning_tos.bidder_number} is now the winner of lot {lot.custom_lot_number}.  <a href='{undo_url}'>Undo</a>",
-#             )
-#         return HttpResponseRedirect(self.get_success_url())
-
-
-# class SetLotWinner(QuickSetLotWinner):
-#     """Same as QuickSetLotWinner but without the autocomplete, per user requests"""
-
-#     form_class = WinnerLotSimple
-
-#     def get_success_url(self):
-#         return reverse("auction_lot_winners", kwargs={"slug": self.auction.slug})
-
-#     def form_valid(self, form, **kwargs):
-#         """A bit of cleanup"""
-#         lot = form.cleaned_data.get("lot")
-#         winner = form.cleaned_data.get("winner")
-#         winning_price = form.cleaned_data.get("winning_price")
-#         if winning_price is None or winning_price < 0:
-#             form.add_error("winning_price", "How much did the lot sell for?")
-#         qs = self.auction.lots_qs
-#         lot = qs.filter(custom_lot_number=lot).first()
-#         tos = None
-#         if not lot:
-#             form.add_error("lot", "No lot found")
-#         if winning_price is not None and winning_price > 0:
-#             tos = AuctionTOS.objects.filter(auction=self.auction, bidder_number=winner)
-#             if len(tos) > 1:
-#                 form.add_error("winner", f"{len(tos)} bidders found with this number!")
-#             else:
-#                 tos = tos.first()
-#             if not tos:
-#                 form.add_error("winner", "No bidder found")
-#             else:
-#                 if tos.invoice and tos.invoice.status != "DRAFT":
-#                     form.add_error("winner", "This user's invoice is not open")
-#         if lot:
-#             if (
-#                 lot.auctiontos_seller
-#                 and lot.auctiontos_seller.invoice
-#                 and lot.auctiontos_seller.invoice.status != "DRAFT"
-#             ):
-#                 form.add_error("lot", "The seller's invoice is not open")
-#             else:
-#                 # right now we allow you to mark unsold lots that have already been sold, bad idea but it's what people want
-#                 if lot.auctiontos_winner and lot.winning_price and winning_price != 0:
-#                     # if lot.auctiontos_winner and lot.winning_price: # this would be better, but would confuse
-#                     error = f"Lot {lot.lot_number_display} has already been sold"
-#                     try:
-#                         if (
-#                             tos.invoice.status == "DRAFT"
-#                             and lot.auctiontos_seller
-#                             and lot.auctiontos_seller.invoice.status == "DRAFT"
-#                         ):
-#                             undo_url = self.get_success_url() + f"?undo={lot.custom_lot_number}"
-#                             form.add_error(
-#                                 "lot",
-#                                 mark_safe(f"{error}.  <a href='{undo_url}'>Click here to mark unsold</a>."),
-#                             )
-#                     except:
-#                         # one invoice or the other doesn't exist, this only happens when the selling the first lot to a given tos
-#                         form.add_error("lot", mark_safe(f"{error}"))
-#                 if lot.high_bidder and lot.auction.allow_bidding_on_lots:
-#                     if winning_price <= lot.max_bid and winner != lot.high_bidder_for_admins:
-#                         form.add_error("winning_price", "Lower than an online bid")
-#                         form.add_error("winner", f"Bidder {lot.high_bidder_for_admins} has bid more than this")
-#         if form.is_valid():
-#             return self.set_winner(lot, tos, winning_price)
-#         return self.form_invalid(form)
-
-
-# class SetLotWinnerImage(SetLotWinner):
-#     """Same as QuickSetLotWinner but without the autocomplete, and with images, per user requests"""
-
-#     template_name = "auctions/quick_set_winner_images.html"
-#     form_class = WinnerLotSimpleImages
-
-#     def get_success_url(self):
-#         return reverse("auction_lot_winners_images", kwargs={"slug": self.auction.slug})
-
-#     def get_context_data(self, **kwargs):
-#         context = super().get_context_data(**kwargs)
-#         context["hide_navbar"] = True
-#         context["menu_tip"] = mark_safe(
-#             f"Press Tab to move the to next field, F11 for full screen, control + or control - to zoom.  <a href='{reverse('auction_main', kwargs={'slug': self.auction.slug})}'>{self.auction} home</a>."
-#         )
-#         return context
 
 
 class DynamicSetLotWinner(AuctionViewMixin, TemplateView):
@@ -3293,7 +3074,7 @@ class ImportFromGoogleDrive(AuctionViewMixin, TemplateView, ContextMixin):
         return redirect(url)
 
 
-class BulkAddLots(TemplateView, AuctionPermissionsMixin):
+class BulkAddLots(AuctionViewMixin, TemplateView):
     """Add/edit lots of lots for a given auctiontos pk"""
 
     template_name = "auctions/bulk_add_lots.html"
@@ -3669,7 +3450,7 @@ class ViewLot(DetailView):
         return context
 
 
-class ViewLotSimple(ViewLot, AuctionPermissionsMixin):
+class ViewLotSimple(ViewLot, AuctionViewMixin):
     """Minimalist view of a lot, just image and description.  For htmx calls"""
 
     template_name = "view_lot_simple.html"
@@ -4225,7 +4006,7 @@ class BidDelete(LoginRequiredMixin, DeleteView):
         return f"/lots/{self.get_object().lot_number.pk}/{self.get_object().lot_number.slug}/"
 
 
-class LotAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
+class LotAdmin(TemplateView, FormMixin, AuctionViewMixin):
     """Creation and management for Lots that are part of an auction"""
 
     template_name = "auctions/generic_admin_form.html"
@@ -4326,7 +4107,7 @@ class LotAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
             return self.form_invalid(form)
 
 
-class AuctionTOSDelete(TemplateView, FormMixin, AuctionPermissionsMixin):
+class AuctionTOSDelete(TemplateView, FormMixin, AuctionViewMixin):
     """Delete AuctionTOSs"""
 
     template_name = "auctions/auctiontos_confirm_delete.html"
@@ -4406,7 +4187,7 @@ class AuctionTOSDelete(TemplateView, FormMixin, AuctionPermissionsMixin):
             return self.form_invalid(form)
 
 
-class AuctionTOSAdmin(TemplateView, FormMixin, AuctionPermissionsMixin):
+class AuctionTOSAdmin(TemplateView, FormMixin, AuctionViewMixin):
     """Creation and management for AuctionTOSs"""
 
     template_name = "auctions/generic_admin_form.html"
@@ -4913,7 +4694,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
         return super().form_valid(form)
 
 
-class AuctionInfo(FormMixin, DetailView, AuctionPermissionsMixin):
+class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
     """Main view of a single auction"""
 
     template_name = "auction.html"
@@ -5155,12 +4936,12 @@ class PromoSite(TemplateView):
         return context
 
 
-def toDefaultLandingPage(request):
+class ToDefaultLandingPage(View):
     """
     Allow the user to pick up where they left off
     """
 
-    def tos_check(request, auction, routeByLastAuction):
+    def tos_check(self, request, auction, routeByLastAuction):
         if not auction:
             if request.user.is_authenticated:
                 return AllLots.as_view()(request)
@@ -5183,56 +4964,56 @@ def toDefaultLandingPage(request):
             # No tos?  Take them there so they can sign
             return AuctionInfo.as_view(rewrite_url=f"/?{auction.slug}", auction=auction)(request)
 
-    data = request.GET.copy()
-    routeByLastAuction = False
-    try:
-        userData, created = UserData.objects.get_or_create(
-            user=request.user,
-            defaults={},
-        )
-        userData.last_activity = timezone.now()
-        userData.save()
-    except:
-        # probably not signed in
-        pass
-    try:
-        # if the slug was set in the URL
-        auction = Auction.objects.exclude(is_deleted=True).filter(slug=list(data.keys())[0])[0]
-        # return tos_check(request, auction, routeByLastAuction)
-    except Exception:
-        # if not, check and see if the user has been participating in an auction
+    def get(self, request, *args, **kwargs):
+        data = request.GET.copy()
+        routeByLastAuction = False
         try:
-            auction = UserData.objects.get(user=request.user).last_auction_used
-            invoice = (
-                Invoice.objects.filter(auctiontos_user__user=request.user, auctiontos_user__auction=auction)
-                .exclude(status="DRAFT")
-                .first()
+            userData, created = UserData.objects.get_or_create(
+                user=request.user,
+                defaults={},
             )
-            if invoice:
-                messages.info(
-                    request,
-                    f'{auction} has ended.  <a href="/invoices/{invoice.pk}">View your invoice</a> or <a href="/feedback/">leave feedback</a> on lots you bought or sold',
-                )
-                return redirect("/lots/")
-            else:
-                try:
-                    # in progress online auctions get routed
-                    AuctionTOS.objects.get(user=request.user, auction=auction, auction__is_online=True)
-                    # only show the banner if the TOS is signed
-                    # messages.add_message(request, messages.INFO, f'{auction} is the last auction you joined.  <a href="/lots/">View all lots instead</a>')
-                    routeByLastAuction = True
-                except:
-                    pass
+            userData.last_activity = timezone.now()
+            userData.save()
         except:
-            # probably no userdata or userdata.auction is None
-            auction = None
-    return tos_check(request, auction, routeByLastAuction)
+            # probably not signed in
+            pass
+        try:
+            # if the slug was set in the URL
+            auction = Auction.objects.exclude(is_deleted=True).filter(slug=list(data.keys())[0])[0]
+            # return tos_check(request, auction, routeByLastAuction)
+        except Exception:
+            # if not, check and see if the user has been participating in an auction
+            try:
+                auction = UserData.objects.get(user=request.user).last_auction_used
+                invoice = (
+                    Invoice.objects.filter(auctiontos_user__user=request.user, auctiontos_user__auction=auction)
+                    .exclude(status="DRAFT")
+                    .first()
+                )
+                if invoice:
+                    messages.info(
+                        request,
+                        f'{auction} has ended.  <a href="/invoices/{invoice.pk}">View your invoice</a> or <a href="/feedback/">leave feedback</a> on lots you bought or sold',
+                    )
+                    return redirect("/lots/")
+                else:
+                    try:
+                        # in progress online auctions get routed
+                        AuctionTOS.objects.get(user=request.user, auction=auction, auction__is_online=True)
+                        # only show the banner if the TOS is signed
+                        # messages.add_message(request, messages.INFO, f'{auction} is the last auction you joined.  <a href="/lots/">View all lots instead</a>')
+                        routeByLastAuction = True
+                    except:
+                        pass
+            except:
+                # probably no userdata or userdata.auction is None
+                auction = None
+        return self.tos_check(request, auction, routeByLastAuction)
 
 
-@login_required
-def toAccount(request):
-    # response = redirect(f'/users/{request.user.username}/')
-    return redirect(reverse("userpage", kwargs={"slug": request.user.username}))
+class MyAccount(LoginRequiredMixin, RedirectView):
+    def get_redirect_url(self, *args, **kwargs):
+        return reverse("userpage", kwargs={"slug": self.request.user.username})
 
 
 class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
@@ -5343,7 +5124,7 @@ class Leaderboard(ListView):
         return context
 
 
-class AllLots(LotListView, AuctionPermissionsMixin):
+class AllLots(LotListView, AuctionViewMixin):
     """Show all lots"""
 
     rewrite_url = (
@@ -5428,7 +5209,7 @@ class Invoices(ListView, LoginRequiredMixin):
     #     return context
 
 
-class InvoiceCreateView(View, AuctionPermissionsMixin):
+class InvoiceCreateView(View, AuctionViewMixin):
     """Create a new invoice for a user in an auction"""
 
     def get(self, request, *args, **kwargs):
@@ -5478,7 +5259,7 @@ class InvoiceCreateView(View, AuctionPermissionsMixin):
 
 
 # password protected in views.py
-class InvoiceView(DetailView, FormMixin, AuctionPermissionsMixin):
+class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
     """Show a single invoice"""
 
     template_name = "invoice.html"
@@ -5650,7 +5431,7 @@ class InvoiceNoLoginView(InvoiceView):
         return super().dispatch(request, *args, **kwargs)
 
 
-class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionPermissionsMixin):
+class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
     """View and print labels for an auction"""
 
     # these are defined in urls.py and used in get_object(), below
@@ -5961,17 +5742,18 @@ class SingleLotLabelView(LotLabelView):
         return View.dispatch(self, request, *args, **kwargs)
 
 
-@login_required
-def getClubs(request):
-    if request.method == "POST":
-        species = request.POST["search"]
-        result = Club.objects.filter(Q(name__icontains=species) | Q(abbreviation__icontains=species)).values(
+class GetClubs(LoginRequiredMixin, View):
+    """Used for autocomplete on the contact info page"""
+
+    def post(self, request):
+        search = request.POST["search"]
+        result = Club.objects.filter(Q(name__icontains=search) | Q(abbreviation__icontains=search)).values(
             "id", "name", "abbreviation"
         )
         return JsonResponse(list(result), safe=False)
 
 
-class BulkSetLotsWon(TemplateView, FormMixin, AuctionPermissionsMixin):
+class BulkSetLotsWon(TemplateView, FormMixin, AuctionViewMixin):
     """Sell all lots based on the current filter to online high bidder"""
 
     template_name = "auctions/generic_admin_form.html"
@@ -6021,7 +5803,7 @@ class BulkSetLotsWon(TemplateView, FormMixin, AuctionPermissionsMixin):
         return form_kwargs
 
 
-class InvoiceBulkUpdateStatus(TemplateView, FormMixin, AuctionPermissionsMixin):
+class InvoiceBulkUpdateStatus(TemplateView, FormMixin, AuctionViewMixin):
     """Change invoice statuses in bulk"""
 
     template_name = "auctions/generic_admin_form.html"
@@ -6139,7 +5921,7 @@ class MarkInvoicesPaid(InvoiceBulkUpdateStatus):
         return context
 
 
-class LotRefundDialog(DetailView, FormMixin, AuctionPermissionsMixin):
+class LotRefundDialog(DetailView, FormMixin, AuctionViewMixin):
     model = Lot
     template_name = "auctions/generic_admin_form.html"
     form_class = LotRefundForm
@@ -8321,7 +8103,7 @@ class AuctionBulkPrintingPDF(LotLabelView):
         return handler(request, *args, **kwargs)
 
 
-class PickupLocationsIncoming(View, AuctionPermissionsMixin):
+class PickupLocationsIncoming(View, AuctionViewMixin):
     """All lots destined for this location"""
 
     def dispatch(self, request, *args, **kwargs):
@@ -8360,7 +8142,7 @@ class PickupLocationsIncoming(View, AuctionPermissionsMixin):
         return response
 
 
-class PickupLocationsOutgoing(View, AuctionPermissionsMixin):
+class PickupLocationsOutgoing(View, AuctionViewMixin):
     """CSV of all lots coming from this location"""
 
     def dispatch(self, request, *args, **kwargs):
@@ -8614,7 +8396,7 @@ class ChatSubscriptions(LoginRequiredMixin, TemplateView):
         return context
 
 
-class AddTosMemo(View, LoginRequiredMixin, AuctionPermissionsMixin):
+class AddTosMemo(View, LoginRequiredMixin, AuctionViewMixin):
     """API view to update the memo field of an auctiontos"""
 
     def dispatch(self, request, *args, **kwargs):
@@ -8638,7 +8420,7 @@ class AddTosMemo(View, LoginRequiredMixin, AuctionPermissionsMixin):
         raise Http404
 
 
-class AuctionNoShow(TemplateView, LoginRequiredMixin, AuctionPermissionsMixin):
+class AuctionNoShow(TemplateView, LoginRequiredMixin, AuctionViewMixin):
     """When someone doesn't show up for an auction, offer some tools to clean up the situation"""
 
     template_name = "auctions/noshow.html"
