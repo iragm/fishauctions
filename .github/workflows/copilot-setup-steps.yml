@@ -1,0 +1,43 @@
+name: "Copilot Setup Steps"
+
+on:
+  workflow_dispatch: {}
+  push:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+  pull_request:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+
+jobs:
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Copy example env
+        run: |
+          if [ -f .env.example ]; then
+            cp .env.example .env
+          else
+            echo ".env.example not found; continuing."
+          fi
+
+      - name: Install Docker & docker compose plugin
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y docker.io docker-compose-plugin
+          docker --version
+          docker compose version
+
+      - name: Build Docker Compose images
+        run: |
+          docker compose --profile "*" build --parallel
+
+      - name: Run CI tests
+        run: |
+          docker compose exec web python3 manage.py test
