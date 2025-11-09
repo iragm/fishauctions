@@ -4,13 +4,14 @@ Penetration tests to verify no data leaks from public endpoints.
 These tests attempt to access sensitive data as unauthenticated users
 and non-admin authenticated users to ensure proper security controls.
 """
+import re
+
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
-import re
 
-from .models import Auction, AuctionTOS, PickupLocation, Lot
+from .models import Auction, AuctionTOS, Invoice, Lot, PickupLocation
 
 User = get_user_model()
 
@@ -118,6 +119,16 @@ class DataLeakPenetrationTests(TestCase):
             winning_price=50,
             auctiontos_winner=self.buyer_tos,
             active=False,
+        )
+
+        # Create invoices for testing
+        self.seller_invoice = Invoice.objects.create(
+            auctiontos_user=self.seller_tos,
+            auction=self.auction,
+        )
+        self.buyer_invoice = Invoice.objects.create(
+            auctiontos_user=self.buyer_tos,
+            auction=self.auction,
         )
 
     def test_lot_page_no_email_leak_unauthenticated(self):
@@ -251,7 +262,7 @@ class DataLeakPenetrationTests(TestCase):
         """Users should only access their own invoices"""
         # Try to access seller's invoice as buyer
         self.client.login(username="buyer", password="testpassword")
-        url = reverse("invoice_by_pk", kwargs={"pk": self.seller_tos.invoice.pk})
+        url = reverse("invoice_by_pk", kwargs={"pk": self.seller_invoice.pk})
         response = self.client.get(url)
         # Should be blocked or redirected
         self.assertIn(response.status_code, [302, 403, 404])
