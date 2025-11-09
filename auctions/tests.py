@@ -3144,6 +3144,8 @@ class UserTrustSystemTests(StandardTestCase):
         invoice.refresh_from_db()
         # Email should be marked sent but not actually sent
         self.assertTrue(invoice.email_sent)
+
+
 class WatchOrUnwatchViewTests(StandardTestCase):
     """Test watchOrUnwatch function-based view"""
 
