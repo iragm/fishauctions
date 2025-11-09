@@ -21,7 +21,3 @@ jobs:
       - run: ./.github/scripts/prepare-ci.sh
       - run: docker compose build
       - run: docker compose up --detach --wait --wait-timeout 60
-
-      - name: Run CI tests
-        run: |
-          docker compose exec web python3 manage.py test
