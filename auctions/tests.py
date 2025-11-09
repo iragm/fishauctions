@@ -3233,7 +3233,7 @@ class LotEndauctionsMethodsTests(StandardTestCase):
         # Create a lot with a high bidder (without an auction to avoid complications)
         lot_end_time = timezone.now() - datetime.timedelta(hours=1)
         bid_time = timezone.now() - datetime.timedelta(hours=2)
-        
+
         lot = Lot.objects.create(
             lot_name="Lot with winner",
             user=self.user,
