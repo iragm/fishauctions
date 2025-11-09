@@ -3177,26 +3177,24 @@ class WatchOrUnwatchViewTests(StandardTestCase):
         self.assertEqual(response.status_code, 405)
 
 
-
-
 class WebSocketConsumerTests(StandardTestCase):
     """Tests for websocket consumers (LotConsumer, UserConsumer, AuctionConsumer)
-    
+
     Best practices for websocket tests in CI:
     - All operations have timeouts
     - Proper cleanup with try-finally blocks
     - Simplified message handling to avoid hanging
     """
-    
+
     # Timeout constants for CI reliability
     CONNECT_TIMEOUT = 5
     DISCONNECT_TIMEOUT = 5
     RECEIVE_TIMEOUT = 3
-    
+
     async def _create_active_lot_with_auction(self, seller_user, bidder_user=None):
         """Helper method to create an active lot with a future-dated auction"""
         from channels.db import database_sync_to_async
-        
+
         theFuture = timezone.now() + datetime.timedelta(days=3)
         auction = await database_sync_to_async(Auction.objects.create)(
             created_by=seller_user,
@@ -3211,12 +3209,12 @@ class WebSocketConsumerTests(StandardTestCase):
         seller_tos = await database_sync_to_async(AuctionTOS.objects.create)(
             user=seller_user, auction=auction, pickup_location=location
         )
-        
+
         if bidder_user:
             await database_sync_to_async(AuctionTOS.objects.create)(
                 user=bidder_user, auction=auction, pickup_location=location
             )
-        
+
         lot = await database_sync_to_async(Lot.objects.create)(
             lot_name="Test websocket lot",
             auction=auction,
@@ -3230,6 +3228,7 @@ class WebSocketConsumerTests(StandardTestCase):
     async def test_lot_consumer_connect_authenticated_user(self):
         """Test LotConsumer connection with authenticated user who has joined auction"""
         from channels.testing import WebsocketCommunicator
+
         from auctions.consumers import LotConsumer
 
         lot = await self._create_active_lot_with_auction(self.user, self.user)
@@ -3250,8 +3249,9 @@ class WebSocketConsumerTests(StandardTestCase):
     async def test_lot_consumer_connect_anonymous_user(self):
         """Test LotConsumer connection with anonymous user"""
         from channels.testing import WebsocketCommunicator
-        from auctions.consumers import LotConsumer
         from django.contrib.auth.models import AnonymousUser
+
+        from auctions.consumers import LotConsumer
 
         lot = await self._create_active_lot_with_auction(self.user)
 
@@ -3272,6 +3272,7 @@ class WebSocketConsumerTests(StandardTestCase):
     async def test_lot_consumer_chat_message_authenticated(self):
         """Test sending chat message as authenticated user who has joined auction"""
         from channels.testing import WebsocketCommunicator
+
         from auctions.consumers import LotConsumer
 
         lot = await self._create_active_lot_with_auction(self.user, self.user_with_no_lots)
@@ -3300,7 +3301,7 @@ class WebSocketConsumerTests(StandardTestCase):
                         break
                 except:
                     break
-            
+
             self.assertTrue(found_message, "Did not receive the expected chat message")
         finally:
             await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
@@ -3308,8 +3309,9 @@ class WebSocketConsumerTests(StandardTestCase):
     async def test_lot_consumer_chat_message_anonymous(self):
         """Test that anonymous users cannot send chat messages"""
         from channels.testing import WebsocketCommunicator
-        from auctions.consumers import LotConsumer
         from django.contrib.auth.models import AnonymousUser
+
+        from auctions.consumers import LotConsumer
 
         lot = await self._create_active_lot_with_auction(self.user)
 
@@ -3334,6 +3336,7 @@ class WebSocketConsumerTests(StandardTestCase):
     async def test_lot_consumer_bid_authenticated_with_tos(self):
         """Test placing a bid as authenticated user who has joined auction"""
         from channels.testing import WebsocketCommunicator
+
         from auctions.consumers import LotConsumer
 
         lot = await self._create_active_lot_with_auction(self.user, self.user_with_no_lots)
@@ -3370,6 +3373,7 @@ class WebSocketConsumerTests(StandardTestCase):
     async def test_lot_consumer_bid_user_not_joined_auction(self):
         """Test that users who haven't joined auction cannot bid"""
         from channels.testing import WebsocketCommunicator
+
         from auctions.consumers import LotConsumer
 
         lot = await self._create_active_lot_with_auction(self.user)
@@ -3406,8 +3410,9 @@ class WebSocketConsumerTests(StandardTestCase):
     async def test_lot_consumer_bid_anonymous_user(self):
         """Test that anonymous users cannot bid"""
         from channels.testing import WebsocketCommunicator
-        from auctions.consumers import LotConsumer
         from django.contrib.auth.models import AnonymousUser
+
+        from auctions.consumers import LotConsumer
 
         lot = await self._create_active_lot_with_auction(self.user)
 
@@ -3431,12 +3436,13 @@ class WebSocketConsumerTests(StandardTestCase):
 
     async def test_lot_consumer_auction_admin_can_view(self):
         """Test that auction admins can connect to lot consumer"""
-        from channels.testing import WebsocketCommunicator
-        from auctions.consumers import LotConsumer
         from channels.db import database_sync_to_async
+        from channels.testing import WebsocketCommunicator
+
+        from auctions.consumers import LotConsumer
 
         lot = await self._create_active_lot_with_auction(self.user)
-        
+
         # Make admin_user an admin of the auction
         auction = await database_sync_to_async(lambda: lot.auction)()
         location = await database_sync_to_async(lambda: auction.pickuplocation_set.first())()
@@ -3460,6 +3466,7 @@ class WebSocketConsumerTests(StandardTestCase):
     async def test_user_consumer_connect_valid_user(self):
         """Test UserConsumer connection with valid user"""
         from channels.testing import WebsocketCommunicator
+
         from auctions.consumers import UserConsumer
 
         communicator = WebsocketCommunicator(
@@ -3478,6 +3485,7 @@ class WebSocketConsumerTests(StandardTestCase):
     async def test_user_consumer_connect_wrong_user(self):
         """Test UserConsumer connection with wrong user ID"""
         from channels.testing import WebsocketCommunicator
+
         from auctions.consumers import UserConsumer
 
         communicator = WebsocketCommunicator(
@@ -3501,8 +3509,9 @@ class WebSocketConsumerTests(StandardTestCase):
     async def test_user_consumer_connect_anonymous(self):
         """Test UserConsumer connection with anonymous user"""
         from channels.testing import WebsocketCommunicator
-        from auctions.consumers import UserConsumer
         from django.contrib.auth.models import AnonymousUser
+
+        from auctions.consumers import UserConsumer
 
         communicator = WebsocketCommunicator(
             UserConsumer.as_asgi(),
@@ -3525,6 +3534,7 @@ class WebSocketConsumerTests(StandardTestCase):
     async def test_auction_consumer_connect_admin(self):
         """Test AuctionConsumer connection with auction admin"""
         from channels.testing import WebsocketCommunicator
+
         from auctions.consumers import AuctionConsumer
 
         communicator = WebsocketCommunicator(
@@ -3543,6 +3553,7 @@ class WebSocketConsumerTests(StandardTestCase):
     async def test_auction_consumer_connect_non_admin(self):
         """Test AuctionConsumer connection with non-admin user"""
         from channels.testing import WebsocketCommunicator
+
         from auctions.consumers import AuctionConsumer
 
         communicator = WebsocketCommunicator(
@@ -3566,8 +3577,9 @@ class WebSocketConsumerTests(StandardTestCase):
     async def test_auction_consumer_connect_anonymous(self):
         """Test AuctionConsumer connection with anonymous user"""
         from channels.testing import WebsocketCommunicator
-        from auctions.consumers import AuctionConsumer
         from django.contrib.auth.models import AnonymousUser
+
+        from auctions.consumers import AuctionConsumer
 
         communicator = WebsocketCommunicator(
             AuctionConsumer.as_asgi(),
@@ -3590,6 +3602,7 @@ class WebSocketConsumerTests(StandardTestCase):
     async def test_auction_consumer_invalid_auction(self):
         """Test AuctionConsumer connection with invalid auction ID"""
         from channels.testing import WebsocketCommunicator
+
         from auctions.consumers import AuctionConsumer
 
         communicator = WebsocketCommunicator(
