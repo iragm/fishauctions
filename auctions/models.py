@@ -5180,17 +5180,16 @@ def update_user_location(sender, instance, **kwargs):
     It is bad practice to use a signal in models.py,
     however with just a couple signals it makes more sense to have them here than to add a whole separate file for it
     """
+    # if not instance.latitude and not instance.longitude:
+    # some things to change here:
+    # if sender has coords and they do not equal the instance coords, update instance lat/lng from sender
+    # if sender has lat/lng and they do not equal the instance lat/lng, update instance coords
     try:
-        # if not instance.latitude and not instance.longitude:
-        # some things to change here:
-        # if sender has coords and they do not equal the instance coords, update instance lat/lng from sender
-        # if sender has lat/lng and they do not equal the instance lat/lng, update instance coords
-        try:
-            cutLocation = instance.location_coordinates.split(",")
-            instance.latitude = float(cutLocation[0])
-            instance.longitude = float(cutLocation[1])
-        except (ValueError, IndexError, AttributeError):
-            pass
+        cutLocation = instance.location_coordinates.split(",")
+        instance.latitude = float(cutLocation[0])
+        instance.longitude = float(cutLocation[1])
+    except (ValueError, IndexError, AttributeError):
+        pass
 
 
 @receiver(pre_save, sender=Lot)
