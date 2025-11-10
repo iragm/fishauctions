@@ -2757,6 +2757,7 @@ class Lot(models.Model):
                 changed_price=True,
                 current_price=self.high_bid,
             )
+        self.save()
 
     def send_non_auction_lot_emails(self):
         """Send winner and seller emails for lots not in an auction"""
@@ -2801,7 +2802,7 @@ class Lot(models.Model):
                 self.active = True
                 self.seller_invoice = None
                 self.buyer_invoice = None
-
+        self.save()
         return relist, sendNoRelistWarning
 
     def relist_lot(self):
