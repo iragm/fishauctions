@@ -3935,3 +3935,101 @@ class WebSocketConsumerTests(StandardTestCase):
                 await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
             except:
                 pass
+
+
+class HasEverGrantedPermissionTests(StandardTestCase):
+    """Test the has_ever_granted_permission annotation"""
+
+    def test_user_who_joined_has_permission(self):
+        """User who joined an auction (not manually_added) should have has_ever_granted_permission=True"""
+        # online_tos is created with manually_added=False by default
+        tos_qs = self.online_auction.tos_qs.filter(user=self.user)
+        tos = tos_qs.first()
+        self.assertTrue(tos.has_ever_granted_permission)
+
+    def test_manually_added_user_without_prior_join_has_no_permission(self):
+        """User who was manually added and never joined should have has_ever_granted_permission=False"""
+        # Create a new user who was manually added
+        new_user = User.objects.create_user(username="manually_added_user", password="testpassword")
+        AuctionTOS.objects.create(
+            user=new_user, auction=self.online_auction, pickup_location=self.location, manually_added=True
+        )
+
+        tos_qs = self.online_auction.tos_qs.filter(user=new_user)
+        tos = tos_qs.first()
+        self.assertFalse(tos.has_ever_granted_permission)
+
+    def test_manually_added_user_with_prior_join_has_permission(self):
+        """User who was manually added but joined another auction by same creator should have has_ever_granted_permission=True"""
+        # Create a new user
+        new_user = User.objects.create_user(username="returning_user", password="testpassword")
+
+        # User joins first auction normally
+        AuctionTOS.objects.create(
+            user=new_user, auction=self.online_auction, pickup_location=self.location, manually_added=False
+        )
+
+        # User is manually added to second auction by same creator
+        second_auction = Auction.objects.create(
+            created_by=self.user,  # Same creator as online_auction
+            title="Second auction",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=2),
+            date_start=timezone.now() - datetime.timedelta(days=1),
+        )
+        second_location = PickupLocation.objects.create(
+            name="location2", auction=second_auction, pickup_time=timezone.now() + datetime.timedelta(days=3)
+        )
+        AuctionTOS.objects.create(
+            user=new_user, auction=second_auction, pickup_location=second_location, manually_added=True
+        )
+
+        # Check the manually added TOS
+        tos_qs = second_auction.tos_qs.filter(user=new_user)
+        tos = tos_qs.first()
+        self.assertTrue(tos.has_ever_granted_permission)
+
+    def test_user_with_no_account_has_no_permission(self):
+        """AuctionTOS without a user should have has_ever_granted_permission=False"""
+        # Create an AuctionTOS without a user
+        no_user_tos = AuctionTOS.objects.create(
+            auction=self.online_auction, pickup_location=self.location, name="Guest User", email="guest@example.com"
+        )
+
+        tos_qs = self.online_auction.tos_qs.filter(pk=no_user_tos.pk)
+        tos = tos_qs.first()
+        self.assertFalse(tos.has_ever_granted_permission)
+
+    def test_different_creator_auctions_dont_grant_permission(self):
+        """User who joined an auction by a different creator should not have permission"""
+        # Create a different auction creator
+        other_creator = User.objects.create_user(username="other_creator", password="testpassword")
+
+        # Create a new user
+        new_user = User.objects.create_user(username="cross_auction_user", password="testpassword")
+
+        # User joins an auction by a different creator
+        other_auction = Auction.objects.create(
+            created_by=other_creator,  # Different creator
+            title="Other creator's auction",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=2),
+            date_start=timezone.now() - datetime.timedelta(days=1),
+        )
+        other_location = PickupLocation.objects.create(
+            name="other_location", auction=other_auction, pickup_time=timezone.now() + datetime.timedelta(days=3)
+        )
+        AuctionTOS.objects.create(
+            user=new_user, auction=other_auction, pickup_location=other_location, manually_added=False
+        )
+
+        # User is manually added to an auction by the original creator
+        AuctionTOS.objects.create(
+            user=new_user, auction=self.online_auction, pickup_location=self.location, manually_added=True
+        )
+
+        # Check the manually added TOS - should be False because user never joined
+        # an auction by self.user (the creator of online_auction)
+        tos_qs = self.online_auction.tos_qs.filter(user=new_user)
+        tos = tos_qs.first()
+        self.assertFalse(tos.has_ever_granted_permission)
