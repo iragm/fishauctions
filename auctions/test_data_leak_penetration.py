@@ -4,7 +4,6 @@ Penetration tests to verify no data leaks from public endpoints.
 These tests attempt to access sensitive data as unauthenticated users
 and non-admin authenticated users to ensure proper security controls.
 """
-import re
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -136,16 +135,16 @@ class DataLeakPenetrationTests(TestCase):
         url = reverse("lot_by_pk", kwargs={"pk": self.lot.pk})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-        
+
         # Check that emails are not in the response
         self.assertNotContains(response, "seller@example.com")
         self.assertNotContains(response, "buyer@example.com")
         self.assertNotContains(response, "admin@example.com")
-        
+
         # Check that phone numbers are not in the response
         self.assertNotContains(response, "555-5678")
         self.assertNotContains(response, "555-9012")
-        
+
         # Check that addresses are not in the response
         self.assertNotContains(response, "456 Seller Ave")
         self.assertNotContains(response, "789 Buyer Blvd")
@@ -156,7 +155,7 @@ class DataLeakPenetrationTests(TestCase):
         url = reverse("lot_by_pk", kwargs={"pk": self.lot.pk})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-        
+
         # Check that other users' emails are not in the response
         self.assertNotContains(response, "seller@example.com")
         self.assertNotContains(response, "buyer@example.com")
@@ -167,7 +166,7 @@ class DataLeakPenetrationTests(TestCase):
         url = reverse("auction_main", kwargs={"slug": self.auction.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-        
+
         # Check that user emails are not in the response (except creator if email_visible)
         self.assertNotContains(response, "seller@example.com")
         self.assertNotContains(response, "buyer@example.com")
@@ -179,7 +178,7 @@ class DataLeakPenetrationTests(TestCase):
         url = reverse("auction_main", kwargs={"slug": self.auction.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-        
+
         # Check that email list is not exposed
         self.assertNotContains(response, "mailto:?bcc=")
 
@@ -192,7 +191,7 @@ class DataLeakPenetrationTests(TestCase):
             ("api/users/lot_notifications/", {}),
             ("api/users/auction_notifications/", {}),
         ]
-        
+
         for endpoint, params in api_endpoints:
             with self.subTest(endpoint=endpoint):
                 response = self.client.get(f"/{endpoint}", params)
@@ -237,7 +236,7 @@ class DataLeakPenetrationTests(TestCase):
         self.lot.auction.is_online = True
         self.lot.auction.save()
         self.lot.save()
-        
+
         # Random user should not see exchange info
         self.client.login(username="random", password="testpassword")
         url = reverse("lot_by_pk", kwargs={"pk": self.lot.pk})
@@ -245,13 +244,13 @@ class DataLeakPenetrationTests(TestCase):
         self.assertEqual(response.status_code, 200)
         # Should not contain "Exchange info" section
         # (We can't check for exact text as it might not be shown for various reasons)
-        
+
         # Seller should see exchange info
         self.client.login(username="seller", password="testpassword")
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
         # Seller should see their own info
-        
+
         # Admin should see exchange info
         self.client.login(username="admin", password="testpassword")
         response = self.client.get(url)

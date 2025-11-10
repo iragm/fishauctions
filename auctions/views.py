@@ -3874,7 +3874,7 @@ class AuctionDelete(LoginRequiredMixin, AuctionViewMixin, DeleteView):
     def dispatch(self, request, *args, **kwargs):
         result = super().dispatch(request, *args, **kwargs)
         # self.auction may not be set if LoginRequiredMixin redirected
-        if hasattr(self, 'auction') and self.auction and not self.auction.can_be_deleted:
+        if hasattr(self, "auction") and self.auction and not self.auction.can_be_deleted:
             messages.error(request, "There are already lots in this auction, it can't be deleted")
             return redirect("/")
         return result

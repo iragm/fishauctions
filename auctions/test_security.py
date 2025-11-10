@@ -6,6 +6,7 @@ These tests verify that:
 2. Non-admin authenticated users cannot access user/AuctionTOS data
 3. Auction admins CAN access user/AuctionTOS data for their auctions only
 """
+
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
@@ -23,25 +24,15 @@ class AuctionTOSSecurityTestCase(TestCase):
         """Set up test data"""
         # Create users
         self.auction_creator = User.objects.create_user(
-            username="creator",
-            password="testpassword",
-            email="creator@example.com"
+            username="creator", password="testpassword", email="creator@example.com"
         )
         self.auction_admin = User.objects.create_user(
-            username="admin",
-            password="testpassword",
-            email="admin@example.com"
+            username="admin", password="testpassword", email="admin@example.com"
         )
         self.regular_user = User.objects.create_user(
-            username="regular",
-            password="testpassword",
-            email="regular@example.com"
+            username="regular", password="testpassword", email="regular@example.com"
         )
-        self.other_user = User.objects.create_user(
-            username="other",
-            password="testpassword",
-            email="other@example.com"
-        )
+        self.other_user = User.objects.create_user(username="other", password="testpassword", email="other@example.com")
 
         # Create auctions
         future_time = timezone.now() + timezone.timedelta(days=3)
@@ -120,10 +111,10 @@ class AuctionTOSSecurityTestCase(TestCase):
         # Should return empty results as user is not an admin
         self.assertEqual(response.status_code, 200)
         # Check that sensitive data is not exposed
-        if hasattr(response, 'json'):
+        if hasattr(response, "json"):
             data = response.json()
             # Ensure no results are returned for non-admin
-            self.assertEqual(len(data.get('results', [])), 0)
+            self.assertEqual(len(data.get("results", [])), 0)
 
     def test_auctiontos_autocomplete_admin_access(self):
         """Auction admins should access AuctionTOS autocomplete for their auction"""
@@ -250,7 +241,7 @@ class AuctionTOSSecurityTestCase(TestCase):
         # Should be allowed
         self.assertEqual(response.status_code, 200)
         # Should be CSV
-        self.assertEqual(response['Content-Type'], 'text/csv')
+        self.assertEqual(response["Content-Type"], "text/csv")
 
     def test_compose_email_users_unauthenticated(self):
         """Unauthenticated users should not access compose email page"""
