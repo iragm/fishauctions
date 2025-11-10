@@ -32,3 +32,6 @@
 0 5 * * * /home/app/web/task.sh get_ses_statistics
 
 0 10 * * * /home/app/web/task.sh webpush_notifications_deduplicate
+
+# update cached auction statistics
+0 * * * * /home/app/web/task.sh update_auction_stats
