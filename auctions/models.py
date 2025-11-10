@@ -2142,10 +2142,7 @@ class AuctionTOS(models.Model):
                     if self.address:
                         search = re.search(r"([\d]{3}$)|$", self.address).group()
                 if self.user:
-                    userData, created = UserData.objects.get_or_create(
-                        user=self.user,
-                        defaults={},
-                    )
+                    userData = self.user.userdata
                     if userData.preferred_bidder_number:
                         search = userData.preferred_bidder_number
                 # I guess it's possible that someone could make 999 accounts and have them all join a single auction, which would turn this into an infinite loop
@@ -2236,10 +2233,7 @@ class AuctionTOS(models.Model):
         # return f"{self.user} will meet at {self.pickup_location} for {self.auction}"
         if self.auction.is_online:
             if self.user and not self.manually_added:
-                userData, created = UserData.objects.get_or_create(
-                    user=self.user,
-                    defaults={},
-                )
+                userData = self.user.userdata
                 if userData.username_visible:
                     return self.user.username
                 else:
@@ -2259,10 +2253,7 @@ class AuctionTOS(models.Model):
     def closest_location_for_this_user(self):
         result = PickupLocation.objects.none()
         if self.user and self.auction.multi_location:
-            userData, created = UserData.objects.get_or_create(
-                user=self.user,
-                defaults={},
-            )
+            userData = self.user.userdata
             if userData.latitude:
                 result = (
                     PickupLocation.objects.filter(auction=self.auction)
@@ -2284,10 +2275,7 @@ class AuctionTOS(models.Model):
     @property
     def distance_traveled(self):
         if self.user and not self.manually_added:
-            userData, created = UserData.objects.get_or_create(
-                user=self.user,
-                defaults={},
-            )
+            userData = self.user.userdata
             if userData.latitude:
                 location = (
                     PickupLocation.objects.filter(pk=self.pickup_location.pk)
@@ -2367,10 +2355,7 @@ class AuctionTOS(models.Model):
     def trying_to_avoid_ban(self):
         """We track IPs in userdata, so we can do a quick check for this"""
         if self.user:
-            userData, created = UserData.objects.get_or_create(
-                user=self.user,
-                defaults={},
-            )
+            userData = self.user.userdata
             if userData.last_ip_address:
                 other_users = UserData.objects.filter(last_ip_address=userData.last_ip_address).exclude(pk=userData.pk)
                 for other_user in other_users:
@@ -2883,10 +2868,7 @@ class Lot(models.Model):
         if self.winner_as_str:
             return self.winner_as_str
         if self.high_bidder:
-            userData, userdataCreated = UserData.objects.get_or_create(
-                user=self.high_bidder,
-                defaults={},
-            )
+            userData = self.high_bidder.userdata
             if userData.username_visible:
                 return str(self.high_bidder)
             else:
@@ -2939,10 +2921,7 @@ class Lot(models.Model):
         if self.auctiontos_winner:
             return f"{self.auctiontos_winner}"
         if self.winner:
-            userData, created = UserData.objects.get_or_create(
-                user=self.winner,
-                defaults={},
-            )
+            userData = self.winner.userdata
             if userData.username_visible:
                 return str(self.winner)
             else:
@@ -5203,10 +5182,7 @@ def update_lot_info(sender, instance, **kwargs):
         if instance.auction:
             instance.date_end = instance.auction.date_end
     if instance.user:
-        userData, created = UserData.objects.get_or_create(
-            user=instance.user,
-            defaults={},
-        )
+        userData = instance.user.userdata
         instance.latitude = userData.latitude
         instance.longitude = userData.longitude
         instance.address = userData.address

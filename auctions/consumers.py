@@ -167,10 +167,7 @@ def bid_on_lot(lot, user, amount):
             user=user,
             defaults={"interest": settings.BID_WEIGHT},
         )
-        userData, userdataCreated = UserData.objects.get_or_create(
-            user=user,
-            defaults={},
-        )
+        userData = user.userdata
         userData.has_bid = True
         if userData.username_visible:
             user_string = str(user)
@@ -276,10 +273,7 @@ def bid_on_lot(lot, user, amount):
                 return result
             if bid.amount > next_allowed_amount:
                 bid.save()
-                userData, userdataCreated = UserData.objects.get_or_create(
-                    user=user,
-                    defaults={},
-                )
+                userData = user.userdata
                 userData.has_used_proxy_bidding = True
                 userData.save()
             # if we get to this point, the user has bid >= the high bid

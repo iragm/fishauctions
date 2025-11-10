@@ -15,10 +15,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         emails = EmailAddress.objects.filter(verified=False, primary=True)
         for email in emails:
-            userData, created = UserData.objects.get_or_create(
-                user=email.user,
-                defaults={},
-            )
+            # UserData is auto-created when user is saved
             time_difference = email.user.userdata.last_activity - email.user.date_joined
             if time_difference < timezone.timedelta(hours=24):
                 logger.info("Deleting %s", email.user)

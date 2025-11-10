@@ -729,10 +729,7 @@ class MyLots(SingleTableMixin, FilterView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["userdata"], created = UserData.objects.get_or_create(
-            user=self.request.user,
-            defaults={},
-        )
+        context["userdata"] = self.request.user.userdata
         context["website_focus"] = settings.WEBSITE_FOCUS
         return context
 
@@ -3368,10 +3365,7 @@ class ViewLot(DetailView):
                     f"Please <a href='/auctions/{lot.auction.slug}/?next=/lots/{lot.pk}/'>read the auction's rules and join the auction</a> to bid",
                 )
         if self.request.user.is_authenticated:
-            userData, created = UserData.objects.get_or_create(
-                user=self.request.user,
-                defaults={},
-            )
+            userData = self.request.user.userdata
             userData.last_activity = timezone.now()
             userData.save()
             if userData.last_ip_address:
@@ -3620,10 +3614,7 @@ class LotValidation(LoginRequiredMixin):
 
     def dispatch(self, request, *args, **kwargs):
         # if the user hasn't filled out their address, redirect:
-        userData, created = UserData.objects.get_or_create(
-            user=request.user.pk,
-            defaults={},
-        )
+        userData = request.user.userdata
         if not userData.address or not request.user.first_name or not request.user.last_name:
             messages.error(self.request, "Please fill out your contact info before creating a lot")
             return redirect("/contact_info?next=/lots/new/")
@@ -3656,10 +3647,7 @@ class LotValidation(LoginRequiredMixin):
                 lot.buy_now_price = lot.auction.minimum_bid
                 messages.error(self.request, "You need to set a buy now price for this lot!")
             lot.date_end = lot.auction.date_end
-            userData, created = UserData.objects.get_or_create(
-                user=self.request.user.pk,
-                defaults={},
-            )
+            userData = self.request.user.userdata
             userData.last_auction_used = lot.auction
             userData.last_activity = timezone.now()
             userData.save()
@@ -3776,10 +3764,7 @@ class LotCreateView(LotValidation, CreateView):
         return result
 
     def dispatch(self, request, *args, **kwargs):
-        userData, created = UserData.objects.get_or_create(
-            user=self.request.user,
-            defaults={},
-        )
+        userData = self.request.user.userdata
         if userData.last_auction_used:
             if (
                 userData.last_auction_used.can_submit_lots
@@ -4466,10 +4451,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
         context = super().get_context_data(**kwargs)
         context["title"] = "New auction"
         context["new"] = True
-        userData, created = UserData.objects.get_or_create(
-            user=self.request.user,
-            defaults={},
-        )
+        userData = self.request.user.userdata
         # a bit of logic used on auction_create_form.html to suggest auction names
         context["club"] = ""
         club = userData.club
@@ -4821,10 +4803,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
         auction = self.auction
         form = self.get_form()
         if form.is_valid():
-            userData, created = UserData.objects.get_or_create(
-                user=self.request.user,
-                defaults={},
-            )
+            userData = self.request.user.userdata
             if auction.require_phone_number and not userData.phone_number:
                 messages.error(
                     self.request,
@@ -4955,16 +4934,14 @@ class ToDefaultLandingPage(View):
     def get(self, request, *args, **kwargs):
         data = request.GET.copy()
         routeByLastAuction = False
-        try:
-            userData, created = UserData.objects.get_or_create(
-                user=request.user,
-                defaults={},
-            )
-            userData.last_activity = timezone.now()
-            userData.save()
-        except (UserData.DoesNotExist, AttributeError):
-            # probably not signed in
-            pass
+        if request.user.is_authenticated:
+            try:
+                userData = request.user.userdata
+                userData.last_activity = timezone.now()
+                userData.save()
+            except AttributeError:
+                # probably not signed in
+                pass
         try:
             # if the slug was set in the URL
             auction = Auction.objects.exclude(is_deleted=True).filter(slug=list(data.keys())[0])[0]
@@ -6632,10 +6609,7 @@ class UserView(DetailView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["data"], created = UserData.objects.get_or_create(
-            user=self.object,
-            defaults={},
-        )
+        context["data"] = self.object.userdata
         try:
             context["banned"] = UserBan.objects.get(user=self.request.user.pk, banned_user=self.object.pk)
         except UserBan.DoesNotExist:
@@ -6720,10 +6694,7 @@ class UserLabelPrefsView(UpdateView, SuccessMessageMixin):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["active_tab"] = "printing"
-        userData, created = UserData.objects.get_or_create(
-            user=self.request.user,
-            defaults={},
-        )
+        userData = self.request.user.userdata
         context["last_auction_used"] = userData.last_auction_used
         context["last_admin_auction"] = (
             Auction.objects.filter(
