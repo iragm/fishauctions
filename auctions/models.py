@@ -1394,6 +1394,47 @@ class Auction(models.Model):
             return 100
 
     @property
+    def lots_sold_per_minute(self):
+        """Calculate the average lots sold per minute for in-person auctions.
+        This uses the same logic as the auctioneer speed graph, ignoring the first and last 10% of lots."""
+        if self.is_online:
+            return 0  # Not applicable for online auctions
+        
+        ignore_percent = 10
+        lots = (
+            Lot.objects.exclude(Q(date_end__isnull=True) | Q(is_deleted=True))
+            .filter(auction=self, winning_price__isnull=False)
+            .order_by("-date_end")
+        )
+        total_lots = lots.count()
+        
+        if total_lots < 10:  # Not enough lots for meaningful calculation
+            return 0
+        
+        # Calculate start and end indices to ignore first and last 10%
+        start_index = int(ignore_percent / 100 * total_lots)
+        end_index = int((1 - (ignore_percent / 100)) * total_lots) - 1
+        
+        if start_index >= end_index:
+            return 0
+        
+        # Get the time range for the middle 80% of lots
+        start_date = lots[start_index].date_end
+        end_date = lots[end_index].date_end
+        
+        # Calculate total time in minutes
+        total_time = (start_date - end_date).total_seconds() / 60
+        
+        # Calculate number of lots in this time period
+        num_lots = end_index - start_index
+        
+        if total_time <= 0:
+            return 0
+        
+        # Return lots per minute
+        return num_lots / total_time
+
+    @property
     def template_lot_link(self):
         """Not directly used in templates, use template_lot_link_first_column and template_lot_link_separate_column instead"""
         if timezone.now() > self.lot_submission_start_date:

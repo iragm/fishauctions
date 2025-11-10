@@ -264,6 +264,11 @@ Promoted auctions are included in a weekly promotional email sent every Wednesda
       <tr>
         <td>Lots with a scanned QR code</td><td>{{ auction.number_of_lots_with_scanned_qr }}</td>
       </tr>
+      {% if not auction.is_online and auction.lots_sold_per_minute %}
+      <tr>
+        <td>Average lots sold per minute</td><td>{{ auction.lots_sold_per_minute|floatformat:2 }}</td>
+      </tr>
+      {% endif %}
 
   </tbody>
 </table>
@@ -314,7 +319,30 @@ Promoted auctions are included in a weekly promotional email sent every Wednesda
       $.get('{% url "auction_stats_attrition" slug=auction.slug %}', function(data) {
           var ctx = $("#attrition").get(0).getContext("2d");
           new Chart(ctx, {
-            type: 'scatter', data: data
+            type: 'scatter', 
+            data: data,
+            options: {
+              scales: {
+                yAxes: [{
+                  type: 'logarithmic',
+                  ticks: {
+                    callback: function(value, index, values) {
+                      return '$' + value;
+                    }
+                  },
+                  scaleLabel: {
+                    display: true,
+                    labelString: 'Sell Price (log scale)'
+                  }
+                }],
+                xAxes: [{
+                  scaleLabel: {
+                    display: true,
+                    labelString: 'Minutes into auction'
+                  }
+                }]
+              }
+            }
           });
         });
         </script>
