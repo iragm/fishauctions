@@ -1669,6 +1669,372 @@ class Auction(models.Model):
         """For use in querysets, pks only"""
         return self.auction_admins_qs.values_list("user__pk", flat=True)
 
+    def recalculate_stats(self):
+        """Recalculate and cache all auction statistics.
+        This method calculates all the chart data that is displayed on the stats page
+        and stores it in the cached_stats JSONField to avoid expensive recalculations.
+        """
+        from django.db.models import Avg
+
+        stats = {}
+
+        # Calculate activity stats (views, joins, new lots, searches, bids, watches)
+        # This is used by AuctionStatsActivityJSONView
+        bins = 21
+        days_before = 16
+        days_after = bins - days_before
+        dates_messed_with = False
+
+        if self.is_online:
+            date_start = self.date_end - timezone.timedelta(days=days_before)
+            date_end = self.date_end + timezone.timedelta(days=days_after)
+        else:  # in person
+            date_start = self.date_start - timezone.timedelta(days=days_before)
+            date_end = self.date_start + timezone.timedelta(days=days_after)
+
+        # if date_end is in the future, shift the graph to show the same range, but for the present
+        if date_end > timezone.now():
+            time_difference = date_end - date_start
+            date_end = timezone.now()
+            date_start = date_end - time_difference
+            dates_messed_with = True
+
+        views = PageView.objects.filter(Q(auction=self) | Q(lot_number__auction=self))
+        joins = AuctionTOS.objects.filter(auction=self)
+        new_lots = Lot.objects.filter(auction=self)
+        searches = SearchHistory.objects.filter(auction=self)
+        bids = LotHistory.objects.filter(lot__auction=self, changed_price=True)
+        watches = Watch.objects.filter(lot_number__auction=self)
+
+        stats["activity"] = {
+            "labels": self._get_activity_labels(bins, days_before, days_after, dates_messed_with),
+            "providers": ["Views", "Joins", "New lots", "Searches", "Bids", "Watches"],
+            "data": [
+                bin_data(views, "date_start", bins, date_start, date_end),
+                bin_data(joins, "createdon", bins, date_start, date_end),
+                bin_data(new_lots, "date_posted", bins, date_start, date_end),
+                bin_data(searches, "createdon", bins, date_start, date_end),
+                bin_data(bids, "timestamp", bins, date_start, date_end),
+                bin_data(watches, "createdon", bins, date_start, date_end),
+            ],
+        }
+
+        # Calculate attrition stats (lot sell prices over time)
+        # This is used by AuctionStatsAttritionJSONView
+        ignore_percent = 10
+        lots = (
+            Lot.objects.exclude(Q(date_end__isnull=True) | Q(is_deleted=True))
+            .filter(auction=self, winning_price__isnull=False)
+            .order_by("-date_end")
+        )
+        total_lots = lots.count()
+        if total_lots > 0:
+            start_index = int(ignore_percent / 100 * total_lots)
+            end_index = int((1 - (ignore_percent / 100)) * total_lots) - 1
+            start_date = lots[start_index].date_end
+            end_date = lots[end_index].date_end if total_lots > 1 else start_date
+            total_runtime = end_date - start_date
+            add_back_on = total_runtime / ignore_percent
+            start_date = start_date - (add_back_on * 2)
+            end_date = end_date + (add_back_on * 2)
+            lots = lots.filter(date_end__lte=start_date, date_end__gte=end_date)
+
+            attrition_data = [
+                {
+                    "x": (lot.date_end - end_date).total_seconds() // 60,
+                    "y": lot.winning_price,
+                }
+                for lot in lots
+            ]
+            stats["attrition"] = {
+                "labels": [],
+                "providers": ["Lots"],
+                "data": [attrition_data],
+            }
+        else:
+            stats["attrition"] = {"labels": [], "providers": ["Lots"], "data": [[]]}
+
+        # Calculate auctioneer speed stats (minutes per lot)
+        # This is used by AuctionStatsAuctioneerSpeedJSONView
+        auctioneer_data = []
+        for i in range(1, len(lots)):
+            minutes = (lots[i - 1].date_end - lots[i].date_end).total_seconds() / 60
+            ignore_if_more_than = 3  # minutes
+            if minutes <= ignore_if_more_than:
+                auctioneer_data.append({"x": i, "y": minutes})
+        stats["auctioneer_speed"] = {
+            "labels": [],
+            "providers": ["Minutes per lot"],
+            "data": [auctioneer_data],
+        }
+
+        # Calculate lot sell prices distribution
+        # This is used by AuctionStatsLotSellPricesJSONView
+        sold_lots = self.lots_qs.filter(winning_price__isnull=False)
+        histogram = bin_data(
+            sold_lots,
+            "winning_price",
+            number_of_bins=19,
+            start_bin=1,
+            end_bin=39,
+            add_column_for_high_overflow=True,
+        )
+        stats["lot_sell_prices"] = {
+            "labels": ["Not sold"] + [(f"${i + 1}-{i + 2}") for i in range(0, 37, 2)] + ["$40+"],
+            "providers": ["Number of lots"],
+            "data": [[self.total_unsold_lots] + histogram],
+        }
+
+        # Calculate referrers stats
+        # This is used by AuctionStatsReferrersJSONView
+        views_for_referrers = (
+            PageView.objects.filter(Q(auction=self) | Q(lot_number__auction=self))
+            .exclude(referrer__isnull=True)
+            .exclude(referrer__startswith=Site.objects.get_current().domain)
+            .exclude(referrer__exact="")
+            .values("referrer")
+            .annotate(count=Count("referrer"))
+        )
+        referrer_labels = []
+        referrer_data = []
+        other = 0
+        for view in views_for_referrers:
+            if view["count"] > 1:
+                referrer_labels.append(view["referrer"])
+                referrer_data.append(view["count"])
+            else:
+                other += 1
+        referrer_labels.append("Other")
+        referrer_data.append(other)
+        stats["referrers"] = {
+            "labels": referrer_labels,
+            "providers": ["Number of clicks"],
+            "data": [referrer_data],
+        }
+
+        # Calculate images stats (impact of images on sell price)
+        # This is used by AuctionStatsImagesJSONView
+        lots = Lot.objects.filter(auction=self, winning_price__isnull=False).annotate(num_images=Count("lotimage"))
+        lots_with_no_images = lots.filter(num_images=0)
+        lots_with_one_image = lots.filter(num_images=1)
+        lots_with_one_or_more_images = lots.filter(num_images__gt=1)
+        medians = []
+        averages = []
+        counts = []
+        for lot_group in [
+            lots_with_no_images,
+            lots_with_one_image,
+            lots_with_one_or_more_images,
+        ]:
+            try:
+                medians.append(median_value(lot_group, "winning_price"))
+            except:
+                medians.append(0)
+            averages.append(lot_group.aggregate(avg_value=Avg("winning_price"))["avg_value"])
+            counts.append(lot_group.count())
+        stats["images"] = {
+            "labels": ["No images", "One image", "More than one image"],
+            "providers": ["Median sell price", "Average sell price", "Number of lots"],
+            "data": [medians, averages, counts],
+        }
+
+        # Calculate travel distance stats
+        # This is used by AuctionStatsTravelDistanceJSONView
+        auctiontos = AuctionTOS.objects.filter(auction=self, user__isnull=False)
+        travel_histogram = bin_data(
+            auctiontos,
+            "distance_traveled",
+            number_of_bins=5,
+            start_bin=1,
+            end_bin=51,
+            add_column_for_high_overflow=True,
+        )
+        stats["travel_distance"] = {
+            "labels": [
+                "Less than 10 miles",
+                "10-20 miles",
+                "21-30 miles",
+                "31-40 miles",
+                "41-50 miles",
+                "51+ miles",
+            ],
+            "providers": ["Number of users"],
+            "data": [travel_histogram],
+        }
+
+        # Calculate previous auctions stats
+        # This is used by AuctionStatsPreviousAuctionsJSONView
+        auctiontos = AuctionTOS.objects.filter(auction=self, email__isnull=False)
+        previous_histogram = bin_data(
+            auctiontos,
+            "previous_auctions_count",
+            number_of_bins=2,
+            start_bin=0,
+            end_bin=2,
+            add_column_for_high_overflow=True,
+        )
+        stats["previous_auctions"] = {
+            "labels": ["First auction", "1 previous auction", "2+ previous auctions"],
+            "providers": ["Number of users"],
+            "data": [previous_histogram],
+        }
+
+        # Calculate lots submitted stats
+        # This is used by AuctionStatsLotsSubmittedJSONView
+        invoices = Invoice.objects.filter(auction=self)
+        lots_histogram = bin_data(
+            invoices,
+            "lots_sold",
+            number_of_bins=4,
+            start_bin=1,
+            end_bin=9,
+            add_column_for_low_overflow=True,
+            add_column_for_high_overflow=True,
+        )
+        stats["lots_submitted"] = {
+            "labels": [
+                "Buyer only (0 lots sold)",
+                "1-2 lots",
+                "3-4 lots",
+                "5-6 lots",
+                "7-8 lots",
+                "9+ lots",
+            ],
+            "providers": ["Number of users"],
+            "data": [lots_histogram],
+        }
+
+        # Calculate location volume stats (if multi-location)
+        # This is used by AuctionStatsLocationVolumeJSONView
+        locations = []
+        sold = []
+        bought = []
+        for location in self.location_qs:
+            locations.append(location.name)
+            sold.append(location.total_sold)
+            bought.append(location.total_bought)
+        stats["location_volume"] = {
+            "labels": locations,
+            "providers": ["Total bought", "Total sold"],
+            "data": [bought, sold],
+        }
+
+        # Calculate feature use stats
+        # This is used by AuctionStatsLocationFeatureUseJSONView
+        auctiontos = AuctionTOS.objects.filter(auction=self)
+        auctiontos_with_account = auctiontos.filter(user__isnull=False)
+        searches = (
+            SearchHistory.objects.filter(user__isnull=False, auction=self).values("user").distinct().count()
+        )
+        seach_percent = int(searches / auctiontos_with_account.count() * 100) if auctiontos_with_account.count() else 0
+        watch_qs = Watch.objects.filter(lot_number__auction=self).values("user").distinct()
+        watches = watch_qs.count()
+        watch_percent = int(watches / auctiontos_with_account.count() * 100) if auctiontos_with_account.count() else 0
+        notifications = (
+            PushInformation.objects.filter(user__in=watch_qs, user__userdata__push_notifications_when_lots_sell=True)
+            .values("user")
+            .distinct()
+            .count()
+        )
+        notification_percent = (
+            int(notifications / auctiontos_with_account.count() * 100) if auctiontos_with_account.count() else 0
+        )
+        has_used_proxy_bidding = UserData.objects.filter(
+            has_used_proxy_bidding=True,
+            user__in=auctiontos_with_account.values_list("user"),
+        ).count()
+        has_used_proxy_bidding_percent = (
+            int(has_used_proxy_bidding / auctiontos_with_account.count() * 100) if auctiontos_with_account.count() else 0
+        )
+        chat = (
+            LotHistory.objects.filter(
+                changed_price=False,
+                lot__auction=self,
+                user__in=auctiontos_with_account.values_list("user"),
+            )
+            .values("user")
+            .distinct()
+            .count()
+        )
+        chat_percent = int(chat / auctiontos_with_account.count() * 100) if auctiontos_with_account.count() else 0
+        if self.is_online:
+            lot_with_buy_now = (
+                Lot.objects.filter(auction=self, buy_now_used=True).values("auctiontos_winner").distinct().count()
+            )
+        else:
+            lot_with_buy_now = (
+                Lot.objects.filter(auction=self, winning_price=F("buy_now_price"))
+                .values("auctiontos_winner")
+                .distinct()
+                .count()
+            )
+        if auctiontos.count() == 0:
+            lot_with_buy_now_percent = 0
+            account_percent = 0
+        else:
+            account_percent = int(auctiontos_with_account.count() / auctiontos.count() * 100)
+            lot_with_buy_now_percent = int(lot_with_buy_now / auctiontos.count() * 100)
+        invoices = Invoice.objects.filter(auction=self)
+        viewed_invoices = invoices.filter(opened=True)
+        if invoices.count():
+            view_invoice_percent = int(viewed_invoices.count() / invoices.count() * 100)
+        else:
+            view_invoice_percent = 0
+        sold_lots = Lot.objects.filter(auction=self, auctiontos_winner__isnull=False)
+        leave_feedback = sold_lots.filter(~Q(feedback_rating=0)).values("auctiontos_winner").distinct().count()
+        all_sold_lots = sold_lots.values("auctiontos_winner").distinct().count()
+        if all_sold_lots == 0:
+            leave_feedback_percent = 0
+        else:
+            leave_feedback_percent = int(leave_feedback / all_sold_lots * 100)
+        stats["feature_use"] = {
+            "labels": [
+                "An account",
+                "Search",
+                "Watch",
+                "Push notifications as lots sell",
+                "Proxy bidding",
+                "Chat",
+                "Buy now",
+                "View invoice",
+                "Leave feedback for sellers",
+            ],
+            "providers": ["Percent of users"],
+            "data": [
+                [
+                    account_percent,
+                    seach_percent,
+                    watch_percent,
+                    notification_percent,
+                    has_used_proxy_bidding_percent,
+                    chat_percent,
+                    lot_with_buy_now_percent,
+                    view_invoice_percent,
+                    leave_feedback_percent,
+                ]
+            ],
+        }
+
+        # Save the stats
+        self.cached_stats = stats
+        self.last_stats_update = timezone.now()
+        # Set next update to 1 hour from now by default
+        self.next_update_due = timezone.now() + timezone.timedelta(hours=1)
+        self.save(update_fields=["cached_stats", "last_stats_update", "next_update_due"])
+
+        return stats
+
+    def _get_activity_labels(self, bins, days_before, days_after, dates_messed_with):
+        """Helper method to generate labels for activity chart"""
+        if dates_messed_with:
+            return [(f"{i - 1} days ago") for i in range(bins, 0, -1)]
+        before = [(f"{i} days before") for i in range(days_before, 0, -1)]
+        after = [(f"{i} days after") for i in range(1, days_after)]
+        midpoint = "start"
+        if self.is_online:
+            midpoint = "end"
+        return before + [midpoint] + after
+
     def create_history(self, applies_to, action="Edited", user=None, form=None):
         """Applies to can be RULES, USERS, INVOICES, LOTS, LOT_WINNERS, user should be the user making the change or None if it's a system change.
         Action is a string describing the change, form is a form instance that has changed data
