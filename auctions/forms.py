@@ -1342,6 +1342,7 @@ class AuctionJoin(forms.ModelForm):
         self.helper.form_class = "form-inline"
         self.helper.form_id = "rule-form"
         self.helper.form_tag = True
+        self.helper.form_action = reverse("auction_main", kwargs={"slug": auction.slug})
         self.helper.layout = Layout(
             "i_agree",
             "time_spent_reading_rules",

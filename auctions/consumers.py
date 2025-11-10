@@ -22,7 +22,6 @@ from .models import (
     LotHistory,
     User,
     UserBan,
-    UserData,
     UserInterestCategory,
 )
 
@@ -69,7 +68,7 @@ def check_chat_permissions(lot, user):
                 else:
                     display = f"in {display.days} days"
                 return f"You can't chat.  Try again {display}"
-    except (ChatBan.DoesNotExist, AttributeError):
+    except AttributeError:
         pass
     if not lot.chat_allowed:
         return "Chat is no longer allowed on this lot"
@@ -579,6 +578,7 @@ class UserConsumer(WebsocketConsumer):
             self.user_notification_channel = f"user_{self.pk}"
             if not user_for or user_for != self.user:
                 self.close()
+                return
             else:
                 self.accept()
                 # Add to the group after accepting the connection
@@ -592,6 +592,7 @@ class UserConsumer(WebsocketConsumer):
         except Exception as e:
             logger.exception(e)
             self.close()
+            return
 
     def disconnect(self, close_code):
         # Leave room group
@@ -618,17 +619,21 @@ class AuctionConsumer(WebsocketConsumer):
             auction = Auction.objects.filter(pk=self.pk).first()
             if not auction:
                 self.close()
+                return
             self.user = self.scope["user"]
             if self.user.is_anonymous:
                 self.close()
+                return
             if not auction.permission_check(self.user):
                 self.close()
+                return
             self.accept()
             async_to_sync(self.channel_layer.group_add)(f"auctions_{self.pk}", self.channel_name)
 
         except Exception as e:
             logger.exception(e)
             self.close()
+            return
 
     def invoice_approved(self, event):
         """Step 1, NOT PAID YET"""

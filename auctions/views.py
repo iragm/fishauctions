@@ -4759,11 +4759,11 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
             )
         else:
             context["ended"] = False
-        
+
         # Initialize existingTos and i_agree for form
         existingTos = None
         i_agree = False
-        
+
         if self.request.user.is_authenticated:
             try:
                 tos = AuctionTOS.objects.get(user=self.request.user, auction=self.auction)
@@ -4782,11 +4782,8 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                 i_agree = True
             else:
                 existingTos = PickupLocation.objects.filter(auction=self.auction).first()
-            # if self.request.user.is_authenticated and not context['ended']:
-            #     if not self.get_object().no_location:
-            #         messages.add_message(self.request, messages.ERROR, "Please confirm you have read these rules by selecting your pickup location at the bottom of this page.")
         context["active_tab"] = "main"
-        if self.request.user.pk == self.auction.created_by.pk:
+        if self.request.user.is_authenticated and self.request.user.pk == self.auction.created_by.pk:
             invalidPickups = self.auction.pickup_locations_before_end
             if invalidPickups:
                 messages.info(
@@ -4803,7 +4800,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
             user=self.request.user,
             auction=self.auction,
             initial={
-                "user": self.request.user.id,
+                "user": getattr(self.request.user, "id", None),
                 "auction": self.auction.pk,
                 "pickup_location": existingTos,
                 "i_agree": i_agree,
@@ -4815,7 +4812,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
     def post(self, request, *args, **kwargs):
         auction = self.auction
         form = self.get_form()
-        if form.is_valid():
+        if request.user.is_authenticated and form.is_valid():
             userData = self.request.user.userdata
             if auction.require_phone_number and not userData.phone_number:
                 messages.error(
@@ -4926,23 +4923,19 @@ class ToDefaultLandingPage(View):
             if request.user.is_authenticated:
                 return AllLots.as_view()(request)
             else:
-                # promo page for non-logged in users
                 if settings.ENABLE_PROMO_PAGE:
                     return PromoSite.as_view()(request)
                 else:
                     return AllAuctions.as_view()(request)
-        try:
-            # Did the user sign the tos yet?
-            AuctionTOS.objects.get(user=request.user, auction=auction)
-            # If so, redirect them to the lot view
+        # Only check TOS if authenticated
+        if request.user.is_authenticated and AuctionTOS.objects.filter(user=request.user, auction=auction).exists():
             return AllLots.as_view(
                 rewrite_url=f"/?{auction.slug}",
                 auction=auction,
                 routeByLastAuction=routeByLastAuction,
             )(request)
-        except Exception:
-            # No tos?  Take them there so they can sign
-            return AuctionInfo.as_view(rewrite_url=f"/?{auction.slug}", auction=auction)(request)
+        # Anonymous or not joined – send to auction info page
+        return AuctionInfo.as_view(rewrite_url=f"/?{auction.slug}", auction=auction)(request)
 
     def get(self, request, *args, **kwargs):
         data = request.GET.copy()
