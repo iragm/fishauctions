@@ -2340,13 +2340,48 @@ class AuctionStats(LoginRequiredMixin, AuctionViewMixin, DetailView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        if not self.get_object().closed and self.get_object().is_online:
+        auction = self.get_object()
+        
+        # Check if stats need recalculation (older than 4 hours or missing)
+        now = timezone.now()
+        four_hours_ago = now - timezone.timedelta(hours=4)
+        
+        if not auction.last_stats_update or auction.last_stats_update < four_hours_ago:
+            # Schedule immediate recalculation by setting next_update_due to now
+            auction.next_update_due = now
+            auction.save(update_fields=["next_update_due"])
+            
+            # Calculate last update time for display
+            if auction.last_stats_update:
+                time_since_update = now - auction.last_stats_update
+                hours = int(time_since_update.total_seconds() // 3600)
+                minutes = int((time_since_update.total_seconds() % 3600) // 60)
+                
+                if hours > 0:
+                    context["stats_age"] = f"{hours} hour{'s' if hours != 1 else ''} ago"
+                else:
+                    context["stats_age"] = f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+            else:
+                context["stats_age"] = "Never updated"
+        else:
+            # Calculate time since last update for display
+            time_since_update = now - auction.last_stats_update
+            hours = int(time_since_update.total_seconds() // 3600)
+            minutes = int((time_since_update.total_seconds() % 3600) // 60)
+            
+            if hours > 0:
+                context["stats_age"] = f"{hours} hour{'s' if hours != 1 else ''} ago"
+            else:
+                context["stats_age"] = f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+        
+        if not auction.closed and auction.is_online:
             messages.info(
                 self.request,
                 "This auction is still in progress, check back once it's finished for more complete stats",
             )
-        if self.get_object().date_posted < datetime(year=2024, month=1, day=1, tzinfo=date_tz.utc):
+        if auction.date_posted < datetime(year=2024, month=1, day=1, tzinfo=date_tz.utc):
             messages.info(self.request, "Not all stats are available for old auctions.")
+        
         return context
 
 
@@ -7487,6 +7522,11 @@ class AuctionStatsActivityJSONView(BaseLineChartView, AuctionStatsPermissionsMix
         return super().dispatch(request, *args, **kwargs)
 
     def get_labels(self):
+        # Check if we have cached stats
+        if self.auction.cached_stats and "activity" in self.auction.cached_stats:
+            return self.auction.cached_stats["activity"]["labels"]
+        
+        # Fallback to original calculation
         if self.dates_messed_with:
             return [(f"{i - 1} days ago") for i in range(self.bins, 0, -1)]
         before = [(f"{i} days before") for i in range(self.days_before, 0, -1)]
@@ -7497,12 +7537,20 @@ class AuctionStatsActivityJSONView(BaseLineChartView, AuctionStatsPermissionsMix
         return before + [midpoint] + after
 
     def get_providers(self):
+        # Check if we have cached stats
+        if self.auction.cached_stats and "activity" in self.auction.cached_stats:
+            return self.auction.cached_stats["activity"]["providers"]
+        
+        # Fallback to original calculation
         return ["Views", "Joins", "New lots", "Searches", "Bids", "Watches"]
 
     def get_data(self):
-        """Wonder if these qs should be properties of the Auction model...
-        Might add invoice views here, but it would require updating the pageview model to have an invoice field similar to how auction and lot currently work"""
-
+        """Return activity data from cache if available, otherwise calculate it"""
+        # Check if we have cached stats
+        if self.auction.cached_stats and "activity" in self.auction.cached_stats:
+            return self.auction.cached_stats["activity"]["data"]
+        
+        # Fallback to original calculation if cache is not available
         views = PageView.objects.filter(Q(auction=self.auction) | Q(lot_number__auction=self.auction))
         joins = AuctionTOS.objects.filter(auction=self.auction)
         new_lots = Lot.objects.filter(auction=self.auction)
@@ -7510,7 +7558,6 @@ class AuctionStatsActivityJSONView(BaseLineChartView, AuctionStatsPermissionsMix
         bids = LotHistory.objects.filter(lot__auction=self.auction, changed_price=True)
         watches = Watch.objects.filter(lot_number__auction=self.auction)
 
-        # what follows is a delightful reminder of how important a consistent naming scheme is
         return [
             bin_data(views, "date_start", self.bins, self.date_start, self.date_end),
             bin_data(joins, "createdon", self.bins, self.date_start, self.date_end),
@@ -7553,13 +7600,24 @@ class AuctionStatsAttritionJSONView(BaseLineChartView, AuctionStatsPermissionsMi
 
     def get_labels(self):
         """Not used for scatter plots"""
+        # Check if we have cached stats
+        if self.auction.cached_stats and "attrition" in self.auction.cached_stats:
+            return self.auction.cached_stats["attrition"]["labels"]
         return []
 
     def get_providers(self):
         """Return names of datasets."""
+        # Check if we have cached stats
+        if self.auction.cached_stats and "attrition" in self.auction.cached_stats:
+            return self.auction.cached_stats["attrition"]["providers"]
         return ["Lots"]
 
     def get_data(self):
+        # Check if we have cached stats
+        if self.auction.cached_stats and "attrition" in self.auction.cached_stats:
+            return self.auction.cached_stats["attrition"]["data"]
+        
+        # Fallback to original calculation
         data = [
             {
                 "x": (lot.date_end - self.end_date).total_seconds() // 60,  # minutes after auction start
@@ -7645,13 +7703,26 @@ class AuctionStatsBarChartJSONView(LoginRequiredMixin, AuctionViewMixin, BaseCol
 
 class AuctionStatsLotSellPricesJSONView(AuctionStatsBarChartJSONView):
     def get_labels(self):
+        # Check if we have cached stats
+        if self.auction.cached_stats and "lot_sell_prices" in self.auction.cached_stats:
+            return self.auction.cached_stats["lot_sell_prices"]["labels"]
+        
         labels = [(f"${i + 1}-{i + 2}") for i in range(0, 37, 2)]
         return ["Not sold"] + labels + ["$40+"]
 
     def get_providers(self):
+        # Check if we have cached stats
+        if self.auction.cached_stats and "lot_sell_prices" in self.auction.cached_stats:
+            return self.auction.cached_stats["lot_sell_prices"]["providers"]
+        
         return ["Number of lots"]
 
     def get_data(self):
+        # Check if we have cached stats
+        if self.auction.cached_stats and "lot_sell_prices" in self.auction.cached_stats:
+            return self.auction.cached_stats["lot_sell_prices"]["data"]
+        
+        # Fallback to original calculation
         sold_lots = self.auction.lots_qs.filter(winning_price__isnull=False)
         histogram = bin_data(
             sold_lots,
@@ -7666,6 +7737,11 @@ class AuctionStatsLotSellPricesJSONView(AuctionStatsBarChartJSONView):
 
 class AuctionStatsReferrersJSONView(AuctionStatsBarChartJSONView):
     def get_labels(self):
+        # Check if we have cached stats
+        if self.auction.cached_stats and "referrers" in self.auction.cached_stats:
+            return self.auction.cached_stats["referrers"]["labels"]
+        
+        # Fallback to original calculation
         self.views = (
             PageView.objects.filter(Q(auction=self.auction) | Q(lot_number__auction=self.auction))
             .exclude(referrer__isnull=True)
@@ -7682,9 +7758,18 @@ class AuctionStatsReferrersJSONView(AuctionStatsBarChartJSONView):
         return result
 
     def get_providers(self):
+        # Check if we have cached stats
+        if self.auction.cached_stats and "referrers" in self.auction.cached_stats:
+            return self.auction.cached_stats["referrers"]["providers"]
+        
         return ["Number of clicks"]
 
     def get_data(self):
+        # Check if we have cached stats
+        if self.auction.cached_stats and "referrers" in self.auction.cached_stats:
+            return self.auction.cached_stats["referrers"]["data"]
+        
+        # Fallback to original calculation
         result = []
         other = 0
         for view in self.views:
@@ -7753,12 +7838,25 @@ class AuctionStatsReferrersJSONView(AuctionStatsBarChartJSONView):
 
 class AuctionStatsImagesJSONView(AuctionStatsBarChartJSONView):
     def get_labels(self):
+        # Check if we have cached stats
+        if self.auction.cached_stats and "images" in self.auction.cached_stats:
+            return self.auction.cached_stats["images"]["labels"]
+        
         return ["No images", "One image", "More than one image"]
 
     def get_providers(self):
+        # Check if we have cached stats
+        if self.auction.cached_stats and "images" in self.auction.cached_stats:
+            return self.auction.cached_stats["images"]["providers"]
+        
         return ["Median sell price", "Average sell price", "Number of lots"]
 
     def get_data(self):
+        # Check if we have cached stats
+        if self.auction.cached_stats and "images" in self.auction.cached_stats:
+            return self.auction.cached_stats["images"]["data"]
+        
+        # Fallback to original calculation
         lots = Lot.objects.filter(auction=self.auction, winning_price__isnull=False).annotate(
             num_images=Count("lotimage")
         )
@@ -7784,6 +7882,10 @@ class AuctionStatsImagesJSONView(AuctionStatsBarChartJSONView):
 
 class AuctionStatsTravelDistanceJSONView(AuctionStatsBarChartJSONView):
     def get_labels(self):
+        # Check if we have cached stats
+        if self.auction.cached_stats and "travel_distance" in self.auction.cached_stats:
+            return self.auction.cached_stats["travel_distance"]["labels"]
+        
         return [
             "Less than 10 miles",
             "10-20 miles",
@@ -7794,9 +7896,18 @@ class AuctionStatsTravelDistanceJSONView(AuctionStatsBarChartJSONView):
         ]
 
     def get_providers(self):
+        # Check if we have cached stats
+        if self.auction.cached_stats and "travel_distance" in self.auction.cached_stats:
+            return self.auction.cached_stats["travel_distance"]["providers"]
+        
         return ["Number of users"]
 
     def get_data(self):
+        # Check if we have cached stats
+        if self.auction.cached_stats and "travel_distance" in self.auction.cached_stats:
+            return self.auction.cached_stats["travel_distance"]["data"]
+        
+        # Fallback to original calculation
         auctiontos = AuctionTOS.objects.filter(auction=self.auction, user__isnull=False)
         histogram = bin_data(
             auctiontos,
@@ -7811,12 +7922,25 @@ class AuctionStatsTravelDistanceJSONView(AuctionStatsBarChartJSONView):
 
 class AuctionStatsPreviousAuctionsJSONView(AuctionStatsBarChartJSONView):
     def get_labels(self):
+        # Check if we have cached stats
+        if self.auction.cached_stats and "previous_auctions" in self.auction.cached_stats:
+            return self.auction.cached_stats["previous_auctions"]["labels"]
+        
         return ["First auction", "1 previous auction", "2+ previous auctions"]
 
     def get_providers(self):
+        # Check if we have cached stats
+        if self.auction.cached_stats and "previous_auctions" in self.auction.cached_stats:
+            return self.auction.cached_stats["previous_auctions"]["providers"]
+        
         return ["Number of users"]
 
     def get_data(self):
+        # Check if we have cached stats
+        if self.auction.cached_stats and "previous_auctions" in self.auction.cached_stats:
+            return self.auction.cached_stats["previous_auctions"]["data"]
+        
+        # Fallback to original calculation
         auctiontos = AuctionTOS.objects.filter(auction=self.auction, email__isnull=False)
         histogram = bin_data(
             auctiontos,
@@ -7831,6 +7955,10 @@ class AuctionStatsPreviousAuctionsJSONView(AuctionStatsBarChartJSONView):
 
 class AuctionStatsLotsSubmittedJSONView(AuctionStatsBarChartJSONView):
     def get_labels(self):
+        # Check if we have cached stats
+        if self.auction.cached_stats and "lots_submitted" in self.auction.cached_stats:
+            return self.auction.cached_stats["lots_submitted"]["labels"]
+        
         return [
             "Buyer only (0 lots sold)",
             "1-2 lots",
@@ -7841,9 +7969,18 @@ class AuctionStatsLotsSubmittedJSONView(AuctionStatsBarChartJSONView):
         ]
 
     def get_providers(self):
+        # Check if we have cached stats
+        if self.auction.cached_stats and "lots_submitted" in self.auction.cached_stats:
+            return self.auction.cached_stats["lots_submitted"]["providers"]
+        
         return ["Number of users"]
 
     def get_data(self):
+        # Check if we have cached stats
+        if self.auction.cached_stats and "lots_submitted" in self.auction.cached_stats:
+            return self.auction.cached_stats["lots_submitted"]["data"]
+        
+        # Fallback to original calculation
         invoices = Invoice.objects.filter(auction=self.auction)
         histogram = bin_data(
             invoices,
@@ -7859,15 +7996,29 @@ class AuctionStatsLotsSubmittedJSONView(AuctionStatsBarChartJSONView):
 
 class AuctionStatsLocationVolumeJSONView(AuctionStatsBarChartJSONView):
     def get_labels(self):
+        # Check if we have cached stats
+        if self.auction.cached_stats and "location_volume" in self.auction.cached_stats:
+            return self.auction.cached_stats["location_volume"]["labels"]
+        
+        # Fallback to original calculation
         locations = []
         for location in self.auction.location_qs:
             locations.append(location.name)
         return locations
 
     def get_providers(self):
+        # Check if we have cached stats
+        if self.auction.cached_stats and "location_volume" in self.auction.cached_stats:
+            return self.auction.cached_stats["location_volume"]["providers"]
+        
         return ["Total bought", "Total sold"]
 
     def get_data(self):
+        # Check if we have cached stats
+        if self.auction.cached_stats and "location_volume" in self.auction.cached_stats:
+            return self.auction.cached_stats["location_volume"]["data"]
+        
+        # Fallback to original calculation
         sold = []
         bought = []
         for location in self.auction.location_qs:
@@ -7878,6 +8029,10 @@ class AuctionStatsLocationVolumeJSONView(AuctionStatsBarChartJSONView):
 
 class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
     def get_labels(self):
+        # Check if we have cached stats
+        if self.auction.cached_stats and "feature_use" in self.auction.cached_stats:
+            return self.auction.cached_stats["feature_use"]["labels"]
+        
         return [
             "An account",
             "Search",
@@ -7891,9 +8046,18 @@ class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
         ]
 
     def get_providers(self):
+        # Check if we have cached stats
+        if self.auction.cached_stats and "feature_use" in self.auction.cached_stats:
+            return self.auction.cached_stats["feature_use"]["providers"]
+        
         return ["Percent of users"]
 
     def get_data(self):
+        # Check if we have cached stats
+        if self.auction.cached_stats and "feature_use" in self.auction.cached_stats:
+            return self.auction.cached_stats["feature_use"]["data"]
+        
+        # Fallback to original calculation
         auctiontos = AuctionTOS.objects.filter(auction=self.auction)
         auctiontos_with_account = auctiontos.filter(user__isnull=False)
         searches = (
@@ -7977,9 +8141,18 @@ class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
 class AuctionStatsAuctioneerSpeedJSONView(AuctionStatsAttritionJSONView):
     def get_providers(self):
         """Return names of datasets."""
-        return ["Lots per minute"]
+        # Check if we have cached stats
+        if self.auction.cached_stats and "auctioneer_speed" in self.auction.cached_stats:
+            return self.auction.cached_stats["auctioneer_speed"]["providers"]
+        
+        return ["Minutes per lot"]
 
     def get_data(self):
+        # Check if we have cached stats
+        if self.auction.cached_stats and "auctioneer_speed" in self.auction.cached_stats:
+            return self.auction.cached_stats["auctioneer_speed"]["data"]
+        
+        # Fallback to original calculation
         data = []
         for i in range(1, len(self.lots)):
             minutes = (self.lots[i - 1].date_end - self.lots[i].date_end).total_seconds() / 60

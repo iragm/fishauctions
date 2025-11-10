@@ -498,5 +498,9 @@ How many of your users are taking advantage of features on this webiste?
 </script>
 What websites are sending you traffic?
 
+{% if stats_age %}
+<p class="text-muted small mt-4">Stats last updated: {{ stats_age }}</p>
+{% endif %}
+
 <div><a href="/auctions/{{auction.slug}}/" class="btn btn-primary active">Back to rules</a></div>
 {% endblock %}
