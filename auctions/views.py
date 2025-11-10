@@ -7524,6 +7524,21 @@ class AuctionStatsActivityJSONView(BaseLineChartView, AuctionStatsPermissionsMix
         self.auction = Auction.objects.get(slug=kwargs["slug"], is_deleted=False)
         if not self.is_auction_admin:
             return redirect("/")
+        
+        # Load comparison auction if provided
+        self.compare_auction = None
+        compare_slug = request.GET.get('compare')
+        if compare_slug:
+            try:
+                compare_auction = Auction.objects.get(slug=compare_slug, is_deleted=False)
+                # Verify user has access to this auction
+                if compare_auction.created_by == request.user or AuctionTOS.objects.filter(
+                    auction=compare_auction, user=request.user, is_admin=True
+                ).exists():
+                    self.compare_auction = compare_auction
+            except Auction.DoesNotExist:
+                pass
+        
         if self.auction.is_online:
             self.date_start = self.auction.date_end - timezone.timedelta(days=self.days_before)
             self.date_end = self.auction.date_end + timezone.timedelta(days=self.days_after)
@@ -7557,34 +7572,49 @@ class AuctionStatsActivityJSONView(BaseLineChartView, AuctionStatsPermissionsMix
 
     def get_providers(self):
         # Check if we have cached stats
+        providers = []
         if self.auction.cached_stats and "activity" in self.auction.cached_stats:
-            return self.auction.cached_stats["activity"]["providers"]
+            providers = self.auction.cached_stats["activity"]["providers"]
+        else:
+            # Fallback to original calculation
+            providers = ["Views", "Joins", "New lots", "Searches", "Bids", "Watches"]
         
-        # Fallback to original calculation
-        return ["Views", "Joins", "New lots", "Searches", "Bids", "Watches"]
+        # Add comparison auction providers if available
+        if self.compare_auction and self.compare_auction.cached_stats and "activity" in self.compare_auction.cached_stats:
+            compare_providers = [f"{p} ({self.compare_auction.title})" for p in self.compare_auction.cached_stats["activity"]["providers"]]
+            providers = providers + compare_providers
+        
+        return providers
 
     def get_data(self):
         """Return activity data from cache if available, otherwise calculate it"""
-        # Check if we have cached stats
+        # Get main auction data
         if self.auction.cached_stats and "activity" in self.auction.cached_stats:
-            return self.auction.cached_stats["activity"]["data"]
-        
-        # Fallback to original calculation if cache is not available
-        views = PageView.objects.filter(Q(auction=self.auction) | Q(lot_number__auction=self.auction))
-        joins = AuctionTOS.objects.filter(auction=self.auction)
-        new_lots = Lot.objects.filter(auction=self.auction)
-        searches = SearchHistory.objects.filter(auction=self.auction)
-        bids = LotHistory.objects.filter(lot__auction=self.auction, changed_price=True)
-        watches = Watch.objects.filter(lot_number__auction=self.auction)
+            data = self.auction.cached_stats["activity"]["data"]
+        else:
+            # Fallback to original calculation if cache is not available
+            views = PageView.objects.filter(Q(auction=self.auction) | Q(lot_number__auction=self.auction))
+            joins = AuctionTOS.objects.filter(auction=self.auction)
+            new_lots = Lot.objects.filter(auction=self.auction)
+            searches = SearchHistory.objects.filter(auction=self.auction)
+            bids = LotHistory.objects.filter(lot__auction=self.auction, changed_price=True)
+            watches = Watch.objects.filter(lot_number__auction=self.auction)
 
-        return [
-            bin_data(views, "date_start", self.bins, self.date_start, self.date_end),
-            bin_data(joins, "createdon", self.bins, self.date_start, self.date_end),
-            bin_data(new_lots, "date_posted", self.bins, self.date_start, self.date_end),
-            bin_data(searches, "createdon", self.bins, self.date_start, self.date_end),
-            bin_data(bids, "timestamp", self.bins, self.date_start, self.date_end),
-            bin_data(watches, "createdon", self.bins, self.date_start, self.date_end),
-        ]
+            data = [
+                bin_data(views, "date_start", self.bins, self.date_start, self.date_end),
+                bin_data(joins, "createdon", self.bins, self.date_start, self.date_end),
+                bin_data(new_lots, "date_posted", self.bins, self.date_start, self.date_end),
+                bin_data(searches, "createdon", self.bins, self.date_start, self.date_end),
+                bin_data(bids, "timestamp", self.bins, self.date_start, self.date_end),
+                bin_data(watches, "createdon", self.bins, self.date_start, self.date_end),
+            ]
+        
+        # Add comparison auction data if available
+        if self.compare_auction and self.compare_auction.cached_stats and "activity" in self.compare_auction.cached_stats:
+            compare_data = self.compare_auction.cached_stats["activity"]["data"]
+            data = data + compare_data
+        
+        return data
 
 
 class AuctionStatsAttritionJSONView(BaseLineChartView, AuctionStatsPermissionsMixin):
@@ -7726,8 +7756,21 @@ class AuctionStatsLotSellPricesJSONView(AuctionStatsBarChartJSONView):
         if self.auction.cached_stats and "lot_sell_prices" in self.auction.cached_stats:
             return self.auction.cached_stats["lot_sell_prices"]["labels"]
         
-        labels = [(f"${i + 1}-{i + 2}") for i in range(0, 37, 2)]
-        return ["Not sold"] + labels + ["$40+"]
+        # Fallback: generate dynamic labels based on actual prices
+        sold_lots = self.auction.lots_qs.filter(winning_price__isnull=False)
+        if sold_lots.exists():
+            max_price = sold_lots.aggregate(max_price=Max("winning_price"))["max_price"] or 40
+            max_price = int((max_price + 9) // 10 * 10)
+            
+            labels = ["Not sold"]
+            for i in range(0, max_price - 1, 2):
+                labels.append(f"${i + 1}-{i + 2}")
+            labels.append(f"${max_price}+")
+            return labels
+        else:
+            # No sold lots, use default
+            labels = [(f"${i + 1}-{i + 2}") for i in range(0, 37, 2)]
+            return ["Not sold"] + labels + ["$40+"]
 
     def get_providers(self):
         # Check if we have cached stats
@@ -7741,17 +7784,35 @@ class AuctionStatsLotSellPricesJSONView(AuctionStatsBarChartJSONView):
         if self.auction.cached_stats and "lot_sell_prices" in self.auction.cached_stats:
             return self.auction.cached_stats["lot_sell_prices"]["data"]
         
-        # Fallback to original calculation
+        # Fallback: calculate dynamically
         sold_lots = self.auction.lots_qs.filter(winning_price__isnull=False)
-        histogram = bin_data(
-            sold_lots,
-            "winning_price",
-            number_of_bins=19,
-            start_bin=1,
-            end_bin=39,
-            add_column_for_high_overflow=True,
-        )
-        return [[self.auction.total_unsold_lots] + histogram]
+        if sold_lots.exists():
+            max_price = sold_lots.aggregate(max_price=Max("winning_price"))["max_price"] or 40
+            max_price = int((max_price + 9) // 10 * 10)
+            num_bins = min(max_price // 2, 30)
+            if num_bins < 10:
+                num_bins = 10
+            
+            histogram = bin_data(
+                sold_lots,
+                "winning_price",
+                number_of_bins=num_bins,
+                start_bin=1,
+                end_bin=max_price - 1,
+                add_column_for_high_overflow=True,
+            )
+            return [[self.auction.total_unsold_lots] + histogram]
+        else:
+            # No sold lots, use default
+            histogram = bin_data(
+                sold_lots,
+                "winning_price",
+                number_of_bins=19,
+                start_bin=1,
+                end_bin=39,
+                add_column_for_high_overflow=True,
+            )
+            return [[self.auction.total_unsold_lots] + histogram]
 
 
 class AuctionStatsReferrersJSONView(AuctionStatsBarChartJSONView):

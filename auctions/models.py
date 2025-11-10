@@ -1812,19 +1812,53 @@ class Auction(models.Model):
         # Calculate lot sell prices distribution
         # This is used by AuctionStatsLotSellPricesJSONView
         sold_lots = self.lots_qs.filter(winning_price__isnull=False)
-        histogram = bin_data(
-            sold_lots,
-            "winning_price",
-            number_of_bins=19,
-            start_bin=1,
-            end_bin=39,
-            add_column_for_high_overflow=True,
-        )
-        stats["lot_sell_prices"] = {
-            "labels": ["Not sold"] + [(f"${i + 1}-{i + 2}") for i in range(0, 37, 2)] + ["$40+"],
-            "providers": ["Number of lots"],
-            "data": [[self.total_unsold_lots] + histogram],
-        }
+        
+        # Make bins dynamic based on actual sell prices
+        if sold_lots.exists():
+            max_price = sold_lots.aggregate(max_price=Max("winning_price"))["max_price"] or 40
+            # Round up to nearest $10 for cleaner bins
+            max_price = int((max_price + 9) // 10 * 10)
+            
+            # Create bins with $2 intervals up to max price
+            num_bins = min(max_price // 2, 30)  # Cap at 30 bins to avoid too many
+            if num_bins < 10:
+                num_bins = 10  # Minimum 10 bins
+            
+            histogram = bin_data(
+                sold_lots,
+                "winning_price",
+                number_of_bins=num_bins,
+                start_bin=1,
+                end_bin=max_price - 1,
+                add_column_for_high_overflow=True,
+            )
+            
+            # Generate labels dynamically
+            labels = ["Not sold"]
+            for i in range(0, max_price - 1, 2):
+                labels.append(f"${i + 1}-{i + 2}")
+            labels.append(f"${max_price}+")
+            
+            stats["lot_sell_prices"] = {
+                "labels": labels,
+                "providers": ["Number of lots"],
+                "data": [[self.total_unsold_lots] + histogram],
+            }
+        else:
+            # No sold lots, use default bins
+            histogram = bin_data(
+                sold_lots,
+                "winning_price",
+                number_of_bins=19,
+                start_bin=1,
+                end_bin=39,
+                add_column_for_high_overflow=True,
+            )
+            stats["lot_sell_prices"] = {
+                "labels": ["Not sold"] + [(f"${i + 1}-{i + 2}") for i in range(0, 37, 2)] + ["$40+"],
+                "providers": ["Number of lots"],
+                "data": [[self.total_unsold_lots] + histogram],
+            }
 
         # Calculate referrers stats
         # This is used by AuctionStatsReferrersJSONView
