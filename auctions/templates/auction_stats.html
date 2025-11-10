@@ -8,7 +8,13 @@
 <script type="text/javascript" src="{% static 'js/Chart.min.js' %}"></script>
 <!--<script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.3/dist/Chart.min.js"></script>-->
 <script src="/static/js/chart.funnel.min.js"></script>
+<link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/css/select2.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/js/select2.min.js"></script>
 <script>
+  // Get compare parameter from URL if present
+  var compareSlug = new URLSearchParams(window.location.search).get('compare');
+  var compareParam = compareSlug ? '?compare=' + compareSlug : '';
+  
   window.onload = function() {
     Chart.defaults.global.defaultFontColor = "#fff";
     $.ajax({
@@ -153,29 +159,53 @@
 {% endblock %}
             {% include 'auction_ribbon.html' %}
             <br>
-            {% if admin_auctions %}
             <div class="mb-3">
                 <label for="compare-auction">Compare with another auction:</label>
                 <select id="compare-auction" class="form-control" style="max-width: 400px;">
                     <option value="">-- Select an auction to compare --</option>
-                    {% for admin_auction in admin_auctions %}
-                    <option value="{{ admin_auction.slug }}" {% if compare_auction and compare_auction.slug == admin_auction.slug %}selected{% endif %}>
-                        {{ admin_auction.title }} ({{ admin_auction.date_start|date:"M d, Y" }})
-                    </option>
-                    {% endfor %}
+                    {% if compare_auction %}
+                    <option value="{{ compare_auction.slug }}" selected>{{ compare_auction.title }} ({{ compare_auction.date_start|date:"M d, Y" }})</option>
+                    {% endif %}
                 </select>
                 <script>
-                    document.getElementById('compare-auction').addEventListener('change', function() {
-                        const slug = this.value;
-                        if (slug) {
-                            window.location.href = '?compare=' + slug;
-                        } else {
-                            window.location.href = window.location.pathname;
-                        }
+                    $(document).ready(function() {
+                        $('#compare-auction').select2({
+                            ajax: {
+                                url: '{% url "auction-autocomplete" %}',
+                                dataType: 'json',
+                                delay: 250,
+                                data: function (params) {
+                                    return {
+                                        q: params.term,
+                                        page: params.page || 1
+                                    };
+                                },
+                                processResults: function (data) {
+                                    return {
+                                        results: data.results,
+                                        pagination: {
+                                            more: data.pagination.more
+                                        }
+                                    };
+                                },
+                                cache: true
+                            },
+                            placeholder: '-- Select an auction to compare --',
+                            minimumInputLength: 0,
+                            allowClear: true
+                        });
+                        
+                        $('#compare-auction').on('change', function() {
+                            const slug = $(this).val();
+                            if (slug) {
+                                window.location.href = '?compare=' + slug;
+                            } else {
+                                window.location.href = window.location.pathname;
+                            }
+                        });
                     });
                 </script>
             </div>
-            {% endif %}
             <h3>Users</h3>
             <table class="table">
                 <thead>
@@ -205,7 +235,7 @@
 <p></p>
 <canvas id="activity" width="500" height="400"></canvas>
 <script type="text/javascript">
-  $.get('{% url "auction_stats_activity" slug=auction.slug %}', function(data) {
+  $.get('{% url "auction_stats_activity" slug=auction.slug %}' + compareParam, function(data) {
     var ctx = $("#activity").get(0).getContext("2d");
     new Chart(ctx, {
       type: 'line', data: data
@@ -301,7 +331,7 @@ Promoted auctions are included in a weekly promotional email sent every Wednesda
             <h4>Lot sell prices</h4>
             <canvas id="lot_prices" width="500" height="400"></canvas>
             <script type="text/javascript">
-              $.get('{% url "auction_sell_prices" slug=auction.slug %}', function(data) {
+              $.get('{% url "auction_sell_prices" slug=auction.slug %}' + compareParam, function(data) {
                 var ctx = $("#lot_prices").get(0).getContext("2d");
                 new Chart(ctx, {
                   type: 'bar', data: data,
@@ -340,7 +370,7 @@ Promoted auctions are included in a weekly promotional email sent every Wednesda
 
 <canvas id="attrition" width="500" height="400"></canvas>
 <script type="text/javascript">
-      $.get('{% url "auction_stats_attrition" slug=auction.slug %}', function(data) {
+      $.get('{% url "auction_stats_attrition" slug=auction.slug %}' + compareParam, function(data) {
           var ctx = $("#attrition").get(0).getContext("2d");
           new Chart(ctx, {
             type: 'scatter', 
@@ -382,7 +412,7 @@ Promoted auctions are included in a weekly promotional email sent every Wednesda
 <h5>Auctioneer performance</h5>
 <canvas id="auctioneer" width="500" height="400"></canvas>
 <script type="text/javascript">
-  $.get('{% url "auction_stats_auctioneer" slug=auction.slug %}', function(data) {
+  $.get('{% url "auction_stats_auctioneer" slug=auction.slug %}' + compareParam, function(data) {
     var ctx = $("#auctioneer").get(0).getContext("2d");
         new Chart(ctx, {
           type: 'scatter', data: data
@@ -395,7 +425,7 @@ Promoted auctions are included in a weekly promotional email sent every Wednesda
 <h4>The importance of images on sell price</h4>
 <canvas id="pictures" width="500" height="400"></canvas>
 <script type="text/javascript">
-  $.get('{% url "auction_stats_pictures" slug=auction.slug %}', function(data) {
+  $.get('{% url "auction_stats_pictures" slug=auction.slug %}' + compareParam, function(data) {
     var ctx = $("#pictures").get(0).getContext("2d");
     new Chart(ctx, {
       type: 'bar', data: data,
@@ -417,7 +447,7 @@ Generally, having an image makes a lot sell for more money, but more images don'
 <h4>How far users travel to get to your auction</h4>
 <canvas id="distances_traveled" width="500" height="400"></canvas>
 <script type="text/javascript">
-  $.get('{% url "auction_stats_distance_traveled" slug=auction.slug %}', function(data) {
+  $.get('{% url "auction_stats_distance_traveled" slug=auction.slug %}' + compareParam, function(data) {
     var ctx = $("#distances_traveled").get(0).getContext("2d");
     new Chart(ctx, {
       type: 'bar', data: data,
@@ -438,7 +468,7 @@ Use this information to add additional pickup locations to future auctions.  Not
 <h4>How many auctions have your users participated in previously?</h4>
 <canvas id="auction_stats_previous_auctions" width="500" height="400"></canvas>
 <script type="text/javascript">
-  $.get('{% url "auction_stats_previous_auctions" slug=auction.slug %}', function(data) {
+  $.get('{% url "auction_stats_previous_auctions" slug=auction.slug %}' + compareParam, function(data) {
     var ctx = $("#auction_stats_previous_auctions").get(0).getContext("2d");
     new Chart(ctx, {
       type: 'bar', data: data,
@@ -460,7 +490,7 @@ You want a good mix of newbies and veterans.  This takes into account ALL auctio
 <h4>How many lots do your users submit?</h4>
 <canvas id="auction_stats_lots_submitted" width="500" height="400"></canvas>
 <script type="text/javascript">
-  $.get('{% url "auction_stats_lots_submitted" slug=auction.slug %}', function(data) {
+  $.get('{% url "auction_stats_lots_submitted" slug=auction.slug %}' + compareParam, function(data) {
     var ctx = $("#auction_stats_lots_submitted").get(0).getContext("2d");
     new Chart(ctx, {
       type: 'bar', data: data,
@@ -482,7 +512,7 @@ Most people will add very few lots to an auction, but it's worth considering tho
 <h4>How much volume does each location do?</h4>
 <canvas id="auction_stats_location_volume" width="500" height="400"></canvas>
 <script type="text/javascript">
-  $.get('{% url "auction_stats_location_volume" slug=auction.slug %}', function(data) {
+  $.get('{% url "auction_stats_location_volume" slug=auction.slug %}' + compareParam, function(data) {
     var ctx = $("#auction_stats_location_volume").get(0).getContext("2d");
     new Chart(ctx, {
       type: 'bar', data: data,
@@ -504,7 +534,7 @@ Use this to spot low-volume locations to skip or advertise more at next time.
 <h4>Website feature utilization</h4>
 <canvas id="auction_stats_feature_use" width="500" height="400"></canvas>
 <script type="text/javascript">
-  $.get('{% url "auction_stats_feature_use" slug=auction.slug %}', function(data) {
+  $.get('{% url "auction_stats_feature_use" slug=auction.slug %}' + compareParam, function(data) {
     var ctx = $("#auction_stats_feature_use").get(0).getContext("2d");
     new Chart(ctx, {
       type: 'bar', data: data,
@@ -532,7 +562,7 @@ How many of your users are taking advantage of features on this webiste?
 <h4>Referrers</h4>
 <canvas id="auction_stats_referrers" width="500" height="400"></canvas>
 <script type="text/javascript">
-  $.get('{% url "auction_stats_referrers" slug=auction.slug %}', function(data) {
+  $.get('{% url "auction_stats_referrers" slug=auction.slug %}' + compareParam, function(data) {
     var ctx = $("#auction_stats_referrers").get(0).getContext("2d");
     new Chart(ctx, {
       type: 'bar', data: data,

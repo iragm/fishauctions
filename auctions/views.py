@@ -607,6 +607,29 @@ class AuctionTOSAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetVie
         return qs.order_by("-name")
 
 
+class AuctionAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetView):
+    """Autocomplete for auctions that the current user is an admin of"""
+    
+    def get_result_label(self, result):
+        return format_html("<b>{}</b> ({})", result.title, result.date_start.strftime("%b %d, %Y"))
+    
+    def get_result_value(self, result):
+        """Return slug instead of PK for the value"""
+        return result.slug
+    
+    def get_queryset(self):
+        # Get auctions where user is creator or admin
+        qs = Auction.objects.filter(
+            Q(created_by=self.request.user) | Q(auctiontos__user=self.request.user, auctiontos__is_admin=True),
+            is_deleted=False
+        ).distinct().order_by('-date_start')
+        
+        if self.q:
+            qs = qs.filter(Q(title__icontains=self.q) | Q(slug__icontains=self.q))
+        
+        return qs
+
+
 class LotQRView(RedirectView):
     def get_redirect_url(self, *args, **kwargs):
         lot = Lot.objects.filter(pk=self.kwargs["pk"]).first()
@@ -7624,6 +7647,21 @@ class AuctionStatsAttritionJSONView(BaseLineChartView, AuctionStatsPermissionsMi
         self.auction = Auction.objects.get(slug=kwargs["slug"], is_deleted=False)
         if not self.is_auction_admin:
             return redirect("/")
+        
+        # Load comparison auction if provided
+        self.compare_auction = None
+        compare_slug = request.GET.get('compare')
+        if compare_slug:
+            try:
+                compare_auction = Auction.objects.get(slug=compare_slug, is_deleted=False)
+                # Verify user has access to this auction
+                if compare_auction.created_by == request.user or AuctionTOS.objects.filter(
+                    auction=compare_auction, user=request.user, is_admin=True
+                ).exists():
+                    self.compare_auction = compare_auction
+            except Auction.DoesNotExist:
+                pass
+        
         self.lots = (
             Lot.objects.exclude(Q(date_end__isnull=True) | Q(is_deleted=True))
             .filter(auction=self.auction, winning_price__isnull=False)
@@ -7656,31 +7694,43 @@ class AuctionStatsAttritionJSONView(BaseLineChartView, AuctionStatsPermissionsMi
 
     def get_providers(self):
         """Return names of datasets."""
+        providers = []
         # Check if we have cached stats
         if self.auction.cached_stats and "attrition" in self.auction.cached_stats:
-            return self.auction.cached_stats["attrition"]["providers"]
-        return ["Lots"]
+            providers = self.auction.cached_stats["attrition"]["providers"]
+        else:
+            providers = ["Lots"]
+        
+        # Add comparison auction providers if available
+        if self.compare_auction and self.compare_auction.cached_stats and "attrition" in self.compare_auction.cached_stats:
+            compare_providers = [f"{p} ({self.compare_auction.title})" for p in self.compare_auction.cached_stats["attrition"]["providers"]]
+            providers = providers + compare_providers
+        
+        return providers
 
     def get_data(self):
-        # Check if we have cached stats
+        # Get main auction data
         if self.auction.cached_stats and "attrition" in self.auction.cached_stats:
-            return self.auction.cached_stats["attrition"]["data"]
+            data = self.auction.cached_stats["attrition"]["data"]
+        else:
+            # Fallback to original calculation
+            data = [
+                [
+                    {
+                        "x": (lot.date_end - self.end_date).total_seconds() // 60,  # minutes after auction start
+                        # 'x': lot.date_end.timestamp() * 1000, # this one gives js timestamps and would need moment.js to convert to date
+                        "y": lot.winning_price,
+                    }
+                    for lot in self.lots
+                ]
+            ]
         
-        # Fallback to original calculation
-        data = [
-            {
-                "x": (lot.date_end - self.end_date).total_seconds() // 60,  # minutes after auction start
-                # 'x': lot.date_end.timestamp() * 1000, # this one gives js timestamps and would need moment.js to convert to date
-                "y": lot.winning_price,
-            }
-            for lot in self.lots
-        ]
-        # Prepare the data structure for Chart.js
-        # data = {
-        #     'data': data
-        # }
-        # return data
-        return [data]
+        # Add comparison auction data if available
+        if self.compare_auction and self.compare_auction.cached_stats and "attrition" in self.compare_auction.cached_stats:
+            compare_data = self.compare_auction.cached_stats["attrition"]["data"]
+            data = data + compare_data
+        
+        return data
 
 
 class AuctionStatsBarChartJSONView(LoginRequiredMixin, AuctionViewMixin, BaseColumnsHighChartsView):
@@ -7688,12 +7738,27 @@ class AuctionStatsBarChartJSONView(LoginRequiredMixin, AuctionViewMixin, BaseCol
 
     # allow_non_admins = True
 
-    # def dispatch(self, request, *args, **kwargs):
-    #     self.auction = Auction.objects.get(slug=kwargs["slug"], is_deleted=False)
-    #     if not self.is_auction_admin:
-    #         return redirect("/")
-    #     result = super().dispatch(request, *args, **kwargs)
-    #     return result
+    def dispatch(self, request, *args, **kwargs):
+        self.auction = Auction.objects.get(slug=kwargs["slug"], is_deleted=False)
+        if not self.is_auction_admin:
+            return redirect("/")
+        
+        # Load comparison auction if provided
+        self.compare_auction = None
+        compare_slug = request.GET.get('compare')
+        if compare_slug:
+            try:
+                compare_auction = Auction.objects.get(slug=compare_slug, is_deleted=False)
+                # Verify user has access to this auction
+                if compare_auction.created_by == request.user or AuctionTOS.objects.filter(
+                    auction=compare_auction, user=request.user, is_admin=True
+                ).exists():
+                    self.compare_auction = compare_auction
+            except Auction.DoesNotExist:
+                pass
+        
+        result = super().dispatch(request, *args, **kwargs)
+        return result
 
     def get_yUnit(self):
         return ""
@@ -7773,46 +7838,61 @@ class AuctionStatsLotSellPricesJSONView(AuctionStatsBarChartJSONView):
             return ["Not sold"] + labels + ["$40+"]
 
     def get_providers(self):
+        providers = []
         # Check if we have cached stats
         if self.auction.cached_stats and "lot_sell_prices" in self.auction.cached_stats:
-            return self.auction.cached_stats["lot_sell_prices"]["providers"]
+            providers = self.auction.cached_stats["lot_sell_prices"]["providers"]
+        else:
+            providers = ["Number of lots"]
         
-        return ["Number of lots"]
+        # Add comparison auction providers if available
+        if self.compare_auction and self.compare_auction.cached_stats and "lot_sell_prices" in self.compare_auction.cached_stats:
+            compare_providers = [f"{p} ({self.compare_auction.title})" for p in self.compare_auction.cached_stats["lot_sell_prices"]["providers"]]
+            providers = providers + compare_providers
+        
+        return providers
 
     def get_data(self):
-        # Check if we have cached stats
+        # Get main auction data
         if self.auction.cached_stats and "lot_sell_prices" in self.auction.cached_stats:
-            return self.auction.cached_stats["lot_sell_prices"]["data"]
-        
-        # Fallback: calculate dynamically
-        sold_lots = self.auction.lots_qs.filter(winning_price__isnull=False)
-        if sold_lots.exists():
-            max_price = sold_lots.aggregate(max_price=Max("winning_price"))["max_price"] or 40
-            max_price = int((max_price + 9) // 10 * 10)
-            num_bins = min(max_price // 2, 30)
-            if num_bins < 10:
-                num_bins = 10
-            
-            histogram = bin_data(
-                sold_lots,
-                "winning_price",
-                number_of_bins=num_bins,
-                start_bin=1,
-                end_bin=max_price - 1,
-                add_column_for_high_overflow=True,
-            )
-            return [[self.auction.total_unsold_lots] + histogram]
+            data = self.auction.cached_stats["lot_sell_prices"]["data"]
         else:
-            # No sold lots, use default
-            histogram = bin_data(
-                sold_lots,
-                "winning_price",
-                number_of_bins=19,
-                start_bin=1,
-                end_bin=39,
-                add_column_for_high_overflow=True,
-            )
-            return [[self.auction.total_unsold_lots] + histogram]
+            # Fallback: calculate dynamically
+            sold_lots = self.auction.lots_qs.filter(winning_price__isnull=False)
+            if sold_lots.exists():
+                max_price = sold_lots.aggregate(max_price=Max("winning_price"))["max_price"] or 40
+                max_price = int((max_price + 9) // 10 * 10)
+                num_bins = min(max_price // 2, 30)
+                if num_bins < 10:
+                    num_bins = 10
+                
+                histogram = bin_data(
+                    sold_lots,
+                    "winning_price",
+                    number_of_bins=num_bins,
+                    start_bin=1,
+                    end_bin=max_price - 1,
+                    add_column_for_high_overflow=True,
+                )
+                data = [[self.auction.total_unsold_lots] + histogram]
+            else:
+                # No sold lots, use default
+                histogram = bin_data(
+                    sold_lots,
+                    "winning_price",
+                    number_of_bins=19,
+                    start_bin=1,
+                    end_bin=39,
+                    add_column_for_high_overflow=True,
+                )
+                data = [[self.auction.total_unsold_lots] + histogram]
+        
+        # Add comparison auction data if available
+        if self.compare_auction and self.compare_auction.cached_stats and "lot_sell_prices" in self.compare_auction.cached_stats:
+            compare_data = self.compare_auction.cached_stats["lot_sell_prices"]["data"]
+            data = data + compare_data
+        
+        return data
 
 
 class AuctionStatsReferrersJSONView(AuctionStatsBarChartJSONView):
@@ -8221,25 +8301,40 @@ class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
 class AuctionStatsAuctioneerSpeedJSONView(AuctionStatsAttritionJSONView):
     def get_providers(self):
         """Return names of datasets."""
+        providers = []
         # Check if we have cached stats
         if self.auction.cached_stats and "auctioneer_speed" in self.auction.cached_stats:
-            return self.auction.cached_stats["auctioneer_speed"]["providers"]
+            providers = self.auction.cached_stats["auctioneer_speed"]["providers"]
+        else:
+            providers = ["Minutes per lot"]
         
-        return ["Minutes per lot"]
+        # Add comparison auction providers if available
+        if self.compare_auction and self.compare_auction.cached_stats and "auctioneer_speed" in self.compare_auction.cached_stats:
+            compare_providers = [f"{p} ({self.compare_auction.title})" for p in self.compare_auction.cached_stats["auctioneer_speed"]["providers"]]
+            providers = providers + compare_providers
+        
+        return providers
 
     def get_data(self):
-        # Check if we have cached stats
+        # Get main auction data
         if self.auction.cached_stats and "auctioneer_speed" in self.auction.cached_stats:
-            return self.auction.cached_stats["auctioneer_speed"]["data"]
+            data = self.auction.cached_stats["auctioneer_speed"]["data"]
+        else:
+            # Fallback to original calculation
+            data_points = []
+            for i in range(1, len(self.lots)):
+                minutes = (self.lots[i - 1].date_end - self.lots[i].date_end).total_seconds() / 60
+                ignore_if_more_than = 3  # minutes
+                if minutes <= ignore_if_more_than:
+                    data_points.append({"x": i, "y": minutes})
+            data = [data_points]
         
-        # Fallback to original calculation
-        data = []
-        for i in range(1, len(self.lots)):
-            minutes = (self.lots[i - 1].date_end - self.lots[i].date_end).total_seconds() / 60
-            ignore_if_more_than = 3  # minutes
-            if minutes <= ignore_if_more_than:
-                data.append({"x": i, "y": minutes})
-        return [data]
+        # Add comparison auction data if available
+        if self.compare_auction and self.compare_auction.cached_stats and "auctioneer_speed" in self.compare_auction.cached_stats:
+            compare_data = self.compare_auction.cached_stats["auctioneer_speed"]["data"]
+            data = data + compare_data
+        
+        return data
 
 
 class AuctionLabelConfig(LoginRequiredMixin, AuctionViewMixin, FormView):
