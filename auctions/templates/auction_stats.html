@@ -152,7 +152,31 @@
 
 {% endblock %}
             {% include 'auction_ribbon.html' %}
-            <br><h3>Users</h3>
+            <br>
+            {% if admin_auctions %}
+            <div class="mb-3">
+                <label for="compare-auction">Compare with another auction:</label>
+                <select id="compare-auction" class="form-control" style="max-width: 400px;">
+                    <option value="">-- Select an auction to compare --</option>
+                    {% for admin_auction in admin_auctions %}
+                    <option value="{{ admin_auction.slug }}" {% if compare_auction and compare_auction.slug == admin_auction.slug %}selected{% endif %}>
+                        {{ admin_auction.title }} ({{ admin_auction.date_start|date:"M d, Y" }})
+                    </option>
+                    {% endfor %}
+                </select>
+                <script>
+                    document.getElementById('compare-auction').addEventListener('change', function() {
+                        const slug = this.value;
+                        if (slug) {
+                            window.location.href = '?compare=' + slug;
+                        } else {
+                            window.location.href = window.location.pathname;
+                        }
+                    });
+                </script>
+            </div>
+            {% endif %}
+            <h3>Users</h3>
             <table class="table">
                 <thead>
                 </thead>

@@ -2342,6 +2342,25 @@ class AuctionStats(LoginRequiredMixin, AuctionViewMixin, DetailView):
         context = super().get_context_data(**kwargs)
         auction = self.get_object()
         
+        # Get list of auctions user is admin of for comparison
+        if self.request.user.is_authenticated:
+            admin_auctions = Auction.objects.filter(
+                Q(created_by=self.request.user) | Q(auctiontos__user=self.request.user, auctiontos__is_admin=True),
+                is_deleted=False
+            ).exclude(pk=auction.pk).distinct().order_by('-date_start')[:20]
+            context['admin_auctions'] = admin_auctions
+            
+            # Get comparison auction from GET parameters
+            compare_slug = self.request.GET.get('compare')
+            if compare_slug:
+                try:
+                    compare_auction = Auction.objects.get(slug=compare_slug, is_deleted=False)
+                    # Verify user has access to this auction
+                    if compare_auction.created_by == self.request.user or compare_auction.auctiontos__user == self.request.user:
+                        context['compare_auction'] = compare_auction
+                except Auction.DoesNotExist:
+                    pass
+        
         # Check if stats need recalculation (older than 4 hours or missing)
         now = timezone.now()
         four_hours_ago = now - timezone.timedelta(hours=4)
