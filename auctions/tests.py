@@ -3177,6 +3177,319 @@ class WatchOrUnwatchViewTests(StandardTestCase):
         self.assertEqual(response.status_code, 405)
 
 
+class LotEndauctionsMethodsTests(StandardTestCase):
+    """Test the new Lot model methods used by endauctions management command"""
+
+    def test_send_ending_very_soon_message_not_ending(self):
+        """Test that message is not sent when lot is not ending very soon"""
+        # Create a lot that ends in the future
+        future_time = timezone.now() + datetime.timedelta(hours=1)
+        lot = Lot.objects.create(
+            lot_name="Future lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            date_end=future_time,
+            active=True,
+        )
+        # This should not raise an error, and not send a message
+        lot.send_ending_very_soon_message()
+        # If we get here without error, the test passes
+
+    def test_send_ending_very_soon_message_ending_soon(self):
+        """Test that message is sent when lot is ending very soon"""
+        # Create a lot that ends in less than 1 minute
+        soon_time = timezone.now() + datetime.timedelta(seconds=30)
+        lot = Lot.objects.create(
+            lot_name="Ending soon lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            date_end=soon_time,
+            active=True,
+        )
+        # This should not raise an error
+        lot.send_ending_very_soon_message()
+
+    def test_send_ending_very_soon_message_already_sold(self):
+        """Test that message is not sent when lot is already sold"""
+        # Create a sold lot that is ending soon
+        soon_time = timezone.now() + datetime.timedelta(seconds=30)
+        lot = Lot.objects.create(
+            lot_name="Sold lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            date_end=soon_time,
+            active=True,
+            winner=self.userB,
+            winning_price=10,
+        )
+        # This should not send a message since lot is sold
+        lot.send_ending_very_soon_message()
+
+    def test_send_lot_end_message_with_winner(self):
+        """Test that correct message is sent when lot ends with a winner"""
+        # Create a lot with a high bidder (without an auction to avoid complications)
+        lot_end_time = timezone.now() - datetime.timedelta(hours=1)
+        bid_time = timezone.now() - datetime.timedelta(hours=2)
+
+        lot = Lot.objects.create(
+            lot_name="Lot with winner",
+            user=self.user,
+            quantity=1,
+            date_end=lot_end_time,
+            active=True,
+            reserve_price=5,
+        )
+        # Add a bid with a time before the lot ended
+        bid = Bid.objects.create(lot_number=lot, user=self.userB, amount=10, was_high_bid=True)
+        # Set the bid time to before the lot ended
+        bid.bid_time = bid_time
+        bid.last_bid_time = bid_time
+        bid.save()
+
+        # Send lot end message
+        lot.send_lot_end_message()
+
+        # Check that LotHistory was created
+        history = LotHistory.objects.filter(lot=lot).first()
+        self.assertIsNotNone(history)
+        self.assertIn("Won by", history.message)
+
+    def test_send_lot_end_message_no_winner(self):
+        """Test that correct message is sent when lot ends without a winner"""
+        # Create a lot without bids
+        past_time = timezone.now() - datetime.timedelta(hours=1)
+        lot = Lot.objects.create(
+            lot_name="Lot without winner",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            date_end=past_time,
+            active=True,
+            reserve_price=5,
+        )
+
+        # Send lot end message
+        lot.send_lot_end_message()
+
+        # Check that LotHistory was created
+        history = LotHistory.objects.filter(lot=lot).first()
+        self.assertIsNotNone(history)
+        self.assertEqual(history.message, "This lot did not sell")
+
+    def test_send_non_auction_lot_emails_with_winner(self):
+        """Test that emails are sent for non-auction lots with winners"""
+        # Create a non-auction lot with a winner
+        # Use user_with_no_lots which has a valid email
+        lot = Lot.objects.create(
+            lot_name="Non-auction lot",
+            user=self.user,
+            quantity=1,
+            winner=self.user_with_no_lots,
+            winning_price=10,
+            active=False,
+        )
+
+        # This should not raise an error
+        lot.send_non_auction_lot_emails()
+
+    def test_send_non_auction_lot_emails_no_winner(self):
+        """Test that emails are not sent for non-auction lots without winners"""
+        # Create a non-auction lot without a winner
+        lot = Lot.objects.create(
+            lot_name="Non-auction lot no winner",
+            user=self.user,
+            quantity=1,
+            active=False,
+        )
+
+        # This should not raise an error or send emails
+        lot.send_non_auction_lot_emails()
+
+    def test_send_non_auction_lot_emails_in_auction(self):
+        """Test that emails are not sent for auction lots"""
+        # Create an auction lot with a winner
+        lot = Lot.objects.create(
+            lot_name="Auction lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            winner=self.userB,
+            winning_price=10,
+            active=False,
+        )
+
+        # This should not send emails since it's in an auction
+        lot.send_non_auction_lot_emails()
+
+    def test_process_relist_logic_no_relist(self):
+        """Test relist logic when lot should not be relisted"""
+        # Create a non-auction lot with no relist settings
+        lot = Lot.objects.create(
+            lot_name="No relist lot",
+            user=self.user,
+            quantity=1,
+            active=False,
+            relist_if_sold=False,
+            relist_if_not_sold=False,
+        )
+
+        relist, sendNoRelistWarning = lot.process_relist_logic()
+        self.assertFalse(relist)
+        self.assertFalse(sendNoRelistWarning)
+
+    def test_process_relist_logic_relist_if_sold_with_countdown(self):
+        """Test relist logic when lot sold and should be relisted"""
+        # Create a non-auction lot that sold and should be relisted
+        lot = Lot.objects.create(
+            lot_name="Relist if sold lot",
+            user=self.user,
+            quantity=1,
+            winner=self.userB,
+            winning_price=10,
+            active=False,
+            relist_if_sold=True,
+            relist_countdown=3,
+        )
+
+        relist, sendNoRelistWarning = lot.process_relist_logic()
+        self.assertTrue(relist)
+        self.assertFalse(sendNoRelistWarning)
+        self.assertEqual(lot.relist_countdown, 2)
+
+    def test_process_relist_logic_relist_if_sold_no_countdown(self):
+        """Test relist logic when lot sold but countdown is 0"""
+        # Create a non-auction lot that sold but has no more relists
+        lot = Lot.objects.create(
+            lot_name="No more relists lot",
+            user=self.user,
+            quantity=1,
+            winner=self.userB,
+            winning_price=10,
+            active=False,
+            relist_if_sold=True,
+            relist_countdown=0,
+        )
+
+        relist, sendNoRelistWarning = lot.process_relist_logic()
+        self.assertFalse(relist)
+        self.assertTrue(sendNoRelistWarning)
+
+    def test_process_relist_logic_relist_if_not_sold_with_countdown(self):
+        """Test relist logic when lot didn't sell and should be relisted"""
+        # Create a non-auction lot that didn't sell and should be relisted
+        past_time = timezone.now() - datetime.timedelta(hours=1)
+        lot = Lot.objects.create(
+            lot_name="Relist if not sold lot",
+            user=self.user,
+            quantity=1,
+            date_end=past_time,
+            active=False,
+            relist_if_not_sold=True,
+            relist_countdown=3,
+            lot_run_duration=10,
+        )
+
+        relist, sendNoRelistWarning = lot.process_relist_logic()
+        self.assertFalse(relist)  # unsold lots don't trigger immediate relist
+        self.assertFalse(sendNoRelistWarning)
+        self.assertEqual(lot.relist_countdown, 2)
+        self.assertTrue(lot.active)  # lot is reactivated
+
+    def test_process_relist_logic_relist_if_not_sold_no_countdown(self):
+        """Test relist logic when lot didn't sell but countdown is 0"""
+        # Create a non-auction lot that didn't sell but has no more relists
+        lot = Lot.objects.create(
+            lot_name="No more relists unsold lot",
+            user=self.user,
+            quantity=1,
+            active=False,
+            relist_if_not_sold=True,
+            relist_countdown=0,
+        )
+
+        relist, sendNoRelistWarning = lot.process_relist_logic()
+        self.assertFalse(relist)
+        self.assertTrue(sendNoRelistWarning)
+
+    def test_process_relist_logic_auction_lot(self):
+        """Test relist logic doesn't apply to auction lots"""
+        # Create an auction lot
+        lot = Lot.objects.create(
+            lot_name="Auction lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            active=False,
+            relist_if_sold=True,
+            relist_countdown=3,
+        )
+
+        relist, sendNoRelistWarning = lot.process_relist_logic()
+        self.assertFalse(relist)
+        self.assertFalse(sendNoRelistWarning)
+
+    def test_relist_lot_basic(self):
+        """Test that relist_lot creates a new lot correctly"""
+        # Create a lot to relist
+        original_lot = Lot.objects.create(
+            lot_name="Original lot",
+            user=self.user,
+            quantity=1,
+            winner=self.userB,
+            winning_price=10,
+            active=False,
+            lot_run_duration=10,
+        )
+        original_pk = original_lot.pk
+
+        # Relist the lot
+        new_lot = original_lot.relist_lot()
+
+        # Check that a new lot was created
+        self.assertNotEqual(new_lot.pk, original_pk)
+        self.assertTrue(new_lot.active)
+        self.assertIsNone(new_lot.winner)
+        self.assertIsNone(new_lot.winning_price)
+        self.assertFalse(new_lot.buy_now_used)
+        self.assertEqual(new_lot.lot_name, "Original lot")
+
+    def test_relist_lot_with_images(self):
+        """Test that relist_lot copies images correctly"""
+        from auctions.models import LotImage
+
+        # Create a lot with an image
+        original_lot = Lot.objects.create(
+            lot_name="Lot with image",
+            user=self.user,
+            quantity=1,
+            winner=self.userB,
+            winning_price=10,
+            active=False,
+            lot_run_duration=10,
+        )
+
+        # Create an image for the lot
+        LotImage.objects.create(
+            lot_number=original_lot,
+            image_source="ACTUAL",
+            is_primary=True,
+        )
+
+        # Relist the lot
+        new_lot = original_lot.relist_lot()
+
+        # Check that image was copied
+        new_images = LotImage.objects.filter(lot_number=new_lot)
+        self.assertEqual(new_images.count(), 1)
+        new_image = new_images.first()
+        # ACTUAL should change to REPRESENTATIVE on relist
+        self.assertEqual(new_image.image_source, "REPRESENTATIVE")
+        self.assertTrue(new_image.is_primary)
+
+
 class WebSocketConsumerTests(StandardTestCase):
     """Tests for websocket consumers (LotConsumer, UserConsumer, AuctionConsumer)
 

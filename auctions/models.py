@@ -40,9 +40,11 @@ from django.urls import reverse
 from django.utils import html, timezone
 from django.utils.safestring import mark_safe
 from easy_thumbnails.fields import ThumbnailerImageField
+from easy_thumbnails.files import get_thumbnailer
 from location_field.models.plain import PlainLocationField
 from markdownfield.models import MarkdownField, RenderedMarkdownField
 from markdownfield.validators import VALIDATOR_STANDARD
+from post_office import mail
 from pytz import timezone as pytz_timezone
 
 logger = logging.getLogger(__name__)
@@ -2701,6 +2703,145 @@ class Lot(models.Model):
     def send_websocket_message(self, message):
         channel_layer = channels.layers.get_channel_layer()
         async_to_sync(channel_layer.group_send)(f"lot_{self.pk}", message)
+
+    def send_ending_very_soon_message(self):
+        """Send a websocket message when the lot is ending in less than a minute"""
+        if self.ending_very_soon and not self.sold:
+            result = {
+                "type": "chat_message",
+                "info": "CHAT",
+                "message": "Bidding ends in less than a minute!!",
+                "pk": -1,
+                "username": "System",
+            }
+            self.send_websocket_message(result)
+
+    def send_lot_end_message(self):
+        """Send websocket message and create LotHistory when lot ends with or without a winner"""
+        info = None
+        bidder = None
+
+        if self.high_bidder:
+            self.sell_to_online_high_bidder
+            info = "LOT_END_WINNER"
+            bidder = self.high_bidder
+            high_bidder_pk = self.high_bidder.pk
+            high_bidder_name = str(self.high_bidder_display)
+            current_high_bid = self.high_bid
+            message = f"Won by {self.high_bidder_display}"
+
+        # at this point, the lot should have a winner filled out if it's sold.  If it still doesn't:
+        if not self.sold:
+            high_bidder_pk = None
+            high_bidder_name = None
+            current_high_bid = None
+            message = "This lot did not sell"
+            bidder = None
+            info = "ENDED_NO_WINNER"
+
+        result = {
+            "type": "chat_message",
+            "info": info,
+            "message": message,
+            "high_bidder_pk": high_bidder_pk,
+            "high_bidder_name": high_bidder_name,
+            "current_high_bid": current_high_bid,
+        }
+
+        if info:
+            self.send_websocket_message(result)
+            LotHistory.objects.create(
+                lot=self,
+                user=bidder,
+                message=message,
+                changed_price=True,
+                current_price=self.high_bid,
+            )
+        self.save()
+
+    def send_non_auction_lot_emails(self):
+        """Send winner and seller emails for lots not in an auction"""
+        if self.winner and not self.auction:
+            current_site = Site.objects.get_current()
+            # email the winner first
+            mail.send(
+                self.winner.email,
+                headers={"Reply-to": self.user.email},
+                template="non_auction_lot_winner",
+                context={"lot": self, "domain": current_site.domain},
+            )
+            # now, email the seller
+            mail.send(
+                self.user.email,
+                headers={"Reply-to": self.winner.email},
+                template="non_auction_lot_seller",
+                context={"lot": self, "domain": current_site.domain},
+            )
+
+    def process_relist_logic(self):
+        """Handle automatic relisting logic for non-auction lots
+
+        Returns:
+            tuple: (relist: bool, sendNoRelistWarning: bool)
+        """
+        relist = False
+        sendNoRelistWarning = False
+
+        if not self.auction:
+            if self.winner and self.relist_if_sold and (not self.relist_countdown):
+                sendNoRelistWarning = True
+            if (not self.winner) and self.relist_if_not_sold and (not self.relist_countdown):
+                sendNoRelistWarning = True
+            if self.winner and self.relist_if_sold and self.relist_countdown:
+                self.relist_countdown -= 1
+                relist = True
+            if (not self.winner) and self.relist_if_not_sold and self.relist_countdown:
+                # no need to relist unsold lots, just decrement the countdown
+                self.relist_countdown -= 1
+                self.date_end = timezone.now() + datetime.timedelta(days=self.lot_run_duration)
+                self.active = True
+                self.seller_invoice = None
+                self.buyer_invoice = None
+        self.save()
+        return relist, sendNoRelistWarning
+
+    def relist_lot(self):
+        """Create a duplicate lot for relisting purposes
+
+        Returns:
+            Lot: The newly created lot
+        """
+        originalImages = LotImage.objects.filter(lot_number=self.pk)
+        originalPk = self.pk
+        self.pk = None  # create a new, duplicate lot
+        self.date_end = timezone.now() + datetime.timedelta(days=self.lot_run_duration)
+        self.active = True
+        self.winner = None
+        self.winning_price = None
+        self.seller_invoice = None
+        self.buyer_invoice = None
+        self.buy_now_used = False
+        self.save()
+
+        # copy shipping locations
+        for location in Lot.objects.get(lot_number=originalPk).shipping_locations.all():
+            self.shipping_locations.add(location)
+
+        # copy images
+        for originalImage in originalImages:
+            newImage = LotImage.objects.create(
+                createdon=originalImage.createdon,
+                lot_number=self,
+                image_source=originalImage.image_source,
+                is_primary=originalImage.is_primary,
+            )
+            newImage.image = get_thumbnailer(originalImage.image)
+            # if the original lot sold, this picture sure isn't of the actual item
+            if originalImage.image_source == "ACTUAL":
+                newImage.image_source = "REPRESENTATIVE"
+            newImage.save()
+
+        return self
 
     def refund(self, amount, user, message=None):
         """Call this to add a message when refunding a lot"""
