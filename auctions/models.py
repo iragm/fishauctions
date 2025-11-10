@@ -777,6 +777,12 @@ class Auction(models.Model):
     google_drive_link.help_text = "Link to a Google Sheet with user information.  Make sure the sheet is shared with 'anyone with the link can view'."
     last_sync_time = models.DateTimeField(blank=True, null=True)
     last_sync_time.help_text = "Last time user data was synchronized from Google Drive"
+    cached_stats = models.JSONField(blank=True, null=True, default=None)
+    cached_stats.help_text = "Cached auction statistics data to avoid recalculating on every page load"
+    last_stats_update = models.DateTimeField(blank=True, null=True)
+    last_stats_update.help_text = "Timestamp of when auction statistics were last calculated"
+    next_update_due = models.DateTimeField(blank=True, null=True)
+    next_update_due.help_text = "Timestamp for when the next statistics update should be run"
 
     @property
     def promotion_request_mailto_query(self):
