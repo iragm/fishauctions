@@ -955,7 +955,9 @@ class CreateEditAuctionTOS(forms.ModelForm):
                 self.fields[
                     "email"
                 ].help_text = f"<span class='text-warning'>Emails sent to {self.auctiontos.email} have bounced</span>, try to get an updated email from this user."
-            self.fields["phone_number"].initial = getattr(self.auctiontos, 'phone_as_string', self.auctiontos.phone_number)
+            self.fields["phone_number"].initial = getattr(
+                self.auctiontos, "phone_as_string", self.auctiontos.phone_number
+            )
             self.fields["address"].initial = self.auctiontos.address
             self.fields["pickup_location"].initial = self.auctiontos.pickup_location.pk
             self.fields["is_admin"].initial = self.auctiontos.is_admin

@@ -405,7 +405,7 @@ class LotFilter(django_filters.FilterSet):
         self.longitude = kwargs.pop("longitude", None)
         self.listType = kwargs.pop("listType", None)
         self.keywords = kwargs.pop("keywords", [])
-        
+
         # Get request and user
         if "request" in kwargs:
             self.request = kwargs["request"]
@@ -415,12 +415,12 @@ class LotFilter(django_filters.FilterSet):
             self.longitude = self.request.COOKIES.get("longitude", self.longitude)
         else:
             self.user = kwargs.pop("user")
-        
+
         # Try to get location from userdata if not set
         if not self.latitude and not self.longitude and self.user.is_authenticated:
             self.latitude = self.user.userdata.latitude
             self.longitude = self.user.userdata.longitude
-        
+
         # annotate lots with the distance to the request user, requires self.latitude and self.longitude
         self.showLocal = bool(self.latitude and self.longitude)
         self.showOwnLots = True  # show lots from the request user. I don't think this is used anywhere
@@ -447,7 +447,9 @@ class LotFilter(django_filters.FilterSet):
             if self.user.userdata.location:
                 self.shippingLocation = self.user.userdata.location
         self.ignore = kwargs.pop("ignore", False)
-        self.regardingAuction = kwargs.pop("regardingAuction", None)  # force only displaying lots from a particular auction
+        self.regardingAuction = kwargs.pop(
+            "regardingAuction", None
+        )  # force only displaying lots from a particular auction
         # force only displaying lots for a particular user (not necessarily the request user)
         self.regardingUser = kwargs.pop("regardingUser", None)
         self.order = kwargs.pop("order", "-lot_number")  # default ordering is just the most recent on top
@@ -457,7 +459,7 @@ class LotFilter(django_filters.FilterSet):
                 self.regardingAuction = Auction.objects.get(slug=forceAuction, is_deleted=False)
             except Auction.DoesNotExist:
                 pass
-        forceAuction = self.request.GET.get("auction") if hasattr(self, 'request') else None
+        forceAuction = self.request.GET.get("auction") if hasattr(self, "request") else None
         if forceAuction:
             if forceAuction != "no_auction":
                 try:

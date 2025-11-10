@@ -503,7 +503,9 @@ class LotListView(AjaxListView):
         if self.request.user.is_authenticated:
             try:
                 context["lastView"] = (
-                    PageView.objects.filter(user=self.request.user, lot_number__isnull=False).order_by("-date_start")[0].date_start
+                    PageView.objects.filter(user=self.request.user, lot_number__isnull=False)
+                    .order_by("-date_start")[0]
+                    .date_start
                 )
             except IndexError:
                 context["lastView"] = timezone.now()
@@ -673,7 +675,9 @@ class RecommendedLots(ListView):
         context["embed"] = data.get("embed", "standalone_page")
         if self.request.user.is_authenticated:
             try:
-                context["lastView"] = PageView.objects.filter(user=self.request.user).order_by("-date_start")[0].date_start
+                context["lastView"] = (
+                    PageView.objects.filter(user=self.request.user).order_by("-date_start")[0].date_start
+                )
             except IndexError:
                 context["lastView"] = timezone.now()
         else:
@@ -1545,7 +1549,7 @@ class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
                 if not profitOutsideAuction:
                     profitOutsideAuction = 0
                 distance = data.distance_traveled or ""
-                club = getattr(data.user.userdata, 'club', None)
+                club = getattr(data.user.userdata, "club", None)
                 username = data.user.username
                 previous_auctions = AuctionTOS.objects.filter(user=data.user).exclude(pk=data.pk).count()
                 number_of_userbans = data.number_of_userbans
@@ -3299,7 +3303,9 @@ class ViewLot(DetailView):
         if self.request.user.is_authenticated:
             try:
                 defaultBidAmount = Bid.objects.get(user=self.request.user, lot_number=lot.pk, is_deleted=False).amount
-                context["viewer_bid_pk"] = Bid.objects.get(user=self.request.user, lot_number=lot.pk, is_deleted=False).pk
+                context["viewer_bid_pk"] = Bid.objects.get(
+                    user=self.request.user, lot_number=lot.pk, is_deleted=False
+                ).pk
                 context["viewer_bid"] = defaultBidAmount
                 defaultBidAmount = defaultBidAmount + 1
             except Bid.DoesNotExist:
@@ -3323,7 +3329,7 @@ class ViewLot(DetailView):
                 else:
                     defaultBidAmount = lot.high_bid + max(math.floor(lot.high_bid * 0.05), 1)
         context["viewer_pk"] = self.request.user.pk
-        context["submitter_pk"] = getattr(lot.user, 'pk', 0)
+        context["submitter_pk"] = getattr(lot.user, "pk", 0)
         context["user_specific_bidding_error"] = False
         if not self.request.user.is_authenticated:
             context["user_specific_bidding_error"] = (
@@ -5103,7 +5109,7 @@ class AllLots(LotListView, AuctionViewMixin):
     def render_to_response(self, context, **response_kwargs):
         """override the default just to add a cookie -- this will allow us to save ordering for subsequent views"""
         response = super().render_to_response(context, **response_kwargs)
-        if hasattr(self, 'ordering'):
+        if hasattr(self, "ordering"):
             response.set_cookie("lot_order", self.ordering)
         return response
 
