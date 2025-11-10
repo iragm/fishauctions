@@ -4759,22 +4759,28 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
             )
         else:
             context["ended"] = False
-        try:
-            existingTos = AuctionTOS.objects.get(user=self.request.user, auction=self.auction)
-            existingTos = existingTos.pickup_location
-            i_agree = True
-            context["hasChosenLocation"] = existingTos.pk
-        except AuctionTOS.DoesNotExist:
+        
+        # Initialize existingTos and i_agree for form
+        existingTos = None
+        i_agree = False
+        
+        if self.request.user.is_authenticated:
+            try:
+                tos = AuctionTOS.objects.get(user=self.request.user, auction=self.auction)
+                existingTos = tos.pickup_location
+                i_agree = True
+                context["hasChosenLocation"] = existingTos.pk if existingTos else False
+            except AuctionTOS.DoesNotExist:
+                context["hasChosenLocation"] = False
+                if self.auction.multi_location:
+                    i_agree = True
+                else:
+                    existingTos = PickupLocation.objects.filter(auction=self.auction).first()
+        else:
             context["hasChosenLocation"] = False
-            # if not self.get_object().no_location:
-            #     # this selects the first location in multi-location auction as the default
-            #     existingTos = PickupLocation.objects.filter(auction=self.get_object().pk)[0]
-            # else:
-            existingTos = None
             if self.auction.multi_location:
                 i_agree = True
             else:
-                i_agree = False
                 existingTos = PickupLocation.objects.filter(auction=self.auction).first()
             # if self.request.user.is_authenticated and not context['ended']:
             #     if not self.get_object().no_location:
