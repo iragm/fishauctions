@@ -3488,6 +3488,8 @@ class LotEndauctionsMethodsTests(StandardTestCase):
         # ACTUAL should change to REPRESENTATIVE on relist
         self.assertEqual(new_image.image_source, "REPRESENTATIVE")
         self.assertTrue(new_image.is_primary)
+
+
 class WebSocketConsumerTests(StandardTestCase):
     """Tests for websocket consumers (LotConsumer, UserConsumer, AuctionConsumer)
 
