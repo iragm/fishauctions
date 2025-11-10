@@ -1,7 +1,5 @@
 from django.conf import settings  # import the settings file
 
-from auctions.models import UserData
-
 
 def google_analytics(request):
     """Return google tracking codes from settings"""

@@ -13,7 +13,6 @@ from auctions.models import (
     AuctionTOS,
     Lot,
     PickupLocation,
-    UserData,
     distance_to,
 )
 
