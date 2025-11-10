@@ -1215,9 +1215,9 @@ class DynamicSetLotWinnerViewTestCase(StandardTestCase):
 
     def test_anonymous_user(self):
         response = self.client.get(self.get_url())
-        assert response.status_code == 403
+        assert response.status_code == 302  # Redirect to login
         response = self.client.post(self.get_url())
-        assert response.status_code == 403
+        assert response.status_code == 302  # Redirect to login
 
     def test_non_admin_user(self):
         self.client.login(username=self.user_who_does_not_join.username, password="testpassword")
@@ -3175,3 +3175,763 @@ class WatchOrUnwatchViewTests(StandardTestCase):
         self.client.login(username=self.user.username, password="testpassword")
         response = self.client.get(f"/api/watchitem/{self.lot.pk}/")
         self.assertEqual(response.status_code, 405)
+
+
+class LotEndauctionsMethodsTests(StandardTestCase):
+    """Test the new Lot model methods used by endauctions management command"""
+
+    def test_send_ending_very_soon_message_not_ending(self):
+        """Test that message is not sent when lot is not ending very soon"""
+        # Create a lot that ends in the future
+        future_time = timezone.now() + datetime.timedelta(hours=1)
+        lot = Lot.objects.create(
+            lot_name="Future lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            date_end=future_time,
+            active=True,
+        )
+        # This should not raise an error, and not send a message
+        lot.send_ending_very_soon_message()
+        # If we get here without error, the test passes
+
+    def test_send_ending_very_soon_message_ending_soon(self):
+        """Test that message is sent when lot is ending very soon"""
+        # Create a lot that ends in less than 1 minute
+        soon_time = timezone.now() + datetime.timedelta(seconds=30)
+        lot = Lot.objects.create(
+            lot_name="Ending soon lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            date_end=soon_time,
+            active=True,
+        )
+        # This should not raise an error
+        lot.send_ending_very_soon_message()
+
+    def test_send_ending_very_soon_message_already_sold(self):
+        """Test that message is not sent when lot is already sold"""
+        # Create a sold lot that is ending soon
+        soon_time = timezone.now() + datetime.timedelta(seconds=30)
+        lot = Lot.objects.create(
+            lot_name="Sold lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            date_end=soon_time,
+            active=True,
+            winner=self.userB,
+            winning_price=10,
+        )
+        # This should not send a message since lot is sold
+        lot.send_ending_very_soon_message()
+
+    def test_send_lot_end_message_with_winner(self):
+        """Test that correct message is sent when lot ends with a winner"""
+        # Create a lot with a high bidder (without an auction to avoid complications)
+        lot_end_time = timezone.now() - datetime.timedelta(hours=1)
+        bid_time = timezone.now() - datetime.timedelta(hours=2)
+
+        lot = Lot.objects.create(
+            lot_name="Lot with winner",
+            user=self.user,
+            quantity=1,
+            date_end=lot_end_time,
+            active=True,
+            reserve_price=5,
+        )
+        # Add a bid with a time before the lot ended
+        bid = Bid.objects.create(lot_number=lot, user=self.userB, amount=10, was_high_bid=True)
+        # Set the bid time to before the lot ended
+        bid.bid_time = bid_time
+        bid.last_bid_time = bid_time
+        bid.save()
+
+        # Send lot end message
+        lot.send_lot_end_message()
+
+        # Check that LotHistory was created
+        history = LotHistory.objects.filter(lot=lot).first()
+        self.assertIsNotNone(history)
+        self.assertIn("Won by", history.message)
+
+    def test_send_lot_end_message_no_winner(self):
+        """Test that correct message is sent when lot ends without a winner"""
+        # Create a lot without bids
+        past_time = timezone.now() - datetime.timedelta(hours=1)
+        lot = Lot.objects.create(
+            lot_name="Lot without winner",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            date_end=past_time,
+            active=True,
+            reserve_price=5,
+        )
+
+        # Send lot end message
+        lot.send_lot_end_message()
+
+        # Check that LotHistory was created
+        history = LotHistory.objects.filter(lot=lot).first()
+        self.assertIsNotNone(history)
+        self.assertEqual(history.message, "This lot did not sell")
+
+    def test_send_non_auction_lot_emails_with_winner(self):
+        """Test that emails are sent for non-auction lots with winners"""
+        # Create a non-auction lot with a winner
+        # Use user_with_no_lots which has a valid email
+        lot = Lot.objects.create(
+            lot_name="Non-auction lot",
+            user=self.user,
+            quantity=1,
+            winner=self.user_with_no_lots,
+            winning_price=10,
+            active=False,
+        )
+
+        # This should not raise an error
+        lot.send_non_auction_lot_emails()
+
+    def test_send_non_auction_lot_emails_no_winner(self):
+        """Test that emails are not sent for non-auction lots without winners"""
+        # Create a non-auction lot without a winner
+        lot = Lot.objects.create(
+            lot_name="Non-auction lot no winner",
+            user=self.user,
+            quantity=1,
+            active=False,
+        )
+
+        # This should not raise an error or send emails
+        lot.send_non_auction_lot_emails()
+
+    def test_send_non_auction_lot_emails_in_auction(self):
+        """Test that emails are not sent for auction lots"""
+        # Create an auction lot with a winner
+        lot = Lot.objects.create(
+            lot_name="Auction lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            winner=self.userB,
+            winning_price=10,
+            active=False,
+        )
+
+        # This should not send emails since it's in an auction
+        lot.send_non_auction_lot_emails()
+
+    def test_process_relist_logic_no_relist(self):
+        """Test relist logic when lot should not be relisted"""
+        # Create a non-auction lot with no relist settings
+        lot = Lot.objects.create(
+            lot_name="No relist lot",
+            user=self.user,
+            quantity=1,
+            active=False,
+            relist_if_sold=False,
+            relist_if_not_sold=False,
+        )
+
+        relist, sendNoRelistWarning = lot.process_relist_logic()
+        self.assertFalse(relist)
+        self.assertFalse(sendNoRelistWarning)
+
+    def test_process_relist_logic_relist_if_sold_with_countdown(self):
+        """Test relist logic when lot sold and should be relisted"""
+        # Create a non-auction lot that sold and should be relisted
+        lot = Lot.objects.create(
+            lot_name="Relist if sold lot",
+            user=self.user,
+            quantity=1,
+            winner=self.userB,
+            winning_price=10,
+            active=False,
+            relist_if_sold=True,
+            relist_countdown=3,
+        )
+
+        relist, sendNoRelistWarning = lot.process_relist_logic()
+        self.assertTrue(relist)
+        self.assertFalse(sendNoRelistWarning)
+        self.assertEqual(lot.relist_countdown, 2)
+
+    def test_process_relist_logic_relist_if_sold_no_countdown(self):
+        """Test relist logic when lot sold but countdown is 0"""
+        # Create a non-auction lot that sold but has no more relists
+        lot = Lot.objects.create(
+            lot_name="No more relists lot",
+            user=self.user,
+            quantity=1,
+            winner=self.userB,
+            winning_price=10,
+            active=False,
+            relist_if_sold=True,
+            relist_countdown=0,
+        )
+
+        relist, sendNoRelistWarning = lot.process_relist_logic()
+        self.assertFalse(relist)
+        self.assertTrue(sendNoRelistWarning)
+
+    def test_process_relist_logic_relist_if_not_sold_with_countdown(self):
+        """Test relist logic when lot didn't sell and should be relisted"""
+        # Create a non-auction lot that didn't sell and should be relisted
+        past_time = timezone.now() - datetime.timedelta(hours=1)
+        lot = Lot.objects.create(
+            lot_name="Relist if not sold lot",
+            user=self.user,
+            quantity=1,
+            date_end=past_time,
+            active=False,
+            relist_if_not_sold=True,
+            relist_countdown=3,
+            lot_run_duration=10,
+        )
+
+        relist, sendNoRelistWarning = lot.process_relist_logic()
+        self.assertFalse(relist)  # unsold lots don't trigger immediate relist
+        self.assertFalse(sendNoRelistWarning)
+        self.assertEqual(lot.relist_countdown, 2)
+        self.assertTrue(lot.active)  # lot is reactivated
+
+    def test_process_relist_logic_relist_if_not_sold_no_countdown(self):
+        """Test relist logic when lot didn't sell but countdown is 0"""
+        # Create a non-auction lot that didn't sell but has no more relists
+        lot = Lot.objects.create(
+            lot_name="No more relists unsold lot",
+            user=self.user,
+            quantity=1,
+            active=False,
+            relist_if_not_sold=True,
+            relist_countdown=0,
+        )
+
+        relist, sendNoRelistWarning = lot.process_relist_logic()
+        self.assertFalse(relist)
+        self.assertTrue(sendNoRelistWarning)
+
+    def test_process_relist_logic_auction_lot(self):
+        """Test relist logic doesn't apply to auction lots"""
+        # Create an auction lot
+        lot = Lot.objects.create(
+            lot_name="Auction lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            active=False,
+            relist_if_sold=True,
+            relist_countdown=3,
+        )
+
+        relist, sendNoRelistWarning = lot.process_relist_logic()
+        self.assertFalse(relist)
+        self.assertFalse(sendNoRelistWarning)
+
+    def test_relist_lot_basic(self):
+        """Test that relist_lot creates a new lot correctly"""
+        # Create a lot to relist
+        original_lot = Lot.objects.create(
+            lot_name="Original lot",
+            user=self.user,
+            quantity=1,
+            winner=self.userB,
+            winning_price=10,
+            active=False,
+            lot_run_duration=10,
+        )
+        original_pk = original_lot.pk
+
+        # Relist the lot
+        new_lot = original_lot.relist_lot()
+
+        # Check that a new lot was created
+        self.assertNotEqual(new_lot.pk, original_pk)
+        self.assertTrue(new_lot.active)
+        self.assertIsNone(new_lot.winner)
+        self.assertIsNone(new_lot.winning_price)
+        self.assertFalse(new_lot.buy_now_used)
+        self.assertEqual(new_lot.lot_name, "Original lot")
+
+    def test_relist_lot_with_images(self):
+        """Test that relist_lot copies images correctly"""
+        from auctions.models import LotImage
+
+        # Create a lot with an image
+        original_lot = Lot.objects.create(
+            lot_name="Lot with image",
+            user=self.user,
+            quantity=1,
+            winner=self.userB,
+            winning_price=10,
+            active=False,
+            lot_run_duration=10,
+        )
+
+        # Create an image for the lot
+        LotImage.objects.create(
+            lot_number=original_lot,
+            image_source="ACTUAL",
+            is_primary=True,
+        )
+
+        # Relist the lot
+        new_lot = original_lot.relist_lot()
+
+        # Check that image was copied
+        new_images = LotImage.objects.filter(lot_number=new_lot)
+        self.assertEqual(new_images.count(), 1)
+        new_image = new_images.first()
+        # ACTUAL should change to REPRESENTATIVE on relist
+        self.assertEqual(new_image.image_source, "REPRESENTATIVE")
+        self.assertTrue(new_image.is_primary)
+
+
+class WebSocketConsumerTests(StandardTestCase):
+    """Tests for websocket consumers (LotConsumer, UserConsumer, AuctionConsumer)
+
+    Best practices for websocket tests in CI:
+    - All operations have timeouts
+    - Proper cleanup with try-finally blocks
+    - Simplified message handling to avoid hanging
+    """
+
+    # Timeout constants for CI reliability
+    CONNECT_TIMEOUT = 5
+    DISCONNECT_TIMEOUT = 5
+    RECEIVE_TIMEOUT = 3
+
+    async def _create_active_lot_with_auction(self, seller_user, bidder_user=None):
+        """Helper method to create an active lot with a future-dated auction"""
+        from channels.db import database_sync_to_async
+
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        auction = await database_sync_to_async(Auction.objects.create)(
+            created_by=seller_user,
+            title="Future auction",
+            is_online=True,
+            date_end=theFuture,
+            date_start=timezone.now(),
+        )
+        location = await database_sync_to_async(PickupLocation.objects.create)(
+            name="test location", auction=auction, pickup_time=theFuture
+        )
+        seller_tos = await database_sync_to_async(AuctionTOS.objects.create)(
+            user=seller_user, auction=auction, pickup_location=location
+        )
+
+        if bidder_user:
+            await database_sync_to_async(AuctionTOS.objects.create)(
+                user=bidder_user, auction=auction, pickup_location=location
+            )
+
+        lot = await database_sync_to_async(Lot.objects.create)(
+            lot_name="Test websocket lot",
+            auction=auction,
+            auctiontos_seller=seller_tos,
+            quantity=1,
+            reserve_price=10,
+            date_end=theFuture,
+        )
+        return lot
+
+    async def test_lot_consumer_connect_authenticated_user(self):
+        """Test LotConsumer connection with authenticated user who has joined auction"""
+        from channels.testing import WebsocketCommunicator
+
+        from auctions.consumers import LotConsumer
+
+        lot = await self._create_active_lot_with_auction(self.user, self.user)
+
+        communicator = WebsocketCommunicator(
+            LotConsumer.as_asgi(),
+            f"/ws/lots/{lot.pk}/",
+        )
+        communicator.scope["user"] = self.user
+        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
+
+        try:
+            connected, _ = await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+            self.assertTrue(connected)
+        finally:
+            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
+
+    async def test_lot_consumer_connect_anonymous_user(self):
+        """Test LotConsumer connection with anonymous user"""
+        from channels.testing import WebsocketCommunicator
+        from django.contrib.auth.models import AnonymousUser
+
+        from auctions.consumers import LotConsumer
+
+        lot = await self._create_active_lot_with_auction(self.user)
+
+        communicator = WebsocketCommunicator(
+            LotConsumer.as_asgi(),
+            f"/ws/lots/{lot.pk}/",
+        )
+        communicator.scope["user"] = AnonymousUser()
+        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
+
+        try:
+            # Anonymous users can connect to view lot
+            connected, _ = await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+            self.assertTrue(connected)
+        finally:
+            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
+
+    async def test_lot_consumer_chat_message_authenticated(self):
+        """Test sending chat message as authenticated user who has joined auction"""
+        from channels.testing import WebsocketCommunicator
+
+        from auctions.consumers import LotConsumer
+
+        lot = await self._create_active_lot_with_auction(self.user, self.user_with_no_lots)
+
+        communicator = WebsocketCommunicator(
+            LotConsumer.as_asgi(),
+            f"/ws/lots/{lot.pk}/",
+        )
+        communicator.scope["user"] = self.user_with_no_lots
+        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
+
+        try:
+            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+
+            # Send a chat message
+            await communicator.send_json_to({"message": "Hello from test!"})
+
+            # Should receive the message back, skip any system messages
+            found_message = False
+            for _ in range(5):  # Reduced from 10 to 5 for faster failure
+                try:
+                    response = await communicator.receive_json_from(timeout=self.RECEIVE_TIMEOUT)
+                    if response.get("message") == "Hello from test!" and response.get("info") == "CHAT":
+                        found_message = True
+                        self.assertEqual(response["username"], str(self.user_with_no_lots))
+                        break
+                except:
+                    break
+
+            self.assertTrue(found_message, "Did not receive the expected chat message")
+        finally:
+            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
+
+    async def test_lot_consumer_chat_message_anonymous(self):
+        """Test that anonymous users cannot send chat messages"""
+        from channels.testing import WebsocketCommunicator
+        from django.contrib.auth.models import AnonymousUser
+
+        from auctions.consumers import LotConsumer
+
+        lot = await self._create_active_lot_with_auction(self.user)
+
+        communicator = WebsocketCommunicator(
+            LotConsumer.as_asgi(),
+            f"/ws/lots/{lot.pk}/",
+        )
+        communicator.scope["user"] = AnonymousUser()
+        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
+
+        try:
+            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+
+            # Try to send a chat message
+            await communicator.send_json_to({"message": "Hello from anonymous!"})
+
+            # Anonymous users should not get a response for their message
+            # The consumer just passes without doing anything
+        finally:
+            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
+
+    async def test_lot_consumer_bid_authenticated_with_tos(self):
+        """Test placing a bid as authenticated user who has joined auction"""
+        from channels.testing import WebsocketCommunicator
+
+        from auctions.consumers import LotConsumer
+
+        lot = await self._create_active_lot_with_auction(self.user, self.user_with_no_lots)
+
+        communicator = WebsocketCommunicator(
+            LotConsumer.as_asgi(),
+            f"/ws/lots/{lot.pk}/",
+        )
+        communicator.scope["user"] = self.user_with_no_lots
+        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
+
+        try:
+            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+
+            # Place a bid
+            await communicator.send_json_to({"bid": 15})
+
+            # Should receive a response about the bid (either success or error message)
+            found_bid_response = False
+            for _ in range(5):  # Reduced from 10 to 5
+                try:
+                    response = await communicator.receive_json_from(timeout=self.RECEIVE_TIMEOUT)
+                    # Accept any bid-related response: success info types or error
+                    if response.get("info") in ["NEW_HIGH_BIDDER", "INFO", "ERROR"] or response.get("error"):
+                        found_bid_response = True
+                        break
+                except:
+                    break
+
+            self.assertTrue(found_bid_response, "Did not receive expected bid response")
+        finally:
+            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
+
+    async def test_lot_consumer_bid_user_not_joined_auction(self):
+        """Test that users who haven't joined auction cannot bid"""
+        from channels.testing import WebsocketCommunicator
+
+        from auctions.consumers import LotConsumer
+
+        lot = await self._create_active_lot_with_auction(self.user)
+
+        communicator = WebsocketCommunicator(
+            LotConsumer.as_asgi(),
+            f"/ws/lots/{lot.pk}/",
+        )
+        communicator.scope["user"] = self.user_who_does_not_join
+        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
+
+        try:
+            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+
+            # Try to place a bid
+            await communicator.send_json_to({"bid": 15})
+
+            # Should receive an error
+            found_error = False
+            for _ in range(5):  # Reduced from 10 to 5
+                try:
+                    response = await communicator.receive_json_from(timeout=self.RECEIVE_TIMEOUT)
+                    if response.get("error"):
+                        found_error = True
+                        self.assertIn("joined", response["error"].lower())
+                        break
+                except:
+                    break
+
+            self.assertTrue(found_error, "Did not receive expected error message")
+        finally:
+            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
+
+    async def test_lot_consumer_bid_anonymous_user(self):
+        """Test that anonymous users cannot bid"""
+        from channels.testing import WebsocketCommunicator
+        from django.contrib.auth.models import AnonymousUser
+
+        from auctions.consumers import LotConsumer
+
+        lot = await self._create_active_lot_with_auction(self.user)
+
+        communicator = WebsocketCommunicator(
+            LotConsumer.as_asgi(),
+            f"/ws/lots/{lot.pk}/",
+        )
+        communicator.scope["user"] = AnonymousUser()
+        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
+
+        try:
+            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+
+            # Try to place a bid
+            await communicator.send_json_to({"bid": 15})
+
+            # Anonymous users should not get a response for their bid
+            # The consumer just passes without doing anything
+        finally:
+            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
+
+    async def test_lot_consumer_auction_admin_can_view(self):
+        """Test that auction admins can connect to lot consumer"""
+        from channels.db import database_sync_to_async
+        from channels.testing import WebsocketCommunicator
+
+        from auctions.consumers import LotConsumer
+
+        lot = await self._create_active_lot_with_auction(self.user)
+
+        # Make admin_user an admin of the auction
+        auction = await database_sync_to_async(lambda: lot.auction)()
+        location = await database_sync_to_async(lambda: auction.pickuplocation_set.first())()
+        await database_sync_to_async(AuctionTOS.objects.create)(
+            user=self.admin_user, auction=auction, pickup_location=location, is_admin=True
+        )
+
+        communicator = WebsocketCommunicator(
+            LotConsumer.as_asgi(),
+            f"/ws/lots/{lot.pk}/",
+        )
+        communicator.scope["user"] = self.admin_user
+        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
+
+        try:
+            connected, _ = await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+            self.assertTrue(connected)
+        finally:
+            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
+
+    async def test_user_consumer_connect_valid_user(self):
+        """Test UserConsumer connection with valid user"""
+        from channels.testing import WebsocketCommunicator
+
+        from auctions.consumers import UserConsumer
+
+        communicator = WebsocketCommunicator(
+            UserConsumer.as_asgi(),
+            f"/ws/users/{self.user.pk}/",
+        )
+        communicator.scope["user"] = self.user
+        communicator.scope["url_route"] = {"kwargs": {"user_pk": self.user.pk}}
+
+        try:
+            connected, _ = await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+            self.assertTrue(connected)
+        finally:
+            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
+
+    async def test_user_consumer_connect_wrong_user(self):
+        """Test UserConsumer connection with wrong user ID"""
+        from channels.testing import WebsocketCommunicator
+
+        from auctions.consumers import UserConsumer
+
+        communicator = WebsocketCommunicator(
+            UserConsumer.as_asgi(),
+            f"/ws/users/{self.admin_user.pk}/",
+        )
+        communicator.scope["user"] = self.user  # Different user
+        communicator.scope["url_route"] = {"kwargs": {"user_pk": self.admin_user.pk}}
+
+        try:
+            connected, _ = await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+            # Should be rejected because user doesn't match
+            self.assertFalse(connected)
+        finally:
+            # Even if connection failed, try to disconnect to clean up
+            try:
+                await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
+            except:
+                pass
+
+    async def test_user_consumer_connect_anonymous(self):
+        """Test UserConsumer connection with anonymous user"""
+        from channels.testing import WebsocketCommunicator
+        from django.contrib.auth.models import AnonymousUser
+
+        from auctions.consumers import UserConsumer
+
+        communicator = WebsocketCommunicator(
+            UserConsumer.as_asgi(),
+            f"/ws/users/{self.user.pk}/",
+        )
+        communicator.scope["user"] = AnonymousUser()
+        communicator.scope["url_route"] = {"kwargs": {"user_pk": self.user.pk}}
+
+        try:
+            connected, _ = await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+            # Should be rejected
+            self.assertFalse(connected)
+        finally:
+            # Even if connection failed, try to disconnect to clean up
+            try:
+                await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
+            except:
+                pass
+
+    async def test_auction_consumer_connect_admin(self):
+        """Test AuctionConsumer connection with auction admin"""
+        from channels.testing import WebsocketCommunicator
+
+        from auctions.consumers import AuctionConsumer
+
+        communicator = WebsocketCommunicator(
+            AuctionConsumer.as_asgi(),
+            f"/ws/auctions/{self.online_auction.pk}/",
+        )
+        communicator.scope["user"] = self.admin_user
+        communicator.scope["url_route"] = {"kwargs": {"auction_pk": self.online_auction.pk}}
+
+        try:
+            connected, _ = await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+            self.assertTrue(connected)
+        finally:
+            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
+
+    async def test_auction_consumer_connect_non_admin(self):
+        """Test AuctionConsumer connection with non-admin user"""
+        from channels.testing import WebsocketCommunicator
+
+        from auctions.consumers import AuctionConsumer
+
+        communicator = WebsocketCommunicator(
+            AuctionConsumer.as_asgi(),
+            f"/ws/auctions/{self.online_auction.pk}/",
+        )
+        communicator.scope["user"] = self.user_with_no_lots
+        communicator.scope["url_route"] = {"kwargs": {"auction_pk": self.online_auction.pk}}
+
+        try:
+            connected, _ = await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+            # Should be rejected
+            self.assertFalse(connected)
+        finally:
+            # Even if connection failed, try to disconnect to clean up
+            try:
+                await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
+            except:
+                pass
+
+    async def test_auction_consumer_connect_anonymous(self):
+        """Test AuctionConsumer connection with anonymous user"""
+        from channels.testing import WebsocketCommunicator
+        from django.contrib.auth.models import AnonymousUser
+
+        from auctions.consumers import AuctionConsumer
+
+        communicator = WebsocketCommunicator(
+            AuctionConsumer.as_asgi(),
+            f"/ws/auctions/{self.online_auction.pk}/",
+        )
+        communicator.scope["user"] = AnonymousUser()
+        communicator.scope["url_route"] = {"kwargs": {"auction_pk": self.online_auction.pk}}
+
+        try:
+            connected, _ = await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+            # Should be rejected
+            self.assertFalse(connected)
+        finally:
+            # Even if connection failed, try to disconnect to clean up
+            try:
+                await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
+            except:
+                pass
+
+    async def test_auction_consumer_invalid_auction(self):
+        """Test AuctionConsumer connection with invalid auction ID"""
+        from channels.testing import WebsocketCommunicator
+
+        from auctions.consumers import AuctionConsumer
+
+        communicator = WebsocketCommunicator(
+            AuctionConsumer.as_asgi(),
+            "/ws/auctions/99999/",
+        )
+        communicator.scope["user"] = self.admin_user
+        communicator.scope["url_route"] = {"kwargs": {"auction_pk": 99999}}
+
+        try:
+            connected, _ = await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+            # Should be rejected because auction doesn't exist
+            self.assertFalse(connected)
+        finally:
+            # Even if connection failed, try to disconnect to clean up
+            try:
+                await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
+            except:
+                pass

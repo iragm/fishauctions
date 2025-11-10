@@ -408,7 +408,23 @@ class LotConsumer(WebsocketConsumer):
                     )
             except Exception as e:
                 logger.exception(e)
-
+            # mark chat messages as seen when a user visits a lot page
+            user_pk = None
+            if self.lot.user:
+                user_pk = self.lot.user.pk
+            if self.lot.auctiontos_seller and self.lot.auctiontos_seller.user:
+                user_pk = self.lot.auctiontos_seller.user
+            if user_pk and self.user.pk == user_pk:
+                logger.debug("lot owner is entering the chat, marking all chats as seen")
+                LotHistory.objects.filter(lot=self.lot.pk, seen=False).update(seen=True)
+            # this is for everyone else
+            if self.user.pk:
+                existing_subscription = ChatSubscription.objects.filter(lot=self.lot, user=self.user.pk).first()
+                if existing_subscription:
+                    logger.info("Marking all ChatSubscription seen last time now for user %s", self.user.pk)
+                    existing_subscription.last_seen = timezone.now()
+                    existing_subscription.last_notification_sent = timezone.now()
+                    existing_subscription.save()
         except Exception as e:
             logger.exception(e)
 

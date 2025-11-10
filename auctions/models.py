@@ -13,7 +13,6 @@ from autoslug import AutoSlugField
 from bs4 import BeautifulSoup
 from django.conf import settings
 from django.contrib.auth.models import User
-from django.contrib.auth.signals import user_logged_in
 from django.contrib.sites.models import Site
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
@@ -37,16 +36,15 @@ from django.db.models import (
 from django.db.models.expressions import RawSQL
 from django.db.models.functions import Cast, Coalesce
 from django.db.models.query import QuerySet
-from django.db.models.signals import post_save, pre_save
-from django.dispatch import receiver
 from django.urls import reverse
 from django.utils import html, timezone
 from django.utils.safestring import mark_safe
-from django_ses.signals import bounce_received, complaint_received
 from easy_thumbnails.fields import ThumbnailerImageField
+from easy_thumbnails.files import get_thumbnailer
 from location_field.models.plain import PlainLocationField
 from markdownfield.models import MarkdownField, RenderedMarkdownField
 from markdownfield.validators import VALIDATOR_STANDARD
+from post_office import mail
 from pytz import timezone as pytz_timezone
 
 logger = logging.getLogger(__name__)
@@ -1103,7 +1101,7 @@ class Auction(models.Model):
                 if location.second_pickup_time:
                     if location.second_pickup_time < time_to_use:
                         error = True
-            except AttributeError:
+            except:
                 error = False
             if error:
                 return reverse("edit_pickup", kwargs={"pk": location.pk})
@@ -1113,7 +1111,7 @@ class Auction(models.Model):
     def timezone(self):
         try:
             return pytz_timezone(self.created_by.userdata.timezone)
-        except (AttributeError, pytz.exceptions.UnknownTimeZoneError):
+        except:
             return pytz_timezone(settings.TIME_ZONE)
 
     @property
@@ -1386,7 +1384,7 @@ class Auction(models.Model):
     def percent_unsold_lots(self):
         try:
             return self.total_unsold_lots / self.total_lots * 100
-        except (ZeroDivisionError, TypeError):
+        except:
             return 100
 
     @property
@@ -2108,7 +2106,7 @@ class AuctionTOS(models.Model):
         # If someone creates an auction and adds every email address that's public
         # We must avoid allowing them to collect addresses/phone numbers/locations from these people
         # Having this code below run only on creation means that the user won't be filled out and prevents collecting data
-        # if making changes, remember that there's user_logged_in_callback below which sets the user field
+        # if making changes, remember that there's user_logged_in_callback in signals.py which sets the user field
         # if self.user and not self.pk:
         # moved to AuctionInfo.post()
         # if not self.name:
@@ -2153,7 +2151,7 @@ class AuctionTOS(models.Model):
                         search = search[1:]
                     if str(search)[0] == "0":
                         search = search[1:]
-                except IndexError:
+                except:
                     pass
                 while failsafe < 6000:
                     search = str(search)
@@ -2321,7 +2319,7 @@ class AuctionTOS(models.Model):
     def timezone(self):
         try:
             return pytz_timezone(self.user.userdata.timezone)
-        except (AttributeError, pytz.exceptions.UnknownTimeZoneError):
+        except:
             return self.auction.timezone
 
     @property
@@ -2691,6 +2689,145 @@ class Lot(models.Model):
         channel_layer = channels.layers.get_channel_layer()
         async_to_sync(channel_layer.group_send)(f"lot_{self.pk}", message)
 
+    def send_ending_very_soon_message(self):
+        """Send a websocket message when the lot is ending in less than a minute"""
+        if self.ending_very_soon and not self.sold:
+            result = {
+                "type": "chat_message",
+                "info": "CHAT",
+                "message": "Bidding ends in less than a minute!!",
+                "pk": -1,
+                "username": "System",
+            }
+            self.send_websocket_message(result)
+
+    def send_lot_end_message(self):
+        """Send websocket message and create LotHistory when lot ends with or without a winner"""
+        info = None
+        bidder = None
+
+        if self.high_bidder:
+            self.sell_to_online_high_bidder
+            info = "LOT_END_WINNER"
+            bidder = self.high_bidder
+            high_bidder_pk = self.high_bidder.pk
+            high_bidder_name = str(self.high_bidder_display)
+            current_high_bid = self.high_bid
+            message = f"Won by {self.high_bidder_display}"
+
+        # at this point, the lot should have a winner filled out if it's sold.  If it still doesn't:
+        if not self.sold:
+            high_bidder_pk = None
+            high_bidder_name = None
+            current_high_bid = None
+            message = "This lot did not sell"
+            bidder = None
+            info = "ENDED_NO_WINNER"
+
+        result = {
+            "type": "chat_message",
+            "info": info,
+            "message": message,
+            "high_bidder_pk": high_bidder_pk,
+            "high_bidder_name": high_bidder_name,
+            "current_high_bid": current_high_bid,
+        }
+
+        if info:
+            self.send_websocket_message(result)
+            LotHistory.objects.create(
+                lot=self,
+                user=bidder,
+                message=message,
+                changed_price=True,
+                current_price=self.high_bid,
+            )
+        self.save()
+
+    def send_non_auction_lot_emails(self):
+        """Send winner and seller emails for lots not in an auction"""
+        if self.winner and not self.auction:
+            current_site = Site.objects.get_current()
+            # email the winner first
+            mail.send(
+                self.winner.email,
+                headers={"Reply-to": self.user.email},
+                template="non_auction_lot_winner",
+                context={"lot": self, "domain": current_site.domain},
+            )
+            # now, email the seller
+            mail.send(
+                self.user.email,
+                headers={"Reply-to": self.winner.email},
+                template="non_auction_lot_seller",
+                context={"lot": self, "domain": current_site.domain},
+            )
+
+    def process_relist_logic(self):
+        """Handle automatic relisting logic for non-auction lots
+
+        Returns:
+            tuple: (relist: bool, sendNoRelistWarning: bool)
+        """
+        relist = False
+        sendNoRelistWarning = False
+
+        if not self.auction:
+            if self.winner and self.relist_if_sold and (not self.relist_countdown):
+                sendNoRelistWarning = True
+            if (not self.winner) and self.relist_if_not_sold and (not self.relist_countdown):
+                sendNoRelistWarning = True
+            if self.winner and self.relist_if_sold and self.relist_countdown:
+                self.relist_countdown -= 1
+                relist = True
+            if (not self.winner) and self.relist_if_not_sold and self.relist_countdown:
+                # no need to relist unsold lots, just decrement the countdown
+                self.relist_countdown -= 1
+                self.date_end = timezone.now() + datetime.timedelta(days=self.lot_run_duration)
+                self.active = True
+                self.seller_invoice = None
+                self.buyer_invoice = None
+        self.save()
+        return relist, sendNoRelistWarning
+
+    def relist_lot(self):
+        """Create a duplicate lot for relisting purposes
+
+        Returns:
+            Lot: The newly created lot
+        """
+        originalImages = LotImage.objects.filter(lot_number=self.pk)
+        originalPk = self.pk
+        self.pk = None  # create a new, duplicate lot
+        self.date_end = timezone.now() + datetime.timedelta(days=self.lot_run_duration)
+        self.active = True
+        self.winner = None
+        self.winning_price = None
+        self.seller_invoice = None
+        self.buyer_invoice = None
+        self.buy_now_used = False
+        self.save()
+
+        # copy shipping locations
+        for location in Lot.objects.get(lot_number=originalPk).shipping_locations.all():
+            self.shipping_locations.add(location)
+
+        # copy images
+        for originalImage in originalImages:
+            newImage = LotImage.objects.create(
+                createdon=originalImage.createdon,
+                lot_number=self,
+                image_source=originalImage.image_source,
+                is_primary=originalImage.is_primary,
+            )
+            newImage.image = get_thumbnailer(originalImage.image)
+            # if the original lot sold, this picture sure isn't of the actual item
+            if originalImage.image_source == "ACTUAL":
+                newImage.image_source = "REPRESENTATIVE"
+            newImage.save()
+
+        return self
+
     def refund(self, amount, user, message=None):
         """Call this to add a message when refunding a lot"""
         if amount and amount != self.partial_refund_percent:
@@ -2748,13 +2885,13 @@ class Lot(models.Model):
             if self.auctiontos_seller:
                 invoice = Invoice.objects.get(auctiontos_user=self.auctiontos_seller)
                 return f"/invoices/{invoice.pk}"
-        except Invoice.DoesNotExist:
+        except:
             pass
         try:
             if self.user:
                 invoice = Invoice.objects.get(user=self.user, auction=self.auction)
                 return f"/invoices/{invoice.pk}"
-        except Invoice.DoesNotExist:
+        except:
             pass
         return ""
 
@@ -2765,13 +2902,13 @@ class Lot(models.Model):
             if self.auctiontos_winner:
                 invoice = Invoice.objects.get(auctiontos_user=self.auctiontos_winner)
                 return f"/invoices/{invoice.pk}"
-        except Invoice.DoesNotExist:
+        except:
             pass
         try:
             if self.winner:
                 invoice = Invoice.objects.get(user=self.winner, auction=self.auction)
                 return f"/invoices/{invoice.pk}"
-        except Invoice.DoesNotExist:
+        except:
             pass
         return ""
 
@@ -2784,31 +2921,33 @@ class Lot(models.Model):
         try:
             AuctionTOS.objects.get(user=self.user, auction=self.auction)
             return False
-        except AuctionTOS.DoesNotExist:
+        except:
             return f"/auctions/{self.auction.slug}"
 
     @property
     def winner_location(self):
         """String of location of the winner for this lot"""
-        if self.auctiontos_winner and self.auctiontos_winner.pickup_location:
+        try:
             return str(self.auctiontos_winner.pickup_location)
-        if self.winner and self.auction:
-            try:
-                return str(AuctionTOS.objects.get(user=self.winner, auction=self.auction).pickup_location)
-            except AuctionTOS.DoesNotExist:
-                pass
+        except:
+            pass
+        try:
+            return str(AuctionTOS.objects.get(user=self.winner, auction=self.auction).pickup_location)
+        except:
+            pass
         return ""
 
     @property
     def location_as_object(self):
         """Pickup location of the seller"""
-        if self.auctiontos_seller and self.auctiontos_seller.pickup_location:
+        try:
             return self.auctiontos_seller.pickup_location
-        if self.user and self.auction:
-            try:
-                return AuctionTOS.objects.get(user=self.user, auction=self.auction).pickup_location
-            except AuctionTOS.DoesNotExist:
-                pass
+        except:
+            pass
+        try:
+            return AuctionTOS.objects.get(user=self.user, auction=self.auction).pickup_location
+        except:
+            pass
         return None
 
     @property
@@ -3241,7 +3380,7 @@ class Lot(models.Model):
             # $1 more than the second highest bid
             bidPrice = allBids[0].amount
             return bidPrice
-        except IndexError:
+        except:
             return self.reserve_price
 
     @property
@@ -3265,10 +3404,11 @@ class Lot(models.Model):
         if self.winning_price:
             return self.winning_price
         if self.sealed_bid:
-            bids = self.bids
-            if bids:
-                return bids[0].amount
-            return 0
+            try:
+                bids = self.bids
+                return self.bids[0].amount
+            except:
+                return 0
         else:
             if self.auction and self.auction.online_bidding == "buy_now_only" and not self.bids:
                 if self.buy_now_price:
@@ -3294,10 +3434,11 @@ class Lot(models.Model):
         """Name of the highest bidder"""
         if self.banned:
             return False
-        bids = self.bids
-        if bids:
+        try:
+            bids = self.bids
             return bids[0].user
-        return False
+        except:
+            return False
 
     @property
     def all_page_views(self):
@@ -3471,9 +3612,10 @@ class Lot(models.Model):
 
     @property
     def seller_ip(self):
-        if self.user:
+        try:
             return self.user.userdata.last_ip_address
-        return None
+        except:
+            return None
 
     @property
     def bidder_ip_same_as_seller(self):
@@ -3711,8 +3853,12 @@ class Invoice(models.Model):
 
     @property
     def first_bid_payout(self):
-        if self.auction and self.auction.first_bid_payout and self.lots_bought:
-            return self.auction.first_bid_payout
+        try:
+            if self.auction.first_bid_payout:
+                if self.lots_bought:
+                    return self.auction.first_bid_payout
+        except:
+            pass
         return 0
 
     @property
@@ -3849,7 +3995,7 @@ class Invoice(models.Model):
     def sold_lots_queryset_sorted(self):
         try:
             return sorted(self.sold_lots_queryset, key=lambda t: str(t.winner_location))
-        except (AttributeError, TypeError):
+        except:
             return self.sold_lots_queryset
 
     @property
@@ -5051,196 +5197,3 @@ class ChatSubscription(models.Model):
 
     def __str__(self):
         return f"{self.user} on lot {self.lot} Unsubscribed: ({self.unsubscribed})"
-
-
-@receiver(pre_save, sender=Auction)
-def on_save_auction(sender, instance, **kwargs):
-    """This is run when an auction is saved"""
-    if instance.date_end and instance.date_start:
-        # if the user entered an end time that's after the start time
-        if instance.date_end < instance.date_start:
-            new_start = instance.date_end
-            instance.date_end = instance.date_start
-            instance.date_start = new_start
-    if not instance.date_end:
-        if instance.is_online:
-            instance.date_end = instance.date_start + datetime.timedelta(days=7)
-    if not instance.lot_submission_end_date:
-        if instance.is_online:
-            instance.lot_submission_end_date = instance.date_end
-        else:
-            instance.lot_submission_end_date = instance.date_start
-    if not instance.lot_submission_start_date:
-        if instance.is_online:
-            instance.lot_submission_start_date = instance.date_start
-        else:
-            instance.lot_submission_start_date = instance.date_start - datetime.timedelta(days=7)
-    # if the lot submission end date is badly set, fix it
-    if instance.is_online:
-        if instance.lot_submission_end_date > instance.date_end:
-            instance.lot_submission_end_date = instance.date_end
-    # else:
-    # if instance.lot_submission_end_date > instance.date_start:
-    # instance.lot_submission_end_date = instance.date_start
-    if instance.lot_submission_start_date > instance.date_start:
-        instance.lot_submission_start_date = instance.date_start
-    # I don't see a problem submitting lots after the auction has started,
-    # or any need to restrict when people add lots to an in-person auction
-    # So I am not putting any new validation checks here
-    # OK, the above comment was not correct, this caused confusion.  A couple checks have been added.
-    # Admins can always override those, and they seem to be adding most of the lots for in person stuff anyway.
-    # OK, third time's the charm, leave the lines above commented out
-
-    # Some validation for online bidding with in-person auctions for #189
-    if not instance.is_online and instance.online_bidding != "disable":
-        if not instance.date_online_bidding_ends:
-            instance.date_online_bidding_ends = instance.date_start
-        if not instance.date_online_bidding_starts:
-            instance.date_online_bidding_starts = instance.date_start - datetime.timedelta(days=7)
-        if instance.date_online_bidding_ends < instance.date_online_bidding_starts:
-            new_start = instance.date_online_bidding_ends
-            instance.date_online_bidding_ends = instance.date_online_bidding_starts
-            instance.date_online_bidding_starts = new_start
-
-    # if this is an existing auction
-    if instance.pk:
-        logger.info("updating date end on lots because this is an existing auction")
-        # update the date end for all lots associated with this auction
-        # note that we do NOT update the end time if there's a winner!
-        # This means you cannot reopen an auction simply by changing the date end
-        if instance.date_end:
-            if instance.date_end + datetime.timedelta(minutes=60) < timezone.now():
-                # if we are at least 60 minutes before the auction end
-                lots = Lot.objects.exclude(is_deleted=True).filter(
-                    auction=instance.pk,
-                    winner__isnull=True,
-                    auctiontos_winner__isnull=True,
-                    active=True,
-                )
-                for lot in lots:
-                    lot.date_end = instance.date_end
-                    lot.save()
-        if not instance.is_online and instance.number_of_locations == 1:
-            # don't make the users set the pickup time seperately for simple auctions
-            location = instance.location_qs.first()
-            location.pickup_time = instance.date_start
-            location.save()
-
-    else:
-        # logic for new auctions goes here
-        pass
-    if not instance.is_online:
-        # for in-person auctions, we need to add a single pickup location
-        # and create it if the user was dumb enough to delete it
-        try:
-            in_person_location, created = PickupLocation.objects.get_or_create(
-                auction=instance,
-                is_default=True,
-                defaults={
-                    "name": str(instance)[:50],
-                    "pickup_time": instance.date_start,
-                },
-            )
-        except Exception:
-            pass
-            # logger.warning("Somehow there's two pickup locations for this auction -- how is this possible?")
-
-
-@receiver(pre_save, sender=UserData)
-@receiver(pre_save, sender=PickupLocation)
-@receiver(pre_save, sender=Club)
-def update_user_location(sender, instance, **kwargs):
-    """
-    GeoDjango does not appear to support MySQL and Point objects well at the moment (2020)
-    To get around this, I'm storing the coordinates in a raw latitude and longitude column
-
-    The custom function distance_to is used to annotate queries
-
-    It is bad practice to use a signal in models.py,
-    however with just a couple signals it makes more sense to have them here than to add a whole separate file for it
-    """
-    # if not instance.latitude and not instance.longitude:
-    # some things to change here:
-    # if sender has coords and they do not equal the instance coords, update instance lat/lng from sender
-    # if sender has lat/lng and they do not equal the instance lat/lng, update instance coords
-    try:
-        cutLocation = instance.location_coordinates.split(",")
-        instance.latitude = float(cutLocation[0])
-        instance.longitude = float(cutLocation[1])
-    except (ValueError, IndexError, AttributeError):
-        pass
-
-
-@receiver(pre_save, sender=Lot)
-def update_lot_info(sender, instance, **kwargs):
-    """
-    Fill out the location and address from the user
-    Fill out end date from the auction
-    """
-    if not instance.pk:
-        # new lot?  set the default end date to the auction end
-        if instance.auction:
-            instance.date_end = instance.auction.date_end
-    if instance.user:
-        userData = instance.user.userdata
-        instance.latitude = userData.latitude
-        instance.longitude = userData.longitude
-        instance.address = userData.address
-
-    # # create an invoice for this seller/winner
-    # if instance.auction and instance.auctiontos_seller:
-    #     invoice, created = Invoice.objects.get_or_create(
-    #         auctiontos_user=instance.auctiontos_seller,
-    #         auction=instance.auction,
-    #         defaults={},
-    #     )
-    # if instance.auction and instance.auctiontos_winner:
-    #     invoice, created = Invoice.objects.get_or_create(
-    #         auctiontos_user=instance.auctiontos_winner,
-    #         auction=instance.auction,
-    #         defaults={},
-    #     )
-    if instance.auction and (not instance.reserve_price or instance.reserve_price < instance.auction.minimum_bid):
-        instance.reserve_price = instance.auction.minimum_bid
-
-
-@receiver(user_logged_in)
-def user_logged_in_callback(sender, user, request, **kwargs):
-    """When a user signs in, check for any AuctionTOS that have this users email but no user, and attach them to the user
-    This allows people to view invoices, leave feedback, get contact information for sellers, etc.
-    Important to have this be any user, not just new ones so that existing users can be signed up for in-person auctions
-
-    After some thought, the user is also set in auctiontos.save
-     -- but this is still important because people may add users who do not yet have an account
-    """
-    auctiontoss = AuctionTOS.objects.filter(user__isnull=True, email=user.email)
-    for auctiontos in auctiontoss:
-        auctiontos.user = user
-        auctiontos.save()
-
-
-@receiver(post_save, sender=User)
-def create_user_userdata(sender, instance, created, **kwargs):
-    if created:
-        UserData.objects.create(user=instance)
-
-
-@receiver(bounce_received)
-def bounce_handler(sender, mail_obj, bounce_obj, raw_message, *args, **kwargs):
-    # you can then use the message ID and/or recipient_list(email address) to identify any problematic email messages that you have sent
-    # message_id = mail_obj['messageId']
-    recipient_list = mail_obj["destination"]
-    email = recipient_list[0]
-    auctiontos = AuctionTOS.objects.filter(email=email)
-    for tos in auctiontos:
-        tos.email_address_status = "BAD"
-        tos.save()
-
-
-@receiver(complaint_received)
-def complaint_handler(sender, mail_obj, complaint_obj, raw_message, *args, **kwargs):
-    recipient_list = mail_obj["destination"]
-    email = recipient_list[0]
-    user = User.objects.filter(email=email).first()
-    if user:
-        user.userdata.unsubscribe_from_all

@@ -547,7 +547,7 @@ class LotListView(AjaxListView):
         return context
 
 
-class LotAutocomplete(autocomplete.Select2QuerySetView):
+class LotAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetView):
     def get_result_label(self, result):
         if result.high_bidder:
             return format_html(
@@ -582,7 +582,7 @@ class LotAutocomplete(autocomplete.Select2QuerySetView):
         return qs
 
 
-class AuctionTOSAutocomplete(autocomplete.Select2QuerySetView):
+class AuctionTOSAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetView):
     def get_result_label(self, result):
         return format_html("<b>{}</b>: {}", result.bidder_number, result.name)
 
@@ -992,7 +992,7 @@ class CreateUserBan(LoginRequiredMixin, View):
         return redirect(reverse("userpage", kwargs={"slug": bannedUser.username}))
 
 
-class LotDeactivate(View):
+class LotDeactivate(LoginRequiredMixin, View):
     """Deactivate or activate a lot - POST only"""
 
     def post(self, request, pk):
@@ -1034,7 +1034,7 @@ class UserUnban(LoginRequiredMixin, View):
         return redirect(reverse("userpage", kwargs={"slug": bannedUser.username}))
 
 
-class ImagesPrimary(View):
+class ImagesPrimary(LoginRequiredMixin, View):
     """Make the specified image the default image for the lot
     Takes pk of image as post param
     this does not check lot.can_add_images, which is deliberate (who cares if you rotate...)
@@ -1054,7 +1054,7 @@ class ImagesPrimary(View):
         return HttpResponse("Success")
 
 
-class ImagesRotate(View):
+class ImagesRotate(LoginRequiredMixin, View):
     """Rotate an image associated with a lot
     Takes pk of image and angle as post params
     """
@@ -1918,7 +1918,7 @@ class AuctionChats(AuctionViewMixin, LoginRequiredMixin, ListView):
         return context
 
 
-class AuctionChatDeleteUndelete(AuctionViewMixin, View):
+class AuctionChatDeleteUndelete(LoginRequiredMixin, AuctionViewMixin, View):
     """HTMX for auction admins only"""
 
     def dispatch(self, request, *args, **kwargs):
@@ -1946,7 +1946,7 @@ class AuctionChatDeleteUndelete(AuctionViewMixin, View):
         return HttpResponse(result)
 
 
-class AuctionShowHighBidder(AuctionViewMixin, View):
+class AuctionShowHighBidder(LoginRequiredMixin, AuctionViewMixin, View):
     """HTMX for auction admins only"""
 
     def dispatch(self, request, *args, **kwargs):
@@ -1970,7 +1970,7 @@ class AuctionShowHighBidder(AuctionViewMixin, View):
         # return HttpResponse(f"Max bid: ${self.lot.max_bid: .2f}")
 
 
-class PickupLocations(AuctionViewMixin, ListView):
+class PickupLocations(LoginRequiredMixin, AuctionViewMixin, ListView):
     """Show all pickup locations belonging to the current auction"""
 
     model = PickupLocation
@@ -1996,7 +1996,7 @@ class PickupLocations(AuctionViewMixin, ListView):
         return context
 
 
-class PickupLocationsDelete(AuctionViewMixin, DeleteView):
+class PickupLocationsDelete(LoginRequiredMixin, AuctionViewMixin, DeleteView):
     model = PickupLocation
 
     def dispatch(self, request, *args, **kwargs):
@@ -2072,7 +2072,7 @@ class PickupLocationForm:
         return super().form_valid(form)
 
 
-class PickupLocationsUpdate(AuctionViewMixin, PickupLocationForm, UpdateView):
+class PickupLocationsUpdate(LoginRequiredMixin, AuctionViewMixin, PickupLocationForm, UpdateView):
     """Edit pickup locations"""
 
     def get_form_kwargs(self):
@@ -2107,7 +2107,7 @@ class PickupLocationsUpdate(AuctionViewMixin, PickupLocationForm, UpdateView):
         return form
 
 
-class PickupLocationsCreate(AuctionViewMixin, PickupLocationForm, CreateView):
+class PickupLocationsCreate(LoginRequiredMixin, AuctionViewMixin, PickupLocationForm, CreateView):
     """Create a new pickup location"""
 
     def dispatch(self, request, *args, **kwargs):
@@ -2131,7 +2131,7 @@ class PickupLocationsCreate(AuctionViewMixin, PickupLocationForm, CreateView):
         return form
 
 
-class AuctionUpdate(AuctionViewMixin, UpdateView):
+class AuctionUpdate(LoginRequiredMixin, AuctionViewMixin, UpdateView):
     """The form users fill out to edit an auction"""
 
     model = Auction
@@ -2213,7 +2213,7 @@ class AuctionUpdate(AuctionViewMixin, UpdateView):
         return form
 
 
-class AuctionHistoryView(SingleTableMixin, AuctionViewMixin, FilterView):
+class AuctionHistoryView(LoginRequiredMixin, SingleTableMixin, AuctionViewMixin, FilterView):
     model = AuctionHistory
     table_class = AuctionHistoryHTMxTable
     filterset_class = AuctionHistoryFilter
@@ -2239,7 +2239,7 @@ class AuctionHistoryView(SingleTableMixin, AuctionViewMixin, FilterView):
         return kwargs
 
 
-class AuctionLots(SingleTableMixin, AuctionViewMixin, FilterView):
+class AuctionLots(LoginRequiredMixin, SingleTableMixin, AuctionViewMixin, FilterView):
     """List of lots associated with an auction.  This is for admins; don't confuse this with the thumbnail-enhanced lot view `AllLots` for users.
 
     At some point, it may make sense to subclass AllLots here, but I think the needs of the two views are so different that it doesn't make sense
@@ -2273,7 +2273,7 @@ class AuctionLots(SingleTableMixin, AuctionViewMixin, FilterView):
         return kwargs
 
 
-class AuctionHelp(AdminEmailMixin, AuctionViewMixin, TemplateView):
+class AuctionHelp(LoginRequiredMixin, AdminEmailMixin, AuctionViewMixin, TemplateView):
     template_name = "auction_help.html"
 
     def dispatch(self, request, *args, **kwargs):
@@ -2287,7 +2287,7 @@ class AuctionHelp(AdminEmailMixin, AuctionViewMixin, TemplateView):
         return context
 
 
-class AuctionUsers(SingleTableMixin, AuctionViewMixin, FilterView):
+class AuctionUsers(LoginRequiredMixin, SingleTableMixin, AuctionViewMixin, FilterView):
     """List of users (AuctionTOS) associated with an auction"""
 
     model = AuctionTOS
@@ -2338,7 +2338,7 @@ class AuctionStats(LoginRequiredMixin, AuctionViewMixin, DetailView):
         return context
 
 
-class DynamicSetLotWinner(AuctionViewMixin, TemplateView):
+class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
     """A form to set lot winners.  Totally async with no page loads, just POST"""
 
     template_name = "auctions/dynamic_set_lot_winner.html"
@@ -2559,7 +2559,7 @@ class DynamicSetLotWinner(AuctionViewMixin, TemplateView):
         return JsonResponse(result)
 
 
-class AuctionUnsellLot(AuctionViewMixin, View):
+class AuctionUnsellLot(LoginRequiredMixin, AuctionViewMixin, View):
     def post(self, request, *args, **kwargs):
         undo_lot = request.POST.get("lot_number", None)
         if undo_lot:
@@ -2596,7 +2596,7 @@ class AuctionUnsellLot(AuctionViewMixin, View):
         return self.http_method_not_allowed
 
 
-class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
+class BulkAddUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView, ContextMixin):
     """Add/edit lots of auctiontos"""
 
     template_name = "auctions/bulk_add_users.html"
@@ -2970,7 +2970,7 @@ class BulkAddUsers(AuctionViewMixin, TemplateView, ContextMixin):
             )
 
 
-class ImportFromGoogleDrive(AuctionViewMixin, TemplateView, ContextMixin):
+class ImportFromGoogleDrive(LoginRequiredMixin, AuctionViewMixin, TemplateView, ContextMixin):
     """Import users from a Google Drive spreadsheet"""
 
     template_name = "auctions/import_from_google_drive.html"
@@ -3061,7 +3061,7 @@ class ImportFromGoogleDrive(AuctionViewMixin, TemplateView, ContextMixin):
         return redirect(url)
 
 
-class BulkAddLots(AuctionViewMixin, TemplateView):
+class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
     """Add/edit lots of lots for a given auctiontos pk"""
 
     template_name = "auctions/bulk_add_lots.html"
@@ -3841,12 +3841,13 @@ class LotUpdate(LotValidation, UpdateView):
         return result
 
 
-class AuctionDelete(AuctionViewMixin, DeleteView):
+class AuctionDelete(LoginRequiredMixin, AuctionViewMixin, DeleteView):
     model = Auction
 
     def dispatch(self, request, *args, **kwargs):
         result = super().dispatch(request, *args, **kwargs)
-        if not self.auction.can_be_deleted:
+        # self.auction may not be set if LoginRequiredMixin redirected
+        if hasattr(self, "auction") and self.auction and not self.auction.can_be_deleted:
             messages.error(request, "There are already lots in this auction, it can't be deleted")
             return redirect("/")
         return result
@@ -3979,7 +3980,7 @@ class BidDelete(LoginRequiredMixin, DeleteView):
         return f"/lots/{self.get_object().lot_number.pk}/{self.get_object().lot_number.slug}/"
 
 
-class LotAdmin(TemplateView, FormMixin, AuctionViewMixin):
+class LotAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
     """Creation and management for Lots that are part of an auction"""
 
     template_name = "auctions/generic_admin_form.html"
@@ -4080,7 +4081,7 @@ class LotAdmin(TemplateView, FormMixin, AuctionViewMixin):
             return self.form_invalid(form)
 
 
-class AuctionTOSDelete(TemplateView, FormMixin, AuctionViewMixin):
+class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
     """Delete AuctionTOSs"""
 
     template_name = "auctions/auctiontos_confirm_delete.html"
@@ -4160,7 +4161,7 @@ class AuctionTOSDelete(TemplateView, FormMixin, AuctionViewMixin):
             return self.form_invalid(form)
 
 
-class AuctionTOSAdmin(TemplateView, FormMixin, AuctionViewMixin):
+class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
     """Creation and management for AuctionTOSs"""
 
     template_name = "auctions/generic_admin_form.html"
@@ -5172,7 +5173,7 @@ class Invoices(ListView, LoginRequiredMixin):
     #     return context
 
 
-class InvoiceCreateView(View, AuctionViewMixin):
+class InvoiceCreateView(LoginRequiredMixin, View, AuctionViewMixin):
     """Create a new invoice for a user in an auction"""
 
     def get(self, request, *args, **kwargs):
@@ -5716,7 +5717,7 @@ class GetClubs(LoginRequiredMixin, View):
         return JsonResponse(list(result), safe=False)
 
 
-class BulkSetLotsWon(TemplateView, FormMixin, AuctionViewMixin):
+class BulkSetLotsWon(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
     """Sell all lots based on the current filter to online high bidder"""
 
     template_name = "auctions/generic_admin_form.html"
@@ -5766,7 +5767,7 @@ class BulkSetLotsWon(TemplateView, FormMixin, AuctionViewMixin):
         return form_kwargs
 
 
-class InvoiceBulkUpdateStatus(TemplateView, FormMixin, AuctionViewMixin):
+class InvoiceBulkUpdateStatus(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
     """Change invoice statuses in bulk"""
 
     template_name = "auctions/generic_admin_form.html"
@@ -5884,7 +5885,7 @@ class MarkInvoicesPaid(InvoiceBulkUpdateStatus):
         return context
 
 
-class LotRefundDialog(DetailView, FormMixin, AuctionViewMixin):
+class LotRefundDialog(LoginRequiredMixin, DetailView, FormMixin, AuctionViewMixin):
     model = Lot
     template_name = "auctions/generic_admin_form.html"
     form_class = LotRefundForm
@@ -7215,13 +7216,10 @@ class DeleteUserIgnoreCategory(View):
             return JsonResponse(data={"error": str(e)})
 
 
-class GetUserIgnoreCategory(View):
+class GetUserIgnoreCategory(LoginRequiredMixin, View):
     """Get a list of all user ignore categories for the request user"""
 
     def get(self, request, *args, **kwargs):
-        if not self.request.user.is_authenticated:
-            messages.error(request, "Sign in to use this feature")
-            return redirect("/")
         categories = Category.objects.all().order_by("name")
         results = []
         for category in categories:
@@ -7529,7 +7527,7 @@ class AuctionStatsAttritionJSONView(BaseLineChartView, AuctionStatsPermissionsMi
         return [data]
 
 
-class AuctionStatsBarChartJSONView(AuctionViewMixin, BaseColumnsHighChartsView):
+class AuctionStatsBarChartJSONView(LoginRequiredMixin, AuctionViewMixin, BaseColumnsHighChartsView):
     """This is needed because of https://github.com/peopledoc/django-chartjs/issues/56"""
 
     # allow_non_admins = True
@@ -7942,7 +7940,7 @@ class AuctionStatsAuctioneerSpeedJSONView(AuctionStatsAttritionJSONView):
         return [data]
 
 
-class AuctionLabelConfig(AuctionViewMixin, FormView):
+class AuctionLabelConfig(LoginRequiredMixin, AuctionViewMixin, FormView):
     form_class = LabelPrintFieldsForm
     template_name = "auction_print_setup.html"
 
