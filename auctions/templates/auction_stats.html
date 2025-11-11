@@ -269,20 +269,75 @@
   // Get main auction data
   var mainData = {{ stats_activity_json|safe }};
   
-  // Merge comparison data if available
+  // Transform data into Chart.js format
+  var chartData = {
+    labels: mainData.labels,
+    datasets: []
+  };
+  
+  // Define colors for main auction series
+  var colors = [
+    'rgba(52, 152, 219, 0.8)',   // Blue
+    'rgba(46, 204, 113, 0.8)',   // Green
+    'rgba(155, 89, 182, 0.8)',   // Purple
+    'rgba(241, 196, 15, 0.8)',   // Yellow
+    'rgba(231, 76, 60, 0.8)',    // Red
+    'rgba(26, 188, 156, 0.8)'    // Teal
+  ];
+  
+  // Add main auction datasets
+  for (var i = 0; i < mainData.providers.length; i++) {
+    chartData.datasets.push({
+      label: mainData.providers[i] + ' ({{ auction.title }})',
+      data: mainData.data[i],
+      borderColor: colors[i % colors.length],
+      backgroundColor: colors[i % colors.length].replace('0.8', '0.2'),
+      fill: false
+    });
+  }
+  
   {% if compare_auction and compare_stats_activity_json %}
+  // Add comparison auction datasets
   var compareData = {{ compare_stats_activity_json|safe }};
-  // Append comparison providers with auction title
-  compareData.providers.forEach(function(provider) {
-    mainData.providers.push(provider + " ({{ compare_auction.title }})");
-  });
-  // Append comparison datasets
-  mainData.data = mainData.data.concat(compareData.data);
+  var compareColors = [
+    'rgba(231, 76, 60, 0.8)',    // Red
+    'rgba(230, 126, 34, 0.8)',   // Orange
+    'rgba(149, 165, 166, 0.8)',  // Gray
+    'rgba(52, 73, 94, 0.8)',     // Dark blue
+    'rgba(192, 57, 43, 0.8)',    // Dark red
+    'rgba(142, 68, 173, 0.8)'    // Dark purple
+  ];
+  
+  for (var i = 0; i < compareData.providers.length; i++) {
+    chartData.datasets.push({
+      label: compareData.providers[i] + ' ({{ compare_auction.title }})',
+      data: compareData.data[i],
+      borderColor: compareColors[i % compareColors.length],
+      backgroundColor: compareColors[i % compareColors.length].replace('0.8', '0.2'),
+      fill: false,
+      borderDash: [5, 5]  // Dashed line for comparison
+    });
+  }
   {% endif %}
   
   var ctx = $("#activity").get(0).getContext("2d");
   new Chart(ctx, {
-    type: 'line', data: mainData
+    type: 'line',
+    data: chartData,
+    options: {
+      responsive: true,
+      legend: {
+        display: true,
+        position: 'bottom'
+      },
+      scales: {
+        yAxes: [{
+          ticks: {
+            beginAtZero: true
+          }
+        }]
+      }
+    }
   });
 </script>
 This graph shows overall engagement of people with your auction.  You can gauge the effectiveness of advertising by tracking views and bids here.
