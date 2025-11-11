@@ -7918,27 +7918,42 @@ class AuctionStatsReferrersJSONView(AuctionStatsBarChartJSONView):
         return result
 
     def get_providers(self):
+        providers = []
         # Check if we have cached stats
         if self.auction.cached_stats and "referrers" in self.auction.cached_stats:
-            return self.auction.cached_stats["referrers"]["providers"]
+            providers = self.auction.cached_stats["referrers"]["providers"]
+        else:
+            providers = ["Number of clicks"]
         
-        return ["Number of clicks"]
+        # Add comparison auction providers if available
+        if self.compare_auction and self.compare_auction.cached_stats and "referrers" in self.compare_auction.cached_stats:
+            compare_providers = [f"{p} ({self.compare_auction.title})" for p in self.compare_auction.cached_stats["referrers"]["providers"]]
+            providers = providers + compare_providers
+        
+        return providers
 
     def get_data(self):
-        # Check if we have cached stats
+        # Get main auction data
         if self.auction.cached_stats and "referrers" in self.auction.cached_stats:
-            return self.auction.cached_stats["referrers"]["data"]
+            data = self.auction.cached_stats["referrers"]["data"]
+        else:
+            # Fallback to original calculation
+            result = []
+            other = 0
+            for view in self.views:
+                if view["count"] > 1:
+                    result.append(view["count"])
+                else:
+                    other += 1
+            result.append(other)
+            data = [result]
         
-        # Fallback to original calculation
-        result = []
-        other = 0
-        for view in self.views:
-            if view["count"] > 1:
-                result.append(view["count"])
-            else:
-                other += 1
-        result.append(other)
-        return [result]
+        # Add comparison auction data if available
+        if self.compare_auction and self.compare_auction.cached_stats and "referrers" in self.compare_auction.cached_stats:
+            compare_data = self.compare_auction.cached_stats["referrers"]["data"]
+            data = data + compare_data
+        
+        return data
 
 
 # # this view and the following collect specific data for the tutorial videos
@@ -8005,39 +8020,54 @@ class AuctionStatsImagesJSONView(AuctionStatsBarChartJSONView):
         return ["No images", "One image", "More than one image"]
 
     def get_providers(self):
+        providers = []
         # Check if we have cached stats
         if self.auction.cached_stats and "images" in self.auction.cached_stats:
-            return self.auction.cached_stats["images"]["providers"]
+            providers = self.auction.cached_stats["images"]["providers"]
+        else:
+            providers = ["Median sell price", "Average sell price", "Number of lots"]
         
-        return ["Median sell price", "Average sell price", "Number of lots"]
+        # Add comparison auction providers if available
+        if self.compare_auction and self.compare_auction.cached_stats and "images" in self.compare_auction.cached_stats:
+            compare_providers = [f"{p} ({self.compare_auction.title})" for p in self.compare_auction.cached_stats["images"]["providers"]]
+            providers = providers + compare_providers
+        
+        return providers
 
     def get_data(self):
-        # Check if we have cached stats
+        # Get main auction data
         if self.auction.cached_stats and "images" in self.auction.cached_stats:
-            return self.auction.cached_stats["images"]["data"]
+            data = self.auction.cached_stats["images"]["data"]
+        else:
+            # Fallback to original calculation
+            lots = Lot.objects.filter(auction=self.auction, winning_price__isnull=False).annotate(
+                num_images=Count("lotimage")
+            )
+            lots_with_no_images = lots.filter(num_images=0)
+            lots_with_one_image = lots.filter(num_images=1)
+            lots_with_one_or_more_images = lots.filter(num_images__gt=1)
+            medians = []
+            averages = []
+            counts = []
+            for lots in [
+                lots_with_no_images,
+                lots_with_one_image,
+                lots_with_one_or_more_images,
+            ]:
+                try:
+                    medians.append(median_value(lots, "winning_price"))
+                except:
+                    medians.append(0)
+                averages.append(lots.aggregate(avg_value=Avg("winning_price"))["avg_value"])
+                counts.append(lots.count())
+            data = [medians, averages, counts]
         
-        # Fallback to original calculation
-        lots = Lot.objects.filter(auction=self.auction, winning_price__isnull=False).annotate(
-            num_images=Count("lotimage")
-        )
-        lots_with_no_images = lots.filter(num_images=0)
-        lots_with_one_image = lots.filter(num_images=1)
-        lots_with_one_or_more_images = lots.filter(num_images__gt=1)
-        medians = []
-        averages = []
-        counts = []
-        for lots in [
-            lots_with_no_images,
-            lots_with_one_image,
-            lots_with_one_or_more_images,
-        ]:
-            try:
-                medians.append(median_value(lots, "winning_price"))
-            except:
-                medians.append(0)
-            averages.append(lots.aggregate(avg_value=Avg("winning_price"))["avg_value"])
-            counts.append(lots.count())
-        return [medians, averages, counts]
+        # Add comparison auction data if available
+        if self.compare_auction and self.compare_auction.cached_stats and "images" in self.compare_auction.cached_stats:
+            compare_data = self.compare_auction.cached_stats["images"]["data"]
+            data = data + compare_data
+        
+        return data
 
 
 class AuctionStatsTravelDistanceJSONView(AuctionStatsBarChartJSONView):
@@ -8056,28 +8086,43 @@ class AuctionStatsTravelDistanceJSONView(AuctionStatsBarChartJSONView):
         ]
 
     def get_providers(self):
+        providers = []
         # Check if we have cached stats
         if self.auction.cached_stats and "travel_distance" in self.auction.cached_stats:
-            return self.auction.cached_stats["travel_distance"]["providers"]
+            providers = self.auction.cached_stats["travel_distance"]["providers"]
+        else:
+            providers = ["Number of users"]
         
-        return ["Number of users"]
+        # Add comparison auction providers if available
+        if self.compare_auction and self.compare_auction.cached_stats and "travel_distance" in self.compare_auction.cached_stats:
+            compare_providers = [f"{p} ({self.compare_auction.title})" for p in self.compare_auction.cached_stats["travel_distance"]["providers"]]
+            providers = providers + compare_providers
+        
+        return providers
 
     def get_data(self):
-        # Check if we have cached stats
+        # Get main auction data
         if self.auction.cached_stats and "travel_distance" in self.auction.cached_stats:
-            return self.auction.cached_stats["travel_distance"]["data"]
+            data = self.auction.cached_stats["travel_distance"]["data"]
+        else:
+            # Fallback to original calculation
+            auctiontos = AuctionTOS.objects.filter(auction=self.auction, user__isnull=False)
+            histogram = bin_data(
+                auctiontos,
+                "distance_traveled",
+                number_of_bins=5,
+                start_bin=1,
+                end_bin=51,
+                add_column_for_high_overflow=True,
+            )
+            data = [histogram]
         
-        # Fallback to original calculation
-        auctiontos = AuctionTOS.objects.filter(auction=self.auction, user__isnull=False)
-        histogram = bin_data(
-            auctiontos,
-            "distance_traveled",
-            number_of_bins=5,
-            start_bin=1,
-            end_bin=51,
-            add_column_for_high_overflow=True,
-        )
-        return [histogram]
+        # Add comparison auction data if available
+        if self.compare_auction and self.compare_auction.cached_stats and "travel_distance" in self.compare_auction.cached_stats:
+            compare_data = self.compare_auction.cached_stats["travel_distance"]["data"]
+            data = data + compare_data
+        
+        return data
 
 
 class AuctionStatsPreviousAuctionsJSONView(AuctionStatsBarChartJSONView):
@@ -8089,28 +8134,43 @@ class AuctionStatsPreviousAuctionsJSONView(AuctionStatsBarChartJSONView):
         return ["First auction", "1 previous auction", "2+ previous auctions"]
 
     def get_providers(self):
+        providers = []
         # Check if we have cached stats
         if self.auction.cached_stats and "previous_auctions" in self.auction.cached_stats:
-            return self.auction.cached_stats["previous_auctions"]["providers"]
+            providers = self.auction.cached_stats["previous_auctions"]["providers"]
+        else:
+            providers = ["Number of users"]
         
-        return ["Number of users"]
+        # Add comparison auction providers if available
+        if self.compare_auction and self.compare_auction.cached_stats and "previous_auctions" in self.compare_auction.cached_stats:
+            compare_providers = [f"{p} ({self.compare_auction.title})" for p in self.compare_auction.cached_stats["previous_auctions"]["providers"]]
+            providers = providers + compare_providers
+        
+        return providers
 
     def get_data(self):
-        # Check if we have cached stats
+        # Get main auction data
         if self.auction.cached_stats and "previous_auctions" in self.auction.cached_stats:
-            return self.auction.cached_stats["previous_auctions"]["data"]
+            data = self.auction.cached_stats["previous_auctions"]["data"]
+        else:
+            # Fallback to original calculation
+            auctiontos = AuctionTOS.objects.filter(auction=self.auction, email__isnull=False)
+            histogram = bin_data(
+                auctiontos,
+                "previous_auctions_count",
+                number_of_bins=2,
+                start_bin=0,
+                end_bin=2,
+                add_column_for_high_overflow=True,
+            )
+            data = [histogram]
         
-        # Fallback to original calculation
-        auctiontos = AuctionTOS.objects.filter(auction=self.auction, email__isnull=False)
-        histogram = bin_data(
-            auctiontos,
-            "previous_auctions_count",
-            number_of_bins=2,
-            start_bin=0,
-            end_bin=2,
-            add_column_for_high_overflow=True,
-        )
-        return [histogram]
+        # Add comparison auction data if available
+        if self.compare_auction and self.compare_auction.cached_stats and "previous_auctions" in self.compare_auction.cached_stats:
+            compare_data = self.compare_auction.cached_stats["previous_auctions"]["data"]
+            data = data + compare_data
+        
+        return data
 
 
 class AuctionStatsLotsSubmittedJSONView(AuctionStatsBarChartJSONView):
@@ -8129,29 +8189,44 @@ class AuctionStatsLotsSubmittedJSONView(AuctionStatsBarChartJSONView):
         ]
 
     def get_providers(self):
+        providers = []
         # Check if we have cached stats
         if self.auction.cached_stats and "lots_submitted" in self.auction.cached_stats:
-            return self.auction.cached_stats["lots_submitted"]["providers"]
+            providers = self.auction.cached_stats["lots_submitted"]["providers"]
+        else:
+            providers = ["Number of users"]
         
-        return ["Number of users"]
+        # Add comparison auction providers if available
+        if self.compare_auction and self.compare_auction.cached_stats and "lots_submitted" in self.compare_auction.cached_stats:
+            compare_providers = [f"{p} ({self.compare_auction.title})" for p in self.compare_auction.cached_stats["lots_submitted"]["providers"]]
+            providers = providers + compare_providers
+        
+        return providers
 
     def get_data(self):
-        # Check if we have cached stats
+        # Get main auction data
         if self.auction.cached_stats and "lots_submitted" in self.auction.cached_stats:
-            return self.auction.cached_stats["lots_submitted"]["data"]
+            data = self.auction.cached_stats["lots_submitted"]["data"]
+        else:
+            # Fallback to original calculation
+            invoices = Invoice.objects.filter(auction=self.auction)
+            histogram = bin_data(
+                invoices,
+                "lots_sold",
+                number_of_bins=4,
+                start_bin=1,
+                end_bin=9,
+                add_column_for_low_overflow=True,
+                add_column_for_high_overflow=True,
+            )
+            data = [histogram]
         
-        # Fallback to original calculation
-        invoices = Invoice.objects.filter(auction=self.auction)
-        histogram = bin_data(
-            invoices,
-            "lots_sold",
-            number_of_bins=4,
-            start_bin=1,
-            end_bin=9,
-            add_column_for_low_overflow=True,
-            add_column_for_high_overflow=True,
-        )
-        return [histogram]
+        # Add comparison auction data if available
+        if self.compare_auction and self.compare_auction.cached_stats and "lots_submitted" in self.compare_auction.cached_stats:
+            compare_data = self.compare_auction.cached_stats["lots_submitted"]["data"]
+            data = data + compare_data
+        
+        return data
 
 
 class AuctionStatsLocationVolumeJSONView(AuctionStatsBarChartJSONView):
@@ -8167,24 +8242,39 @@ class AuctionStatsLocationVolumeJSONView(AuctionStatsBarChartJSONView):
         return locations
 
     def get_providers(self):
+        providers = []
         # Check if we have cached stats
         if self.auction.cached_stats and "location_volume" in self.auction.cached_stats:
-            return self.auction.cached_stats["location_volume"]["providers"]
+            providers = self.auction.cached_stats["location_volume"]["providers"]
+        else:
+            providers = ["Total bought", "Total sold"]
         
-        return ["Total bought", "Total sold"]
+        # Add comparison auction providers if available
+        if self.compare_auction and self.compare_auction.cached_stats and "location_volume" in self.compare_auction.cached_stats:
+            compare_providers = [f"{p} ({self.compare_auction.title})" for p in self.compare_auction.cached_stats["location_volume"]["providers"]]
+            providers = providers + compare_providers
+        
+        return providers
 
     def get_data(self):
-        # Check if we have cached stats
+        # Get main auction data
         if self.auction.cached_stats and "location_volume" in self.auction.cached_stats:
-            return self.auction.cached_stats["location_volume"]["data"]
+            data = self.auction.cached_stats["location_volume"]["data"]
+        else:
+            # Fallback to original calculation
+            sold = []
+            bought = []
+            for location in self.auction.location_qs:
+                sold.append(location.total_sold)
+                bought.append(location.total_bought)
+            data = [bought, sold]
         
-        # Fallback to original calculation
-        sold = []
-        bought = []
-        for location in self.auction.location_qs:
-            sold.append(location.total_sold)
-            bought.append(location.total_bought)
-        return [bought, sold]
+        # Add comparison auction data if available
+        if self.compare_auction and self.compare_auction.cached_stats and "location_volume" in self.compare_auction.cached_stats:
+            compare_data = self.compare_auction.cached_stats["location_volume"]["data"]
+            data = data + compare_data
+        
+        return data
 
 
 class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
@@ -8206,96 +8296,111 @@ class AuctionStatsLocationFeatureUseJSONView(AuctionStatsBarChartJSONView):
         ]
 
     def get_providers(self):
+        providers = []
         # Check if we have cached stats
         if self.auction.cached_stats and "feature_use" in self.auction.cached_stats:
-            return self.auction.cached_stats["feature_use"]["providers"]
+            providers = self.auction.cached_stats["feature_use"]["providers"]
+        else:
+            providers = ["Percent of users"]
         
-        return ["Percent of users"]
+        # Add comparison auction providers if available
+        if self.compare_auction and self.compare_auction.cached_stats and "feature_use" in self.compare_auction.cached_stats:
+            compare_providers = [f"{p} ({self.compare_auction.title})" for p in self.compare_auction.cached_stats["feature_use"]["providers"]]
+            providers = providers + compare_providers
+        
+        return providers
 
     def get_data(self):
-        # Check if we have cached stats
+        # Get main auction data
         if self.auction.cached_stats and "feature_use" in self.auction.cached_stats:
-            return self.auction.cached_stats["feature_use"]["data"]
-        
-        # Fallback to original calculation
-        auctiontos = AuctionTOS.objects.filter(auction=self.auction)
-        auctiontos_with_account = auctiontos.filter(user__isnull=False)
-        searches = (
-            SearchHistory.objects.filter(user__isnull=False, auction=self.auction).values("user").distinct().count()
-        )
-        seach_percent = int(searches / auctiontos_with_account.count() * 100) if auctiontos_with_account.count() else 0
-        watch_qs = Watch.objects.filter(lot_number__auction=self.auction).values("user").distinct()
-        watches = watch_qs.count()
-        watch_percent = int(watches / auctiontos_with_account.count() * 100)
-        notifications = (
-            PushInformation.objects.filter(user__in=watch_qs, user__userdata__push_notifications_when_lots_sell=True)
-            .values("user")
-            .distinct()
-            .count()
-        )
-        notification_percent = int(notifications / auctiontos_with_account.count() * 100)
-        has_used_proxy_bidding = UserData.objects.filter(
-            has_used_proxy_bidding=True,
-            user__in=auctiontos_with_account.values_list("user"),
-        ).count()
-        has_used_proxy_bidding_percent = int(has_used_proxy_bidding / auctiontos_with_account.count() * 100)
-        chat = (
-            LotHistory.objects.filter(
-                changed_price=False,
-                lot__auction=self.auction,
+            data = self.auction.cached_stats["feature_use"]["data"]
+        else:
+            # Fallback to original calculation
+            auctiontos = AuctionTOS.objects.filter(auction=self.auction)
+            auctiontos_with_account = auctiontos.filter(user__isnull=False)
+            searches = (
+                SearchHistory.objects.filter(user__isnull=False, auction=self.auction).values("user").distinct().count()
+            )
+            seach_percent = int(searches / auctiontos_with_account.count() * 100) if auctiontos_with_account.count() else 0
+            watch_qs = Watch.objects.filter(lot_number__auction=self.auction).values("user").distinct()
+            watches = watch_qs.count()
+            watch_percent = int(watches / auctiontos_with_account.count() * 100)
+            notifications = (
+                PushInformation.objects.filter(user__in=watch_qs, user__userdata__push_notifications_when_lots_sell=True)
+                .values("user")
+                .distinct()
+                .count()
+            )
+            notification_percent = int(notifications / auctiontos_with_account.count() * 100)
+            has_used_proxy_bidding = UserData.objects.filter(
+                has_used_proxy_bidding=True,
                 user__in=auctiontos_with_account.values_list("user"),
-            )
-            .values("user")
-            .distinct()
-            .count()
-        )
-        chat_percent = int(chat / auctiontos_with_account.count() * 100)
-        if self.auction.is_online:
-            lot_with_buy_now = (
-                Lot.objects.filter(auction=self.auction, buy_now_used=True)
-                .values("auctiontos_winner")
+            ).count()
+            has_used_proxy_bidding_percent = int(has_used_proxy_bidding / auctiontos_with_account.count() * 100)
+            chat = (
+                LotHistory.objects.filter(
+                    changed_price=False,
+                    lot__auction=self.auction,
+                    user__in=auctiontos_with_account.values_list("user"),
+                )
+                .values("user")
                 .distinct()
                 .count()
             )
-        else:
-            lot_with_buy_now = (
-                Lot.objects.filter(auction=self.auction, winning_price=F("buy_now_price"))
-                .values("auctiontos_winner")
-                .distinct()
-                .count()
-            )
-        if auctiontos.count() == 0:
-            lot_with_buy_now_percent = 0
-            account_percent = 0
-        else:
-            account_percent = int(auctiontos_with_account.count() / auctiontos.count() * 100)
-            lot_with_buy_now_percent = int(lot_with_buy_now / auctiontos.count() * 100)
-        invoices = Invoice.objects.filter(auction=self.auction)
-        viewed_invoices = invoices.filter(opened=True)
-        if invoices.count():
-            view_invoice_percent = int(viewed_invoices.count() / invoices.count() * 100)
-        else:
-            view_invoice_percent = 0
-        sold_lots = Lot.objects.filter(auction=self.auction, auctiontos_winner__isnull=False)
-        leave_feedback = sold_lots.filter(~Q(feedback_rating=0)).values("auctiontos_winner").distinct().count()
-        all_sold_lots = sold_lots.values("auctiontos_winner").distinct().count()
-        if all_sold_lots == 0:
-            leave_feedback_percent = 0
-        else:
-            leave_feedback_percent = int(leave_feedback / all_sold_lots * 100)
-        return [
-            [
-                account_percent,
-                seach_percent,
-                watch_percent,
-                notification_percent,
-                has_used_proxy_bidding_percent,
-                chat_percent,
-                lot_with_buy_now_percent,
-                view_invoice_percent,
-                leave_feedback_percent,
+            chat_percent = int(chat / auctiontos_with_account.count() * 100)
+            if self.auction.is_online:
+                lot_with_buy_now = (
+                    Lot.objects.filter(auction=self.auction, buy_now_used=True)
+                    .values("auctiontos_winner")
+                    .distinct()
+                    .count()
+                )
+            else:
+                lot_with_buy_now = (
+                    Lot.objects.filter(auction=self.auction, winning_price=F("buy_now_price"))
+                    .values("auctiontos_winner")
+                    .distinct()
+                    .count()
+                )
+            if auctiontos.count() == 0:
+                lot_with_buy_now_percent = 0
+                account_percent = 0
+            else:
+                account_percent = int(auctiontos_with_account.count() / auctiontos.count() * 100)
+                lot_with_buy_now_percent = int(lot_with_buy_now / auctiontos.count() * 100)
+            invoices = Invoice.objects.filter(auction=self.auction)
+            viewed_invoices = invoices.filter(opened=True)
+            if invoices.count():
+                view_invoice_percent = int(viewed_invoices.count() / invoices.count() * 100)
+            else:
+                view_invoice_percent = 0
+            sold_lots = Lot.objects.filter(auction=self.auction, auctiontos_winner__isnull=False)
+            leave_feedback = sold_lots.filter(~Q(feedback_rating=0)).values("auctiontos_winner").distinct().count()
+            all_sold_lots = sold_lots.values("auctiontos_winner").distinct().count()
+            if all_sold_lots == 0:
+                leave_feedback_percent = 0
+            else:
+                leave_feedback_percent = int(leave_feedback / all_sold_lots * 100)
+            data = [
+                [
+                    account_percent,
+                    seach_percent,
+                    watch_percent,
+                    notification_percent,
+                    has_used_proxy_bidding_percent,
+                    chat_percent,
+                    lot_with_buy_now_percent,
+                    view_invoice_percent,
+                    leave_feedback_percent,
+                ]
             ]
-        ]
+        
+        # Add comparison auction data if available
+        if self.compare_auction and self.compare_auction.cached_stats and "feature_use" in self.compare_auction.cached_stats:
+            compare_data = self.compare_auction.cached_stats["feature_use"]["data"]
+            data = data + compare_data
+        
+        return data
 
 
 class AuctionStatsAuctioneerSpeedJSONView(AuctionStatsAttritionJSONView):
