@@ -3400,7 +3400,7 @@ class ViewLot(DetailView):
                         break
                 if lot.distance > 3000:
                     context["distance"] = "over 3000 miles away"
-        except AttributeError:
+        except (AttributeError, TypeError):
             context["distance"] = 0
         # for lots that are part of an auction, it's very handy to show the exchange info right on the lot page
         # this should be visible only to people running the auction or the seller

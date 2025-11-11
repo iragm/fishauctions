@@ -400,10 +400,9 @@ class LotFilter(django_filters.FilterSet):
 
     def __init__(self, *args, **kwargs):
         self.canShowAuction = True
-        self.listType = None  # a special filter for recommended lot views
         self.latitude = kwargs.pop("latitude", None)
         self.longitude = kwargs.pop("longitude", None)
-        self.listType = kwargs.pop("listType", None)
+        self.listType = kwargs.pop("listType", None)  # a special filter for recommended lot views
         self.keywords = kwargs.pop("keywords", [])
 
         # Get request and user
