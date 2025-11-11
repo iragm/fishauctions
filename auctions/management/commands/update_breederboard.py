@@ -14,10 +14,9 @@ class Command(BaseCommand):
         users = User.objects.all()
         numberOfUsers = len(users)
         for user in users:
-            try:
-                data = UserData.objects.get(user_id=user.pk)
-            except:
-                data = UserData.objects.create(user_id=user.pk)
+            # UserData is auto-created when user is saved, so this is no longer needed
+            # but keeping for backwards compatibility with existing users
+            UserData.objects.get_or_create(user_id=user.pk)
         userData = UserData.objects.all()
         self.stdout.write("Updating total lots sold")
         sortedList = sorted(userData, key=lambda t: -t.lots_sold)
