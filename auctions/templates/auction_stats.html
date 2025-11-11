@@ -154,6 +154,239 @@
     });
     {% endif %}
 };
+
+// Helper function to create bar chart with comparison data
+function createBarChart(canvasId, mainData, compareData, mainTitle, compareTitle) {
+  var colors = [
+    'rgba(52, 152, 219, 0.8)',   // Blue
+    'rgba(46, 204, 113, 0.8)',   // Green
+    'rgba(155, 89, 182, 0.8)',   // Purple  
+    'rgba(241, 196, 15, 0.8)',   // Yellow
+    'rgba(231, 76, 60, 0.8)',    // Red
+    'rgba(26, 188, 156, 0.8)'    // Teal
+  ];
+  
+  var compareColors = [
+    'rgba(231, 76, 60, 0.8)',    // Red
+    'rgba(230, 126, 34, 0.8)',   // Orange
+    'rgba(149, 165, 166, 0.8)',  // Gray
+    'rgba(52, 73, 94, 0.8)',     // Dark blue
+    'rgba(192, 57, 43, 0.8)',    // Dark red
+    'rgba(142, 68, 173, 0.8)'    // Dark purple
+  ];
+  
+  var chartData = {
+    labels: mainData.labels,
+    datasets: []
+  };
+  
+  // Add main auction datasets
+  for (var i = 0; i < mainData.providers.length; i++) {
+    chartData.datasets.push({
+      label: mainData.providers[i] + ' (' + mainTitle + ')',
+      data: mainData.data[i],
+      backgroundColor: colors[i % colors.length],
+      hoverBackgroundColor: colors[i % colors.length].replace('0.8', '1.0')
+    });
+  }
+  
+  // Add comparison datasets if available
+  if (compareData) {
+    for (var i = 0; i < compareData.providers.length; i++) {
+      chartData.datasets.push({
+        label: compareData.providers[i] + ' (' + compareTitle + ')',
+        data: compareData.data[i],
+        backgroundColor: compareColors[i % compareColors.length],
+        hoverBackgroundColor: compareColors[i % compareColors.length].replace('0.8', '1.0')
+      });
+    }
+  }
+  
+  var ctx = $("#" + canvasId).get(0).getContext("2d");
+  new Chart(ctx, {
+    type: 'bar',
+    data: chartData,
+    options: {
+      responsive: true,
+      legend: {
+        display: true,
+        position: 'bottom'
+      },
+      scales: {
+        yAxes: [{
+          ticks: {
+            beginAtZero: true
+          }
+        }]
+      }
+    }
+  });
+}
+
+// Helper function to create line chart with comparison data
+function createLineChart(canvasId, mainData, compareData, mainTitle, compareTitle, scaleType) {
+  var colors = [
+    'rgba(52, 152, 219, 0.8)',   // Blue
+    'rgba(46, 204, 113, 0.8)',   // Green
+    'rgba(155, 89, 182, 0.8)',   // Purple
+    'rgba(241, 196, 15, 0.8)',   // Yellow
+    'rgba(231, 76, 60, 0.8)',    // Red
+    'rgba(26, 188, 156, 0.8)'    // Teal
+  ];
+  
+  var compareColors = [
+    'rgba(231, 76, 60, 0.8)',    // Red
+    'rgba(230, 126, 34, 0.8)',   // Orange
+    'rgba(149, 165, 166, 0.8)',  // Gray
+    'rgba(52, 73, 94, 0.8)',     // Dark blue
+    'rgba(192, 57, 43, 0.8)',    // Dark red
+    'rgba(142, 68, 173, 0.8)'    // Dark purple
+  ];
+  
+  var chartData = {
+    labels: mainData.labels,
+    datasets: []
+  };
+  
+  // Add main auction datasets
+  for (var i = 0; i < mainData.providers.length; i++) {
+    chartData.datasets.push({
+      label: mainData.providers[i] + ' (' + mainTitle + ')',
+      data: mainData.data[i],
+      borderColor: colors[i % colors.length],
+      backgroundColor: colors[i % colors.length].replace('0.8', '0.2'),
+      fill: false
+    });
+  }
+  
+  // Add comparison datasets if available
+  if (compareData) {
+    for (var i = 0; i < compareData.providers.length; i++) {
+      chartData.datasets.push({
+        label: compareData.providers[i] + ' (' + compareTitle + ')',
+        data: compareData.data[i],
+        borderColor: compareColors[i % compareColors.length],
+        backgroundColor: compareColors[i % compareColors.length].replace('0.8', '0.2'),
+        fill: false,
+        borderDash: [5, 5]  // Dashed line for comparison
+      });
+    }
+  }
+  
+  var options = {
+    responsive: true,
+    legend: {
+      display: true,
+      position: 'bottom'
+    },
+    scales: {
+      yAxes: [{
+        ticks: {
+          beginAtZero: true
+        }
+      }]
+    }
+  };
+  
+  // Apply logarithmic scale if specified
+  if (scaleType === 'logarithmic') {
+    options.scales.yAxes[0].type = 'logarithmic';
+    options.scales.yAxes[0].ticks = {
+      callback: function(value, index, values) {
+        if (value === 0) return '0';
+        if (value === 1 || value === 10 || value === 100 || value === 1000) return value;
+        return '';
+      }
+    };
+  }
+  
+  var ctx = $("#" + canvasId).get(0).getContext("2d");
+  new Chart(ctx, {
+    type: 'line',
+    data: chartData,
+    options: options
+  });
+}
+
+// Helper function to create scatter chart with comparison data
+function createScatterChart(canvasId, mainData, compareData, mainTitle, compareTitle, useLogScale) {
+  var colors = [
+    'rgba(52, 152, 219, 0.8)',   // Blue
+    'rgba(46, 204, 113, 0.8)',   // Green
+  ];
+  
+  var compareColors = [
+    'rgba(231, 76, 60, 0.8)',    // Red
+    'rgba(230, 126, 34, 0.8)',   // Orange
+  ];
+  
+  var chartData = {
+    datasets: []
+  };
+  
+  // Add main auction datasets
+  for (var i = 0; i < mainData.providers.length; i++) {
+    chartData.datasets.push({
+      label: mainData.providers[i] + ' (' + mainTitle + ')',
+      data: mainData.data[i],
+      backgroundColor: colors[i % colors.length],
+      borderColor: colors[i % colors.length]
+    });
+  }
+  
+  // Add comparison datasets if available
+  if (compareData) {
+    for (var i = 0; i < compareData.providers.length; i++) {
+      chartData.datasets.push({
+        label: compareData.providers[i] + ' (' + compareTitle + ')',
+        data: compareData.data[i],
+        backgroundColor: compareColors[i % compareColors.length],
+        borderColor: compareColors[i % compareColors.length]
+      });
+    }
+  }
+  
+  var options = {
+    responsive: true,
+    legend: {
+      display: true,
+      position: 'bottom'
+    },
+    scales: {
+      xAxes: [{
+        type: 'linear',
+        position: 'bottom',
+        ticks: {
+          beginAtZero: true
+        }
+      }],
+      yAxes: [{
+        ticks: {
+          beginAtZero: true
+        }
+      }]
+    }
+  };
+  
+  // Apply logarithmic scale if specified
+  if (useLogScale) {
+    options.scales.yAxes[0].type = 'logarithmic';
+    options.scales.yAxes[0].ticks = {
+      callback: function(value, index, values) {
+        if (value === 0) return '0';
+        if (value === 1 || value === 10 || value === 100 || value === 1000) return value;
+        return '';
+      }
+    };
+  }
+  
+  var ctx = $("#" + canvasId).get(0).getContext("2d");
+  new Chart(ctx, {
+    type: 'scatter',
+    data: chartData,
+    options: options
+  });
+}
 </script>
 
 {% endblock %}
@@ -266,79 +499,9 @@
 <p></p>
 <canvas id="activity" width="500" height="400"></canvas>
 <script type="text/javascript">
-  // Get main auction data
   var mainData = {{ stats_activity_json|safe }};
-  
-  // Transform data into Chart.js format
-  var chartData = {
-    labels: mainData.labels,
-    datasets: []
-  };
-  
-  // Define colors for main auction series
-  var colors = [
-    'rgba(52, 152, 219, 0.8)',   // Blue
-    'rgba(46, 204, 113, 0.8)',   // Green
-    'rgba(155, 89, 182, 0.8)',   // Purple
-    'rgba(241, 196, 15, 0.8)',   // Yellow
-    'rgba(231, 76, 60, 0.8)',    // Red
-    'rgba(26, 188, 156, 0.8)'    // Teal
-  ];
-  
-  // Add main auction datasets
-  for (var i = 0; i < mainData.providers.length; i++) {
-    chartData.datasets.push({
-      label: mainData.providers[i] + ' ({{ auction.title }})',
-      data: mainData.data[i],
-      borderColor: colors[i % colors.length],
-      backgroundColor: colors[i % colors.length].replace('0.8', '0.2'),
-      fill: false
-    });
-  }
-  
-  {% if compare_auction and compare_stats_activity_json %}
-  // Add comparison auction datasets
-  var compareData = {{ compare_stats_activity_json|safe }};
-  var compareColors = [
-    'rgba(231, 76, 60, 0.8)',    // Red
-    'rgba(230, 126, 34, 0.8)',   // Orange
-    'rgba(149, 165, 166, 0.8)',  // Gray
-    'rgba(52, 73, 94, 0.8)',     // Dark blue
-    'rgba(192, 57, 43, 0.8)',    // Dark red
-    'rgba(142, 68, 173, 0.8)'    // Dark purple
-  ];
-  
-  for (var i = 0; i < compareData.providers.length; i++) {
-    chartData.datasets.push({
-      label: compareData.providers[i] + ' ({{ compare_auction.title }})',
-      data: compareData.data[i],
-      borderColor: compareColors[i % compareColors.length],
-      backgroundColor: compareColors[i % compareColors.length].replace('0.8', '0.2'),
-      fill: false,
-      borderDash: [5, 5]  // Dashed line for comparison
-    });
-  }
-  {% endif %}
-  
-  var ctx = $("#activity").get(0).getContext("2d");
-  new Chart(ctx, {
-    type: 'line',
-    data: chartData,
-    options: {
-      responsive: true,
-      legend: {
-        display: true,
-        position: 'bottom'
-      },
-      scales: {
-        yAxes: [{
-          ticks: {
-            beginAtZero: true
-          }
-        }]
-      }
-    }
-  });
+  var compareData = {% if compare_auction and compare_stats_activity_json %}{{ compare_stats_activity_json|safe }}{% else %}null{% endif %};
+  createLineChart('activity', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}', null);
 </script>
 This graph shows overall engagement of people with your auction.  You can gauge the effectiveness of advertising by tracking views and bids here.
 <p></p>
@@ -511,21 +674,9 @@ Promoted auctions are included in a weekly promotional email sent every Wednesda
             <h4>Lot sell prices</h4>
             <canvas id="lot_prices" width="500" height="400"></canvas>
             <script type="text/javascript">
-              $.get('{% url "auction_sell_prices" slug=auction.slug %}' + compareParam, function(data) {
-                var ctx = $("#lot_prices").get(0).getContext("2d");
-                new Chart(ctx, {
-                  type: 'bar', data: data,
-                  options: {
-                    scales: {
-                        yAxes: [{
-                            ticks: {
-                                beginAtZero: true, // start the Y-axis scale at zero
-                            }
-                        }]
-                    }
-                  },
-                });
-              });
+              var mainData = {{ stats_lot_sell_prices_json|safe }};
+              var compareData = {% if compare_auction and compare_stats_lot_sell_prices_json %}{{ compare_stats_lot_sell_prices_json|safe }}{% else %}null{% endif %};
+              createBarChart('lot_prices', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}');
             </script>
             <br>
             How many lots sold at different price points.  Buyer's auctions have a distribution towards the left, seller's auctions towards the right.<br><br>
@@ -550,36 +701,10 @@ Promoted auctions are included in a weekly promotional email sent every Wednesda
 
 <canvas id="attrition" width="500" height="400"></canvas>
 <script type="text/javascript">
-      $.get('{% url "auction_stats_attrition" slug=auction.slug %}' + compareParam, function(data) {
-          var ctx = $("#attrition").get(0).getContext("2d");
-          new Chart(ctx, {
-            type: 'scatter',
-            data: data,
-            options: {
-              scales: {
-                yAxes: [{
-                  type: 'logarithmic',
-                  ticks: {
-                    callback: function(value, index, values) {
-                      return '$' + value;
-                    }
-                  },
-                  scaleLabel: {
-                    display: true,
-                    labelString: 'Sell Price (log scale)'
-                  }
-                }],
-                xAxes: [{
-                  scaleLabel: {
-                    display: true,
-                    labelString: 'Minutes into auction'
-                  }
-                }]
-              }
-            }
-          });
-        });
-        </script>
+  var mainData = {{ stats_attrition_json|safe }};
+  var compareData = {% if compare_auction and compare_stats_attrition_json %}{{ compare_stats_attrition_json|safe }}{% else %}null{% endif %};
+  createScatterChart('attrition', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}', true);
+</script>
 <div>This graph shows lot sell price, graphed against the minutes into the auction.  Generally, prices tend to decrease the longer an auction runs.  (And if you can't see a decrease on this graph, awesome!)  Attrition is often the largest issue in big auctions.  You can counteract it with:
   <ul>
     <li>Change out your auctioneer if they start to slow down</li>
@@ -592,34 +717,19 @@ Promoted auctions are included in a weekly promotional email sent every Wednesda
 <h5>Auctioneer performance</h5>
 <canvas id="auctioneer" width="500" height="400"></canvas>
 <script type="text/javascript">
-  $.get('{% url "auction_stats_auctioneer" slug=auction.slug %}' + compareParam, function(data) {
-    var ctx = $("#auctioneer").get(0).getContext("2d");
-        new Chart(ctx, {
-          type: 'scatter', data: data
-        });
-      });
-    </script>
+  var mainData = {{ stats_auctioneer_speed_json|safe }};
+  var compareData = {% if compare_auction and compare_stats_auctioneer_speed_json %}{{ compare_stats_auctioneer_speed_json|safe }}{% else %}null{% endif %};
+  createScatterChart('auctioneer', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}', false);
+</script>
 <div>This graph shows the time since the last lot sold, graphed against the minutes into the auction.  Faster auctioneers will tend to be lower down on the Y axis.  If more than 3 minutes elapsed since the last lot, that data point is skipped.  If you changed auctioneers mid-way though the auction, see if you can spot that location on this chart.  Faster isn't always better, but the speed of your auctioneer makes a huge difference on attrition, especially in larger auctions.  And of course, this is based on the lot sell time, so if you're recording bids on paper and tallying them up later, you may not get a perfect representation of your auctioneer's speed.
 </div>{% endif %}
 <p></p>
 <h4>The importance of images on sell price</h4>
 <canvas id="pictures" width="500" height="400"></canvas>
 <script type="text/javascript">
-  $.get('{% url "auction_stats_pictures" slug=auction.slug %}' + compareParam, function(data) {
-    var ctx = $("#pictures").get(0).getContext("2d");
-    new Chart(ctx, {
-      type: 'bar', data: data,
-      options: {
-        scales: {
-            yAxes: [{
-                ticks: {
-                    beginAtZero: true, // start the Y-axis scale at zero
-                }
-            }]
-        }
-      },
-    });
-  });
+  var mainData = {{ stats_images_json|safe }};
+  var compareData = {% if compare_auction and compare_stats_images_json %}{{ compare_stats_images_json|safe }}{% else %}null{% endif %};
+  createBarChart('pictures', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}');
 </script>
 Generally, having an image makes a lot sell for more money, but more images don't help.  Remember that you can click on the legend to show/hide the number of lots or median value.  Does having a picture make a difference in your auction?
 
@@ -627,42 +737,18 @@ Generally, having an image makes a lot sell for more money, but more images don'
 <h4>How far users travel to get to your auction</h4>
 <canvas id="distances_traveled" width="500" height="400"></canvas>
 <script type="text/javascript">
-  $.get('{% url "auction_stats_distance_traveled" slug=auction.slug %}' + compareParam, function(data) {
-    var ctx = $("#distances_traveled").get(0).getContext("2d");
-    new Chart(ctx, {
-      type: 'bar', data: data,
-      options: {
-        scales: {
-            yAxes: [{
-                ticks: {
-                    beginAtZero: true, // start the Y-axis scale at zero
-                }
-            }]
-        }
-      },
-    });
-  });
+  var mainData = {{ stats_travel_distance_json|safe }};
+  var compareData = {% if compare_auction and compare_stats_travel_distance_json %}{{ compare_stats_travel_distance_json|safe }}{% else %}null{% endif %};
+  createBarChart('distances_traveled', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}');
 </script>
 Use this information to add additional pickup locations to future auctions.  Note that only people who join though this website have their location recorded: if you manually add people to your auction, they won't show up here.  IP address is used for people who choose not to share their exact location; be aware that IP geolocation is quite imprecise.
 <p></p>
 <h4>How many auctions have your users participated in previously?</h4>
 <canvas id="auction_stats_previous_auctions" width="500" height="400"></canvas>
 <script type="text/javascript">
-  $.get('{% url "auction_stats_previous_auctions" slug=auction.slug %}' + compareParam, function(data) {
-    var ctx = $("#auction_stats_previous_auctions").get(0).getContext("2d");
-    new Chart(ctx, {
-      type: 'bar', data: data,
-      options: {
-        scales: {
-            yAxes: [{
-                ticks: {
-                    beginAtZero: true, // start the Y-axis scale at zero
-                }
-            }]
-        }
-      },
-    });
-  });
+  var mainData = {{ stats_previous_auctions_json|safe }};
+  var compareData = {% if compare_auction and compare_stats_previous_auctions_json %}{{ compare_stats_previous_auctions_json|safe }}{% else %}null{% endif %};
+  createBarChart('auction_stats_previous_auctions', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}');
 </script>
 You want a good mix of newbies and veterans.  This takes into account ALL auctions on the site, not just ones you've created.  Email address is used to identify people, so if you left that blank, that person won't appear here at all.
 
@@ -670,21 +756,9 @@ You want a good mix of newbies and veterans.  This takes into account ALL auctio
 <h4>How many lots do your users submit?</h4>
 <canvas id="auction_stats_lots_submitted" width="500" height="400"></canvas>
 <script type="text/javascript">
-  $.get('{% url "auction_stats_lots_submitted" slug=auction.slug %}' + compareParam, function(data) {
-    var ctx = $("#auction_stats_lots_submitted").get(0).getContext("2d");
-    new Chart(ctx, {
-      type: 'bar', data: data,
-      options: {
-        scales: {
-            yAxes: [{
-                ticks: {
-                    beginAtZero: true, // start the Y-axis scale at zero
-                }
-            }]
-        }
-      },
-    });
-  });
+  var mainData = {{ stats_lots_submitted_json|safe }};
+  var compareData = {% if compare_auction and compare_stats_lots_submitted_json %}{{ compare_stats_lots_submitted_json|safe }}{% else %}null{% endif %};
+  createBarChart('auction_stats_lots_submitted', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}');
 </script>
 Most people will add very few lots to an auction, but it's worth considering those people, as how their lots do will impact whether or not they come back.  Only people who actually bought or sold a lot are included here -- if someone joined your auction but didn't participate, they won't appear in any column of this graph.
 {% if auction.multi_location %}
@@ -692,21 +766,9 @@ Most people will add very few lots to an auction, but it's worth considering tho
 <h4>How much volume does each location do?</h4>
 <canvas id="auction_stats_location_volume" width="500" height="400"></canvas>
 <script type="text/javascript">
-  $.get('{% url "auction_stats_location_volume" slug=auction.slug %}' + compareParam, function(data) {
-    var ctx = $("#auction_stats_location_volume").get(0).getContext("2d");
-    new Chart(ctx, {
-      type: 'bar', data: data,
-      options: {
-        scales: {
-            yAxes: [{
-                ticks: {
-                    beginAtZero: true, // start the Y-axis scale at zero
-                }
-            }]
-        }
-      },
-    });
-  });
+  var mainData = {{ stats_location_volume_json|safe }};
+  var compareData = {% if compare_auction and compare_stats_location_volume_json %}{{ compare_stats_location_volume_json|safe }}{% else %}null{% endif %};
+  createBarChart('auction_stats_location_volume', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}');
 </script>
 Use this to spot low-volume locations to skip or advertise more at next time.
 {% endif %}
@@ -714,21 +776,9 @@ Use this to spot low-volume locations to skip or advertise more at next time.
 <h4>Website feature utilization</h4>
 <canvas id="auction_stats_feature_use" width="500" height="400"></canvas>
 <script type="text/javascript">
-  $.get('{% url "auction_stats_feature_use" slug=auction.slug %}' + compareParam, function(data) {
-    var ctx = $("#auction_stats_feature_use").get(0).getContext("2d");
-    new Chart(ctx, {
-      type: 'bar', data: data,
-      options: {
-        scales: {
-            yAxes: [{
-                ticks: {
-                    beginAtZero: true, // start the Y-axis scale at zero
-                }
-            }]
-        }
-      },
-    });
-  });
+  var mainData = {{ stats_feature_use_json|safe }};
+  var compareData = {% if compare_auction and compare_stats_feature_use_json %}{{ compare_stats_feature_use_json|safe }}{% else %}null{% endif %};
+  createBarChart('auction_stats_feature_use', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}');
 </script>
 How many of your users are taking advantage of features on this webiste?
 <div>These measure the percent of users who <b>could</b> be taking advantage of the feature, which means:</div>
@@ -742,21 +792,9 @@ How many of your users are taking advantage of features on this webiste?
 <h4>Referrers</h4>
 <canvas id="auction_stats_referrers" width="500" height="400"></canvas>
 <script type="text/javascript">
-  $.get('{% url "auction_stats_referrers" slug=auction.slug %}' + compareParam, function(data) {
-    var ctx = $("#auction_stats_referrers").get(0).getContext("2d");
-    new Chart(ctx, {
-      type: 'bar', data: data,
-      options: {
-        scales: {
-            yAxes: [{
-                ticks: {
-                    beginAtZero: true, // start the Y-axis scale at zero
-                }
-            }]
-        }
-      },
-    });
-  });
+  var mainData = {{ stats_referrers_json|safe }};
+  var compareData = {% if compare_auction and compare_stats_referrers_json %}{{ compare_stats_referrers_json|safe }}{% else %}null{% endif %};
+  createBarChart('auction_stats_referrers', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}');
 </script>
 What websites are sending you traffic?
 
