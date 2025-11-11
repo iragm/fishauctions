@@ -2438,6 +2438,35 @@ class AuctionStats(LoginRequiredMixin, AuctionViewMixin, DetailView):
         if auction.date_posted < datetime(year=2024, month=1, day=1, tzinfo=date_tz.utc):
             messages.info(self.request, "Not all stats are available for old auctions.")
 
+        # Add all stat data to context for template rendering
+        import json
+        context["stats_activity_json"] = json.dumps(auction.get_stat_activity)
+        context["stats_attrition_json"] = json.dumps(auction.get_stat_attrition)
+        context["stats_auctioneer_speed_json"] = json.dumps(auction.get_stat_auctioneer_speed)
+        context["stats_lot_sell_prices_json"] = json.dumps(auction.get_stat_lot_sell_prices)
+        context["stats_referrers_json"] = json.dumps(auction.get_stat_referrers)
+        context["stats_images_json"] = json.dumps(auction.get_stat_images)
+        context["stats_travel_distance_json"] = json.dumps(auction.get_stat_travel_distance)
+        context["stats_previous_auctions_json"] = json.dumps(auction.get_stat_previous_auctions)
+        context["stats_lots_submitted_json"] = json.dumps(auction.get_stat_lots_submitted)
+        context["stats_location_volume_json"] = json.dumps(auction.get_stat_location_volume)
+        context["stats_feature_use_json"] = json.dumps(auction.get_stat_feature_use)
+
+        # Add comparison auction stats if available
+        if "compare_auction" in context:
+            compare_auction = context["compare_auction"]
+            context["compare_stats_activity_json"] = json.dumps(compare_auction.get_stat_activity)
+            context["compare_stats_attrition_json"] = json.dumps(compare_auction.get_stat_attrition)
+            context["compare_stats_auctioneer_speed_json"] = json.dumps(compare_auction.get_stat_auctioneer_speed)
+            context["compare_stats_lot_sell_prices_json"] = json.dumps(compare_auction.get_stat_lot_sell_prices)
+            context["compare_stats_referrers_json"] = json.dumps(compare_auction.get_stat_referrers)
+            context["compare_stats_images_json"] = json.dumps(compare_auction.get_stat_images)
+            context["compare_stats_travel_distance_json"] = json.dumps(compare_auction.get_stat_travel_distance)
+            context["compare_stats_previous_auctions_json"] = json.dumps(compare_auction.get_stat_previous_auctions)
+            context["compare_stats_lots_submitted_json"] = json.dumps(compare_auction.get_stat_lots_submitted)
+            context["compare_stats_location_volume_json"] = json.dumps(compare_auction.get_stat_location_volume)
+            context["compare_stats_feature_use_json"] = json.dumps(compare_auction.get_stat_feature_use)
+
         return context
 
 
