@@ -266,11 +266,23 @@
 <p></p>
 <canvas id="activity" width="500" height="400"></canvas>
 <script type="text/javascript">
-  $.get('{% url "auction_stats_activity" slug=auction.slug %}' + compareParam, function(data) {
-    var ctx = $("#activity").get(0).getContext("2d");
-    new Chart(ctx, {
-      type: 'line', data: data
-    });
+  // Get main auction data
+  var mainData = {{ stats_activity_json|safe }};
+  
+  // Merge comparison data if available
+  {% if compare_auction and compare_stats_activity_json %}
+  var compareData = {{ compare_stats_activity_json|safe }};
+  // Append comparison providers with auction title
+  compareData.providers.forEach(function(provider) {
+    mainData.providers.push(provider + " ({{ compare_auction.title }})");
+  });
+  // Append comparison datasets
+  mainData.data = mainData.data.concat(compareData.data);
+  {% endif %}
+  
+  var ctx = $("#activity").get(0).getContext("2d");
+  new Chart(ctx, {
+    type: 'line', data: mainData
   });
 </script>
 This graph shows overall engagement of people with your auction.  You can gauge the effectiveness of advertising by tracking views and bids here.
