@@ -18,9 +18,11 @@ from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.db.models import (
+    BooleanField,
     Case,
     Count,
     DecimalField,
+    Exists,
     ExpressionWrapper,
     F,
     FloatField,
@@ -265,6 +267,26 @@ def add_tos_info(qs):
     if not (isinstance(qs, QuerySet) and qs.model == AuctionTOS):
         msg = "must be passed a queryset of the AuctionTOS model"
         raise TypeError(msg)
+
+    # Add has_ever_granted_permission annotation if not already present
+    # This checks if the user has ever joined an auction (manually_added=False)
+    # for the same auction creator
+    qs = qs.annotate(
+        has_ever_granted_permission=Case(
+            When(
+                Q(user__isnull=False)
+                & Exists(
+                    AuctionTOS.objects.filter(
+                        user=OuterRef("user"), auction__created_by=OuterRef("auction__created_by"), manually_added=False
+                    )
+                ),
+                then=Value(True),
+            ),
+            default=Value(False),
+            output_field=BooleanField(),
+        )
+    )
+
     return qs.annotate(
         lots_bid_actual=Coalesce(
             Subquery(
@@ -277,7 +299,7 @@ def add_tos_info(qs):
             ),
             0,
         ),
-        lots_bid=Case(When(Q(manually_added=True), then=Value(0)), default=F("lots_bid_actual")),
+        lots_bid=Case(When(Q(has_ever_granted_permission=False), then=Value(0)), default=F("lots_bid_actual")),
         lots_viewed_actual=Coalesce(
             Subquery(
                 PageView.objects.filter(user=OuterRef("user"), lot_number__auction=OuterRef("auction"))
@@ -288,7 +310,7 @@ def add_tos_info(qs):
             ),
             0,
         ),
-        lots_viewed=Case(When(Q(manually_added=True), then=Value(0)), default=F("lots_viewed_actual")),
+        lots_viewed=Case(When(Q(has_ever_granted_permission=False), then=Value(0)), default=F("lots_viewed_actual")),
         lots_won=Count("auctiontos_winner", distinct=True),
         lots_submitted=Count("auctiontos_seller", distinct=True),
         other_auctions=Coalesce(
@@ -309,7 +331,7 @@ def add_tos_info(qs):
         ),
         account_age_ms=Case(
             When(
-                Q(manually_added=True),
+                Q(has_ever_granted_permission=False),
                 then=ExpressionWrapper(timezone.now() - F("createdon"), output_field=IntegerField()),
             ),
             default=ExpressionWrapper(timezone.now() - F("user__date_joined"), output_field=IntegerField()),
@@ -326,7 +348,7 @@ def add_tos_info(qs):
             0,
         ),
         other_user_bans=Case(
-            When(Q(manually_added=True), then=Value(0)),
+            When(Q(has_ever_granted_permission=False), then=Value(0)),
             default=F("other_user_bans_actual"),
         ),
         trust=ExpressionWrapper(
@@ -348,12 +370,30 @@ def add_tos_distance_info(qs):
     if not (isinstance(qs, QuerySet) and qs.model == AuctionTOS):
         msg = "must be passed a queryset of the AuctionTOS model"
         raise TypeError(msg)
+
+    # Add has_ever_granted_permission annotation if not already present
+    qs = qs.annotate(
+        has_ever_granted_permission=Case(
+            When(
+                Q(user__isnull=False)
+                & Exists(
+                    AuctionTOS.objects.filter(
+                        user=OuterRef("user"), auction__created_by=OuterRef("auction__created_by"), manually_added=False
+                    )
+                ),
+                then=Value(True),
+            ),
+            default=Value(False),
+            output_field=BooleanField(),
+        )
+    )
+
     return (
         qs.select_related("user__userdata")
         .select_related("pickup_location")
         .annotate(
             new_distance_traveled=Case(
-                When(Q(manually_added=True), then=Value(-1)),
+                When(Q(has_ever_granted_permission=False), then=Value(-1)),
                 default=distance_to(
                     """`auctions_userdata`.`latitude`""",
                     """`auctions_userdata`.`longitude`""",
@@ -1285,7 +1325,30 @@ class Auction(models.Model):
 
     @property
     def tos_qs(self):
-        return AuctionTOS.objects.filter(auction=self.pk).order_by("-createdon")
+        """Return AuctionTOS queryset with has_ever_granted_permission annotation.
+
+        has_ever_granted_permission is True if the user has ever joined any auction
+        created by this auction's creator with manually_added=False.
+        """
+        return (
+            AuctionTOS.objects.filter(auction=self.pk)
+            .annotate(
+                has_ever_granted_permission=Case(
+                    When(
+                        Q(user__isnull=False)
+                        & Exists(
+                            AuctionTOS.objects.filter(
+                                user=OuterRef("user"), auction__created_by=self.created_by, manually_added=False
+                            )
+                        ),
+                        then=Value(True),
+                    ),
+                    default=Value(False),
+                    output_field=BooleanField(),
+                )
+            )
+            .order_by("-createdon")
+        )
 
     @property
     def number_of_confirmed_tos(self):

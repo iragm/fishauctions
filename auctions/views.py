@@ -1513,12 +1513,8 @@ class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
                 "Added auction to their calendar",
             ]
         )
-        users = (
-            AuctionTOS.objects.filter(auction=self.auction)
-            .select_related("user__userdata")
-            .select_related("pickup_location")
-            .order_by("createdon")
-        )
+        # Use the auction's tos_qs property to get the has_ever_granted_permission annotation
+        users = self.auction.tos_qs.select_related("user__userdata").select_related("pickup_location")
         # Apply filter if query is provided
         if query:
             users = AuctionTOSFilter.generic(None, users, query)
@@ -1531,7 +1527,7 @@ class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
         for data in users:
             distance = ""
             club = ""
-            if data.user and not data.manually_added:
+            if data.user and data.has_ever_granted_permission:
                 # these things will only be written out if the user wants you to have it
                 lotsViewed = PageView.objects.filter(lot_number__auction=self.auction, user=data.user)
                 lotsBid = Bid.objects.exclude(is_deleted=True).filter(lot_number__auction=self.auction, user=data.user)
