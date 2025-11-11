@@ -1710,17 +1710,16 @@ class Auction(models.Model):
         """For use in querysets, pks only"""
         return self.auction_admins_qs.values_list("user__pk", flat=True)
 
-    def recalculate_stats(self):
-        """Recalculate and cache all auction statistics.
-        This method calculates all the chart data that is displayed on the stats page
-        and stores it in the cached_stats JSONField to avoid expensive recalculations.
-        """
-        from django.db.models import Avg
+    # Stat getter/setter properties
+    @property
+    def get_stat_activity(self):
+        """Get activity chart data from cached stats"""
+        if self.cached_stats and "activity" in self.cached_stats:
+            return self.cached_stats["activity"]
+        return {"labels": [], "providers": [], "data": []}
 
-        stats = {}
-
-        # Calculate activity stats (views, joins, new lots, searches, bids, watches)
-        # This is used by AuctionStatsActivityJSONView
+    def set_stat_activity(self):
+        """Calculate and return activity chart data"""
         bins = 21
         days_before = 16
         days_after = bins - days_before
@@ -1747,7 +1746,7 @@ class Auction(models.Model):
         bids = LotHistory.objects.filter(lot__auction=self, changed_price=True)
         watches = Watch.objects.filter(lot_number__auction=self)
 
-        stats["activity"] = {
+        return {
             "labels": self._get_activity_labels(bins, days_before, days_after, dates_messed_with),
             "providers": ["Views", "Joins", "New lots", "Searches", "Bids", "Watches"],
             "data": [
@@ -1760,8 +1759,15 @@ class Auction(models.Model):
             ],
         }
 
-        # Calculate attrition stats (lot sell prices over time)
-        # This is used by AuctionStatsAttritionJSONView
+    @property
+    def get_stat_attrition(self):
+        """Get attrition chart data from cached stats"""
+        if self.cached_stats and "attrition" in self.cached_stats:
+            return self.cached_stats["attrition"]
+        return {"labels": [], "providers": [], "data": []}
+
+    def set_stat_attrition(self):
+        """Calculate and return attrition chart data"""
         ignore_percent = 10
         lots = (
             Lot.objects.exclude(Q(date_end__isnull=True) | Q(is_deleted=True))
@@ -1787,34 +1793,54 @@ class Auction(models.Model):
                 }
                 for lot in lots
             ]
-            stats["attrition"] = {
+            return {
                 "labels": [],
                 "providers": ["Lots"],
                 "data": [attrition_data],
             }
         else:
-            stats["attrition"] = {"labels": [], "providers": ["Lots"], "data": [[]]}
+            return {"labels": [], "providers": ["Lots"], "data": [[]]}
 
-        # Calculate auctioneer speed stats (minutes per lot)
-        # This is used by AuctionStatsAuctioneerSpeedJSONView
+    @property
+    def get_stat_auctioneer_speed(self):
+        """Get auctioneer speed chart data from cached stats"""
+        if self.cached_stats and "auctioneer_speed" in self.cached_stats:
+            return self.cached_stats["auctioneer_speed"]
+        return {"labels": [], "providers": [], "data": []}
+
+    def set_stat_auctioneer_speed(self):
+        """Calculate and return auctioneer speed chart data"""
+        lots = (
+            Lot.objects.exclude(Q(date_end__isnull=True) | Q(is_deleted=True))
+            .filter(auction=self, winning_price__isnull=False)
+            .order_by("-date_end")
+        )
         auctioneer_data = []
         for i in range(1, len(lots)):
             minutes = (lots[i - 1].date_end - lots[i].date_end).total_seconds() / 60
             ignore_if_more_than = 3  # minutes
             if minutes <= ignore_if_more_than:
                 auctioneer_data.append({"x": i, "y": minutes})
-        stats["auctioneer_speed"] = {
+        return {
             "labels": [],
             "providers": ["Minutes per lot"],
             "data": [auctioneer_data],
         }
 
-        # Calculate lot sell prices distribution
-        # This is used by AuctionStatsLotSellPricesJSONView
+    @property
+    def get_stat_lot_sell_prices(self):
+        """Get lot sell prices chart data from cached stats"""
+        if self.cached_stats and "lot_sell_prices" in self.cached_stats:
+            return self.cached_stats["lot_sell_prices"]
+        return {"labels": [], "providers": [], "data": []}
+
+    def set_stat_lot_sell_prices(self):
+        """Calculate and return lot sell prices chart data"""
         sold_lots = self.lots_qs.filter(winning_price__isnull=False)
         
         # Make bins dynamic based on actual sell prices
         if sold_lots.exists():
+            from django.db.models import Max
             max_price = sold_lots.aggregate(max_price=Max("winning_price"))["max_price"] or 40
             # Round up to nearest $10 for cleaner bins
             max_price = int((max_price + 9) // 10 * 10)
@@ -1839,7 +1865,7 @@ class Auction(models.Model):
                 labels.append(f"${i + 1}-{i + 2}")
             labels.append(f"${max_price}+")
             
-            stats["lot_sell_prices"] = {
+            return {
                 "labels": labels,
                 "providers": ["Number of lots"],
                 "data": [[self.total_unsold_lots] + histogram],
@@ -1854,15 +1880,47 @@ class Auction(models.Model):
                 end_bin=39,
                 add_column_for_high_overflow=True,
             )
-            stats["lot_sell_prices"] = {
-                "labels": ["Not sold"] + [(f"${i + 1}-{i + 2}") for i in range(0, 37, 2)] + ["$40+"],
+            return {
+                "labels": [
+                    "Not sold",
+                    "$1-2",
+                    "$3-4",
+                    "$5-6",
+                    "$7-8",
+                    "$9-10",
+                    "$11-12",
+                    "$13-14",
+                    "$15-16",
+                    "$17-18",
+                    "$19-20",
+                    "$21-22",
+                    "$23-24",
+                    "$25-26",
+                    "$27-28",
+                    "$29-30",
+                    "$31-32",
+                    "$33-34",
+                    "$35-36",
+                    "$37-38",
+                    "$39-40",
+                    "$40+",
+                ],
                 "providers": ["Number of lots"],
                 "data": [[self.total_unsold_lots] + histogram],
             }
 
-        # Calculate referrers stats
-        # This is used by AuctionStatsReferrersJSONView
-        views_for_referrers = (
+    @property
+    def get_stat_referrers(self):
+        """Get referrers chart data from cached stats"""
+        if self.cached_stats and "referrers" in self.cached_stats:
+            return self.cached_stats["referrers"]
+        return {"labels": [], "providers": [], "data": []}
+
+    def set_stat_referrers(self):
+        """Calculate and return referrers chart data"""
+        from django.contrib.sites.models import Site
+        
+        views = (
             PageView.objects.filter(Q(auction=self) | Q(lot_number__auction=self))
             .exclude(referrer__isnull=True)
             .exclude(referrer__startswith=Site.objects.get_current().domain)
@@ -1870,53 +1928,71 @@ class Auction(models.Model):
             .values("referrer")
             .annotate(count=Count("referrer"))
         )
-        referrer_labels = []
-        referrer_data = []
+        labels = []
+        data = []
         other = 0
-        for view in views_for_referrers:
+        for view in views:
             if view["count"] > 1:
-                referrer_labels.append(view["referrer"])
-                referrer_data.append(view["count"])
+                labels.append(view["referrer"])
+                data.append(view["count"])
             else:
                 other += 1
-        referrer_labels.append("Other")
-        referrer_data.append(other)
-        stats["referrers"] = {
-            "labels": referrer_labels,
+        labels.append("Other")
+        data.append(other)
+        return {
+            "labels": labels,
             "providers": ["Number of clicks"],
-            "data": [referrer_data],
+            "data": [data],
         }
 
-        # Calculate images stats (impact of images on sell price)
-        # This is used by AuctionStatsImagesJSONView
-        lots = Lot.objects.filter(auction=self, winning_price__isnull=False).annotate(num_images=Count("lotimage"))
+    @property
+    def get_stat_images(self):
+        """Get images chart data from cached stats"""
+        if self.cached_stats and "images" in self.cached_stats:
+            return self.cached_stats["images"]
+        return {"labels": [], "providers": [], "data": []}
+
+    def set_stat_images(self):
+        """Calculate and return images chart data"""
+        from django.db.models import Avg
+        
+        lots = Lot.objects.filter(auction=self, winning_price__isnull=False).annotate(
+            num_images=Count("lotimage")
+        )
         lots_with_no_images = lots.filter(num_images=0)
         lots_with_one_image = lots.filter(num_images=1)
         lots_with_one_or_more_images = lots.filter(num_images__gt=1)
         medians = []
         averages = []
         counts = []
-        for lot_group in [
+        for lots_subset in [
             lots_with_no_images,
             lots_with_one_image,
             lots_with_one_or_more_images,
         ]:
             try:
-                medians.append(median_value(lot_group, "winning_price"))
+                medians.append(median_value(lots_subset, "winning_price"))
             except:
                 medians.append(0)
-            averages.append(lot_group.aggregate(avg_value=Avg("winning_price"))["avg_value"])
-            counts.append(lot_group.count())
-        stats["images"] = {
+            averages.append(lots_subset.aggregate(avg_value=Avg("winning_price"))["avg_value"])
+            counts.append(lots_subset.count())
+        return {
             "labels": ["No images", "One image", "More than one image"],
             "providers": ["Median sell price", "Average sell price", "Number of lots"],
             "data": [medians, averages, counts],
         }
 
-        # Calculate travel distance stats
-        # This is used by AuctionStatsTravelDistanceJSONView
+    @property
+    def get_stat_travel_distance(self):
+        """Get travel distance chart data from cached stats"""
+        if self.cached_stats and "travel_distance" in self.cached_stats:
+            return self.cached_stats["travel_distance"]
+        return {"labels": [], "providers": [], "data": []}
+
+    def set_stat_travel_distance(self):
+        """Calculate and return travel distance chart data"""
         auctiontos = AuctionTOS.objects.filter(auction=self, user__isnull=False)
-        travel_histogram = bin_data(
+        histogram = bin_data(
             auctiontos,
             "distance_traveled",
             number_of_bins=5,
@@ -1924,23 +2000,30 @@ class Auction(models.Model):
             end_bin=51,
             add_column_for_high_overflow=True,
         )
-        stats["travel_distance"] = {
+        return {
             "labels": [
-                "Less than 10 miles",
-                "10-20 miles",
+                "1-10 miles",
+                "11-20 miles",
                 "21-30 miles",
                 "31-40 miles",
                 "41-50 miles",
                 "51+ miles",
             ],
             "providers": ["Number of users"],
-            "data": [travel_histogram],
+            "data": [histogram],
         }
 
-        # Calculate previous auctions stats
-        # This is used by AuctionStatsPreviousAuctionsJSONView
+    @property
+    def get_stat_previous_auctions(self):
+        """Get previous auctions chart data from cached stats"""
+        if self.cached_stats and "previous_auctions" in self.cached_stats:
+            return self.cached_stats["previous_auctions"]
+        return {"labels": [], "providers": [], "data": []}
+
+    def set_stat_previous_auctions(self):
+        """Calculate and return previous auctions chart data"""
         auctiontos = AuctionTOS.objects.filter(auction=self, email__isnull=False)
-        previous_histogram = bin_data(
+        histogram = bin_data(
             auctiontos,
             "previous_auctions_count",
             number_of_bins=2,
@@ -1948,16 +2031,23 @@ class Auction(models.Model):
             end_bin=2,
             add_column_for_high_overflow=True,
         )
-        stats["previous_auctions"] = {
+        return {
             "labels": ["First auction", "1 previous auction", "2+ previous auctions"],
             "providers": ["Number of users"],
-            "data": [previous_histogram],
+            "data": [histogram],
         }
 
-        # Calculate lots submitted stats
-        # This is used by AuctionStatsLotsSubmittedJSONView
+    @property
+    def get_stat_lots_submitted(self):
+        """Get lots submitted chart data from cached stats"""
+        if self.cached_stats and "lots_submitted" in self.cached_stats:
+            return self.cached_stats["lots_submitted"]
+        return {"labels": [], "providers": [], "data": []}
+
+    def set_stat_lots_submitted(self):
+        """Calculate and return lots submitted chart data"""
         invoices = Invoice.objects.filter(auction=self)
-        lots_histogram = bin_data(
+        histogram = bin_data(
             invoices,
             "lots_sold",
             number_of_bins=4,
@@ -1966,7 +2056,7 @@ class Auction(models.Model):
             add_column_for_low_overflow=True,
             add_column_for_high_overflow=True,
         )
-        stats["lots_submitted"] = {
+        return {
             "labels": [
                 "Buyer only (0 lots sold)",
                 "1-2 lots",
@@ -1976,11 +2066,18 @@ class Auction(models.Model):
                 "9+ lots",
             ],
             "providers": ["Number of users"],
-            "data": [lots_histogram],
+            "data": [histogram],
         }
 
-        # Calculate location volume stats (if multi-location)
-        # This is used by AuctionStatsLocationVolumeJSONView
+    @property
+    def get_stat_location_volume(self):
+        """Get location volume chart data from cached stats"""
+        if self.cached_stats and "location_volume" in self.cached_stats:
+            return self.cached_stats["location_volume"]
+        return {"labels": [], "providers": [], "data": []}
+
+    def set_stat_location_volume(self):
+        """Calculate and return location volume chart data"""
         locations = []
         sold = []
         bought = []
@@ -1988,14 +2085,21 @@ class Auction(models.Model):
             locations.append(location.name)
             sold.append(location.total_sold)
             bought.append(location.total_bought)
-        stats["location_volume"] = {
+        return {
             "labels": locations,
             "providers": ["Total bought", "Total sold"],
             "data": [bought, sold],
         }
 
-        # Calculate feature use stats
-        # This is used by AuctionStatsLocationFeatureUseJSONView
+    @property
+    def get_stat_feature_use(self):
+        """Get feature use chart data from cached stats"""
+        if self.cached_stats and "feature_use" in self.cached_stats:
+            return self.cached_stats["feature_use"]
+        return {"labels": [], "providers": [], "data": []}
+
+    def set_stat_feature_use(self):
+        """Calculate and return feature use chart data"""
         auctiontos = AuctionTOS.objects.filter(auction=self)
         auctiontos_with_account = auctiontos.filter(user__isnull=False)
         searches = (
@@ -2011,16 +2115,12 @@ class Auction(models.Model):
             .distinct()
             .count()
         )
-        notification_percent = (
-            int(notifications / auctiontos_with_account.count() * 100) if auctiontos_with_account.count() else 0
-        )
+        notification_percent = int(notifications / auctiontos_with_account.count() * 100) if auctiontos_with_account.count() else 0
         has_used_proxy_bidding = UserData.objects.filter(
             has_used_proxy_bidding=True,
             user__in=auctiontos_with_account.values_list("user"),
         ).count()
-        has_used_proxy_bidding_percent = (
-            int(has_used_proxy_bidding / auctiontos_with_account.count() * 100) if auctiontos_with_account.count() else 0
-        )
+        has_used_proxy_bidding_percent = int(has_used_proxy_bidding / auctiontos_with_account.count() * 100) if auctiontos_with_account.count() else 0
         chat = (
             LotHistory.objects.filter(
                 changed_price=False,
@@ -2034,9 +2134,13 @@ class Auction(models.Model):
         chat_percent = int(chat / auctiontos_with_account.count() * 100) if auctiontos_with_account.count() else 0
         if self.is_online:
             lot_with_buy_now = (
-                Lot.objects.filter(auction=self, buy_now_used=True).values("auctiontos_winner").distinct().count()
+                Lot.objects.filter(auction=self, buy_now_used=True)
+                .values("auctiontos_winner")
+                .distinct()
+                .count()
             )
         else:
+            from django.db.models import F
             lot_with_buy_now = (
                 Lot.objects.filter(auction=self, winning_price=F("buy_now_price"))
                 .values("auctiontos_winner")
@@ -2062,7 +2166,7 @@ class Auction(models.Model):
             leave_feedback_percent = 0
         else:
             leave_feedback_percent = int(leave_feedback / all_sold_lots * 100)
-        stats["feature_use"] = {
+        return {
             "labels": [
                 "An account",
                 "Search",
@@ -2089,6 +2193,26 @@ class Auction(models.Model):
                 ]
             ],
         }
+
+    def recalculate_stats(self):
+        """Recalculate and cache all auction statistics.
+        This method calls all the setter methods to calculate chart data
+        and stores it in the cached_stats JSONField to avoid expensive recalculations.
+        """
+        stats = {}
+        
+        # Call all setter methods to calculate stats
+        stats["activity"] = self.set_stat_activity()
+        stats["attrition"] = self.set_stat_attrition()
+        stats["auctioneer_speed"] = self.set_stat_auctioneer_speed()
+        stats["lot_sell_prices"] = self.set_stat_lot_sell_prices()
+        stats["referrers"] = self.set_stat_referrers()
+        stats["images"] = self.set_stat_images()
+        stats["travel_distance"] = self.set_stat_travel_distance()
+        stats["previous_auctions"] = self.set_stat_previous_auctions()
+        stats["lots_submitted"] = self.set_stat_lots_submitted()
+        stats["location_volume"] = self.set_stat_location_volume()
+        stats["feature_use"] = self.set_stat_feature_use()
 
         # Save the stats
         self.cached_stats = stats
