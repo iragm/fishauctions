@@ -14,7 +14,7 @@
   // Get compare parameter from URL if present
   var compareSlug = new URLSearchParams(window.location.search).get('compare');
   var compareParam = compareSlug ? '?compare=' + compareSlug : '';
-  
+
   window.onload = function() {
     Chart.defaults.global.defaultFontColor = "#fff";
     $.ajax({
@@ -171,7 +171,7 @@
                     $(document).ready(function() {
                         $('#compare-auction').select2({
                             ajax: {
-                                url: '{% url "auction-autocomplete" %}',
+                                url: '{% url "auction-autocomplete" %}?exclude={{ auction.slug }}',
                                 dataType: 'json',
                                 delay: 250,
                                 data: function (params) {
@@ -194,7 +194,7 @@
                             minimumInputLength: 0,
                             allowClear: true
                         });
-                        
+
                         $('#compare-auction').on('change', function() {
                             const slug = $(this).val();
                             if (slug) {
@@ -486,7 +486,7 @@ Promoted auctions are included in a weekly promotional email sent every Wednesda
       $.get('{% url "auction_stats_attrition" slug=auction.slug %}' + compareParam, function(data) {
           var ctx = $("#attrition").get(0).getContext("2d");
           new Chart(ctx, {
-            type: 'scatter', 
+            type: 'scatter',
             data: data,
             options: {
               scales: {
