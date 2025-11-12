@@ -1,6 +1,7 @@
 import logging
 
 from django.core.management.base import BaseCommand
+from django.db.models import Q
 from django.utils import timezone
 
 from auctions.models import Auction
@@ -15,17 +16,17 @@ class Command(BaseCommand):
         now = timezone.now()
         # Find auctions that need stats recalculation
         auctions = Auction.objects.filter(
+            Q(next_update_due__lte=now) | Q(next_update_due__isnull=True),
             is_deleted=False,
-            next_update_due__lte=now,
         )
-        
+
         count = auctions.count()
         if count == 0:
             logger.info("No auctions need stats updates at this time")
             return
-        
+
         logger.info("Updating stats for %d auction(s)", count)
-        
+
         for auction in auctions:
             try:
                 logger.info("Recalculating stats for auction: %s (%s)", auction.title, auction.slug)
@@ -36,5 +37,5 @@ class Command(BaseCommand):
                 logger.exception(e)
                 # Continue with other auctions even if one fails
                 continue
-        
+
         logger.info("Completed stats update for %d auction(s)", count)

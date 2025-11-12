@@ -46,6 +46,9 @@ from markdownfield.models import MarkdownField, RenderedMarkdownField
 from markdownfield.validators import VALIDATOR_STANDARD
 from post_office import mail
 from pytz import timezone as pytz_timezone
+from webpush.models import PushInformation
+
+from .helper_functions import bin_data
 
 logger = logging.getLogger(__name__)
 
@@ -1399,7 +1402,7 @@ class Auction(models.Model):
         This uses the same logic as the auctioneer speed graph, ignoring the first and last 10% of lots."""
         if self.is_online:
             return 0  # Not applicable for online auctions
-        
+
         ignore_percent = 10
         lots = (
             Lot.objects.exclude(Q(date_end__isnull=True) | Q(is_deleted=True))
@@ -1407,30 +1410,30 @@ class Auction(models.Model):
             .order_by("-date_end")
         )
         total_lots = lots.count()
-        
+
         if total_lots < 10:  # Not enough lots for meaningful calculation
             return 0
-        
+
         # Calculate start and end indices to ignore first and last 10%
         start_index = int(ignore_percent / 100 * total_lots)
         end_index = int((1 - (ignore_percent / 100)) * total_lots) - 1
-        
+
         if start_index >= end_index:
             return 0
-        
+
         # Get the time range for the middle 80% of lots
         start_date = lots[start_index].date_end
         end_date = lots[end_index].date_end
-        
+
         # Calculate total time in minutes
         total_time = (start_date - end_date).total_seconds() / 60
-        
+
         # Calculate number of lots in this time period
         num_lots = end_index - start_index
-        
+
         if total_time <= 0:
             return 0
-        
+
         # Return lots per minute
         return num_lots / total_time
 
@@ -1837,19 +1840,20 @@ class Auction(models.Model):
     def set_stat_lot_sell_prices(self):
         """Calculate and return lot sell prices chart data"""
         sold_lots = self.lots_qs.filter(winning_price__isnull=False)
-        
+
         # Make bins dynamic based on actual sell prices
         if sold_lots.exists():
             from django.db.models import Max
+
             max_price = sold_lots.aggregate(max_price=Max("winning_price"))["max_price"] or 40
             # Round up to nearest $10 for cleaner bins
             max_price = int((max_price + 9) // 10 * 10)
-            
+
             # Create bins with $2 intervals up to max price
             num_bins = min(max_price // 2, 30)  # Cap at 30 bins to avoid too many
             if num_bins < 10:
                 num_bins = 10  # Minimum 10 bins
-            
+
             histogram = bin_data(
                 sold_lots,
                 "winning_price",
@@ -1858,13 +1862,13 @@ class Auction(models.Model):
                 end_bin=max_price - 1,
                 add_column_for_high_overflow=True,
             )
-            
+
             # Generate labels dynamically
             labels = ["Not sold"]
             for i in range(0, max_price - 1, 2):
                 labels.append(f"${i + 1}-{i + 2}")
             labels.append(f"${max_price}+")
-            
+
             return {
                 "labels": labels,
                 "providers": ["Number of lots"],
@@ -1919,7 +1923,7 @@ class Auction(models.Model):
     def set_stat_referrers(self):
         """Calculate and return referrers chart data"""
         from django.contrib.sites.models import Site
-        
+
         views = (
             PageView.objects.filter(Q(auction=self) | Q(lot_number__auction=self))
             .exclude(referrer__isnull=True)
@@ -1955,10 +1959,8 @@ class Auction(models.Model):
     def set_stat_images(self):
         """Calculate and return images chart data"""
         from django.db.models import Avg
-        
-        lots = Lot.objects.filter(auction=self, winning_price__isnull=False).annotate(
-            num_images=Count("lotimage")
-        )
+
+        lots = Lot.objects.filter(auction=self, winning_price__isnull=False).annotate(num_images=Count("lotimage"))
         lots_with_no_images = lots.filter(num_images=0)
         lots_with_one_image = lots.filter(num_images=1)
         lots_with_one_or_more_images = lots.filter(num_images__gt=1)
@@ -2102,9 +2104,7 @@ class Auction(models.Model):
         """Calculate and return feature use chart data"""
         auctiontos = AuctionTOS.objects.filter(auction=self)
         auctiontos_with_account = auctiontos.filter(user__isnull=False)
-        searches = (
-            SearchHistory.objects.filter(user__isnull=False, auction=self).values("user").distinct().count()
-        )
+        searches = SearchHistory.objects.filter(user__isnull=False, auction=self).values("user").distinct().count()
         seach_percent = int(searches / auctiontos_with_account.count() * 100) if auctiontos_with_account.count() else 0
         watch_qs = Watch.objects.filter(lot_number__auction=self).values("user").distinct()
         watches = watch_qs.count()
@@ -2115,12 +2115,18 @@ class Auction(models.Model):
             .distinct()
             .count()
         )
-        notification_percent = int(notifications / auctiontos_with_account.count() * 100) if auctiontos_with_account.count() else 0
+        notification_percent = (
+            int(notifications / auctiontos_with_account.count() * 100) if auctiontos_with_account.count() else 0
+        )
         has_used_proxy_bidding = UserData.objects.filter(
             has_used_proxy_bidding=True,
             user__in=auctiontos_with_account.values_list("user"),
         ).count()
-        has_used_proxy_bidding_percent = int(has_used_proxy_bidding / auctiontos_with_account.count() * 100) if auctiontos_with_account.count() else 0
+        has_used_proxy_bidding_percent = (
+            int(has_used_proxy_bidding / auctiontos_with_account.count() * 100)
+            if auctiontos_with_account.count()
+            else 0
+        )
         chat = (
             LotHistory.objects.filter(
                 changed_price=False,
@@ -2134,13 +2140,11 @@ class Auction(models.Model):
         chat_percent = int(chat / auctiontos_with_account.count() * 100) if auctiontos_with_account.count() else 0
         if self.is_online:
             lot_with_buy_now = (
-                Lot.objects.filter(auction=self, buy_now_used=True)
-                .values("auctiontos_winner")
-                .distinct()
-                .count()
+                Lot.objects.filter(auction=self, buy_now_used=True).values("auctiontos_winner").distinct().count()
             )
         else:
             from django.db.models import F
+
             lot_with_buy_now = (
                 Lot.objects.filter(auction=self, winning_price=F("buy_now_price"))
                 .values("auctiontos_winner")
@@ -2200,7 +2204,7 @@ class Auction(models.Model):
         and stores it in the cached_stats JSONField to avoid expensive recalculations.
         """
         stats = {}
-        
+
         # Call all setter methods to calculate stats
         stats["activity"] = self.set_stat_activity()
         stats["attrition"] = self.set_stat_attrition()
