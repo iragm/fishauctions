@@ -1493,6 +1493,7 @@ class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
                 "Lots viewed",
                 "Lots bid",
                 "Lots submitted",
+                "Lots sold",
                 "Lots won",
                 "Invoice",
                 "Total bought",
@@ -1562,6 +1563,7 @@ class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
                 number_of_userbans = 0
                 account_age = ""
             lotsSumbitted = Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller=data, auction=self.auction)
+            lotsSold = lotsSumbitted.filter(winning_price__isnull=False)
             lotsWon = Lot.objects.exclude(is_deleted=True).filter(auctiontos_winner=data, auction=self.auction)
             breederPoints = Lot.objects.exclude(is_deleted=True).filter(
                 auctiontos_seller=data, auction=self.auction, i_bred_this_fish=True
@@ -1593,6 +1595,7 @@ class AuctionReportView(LoginRequiredMixin, AuctionViewMixin, View):
                     len(lotsViewed),
                     len(lotsBid),
                     len(lotsSumbitted),
+                    len(lotsSold),
                     len(lotsWon),
                     invoiceStatus,
                     f"{totalSpent:.2f}",
