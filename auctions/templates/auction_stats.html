@@ -42,6 +42,7 @@
 
   window.onload = function() {
     Chart.defaults.global.defaultFontColor = "#fff";
+    /* Commented out funnel chart AJAX - can be restored if users request it
     $.ajax({
       url: '{% url "auction_funnel_chart" slug=auction.slug %}',
       success: function (data) {
@@ -86,7 +87,9 @@
           new Chart(ctx, funnelChart);
       }
     });
+    */
     {% if auction.is_online %}
+    /* Commented out lot_pie chart AJAX - can be restored if users request it
     $.ajax({
       url: '{% url "auction_lot_bidders" slug=auction.slug %}',
       success: function (data) {
@@ -128,8 +131,10 @@
           new Chart(ctx, pie);
       }
     });
+    */
     {% endif %}
     {% if auction.is_online %}
+    /* Commented out category popularity AJAX - can be restored if users request it
     $.ajax({
       url: '{% url "auction_lot_categories" slug=auction.slug %}',
       success: function (data) {
@@ -177,6 +182,7 @@
           new Chart(ctx, categories);
      }
     });
+    */
     {% endif %}
 };
 
