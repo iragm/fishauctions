@@ -649,6 +649,10 @@ class AuctionConsumer(WebsocketConsumer):
         """When PayPal payment completes"""
         self.send(text_data=json.dumps({"type": "invoice_paid", "pk": event["pk"]}))
 
+    def stats_updated(self, event):
+        """When auction stats have been recalculated"""
+        self.send(text_data=json.dumps({"type": "stats_updated", "auction_pk": event["auction_pk"]}))
+
     def disconnect(self, close_code):
         # Leave room group
         async_to_sync(self.channel_layer.group_discard)(f"invoices_{self.pk}", self.channel_name)

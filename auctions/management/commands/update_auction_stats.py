@@ -1,5 +1,7 @@
 import logging
 
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 from django.core.management.base import BaseCommand
 from django.db.models import Q
 from django.utils import timezone
@@ -32,6 +34,17 @@ class Command(BaseCommand):
                 logger.info("Recalculating stats for auction: %s (%s)", auction.title, auction.slug)
                 auction.recalculate_stats()
                 logger.info("Successfully updated stats for auction: %s", auction.title)
+                
+                # Send WebSocket notification to connected users
+                channel_layer = get_channel_layer()
+                async_to_sync(channel_layer.group_send)(
+                    f"auctions_{auction.pk}",
+                    {
+                        "type": "stats_updated",
+                        "auction_pk": auction.pk,
+                    }
+                )
+                logger.debug("Sent stats_updated notification for auction: %s", auction.pk)
             except Exception as e:
                 logger.error("Failed to update stats for auction %s (%s): %s", auction.title, auction.slug, e)
                 logger.exception(e)

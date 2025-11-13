@@ -2214,6 +2214,14 @@ class Auction(models.Model):
 
         total_bidders = User.objects.filter(bid__lot_number__auction=self).annotate(c=Count("id")).count()
         total_winners = User.objects.filter(winner__auction=self).annotate(c=Count("id")).count()
+        
+        # Additional email/reminder stats  
+        reminder_emails_sent = self.number_of_reminder_emails
+        reminder_email_click_rate = self.reminder_email_clicks
+        reminder_email_join_rate = self.reminder_email_joins
+        
+        # QR code scans
+        qr_scans = self.number_of_lots_with_scanned_qr
 
         return {
             "total_unique_views": total_views,
@@ -2221,6 +2229,10 @@ class Auction(models.Model):
             "anonymous_unique_views": anonymous_views,
             "total_bidders": total_bidders,
             "total_winners": total_winners,
+            "reminder_emails_sent": reminder_emails_sent,
+            "reminder_email_click_rate": reminder_email_click_rate,
+            "reminder_email_join_rate": reminder_email_join_rate,
+            "number_of_lots_with_scanned_qr": qr_scans,
         }
 
     def recalculate_stats(self):
@@ -2247,8 +2259,30 @@ class Auction(models.Model):
         # Save the stats
         self.cached_stats = stats
         self.last_stats_update = timezone.now()
-        # Set next update to 1 hour from now by default
-        self.next_update_due = timezone.now() + timezone.timedelta(hours=1)
+        
+        # Smart scheduling based on auction age and status
+        # Active auctions (start date within a week): recalculate every 4 hours
+        # Other auctions: recalculate once per day  
+        # Auctions > 90 days old: don't recalculate automatically
+        now = timezone.now()
+        
+        if self.date_start:
+            days_until_start = (self.date_start - now).days
+            days_since_start = (now - self.date_start).days
+            
+            # Auctions > 90 days in the past aren't recalculated at all
+            if days_since_start > 90:
+                self.next_update_due = None
+            # Active auctions (started within 7 days ago or start within 7 days) - every 4 hours
+            elif -7 <= days_until_start <= 7:
+                self.next_update_due = now + timezone.timedelta(hours=4)
+            # Other auctions - once per day
+            else:
+                self.next_update_due = now + timezone.timedelta(days=1)
+        else:
+            # No start date set - use daily updates
+            self.next_update_due = now + timezone.timedelta(days=1)
+            
         self.save(update_fields=["cached_stats", "last_stats_update", "next_update_due"])
 
         return stats
