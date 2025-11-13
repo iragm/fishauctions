@@ -5289,7 +5289,6 @@ class InvoiceCreateView(LoginRequiredMixin, View, AuctionViewMixin):
         return redirect(invoice.get_absolute_url())
 
 
-# password protected in views.py
 class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
     """Show a single invoice"""
 
@@ -5446,11 +5445,7 @@ class InvoiceNoLoginView(InvoiceView):
     def get_object(self):
         if not self.uuid:
             raise Http404
-        invoice = Invoice.objects.filter(no_login_link=self.uuid).first()
-        if invoice:
-            return invoice
-        else:
-            raise Http404
+        return get_object_or_404(Invoice, no_login_link=self.uuid)
 
     def dispatch(self, request, *args, **kwargs):
         self.uuid = kwargs.get("uuid", None)

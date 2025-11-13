@@ -2198,6 +2198,31 @@ class Auction(models.Model):
             ],
         }
 
+    def get_stat_misc(self):
+        """A few one-off stats that are slow to calculate and/or dependent on page views"""
+        if self.cached_stats and "misc" in self.cached_stats:
+            return self.cached_stats["misc"]
+        return {}
+
+    def set_stat_misc(self):
+        """A few one-off stats that are slow to calculate and/or dependent on page views"""
+
+        all_views = PageView.objects.filter(Q(auction=self) | Q(lot_number__auction=self))
+        anonymous_views = all_views.values("session_id").annotate(c=Count("session_id")).count()
+        user_views = all_views.values("user").annotate(c=Count("user")).count()
+        total_views = anonymous_views + user_views
+
+        total_bidders = User.objects.filter(bid__lot_number__auction=self).annotate(c=Count("id")).count()
+        total_winners = User.objects.filter(winner__auction=self).annotate(c=Count("id")).count()
+
+        return {
+            "total_unique_views": total_views,
+            "logged_in_unique_views": user_views,
+            "anonymous_unique_views": anonymous_views,
+            "total_bidders": total_bidders,
+            "total_winners": total_winners,
+        }
+
     def recalculate_stats(self):
         """Recalculate and cache all auction statistics.
         This method calls all the setter methods to calculate chart data
@@ -2217,6 +2242,7 @@ class Auction(models.Model):
         stats["lots_submitted"] = self.set_stat_lots_submitted()
         stats["location_volume"] = self.set_stat_location_volume()
         stats["feature_use"] = self.set_stat_feature_use()
+        stats["misc"] = self.set_stat_misc()
 
         # Save the stats
         self.cached_stats = stats
