@@ -2997,6 +2997,47 @@ class UserExportTests(StandardTestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 403)
 
+    def test_user_export_includes_lots_sold_column(self):
+        """Test that user export includes the 'Lots sold' column with correct data"""
+        self.client.login(username="admin_user", password="testpassword")
+        url = reverse("user_list", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "text/csv")
+
+        # Decode the CSV content
+        content = response.content.decode("utf-8")
+        lines = content.strip().split("\n")
+
+        # Check header row contains "Lots sold"
+        header = lines[0]
+        self.assertIn("Lots sold", header)
+
+        # Verify header column order: "Lots submitted" should come before "Lots sold" which comes before "Lots won"
+        self.assertLess(header.index("Lots submitted"), header.index("Lots sold"))
+        self.assertLess(header.index("Lots sold"), header.index("Lots won"))
+
+        # Find the row for "my_lot" user who has:
+        # - 4 lots submitted (lot, lotB, lotC, unsoldLot)
+        # - 3 lots sold (lot, lotB, lotC have winning_price)
+        # - 0 lots won (this user is a seller)
+        header_parts = header.split(",")
+        lots_submitted_idx = header_parts.index("Lots submitted")
+        lots_sold_idx = header_parts.index("Lots sold")
+        lots_won_idx = header_parts.index("Lots won")
+
+        # Find the row with my_lot username
+        for line in lines[1:]:
+            if "my_lot" in line:
+                parts = line.split(",")
+                # Verify the counts match expected values
+                self.assertEqual(parts[lots_submitted_idx], "4", "Expected 4 lots submitted")
+                self.assertEqual(parts[lots_sold_idx], "3", "Expected 3 lots sold")
+                self.assertEqual(parts[lots_won_idx], "0", "Expected 0 lots won")
+                break
+        else:
+            self.fail("Could not find my_lot user in CSV export")
+
 
 class UserTrustSystemTests(StandardTestCase):
     """Test the user trust system functionality"""
