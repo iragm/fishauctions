@@ -160,12 +160,12 @@ function createBarChart(canvasId, mainData, compareData, mainTitle, compareTitle
   var colors = [
     'rgba(52, 152, 219, 0.8)',   // Blue
     'rgba(46, 204, 113, 0.8)',   // Green
-    'rgba(155, 89, 182, 0.8)',   // Purple  
+    'rgba(155, 89, 182, 0.8)',   // Purple
     'rgba(241, 196, 15, 0.8)',   // Yellow
     'rgba(231, 76, 60, 0.8)',    // Red
     'rgba(26, 188, 156, 0.8)'    // Teal
   ];
-  
+
   var compareColors = [
     'rgba(231, 76, 60, 0.8)',    // Red
     'rgba(230, 126, 34, 0.8)',   // Orange
@@ -174,12 +174,12 @@ function createBarChart(canvasId, mainData, compareData, mainTitle, compareTitle
     'rgba(192, 57, 43, 0.8)',    // Dark red
     'rgba(142, 68, 173, 0.8)'    // Dark purple
   ];
-  
+
   var chartData = {
     labels: mainData.labels,
     datasets: []
   };
-  
+
   // Add main auction datasets
   for (var i = 0; i < mainData.providers.length; i++) {
     chartData.datasets.push({
@@ -189,7 +189,7 @@ function createBarChart(canvasId, mainData, compareData, mainTitle, compareTitle
       hoverBackgroundColor: colors[i % colors.length].replace('0.8', '1.0')
     });
   }
-  
+
   // Add comparison datasets if available
   if (compareData) {
     for (var i = 0; i < compareData.providers.length; i++) {
@@ -201,7 +201,7 @@ function createBarChart(canvasId, mainData, compareData, mainTitle, compareTitle
       });
     }
   }
-  
+
   var ctx = $("#" + canvasId).get(0).getContext("2d");
   new Chart(ctx, {
     type: 'bar',
@@ -233,7 +233,7 @@ function createLineChart(canvasId, mainData, compareData, mainTitle, compareTitl
     'rgba(231, 76, 60, 0.8)',    // Red
     'rgba(26, 188, 156, 0.8)'    // Teal
   ];
-  
+
   var compareColors = [
     'rgba(231, 76, 60, 0.8)',    // Red
     'rgba(230, 126, 34, 0.8)',   // Orange
@@ -242,12 +242,12 @@ function createLineChart(canvasId, mainData, compareData, mainTitle, compareTitl
     'rgba(192, 57, 43, 0.8)',    // Dark red
     'rgba(142, 68, 173, 0.8)'    // Dark purple
   ];
-  
+
   var chartData = {
     labels: mainData.labels,
     datasets: []
   };
-  
+
   // Add main auction datasets
   for (var i = 0; i < mainData.providers.length; i++) {
     chartData.datasets.push({
@@ -258,7 +258,7 @@ function createLineChart(canvasId, mainData, compareData, mainTitle, compareTitl
       fill: false
     });
   }
-  
+
   // Add comparison datasets if available
   if (compareData) {
     for (var i = 0; i < compareData.providers.length; i++) {
@@ -272,7 +272,7 @@ function createLineChart(canvasId, mainData, compareData, mainTitle, compareTitl
       });
     }
   }
-  
+
   var options = {
     responsive: true,
     legend: {
@@ -287,7 +287,7 @@ function createLineChart(canvasId, mainData, compareData, mainTitle, compareTitl
       }]
     }
   };
-  
+
   // Apply logarithmic scale if specified
   if (scaleType === 'logarithmic') {
     options.scales.yAxes[0].type = 'logarithmic';
@@ -299,7 +299,7 @@ function createLineChart(canvasId, mainData, compareData, mainTitle, compareTitl
       }
     };
   }
-  
+
   var ctx = $("#" + canvasId).get(0).getContext("2d");
   new Chart(ctx, {
     type: 'line',
@@ -314,16 +314,16 @@ function createScatterChart(canvasId, mainData, compareData, mainTitle, compareT
     'rgba(52, 152, 219, 0.8)',   // Blue
     'rgba(46, 204, 113, 0.8)',   // Green
   ];
-  
+
   var compareColors = [
     'rgba(231, 76, 60, 0.8)',    // Red
     'rgba(230, 126, 34, 0.8)',   // Orange
   ];
-  
+
   var chartData = {
     datasets: []
   };
-  
+
   // Add main auction datasets
   for (var i = 0; i < mainData.providers.length; i++) {
     chartData.datasets.push({
@@ -333,7 +333,7 @@ function createScatterChart(canvasId, mainData, compareData, mainTitle, compareT
       borderColor: colors[i % colors.length]
     });
   }
-  
+
   // Add comparison datasets if available
   if (compareData) {
     for (var i = 0; i < compareData.providers.length; i++) {
@@ -345,7 +345,7 @@ function createScatterChart(canvasId, mainData, compareData, mainTitle, compareT
       });
     }
   }
-  
+
   var options = {
     responsive: true,
     legend: {
@@ -367,7 +367,7 @@ function createScatterChart(canvasId, mainData, compareData, mainTitle, compareT
       }]
     }
   };
-  
+
   // Apply logarithmic scale if specified
   if (useLogScale) {
     options.scales.yAxes[0].type = 'logarithmic';
@@ -379,7 +379,7 @@ function createScatterChart(canvasId, mainData, compareData, mainTitle, compareT
       }
     };
   }
-  
+
   var ctx = $("#" + canvasId).get(0).getContext("2d");
   new Chart(ctx, {
     type: 'scatter',
