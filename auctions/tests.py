@@ -2072,6 +2072,58 @@ class AuctionPropertyTests(StandardTestCase):
         assert self.online_auction.number_of_locations == 1
         assert self.online_auction.all_location_count == 2
 
+    def test_has_non_logical_times(self):
+        """Test that has_non_logical_times property detects illogical auction times"""
+        # Create an auction with logical times (ending in :00:00)
+        logical_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Logical time auction",
+            is_online=True,
+            date_start=timezone.now().replace(hour=14, minute=0, second=0, microsecond=0),
+            date_end=timezone.now().replace(hour=18, minute=0, second=0, microsecond=0) + datetime.timedelta(days=1),
+        )
+        assert logical_auction.has_non_logical_times is False
+
+        # Create an auction with logical times (ending in :30:00)
+        logical_auction_30 = Auction.objects.create(
+            created_by=self.user,
+            title="Logical time auction at 30",
+            is_online=True,
+            date_start=timezone.now().replace(hour=14, minute=30, second=0, microsecond=0),
+            date_end=timezone.now().replace(hour=18, minute=30, second=0, microsecond=0) + datetime.timedelta(days=1),
+        )
+        assert logical_auction_30.has_non_logical_times is False
+
+        # Create an auction with non-logical start time
+        illogical_start = Auction.objects.create(
+            created_by=self.user,
+            title="Illogical start time auction",
+            is_online=True,
+            date_start=timezone.now().replace(hour=14, minute=23, second=0, microsecond=0),
+            date_end=timezone.now().replace(hour=18, minute=0, second=0, microsecond=0) + datetime.timedelta(days=1),
+        )
+        assert illogical_start.has_non_logical_times is not False
+
+        # Create an auction with non-logical end time
+        illogical_end = Auction.objects.create(
+            created_by=self.user,
+            title="Illogical end time auction",
+            is_online=True,
+            date_start=timezone.now().replace(hour=14, minute=0, second=0, microsecond=0),
+            date_end=timezone.now().replace(hour=18, minute=15, second=0, microsecond=0) + datetime.timedelta(days=1),
+        )
+        assert illogical_end.has_non_logical_times is not False
+
+        # Create an auction with seconds not zero
+        illogical_seconds = Auction.objects.create(
+            created_by=self.user,
+            title="Illogical seconds auction",
+            is_online=True,
+            date_start=timezone.now().replace(hour=14, minute=0, second=30, microsecond=0),
+            date_end=timezone.now().replace(hour=18, minute=0, second=0, microsecond=0) + datetime.timedelta(days=1),
+        )
+        assert illogical_seconds.has_non_logical_times is not False
+
 
 class LotPropertyTests(StandardTestCase):
     """Test Lot model properties"""

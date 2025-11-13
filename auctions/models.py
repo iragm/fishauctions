@@ -1148,6 +1148,21 @@ class Auction(models.Model):
         return False
 
     @property
+    def has_non_logical_times(self):
+        """Check if auction start or end times are not set to logical times (ending in :00:00 or :30:00).
+        Returns the edit url if times are illogical, False otherwise."""
+        # A logical time has minutes of 00 or 30, and seconds of 00
+        for date_field in [self.date_start, self.date_end]:
+            if date_field:
+                local_time = date_field.astimezone(self.timezone)
+                minutes = local_time.minute
+                seconds = local_time.second
+                # Check if time is not :00:00 or :30:00
+                if not ((minutes == 0 or minutes == 30) and seconds == 0):
+                    return reverse("edit_auction", kwargs={"slug": self.slug})
+        return False
+
+    @property
     def timezone(self):
         try:
             return pytz_timezone(self.created_by.userdata.timezone)
