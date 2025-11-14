@@ -651,7 +651,7 @@ class AuctionConsumer(WebsocketConsumer):
 
     def stats_updated(self, event):
         """When auction stats have been recalculated"""
-        self.send(text_data=json.dumps({"type": "stats_updated", "auction_pk": event["auction_pk"]}))
+        self.send(text_data=json.dumps({"type": "stats_updated"}))
 
     def disconnect(self, close_code):
         # Leave room group

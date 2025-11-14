@@ -22,17 +22,16 @@
   statsSocket.onmessage = function(e) {
     var data = JSON.parse(e.data);
     if (data.type === 'stats_updated') {
-      // Show notification that updated stats are available
       var notification = document.createElement('div');
       notification.className = 'alert alert-info alert-dismissible fade show position-fixed';
       notification.style = 'top: 20px; right: 20px; z-index: 9999; max-width: 400px;';
-      notification.innerHTML = '<strong>Updated stats are now available!</strong> <a href="#" onclick="location.reload(); return false;">Click here to reload the page</a><button type="button" class="close" data-dismiss="alert">&times;</button>';
+      notification.innerHTML = '<a href="#" onclick="location.reload(); return false;"><strong>Updated stats ready!</strong> Click here to reload this page and see them.</a><button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>';
       document.body.appendChild(notification);
     }
   };
 
   statsSocket.onclose = function(e) {
-    console.log('Stats WebSocket closed');
+    //console.log('Stats WebSocket closed');
   };
   {% endif %}
 
@@ -256,23 +255,23 @@ function createBarChart(canvasId, mainData, compareData, mainTitle, compareTitle
 
 // Helper function to create line chart with comparison data
 function createLineChart(canvasId, mainData, compareData, mainTitle, compareTitle, scaleType) {
-  var colors = [
-    'rgba(52, 152, 219, 0.8)',   // Blue
-    'rgba(46, 204, 113, 0.8)',   // Green
-    'rgba(155, 89, 182, 0.8)',   // Purple
-    'rgba(241, 196, 15, 0.8)',   // Yellow
-    'rgba(231, 76, 60, 0.8)',    // Red
-    'rgba(26, 188, 156, 0.8)'    // Teal
-  ];
+var colors = [
+    'rgba(135, 206, 250, 0.8)',  // Light Blue
+    'rgba(0, 51, 102, 0.8)',     // Dark Blue
+    'rgba(0, 128, 128, 0.8)',    // Teal
+    'rgba(102, 0, 102, 0.8)',    // Dark Purple
+    'rgba(144, 238, 144, 0.8)',  // Pale Green
+    'rgba(186, 85, 211, 0.8)'    // Light Purple
+];
 
-  var compareColors = [
-    'rgba(231, 76, 60, 0.8)',    // Red
-    'rgba(230, 126, 34, 0.8)',   // Orange
-    'rgba(149, 165, 166, 0.8)',  // Gray
-    'rgba(52, 73, 94, 0.8)',     // Dark blue
-    'rgba(192, 57, 43, 0.8)',    // Dark red
-    'rgba(142, 68, 173, 0.8)'    // Dark purple
-  ];
+var compareColors = [
+    'rgba(192, 57, 43, 0.8)',    // Dark Red
+    'rgba(204, 102, 0, 0.8)',    // Dark Orange
+    'rgba(204, 204, 0, 0.8)',    // Dark Yellow
+    'rgba(102, 0, 102, 0.8)',    // Dark Purple (same as above)
+    'rgba(255, 255, 153, 0.8)',  // Pale Yellow
+    'rgba(186, 85, 211, 0.8)'    // Light Purple (same as above)
+];
 
   var chartData = {
     labels: mainData.labels,
@@ -771,10 +770,10 @@ Promoted auctions are included in a weekly promotional email sent every Wednesda
 <script type="text/javascript">
   var mainData = {{ stats_images_json|safe }};
   var compareData = {% if compare_auction and compare_stats_images_json %}{{ compare_stats_images_json|safe }}{% else %}null{% endif %};
-  createBarChart('pictures', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}');
+  createBarChart('pictures', mainData, null, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}');
 </script>
 Generally, having an image makes a lot sell for more money, but more images don't help.  Remember that you can click on the legend to show/hide the number of lots or median value.  Does having a picture make a difference in your auction?
-
+{% if compare_auction %}<small>This graph gets really cluttered when comparing auctions and it's really mostly about seeing how worthwhile it is to add images, which doesn't change between auctions.</small>{% endif %}
 <p></p>
 <h4>How far users travel to get to your auction</h4>
 <canvas id="distances_traveled" width="500" height="400"></canvas>
