@@ -86,6 +86,7 @@ class QuickAddTOS(forms.ModelForm):
         if not self.auction.multi_location:
             self.fields["pickup_location"].initial = self.auction.location_qs.first()
             self.fields["pickup_location"].widget = HiddenInput()
+        self.fields["is_club_member"].label = self.auction.alternative_split_label
 
     def clean(self):
         cleaned_data = super().clean()
