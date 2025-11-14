@@ -1438,6 +1438,45 @@ class Auction(models.Model):
         return num_lots / total_time
 
     @property
+    def total_auction_duration(self):
+        """For in-person auctions, this also uses the same logic as the auctioneer speed graph, ignoring the first and last 10% of lots."""
+        if self.is_online:
+            return 0  # Not applicable for online auctions
+
+        ignore_percent = 10
+        lots = (
+            Lot.objects.exclude(Q(date_end__isnull=True) | Q(is_deleted=True))
+            .filter(auction=self, winning_price__isnull=False)
+            .order_by("-date_end")
+        )
+        total_lots = lots.count()
+
+        if total_lots < 10:  # Not enough lots for meaningful calculation
+            return 0
+
+        # Calculate start and end indices to ignore first and last 10%
+        start_index = int(ignore_percent / 100 * total_lots)
+        end_index = int((1 - (ignore_percent / 100)) * total_lots) - 1
+
+        if start_index >= end_index:
+            return 0
+
+        # Get the time range for the middle 80% of lots
+        start_date = lots[start_index].date_end
+        end_date = lots[end_index].date_end
+
+        # Calculate total time in minutes
+        middle_time = (start_date - end_date).total_seconds() / 60
+        return middle_time + middle_time * ignore_percent * 2 / 100
+
+    @property
+    def total_auction_duration_str(self):
+        """Format total_auction_duration (minutes) as 'Hh MMm'."""
+        minutes_total = int(round(self.total_auction_duration or 0))
+        hours, minutes = divmod(minutes_total, 60)
+        return f"{hours}h {minutes:02d}m"
+
+    @property
     def template_lot_link(self):
         """Not directly used in templates, use template_lot_link_first_column and template_lot_link_separate_column instead"""
         if timezone.now() > self.lot_submission_start_date:
@@ -2272,7 +2311,7 @@ class Auction(models.Model):
 
             # Auctions > 90 days in the past aren't recalculated at all
             if days_since_start > 90:
-                self.next_update_due = None
+                self.next_update_due = now + timezone.timedelta(years=500)
             # Active auctions (started within 7 days ago or start within 7 days) - every 4 hours
             elif -7 <= days_until_start <= 7:
                 self.next_update_due = now + timezone.timedelta(hours=4)
