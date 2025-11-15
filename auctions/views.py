@@ -4819,6 +4819,12 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                     self.request,
                     f"<a href='{invalidPickups}'>Some pickup times</a> are set before the end date of the auction",
                 )
+            nonLogicalTimes = self.auction.has_non_logical_times
+            if nonLogicalTimes:
+                messages.info(
+                    self.request,
+                    f"<a href='{nonLogicalTimes}'>Auction start or end time</a> should be set to a logical time like 14:30 or 09:00",
+                )
             if self.auction.time_start_is_at_night and not self.auction.is_online:
                 messages.info(
                     self.request,
