@@ -22,7 +22,6 @@ from .models import (
     LotHistory,
     User,
     UserBan,
-    UserData,
     UserInterestCategory,
 )
 
@@ -69,7 +68,7 @@ def check_chat_permissions(lot, user):
                 else:
                     display = f"in {display.days} days"
                 return f"You can't chat.  Try again {display}"
-    except:
+    except AttributeError:
         pass
     if not lot.chat_allowed:
         return "Chat is no longer allowed on this lot"
@@ -167,10 +166,7 @@ def bid_on_lot(lot, user, amount):
             user=user,
             defaults={"interest": settings.BID_WEIGHT},
         )
-        userData, userdataCreated = UserData.objects.get_or_create(
-            user=user,
-            defaults={},
-        )
+        userData = user.userdata
         userData.has_bid = True
         if userData.username_visible:
             user_string = str(user)
@@ -276,10 +272,7 @@ def bid_on_lot(lot, user, amount):
                 return result
             if bid.amount > next_allowed_amount:
                 bid.save()
-                userData, userdataCreated = UserData.objects.get_or_create(
-                    user=user,
-                    defaults={},
-                )
+                userData = user.userdata
                 userData.has_used_proxy_bidding = True
                 userData.save()
             # if we get to this point, the user has bid >= the high bid
@@ -294,7 +287,7 @@ def bid_on_lot(lot, user, amount):
                         result["message"] = f"You've raised your proxy bid to ${bid.amount}"
                         logger.debug("%s has raised their bid on %s to $%s", user_string, lot, bid.amount)
                         return result
-                except:
+                except AttributeError:
                     pass
                 # New high bidder!  If we get to this point, the user has bid against someone else and changed the price
                 result["date_end"] = reset_lot_end_time(lot)
@@ -493,7 +486,7 @@ class LotConsumer(WebsocketConsumer):
                                     "username": str(self.user),
                                 },
                             )
-                    except:
+                    except (KeyError, ValueError):
                         pass
                     try:
                         # handle bids
@@ -541,7 +534,7 @@ class LotConsumer(WebsocketConsumer):
                                         "date_end": result["date_end"],
                                     },
                                 )
-                    except:
+                    except (KeyError, ValueError, TypeError):
                         pass
             except Exception as e:
                 logger.exception(e)
@@ -585,6 +578,7 @@ class UserConsumer(WebsocketConsumer):
             self.user_notification_channel = f"user_{self.pk}"
             if not user_for or user_for != self.user:
                 self.close()
+                return
             else:
                 self.accept()
                 # Add to the group after accepting the connection
@@ -598,6 +592,7 @@ class UserConsumer(WebsocketConsumer):
         except Exception as e:
             logger.exception(e)
             self.close()
+            return
 
     def disconnect(self, close_code):
         # Leave room group
@@ -624,17 +619,21 @@ class AuctionConsumer(WebsocketConsumer):
             auction = Auction.objects.filter(pk=self.pk).first()
             if not auction:
                 self.close()
+                return
             self.user = self.scope["user"]
             if self.user.is_anonymous:
                 self.close()
+                return
             if not auction.permission_check(self.user):
                 self.close()
+                return
             self.accept()
             async_to_sync(self.channel_layer.group_add)(f"auctions_{self.pk}", self.channel_name)
 
         except Exception as e:
             logger.exception(e)
             self.close()
+            return
 
     def invoice_approved(self, event):
         """Step 1, NOT PAID YET"""

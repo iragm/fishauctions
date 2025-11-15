@@ -16,7 +16,7 @@ from channels.auth import AuthMiddlewareStack
 from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.security.websocket import AllowedHostsOriginValidator
 
-from auctions.consumers import LotConsumer, UserConsumer, AuctionConsumer  # ruff: noqa: E402
+from auctions.consumers import LotConsumer, UserConsumer, AuctionConsumer  # noqa: E402
 
 application = ProtocolTypeRouter(
     {

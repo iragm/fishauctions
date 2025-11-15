@@ -7,7 +7,7 @@ from django.db.models import Q
 from django.utils import timezone
 from post_office import mail
 
-from auctions.models import Auction, UserData
+from auctions.models import Auction
 
 logger = logging.getLogger(__name__)
 
@@ -26,10 +26,7 @@ class Command(BaseCommand):
         )
         for auction in auctions:
             current_site = Site.objects.get_current()
-            userData, created = UserData.objects.get_or_create(
-                user=auction.created_by,
-                defaults={},
-            )
+            userData = auction.created_by.userdata
             if userData.has_unsubscribed:
                 # that's the end of that
                 auction.email_first_sent = True

@@ -13,7 +13,6 @@ from auctions.models import (
     AuctionTOS,
     Lot,
     PickupLocation,
-    UserData,
     distance_to,
 )
 
@@ -133,10 +132,7 @@ class Command(BaseCommand):
             campaign.save()
             send_email = True
             # don't send these emails if it's too late to join, such as an online auction that's ended or an in-person auction that's started
-            userData, created = UserData.objects.get_or_create(
-                user=campaign.user,
-                defaults={},
-            )
+            userData = campaign.user.userdata
             latitude = userData.latitude
             longitude = userData.longitude
             if latitude and longitude:
