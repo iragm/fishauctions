@@ -1,8 +1,10 @@
 {% extends "base.html" %}
 {% load i18n %}
+{% load static %}
 {% block title %}Set winners for {{ auction }}{% endblock %}
 
 {% block extra_js %}
+<script src="https://cdn.jsdelivr.net/gh/msqr1/Vosklet@1.2.1/Examples/Vosklet.js" async defer></script>
 <script>
   let tooltipTimeout;
   function initializeTooltipWithTimeout() {
@@ -145,6 +147,211 @@
   function getLotPicture() {
     htmx.ajax('get','/api/{{ auction.slug }}/lots/' + encodeURIComponent($("#lot").val()), {target: '#result'});
   }
+
+  // Voice recognition functionality
+  let voiceRecognizer = null;
+  let isListening = false;
+  let pendingLot = null;
+  let pendingPrice = null;
+  let pendingWinner = null;
+  let isSoldCommandGiven = false;
+
+  // Convert spoken numbers to digits
+  function parseSpokenNumber(text) {
+    const numberWords = {
+      'zero': '0', 'one': '1', 'two': '2', 'three': '3', 'four': '4',
+      'five': '5', 'six': '6', 'seven': '7', 'eight': '8', 'nine': '9',
+      'ten': '10', 'eleven': '11', 'twelve': '12', 'thirteen': '13',
+      'fourteen': '14', 'fifteen': '15', 'sixteen': '16', 'seventeen': '17',
+      'eighteen': '18', 'nineteen': '19', 'twenty': '20', 'thirty': '30',
+      'forty': '40', 'fifty': '50', 'sixty': '60', 'seventy': '70',
+      'eighty': '80', 'ninety': '90', 'hundred': '100', 'thousand': '1000'
+    };
+
+    let result = '';
+    let words = text.toLowerCase().split(/[\s-]+/);
+    
+    for (let word of words) {
+      if (numberWords[word] !== undefined) {
+        result += numberWords[word];
+      } else if (/^\d+$/.test(word)) {
+        result += word;
+      }
+    }
+    
+    return result || null;
+  }
+
+  // Handle voice recognition results
+  function handleVoiceResult(text) {
+    text = text.toLowerCase().trim();
+    console.log('Voice recognized:', text);
+    
+    // Check for undo command
+    if (/\bundo\b/.test(text)) {
+      console.log('Undo command detected');
+      if (!$("#undo_button").hasClass('d-none')) {
+        undoSellLot();
+      }
+      return;
+    }
+    
+    // Check for sold command
+    if (/\bsold\b/.test(text)) {
+      console.log('Sold command detected');
+      isSoldCommandGiven = true;
+      // Try to auto-submit if all fields are filled
+      tryAutoSubmit();
+      return;
+    }
+    
+    // Check for lot number
+    let lotMatch = text.match(/\blot\s+(?:number\s+)?(\d+|(?:[\w-]+\s*)+?)(?:\s|$)/i);
+    if (lotMatch) {
+      let lotNumber = parseSpokenNumber(lotMatch[1]);
+      if (lotNumber) {
+        console.log('Lot number detected:', lotNumber);
+        $("#lot").val(lotNumber);
+        $("#lot").trigger('blur');
+        pendingLot = lotNumber;
+        tryAutoSubmit();
+        return;
+      }
+    }
+    
+    // Check for price (dollar/dollars)
+    let priceMatch = text.match(/(\d+|(?:[\w-]+\s*)+?)\s+dollars?/i);
+    if (priceMatch) {
+      let price = parseSpokenNumber(priceMatch[1]);
+      if (price) {
+        console.log('Price detected:', price);
+        $("#price").val(price);
+        $("#price").trigger('blur');
+        pendingPrice = price;
+        tryAutoSubmit();
+        return;
+      }
+    }
+    
+    // Check for bidder number
+    let bidderMatch = text.match(/\bbidder\s+(\d+|[a-z]|(?:[\w-]+\s*)+?)(?:\s|$)/i);
+    if (bidderMatch) {
+      let bidderNum = bidderMatch[1].trim();
+      // Try to parse as number first
+      let parsedBidder = parseSpokenNumber(bidderNum);
+      if (!parsedBidder) {
+        // If not a number, might be a letter or word - use as is
+        parsedBidder = bidderNum.toUpperCase().charAt(0);
+      }
+      console.log('Bidder detected:', parsedBidder);
+      $("#winner").val(parsedBidder);
+      $("#winner").trigger('blur');
+      pendingWinner = parsedBidder;
+      tryAutoSubmit();
+      return;
+    }
+  }
+
+  // Try to auto-submit if sold command was given and all fields are filled
+  function tryAutoSubmit() {
+    if (isSoldCommandGiven) {
+      let lot = $("#lot").val();
+      let price = $("#price").val();
+      let winner = $("#winner").val();
+      
+      if (lot && price && winner) {
+        console.log('Auto-submitting form...');
+        sendFormData('save');
+        isSoldCommandGiven = false;
+        pendingLot = null;
+        pendingPrice = null;
+        pendingWinner = null;
+      }
+    }
+  }
+
+  // Initialize voice recognition
+  async function startVoiceRecognition() {
+    if (isListening) return;
+    
+    try {
+      $("#voice-status").text("Initializing...");
+      $("#voice-btn").prop("disabled", true);
+      
+      let ctx = new AudioContext({ sinkId: { type: "none" } });
+      let micNode = ctx.createMediaStreamSource(await navigator.mediaDevices.getUserMedia({
+        video: false,
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          channelCount: 1
+        }
+      }));
+
+      let module = await loadVosklet();
+      let modelUrl = "{% static 'models/vosk/vosk-model-small-en-us-0.15/' %}";
+      let model = await module.createModel(modelUrl, "English", "vosk-model-small-en-us-0.15");
+      let recognizer = await module.createRecognizer(model, ctx.sampleRate);
+
+      recognizer.addEventListener("result", ev => {
+        const text = ev.detail.text;
+        if (text) {
+          handleVoiceResult(text);
+        }
+      });
+
+      recognizer.addEventListener("partialResult", ev => {
+        const text = ev.detail.partial;
+        if (text) {
+          $("#voice-status").text("Listening: " + text);
+        }
+      });
+
+      let transferer = await module.createTransferer(ctx, 128 * 150);
+      transferer.port.onmessage = ev => recognizer.acceptWaveform(ev.data);
+      micNode.connect(transferer);
+
+      voiceRecognizer = { ctx, recognizer, transferer, micNode };
+      isListening = true;
+      $("#voice-btn").removeClass("btn-primary").addClass("btn-danger");
+      $("#voice-btn").html('<i class="bi bi-mic-fill"></i> Stop Listening');
+      $("#voice-status").text("Listening...");
+      $("#voice-btn").prop("disabled", false);
+      
+    } catch (err) {
+      console.error("Voice recognition error:", err);
+      $("#voice-status").text("Error: " + err.message);
+      $("#voice-btn").prop("disabled", false);
+    }
+  }
+
+  // Stop voice recognition
+  function stopVoiceRecognition() {
+    if (!isListening || !voiceRecognizer) return;
+    
+    try {
+      if (voiceRecognizer.ctx) {
+        voiceRecognizer.ctx.close();
+      }
+      voiceRecognizer = null;
+      isListening = false;
+      $("#voice-btn").removeClass("btn-danger").addClass("btn-primary");
+      $("#voice-btn").html('<i class="bi bi-mic"></i> Start Voice Control');
+      $("#voice-status").text("Voice control stopped");
+    } catch (err) {
+      console.error("Error stopping voice recognition:", err);
+    }
+  }
+
+  // Toggle voice recognition
+  function toggleVoiceRecognition() {
+    if (isListening) {
+      stopVoiceRecognition();
+    } else {
+      startVoiceRecognition();
+    }
+  }
+
 $(document).ready(function() {
         var lotSearch;
         $("#lot").on('blur', function() {
@@ -205,6 +412,8 @@ $(document).ready(function() {
 
 <small>Use this page to mark lots as sold.  Press tab to move the to next field.  <a href='https://github.com/iragm/fishauctions/issues/223'>Leave feedback about this page here.</a></small><br>
 <button id="fullscreen-btn" class="btn btn-sm bg-primary d-none d-sm-inline-block"><i class="bi bi-fullscreen"></i> Go fullscreen</button>
+<button id="voice-btn" class="btn btn-sm btn-primary d-none d-sm-inline-block ms-2" onclick="toggleVoiceRecognition()"><i class="bi bi-mic"></i> Start Voice Control</button>
+<small id="voice-status" class="ms-2 text-muted"></small>
 
 </span>
 {% endblock %}
