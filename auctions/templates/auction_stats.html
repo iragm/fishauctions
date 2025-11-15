@@ -8,9 +8,40 @@
 <script type="text/javascript" src="{% static 'js/Chart.min.js' %}"></script>
 <!--<script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.3/dist/Chart.min.js"></script>-->
 <script src="/static/js/chart.funnel.min.js"></script>
+<link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/css/select2.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/js/select2.min.js"></script>
 <script>
+  // WebSocket connection for stats update notifications
+  {% if user.is_authenticated %}
+  var statsSocket = new WebSocket(
+    (window.location.protocol === 'https:' ? 'wss://' : 'ws://') +
+    window.location.host +
+    '/ws/auctions/{{ auction.pk }}/'
+  );
+
+  statsSocket.onmessage = function(e) {
+    var data = JSON.parse(e.data);
+    if (data.type === 'stats_updated') {
+      var notification = document.createElement('div');
+      notification.className = 'alert alert-info alert-dismissible fade show position-fixed';
+      notification.style = 'top: 20px; right: 20px; z-index: 9999; max-width: 400px;';
+      notification.innerHTML = '<a href="#" onclick="location.reload(); return false;"><strong>Updated stats ready!</strong> Click here to reload this page and see them.</a><button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>';
+      document.body.appendChild(notification);
+    }
+  };
+
+  statsSocket.onclose = function(e) {
+    //console.log('Stats WebSocket closed');
+  };
+  {% endif %}
+
+  // Get compare parameter from URL if present
+  var compareSlug = new URLSearchParams(window.location.search).get('compare');
+  var compareParam = compareSlug ? '?compare=' + compareSlug : '';
+
   window.onload = function() {
     Chart.defaults.global.defaultFontColor = "#fff";
+    /* Commented out funnel chart AJAX - can be restored if users request it
     $.ajax({
       url: '{% url "auction_funnel_chart" slug=auction.slug %}',
       success: function (data) {
@@ -55,7 +86,9 @@
           new Chart(ctx, funnelChart);
       }
     });
+    */
     {% if auction.is_online %}
+    /* Commented out lot_pie chart AJAX - can be restored if users request it
     $.ajax({
       url: '{% url "auction_lot_bidders" slug=auction.slug %}',
       success: function (data) {
@@ -97,8 +130,10 @@
           new Chart(ctx, pie);
       }
     });
+    */
     {% endif %}
     {% if auction.is_online %}
+    /* Commented out category popularity AJAX - can be restored if users request it
     $.ajax({
       url: '{% url "auction_lot_categories" slug=auction.slug %}',
       success: function (data) {
@@ -146,34 +181,357 @@
           new Chart(ctx, categories);
      }
     });
+    */
     {% endif %}
 };
+
+// Helper function to create bar chart with comparison data
+function createBarChart(canvasId, mainData, compareData, mainTitle, compareTitle) {
+  var colors = [
+    'rgba(52, 152, 219, 0.8)',   // Blue
+    'rgba(46, 204, 113, 0.8)',   // Green
+    'rgba(155, 89, 182, 0.8)',   // Purple
+    'rgba(241, 196, 15, 0.8)',   // Yellow
+    'rgba(231, 76, 60, 0.8)',    // Red
+    'rgba(26, 188, 156, 0.8)'    // Teal
+  ];
+
+  var compareColors = [
+    'rgba(231, 76, 60, 0.8)',    // Red
+    'rgba(230, 126, 34, 0.8)',   // Orange
+    'rgba(149, 165, 166, 0.8)',  // Gray
+    'rgba(52, 73, 94, 0.8)',     // Dark blue
+    'rgba(192, 57, 43, 0.8)',    // Dark red
+    'rgba(142, 68, 173, 0.8)'    // Dark purple
+  ];
+
+  var chartData = {
+    labels: mainData.labels,
+    datasets: []
+  };
+
+  // Add main auction datasets
+  for (var i = 0; i < mainData.providers.length; i++) {
+    chartData.datasets.push({
+      label: mainData.providers[i] + ' (' + mainTitle + ')',
+      data: mainData.data[i],
+      backgroundColor: colors[i % colors.length],
+      hoverBackgroundColor: colors[i % colors.length].replace('0.8', '1.0')
+    });
+  }
+
+  // Add comparison datasets if available
+  if (compareData) {
+    for (var i = 0; i < compareData.providers.length; i++) {
+      chartData.datasets.push({
+        label: compareData.providers[i] + ' (' + compareTitle + ')',
+        data: compareData.data[i],
+        backgroundColor: compareColors[i % compareColors.length],
+        hoverBackgroundColor: compareColors[i % compareColors.length].replace('0.8', '1.0')
+      });
+    }
+  }
+
+  var ctx = $("#" + canvasId).get(0).getContext("2d");
+  new Chart(ctx, {
+    type: 'bar',
+    data: chartData,
+    options: {
+      responsive: true,
+      legend: {
+        display: true,
+        position: 'bottom'
+      },
+      scales: {
+        yAxes: [{
+          ticks: {
+            beginAtZero: true
+          }
+        }]
+      }
+    }
+  });
+}
+
+// Helper function to create line chart with comparison data
+function createLineChart(canvasId, mainData, compareData, mainTitle, compareTitle, scaleType) {
+var colors = [
+    'rgba(135, 206, 250, 0.8)',  // Light Blue
+    'rgba(0, 51, 102, 0.8)',     // Dark Blue
+    'rgba(0, 128, 128, 0.8)',    // Teal
+    'rgba(102, 0, 102, 0.8)',    // Dark Purple
+    'rgba(144, 238, 144, 0.8)',  // Pale Green
+    'rgba(186, 85, 211, 0.8)'    // Light Purple
+];
+
+var compareColors = [
+    'rgba(192, 57, 43, 0.8)',    // Dark Red
+    'rgba(204, 102, 0, 0.8)',    // Dark Orange
+    'rgba(204, 204, 0, 0.8)',    // Dark Yellow
+    'rgba(102, 0, 102, 0.8)',    // Dark Purple (same as above)
+    'rgba(255, 255, 153, 0.8)',  // Pale Yellow
+    'rgba(186, 85, 211, 0.8)'    // Light Purple (same as above)
+];
+
+  var chartData = {
+    labels: mainData.labels,
+    datasets: []
+  };
+
+  // Add main auction datasets
+  for (var i = 0; i < mainData.providers.length; i++) {
+    chartData.datasets.push({
+      label: mainData.providers[i] + ' (' + mainTitle + ')',
+      data: mainData.data[i],
+      borderColor: colors[i % colors.length],
+      backgroundColor: colors[i % colors.length].replace('0.8', '0.2'),
+      fill: false
+    });
+  }
+
+  // Add comparison datasets if available
+  if (compareData) {
+    for (var i = 0; i < compareData.providers.length; i++) {
+      chartData.datasets.push({
+        label: compareData.providers[i] + ' (' + compareTitle + ')',
+        data: compareData.data[i],
+        borderColor: compareColors[i % compareColors.length],
+        backgroundColor: compareColors[i % compareColors.length].replace('0.8', '0.2'),
+        fill: false,
+        borderDash: [5, 5]  // Dashed line for comparison
+      });
+    }
+  }
+
+  var options = {
+    responsive: true,
+    legend: {
+      display: true,
+      position: 'bottom'
+    },
+    scales: {
+      yAxes: [{
+        ticks: {
+          beginAtZero: true
+        }
+      }]
+    }
+  };
+
+  // Apply logarithmic scale if specified
+  if (scaleType === 'logarithmic') {
+    options.scales.yAxes[0].type = 'logarithmic';
+    options.scales.yAxes[0].ticks = {
+      callback: function(value, index, values) {
+        if (value === 0) return '0';
+        if (value === 1 || value === 10 || value === 100 || value === 1000) return value;
+        return '';
+      }
+    };
+  }
+
+  var ctx = $("#" + canvasId).get(0).getContext("2d");
+  new Chart(ctx, {
+    type: 'line',
+    data: chartData,
+    options: options
+  });
+}
+
+// Helper function to create scatter chart with comparison data
+function createScatterChart(canvasId, mainData, compareData, mainTitle, compareTitle, useLogScale) {
+  var colors = [
+    'rgba(52, 152, 219, 0.8)',   // Blue
+    'rgba(46, 204, 113, 0.8)',   // Green
+  ];
+
+  var compareColors = [
+    'rgba(231, 76, 60, 0.8)',    // Red
+    'rgba(230, 126, 34, 0.8)',   // Orange
+  ];
+
+  var chartData = {
+    datasets: []
+  };
+
+  // Add main auction datasets
+  for (var i = 0; i < mainData.providers.length; i++) {
+    chartData.datasets.push({
+      label: mainData.providers[i] + ' (' + mainTitle + ')',
+      data: mainData.data[i],
+      backgroundColor: colors[i % colors.length],
+      borderColor: colors[i % colors.length]
+    });
+  }
+
+  // Add comparison datasets if available
+  if (compareData) {
+    for (var i = 0; i < compareData.providers.length; i++) {
+      chartData.datasets.push({
+        label: compareData.providers[i] + ' (' + compareTitle + ')',
+        data: compareData.data[i],
+        backgroundColor: compareColors[i % compareColors.length],
+        borderColor: compareColors[i % compareColors.length]
+      });
+    }
+  }
+
+  var options = {
+    responsive: true,
+    legend: {
+      display: true,
+      position: 'bottom'
+    },
+    scales: {
+      xAxes: [{
+        type: 'linear',
+        position: 'bottom',
+        ticks: {
+          beginAtZero: true
+        }
+      }],
+      yAxes: [{
+        ticks: {
+          beginAtZero: true
+        }
+      }]
+    }
+  };
+
+  // Apply logarithmic scale if specified
+  if (useLogScale) {
+    options.scales.yAxes[0].type = 'logarithmic';
+    options.scales.yAxes[0].ticks = {
+      callback: function(value, index, values) {
+        if (value === 0) return '0';
+        if (value === 1 || value === 10 || value === 100 || value === 1000) return value;
+        return '';
+      }
+    };
+  }
+
+  var ctx = $("#" + canvasId).get(0).getContext("2d");
+  new Chart(ctx, {
+    type: 'scatter',
+    data: chartData,
+    options: options
+  });
+}
 </script>
 
 {% endblock %}
             {% include 'auction_ribbon.html' %}
-            <br><h3>Users</h3>
-            <table class="table">
+            <br>
+            {% if stats_age %}
+            <p class="text-muted small mt-4">Stats last updated: {{ stats_age }}</p>
+            {% endif %}
+            <div class="mb-3">
+                <label for="compare-auction">Compare with another auction:</label>
+                <select id="compare-auction" class="form-control" style="max-width: 400px;">
+                    <option value="">-- Select an auction to compare --</option>
+                    {% if compare_auction %}
+                    <option value="{{ compare_auction.slug }}" selected>{{ compare_auction.title }} ({{ compare_auction.date_start|date:"M d, Y" }})</option>
+                    {% endif %}
+                </select>
+                <script>
+                    $(document).ready(function() {
+                        $('#compare-auction').select2({
+                            ajax: {
+                                url: '{% url "auction-autocomplete" %}?exclude={{ auction.slug }}',
+                                dataType: 'json',
+                                delay: 250,
+                                data: function (params) {
+                                    return {
+                                        q: params.term,
+                                        page: params.page || 1
+                                    };
+                                },
+                                processResults: function (data) {
+                                    return {
+                                        results: data.results,
+                                        pagination: {
+                                            more: data.pagination.more
+                                        }
+                                    };
+                                },
+                                cache: true
+                            },
+                            placeholder: '-- Select an auction to compare --',
+                            minimumInputLength: 0,
+                            allowClear: true
+                        });
+
+                        $('#compare-auction').on('change', function() {
+                            const slug = $(this).val();
+                            if (slug) {
+                                window.location.href = '?compare=' + slug;
+                            } else {
+                                window.location.href = window.location.pathname;
+                            }
+                        });
+                    });
+                </script>
+            </div>
+            <h3>Users</h3>
+            <table class="table table-striped">
                 <thead>
+                    <tr>
+                        <th>Metric</th>
+                        <th>{{ auction.title }}</th>
+                        {% if compare_auction %}
+                        <th>{{ compare_auction.title }}</th>
+                        {% endif %}
+                    </tr>
                 </thead>
                 <tbody>
                   <tr>
-                    <td>Total users</td><td>{{auction.number_of_confirmed_tos}}</td>
+                    <td>Total users</td>
+                    <td>{{auction.number_of_confirmed_tos}}</td>
+                    {% if compare_auction %}
+                    <td>{{compare_auction.number_of_confirmed_tos}}</td>
+                    {% endif %}
                   </tr>
                   <tr>
-                    <td>Users who bought or sold at least one item</td><td>{{auction.number_of_participants}}</td>
+                    <td>Users who bought or sold at least one item</td>
+                    <td>{{auction.number_of_participants}}</td>
+                    {% if compare_auction %}
+                    <td>{{compare_auction.number_of_participants}}</td>
+                    {% endif %}
                   </tr>
                   <tr>
-                    <td>Buyers</td><td>{{auction.number_of_buyers}}</td>
+                    <td>Buyers</td>
+                    <td>{{auction.number_of_buyers}}</td>
+                    {% if compare_auction %}
+                    <td>{{compare_auction.number_of_buyers}}</td>
+                    {% endif %}
                   </tr>
                   <tr>
-                    <td>Sellers</td><td>{{auction.number_of_sellers}}</td>
+                    <td>Sellers</td>
+                    <td>{{auction.number_of_sellers}}</td>
+                    {% if compare_auction %}
+                    <td>{{compare_auction.number_of_sellers}}</td>
+                    {% endif %}
                   </tr>
                   <tr>
-                    <td>Sellers who did not buy anything</td><td>{{auction.number_of_sellers_who_didnt_buy}}</td>
+                    <td>Sellers who did not buy anything</td>
+                    <td>{{auction.number_of_sellers_who_didnt_buy}}</td>
+                    {% if compare_auction %}
+                    <td>{{compare_auction.number_of_sellers_who_didnt_buy}}</td>
+                    {% endif %}
                   </tr>
                   <tr>
-                    <td>Users who preregistered through this site</td><td>{{auction.preregistered_users}}</td>
+                    <td>Users who preregistered through this site</td>
+                    <td>{{auction.preregistered_users}}</td>
+                    {% if compare_auction %}
+                    <td>{{compare_auction.preregistered_users}}</td>
+                    {% endif %}
+                  </tr>
+                  <tr>
+                    <td>Total unique views</td>
+                    <td>{% if auction.cached_stats.misc.total_unique_views %}{{ auction.cached_stats.misc.total_unique_views }}{% else %}N/A{% endif %}</td>
+                    {% if compare_auction %}
+                    <td>{% if compare_auction.cached_stats.misc.total_unique_views %}{{ compare_auction.cached_stats.misc.total_unique_views }}{% else %}N/A{% endif %}</td>
+                    {% endif %}
                   </tr>
               </tbody>
             </table>
@@ -181,89 +539,182 @@
 <p></p>
 <canvas id="activity" width="500" height="400"></canvas>
 <script type="text/javascript">
-  $.get('{% url "auction_stats_activity" slug=auction.slug %}', function(data) {
-    var ctx = $("#activity").get(0).getContext("2d");
-    new Chart(ctx, {
-      type: 'line', data: data
-    });
-  });
+  var mainData = {{ stats_activity_json|safe }};
+  var compareData = {% if compare_auction and compare_stats_activity_json %}{{ compare_stats_activity_json|safe }}{% else %}null{% endif %};
+  createLineChart('activity', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}', null);
 </script>
 This graph shows overall engagement of people with your auction.  You can gauge the effectiveness of advertising by tracking views and bids here.
 <p></p>
 
             {% if auction.is_online %}
+            <!-- Commented out funnel chart - can be restored if users request it
             <h4>User engagement</h4>
             Number of users who viewed lots, logged in, bid, and won lots in this auction.
             <canvas id="funnel_chart"></canvas>
             <span><br>In order for the auction to succeed, users must<ol><li>Visit the site</li><li>See a lot they like</li><li>Sign up for an account</li><li>Place a bid</li><li>Up their bid if they are outbid</li></ol>
               This graph represents "friction" in this process.  At each step, some number of people will give up.  Ideally, every user who viewed a lot would win at least a lot or two, meaning there would be very little change as you move down the graph.<br><br>Remember that this graph only indicates people who visited the auction site, we can't know how many people are (for example) aware of your club but don't know about the auction, or have heard about the auction but didn't have a link for the site.</span>
             <br>
+            -->
             {% endif %}
 <br><h4>Promotions and join reminder emails</h4>
 When users with an account view your auction but don't join it, they'll be sent a reminder email 24 hours later.  Users can turn off <b>send reminder emails about joining auctions</b> under preferences.<br><br>
 Promoted auctions are included in a weekly promotional email sent every Wednesday to nearby users.
 
-<table class="table">
+<table class="table table-striped">
     <thead>
+        <tr>
+            <th>Metric</th>
+            <th>{{ auction.title }}</th>
+            {% if compare_auction %}
+            <th>{{ compare_auction.title }}</th>
+            {% endif %}
+        </tr>
     </thead>
     <tbody>
         <tr>
-            <td>Users who received a join reminder email</td><td>{{auction.number_of_reminder_emails}}</td>
+            <td>Users who received a join reminder email</td>
+            <td>{{auction.number_of_reminder_emails}}</td>
+            {% if compare_auction %}
+            <td>{{compare_auction.number_of_reminder_emails}}</td>
+            {% endif %}
         </tr>
         <tr>
-            <td>Click rate for join reminder email</td><td>{{auction.reminder_email_clicks|floatformat:2}}% ({{auction.all_auctions_reminder_email_clicks|floatformat:2}}% in all auctions)</td>
+            <td>Click rate for join reminder email</td>
+            <td>{{auction.reminder_email_clicks|floatformat:2}}% ({{auction.all_auctions_reminder_email_clicks|floatformat:2}}% in all auctions)</td>
+            {% if compare_auction %}
+            <td>{{compare_auction.reminder_email_clicks|floatformat:2}}% ({{compare_auction.all_auctions_reminder_email_clicks|floatformat:2}}% in all auctions)</td>
+            {% endif %}
         </tr>
         <tr>
-            <td>Join rate for join reminder email</td><td>{{auction.reminder_email_joins|floatformat:2}}% ({{auction.all_auctions_reminder_email_joins|floatformat:2}}% in all auctions)</td>
+            <td>Join rate for join reminder email</td>
+            <td>{{auction.reminder_email_joins|floatformat:2}}% ({{auction.all_auctions_reminder_email_joins|floatformat:2}}% in all auctions)</td>
+            {% if compare_auction %}
+            <td>{{compare_auction.reminder_email_joins|floatformat:2}}% ({{compare_auction.all_auctions_reminder_email_joins|floatformat:2}}% in all auctions)</td>
+            {% endif %}
         </tr>
         <tr>
-            <td>Clicks from weekly promo email</td><td>{{auction.weekly_promo_email_clicks}}</td>
+            <td>Clicks from weekly promo email</td>
+            <td>{{auction.weekly_promo_email_clicks}}</td>
+            {% if compare_auction %}
+            <td>{{compare_auction.weekly_promo_email_clicks}}</td>
+            {% endif %}
         </tr>
         <tr>
-            <td>Users who received this auction in weekly promo email</td><td>{{auction.weekly_promo_emails_sent}}</td>
+            <td>Users who received this auction in weekly promo email</td>
+            <td>{{auction.weekly_promo_emails_sent}}</td>
+            {% if compare_auction %}
+            <td>{{compare_auction.weekly_promo_emails_sent}}</td>
+            {% endif %}
         </tr>
         <tr>
-            <td>Click rate for weekly promo email</td><td>{{auction.weekly_promo_email_click_rate|floatformat:2}}%</td>
+            <td>Click rate for weekly promo email</td>
+            <td>{{auction.weekly_promo_email_click_rate|floatformat:2}}%</td>
+            {% if compare_auction %}
+            <td>{{compare_auction.weekly_promo_email_click_rate|floatformat:2}}%</td>
+            {% endif %}
         </tr>
   </tbody>
 </table>
 
 <br><h3>Lots</h3>
-<table class="table">
+<table class="table table-striped">
     <thead>
+        <tr>
+            <th>Metric</th>
+            <th>{{ auction.title }}</th>
+            {% if compare_auction %}
+            <th>{{ compare_auction.title }}</th>
+            {% endif %}
+        </tr>
     </thead>
     <tbody>
         <tr>
-            <td>Total lots</td><td>{{auction.total_lots}}</td>
+            <td>Total lots</td>
+            <td>{{auction.total_lots}}</td>
+            {% if compare_auction %}
+            <td>{{compare_auction.total_lots}}</td>
+            {% endif %}
         </tr>
         <tr>
-            <td>Unsold lots</td><td>{{auction.total_unsold_lots}} ({{auction.percent_unsold_lots|floatformat:0}}%)</td>
+            <td>Unsold lots</td>
+            <td>{{auction.total_unsold_lots}} ({{auction.percent_unsold_lots|floatformat:0}}%)</td>
+            {% if compare_auction %}
+            <td>{{compare_auction.total_unsold_lots}} ({{compare_auction.percent_unsold_lots|floatformat:0}}%)</td>
+            {% endif %}
           </tr>
 
         <tr>
-        <td>Sold lots</td><td>{{auction.total_sold_lots}}  ({{ auction.total_sold_lots_with_buy_now_percent|floatformat:0 }}% with buy now)</td>
+        <td>Sold lots</td>
+        <td>{{auction.total_sold_lots}}  ({{ auction.total_sold_lots_with_buy_now_percent|floatformat:0 }}% with buy now)</td>
+        {% if compare_auction %}
+        <td>{{compare_auction.total_sold_lots}}  ({{ compare_auction.total_sold_lots_with_buy_now_percent|floatformat:0 }}% with buy now)</td>
+        {% endif %}
       </tr>
       <tr>
-        <td>Median lot price</td><td>${{auction.median_lot_price|floatformat:2}}</td>
+        <td>Median lot price</td>
+        <td>${{auction.median_lot_price|floatformat:2}}</td>
+        {% if compare_auction %}
+        <td>${{compare_auction.median_lot_price|floatformat:2}}</td>
+        {% endif %}
       </tr>
       <tr>
-        <td>Gross (value of all lots sold)</td><td>${{auction.gross|floatformat:2}}</td>
+        <td>Gross (value of all lots sold)</td>
+        <td>${{auction.gross|floatformat:2}}</td>
+        {% if compare_auction %}
+        <td>${{compare_auction.gross|floatformat:2}}</td>
+        {% endif %}
       </tr>
       <tr>
-        <td>Total donations</td><td>${{auction.total_donations|floatformat:2}}</td>
+        <td>Total donations</td>
+        <td>${{auction.total_donations|floatformat:2}}</td>
+        {% if compare_auction %}
+        <td>${{compare_auction.total_donations|floatformat:2}}</td>
+        {% endif %}
       </tr>
       <tr>
-        <td>Club profit (unrounded)</td><td>${{auction.club_profit_raw|floatformat:2}}</td>
+        <td>Club profit (unrounded)</td>
+        <td>${{auction.club_profit_raw|floatformat:2}}</td>
+        {% if compare_auction %}
+        <td>${{compare_auction.club_profit_raw|floatformat:2}}</td>
+        {% endif %}
       </tr>
       <tr>
-        <td>Club profit <small>(includes adjustments, and invoices are rounded to the nearest dollar)</small></td><td>${{auction.club_profit|floatformat:2}} ({{ auction.percent_to_club|floatformat:2 }}% of gross)</td>
+        <td>Club profit <small>(includes adjustments, and invoices are rounded to the nearest dollar)</small></td>
+        <td>${{auction.club_profit|floatformat:2}} ({{ auction.percent_to_club|floatformat:2 }}% of gross)</td>
+        {% if compare_auction %}
+        <td>${{compare_auction.club_profit|floatformat:2}} ({{ compare_auction.percent_to_club|floatformat:2 }}% of gross)</td>
+        {% endif %}
       </tr>
       <tr>
-        <td>Seller payout</td><td>${{ auction.total_to_sellers|floatformat:2 }}</td>
+        <td>Seller payout</td>
+        <td>${{ auction.total_to_sellers|floatformat:2 }}</td>
+        {% if compare_auction %}
+        <td>${{ compare_auction.total_to_sellers|floatformat:2 }}</td>
+        {% endif %}
       </tr>
       <tr>
-        <td>Lots with a scanned QR code</td><td>{{ auction.number_of_lots_with_scanned_qr }}</td>
+        <td>Lots with a scanned QR code</td>
+        <td>{{ auction.number_of_lots_with_scanned_qr }}</td>
+        {% if compare_auction %}
+        <td>{{ compare_auction.number_of_lots_with_scanned_qr }}</td>
+        {% endif %}
       </tr>
+      {% if not auction.is_online and auction.lots_sold_per_minute %}
+      <tr>
+        <td>Average lots sold per minute</td>
+        <td>{{ auction.lots_sold_per_minute|floatformat:2 }}</td>
+        {% if compare_auction %}
+        <td>{% if not compare_auction.is_online and compare_auction.lots_sold_per_minute %}{{ compare_auction.lots_sold_per_minute|floatformat:2 }}{% else %}N/A{% endif %}</td>
+        {% endif %}
+      </tr>
+      <tr>
+        <td>Total auction run time</td>
+        <td>{{ auction.total_auction_duration_str }}</td>
+        {% if compare_auction %}
+        <td>{% if not compare_auction.is_online and compare_auction.total_auction_duration %}{{ compare_auction.total_auction_duration_str }}{% else %}N/A{% endif %}</td>
+        {% endif %}
+      </tr>
+      {% endif %}
 
   </tbody>
 </table>
@@ -272,26 +723,15 @@ Promoted auctions are included in a weekly promotional email sent every Wednesda
             <h4>Lot sell prices</h4>
             <canvas id="lot_prices" width="500" height="400"></canvas>
             <script type="text/javascript">
-              $.get('{% url "auction_sell_prices" slug=auction.slug %}', function(data) {
-                var ctx = $("#lot_prices").get(0).getContext("2d");
-                new Chart(ctx, {
-                  type: 'bar', data: data,
-                  options: {
-                    scales: {
-                        yAxes: [{
-                            ticks: {
-                                beginAtZero: true, // start the Y-axis scale at zero
-                            }
-                        }]
-                    }
-                  },
-                });
-              });
+              var mainData = {{ stats_lot_sell_prices_json|safe }};
+              var compareData = {% if compare_auction and compare_stats_lot_sell_prices_json %}{{ compare_stats_lot_sell_prices_json|safe }}{% else %}null{% endif %};
+              createBarChart('lot_prices', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}');
             </script>
             <br>
             How many lots sold at different price points.  Buyer's auctions have a distribution towards the left, seller's auctions towards the right.<br><br>
               <br><br>
             {% if auction.is_online %}
+            <!-- Commented out competition for lots and category popularity - can be restored if users request them
             <h4>Competition for lots</h4>
             How many bidders were there per lot?
             <canvas id="lot_pie"></canvas>
@@ -304,6 +744,7 @@ Promoted auctions are included in a weekly promotional email sent every Wednesda
             This chart is a good way to look at the popularity of different categories in your auction.<br><br>
             If there is equal supply, interest, and demand in a category, views/bids/number of lots should be the same height (and determined by the number of lots).  When they are different, you can get some interesting info from this graph.
             For example, categories with more bids are likely to be in higher demand, especially if views are lower.  Categories with lots of views but no bids may be something people are curious about, but don't actually want.  To wit: <i>What's this tequila fish?  Oh, it's a gray livebearer, never mind.</i>
+            -->
             {% endif %}
 {% if not auction.is_online %}
 <p></p>
@@ -311,13 +752,10 @@ Promoted auctions are included in a weekly promotional email sent every Wednesda
 
 <canvas id="attrition" width="500" height="400"></canvas>
 <script type="text/javascript">
-      $.get('{% url "auction_stats_attrition" slug=auction.slug %}', function(data) {
-          var ctx = $("#attrition").get(0).getContext("2d");
-          new Chart(ctx, {
-            type: 'scatter', data: data
-          });
-        });
-        </script>
+  var mainData = {{ stats_attrition_json|safe }};
+  var compareData = {% if compare_auction and compare_stats_attrition_json %}{{ compare_stats_attrition_json|safe }}{% else %}null{% endif %};
+  createScatterChart('attrition', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}', true);
+</script>
 <div>This graph shows lot sell price, graphed against the minutes into the auction.  Generally, prices tend to decrease the longer an auction runs.  (And if you can't see a decrease on this graph, awesome!)  Attrition is often the largest issue in big auctions.  You can counteract it with:
   <ul>
     <li>Change out your auctioneer if they start to slow down</li>
@@ -330,77 +768,38 @@ Promoted auctions are included in a weekly promotional email sent every Wednesda
 <h5>Auctioneer performance</h5>
 <canvas id="auctioneer" width="500" height="400"></canvas>
 <script type="text/javascript">
-  $.get('{% url "auction_stats_auctioneer" slug=auction.slug %}', function(data) {
-    var ctx = $("#auctioneer").get(0).getContext("2d");
-        new Chart(ctx, {
-          type: 'scatter', data: data
-        });
-      });
-    </script>
+  var mainData = {{ stats_auctioneer_speed_json|safe }};
+  var compareData = {% if compare_auction and compare_stats_auctioneer_speed_json %}{{ compare_stats_auctioneer_speed_json|safe }}{% else %}null{% endif %};
+  createScatterChart('auctioneer', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}', false);
+</script>
 <div>This graph shows the time since the last lot sold, graphed against the minutes into the auction.  Faster auctioneers will tend to be lower down on the Y axis.  If more than 3 minutes elapsed since the last lot, that data point is skipped.  If you changed auctioneers mid-way though the auction, see if you can spot that location on this chart.  Faster isn't always better, but the speed of your auctioneer makes a huge difference on attrition, especially in larger auctions.  And of course, this is based on the lot sell time, so if you're recording bids on paper and tallying them up later, you may not get a perfect representation of your auctioneer's speed.
 </div>{% endif %}
 <p></p>
 <h4>The importance of images on sell price</h4>
 <canvas id="pictures" width="500" height="400"></canvas>
 <script type="text/javascript">
-  $.get('{% url "auction_stats_pictures" slug=auction.slug %}', function(data) {
-    var ctx = $("#pictures").get(0).getContext("2d");
-    new Chart(ctx, {
-      type: 'bar', data: data,
-      options: {
-        scales: {
-            yAxes: [{
-                ticks: {
-                    beginAtZero: true, // start the Y-axis scale at zero
-                }
-            }]
-        }
-      },
-    });
-  });
+  var mainData = {{ stats_images_json|safe }};
+  var compareData = {% if compare_auction and compare_stats_images_json %}{{ compare_stats_images_json|safe }}{% else %}null{% endif %};
+  createBarChart('pictures', mainData, null, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}');
 </script>
 Generally, having an image makes a lot sell for more money, but more images don't help.  Remember that you can click on the legend to show/hide the number of lots or median value.  Does having a picture make a difference in your auction?
-
+{% if compare_auction %}<small>This graph gets really cluttered when comparing auctions and it's really mostly about seeing how worthwhile it is to add images, which doesn't change between auctions.</small>{% endif %}
 <p></p>
 <h4>How far users travel to get to your auction</h4>
 <canvas id="distances_traveled" width="500" height="400"></canvas>
 <script type="text/javascript">
-  $.get('{% url "auction_stats_distance_traveled" slug=auction.slug %}', function(data) {
-    var ctx = $("#distances_traveled").get(0).getContext("2d");
-    new Chart(ctx, {
-      type: 'bar', data: data,
-      options: {
-        scales: {
-            yAxes: [{
-                ticks: {
-                    beginAtZero: true, // start the Y-axis scale at zero
-                }
-            }]
-        }
-      },
-    });
-  });
+  var mainData = {{ stats_travel_distance_json|safe }};
+  var compareData = {% if compare_auction and compare_stats_travel_distance_json %}{{ compare_stats_travel_distance_json|safe }}{% else %}null{% endif %};
+  createBarChart('distances_traveled', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}');
 </script>
 Use this information to add additional pickup locations to future auctions.  Note that only people who join though this website have their location recorded: if you manually add people to your auction, they won't show up here.  IP address is used for people who choose not to share their exact location; be aware that IP geolocation is quite imprecise.
 <p></p>
 <h4>How many auctions have your users participated in previously?</h4>
 <canvas id="auction_stats_previous_auctions" width="500" height="400"></canvas>
 <script type="text/javascript">
-  $.get('{% url "auction_stats_previous_auctions" slug=auction.slug %}', function(data) {
-    var ctx = $("#auction_stats_previous_auctions").get(0).getContext("2d");
-    new Chart(ctx, {
-      type: 'bar', data: data,
-      options: {
-        scales: {
-            yAxes: [{
-                ticks: {
-                    beginAtZero: true, // start the Y-axis scale at zero
-                }
-            }]
-        }
-      },
-    });
-  });
+  var mainData = {{ stats_previous_auctions_json|safe }};
+  var compareData = {% if compare_auction and compare_stats_previous_auctions_json %}{{ compare_stats_previous_auctions_json|safe }}{% else %}null{% endif %};
+  createBarChart('auction_stats_previous_auctions', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}');
 </script>
 You want a good mix of newbies and veterans.  This takes into account ALL auctions on the site, not just ones you've created.  Email address is used to identify people, so if you left that blank, that person won't appear here at all.
 
@@ -408,21 +807,9 @@ You want a good mix of newbies and veterans.  This takes into account ALL auctio
 <h4>How many lots do your users submit?</h4>
 <canvas id="auction_stats_lots_submitted" width="500" height="400"></canvas>
 <script type="text/javascript">
-  $.get('{% url "auction_stats_lots_submitted" slug=auction.slug %}', function(data) {
-    var ctx = $("#auction_stats_lots_submitted").get(0).getContext("2d");
-    new Chart(ctx, {
-      type: 'bar', data: data,
-      options: {
-        scales: {
-            yAxes: [{
-                ticks: {
-                    beginAtZero: true, // start the Y-axis scale at zero
-                }
-            }]
-        }
-      },
-    });
-  });
+  var mainData = {{ stats_lots_submitted_json|safe }};
+  var compareData = {% if compare_auction and compare_stats_lots_submitted_json %}{{ compare_stats_lots_submitted_json|safe }}{% else %}null{% endif %};
+  createBarChart('auction_stats_lots_submitted', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}');
 </script>
 Most people will add very few lots to an auction, but it's worth considering those people, as how their lots do will impact whether or not they come back.  Only people who actually bought or sold a lot are included here -- if someone joined your auction but didn't participate, they won't appear in any column of this graph.
 {% if auction.multi_location %}
@@ -430,21 +817,9 @@ Most people will add very few lots to an auction, but it's worth considering tho
 <h4>How much volume does each location do?</h4>
 <canvas id="auction_stats_location_volume" width="500" height="400"></canvas>
 <script type="text/javascript">
-  $.get('{% url "auction_stats_location_volume" slug=auction.slug %}', function(data) {
-    var ctx = $("#auction_stats_location_volume").get(0).getContext("2d");
-    new Chart(ctx, {
-      type: 'bar', data: data,
-      options: {
-        scales: {
-            yAxes: [{
-                ticks: {
-                    beginAtZero: true, // start the Y-axis scale at zero
-                }
-            }]
-        }
-      },
-    });
-  });
+  var mainData = {{ stats_location_volume_json|safe }};
+  var compareData = {% if compare_auction and compare_stats_location_volume_json %}{{ compare_stats_location_volume_json|safe }}{% else %}null{% endif %};
+  createBarChart('auction_stats_location_volume', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}');
 </script>
 Use this to spot low-volume locations to skip or advertise more at next time.
 {% endif %}
@@ -452,21 +827,9 @@ Use this to spot low-volume locations to skip or advertise more at next time.
 <h4>Website feature utilization</h4>
 <canvas id="auction_stats_feature_use" width="500" height="400"></canvas>
 <script type="text/javascript">
-  $.get('{% url "auction_stats_feature_use" slug=auction.slug %}', function(data) {
-    var ctx = $("#auction_stats_feature_use").get(0).getContext("2d");
-    new Chart(ctx, {
-      type: 'bar', data: data,
-      options: {
-        scales: {
-            yAxes: [{
-                ticks: {
-                    beginAtZero: true, // start the Y-axis scale at zero
-                }
-            }]
-        }
-      },
-    });
-  });
+  var mainData = {{ stats_feature_use_json|safe }};
+  var compareData = {% if compare_auction and compare_stats_feature_use_json %}{{ compare_stats_feature_use_json|safe }}{% else %}null{% endif %};
+  createBarChart('auction_stats_feature_use', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}');
 </script>
 How many of your users are taking advantage of features on this webiste?
 <div>These measure the percent of users who <b>could</b> be taking advantage of the feature, which means:</div>
@@ -480,21 +843,9 @@ How many of your users are taking advantage of features on this webiste?
 <h4>Referrers</h4>
 <canvas id="auction_stats_referrers" width="500" height="400"></canvas>
 <script type="text/javascript">
-  $.get('{% url "auction_stats_referrers" slug=auction.slug %}', function(data) {
-    var ctx = $("#auction_stats_referrers").get(0).getContext("2d");
-    new Chart(ctx, {
-      type: 'bar', data: data,
-      options: {
-        scales: {
-            yAxes: [{
-                ticks: {
-                    beginAtZero: true, // start the Y-axis scale at zero
-                }
-            }]
-        }
-      },
-    });
-  });
+  var mainData = {{ stats_referrers_json|safe }};
+  var compareData = {% if compare_auction and compare_stats_referrers_json %}{{ compare_stats_referrers_json|safe }}{% else %}null{% endif %};
+  createBarChart('auction_stats_referrers', mainData, compareData, '{{ auction.title }}', '{{ compare_auction.title|default:"" }}');
 </script>
 What websites are sending you traffic?
 
