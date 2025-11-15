@@ -121,7 +121,6 @@ document.addEventListener("DOMContentLoaded", function() {
               <button
                 type="submit"
                 class="btn btn-secondary disabled mr-1 mt-1"
-                id="pay-with-paypal"
                 data-bs-toggle="popover"
                 data-bs-placement="bottom"
                 data-bs-html="true"
@@ -129,25 +128,45 @@ document.addEventListener("DOMContentLoaded", function() {
                 data-bs-content="{{ invoice.reason_for_payment_not_available }}"
                 data-bs-template='<div class="popover" role="tooltip"><div class="popover-header bg-secondary text-white"></div><div class="popover-body"></div></div>'
               >
-                <i class="bi bi-paypal"></i> Pay now
+                Pay now
               </button>
           {% else %}
-          <form action="{% url 'create_paypal_order' uuid=invoice.no_login_link %}" method="post" style="display: inline;">
-              {% csrf_token %}
-              <button
-                type="submit"
-                class="btn btn-success mr-1 mt-1"
-                id="pay-with-paypal"
-                data-bs-toggle="popover"
-                data-bs-placement="bottom"
-                data-bs-html="true"
-                data-bs-title="Ready to pay?"
-                data-bs-content="Pay this invoice using PayPal  "
-                data-bs-template='<div class="popover" role="tooltip"><div class="popover-header bg-info text-white"></div><div class="popover-body"></div></div>'
-              >
-                <i class="bi bi-paypal"></i> Pay now
-              </button>
-          </form>
+            {% if invoice.show_paypal_button %}
+            <form action="{% url 'create_paypal_order' uuid=invoice.no_login_link %}" method="post" style="display: inline;">
+                {% csrf_token %}
+                <button
+                  type="submit"
+                  class="btn btn-success mr-1 mt-1"
+                  id="pay-with-paypal"
+                  data-bs-toggle="popover"
+                  data-bs-placement="bottom"
+                  data-bs-html="true"
+                  data-bs-title="Ready to pay?"
+                  data-bs-content="Pay this invoice using PayPal  "
+                  data-bs-template='<div class="popover" role="tooltip"><div class="popover-header bg-info text-white"></div><div class="popover-body"></div></div>'
+                >
+                  <i class="bi bi-paypal"></i> Pay now
+                </button>
+            </form>
+            {% endif %}
+            {% if invoice.show_square_button %}
+            <form action="{% url 'create_square_payment_link' uuid=invoice.no_login_link %}" method="post" style="display: inline;">
+                {% csrf_token %}
+                <button
+                  type="submit"
+                  class="btn btn-success mr-1 mt-1"
+                  id="pay-with-square"
+                  data-bs-toggle="popover"
+                  data-bs-placement="bottom"
+                  data-bs-html="true"
+                  data-bs-title="Ready to pay?"
+                  data-bs-content="Pay this invoice using Square  "
+                  data-bs-template='<div class="popover" role="tooltip"><div class="popover-header bg-info text-white"></div><div class="popover-body"></div></div>'
+                >
+                  <i class="bi bi-credit-card"></i> Pay with Square
+                </button>
+            </form>
+            {% endif %}
           {% endif %}
         {% endif %}
       {% endif %}
