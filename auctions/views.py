@@ -3205,7 +3205,7 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         if not self.tos:
             messages.error(request, "You can't add lots until you join this auction")
             return redirect(
-                f"/auctions/{self.auction.slug}/?next={reverse('bulk_add_lots_for_myself', kwargs={'slug': self.auction.slug})}"
+                f"/auctions/{self.auction.slug}/?next={reverse('bulk_add_lots_auto_for_myself', kwargs={'slug': self.auction.slug})}"
             )
         else:
             if not self.tos.selling_allowed and not self.is_admin:
@@ -3250,6 +3250,280 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
             ),
             form=QuickAddLot,
         )
+        return super().dispatch(request, *args, **kwargs)
+
+
+class BulkAddLotsAuto(LoginRequiredMixin, AuctionViewMixin, TemplateView):
+    """Add/edit lots with auto-save functionality - lots are saved as user types"""
+
+    template_name = "auctions/bulk_add_lots_auto.html"
+    allow_non_admins = True
+
+    def get(self, *args, **kwargs):
+        context = self.get_context_data(**kwargs)
+        return self.render_to_response(context)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["tos"] = self.tos
+        context["auction"] = self.auction
+        context["is_admin"] = self.is_admin
+        
+        # Get existing lots for this user/auction
+        context["existing_lots"] = self.queryset.order_by("-date_posted")
+        
+        # Get custom field configurations
+        context["use_custom_checkbox"] = self.auction.use_custom_checkbox_field and self.auction.custom_checkbox_name
+        context["custom_checkbox_name"] = self.auction.custom_checkbox_name if context["use_custom_checkbox"] else ""
+        
+        context["use_custom_field_1"] = self.auction.custom_field_1 != "disable" and self.auction.custom_field_1_name
+        context["custom_field_1_name"] = self.auction.custom_field_1_name if context["use_custom_field_1"] else ""
+        context["custom_field_1_required"] = self.auction.custom_field_1 == "required"
+        
+        context["use_i_bred_this_fish"] = self.auction.use_i_bred_this_fish_field
+        context["use_quantity"] = self.auction.use_quantity_field
+        context["use_donation"] = self.auction.use_donation_field
+        
+        context["reserve_price_mode"] = self.auction.reserve_price
+        context["buy_now_mode"] = self.auction.buy_now
+        context["minimum_bid"] = self.auction.minimum_bid
+        
+        context["auto_add_images"] = self.auction.auto_add_images
+        
+        # For determining number of initial blank rows
+        max_lots = self.auction.max_lots_per_user
+        current_count = self.queryset.count()
+        if max_lots:
+            initial_rows = min(5, max_lots - current_count) if current_count < max_lots else 0
+        else:
+            initial_rows = 5
+        context["initial_rows"] = max(initial_rows, 1)  # At least 1 row
+        
+        return context
+
+    def dispatch(self, request, *args, **kwargs):
+        self.auction = get_object_or_404(Auction, slug=kwargs.pop("slug"), is_deleted=False)
+        self.is_admin = False
+        if not self.auction:
+            raise Http404
+        bidder_number = kwargs.pop("bidder_number", None)
+        self.tos = None
+        if bidder_number:
+            self.tos = AuctionTOS.objects.filter(bidder_number=bidder_number, auction=self.auction).first()
+        if self.is_auction_admin:
+            self.is_admin = True
+        if not self.tos:
+            # if you don't got permission to edit this auction, you can only add lots for yourself
+            self.tos = (
+                AuctionTOS.objects.filter(auction=self.auction)
+                .filter(Q(email=request.user.email) | Q(user=request.user))
+                .first()
+            )
+        if not self.tos:
+            messages.error(request, "You can't add lots until you join this auction")
+            return redirect(
+                f"/auctions/{self.auction.slug}/?next={reverse('bulk_add_lots_auto_for_myself', kwargs={'slug': self.auction.slug})}"
+            )
+        else:
+            if not self.tos.selling_allowed and not self.is_admin:
+                messages.error(request, "You don't have permission to add lots to this auction")
+                return redirect(f"/auctions/{self.auction.slug}/")
+        if not self.is_admin and not self.auction.can_submit_lots:
+            messages.error(request, f"Lot submission has ended for {self.auction}")
+            return redirect(f"/auctions/{self.auction.slug}/")
+        if not self.is_admin and not self.auction.allow_bulk_adding_lots:
+            messages.error(
+                request,
+                "Bulk adding lots has been disabled in this auction, add your lots one at a time using this form",
+            )
+            return redirect(self.auction.add_lot_link)
+        self.queryset = self.tos.unbanned_lot_qs
+        return super().dispatch(request, *args, **kwargs)
+
+
+class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
+    """AJAX endpoint to save a single lot"""
+
+    allow_non_admins = True
+
+    def post(self, request, *args, **kwargs):
+        try:
+            data = json.loads(request.body)
+            lot_id = data.get("lot_id")
+            
+            # Create or get existing lot
+            if lot_id:
+                lot = Lot.objects.filter(
+                    lot_number=lot_id,
+                    auction=self.auction,
+                    auctiontos_seller=self.tos
+                ).first()
+                if not lot:
+                    return JsonResponse({"success": False, "errors": {"general": "Lot not found"}})
+                is_new = False
+            else:
+                lot = Lot(
+                    auction=self.auction,
+                    auctiontos_seller=self.tos,
+                    user=self.tos.user if self.tos.user else None,
+                    added_by=request.user
+                )
+                is_new = True
+            
+            # Check lot limits
+            if is_new and self.auction.max_lots_per_user:
+                current_count = self.tos.unbanned_lot_qs.count()
+                if current_count >= self.auction.max_lots_per_user and not self.is_admin:
+                    return JsonResponse({
+                        "success": False,
+                        "errors": {"general": f"You have reached the maximum of {self.auction.max_lots_per_user} lots for this auction"}
+                    })
+            
+            # Validate and save fields
+            errors = {}
+            
+            lot_name = data.get("lot_name", "").strip()
+            if not lot_name:
+                errors["lot_name"] = "Lot name is required"
+            elif len(lot_name) > 40:
+                errors["lot_name"] = "Lot name must be 40 characters or less"
+            else:
+                lot.lot_name = lot_name
+            
+            # Species category (auto-set to Uncategorized)
+            if not lot.species_category_id:
+                lot.species_category = Category.objects.filter(name="Uncategorized").first()
+            
+            # Custom checkbox
+            if self.auction.use_custom_checkbox_field and self.auction.custom_checkbox_name:
+                lot.custom_checkbox = data.get("custom_checkbox", False)
+            
+            # Custom field 1
+            if self.auction.custom_field_1 != "disable" and self.auction.custom_field_1_name:
+                custom_field_1 = data.get("custom_field_1", "").strip()
+                if self.auction.custom_field_1 == "required" and not custom_field_1:
+                    errors["custom_field_1"] = f"{self.auction.custom_field_1_name} is required"
+                elif len(custom_field_1) > 60:
+                    errors["custom_field_1"] = f"{self.auction.custom_field_1_name} must be 60 characters or less"
+                else:
+                    lot.custom_field_1 = custom_field_1
+            
+            # I bred this fish
+            if self.auction.use_i_bred_this_fish_field:
+                lot.i_bred_this_fish = data.get("i_bred_this_fish", False)
+            
+            # Quantity
+            if self.auction.use_quantity_field:
+                quantity = data.get("quantity")
+                if quantity is None or quantity == "":
+                    quantity = 1
+                try:
+                    quantity = int(quantity)
+                    if quantity < 1:
+                        errors["quantity"] = "Quantity must be at least 1"
+                    else:
+                        lot.quantity = quantity
+                except (ValueError, TypeError):
+                    errors["quantity"] = "Quantity must be a number"
+            else:
+                lot.quantity = 1
+            
+            # Donation
+            if self.auction.use_donation_field:
+                lot.donation = data.get("donation", False)
+            
+            # Reserve price
+            if self.auction.reserve_price != "disable":
+                reserve_price = data.get("reserve_price")
+                if reserve_price is None or reserve_price == "":
+                    reserve_price = self.auction.minimum_bid
+                try:
+                    reserve_price = int(reserve_price)
+                    if reserve_price < 1:
+                        errors["reserve_price"] = "Minimum bid must be at least $1"
+                    elif reserve_price > 2000:
+                        errors["reserve_price"] = "Minimum bid must be $2000 or less"
+                    else:
+                        lot.reserve_price = reserve_price
+                except (ValueError, TypeError):
+                    errors["reserve_price"] = "Minimum bid must be a number"
+                
+                if self.auction.reserve_price == "required" and not reserve_price:
+                    errors["reserve_price"] = "Minimum bid is required"
+            else:
+                lot.reserve_price = self.auction.minimum_bid
+            
+            # Buy now price
+            if self.auction.buy_now != "disable":
+                buy_now_price = data.get("buy_now_price")
+                if buy_now_price is not None and buy_now_price != "":
+                    try:
+                        buy_now_price = int(buy_now_price)
+                        if buy_now_price < 1:
+                            errors["buy_now_price"] = "Buy now price must be at least $1"
+                        elif buy_now_price > 1000:
+                            errors["buy_now_price"] = "Buy now price must be $1000 or less"
+                        else:
+                            lot.buy_now_price = buy_now_price
+                    except (ValueError, TypeError):
+                        errors["buy_now_price"] = "Buy now price must be a number"
+                else:
+                    lot.buy_now_price = None
+                
+                if self.auction.buy_now == "required" and not buy_now_price:
+                    errors["buy_now_price"] = "Buy now price is required"
+            else:
+                lot.buy_now_price = None
+            
+            if errors:
+                return JsonResponse({"success": False, "errors": errors})
+            
+            # Save the lot
+            lot.save()
+            
+            # Update invoice
+            invoice = Invoice.objects.filter(auctiontos_user=self.tos, auction=self.auction).first()
+            if not invoice:
+                invoice = Invoice.objects.create(auctiontos_user=self.tos, auction=self.auction)
+            invoice.recalculate
+            
+            return JsonResponse({
+                "success": True,
+                "lot_id": lot.lot_number,
+                "lot_number_display": lot.lot_number_display,
+                "is_new": is_new
+            })
+            
+        except json.JSONDecodeError:
+            return JsonResponse({"success": False, "errors": {"general": "Invalid JSON data"}})
+        except Exception as e:
+            return JsonResponse({"success": False, "errors": {"general": str(e)}})
+
+    def dispatch(self, request, *args, **kwargs):
+        self.auction = get_object_or_404(Auction, slug=kwargs.pop("slug"), is_deleted=False)
+        self.is_admin = False
+        if not self.auction:
+            raise Http404
+        
+        # Get the TOS for this user
+        self.tos = (
+            AuctionTOS.objects.filter(auction=self.auction)
+            .filter(Q(email=request.user.email) | Q(user=request.user))
+            .first()
+        )
+        
+        if self.is_auction_admin:
+            self.is_admin = True
+        
+        if not self.tos:
+            return JsonResponse({"success": False, "errors": {"general": "You must join this auction first"}})
+        
+        if not self.tos.selling_allowed and not self.is_admin:
+            return JsonResponse({"success": False, "errors": {"general": "You don't have permission to add lots"}})
+        
+        if not self.is_admin and not self.auction.can_submit_lots:
+            return JsonResponse({"success": False, "errors": {"general": "Lot submission has ended"}})
+        
         return super().dispatch(request, *args, **kwargs)
 
 
@@ -3808,7 +4082,7 @@ class LotCreateView(LotValidation, CreateView):
             ):
                 messages.info(
                     request,
-                    f"Sick of adding lots one at a time?  <a href='{reverse('bulk_add_lots_for_myself', kwargs={'slug': userData.last_auction_used.slug})}'>Add lots of lots to {userData.last_auction_used}</a>",
+                    f"Sick of adding lots one at a time?  <a href='{reverse('bulk_add_lots_auto_for_myself', kwargs={'slug': userData.last_auction_used.slug})}'>Add lots of lots to {userData.last_auction_used}</a>",
                 )
         data = self.request.GET.copy()
         auction_slug = data.get("auction", None)
