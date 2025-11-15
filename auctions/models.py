@@ -814,8 +814,13 @@ class Auction(models.Model):
     paypal_email_address.help_text = "Not currently used, this is configured in the model PayPalSeller"
     enable_online_payments = models.BooleanField(default=False, blank=True, verbose_name="PayPal payments")
     enable_online_payments.help_text = "Allow users to use PayPal to pay their invoices themselves."
-    dismissed_promo_banner = models.BooleanField(default=False, blank=True)
     dismissed_paypal_banner = models.BooleanField(default=False, blank=True)
+    square_email_address = models.EmailField(max_length=255, blank=True, null=True)
+    square_email_address.help_text = "Not currently used, this is configured in the model SquareSeller"
+    enable_square_payments = models.BooleanField(default=False, blank=True, verbose_name="Square payments")
+    enable_square_payments.help_text = "Allow users to use Square to pay their invoices themselves."
+    dismissed_square_banner = models.BooleanField(default=False, blank=True)
+    dismissed_promo_banner = models.BooleanField(default=False, blank=True)
     google_drive_link = models.URLField(max_length=500, blank=True, null=True, default="")
     google_drive_link.help_text = "Link to a Google Sheet with user information.  Make sure the sheet is shared with 'anyone with the link can view'."
     last_sync_time = models.DateTimeField(blank=True, null=True)
@@ -872,6 +877,21 @@ class Auction(models.Model):
         return None
 
     @property
+    def square_information(self):
+        """
+        Return the merchant ID for Square payments
+        Fallback for admin users to use the site-wide api keys
+        """
+        from auctions.models import SquareSeller
+
+        seller = SquareSeller.objects.filter(user=self.created_by).first()
+        if seller:
+            return seller.square_merchant_id
+        if self.created_by.is_superuser:
+            return "admin"
+        return None
+
+    @property
     def show_paypal_banner(self):
         """Can we show the link your PayPal account banner?
         One more check is needed on the template:
@@ -887,6 +907,25 @@ class Auction(models.Model):
         # if self.enable_online_payments:
         #    return False
         if PayPalSeller.objects.filter(user=self.created_by).first():
+            return False
+        return True
+
+    @property
+    def show_square_banner(self):
+        """Can we show the link your Square account banner?
+        One more check is needed on the template:
+        this banner should only be shown to the auction creator"""
+        from auctions.models import SquareSeller
+
+        if self.dismissed_square_banner:
+            return False
+        if not self.created_by.userdata.square_enabled:
+            return False
+        if self.created_by.is_superuser:
+            return False
+        if self.created_by.userdata.never_show_square_connect:
+            return False
+        if SquareSeller.objects.filter(user=self.created_by).first():
             return False
         return True
 
@@ -4514,7 +4553,54 @@ class Invoice(models.Model):
 
     @property
     def show_payment_button(self):
-        """True if we can show the PayPal button"""
+        """True if we can show the PayPal or Square button"""
+        # Check PayPal
+        paypal_configured = settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET
+        square_configured = getattr(settings, "SQUARE_APPLICATION_ID", None) and getattr(
+            settings, "SQUARE_ACCESS_TOKEN", None
+        )
+
+        if not (paypal_configured or square_configured):
+            return False
+        if self.status == "PAID":
+            return False
+        if self.net_after_payments >= 0:
+            return False
+        if not self.auction:
+            # change this if we ever allow direct person to person payments
+            return False
+
+        # Check if auction allows any payment method
+        has_payment_method = False
+        if self.auction.enable_online_payments:
+            if not self.auction.created_by.userdata.is_trusted:
+                return False
+            if (
+                not self.auction.created_by.is_superuser
+                and not self.auction.created_by.userdata.paypal_enabled
+                and not self.auction.paypal_information
+            ):
+                pass  # Check Square
+            else:
+                has_payment_method = True
+
+        if self.auction.enable_square_payments:
+            if not self.auction.created_by.userdata.is_trusted:
+                return False
+            if (
+                not self.auction.created_by.is_superuser
+                and not self.auction.created_by.userdata.square_enabled
+                and not self.auction.square_information
+            ):
+                pass
+            else:
+                has_payment_method = True
+
+        return has_payment_method
+
+    @property
+    def show_paypal_button(self):
+        """True if we can show specifically the PayPal button"""
         if not (settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET):
             return False
         if self.auction and not self.auction.enable_online_payments:
@@ -4533,7 +4619,32 @@ class Invoice(models.Model):
         ):
             return False
         if not self.auction:
-            # change this if we ever allow direct person to person PayPal
+            return False
+        return True
+
+    @property
+    def show_square_button(self):
+        """True if we can show specifically the Square button"""
+        if not (
+            getattr(settings, "SQUARE_APPLICATION_ID", None) and getattr(settings, "SQUARE_ACCESS_TOKEN", None)
+        ):
+            return False
+        if self.auction and not self.auction.enable_square_payments:
+            return False
+        if self.auction and not self.auction.created_by.userdata.is_trusted:
+            return False
+        if self.status == "PAID":
+            return False
+        if self.net_after_payments >= 0:
+            return False
+        if (
+            self.auction
+            and not self.auction.created_by.is_superuser
+            and not self.auction.created_by.userdata.square_enabled
+            and not self.auction.square_information
+        ):
+            return False
+        if not self.auction:
             return False
         return True
 
@@ -5184,6 +5295,10 @@ def get_default_paypal_enabled():
     return settings.PAYPAL_ENABLED_FOR_USERS
 
 
+def get_default_square_enabled():
+    return getattr(settings, "SQUARE_ENABLED_FOR_USERS", False)
+
+
 def get_default_is_trusted():
     return settings.USERS_ARE_TRUSTED_BY_DEFAULT
 
@@ -5266,6 +5381,7 @@ class UserData(models.Model):
     can_submit_standalone_lots = models.BooleanField(default=get_default_can_submit_lots)
     can_create_club_auctions = models.BooleanField(default=get_default_can_create_auctions)
     paypal_enabled = models.BooleanField(default=get_default_paypal_enabled)
+    square_enabled = models.BooleanField(default=get_default_square_enabled)
     is_trusted = models.BooleanField(default=get_default_is_trusted)
     is_trusted.help_text = "Trusted users can promote auctions, accept payments, and send invoice notification emails"
     dismissed_cookies_tos = models.BooleanField(default=False)
@@ -5326,6 +5442,7 @@ class UserData(models.Model):
     has_bid = models.BooleanField(default=False)
     has_used_proxy_bidding = models.BooleanField(default=False)
     never_show_paypal_connect = models.BooleanField(default=False)
+    never_show_square_connect = models.BooleanField(default=False)
 
     @property
     def last_auction_created(self):
@@ -5629,6 +5746,40 @@ class PayPalSeller(models.Model):
             auction.create_history(
                 applies_to="INVOICES",
                 action=f"PayPal partner consent from {self.payer_email} has been revoked.  Relink your PayPal account to re-enable payments.",
+                user=None,
+            )
+            auction.save()
+        return super().delete()
+
+
+class SquareSeller(models.Model):
+    """Extension of user model to store Square info for sellers
+    Similar to PayPalSeller, stores Square merchant information
+    """
+
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    square_merchant_id = models.CharField(max_length=64, blank=True, null=True)
+    currency = models.CharField(max_length=10, default="USD")
+    payer_email = models.EmailField(blank=True, null=True)
+    connected_on = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        if self.currency != "USD":
+            result = f"{self.currency} to "
+        else:
+            result = ""
+        if self.payer_email:
+            result += self.payer_email
+        else:
+            result += f"{self.user.first_name} {self.user.last_name}'s Square account"
+        return result
+
+    def delete(self):
+        auctions = Auction.objects.filter(created_by=self.user, enable_square_payments=True)
+        for auction in auctions:
+            auction.create_history(
+                applies_to="INVOICES",
+                action=f"Square account from {self.payer_email} has been disconnected. Relink your Square account to re-enable payments.",
                 user=None,
             )
             auction.save()

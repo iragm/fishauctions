@@ -476,6 +476,7 @@ if os.environ.get("ALLOW_USERS_TO_CREATE_LOTS", "True") == "False":
 else:
     ALLOW_USERS_TO_CREATE_LOTS = True
 PAYPAL_ENABLED_FOR_USERS = os.environ.get("PAYPAL_ENABLED_FOR_USERS", "False") == "True"
+SQUARE_ENABLED_FOR_USERS = os.environ.get("SQUARE_ENABLED_FOR_USERS", "False") == "True"
 if os.environ.get("USERS_ARE_TRUSTED_BY_DEFAULT", "True") == "False":
     USERS_ARE_TRUSTED_BY_DEFAULT = False
 else:
@@ -681,3 +682,11 @@ PAYPAL_SECRET = os.environ.get("PAYPAL_SECRET", "")
 PARTNER_MERCHANT_ID = os.environ.get("PARTNER_MERCHANT_ID", "")
 PAYPAL_BN_CODE = os.environ.get("PAYPAL_BN_CODE", "")
 PAYPAL_PLATFORM_FEE = Decimal(str(os.environ.get("PAYPAL_PLATFORM_FEE", "0") or "0"))
+
+# Square settings
+SQUARE_ENVIRONMENT = os.environ.get("SQUARE_ENVIRONMENT", "sandbox" if DEBUG else "production")
+SQUARE_APPLICATION_ID = os.environ.get("SQUARE_APPLICATION_ID", "")
+SQUARE_ACCESS_TOKEN = os.environ.get("SQUARE_ACCESS_TOKEN", "")
+SQUARE_LOCATION_ID = os.environ.get("SQUARE_LOCATION_ID", "")
+# Optional signing secret for webhook verification
+SQUARE_WEBHOOK_SIGNATURE_KEY = os.environ.get("SQUARE_WEBHOOK_SIGNATURE_KEY", "")

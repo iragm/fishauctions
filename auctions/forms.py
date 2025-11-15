@@ -34,6 +34,7 @@ from .models import (
     Lot,
     LotImage,
     PayPalSeller,
+    SquareSeller,
     PickupLocation,
     UserBan,
     UserData,
@@ -1729,6 +1730,7 @@ class AuctionEditForm(forms.ModelForm):
             "use_reference_link",
             "use_description",
             "enable_online_payments",
+            "enable_square_payments",
         ]
         widgets = {
             "date_start": DateTimePickerInput(),
@@ -1764,6 +1766,19 @@ class AuctionEditForm(forms.ModelForm):
                 # show payments option
                 pass
                 self.fields["enable_online_payments"].widget = forms.HiddenInput()
+
+        square_seller = SquareSeller.objects.filter(user=self.instance.created_by).first()
+        if square_seller:
+            self.fields["enable_square_payments"].help_text += f"<br>Payments sent to {square_seller}"
+        else:
+            if (
+                self.instance.created_by.is_superuser
+                and settings.SQUARE_APPLICATION_ID
+                and settings.SQUARE_ACCESS_TOKEN
+            ):
+                # show payments option
+                pass
+                self.fields["enable_square_payments"].widget = forms.HiddenInput()
         # self.fields['notes'].help_text = "Foo"
         if self.instance.is_online:
             self.fields[
