@@ -5754,11 +5754,14 @@ class PayPalSeller(models.Model):
 
 class SquareSeller(models.Model):
     """Extension of user model to store Square info for sellers
-    Similar to PayPalSeller, stores Square merchant information
+    Similar to PayPalSeller, stores Square merchant information and OAuth tokens
     """
 
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     square_merchant_id = models.CharField(max_length=64, blank=True, null=True)
+    access_token = models.CharField(max_length=500, blank=True, null=True)
+    refresh_token = models.CharField(max_length=500, blank=True, null=True)
+    token_expires_at = models.DateTimeField(blank=True, null=True)
     currency = models.CharField(max_length=10, default="USD")
     payer_email = models.EmailField(blank=True, null=True)
     connected_on = models.DateTimeField(auto_now_add=True)
