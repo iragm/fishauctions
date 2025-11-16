@@ -438,13 +438,13 @@ class LotAdmin(admin.ModelAdmin):
         "promote_this_lot",
         "promotion_budget",
         "promotion_weight",
-        "added_by",
     )
     readonly_fields = (
         "user",
         "auctiontos_seller",
         "auction",
         "reference_link",
+        "added_by",
     )
     inlines = [
         BidInline,
