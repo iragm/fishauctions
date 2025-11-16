@@ -275,18 +275,53 @@
     if (isListening) return;
     
     try {
-      $("#voice-status").text("Initializing...");
+      $("#voice-status").text("Requesting microphone access...");
       $("#voice-btn").prop("disabled", true);
       
-      let ctx = new AudioContext({ sinkId: { type: "none" } });
-      let micNode = ctx.createMediaStreamSource(await navigator.mediaDevices.getUserMedia({
-        video: false,
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          channelCount: 1
+      // Check if Vosklet library is loaded
+      if (typeof loadVosklet === 'undefined') {
+        $("#voice-status").text("Voice recognition library not loaded yet. Please wait and try again.");
+        $("#voice-btn").prop("disabled", false);
+        return;
+      }
+      
+      // Request microphone access with proper error handling
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: false,
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            channelCount: 1
+          }
+        });
+      } catch (micError) {
+        // Handle microphone permission denial or device errors
+        let errorMessage = "Microphone access denied. Please allow microphone access in your browser settings.";
+        
+        if (micError.name === 'NotAllowedError' || micError.name === 'PermissionDeniedError') {
+          errorMessage = "Microphone access denied. Please allow microphone access and try again.";
+        } else if (micError.name === 'NotFoundError' || micError.name === 'DevicesNotFoundError') {
+          errorMessage = "No microphone found. Please connect a microphone and try again.";
+        } else if (micError.name === 'NotReadableError' || micError.name === 'TrackStartError') {
+          errorMessage = "Microphone is already in use by another application.";
+        } else if (micError.name === 'OverconstrainedError' || micError.name === 'ConstraintNotSatisfiedError') {
+          errorMessage = "Microphone doesn't meet the required specifications.";
+        } else if (micError.name === 'TypeError') {
+          errorMessage = "Browser doesn't support microphone access.";
         }
-      }));
+        
+        console.error("Microphone access error:", micError);
+        $("#voice-status").text(errorMessage);
+        $("#voice-btn").prop("disabled", false);
+        return;
+      }
+      
+      $("#voice-status").text("Initializing speech recognition...");
+      
+      let ctx = new AudioContext({ sinkId: { type: "none" } });
+      let micNode = ctx.createMediaStreamSource(stream);
 
       let module = await loadVosklet();
       let modelUrl = "{% static 'models/vosk/vosk-model-small-en-us-0.15/' %}";
@@ -311,7 +346,7 @@
       transferer.port.onmessage = ev => recognizer.acceptWaveform(ev.data);
       micNode.connect(transferer);
 
-      voiceRecognizer = { ctx, recognizer, transferer, micNode };
+      voiceRecognizer = { ctx, recognizer, transferer, micNode, stream };
       isListening = true;
       $("#voice-btn").removeClass("btn-primary").addClass("btn-danger");
       $("#voice-btn").html('<i class="bi bi-mic-fill"></i> Stop Listening');
@@ -320,8 +355,16 @@
       
     } catch (err) {
       console.error("Voice recognition error:", err);
-      $("#voice-status").text("Error: " + err.message);
+      let errorMessage = "Failed to start voice recognition: " + err.message;
+      if (err.message && err.message.includes("not found")) {
+        errorMessage = "Voice recognition model not found. Please ensure the Vosk model is installed.";
+      }
+      $("#voice-status").text(errorMessage);
       $("#voice-btn").prop("disabled", false);
+      
+      // Reset state
+      isListening = false;
+      voiceRecognizer = null;
     }
   }
 
@@ -330,9 +373,16 @@
     if (!isListening || !voiceRecognizer) return;
     
     try {
+      // Stop all media stream tracks
+      if (voiceRecognizer.stream) {
+        voiceRecognizer.stream.getTracks().forEach(track => track.stop());
+      }
+      
+      // Close audio context
       if (voiceRecognizer.ctx) {
         voiceRecognizer.ctx.close();
       }
+      
       voiceRecognizer = null;
       isListening = false;
       $("#voice-btn").removeClass("btn-danger").addClass("btn-primary");
@@ -340,6 +390,12 @@
       $("#voice-status").text("Voice control stopped");
     } catch (err) {
       console.error("Error stopping voice recognition:", err);
+      // Reset state anyway
+      voiceRecognizer = null;
+      isListening = false;
+      $("#voice-btn").removeClass("btn-danger").addClass("btn-primary");
+      $("#voice-btn").html('<i class="bi bi-mic"></i> Start Voice Control');
+      $("#voice-status").text("Voice control stopped");
     }
   }
 
