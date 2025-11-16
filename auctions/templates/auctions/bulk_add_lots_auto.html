@@ -26,7 +26,7 @@
           <div class="lot-row card mb-3" data-lot-id="{{ lot.lot_number }}">
             <div class="card-body">
               <div class="row align-items-center">
-                <div class="col-12 col-md-auto mb-2 mb-md-0" style="min-height: 32px;">
+                <div class="col-12 col-md-auto mb-2 mb-md-0" style="min-width: 80px;">
                   <span class="badge bg-success lot-number-badge">Lot #{{ lot.lot_number_display }}</span>
                 </div>
                 <div class="col-12 col-md">
@@ -117,8 +117,8 @@
           <div class="lot-row card mb-3" data-lot-id="">
             <div class="card-body">
               <div class="row align-items-center">
-                <div class="col-12 col-md-auto mb-2 mb-md-0" style="min-height: 32px;">
-                  <span class="badge bg-secondary lot-number-badge d-none">Not saved</span>
+                <div class="col-12 col-md-auto mb-2 mb-md-0" style="min-width: 80px;">
+                  <span class="badge bg-secondary lot-number-badge">Not saved</span>
                 </div>
                 <div class="col-12 col-md">
                   <div class="row g-2">
@@ -287,7 +287,9 @@ function performSave(lotRow) {
     
     // Don't save if lot name is empty
     if (!formData.lot_name || formData.lot_name.trim() === '') {
-        badge.classList.add('d-none');
+        badge.textContent = 'Not saved';
+        badge.classList.remove('bg-success', 'bg-warning', 'bg-danger');
+        badge.classList.add('bg-secondary');
         clearValidationErrors(lotRow);
         return;
     }
@@ -311,7 +313,7 @@ function performSave(lotRow) {
             
             // Update badge
             badge.textContent = `Lot #${data.lot_number_display}`;
-            badge.classList.remove('d-none', 'bg-secondary', 'bg-warning', 'bg-danger');
+            badge.classList.remove('bg-secondary', 'bg-warning', 'bg-danger');
             badge.classList.add('bg-success');
             
             // Clear any validation errors
@@ -375,11 +377,19 @@ function showValidationErrors(lotRow, errors) {
 function attachLotEventListeners(lotRow) {
     const inputs = lotRow.querySelectorAll('.lot-input');
     inputs.forEach(input => {
+        // Disable browser validation to prevent shake effect
+        input.setAttribute('novalidate', 'true');
+        
         input.addEventListener('input', () => {
             saveLot(lotRow);
         });
         input.addEventListener('change', () => {
             saveLot(lotRow);
+        });
+        
+        // Prevent invalid event which can cause shake
+        input.addEventListener('invalid', (e) => {
+            e.preventDefault();
         });
     });
 }
@@ -398,7 +408,7 @@ document.getElementById('add-row-btn').addEventListener('click', () => {
     const badge = newRow.querySelector('.lot-number-badge');
     badge.textContent = 'Not saved';
     badge.classList.remove('bg-success', 'bg-warning', 'bg-danger');
-    badge.classList.add('bg-secondary', 'd-none');
+    badge.classList.add('bg-secondary');
     
     const inputs = newRow.querySelectorAll('.lot-input');
     inputs.forEach(input => {
