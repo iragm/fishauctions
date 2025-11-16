@@ -3290,6 +3290,11 @@ class BulkAddLotsAuto(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         
         context["auto_add_images"] = self.auction.auto_add_images
         
+        # Lot limit settings
+        context["max_lots_per_user"] = self.auction.max_lots_per_user
+        context["allow_additional_lots_as_donation"] = self.auction.allow_additional_lots_as_donation
+        context["current_lot_count"] = self.queryset.count()
+        
         # For determining number of initial blank rows
         max_lots = self.auction.max_lots_per_user
         current_count = self.queryset.count()
@@ -3374,10 +3379,13 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
             if is_new and self.auction.max_lots_per_user:
                 current_count = self.tos.unbanned_lot_qs.count()
                 if current_count >= self.auction.max_lots_per_user and not self.is_admin:
-                    return JsonResponse({
-                        "success": False,
-                        "errors": {"general": f"You have reached the maximum of {self.auction.max_lots_per_user} lots for this auction"}
-                    })
+                    # Check if donation lots are allowed beyond the limit
+                    donation = data.get("donation", False)
+                    if not donation or not self.auction.allow_additional_lots_as_donation:
+                        return JsonResponse({
+                            "success": False,
+                            "errors": {"general": f"You have reached the maximum of {self.auction.max_lots_per_user} lots for this auction"}
+                        })
             
             # Validate and save fields
             errors = {}
@@ -3505,12 +3513,24 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
         if not self.auction:
             raise Http404
         
-        # Get the TOS for this user
-        self.tos = (
-            AuctionTOS.objects.filter(auction=self.auction)
-            .filter(Q(email=request.user.email) | Q(user=request.user))
-            .first()
-        )
+        # Get bidder_number from POST data if present (for admin adding lots for specific user)
+        bidder_number = None
+        if request.method == 'POST':
+            try:
+                data = json.loads(request.body)
+                bidder_number = data.get('bidder_number')
+            except (json.JSONDecodeError, AttributeError):
+                pass
+        
+        # Get the TOS - either for specified bidder or for current user
+        if bidder_number:
+            self.tos = AuctionTOS.objects.filter(bidder_number=bidder_number, auction=self.auction).first()
+        else:
+            self.tos = (
+                AuctionTOS.objects.filter(auction=self.auction)
+                .filter(Q(email=request.user.email) | Q(user=request.user))
+                .first()
+            )
         
         if self.is_auction_admin:
             self.is_admin = True

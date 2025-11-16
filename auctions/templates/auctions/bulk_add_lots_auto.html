@@ -26,7 +26,7 @@
           <div class="lot-row card mb-3" data-lot-id="{{ lot.lot_number }}">
             <div class="card-body">
               <div class="row align-items-center">
-                <div class="col-12 col-md-auto mb-2 mb-md-0">
+                <div class="col-12 col-md-auto mb-2 mb-md-0" style="min-height: 32px;">
                   <span class="badge bg-success lot-number-badge">Lot #{{ lot.lot_number_display }}</span>
                 </div>
                 <div class="col-12 col-md">
@@ -117,7 +117,7 @@
           <div class="lot-row card mb-3" data-lot-id="">
             <div class="card-body">
               <div class="row align-items-center">
-                <div class="col-12 col-md-auto mb-2 mb-md-0">
+                <div class="col-12 col-md-auto mb-2 mb-md-0" style="min-height: 32px;">
                   <span class="badge bg-secondary lot-number-badge d-none">Not saved</span>
                 </div>
                 <div class="col-12 col-md">
@@ -271,6 +271,7 @@ function performSave(lotRow) {
     // Collect form data
     const formData = {
         lot_id: lotId,
+        bidder_number: '{{ tos.bidder_number }}'  // Include bidder number for admin adding lots for users
     };
     
     // Get all inputs in this row
