@@ -3378,7 +3378,12 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
             # Check lot limits
             if is_new and self.auction.max_lots_per_user:
                 current_count = self.tos.unbanned_lot_qs.count()
-                if current_count >= self.auction.max_lots_per_user and not self.is_admin:
+                # Admins can bypass limits only when adding lots for OTHER users
+                # If admin is adding lots for themselves, they must follow the limits
+                is_adding_for_self = (self.tos.user == request.user)
+                bypass_limit = self.is_admin and not is_adding_for_self
+                
+                if current_count >= self.auction.max_lots_per_user and not bypass_limit:
                     # Check if donation lots are allowed beyond the limit
                     donation = data.get("donation", False)
                     if not donation or not self.auction.allow_additional_lots_as_donation:
