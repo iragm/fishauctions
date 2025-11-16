@@ -3370,16 +3370,17 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                     added_by=request.user,
                 )
                 is_new = True
+            
+            admin_bypassed = False  # Track if admin bypassed lot limit
 
             # Check lot limits
             if is_new and self.auction.max_lots_per_user:
                 current_count = self.tos.unbanned_lot_qs.count()
-                # Admins can bypass limits only when adding lots for OTHER users
-                # If admin is adding lots for themselves, they must follow the limits
-                is_adding_for_self = (self.tos.user == request.user)
-                bypass_limit = self.is_admin and not is_adding_for_self
+                # Admins can bypass limits for both their own lots and other users' lots
+                bypass_limit = self.is_admin
+                limit_exceeded = current_count >= self.auction.max_lots_per_user
                 
-                if current_count >= self.auction.max_lots_per_user and not bypass_limit:
+                if limit_exceeded and not bypass_limit:
                     # Check if donation lots are allowed beyond the limit
                     donation = data.get("donation", False)
                     if not donation or not self.auction.allow_additional_lots_as_donation:
@@ -3391,6 +3392,9 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                                 },
                             }
                         )
+                
+                # Track if admin bypassed the limit for visual feedback
+                admin_bypassed = bypass_limit and limit_exceeded
 
             # Validate and save fields
             errors = {}
@@ -3506,6 +3510,9 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                     "lot_id": lot.lot_number,
                     "lot_number_display": lot.lot_number_display,
                     "is_new": is_new,
+                    "admin_bypassed": admin_bypassed,
+                }
+            )
                 }
             )
 

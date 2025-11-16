@@ -237,6 +237,13 @@
 {% endblock %}
 
 {% block extra_js %}
+<style>
+/* Disable all transitions and animations on form inputs to prevent shake effect */
+.lot-input, .lot-input.is-invalid, .form-control.is-invalid {
+    transition: none !important;
+    animation: none !important;
+}
+</style>
 <script>
 let saveTimeouts = {};
 const SAVE_DELAY = 1000; // Save after 1 second of no typing
@@ -311,10 +318,18 @@ function performSave(lotRow) {
                 lotRow.dataset.lotId = data.lot_id;
             }
             
-            // Update badge
-            badge.textContent = `Lot #${data.lot_number_display}`;
-            badge.classList.remove('bg-secondary', 'bg-warning', 'bg-danger');
-            badge.classList.add('bg-success');
+            // Update badge with admin bypass feedback
+            if (data.admin_bypassed) {
+                badge.textContent = `Lot #${data.lot_number_display} (Admin)`;
+                badge.classList.remove('bg-secondary', 'bg-warning', 'bg-danger');
+                badge.classList.add('bg-info');  // Use info color for admin bypass
+                badge.title = 'Admin bypassed lot limit';
+            } else {
+                badge.textContent = `Lot #${data.lot_number_display}`;
+                badge.classList.remove('bg-secondary', 'bg-warning', 'bg-danger', 'bg-info');
+                badge.classList.add('bg-success');
+                badge.title = '';
+            }
             
             // Clear any validation errors
             clearValidationErrors(lotRow);
@@ -367,9 +382,41 @@ function showValidationErrors(lotRow, errors) {
         }
     });
     
-    // Show general errors
+    // Handle general errors (lot limit reached) - show on lot_name or donation checkbox
     if (errors.general) {
-        alert(errors.general);
+        const lotNameInput = lotRow.querySelector('[data-field="lot_name"]');
+        const donationCheckbox = lotRow.querySelector('[data-field="donation"]');
+        
+        // If additional lots allowed as donation, mark donation checkbox invalid
+        // Otherwise, mark lot name invalid
+        if (donationCheckbox && errors.general.includes('maximum')) {
+            // Check if allow_additional_lots_as_donation is enabled
+            const allowDonation = {{ auction.allow_additional_lots_as_donation|lower }};
+            if (allowDonation) {
+                donationCheckbox.classList.add('is-invalid');
+                // Add feedback after checkbox label
+                const checkboxLabel = donationCheckbox.parentElement;
+                let feedback = checkboxLabel.querySelector('.invalid-feedback');
+                if (!feedback) {
+                    feedback = document.createElement('div');
+                    feedback.className = 'invalid-feedback d-block';
+                    checkboxLabel.appendChild(feedback);
+                }
+                feedback.textContent = errors.general + ' (check Donation to allow)';
+            } else {
+                lotNameInput.classList.add('is-invalid');
+                const feedback = lotNameInput.parentElement.querySelector('.invalid-feedback');
+                if (feedback) {
+                    feedback.textContent = errors.general;
+                }
+            }
+        } else if (lotNameInput) {
+            lotNameInput.classList.add('is-invalid');
+            const feedback = lotNameInput.parentElement.querySelector('.invalid-feedback');
+            if (feedback) {
+                feedback.textContent = errors.general;
+            }
+        }
     }
 }
 
