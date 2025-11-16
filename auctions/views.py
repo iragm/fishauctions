@@ -3513,8 +3513,6 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                     "admin_bypassed": admin_bypassed,
                 }
             )
-                }
-            )
 
         except json.JSONDecodeError:
             return JsonResponse({"success": False, "errors": {"general": "Invalid JSON data"}})
