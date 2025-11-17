@@ -459,8 +459,12 @@ class LotAdmin(admin.ModelAdmin):
     readonly_fields = (
         "user",
         "auctiontos_seller",
+        "auctiontos_winner",
+        "winner",
         "auction",
         "reference_link",
+        "buyer_invoice",
+        "seller_invoice",
     )
     inlines = [
         BidInline,

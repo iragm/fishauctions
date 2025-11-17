@@ -755,7 +755,7 @@ function deactivate_lot() {
 
             var lastChat = $(".message").last();
             if (lastChat.hasClass("user_" + pk)) {
-                lastChat.append("<br>" + message);
+                lastChat.append("<br><span title='" + fullDateTime + "'>" + message + "</span>");
             } else {
                 var cssStyle = "";
                 if (pk == -1) {
@@ -769,7 +769,7 @@ function deactivate_lot() {
                                     <div class="chat-body">\
                                         <div class="chat-content">\
                                             <small><span class="chat-username">' + username + '</span></small>\
-                                            <span title="' + fullDateTime + '" class="message user_' + pk + ' ">'+ message+ '</span>\
+                                            <span title="' + fullDateTime + '" class="message user_' + pk + ' ">'+ message + '</span>\
                                         </div>\
                                     </div>\
                                 </div>';
