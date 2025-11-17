@@ -5011,7 +5011,7 @@ class ToDefaultLandingPage(View):
                         routeByLastAuction = True
                     except AuctionTOS.DoesNotExist:
                         pass
-            except (AttributeError, Auction.DoesNotExist):
+            except (TypeError, AttributeError, Auction.DoesNotExist):
                 # probably no userdata or userdata.auction is None
                 auction = None
         return self.tos_check(request, auction, routeByLastAuction)
