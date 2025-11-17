@@ -394,6 +394,7 @@ class LotConsumer(WebsocketConsumer):
                             "info": "CHAT",
                             "message": history.message,
                             "username": username,
+                            "timestamp": history.timestamp.isoformat(),
                         },
                     )
                 except Exception as e:
@@ -419,6 +420,7 @@ class LotConsumer(WebsocketConsumer):
                             "info": "CHAT",
                             "message": "The creator of this lot has turned off email notifications when chat messages are posted.  You may not get a reply.",
                             "username": "System",
+                            "timestamp": timezone.now().isoformat(),
                         },
                     )
             except Exception as e:
@@ -485,7 +487,7 @@ class LotConsumer(WebsocketConsumer):
                             )
                         else:
                             if True:
-                                LotHistory.objects.create(
+                                history = LotHistory.objects.create(
                                     lot=self.lot,
                                     user=self.user,
                                     message=message,
@@ -500,6 +502,7 @@ class LotConsumer(WebsocketConsumer):
                                     "message": message,
                                     "pk": self.user.pk,
                                     "username": str(self.user),
+                                    "timestamp": history.timestamp.isoformat(),
                                 },
                             )
                     except (KeyError, ValueError):

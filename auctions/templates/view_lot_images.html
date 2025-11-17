@@ -709,7 +709,7 @@ function deactivate_lot() {
                 high_bidder_pk = data.high_bidder_pk;
             }
             if (data.info == "CHAT") {
-                addChat(data.pk, data.username, data.message);
+                addChat(data.pk, data.username, data.message, data.timestamp);
             } else {
                 if (data.date_end) {
                     var date_end = new Date(data.date_end);
@@ -723,7 +723,7 @@ function deactivate_lot() {
                     messageClass = "info";
                 } else {
                     // non-info, non-error messages are public and added to the chat
-                    addChat(-1, "System", data.message);
+                    addChat(-1, "System", data.message, null);
                 }
                 if (data.info == "LOT_END_WINNER") {
                     $('#price_label').html("Winner:");
@@ -737,12 +737,22 @@ function deactivate_lot() {
                 });
             }
         };
-        function addChat(pk, username, message) {
+        function addChat(pk, username, message, timestamp) {
             message = message.replace(/</g, "&lt;").replace(/>/g, "&gt;");
             var urlRegex = /(?:(?:https?|ftp|file):\/\/|www\.|ftp\.|auction\.)(?:\([-A-Z0-9+&@#\/%=~_|$?!:,.]*\)|[-A-Z0-9+&@#\/%=~_|$?!:,.])*(?:\([-A-Z0-9+&@#\/%=~_|$?!:,.]*\)|[A-Z0-9+&@#\/%=~_|$])/igm
             message =  message.replace(urlRegex, function(url) {
                 return '<a style="color: #555; font-weight: bold;" href="' + url + '">' + url + '</a>';
             })
+            
+            // Format timestamp for display
+            var timestampHtml = '';
+            if (timestamp) {
+                var date = new Date(timestamp);
+                var timeString = date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+                var fullDateTime = date.toLocaleString('en-US', { dateStyle: 'short', timeStyle: 'short' });
+                timestampHtml = '<small class="text-muted" style="margin-left: 8px;" title="' + fullDateTime + '">' + timeString + '</small>';
+            }
+            
             var lastChat = $(".message").last();
             if (lastChat.hasClass("user_" + pk)) {
                 lastChat.append("<br>" + message);
@@ -758,7 +768,7 @@ function deactivate_lot() {
                 var chatHtml = '<div class="chat ' + cssStyle + '">\
                                     <div class="chat-body">\
                                         <div class="chat-content">\
-                                            <small><span class="chat-username">' + username + '</span></small>\
+                                            <small><span class="chat-username">' + username + '</span>' + timestampHtml + '</small>\
                                             <span class="message user_' + pk + ' ">'+ message+ '</span>\
                                         </div>\
                                     </div>\
