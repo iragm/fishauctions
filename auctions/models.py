@@ -3982,6 +3982,7 @@ class Lot(models.Model):
             if (
                 not self.auction.is_online
                 and self.auction.online_bidding != "disable"
+                and self.auction.date_online_bidding_starts
                 and self.auction.date_online_bidding_starts > first_bid_date
             ):
                 return self.auction.date_online_bidding_starts
