@@ -23,8 +23,13 @@
         <div id="lots-container">
           <!-- Existing lots will be loaded here via AJAX -->
           {% for lot in existing_lots %}
-          <div class="lot-row card mb-3" data-lot-id="{{ lot.lot_number }}">
+          <div class="lot-row card mb-3" data-lot-id="{{ lot.lot_number }}" {% if not lot.can_be_edited %}data-locked="true"{% endif %}>
             <div class="card-body">
+              {% if not lot.can_be_edited %}
+              <div class="alert alert-warning alert-sm mb-2">
+                <small><strong>🔒 Locked:</strong> {{ lot.cannot_be_edited_reason }}</small>
+              </div>
+              {% endif %}
               <div class="row align-items-center">
                 <div class="col-12 col-md-auto mb-2 mb-md-0" style="min-width: 80px;">
                   <span class="badge bg-success lot-number-badge">Lot #{{ lot.lot_number_display }}</span>
@@ -35,7 +40,8 @@
                       <label class="form-label small mb-1">Lot name <span class="text-danger">*</span></label>
                       <div class="input-wrapper">
                         <input type="text" class="form-control form-control-sm lot-input" name="lot_name" 
-                               value="{{ lot.lot_name }}" maxlength="40" data-field="lot_name">
+                               value="{{ lot.lot_name }}" maxlength="40" data-field="lot_name"
+                               {% if not lot.can_be_edited %}disabled{% endif %}>
                       </div>
                       <div class="invalid-feedback"></div>
                     </div>
@@ -44,7 +50,8 @@
                     <div class="col-12 col-md-6">
                       <label class="form-label small mb-1">{{ custom_field_1_name }} {% if custom_field_1_required %}<span class="text-danger">*</span>{% endif %}</label>
                       <input type="text" class="form-control form-control-sm lot-input" name="custom_field_1" 
-                             value="{{ lot.custom_field_1 }}" maxlength="60" data-field="custom_field_1">
+                             value="{{ lot.custom_field_1 }}" maxlength="60" data-field="custom_field_1"
+                             {% if not lot.can_be_edited %}disabled{% endif %}>
                       <div class="invalid-feedback"></div>
                     </div>
                     {% endif %}
@@ -53,7 +60,8 @@
                     <div class="col-6 col-md-3">
                       <label class="form-label small mb-1">Quantity</label>
                       <input type="number" class="form-control form-control-sm lot-input" name="quantity" 
-                             value="{{ lot.quantity }}" min="1" data-field="quantity">
+                             value="{{ lot.quantity }}" min="1" data-field="quantity"
+                             {% if not lot.can_be_edited %}disabled{% endif %}>
                       <div class="invalid-feedback"></div>
                     </div>
                     {% endif %}
@@ -62,7 +70,8 @@
                     <div class="col-6 col-md-3">
                       <label class="form-label small mb-1">Min bid {% if reserve_price_mode == 'required' %}<span class="text-danger">*</span>{% endif %}</label>
                       <input type="number" class="form-control form-control-sm lot-input" name="reserve_price" 
-                             value="{{ lot.reserve_price }}" min="1" max="2000" data-field="reserve_price">
+                             value="{{ lot.reserve_price }}" min="1" max="2000" data-field="reserve_price"
+                             {% if not lot.can_be_edited %}disabled{% endif %}>
                       <div class="invalid-feedback"></div>
                     </div>
                     {% endif %}
@@ -71,7 +80,8 @@
                     <div class="col-6 col-md-3">
                       <label class="form-label small mb-1">Buy now {% if buy_now_mode == 'required' %}<span class="text-danger">*</span>{% endif %}</label>
                       <input type="number" class="form-control form-control-sm lot-input" name="buy_now_price" 
-                             value="{{ lot.buy_now_price|default:'' }}" min="1" max="1000" data-field="buy_now_price">
+                             value="{{ lot.buy_now_price|default:'' }}" min="1" max="1000" data-field="buy_now_price"
+                             {% if not lot.can_be_edited %}disabled{% endif %}>
                       <div class="invalid-feedback"></div>
                     </div>
                     {% endif %}
@@ -80,7 +90,8 @@
                     <div class="col-6 col-md-3">
                       <div class="form-check mt-4">
                         <input type="checkbox" class="form-check-input lot-input" name="donation" 
-                               {% if lot.donation %}checked{% endif %} data-field="donation">
+                               {% if lot.donation %}checked{% endif %} data-field="donation"
+                               {% if not lot.can_be_edited %}disabled{% endif %}>
                         <label class="form-check-label small">Donation</label>
                       </div>
                     </div>
@@ -90,7 +101,8 @@
                     <div class="col-6 col-md-3">
                       <div class="form-check mt-4">
                         <input type="checkbox" class="form-check-input lot-input" name="i_bred_this_fish" 
-                               {% if lot.i_bred_this_fish %}checked{% endif %} data-field="i_bred_this_fish">
+                               {% if lot.i_bred_this_fish %}checked{% endif %} data-field="i_bred_this_fish"
+                               {% if not lot.can_be_edited %}disabled{% endif %}>
                         <label class="form-check-label small">Breeder points</label>
                       </div>
                     </div>
@@ -100,7 +112,8 @@
                     <div class="col-6 col-md-3">
                       <div class="form-check mt-4">
                         <input type="checkbox" class="form-check-input lot-input" name="custom_checkbox" 
-                               {% if lot.custom_checkbox %}checked{% endif %} data-field="custom_checkbox">
+                               {% if lot.custom_checkbox %}checked{% endif %} data-field="custom_checkbox"
+                               {% if not lot.can_be_edited %}disabled{% endif %}>
                         <label class="form-check-label small">{{ custom_checkbox_name }}</label>
                       </div>
                     </div>
@@ -201,10 +214,15 @@
           {% endfor %}
         </div>
         
-        <div class="mt-3">
+        <div class="mt-3 d-flex align-items-center gap-2">
           <button class="btn btn-secondary btn-sm" id="add-row-btn">
             <i class="bi bi-plus-circle"></i> Add another row
           </button>
+          {% if is_admin and max_lots_per_user %}
+            <small class="text-warning" id="admin-bypass-warning" style="display: none;">
+              <i class="bi bi-exclamation-triangle-fill"></i> Admin: Bypassing {{ max_lots_per_user }} lot limit
+            </small>
+          {% endif %}
         </div>
       </div>
     </div>
@@ -242,6 +260,11 @@
 .lot-input, .lot-input.is-invalid, .form-control.is-invalid {
     transition: none !important;
     animation: none !important;
+}
+/* Prevent badge resize during save by keeping text length similar */
+.lot-number-badge {
+    display: inline-block;
+    text-align: center;
 }
 </style>
 <script>
@@ -324,11 +347,17 @@ function performSave(lotRow) {
                 badge.classList.remove('bg-secondary', 'bg-warning', 'bg-danger');
                 badge.classList.add('bg-info');  // Use info color for admin bypass
                 badge.title = 'Admin bypassed lot limit';
+                
+                // Show admin bypass warning
+                updateAdminBypassWarning();
             } else {
                 badge.textContent = `Lot #${data.lot_number_display}`;
                 badge.classList.remove('bg-secondary', 'bg-warning', 'bg-danger', 'bg-info');
                 badge.classList.add('bg-success');
                 badge.title = '';
+                
+                // Update admin bypass warning
+                updateAdminBypassWarning();
             }
             
             // Clear any validation errors
@@ -420,8 +449,32 @@ function showValidationErrors(lotRow, errors) {
     }
 }
 
+// Function to update admin bypass warning
+function updateAdminBypassWarning() {
+    const warning = document.getElementById('admin-bypass-warning');
+    if (!warning) return;
+    
+    const maxLots = {{ max_lots_per_user|default:0 }};
+    if (!maxLots) return;
+    
+    // Count saved lots (excluding locked ones and unsaved ones)
+    const savedLots = document.querySelectorAll('.lot-row[data-lot-id]').length;
+    
+    // Show warning if we're beyond the limit
+    if (savedLots > maxLots) {
+        warning.style.display = 'inline';
+    } else {
+        warning.style.display = 'none';
+    }
+}
+
 // Add event listeners to all lot inputs
 function attachLotEventListeners(lotRow) {
+    // Skip locked lots
+    if (lotRow.dataset.locked === 'true') {
+        return;
+    }
+    
     const inputs = lotRow.querySelectorAll('.lot-input');
     inputs.forEach(input => {
         // Disable browser validation to prevent shake effect
@@ -443,6 +496,9 @@ function attachLotEventListeners(lotRow) {
 
 // Initialize existing lots
 document.querySelectorAll('.lot-row').forEach(attachLotEventListeners);
+
+// Initialize admin bypass warning
+updateAdminBypassWarning();
 
 // Add row button
 document.getElementById('add-row-btn').addEventListener('click', () => {

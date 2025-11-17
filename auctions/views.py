@@ -3355,6 +3355,48 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
         try:
             data = json.loads(request.body)
             lot_id = data.get("lot_id")
+            bidder_number = data.get("bidder_number")
+            
+            # Determine which TOS we're adding lots for
+            self.tos = None
+            self.is_admin = self.is_auction_admin
+            
+            if bidder_number:
+                # Someone is trying to add lots for a specific user
+                # Only admins can do this
+                if not self.is_admin:
+                    return JsonResponse({
+                        "success": False,
+                        "errors": {"general": "Only auction admins can add lots for other users"}
+                    })
+                self.tos = AuctionTOS.objects.filter(
+                    bidder_number=bidder_number,
+                    auction=self.auction
+                ).first()
+                if not self.tos:
+                    return JsonResponse({
+                        "success": False,
+                        "errors": {"general": "User not found in this auction"}
+                    })
+            else:
+                # Adding lots for yourself
+                self.tos = (
+                    AuctionTOS.objects.filter(auction=self.auction)
+                    .filter(Q(email=request.user.email) | Q(user=request.user))
+                    .first()
+                )
+                if not self.tos:
+                    return JsonResponse({
+                        "success": False,
+                        "errors": {"general": "You must join this auction before adding lots"}
+                    })
+            
+            # Check if user has permission to add lots
+            if not self.tos.selling_allowed and not self.is_admin:
+                return JsonResponse({
+                    "success": False,
+                    "errors": {"general": "You don't have permission to add lots to this auction"}
+                })
 
             # Create or get existing lot
             if lot_id:
@@ -3362,6 +3404,13 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                 if not lot:
                     return JsonResponse({"success": False, "errors": {"general": "Lot not found"}})
                 is_new = False
+                
+                # Check if lot can be edited
+                if not lot.can_be_edited and not self.is_admin:
+                    return JsonResponse({
+                        "success": False,
+                        "errors": {"general": lot.cannot_be_edited_reason or "This lot cannot be edited"}
+                    })
             else:
                 lot = Lot(
                     auction=self.auction,
