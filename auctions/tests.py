@@ -4341,3 +4341,146 @@ class HasEverGrantedPermissionTests(StandardTestCase):
         tos_qs = self.online_auction.tos_qs.filter(user=new_user)
         tos = tos_qs.first()
         self.assertFalse(tos.has_ever_granted_permission)
+
+
+class UpdateAuctionStatsCommandTestCase(StandardTestCase):
+    """Test the update_auction_stats management command"""
+
+    def test_command_processes_single_auction(self):
+        """Test that the command processes only one auction per run"""
+        import datetime
+
+        from django.core.management import call_command
+        from django.utils import timezone
+
+        # Set up multiple auctions with due stats updates
+        now = timezone.now()
+
+        # Create three auctions with different next_update_due times
+        auction1 = Auction.objects.create(
+            created_by=self.user,
+            title="Auction 1 - oldest",
+            is_online=True,
+            date_start=now - datetime.timedelta(days=5),
+            date_end=now + datetime.timedelta(days=2),
+        )
+        auction1.next_update_due = now - datetime.timedelta(hours=5)  # Most overdue
+        auction1.save()
+
+        auction2 = Auction.objects.create(
+            created_by=self.user,
+            title="Auction 2 - middle",
+            is_online=True,
+            date_start=now - datetime.timedelta(days=4),
+            date_end=now + datetime.timedelta(days=2),
+        )
+        auction2.next_update_due = now - datetime.timedelta(hours=3)  # Second most overdue
+        auction2.save()
+
+        auction3 = Auction.objects.create(
+            created_by=self.user,
+            title="Auction 3 - newest",
+            is_online=True,
+            date_start=now - datetime.timedelta(days=3),
+            date_end=now + datetime.timedelta(days=2),
+        )
+        auction3.next_update_due = now - datetime.timedelta(hours=1)  # Least overdue
+        auction3.save()
+
+        # Store the original next_update_due times
+        original_due_1 = auction1.next_update_due
+        original_due_2 = auction2.next_update_due
+        original_due_3 = auction3.next_update_due
+
+        # Run the command once
+        call_command("update_auction_stats")
+
+        # Refresh from database
+        auction1.refresh_from_db()
+        auction2.refresh_from_db()
+        auction3.refresh_from_db()
+
+        # The most overdue auction (auction1) should have been updated
+        self.assertIsNotNone(auction1.last_stats_update)
+        self.assertNotEqual(auction1.next_update_due, original_due_1)
+        # The new next_update_due should be in the future
+        self.assertGreater(auction1.next_update_due, now)
+
+        # The other two auctions should NOT have been updated
+        self.assertEqual(auction2.next_update_due, original_due_2)
+        self.assertEqual(auction3.next_update_due, original_due_3)
+
+    def test_command_orders_by_next_update_due(self):
+        """Test that the command processes the most overdue auction first"""
+        import datetime
+
+        from django.core.management import call_command
+        from django.utils import timezone
+
+        now = timezone.now()
+
+        # Create two auctions with different next_update_due times
+        newer_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Newer auction",
+            is_online=True,
+            date_start=now - datetime.timedelta(days=3),
+            date_end=now + datetime.timedelta(days=2),
+        )
+        newer_auction.next_update_due = now - datetime.timedelta(hours=1)  # Less overdue
+        newer_auction.save()
+
+        older_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Older auction",
+            is_online=True,
+            date_start=now - datetime.timedelta(days=5),
+            date_end=now + datetime.timedelta(days=2),
+        )
+        older_auction.next_update_due = now - datetime.timedelta(hours=5)  # More overdue
+        older_auction.save()
+
+        # Run the command
+        call_command("update_auction_stats")
+
+        # Refresh from database
+        newer_auction.refresh_from_db()
+        older_auction.refresh_from_db()
+
+        # The older (more overdue) auction should have been processed
+        self.assertIsNotNone(older_auction.last_stats_update)
+        self.assertGreater(older_auction.next_update_due, now)
+
+        # The newer auction should not have been processed yet
+        self.assertEqual(newer_auction.next_update_due, now - datetime.timedelta(hours=1))
+        self.assertIsNone(newer_auction.last_stats_update)
+
+    def test_command_handles_no_due_auctions(self):
+        """Test that the command handles the case when no auctions are due"""
+        import datetime
+
+        from django.core.management import call_command
+        from django.utils import timezone
+
+        now = timezone.now()
+
+        # Create an auction with next_update_due in the future
+        future_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Future auction",
+            is_online=True,
+            date_start=now - datetime.timedelta(days=3),
+            date_end=now + datetime.timedelta(days=2),
+        )
+        future_auction.next_update_due = now + datetime.timedelta(hours=5)
+        future_auction.save()
+
+        # Run the command - should not raise any errors
+        call_command("update_auction_stats")
+
+        # Refresh from database
+        future_auction.refresh_from_db()
+
+        # The auction should not have been processed
+        self.assertEqual(future_auction.next_update_due, now + datetime.timedelta(hours=5))
+        self.assertIsNone(future_auction.last_stats_update)

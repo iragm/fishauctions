@@ -16,12 +16,17 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         now = timezone.now()
-        auctions = Auction.objects.filter(
-            Q(next_update_due__lte=now) | Q(next_update_due__isnull=True),
-            is_deleted=False,
+        # Process only one auction per run, ordered by most overdue first
+        auction = (
+            Auction.objects.filter(
+                Q(next_update_due__lte=now) | Q(next_update_due__isnull=True),
+                is_deleted=False,
+            )
+            .order_by("next_update_due")
+            .first()
         )
 
-        for auction in auctions:
+        if auction:
             try:
                 logger.info("Recalculating stats for auction: %s (%s)", auction.title, auction.slug)
                 auction.recalculate_stats()
@@ -37,5 +42,3 @@ class Command(BaseCommand):
             except Exception as e:
                 logger.error("Failed to update stats for auction %s (%s): %s", auction.title, auction.slug, e)
                 logger.exception(e)
-                # Continue with other auctions even if one fails
-                continue
