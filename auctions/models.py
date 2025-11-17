@@ -2651,7 +2651,7 @@ class AuctionTOS(models.Model):
     def bulk_add_link_html(self):
         """Link to add multiple lots at once for this user"""
         url = reverse(
-            "bulk_add_lots",
+            "bulk_add_lots_auto",
             kwargs={"bidder_number": self.bidder_number, "slug": self.auction.slug},
         )
         if not self.selling_allowed:

@@ -226,6 +226,21 @@ urlpatterns = [
         login_required(views.BulkAddLots.as_view()),
         name="bulk_add_lots_for_myself",
     ),
+    path(
+        "auctions/<slug:slug>/users/<str:bidder_number>/bulk-add-auto/",
+        login_required(views.BulkAddLotsAuto.as_view()),
+        name="bulk_add_lots_auto",
+    ),
+    path(
+        "auctions/<slug:slug>/lots/bulk-add-auto/",
+        login_required(views.BulkAddLotsAuto.as_view()),
+        name="bulk_add_lots_auto_for_myself",
+    ),
+    path(
+        "api/auctions/<slug:slug>/lots/save-lot/",
+        views.SaveLotAjax.as_view(),
+        name="save_lot_ajax",
+    ),
     # path(
     #     "auctions/<slug:slug>/lots/set-winners/old",
     #     login_required(views.SetLotWinner.as_view()),

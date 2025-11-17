@@ -79,7 +79,7 @@ Your lots{% else %}
             {% if auction %}<a href="/auctions/{{auction.slug}}/" class="mr-1 mt-1">View {{ auction }} rules</a><br>
               {% if auction.can_submit_lots %}
                 {% if auction_tos %}{% if auction.is_online or not auction.allow_bulk_adding_lots %}<a href='{{auction.add_lot_link}}' class="mr-1 mt-1">Add a lot</a>{% else %}
-                <a href='{% url "bulk_add_lots_for_myself" slug=auction.slug %}' class="mr-1 mt-1">Add lots</a>{% endif %}
+                <a href='{% url "bulk_add_lots_auto_for_myself" slug=auction.slug %}' class="mr-1 mt-1">Add lots</a>{% endif %}
                   <small class="">You can add lots to this auction until {{ auction.lot_submission_end_date }}</small>
                 {% else %}
                   {% if not request.user.is_authenticated %}
