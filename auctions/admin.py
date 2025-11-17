@@ -388,7 +388,7 @@ class BidInline(admin.TabularInline):
         "user__last_name",
     )
     extra = 0
-    
+
     def get_readonly_fields(self, request, obj=None):
         # Make all Bid fields readonly (except the FK back to Lot which is implied)
         return tuple(
@@ -407,7 +407,7 @@ class WatchInline(admin.TabularInline):
         "user__last_name",
     )
     extra = 0
-    
+
     def get_readonly_fields(self, request, obj=None):
         # Make all Watch fields readonly (except the FK back to Lot which is implied)
         return tuple(
