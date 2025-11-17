@@ -3840,6 +3840,221 @@ class WebSocketConsumerTests(StandardTestCase):
         finally:
             await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
 
+    async def test_lot_consumer_bid_before_online_bidding_starts(self):
+        """Test that bids cannot be placed before online bidding starts for in-person auctions"""
+        from channels.db import database_sync_to_async
+        from channels.testing import WebsocketCommunicator
+
+        from auctions.consumers import LotConsumer
+
+        # Create an in-person auction with online bidding that hasn't started yet
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        online_bidding_start = timezone.now() + datetime.timedelta(hours=2)
+        online_bidding_end = timezone.now() + datetime.timedelta(days=2)
+
+        auction = await database_sync_to_async(Auction.objects.create)(
+            created_by=self.user,
+            title="In-person auction with future online bidding",
+            is_online=False,
+            date_start=timezone.now(),
+            date_end=theFuture,
+            date_online_bidding_starts=online_bidding_start,
+            date_online_bidding_ends=online_bidding_end,
+            online_bidding="allow",
+        )
+        location = await database_sync_to_async(PickupLocation.objects.create)(
+            name="test location", auction=auction, pickup_time=theFuture
+        )
+        seller_tos = await database_sync_to_async(AuctionTOS.objects.create)(
+            user=self.user, auction=auction, pickup_location=location
+        )
+        await database_sync_to_async(AuctionTOS.objects.create)(
+            user=self.user_with_no_lots, auction=auction, pickup_location=location
+        )
+
+        lot = await database_sync_to_async(Lot.objects.create)(
+            lot_name="Test lot before online bidding",
+            auction=auction,
+            auctiontos_seller=seller_tos,
+            quantity=1,
+            reserve_price=10,
+            date_end=theFuture,
+        )
+
+        communicator = WebsocketCommunicator(
+            LotConsumer.as_asgi(),
+            f"/ws/lots/{lot.pk}/",
+        )
+        communicator.scope["user"] = self.user_with_no_lots
+        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
+
+        try:
+            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+
+            # Try to place a bid
+            await communicator.send_json_to({"bid": 15})
+
+            # Should receive an error about online bidding not started
+            found_error = False
+            for _ in range(5):
+                try:
+                    response = await communicator.receive_json_from(timeout=self.RECEIVE_TIMEOUT)
+                    if response.get("error"):
+                        found_error = True
+                        self.assertIn("hasn't started", response["error"].lower())
+                        break
+                except:
+                    break
+
+            self.assertTrue(found_error, "Did not receive expected error about online bidding not started")
+        finally:
+            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
+
+    async def test_lot_consumer_bid_after_online_bidding_ends(self):
+        """Test that bids cannot be placed after online bidding ends for in-person auctions"""
+        from channels.db import database_sync_to_async
+        from channels.testing import WebsocketCommunicator
+
+        from auctions.consumers import LotConsumer
+
+        # Create an in-person auction with online bidding that has ended
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        online_bidding_start = timezone.now() - datetime.timedelta(days=2)
+        online_bidding_end = timezone.now() - datetime.timedelta(hours=1)
+
+        auction = await database_sync_to_async(Auction.objects.create)(
+            created_by=self.user,
+            title="In-person auction with ended online bidding",
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(days=3),
+            date_end=theFuture,
+            date_online_bidding_starts=online_bidding_start,
+            date_online_bidding_ends=online_bidding_end,
+            online_bidding="allow",
+        )
+        location = await database_sync_to_async(PickupLocation.objects.create)(
+            name="test location", auction=auction, pickup_time=theFuture
+        )
+        seller_tos = await database_sync_to_async(AuctionTOS.objects.create)(
+            user=self.user, auction=auction, pickup_location=location
+        )
+        await database_sync_to_async(AuctionTOS.objects.create)(
+            user=self.user_with_no_lots, auction=auction, pickup_location=location
+        )
+
+        lot = await database_sync_to_async(Lot.objects.create)(
+            lot_name="Test lot after online bidding",
+            auction=auction,
+            auctiontos_seller=seller_tos,
+            quantity=1,
+            reserve_price=10,
+            date_end=theFuture,
+        )
+
+        communicator = WebsocketCommunicator(
+            LotConsumer.as_asgi(),
+            f"/ws/lots/{lot.pk}/",
+        )
+        communicator.scope["user"] = self.user_with_no_lots
+        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
+
+        try:
+            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+
+            # Try to place a bid
+            await communicator.send_json_to({"bid": 15})
+
+            # Should receive an error about online bidding ended
+            found_error = False
+            for _ in range(5):
+                try:
+                    response = await communicator.receive_json_from(timeout=self.RECEIVE_TIMEOUT)
+                    if response.get("error"):
+                        found_error = True
+                        self.assertIn("ended", response["error"].lower())
+                        break
+                except:
+                    break
+
+            self.assertTrue(found_error, "Did not receive expected error about online bidding ended")
+        finally:
+            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
+
+    async def test_lot_consumer_bid_on_sold_lot(self):
+        """Test that bids cannot be placed on lots that have already been sold"""
+        from channels.db import database_sync_to_async
+        from channels.testing import WebsocketCommunicator
+
+        from auctions.consumers import LotConsumer
+
+        # Create a sold lot
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        auction = await database_sync_to_async(Auction.objects.create)(
+            created_by=self.user,
+            title="Auction with sold lot",
+            is_online=True,
+            date_start=timezone.now(),
+            date_end=theFuture,
+        )
+        location = await database_sync_to_async(PickupLocation.objects.create)(
+            name="test location", auction=auction, pickup_time=theFuture
+        )
+        seller_tos = await database_sync_to_async(AuctionTOS.objects.create)(
+            user=self.user, auction=auction, pickup_location=location
+        )
+        winner_tos = await database_sync_to_async(AuctionTOS.objects.create)(
+            user=self.user_with_no_lots, auction=auction, pickup_location=location
+        )
+
+        lot = await database_sync_to_async(Lot.objects.create)(
+            lot_name="Sold lot",
+            auction=auction,
+            auctiontos_seller=seller_tos,
+            quantity=1,
+            reserve_price=10,
+            date_end=theFuture,
+            winner=self.user_with_no_lots,
+            auctiontos_winner=winner_tos,
+            winning_price=20,
+        )
+
+        # Try to bid as another user
+        another_user = await database_sync_to_async(User.objects.create_user)(
+            username="another_bidder", password="testpassword", email="another@example.com"
+        )
+        await database_sync_to_async(AuctionTOS.objects.create)(
+            user=another_user, auction=auction, pickup_location=location
+        )
+
+        communicator = WebsocketCommunicator(
+            LotConsumer.as_asgi(),
+            f"/ws/lots/{lot.pk}/",
+        )
+        communicator.scope["user"] = another_user
+        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
+
+        try:
+            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+
+            # Try to place a bid
+            await communicator.send_json_to({"bid": 25})
+
+            # Should receive an error about lot being sold
+            found_error = False
+            for _ in range(5):
+                try:
+                    response = await communicator.receive_json_from(timeout=self.RECEIVE_TIMEOUT)
+                    if response.get("error"):
+                        found_error = True
+                        self.assertIn("sold", response["error"].lower())
+                        break
+                except:
+                    break
+
+            self.assertTrue(found_error, "Did not receive expected error about lot being sold")
+        finally:
+            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
+
     async def test_lot_consumer_auction_admin_can_view(self):
         """Test that auction admins can connect to lot consumer"""
         from channels.db import database_sync_to_async
