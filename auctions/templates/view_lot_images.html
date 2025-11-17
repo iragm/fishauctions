@@ -766,10 +766,10 @@ function deactivate_lot() {
                     cssStyle = "chat-submitter";
                 }
                 var chatHtml = '<div class="chat ' + cssStyle + '">\
-                                    <div class="chat-body" title="' + fullDateTime + '">\
+                                    <div class="chat-body">\
                                         <div class="chat-content">\
                                             <small><span class="chat-username">' + username + '</span></small>\
-                                            <span class="message user_' + pk + ' ">'+ message+ '</span>\
+                                            <span title="' + fullDateTime + '" class="message user_' + pk + ' ">'+ message+ '</span>\
                                         </div>\
                                     </div>\
                                 </div>';
