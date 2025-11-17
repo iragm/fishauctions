@@ -4158,6 +4158,26 @@ class BulkAddLotsAutoTests(StandardTestCase):
             })
         )
         self.assertEqual(response.status_code, 200)
+    
+    def test_bulk_add_lots_non_admin_cannot_access_bidder_url(self):
+        """Test that non-admin users cannot access the bidder_number URL"""
+        # Login as regular user (not auction creator)
+        self.client.login(username="no_lots", password="testpassword")
+        
+        # Try to access bulk add for a specific bidder number
+        response = self.client.get(
+            reverse('bulk_add_lots_auto', kwargs={
+                'slug': self.in_person_auction.slug,
+                'bidder_number': self.in_person_buyer.bidder_number
+            }),
+            follow=True  # Follow redirects
+        )
+        
+        # Should be redirected (not allowed)
+        self.assertEqual(response.status_code, 200)
+        # Check for error message
+        messages = list(response.context['messages'])
+        self.assertTrue(any('admin' in str(m).lower() for m in messages))
         
     def test_save_lot_ajax_security(self):
         """Test that non-admin users cannot add lots for others"""

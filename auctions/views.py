@@ -3313,10 +3313,21 @@ class BulkAddLotsAuto(LoginRequiredMixin, AuctionViewMixin, TemplateView):
             raise Http404
         bidder_number = kwargs.pop("bidder_number", None)
         self.tos = None
+        
+        # Security: Only admins can access the bidder_number URL
         if bidder_number:
+            # Check admin status first
+            if not self.is_auction_admin:
+                messages.error(request, "Only auction admins can add lots for other users")
+                return redirect(f"/auctions/{self.auction.slug}/")
             self.tos = AuctionTOS.objects.filter(bidder_number=bidder_number, auction=self.auction).first()
+            if not self.tos:
+                messages.error(request, "User not found in this auction")
+                return redirect(f"/auctions/{self.auction.slug}/users/")
+        
         if self.is_auction_admin:
             self.is_admin = True
+            
         if not self.tos:
             # if you don't got permission to edit this auction, you can only add lots for yourself
             self.tos = (

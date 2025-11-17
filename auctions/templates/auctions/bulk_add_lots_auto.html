@@ -390,6 +390,7 @@ function clearValidationErrors(lotRow) {
         const feedback = input.parentElement.querySelector('.invalid-feedback');
         if (feedback) {
             feedback.textContent = '';
+            feedback.classList.remove('d-block');  // Hide feedback when cleared
         }
     });
 }
@@ -407,6 +408,7 @@ function showValidationErrors(lotRow, errors) {
                            input.nextElementSibling;
             if (feedback && feedback.classList.contains('invalid-feedback')) {
                 feedback.textContent = errors[field];
+                feedback.classList.add('d-block');  // Make sure it's visible
             }
         }
     });
@@ -431,12 +433,14 @@ function showValidationErrors(lotRow, errors) {
                     feedback.className = 'invalid-feedback d-block';
                     checkboxLabel.appendChild(feedback);
                 }
+                feedback.classList.add('d-block');  // Make sure it's visible
                 feedback.textContent = errors.general + ' (check Donation to allow)';
             } else {
                 lotNameInput.classList.add('is-invalid');
                 const feedback = lotNameInput.parentElement.querySelector('.invalid-feedback');
                 if (feedback) {
                     feedback.textContent = errors.general;
+                    feedback.classList.add('d-block');  // Make sure it's visible
                 }
             }
         } else if (lotNameInput) {
@@ -444,6 +448,7 @@ function showValidationErrors(lotRow, errors) {
             const feedback = lotNameInput.parentElement.querySelector('.invalid-feedback');
             if (feedback) {
                 feedback.textContent = errors.general;
+                feedback.classList.add('d-block');  // Make sure it's visible
             }
         }
     }
