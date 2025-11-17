@@ -743,7 +743,7 @@ function deactivate_lot() {
             message =  message.replace(urlRegex, function(url) {
                 return '<a style="color: #555; font-weight: bold;" href="' + url + '">' + url + '</a>';
             })
-            
+
             // Format timestamp for display
             var timestampHtml = '';
             if (timestamp) {
@@ -752,7 +752,7 @@ function deactivate_lot() {
                 var fullDateTime = date.toLocaleString('en-US', { dateStyle: 'short', timeStyle: 'short' });
                 timestampHtml = '<small class="text-muted" style="margin-left: 8px;" title="' + fullDateTime + '">' + timeString + '</small>';
             }
-            
+
             var lastChat = $(".message").last();
             if (lastChat.hasClass("user_" + pk)) {
                 lastChat.append("<br>" + message);
@@ -766,9 +766,9 @@ function deactivate_lot() {
                     cssStyle = "chat-submitter";
                 }
                 var chatHtml = '<div class="chat ' + cssStyle + '">\
-                                    <div class="chat-body">\
+                                    <div class="chat-body" title="' + fullDateTime + '">\
                                         <div class="chat-content">\
-                                            <small><span class="chat-username">' + username + '</span>' + timestampHtml + '</small>\
+                                            <small><span class="chat-username">' + username + '</span></small>\
                                             <span class="message user_' + pk + ' ">'+ message+ '</span>\
                                         </div>\
                                     </div>\
