@@ -388,6 +388,14 @@ class BidInline(admin.TabularInline):
         "user__last_name",
     )
     extra = 0
+    
+    def get_readonly_fields(self, request, obj=None):
+        # Make all Bid fields readonly (except the FK back to Lot which is implied)
+        return tuple(
+            f.name
+            for f in self.model._meta.get_fields()
+            if not (f.many_to_many or f.one_to_many) and f.name != "lot_number"
+        )
 
 
 class WatchInline(admin.TabularInline):
@@ -399,6 +407,14 @@ class WatchInline(admin.TabularInline):
         "user__last_name",
     )
     extra = 0
+    
+    def get_readonly_fields(self, request, obj=None):
+        # Make all Watch fields readonly (except the FK back to Lot which is implied)
+        return tuple(
+            f.name
+            for f in self.model._meta.get_fields()
+            if not (f.many_to_many or f.one_to_many) and f.name != "lot_number"
+        )
 
 
 class LotAdmin(admin.ModelAdmin):
