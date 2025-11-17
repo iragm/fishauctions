@@ -4001,9 +4001,17 @@ class Lot(models.Model):
                 return "This auction doesn't allow online bidding"
             if not self.auction.started:
                 return "Bidding hasn't opened yet for this auction"
-            if not self.auction.is_online and timezone.now() > self.auction.date_online_bidding_ends:
+            if (
+                not self.auction.is_online
+                and self.auction.date_online_bidding_ends
+                and timezone.now() > self.auction.date_online_bidding_ends
+            ):
                 return "Online bidding has ended for this auction"
-            if not self.auction.is_online and timezone.now() < self.auction.date_online_bidding_starts:
+            if (
+                not self.auction.is_online
+                and self.auction.date_online_bidding_starts
+                and timezone.now() < self.auction.date_online_bidding_starts
+            ):
                 return "Online bidding hasn't started yet for this auction"
             if self.auction.online_bidding == "buy_now_only" and not self.buy_now_price:
                 return "This lot does not have a buy now price set, you can't buy it now"

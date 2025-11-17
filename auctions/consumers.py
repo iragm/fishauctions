@@ -35,6 +35,8 @@ def check_bidding_permissions(lot, user):
     """
     if lot.ended:
         return "Bidding on this lot has ended"
+    if lot.winner or lot.auctiontos_winner:
+        return "This lot has already been sold"
     if lot.user and lot.user.pk == user.pk:
         return "You can't bid on your own lot"
     if lot.auction:
@@ -50,6 +52,20 @@ def check_bidding_permissions(lot, user):
                 return "This auction requires admin approval before you can bid"
         if not lot.auction.is_online and lot.auction.online_bidding == "disable":
             return "This auction does not allow online bidding"
+        if (
+            not lot.auction.is_online
+            and lot.auction.online_bidding != "disable"
+            and lot.auction.date_online_bidding_ends
+            and timezone.now() > lot.auction.date_online_bidding_ends
+        ):
+            return "Online bidding has ended for this auction"
+        if (
+            not lot.auction.is_online
+            and lot.auction.online_bidding != "disable"
+            and lot.auction.date_online_bidding_starts
+            and timezone.now() < lot.auction.date_online_bidding_starts
+        ):
+            return "Online bidding hasn't started yet for this auction"
     return False
 
 
