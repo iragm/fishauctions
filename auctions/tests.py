@@ -4408,6 +4408,12 @@ class UpdateAuctionStatsCommandTestCase(StandardTestCase):
         # Set up multiple auctions with due stats updates
         now = timezone.now()
 
+        # Ensure setUp auctions don't interfere by setting their next_update_due to far future
+        self.online_auction.next_update_due = now + datetime.timedelta(days=365)
+        self.online_auction.save()
+        self.in_person_auction.next_update_due = now + datetime.timedelta(days=365)
+        self.in_person_auction.save()
+
         # Create three auctions with different next_update_due times
         auction1 = Auction.objects.create(
             created_by=self.user,
@@ -4470,6 +4476,12 @@ class UpdateAuctionStatsCommandTestCase(StandardTestCase):
         from django.utils import timezone
 
         now = timezone.now()
+
+        # Ensure setUp auctions don't interfere by setting their next_update_due to far future
+        self.online_auction.next_update_due = now + datetime.timedelta(days=365)
+        self.online_auction.save()
+        self.in_person_auction.next_update_due = now + datetime.timedelta(days=365)
+        self.in_person_auction.save()
 
         # Create two auctions with different next_update_due times
         newer_auction = Auction.objects.create(
