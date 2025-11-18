@@ -6,6 +6,7 @@
 <!DOCTYPE html>
 {# {% include 'demo_formatting.html' %} #}
 <!-- Global site tag (gtag.js) - Google Analytics -->
+{% block analytics %}
 {% if GOOGLE_MEASUREMENT_ID %}<script async src="https://www.googletagmanager.com/gtag/js?id={{ GOOGLE_MEASUREMENT_ID }}"></script>
 <script>
   window.dataLayer = window.dataLayer || [];
@@ -21,6 +22,7 @@
   'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
   })(window,document,'script','dataLayer','{{ GOOGLE_TAG_ID }}');</script>{% endif %}
   <!-- End Google Tag Manager -->
+{% endblock %}
 {% if rewrite_url %}
 <script>
 window.onload = function() {
@@ -31,10 +33,12 @@ window.onload = function() {
   <html class="no-js" lang="en" data-bs-theme="dark">
     <head>
         <meta charset="utf-8" />
+        {% block ads %}
         {% if GOOGLE_ADSENSE_ID %}
         <script data-ad-client="{{GOOGLE_ADSENSE_ID}}" async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script>
         {% endif %}
         {% if show_ads %}<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script>{% endif %}
+        {% endblock %}
         <title>
             {% block title %}
                 {% if self.seo_title %}{{ self.seo_title }}{% else %}{{ self.title }}{% endif %}
@@ -50,6 +54,7 @@ window.onload = function() {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         {# Global javascript #}
 
+        {% block core_js %}
         <script type="text/javascript" src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
         {# 3.5.1 needed for focus to go to select2 dropdowns https://github.com/select2/select2/issues/5993 #}
         <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.11.0/umd/popper.min.js"></script>
@@ -59,6 +64,7 @@ window.onload = function() {
 
         <!-- <link rel="stylesheet" href="https://bootswatch.com/5/darkly/bootstrap.css" integrity="" crossorigin="anonymous"> -->
         <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
+        {% endblock %}
         <script type="text/javascript" src="{% static 'js/auction_site.js' %}"></script>
         {% include 'base_page_view.html' %}
         {% if request.user.is_authenticated %}
@@ -82,9 +88,11 @@ window.onload = function() {
         {% endif %}
         {# Global stylesheets #}
         <!-- <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}" integrity="" crossorigin="anonymous"> -->
+        {% block core_css %}
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootswatch@5.3.3/dist/darkly/bootstrap.min.css" integrity="" >
-        <link rel="stylesheet" type="text/css" href="{% static 'css/auction_site.css' %}">
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+        {% endblock %}
+        <link rel="stylesheet" type="text/css" href="{% static 'css/auction_site.css' %}"
         <style>
 .bs-canvas-overlay {
    opacity: 0;

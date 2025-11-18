@@ -3,8 +3,30 @@
 {% load static %}
 {% block title %}Set winners for {{ auction }}{% endblock %}
 
+{# Disable analytics and ads for this page to enable cross-origin isolation for SharedArrayBuffer #}
+{% block analytics %}
+{# Analytics disabled for voice recognition cross-origin isolation #}
+{% endblock %}
+
+{% block ads %}
+{# Ads disabled for voice recognition cross-origin isolation #}
+{% endblock %}
+
+{# Override CDN resources with self-hosted versions for cross-origin isolation #}
+{% block core_css %}
+<link rel="stylesheet" href="{% static 'css/vendor/bootstrap.min.css' %}">
+<link rel="stylesheet" href="{% static 'css/vendor/bootstrap-icons.min.css' %}">
+{% endblock %}
+
+{% block core_js %}
+{# Self-hosted jQuery, Bootstrap for cross-origin isolation #}
+<script type="text/javascript" src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+<script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
+{% endblock %}
+
 {% block extra_js %}
-<script src="https://cdn.jsdelivr.net/gh/msqr1/Vosklet@1.2.1/Examples/Vosklet.js" async defer></script>
+{# Use self-hosted Vosklet instead of CDN for cross-origin isolation #}
+<script src="{% static 'js/vendor/Vosklet.js' %}" async defer></script>
 <script>
   let tooltipTimeout;
   function initializeTooltipWithTimeout() {

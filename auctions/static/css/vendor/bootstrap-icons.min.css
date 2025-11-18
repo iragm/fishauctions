@@ -1,0 +1,13 @@
+/* Placeholder for Bootstrap Icons CSS - Download Required */
+/* 
+ * This file needs to be downloaded from:
+ * https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css
+ * 
+ * After download, update the @font-face URLs to point to self-hosted fonts:
+ * 
+ * @font-face {
+ *   font-family: "bootstrap-icons";
+ *   src: url("/static/fonts/bootstrap-icons.woff2") format("woff2"),
+ *        url("/static/fonts/bootstrap-icons.woff") format("woff");
+ * }
+ */
