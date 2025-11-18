@@ -2459,6 +2459,58 @@ class AuctionStatsViewTests(StandardTestCase):
         response = self.client.get(url)
         assert response.status_code == 200
 
+    def test_auction_stats_recalculation_threshold(self):
+        """Stats recalculation respects 20-minute threshold"""
+        from django.utils import timezone
+
+        self.client.login(username=self.user.username, password="testpassword")
+        url = f"/auctions/{self.online_auction.slug}/stats/"
+
+        # Test 1: Stats older than 20 minutes should trigger recalculation
+        old_time = timezone.now() - timezone.timedelta(minutes=25)
+        self.online_auction.last_stats_update = old_time
+        self.online_auction.next_update_due = None
+        self.online_auction.save()
+
+        response = self.client.get(url)
+        assert response.status_code == 200
+        # Should show recalculation message in context
+        assert response.context.get("stats_being_recalculated") is True, "Should show recalculation message"
+
+        self.online_auction.refresh_from_db()
+        # next_update_due should be set (scheduled for recalculation)
+        assert self.online_auction.next_update_due is not None, "next_update_due should be set for old stats"
+
+        # Test 2: Stats within 20 minutes should NOT trigger recalculation
+        recent_time = timezone.now() - timezone.timedelta(minutes=10)
+        self.online_auction.last_stats_update = recent_time
+        self.online_auction.next_update_due = None
+        self.online_auction.save()
+
+        response = self.client.get(url)
+        assert response.status_code == 200
+        # Should NOT show recalculation message in context
+        assert response.context.get("stats_being_recalculated") is not True, "Should not show recalculation message"
+
+        self.online_auction.refresh_from_db()
+        # next_update_due should remain None (no recalculation scheduled)
+        assert self.online_auction.next_update_due is None, "next_update_due should not be set for recent stats"
+
+        # Test 3: Already scheduled recalculation should not reschedule
+        old_time = timezone.now() - timezone.timedelta(minutes=25)
+        scheduled_time = timezone.now() + timezone.timedelta(minutes=2)
+        self.online_auction.last_stats_update = old_time
+        self.online_auction.next_update_due = scheduled_time
+        self.online_auction.save()
+
+        response = self.client.get(url)
+        assert response.status_code == 200
+        # Should still show recalculation message but not reschedule
+        assert response.context.get("stats_being_recalculated") is True, "Should show recalculation message"
+
+        self.online_auction.refresh_from_db()
+        assert self.online_auction.next_update_due == scheduled_time, "Should not reschedule if already scheduled"
+
 
 class BulkAddLotsViewTests(StandardTestCase):
     """Test bulk add lots view with different user types"""
@@ -4356,6 +4408,12 @@ class UpdateAuctionStatsCommandTestCase(StandardTestCase):
         # Set up multiple auctions with due stats updates
         now = timezone.now()
 
+        # Ensure setUp auctions don't interfere by setting their next_update_due to far future
+        self.online_auction.next_update_due = now + datetime.timedelta(days=365)
+        self.online_auction.save()
+        self.in_person_auction.next_update_due = now + datetime.timedelta(days=365)
+        self.in_person_auction.save()
+
         # Create three auctions with different next_update_due times
         auction1 = Auction.objects.create(
             created_by=self.user,
@@ -4418,6 +4476,12 @@ class UpdateAuctionStatsCommandTestCase(StandardTestCase):
         from django.utils import timezone
 
         now = timezone.now()
+
+        # Ensure setUp auctions don't interfere by setting their next_update_due to far future
+        self.online_auction.next_update_due = now + datetime.timedelta(days=365)
+        self.online_auction.save()
+        self.in_person_auction.next_update_due = now + datetime.timedelta(days=365)
+        self.in_person_auction.save()
 
         # Create two auctions with different next_update_due times
         newer_auction = Auction.objects.create(

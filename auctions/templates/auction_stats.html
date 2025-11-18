@@ -425,6 +425,11 @@ function createScatterChart(canvasId, mainData, compareData, mainTitle, compareT
             {% if stats_age %}
             <p class="text-muted small mt-4">Stats last updated: {{ stats_age }}</p>
             {% endif %}
+            {% if stats_being_recalculated %}
+            <div class="alert alert-info" role="alert">
+                <i class="bi bi-arrow-repeat"></i> Stats are being recalculated. You'll get a notification when they're ready.
+            </div>
+            {% endif %}
             <div class="mb-3">
                 <label for="compare-auction">Compare with another auction:</label>
                 <select id="compare-auction" class="form-control" style="max-width: 400px;">

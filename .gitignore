@@ -10,3 +10,4 @@ mediafiles/
 staticfiles/
 logs/
 tos.html
+auctions/static/models/
