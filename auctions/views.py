@@ -2308,11 +2308,11 @@ class AuctionStats(LoginRequiredMixin, AuctionViewMixin, DetailView):
                 if compare_auction.permission_check(self.request.user):
                     context["compare_auction"] = compare_auction
 
-        # Check if stats need recalculation (older than 4 hours or missing)
+        # Check if stats need recalculation (older than 20 minutes or missing)
         now = timezone.now()
-        four_hours_ago = now - timezone.timedelta(hours=4)
+        twenty_minutes_ago = now - timezone.timedelta(minutes=20)
 
-        if not auction.last_stats_update or auction.last_stats_update < four_hours_ago:
+        if not auction.last_stats_update or auction.last_stats_update < twenty_minutes_ago:
             # Schedule immediate recalculation by setting next_update_due to now
             auction.next_update_due = now
             auction.save(update_fields=["next_update_due"])
