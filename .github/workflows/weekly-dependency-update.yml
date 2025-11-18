@@ -1,0 +1,75 @@
+name: Weekly dependency update
+
+on:
+  schedule:
+    # Every Monday at 05:00 UTC
+    - cron: "0 5 * * 1"
+  workflow_dispatch: {}   # allow manual runs
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    outputs:
+      pull-request-number: ${{ steps.cpr.outputs.pull-request-number }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Prepare environment
+        run: ./.github/scripts/prepare-ci.sh
+
+      - name: Build Docker images
+        run: docker compose build
+
+      - name: Run dependency update
+        run: |
+          chmod +x .github/scripts/update-packages.sh
+          ./.github/scripts/update-packages.sh --upgrade
+
+      - name: Create Pull Request
+        id: cpr
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "chore: weekly dependency upgrade"
+          title: "Weekly dependency upgrade"
+          body: |
+            This PR updates pinned dependencies via automated weekly run.
+            
+            ## Changes
+            - Updated `requirements.txt` with latest compatible versions
+            - Updated `requirements-test.txt` with latest compatible versions
+            
+            Please review the changes and ensure all tests pass before merging.
+          branch: "auto/update-deps"
+          delete-branch: true
+          labels: |
+            automated
+            dependencies
+
+  test-pr:
+    name: Run tests on update PR
+    runs-on: ubuntu-latest
+    needs: update
+    if: needs.update.outputs.pull-request-number != ''
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+        with:
+          ref: auto/update-deps
+
+      - name: Prepare CI environment
+        run: ./.github/scripts/prepare-ci.sh
+
+      - name: Run tests
+        run: docker compose run --rm test --ci --verbose
