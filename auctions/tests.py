@@ -2474,6 +2474,8 @@ class AuctionStatsViewTests(StandardTestCase):
 
         response = self.client.get(url)
         assert response.status_code == 200
+        # Should show recalculation message in context
+        assert response.context.get("stats_being_recalculated") is True, "Should show recalculation message"
 
         self.online_auction.refresh_from_db()
         # next_update_due should be set (scheduled for recalculation)
@@ -2487,10 +2489,27 @@ class AuctionStatsViewTests(StandardTestCase):
 
         response = self.client.get(url)
         assert response.status_code == 200
+        # Should NOT show recalculation message in context
+        assert response.context.get("stats_being_recalculated") is not True, "Should not show recalculation message"
 
         self.online_auction.refresh_from_db()
         # next_update_due should remain None (no recalculation scheduled)
         assert self.online_auction.next_update_due is None, "next_update_due should not be set for recent stats"
+
+        # Test 3: Already scheduled recalculation should not reschedule
+        old_time = timezone.now() - timezone.timedelta(minutes=25)
+        scheduled_time = timezone.now() + timezone.timedelta(minutes=2)
+        self.online_auction.last_stats_update = old_time
+        self.online_auction.next_update_due = scheduled_time
+        self.online_auction.save()
+
+        response = self.client.get(url)
+        assert response.status_code == 200
+        # Should still show recalculation message but not reschedule
+        assert response.context.get("stats_being_recalculated") is True, "Should show recalculation message"
+
+        self.online_auction.refresh_from_db()
+        assert self.online_auction.next_update_due == scheduled_time, "Should not reschedule if already scheduled"
 
 
 class BulkAddLotsViewTests(StandardTestCase):
