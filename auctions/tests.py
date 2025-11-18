@@ -2459,6 +2459,39 @@ class AuctionStatsViewTests(StandardTestCase):
         response = self.client.get(url)
         assert response.status_code == 200
 
+    def test_auction_stats_recalculation_threshold(self):
+        """Stats recalculation respects 20-minute threshold"""
+        from django.utils import timezone
+
+        self.client.login(username=self.user.username, password="testpassword")
+        url = f"/auctions/{self.online_auction.slug}/stats/"
+
+        # Test 1: Stats older than 20 minutes should trigger recalculation
+        old_time = timezone.now() - timezone.timedelta(minutes=25)
+        self.online_auction.last_stats_update = old_time
+        self.online_auction.next_update_due = None
+        self.online_auction.save()
+
+        response = self.client.get(url)
+        assert response.status_code == 200
+
+        self.online_auction.refresh_from_db()
+        # next_update_due should be set (scheduled for recalculation)
+        assert self.online_auction.next_update_due is not None, "next_update_due should be set for old stats"
+
+        # Test 2: Stats within 20 minutes should NOT trigger recalculation
+        recent_time = timezone.now() - timezone.timedelta(minutes=10)
+        self.online_auction.last_stats_update = recent_time
+        self.online_auction.next_update_due = None
+        self.online_auction.save()
+
+        response = self.client.get(url)
+        assert response.status_code == 200
+
+        self.online_auction.refresh_from_db()
+        # next_update_due should remain None (no recalculation scheduled)
+        assert self.online_auction.next_update_due is None, "next_update_due should not be set for recent stats"
+
 
 class BulkAddLotsViewTests(StandardTestCase):
     """Test bulk add lots view with different user types"""
