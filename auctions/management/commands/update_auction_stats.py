@@ -29,13 +29,13 @@ class Command(BaseCommand):
         if auction:
             try:
                 logger.info("Recalculating stats for auction: %s (%s)", auction.title, auction.slug)
-                
+
                 # Set next_update_due before recalculating to prevent concurrent recalculations
                 # This ensures that if the recalculation takes longer than a minute,
                 # the cron job won't try to recalculate the same auction again
                 auction.next_update_due = now + timezone.timedelta(minutes=5)
                 auction.save(update_fields=["next_update_due"])
-                
+
                 auction.recalculate_stats()
 
                 auction_websocket = get_channel_layer()
