@@ -4484,3 +4484,42 @@ class UpdateAuctionStatsCommandTestCase(StandardTestCase):
         # The auction should not have been processed
         self.assertEqual(future_auction.next_update_due, now + datetime.timedelta(hours=5))
         self.assertIsNone(future_auction.last_stats_update)
+
+
+class LotsByUserViewTest(StandardTestCase):
+    """Test for the LotsByUser view to ensure it handles missing 'user' parameter correctly"""
+
+    def test_lots_by_user_missing_user_parameter(self):
+        """Test that the view doesn't crash when 'user' parameter is missing"""
+        # Access the URL without user parameter, only with auction parameter
+        url = reverse("user_lots") + f"?auction={self.online_auction.slug}"
+        response = self.client.get(url)
+
+        # Should return 200, not crash with MultiValueDictKeyError
+        self.assertEqual(response.status_code, 200)
+
+        # Context should have user set to None
+        self.assertIsNone(response.context["user"])
+
+    def test_lots_by_user_with_valid_user_parameter(self):
+        """Test that the view works correctly with a valid user parameter"""
+        url = reverse("user_lots") + f"?user={self.user.username}"
+        response = self.client.get(url)
+
+        # Should return 200
+        self.assertEqual(response.status_code, 200)
+
+        # Context should have the correct user
+        self.assertEqual(response.context["user"], self.user)
+        self.assertEqual(response.context["view"], "user")
+
+    def test_lots_by_user_with_invalid_user_parameter(self):
+        """Test that the view handles non-existent username gracefully"""
+        url = reverse("user_lots") + "?user=nonexistent_user"
+        response = self.client.get(url)
+
+        # Should return 200, not crash
+        self.assertEqual(response.status_code, 200)
+
+        # Context should have user set to None
+        self.assertIsNone(response.context["user"])

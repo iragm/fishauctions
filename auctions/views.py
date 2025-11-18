@@ -726,10 +726,14 @@ class LotsByUser(LotListView):
     def get_context_data(self, **kwargs):
         data = self.request.GET.copy()
         context = super().get_context_data(**kwargs)
-        try:
-            context["user"] = User.objects.get(username=data["user"])
-            context["view"] = "user"
-        except User.DoesNotExist:
+        username = data.get("user")
+        if username:
+            try:
+                context["user"] = User.objects.get(username=username)
+                context["view"] = "user"
+            except User.DoesNotExist:
+                context["user"] = None
+        else:
             context["user"] = None
         context["filter"] = LotFilter(
             data,
