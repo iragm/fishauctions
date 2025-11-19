@@ -45,11 +45,11 @@ jobs:
           title: "Weekly dependency upgrade"
           body: |
             This PR updates pinned dependencies via automated weekly run.
-            
+
             ## Changes
             - Updated `requirements.txt` with latest compatible versions
             - Updated `requirements-test.txt` with latest compatible versions
-            
+
             Please review the changes and ensure all tests pass before merging.
           branch: "auto/update-deps"
           delete-branch: true
