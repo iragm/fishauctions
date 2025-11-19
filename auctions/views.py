@@ -2218,7 +2218,7 @@ class AuctionLots(LoginRequiredMixin, SingleTableMixin, AuctionViewMixin, Filter
         if self.request.htmx:
             template_name = "tables/table_generic.html"
         else:
-            template_name = "auctions/auction_lot_list.html"
+            template_name = "auctions/auction_lot_admin.html"
         return template_name
 
     def get_context_data(self, **kwargs):

@@ -11,7 +11,7 @@
   </small>
     {% if not auction.is_online %}<a class='btn btn-sm btn-primary' href="{{ auction.set_lot_winners_link }}"><i class="bi bi-calendar-check"></i> Set winners</a>{% endif %}
     <a id='all_lot_list' href="{% url 'lot_list' slug=auction.slug %}" class="btn btn-sm mt-2 mb-2 btn-primary"><i class="bi bi-download"></i> Export lot CSV</a>
-    <button class="btn btn-sm btn-warning mt-2 mb-2" type="button" data-bs-toggle="collapse" data-bs-target="#csvImportLots" aria-expanded="false" aria-controls="csvImportLots">
+    <button class="btn btn-sm btn-primary mt-2 mb-2" type="button" data-bs-toggle="collapse" data-bs-target="#csvImportLots" aria-expanded="false" aria-controls="csvImportLots">
       <i class="bi bi-file-earmark-spreadsheet"></i> Import lots from CSV
     </button>
     <a href="{{auction.view_lot_link}}" class="btn btn-sm btn-primary"><i class="bi bi-calendar"></i> See user view</a>
@@ -32,7 +32,7 @@
     <form method="POST" action="{% url 'import_lots_from_csv' slug=auction.slug %}" enctype="multipart/form-data" hx-post="{% url 'import_lots_from_csv' slug=auction.slug %}" hx-encoding="multipart/form-data" class="mt-2">
       {% csrf_token %}
       <input type="file" name="csv_file" accept=".csv" class="form-control mb-2">
-      <button type="submit" class="btn btn-warning">Upload CSV</button>
+      <button type="submit" class="btn btn-primary">Upload CSV</button>
     </form>
   </div>
 </div>
