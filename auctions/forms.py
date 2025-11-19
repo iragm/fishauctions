@@ -1771,13 +1771,9 @@ class AuctionEditForm(forms.ModelForm):
         if square_seller:
             self.fields["enable_square_payments"].help_text += f"<br>Payments sent to {square_seller}"
         else:
-            if (
-                self.instance.created_by.is_superuser
-                and settings.SQUARE_APPLICATION_ID
-                and settings.SQUARE_ACCESS_TOKEN
-            ):
-                # show payments option
-                pass
+            # Square requires OAuth - no fallback for superusers
+            # Hide the field if seller hasn't linked their Square account
+            if not self.instance.created_by.userdata.square_enabled:
                 self.fields["enable_square_payments"].widget = forms.HiddenInput()
         # self.fields['notes'].help_text = "Foo"
         if self.instance.is_online:

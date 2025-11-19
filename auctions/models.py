@@ -880,15 +880,13 @@ class Auction(models.Model):
     def square_information(self):
         """
         Return the merchant ID for Square payments
-        Fallback for admin users to use the site-wide api keys
+        Only returns ID if seller has linked their Square account via OAuth
         """
         from auctions.models import SquareSeller
 
         seller = SquareSeller.objects.filter(user=self.created_by).first()
         if seller:
             return seller.square_merchant_id
-        if self.created_by.is_superuser:
-            return "admin"
         return None
 
     @property
@@ -4565,8 +4563,9 @@ class Invoice(models.Model):
         """True if we can show the PayPal or Square button"""
         # Check PayPal
         paypal_configured = settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET
+        # Square now requires OAuth - just check if OAuth is configured
         square_configured = getattr(settings, "SQUARE_APPLICATION_ID", None) and getattr(
-            settings, "SQUARE_ACCESS_TOKEN", None
+            settings, "SQUARE_CLIENT_SECRET", None
         )
 
         if not (paypal_configured or square_configured):
@@ -4596,11 +4595,8 @@ class Invoice(models.Model):
         if self.auction.enable_square_payments:
             if not self.auction.created_by.userdata.is_trusted:
                 return False
-            if (
-                not self.auction.created_by.is_superuser
-                and not self.auction.created_by.userdata.square_enabled
-                and not self.auction.square_information
-            ):
+            # Square requires OAuth - check if seller has linked account
+            if not self.auction.created_by.userdata.square_enabled or not self.auction.square_information:
                 pass
             else:
                 has_payment_method = True
@@ -4633,13 +4629,29 @@ class Invoice(models.Model):
 
     @property
     def show_square_button(self):
-        """True if we can show specifically the Square button"""
+        """True if we can show specifically the Square button
+        Square requires OAuth - seller must have linked their account"""
+        # Check OAuth is configured
         if not (
-            getattr(settings, "SQUARE_APPLICATION_ID", None) and getattr(settings, "SQUARE_ACCESS_TOKEN", None)
+            getattr(settings, "SQUARE_APPLICATION_ID", None) and getattr(settings, "SQUARE_CLIENT_SECRET", None)
         ):
             return False
         if self.auction and not self.auction.enable_square_payments:
             return False
+        if self.auction and not self.auction.created_by.userdata.is_trusted:
+            return False
+        if self.status == "PAID":
+            return False
+        if self.net_after_payments >= 0:
+            return False
+        # Square requires OAuth - check if seller has linked their account
+        if self.auction and not self.auction.created_by.userdata.square_enabled:
+            return False
+        if self.auction and not self.auction.square_information:
+            return False
+        if not self.auction:
+            return False
+        return True
         if self.auction and not self.auction.created_by.userdata.is_trusted:
             return False
         if self.status == "PAID":

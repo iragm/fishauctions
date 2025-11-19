@@ -6950,34 +6950,41 @@ class PayPalSellerDeleteView(LoginRequiredMixin, DeleteView):
 
 
 class SquareAPIMixin:
-    """Couple API methods for Square stuff using CreatePaymentLink API"""
+    """Couple API methods for Square stuff using CreatePaymentLink API
+    All operations require OAuth - no platform credentials"""
 
-    def _get_square_client(self, merchant_access_token=None):
-        """Initialize and return Square SDK client
-        If merchant_access_token is provided, use it for OAuth payments on behalf of merchant
-        Otherwise use platform access token"""
+    def _get_square_client(self, merchant_access_token):
+        """Initialize and return Square SDK client using merchant's OAuth token
+        Raises ValueError if no token provided"""
         from square.client import Client
 
-        access_token = merchant_access_token or settings.SQUARE_ACCESS_TOKEN
+        if not merchant_access_token:
+            raise ValueError("Square merchant access token required - seller must link their Square account via OAuth")
+        
         return Client(
-            access_token=access_token,
+            access_token=merchant_access_token,
             environment=settings.SQUARE_ENVIRONMENT,
         )
 
-    def create_payment_link(self, invoice, merchant_access_token=None):
+    def create_payment_link(self, invoice):
         """Create a Square payment link for an invoice using CreatePaymentLink API
-        If merchant has linked their Square account via OAuth, use their access token
+        Requires merchant to have linked their Square account via OAuth
         Returns the payment link URL or None if the request failed"""
         try:
             from square.client import Client
 
-            # Check if merchant has OAuth token
-            if not merchant_access_token:
-                seller = SquareSeller.objects.filter(user=invoice.auction.created_by).first()
-                if seller and seller.access_token:
-                    merchant_access_token = seller.access_token
+            # Get merchant's OAuth token - required
+            seller = SquareSeller.objects.filter(user=invoice.auction.created_by).first()
+            if not seller or not seller.access_token:
+                logger.error("Square payment link creation failed: No OAuth token for user %s", invoice.auction.created_by.pk)
+                return None
+            
+            # Also need the merchant's location ID
+            if not seller.square_merchant_id:
+                logger.error("Square payment link creation failed: No merchant ID for user %s", invoice.auction.created_by.pk)
+                return None
 
-            client = self._get_square_client(merchant_access_token)
+            client = self._get_square_client(seller.access_token)
             currency = invoice.auction.created_by.userdata.currency
 
             # Build line items
@@ -7029,6 +7036,25 @@ class SquareAPIMixin:
                 )
 
             # Create the payment link
+            # Note: Square requires a location_id which we need to get from the merchant's account
+            # We'll fetch the first active location from their account
+            try:
+                locations_result = client.locations.list_locations()
+                if locations_result.is_error() or not locations_result.body.get("locations"):
+                    logger.error("Failed to get Square locations for merchant %s: %s", seller.square_merchant_id, locations_result.errors if locations_result.is_error() else "No locations found")
+                    return None
+                
+                # Use the first active location
+                active_locations = [loc for loc in locations_result.body.get("locations", []) if loc.get("status") == "ACTIVE"]
+                if not active_locations:
+                    logger.error("No active Square locations found for merchant %s", seller.square_merchant_id)
+                    return None
+                
+                location_id = active_locations[0].get("id")
+            except Exception as e:
+                logger.exception("Error fetching Square locations: %s", e)
+                return None
+            
             body = {
                 "idempotency_key": str(uuid.uuid4()),
                 "quick_pay": {
@@ -7037,7 +7063,7 @@ class SquareAPIMixin:
                         "amount": target_total,
                         "currency": currency,
                     },
-                    "location_id": settings.SQUARE_LOCATION_ID,
+                    "location_id": location_id,
                 },
                 "checkout_options": {
                     "redirect_url": self.request.build_absolute_uri("/square/success/"),
@@ -7065,70 +7091,6 @@ class SquareAPIMixin:
         except Exception as e:
             logger.exception("Error creating Square payment link: %s", e)
             return None
-
-    def handle_square_payment(self, payment_id):
-        """Find an invoice associated with a Square payment and create a payment record
-        Returns error string and invoice object"""
-        try:
-            client = self._get_square_client()
-            result = client.payments.get_payment(payment_id=payment_id)
-
-            if result.is_error():
-                logger.error("Square payment retrieval failed: %s", result.errors)
-                return "Unable to retrieve payment information", None
-
-            payment = result.body.get("payment", {})
-            if payment.get("status") != "COMPLETED":
-                return "Square payment has not yet been completed", None
-
-            # Get invoice reference
-            reference_id = payment.get("reference_id")
-            if not reference_id:
-                return "No invoice associated with this Square payment", None
-
-            invoice = Invoice.objects.filter(pk=reference_id).first()
-            if not invoice:
-                return "No invoice found for this payment", None
-
-            # Extract payment details
-            amount_money = payment.get("amount_money", {})
-            amount_value = Decimal(amount_money.get("amount", 0)) / 100  # Convert from cents
-            currency = amount_money.get("currency", "USD")
-
-            # Create or update payment record
-            payment_record, created = InvoicePayment.objects.get_or_create(
-                invoice=invoice,
-                external_id=payment_id,
-                defaults={
-                    "amount": amount_value,
-                    "currency": currency,
-                    "status": "COMPLETED",
-                    "payment_method": "square",
-                    "payer_email": payment.get("buyer_email_address"),
-                },
-            )
-
-            if not created:
-                # Update existing record
-                payment_record.amount = amount_value
-                payment_record.status = "COMPLETED"
-                payment_record.save()
-
-            # Mark invoice as paid if fully paid
-            if invoice.net_after_payments >= 0:
-                invoice.status = "PAID"
-                invoice.save()
-                invoice.auction.create_history(
-                    applies_to="INVOICES",
-                    action=f"Invoice {invoice.pk} paid via Square",
-                    user=None,
-                )
-
-            return None, invoice
-
-        except Exception as e:
-            logger.exception("Error handling Square payment: %s", e)
-            return f"Error processing payment: {str(e)}", None
 
 
 class SquareConnectView(LoginRequiredMixin, View):
