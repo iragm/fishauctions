@@ -23,6 +23,12 @@ curl -L -o auctions/static/js/vendor/Vosklet.js \
 echo "✓ Vosklet.js downloaded"
 
 echo ""
+echo "1b. Downloading Vosklet WASM module..."
+curl -L -o auctions/static/js/vendor/Vosklet.wasm \
+  "https://cdn.jsdelivr.net/gh/msqr1/Vosklet@1.2.1/Examples/Vosklet.wasm"
+echo "✓ Vosklet.wasm downloaded"
+
+echo ""
 echo "2. Downloading Bootstrap 5.3.3 bundle (includes Popper)..."
 curl -L -o auctions/static/js/vendor/bootstrap.bundle.min.js \
   "https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
