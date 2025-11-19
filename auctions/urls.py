@@ -226,6 +226,11 @@ urlpatterns = [
         login_required(views.BulkAddLots.as_view()),
         name="bulk_add_lots_for_myself",
     ),
+    path(
+        "auctions/<slug:slug>/lots/import-csv/",
+        login_required(views.ImportLotsFromCSV.as_view()),
+        name="import_lots_from_csv",
+    ),
     # path(
     #     "auctions/<slug:slug>/lots/set-winners/old",
     #     login_required(views.SetLotWinner.as_view()),

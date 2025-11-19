@@ -4587,3 +4587,230 @@ class LotsByUserViewTest(StandardTestCase):
 
         # Context should have user set to None
         self.assertIsNone(response.context["user"])
+
+
+class ImportLotsFromCSVViewTests(StandardTestCase):
+    """Test CSV lot import functionality"""
+
+    def test_import_lots_csv_anonymous(self):
+        """Anonymous users cannot import lots from CSV"""
+        url = reverse("import_lots_from_csv", kwargs={"slug": self.online_auction.slug})
+        response = self.client.post(url)
+        # Should redirect to login (302) or be denied (403)
+        assert response.status_code in [302, 403]
+
+    def test_import_lots_csv_non_admin(self):
+        """Non-admin users cannot import lots from CSV"""
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        url = reverse("import_lots_from_csv", kwargs={"slug": self.online_auction.slug})
+        response = self.client.post(url)
+        assert response.status_code in [302, 403]
+
+    def test_import_lots_csv_admin_no_file(self):
+        """Admin posting without CSV file gets error"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("import_lots_from_csv", kwargs={"slug": self.online_auction.slug})
+        response = self.client.post(url)
+        # Should redirect with error message
+        assert response.status_code == 200
+
+    def test_import_lots_csv_create_new_lot(self):
+        """CSV import creates a new lot for existing user"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("import_lots_from_csv", kwargs={"slug": self.online_auction.slug})
+
+        # Set name and email on TOS so we can find it
+        self.online_tos.name = "Test User"
+        self.online_tos.email = "testuser@example.com"
+        self.online_tos.save()
+
+        # Create CSV content
+        csv_content = (
+            "Name,Email,Lot Name,Quantity,Reserve Price\n"
+            f"{self.online_tos.name},{self.online_tos.email},Test Lot from CSV,5,10\n"
+        )
+
+        from io import BytesIO
+
+        csv_file = BytesIO(csv_content.encode("utf-8"))
+        csv_file.name = "test.csv"
+
+        response = self.client.post(url, {"csv_file": csv_file})
+
+        # Should redirect successfully
+        assert response.status_code == 200
+
+        # Check that lot was created
+        new_lot = Lot.objects.filter(lot_name="Test Lot from CSV", auction=self.online_auction).first()
+        assert new_lot is not None
+        assert new_lot.quantity == 5
+        assert new_lot.reserve_price == 10
+        assert new_lot.auctiontos_seller == self.online_tos
+
+    def test_import_lots_csv_update_existing_lot(self):
+        """CSV import updates existing lot by lot number"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("import_lots_from_csv", kwargs={"slug": self.online_auction.slug})
+
+        # Use existing lot
+        lot_number = self.lot.lot_number_int
+
+        # Create CSV content to update the lot
+        csv_content = f"Lot Number,Lot Name,Quantity,Reserve Price\n{lot_number},Updated Lot Name,3,15\n"
+
+        from io import BytesIO
+
+        csv_file = BytesIO(csv_content.encode("utf-8"))
+        csv_file.name = "test.csv"
+
+        response = self.client.post(url, {"csv_file": csv_file})
+
+        # Should redirect successfully
+        assert response.status_code == 200
+
+        # Check that lot was updated
+        self.lot.refresh_from_db()
+        assert self.lot.lot_name == "Updated Lot Name"
+        assert self.lot.quantity == 3
+        assert self.lot.reserve_price == 15
+
+    def test_import_lots_csv_create_new_user_and_lot(self):
+        """CSV import creates both user and lot"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("import_lots_from_csv", kwargs={"slug": self.online_auction.slug})
+
+        # Create CSV content with new user
+        csv_content = "Name,Email,Lot Name,Quantity\nNew User,newuser@example.com,New User Lot,2\n"
+
+        from io import BytesIO
+
+        csv_file = BytesIO(csv_content.encode("utf-8"))
+        csv_file.name = "test.csv"
+
+        response = self.client.post(url, {"csv_file": csv_file})
+
+        # Should redirect successfully
+        assert response.status_code == 200
+
+        # Check that user was created
+        new_tos = AuctionTOS.objects.filter(email="newuser@example.com", auction=self.online_auction).first()
+        assert new_tos is not None
+        assert new_tos.name == "New User"
+
+        # Check that lot was created
+        new_lot = Lot.objects.filter(lot_name="New User Lot", auction=self.online_auction).first()
+        assert new_lot is not None
+        assert new_lot.auctiontos_seller == new_tos
+
+    def test_import_lots_csv_boolean_fields(self):
+        """CSV import handles boolean fields correctly"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("import_lots_from_csv", kwargs={"slug": self.online_auction.slug})
+
+        # Create CSV with boolean fields
+        csv_content = (
+            "Name,Email,Lot Name,Breeder Points,Donation\n"
+            f"{self.online_tos.name},{self.online_tos.email},Bred Fish,yes,true\n"
+        )
+
+        from io import BytesIO
+
+        csv_file = BytesIO(csv_content.encode("utf-8"))
+        csv_file.name = "test.csv"
+
+        response = self.client.post(url, {"csv_file": csv_file})
+
+        # Should redirect successfully
+        assert response.status_code == 200
+
+        # Check boolean fields
+        new_lot = Lot.objects.filter(lot_name="Bred Fish", auction=self.online_auction).first()
+        assert new_lot is not None
+        assert new_lot.i_bred_this_fish is True
+        assert new_lot.donation is True
+
+    def test_import_lots_csv_missing_info(self):
+        """CSV import skips rows with missing required information"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("import_lots_from_csv", kwargs={"slug": self.online_auction.slug})
+
+        # Create CSV with incomplete data
+        csv_content = "Name,Email\nMissing Lot Name,missing@example.com\n"
+
+        from io import BytesIO
+
+        csv_file = BytesIO(csv_content.encode("utf-8"))
+        csv_file.name = "test.csv"
+
+        response = self.client.post(url, {"csv_file": csv_file})
+
+        # Should redirect successfully but skip the row
+        assert response.status_code == 200
+
+        # Check that no lot was created
+        lots = Lot.objects.filter(auctiontos_seller__email="missing@example.com", auction=self.online_auction)
+        assert lots.count() == 0
+
+    def test_import_lots_csv_idempotent(self):
+        """CSV import is idempotent - repeated uploads should update, not duplicate"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("import_lots_from_csv", kwargs={"slug": self.online_auction.slug})
+
+        # Use existing lot with lot number
+        lot_number = self.lot.lot_number_int
+
+        # Create CSV content
+        csv_content = f"Lot Number,Lot Name,Quantity\n{lot_number},Idempotent Lot,7\n"
+
+        from io import BytesIO
+
+        # Upload once
+        csv_file = BytesIO(csv_content.encode("utf-8"))
+        csv_file.name = "test.csv"
+        response = self.client.post(url, {"csv_file": csv_file})
+        assert response.status_code == 200
+
+        # Upload again
+        csv_file = BytesIO(csv_content.encode("utf-8"))
+        csv_file.name = "test.csv"
+        response = self.client.post(url, {"csv_file": csv_file})
+        assert response.status_code == 200
+
+        # Check that lot was updated, not duplicated
+        lots = Lot.objects.filter(lot_name="Idempotent Lot", auction=self.online_auction)
+        assert lots.count() == 1
+        assert lots.first().quantity == 7
+
+    def test_import_lots_csv_closed_invoice(self):
+        """CSV import skips creating lots when invoice is not open"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("import_lots_from_csv", kwargs={"slug": self.online_auction.slug})
+
+        # Set name and email on TOS so we can find it
+        self.online_tos.name = "Closed Invoice User"
+        self.online_tos.email = "closedinvoice@example.com"
+        self.online_tos.save()
+
+        # Close the invoice
+        invoice = Invoice.objects.filter(auctiontos_user=self.online_tos, auction=self.online_auction).first()
+        if not invoice:
+            invoice = Invoice.objects.create(auctiontos_user=self.online_tos, auction=self.online_auction)
+        invoice.status = "PAID"
+        invoice.save()
+
+        # Create CSV content
+        csv_content = f"Name,Email,Lot Name\n{self.online_tos.name},{self.online_tos.email},Should Not Create\n"
+
+        from io import BytesIO
+
+        csv_file = BytesIO(csv_content.encode("utf-8"))
+        csv_file.name = "test.csv"
+
+        response = self.client.post(url, {"csv_file": csv_file})
+
+        # Should redirect with warning
+        assert response.status_code == 200
+
+        # Check that lot was not created
+        new_lot = Lot.objects.filter(lot_name="Should Not Create", auction=self.online_auction).first()
+        assert new_lot is None
