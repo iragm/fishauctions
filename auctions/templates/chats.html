@@ -25,7 +25,7 @@
                     hx-trigger="click">
                     {{ history.user }}</a>{% else %}{{ history.user }}<br><small>User has not joined your auction</small>{% endif %}
                   </td>
-                  <td><small>{{ history.timestamp }}</small></td>
+                  <td><small><span title="{{ history.timestamp }}">{{ history.timestamp }}</span></small></td>
                   <td>
 
                           {{ history.message }}

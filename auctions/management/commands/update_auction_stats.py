@@ -16,14 +16,26 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         now = timezone.now()
-        auctions = Auction.objects.filter(
-            Q(next_update_due__lte=now) | Q(next_update_due__isnull=True),
-            is_deleted=False,
+        # Process only one auction per run, ordered by most overdue first
+        auction = (
+            Auction.objects.filter(
+                Q(next_update_due__lte=now) | Q(next_update_due__isnull=True),
+                is_deleted=False,
+            )
+            .order_by("next_update_due")
+            .first()
         )
 
-        for auction in auctions:
+        if auction:
             try:
                 logger.info("Recalculating stats for auction: %s (%s)", auction.title, auction.slug)
+
+                # Set next_update_due before recalculating to prevent concurrent recalculations
+                # This ensures that if the recalculation takes longer than a minute,
+                # the cron job won't try to recalculate the same auction again
+                auction.next_update_due = now + timezone.timedelta(minutes=5)
+                auction.save(update_fields=["next_update_due"])
+
                 auction.recalculate_stats()
 
                 auction_websocket = get_channel_layer()
@@ -37,5 +49,3 @@ class Command(BaseCommand):
             except Exception as e:
                 logger.error("Failed to update stats for auction %s (%s): %s", auction.title, auction.slug, e)
                 logger.exception(e)
-                # Continue with other auctions even if one fails
-                continue

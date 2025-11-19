@@ -2428,7 +2428,7 @@ class Auction(models.Model):
 
             # Auctions > 90 days in the past aren't recalculated at all
             if days_since_start > 90:
-                self.next_update_due = now + timezone.timedelta(years=500)
+                self.next_update_due = now + timezone.timedelta(hours=4380000)
             # Active auctions (started within 7 days ago or start within 7 days) - every 4 hours
             elif -7 <= days_until_start <= 7:
                 self.next_update_due = now + timezone.timedelta(hours=4)
@@ -4021,6 +4021,7 @@ class Lot(models.Model):
             if (
                 not self.auction.is_online
                 and self.auction.online_bidding != "disable"
+                and self.auction.date_online_bidding_starts
                 and self.auction.date_online_bidding_starts > first_bid_date
             ):
                 return self.auction.date_online_bidding_starts
@@ -4040,9 +4041,17 @@ class Lot(models.Model):
                 return "This auction doesn't allow online bidding"
             if not self.auction.started:
                 return "Bidding hasn't opened yet for this auction"
-            if not self.auction.is_online and timezone.now() > self.auction.date_online_bidding_ends:
+            if (
+                not self.auction.is_online
+                and self.auction.date_online_bidding_ends
+                and timezone.now() > self.auction.date_online_bidding_ends
+            ):
                 return "Online bidding has ended for this auction"
-            if not self.auction.is_online and timezone.now() < self.auction.date_online_bidding_starts:
+            if (
+                not self.auction.is_online
+                and self.auction.date_online_bidding_starts
+                and timezone.now() < self.auction.date_online_bidding_starts
+            ):
                 return "Online bidding hasn't started yet for this auction"
             if self.auction.online_bidding == "buy_now_only" and not self.buy_now_price:
                 return "This lot does not have a buy now price set, you can't buy it now"

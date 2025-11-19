@@ -35,6 +35,8 @@ def check_bidding_permissions(lot, user):
     """
     if lot.ended:
         return "Bidding on this lot has ended"
+    if lot.winner or lot.auctiontos_winner:
+        return "This lot has already been sold"
     if lot.user and lot.user.pk == user.pk:
         return "You can't bid on your own lot"
     if lot.auction:
@@ -50,6 +52,20 @@ def check_bidding_permissions(lot, user):
                 return "This auction requires admin approval before you can bid"
         if not lot.auction.is_online and lot.auction.online_bidding == "disable":
             return "This auction does not allow online bidding"
+        if (
+            not lot.auction.is_online
+            and lot.auction.online_bidding != "disable"
+            and lot.auction.date_online_bidding_ends
+            and timezone.now() > lot.auction.date_online_bidding_ends
+        ):
+            return "Online bidding has ended for this auction"
+        if (
+            not lot.auction.is_online
+            and lot.auction.online_bidding != "disable"
+            and lot.auction.date_online_bidding_starts
+            and timezone.now() < lot.auction.date_online_bidding_starts
+        ):
+            return "Online bidding hasn't started yet for this auction"
     return False
 
 
@@ -378,6 +394,7 @@ class LotConsumer(WebsocketConsumer):
                             "info": "CHAT",
                             "message": history.message,
                             "username": username,
+                            "timestamp": history.timestamp.isoformat(),
                         },
                     )
                 except Exception as e:
@@ -403,6 +420,7 @@ class LotConsumer(WebsocketConsumer):
                             "info": "CHAT",
                             "message": "The creator of this lot has turned off email notifications when chat messages are posted.  You may not get a reply.",
                             "username": "System",
+                            "timestamp": timezone.now().isoformat(),
                         },
                     )
             except Exception as e:
@@ -469,7 +487,7 @@ class LotConsumer(WebsocketConsumer):
                             )
                         else:
                             if True:
-                                LotHistory.objects.create(
+                                history = LotHistory.objects.create(
                                     lot=self.lot,
                                     user=self.user,
                                     message=message,
@@ -484,6 +502,7 @@ class LotConsumer(WebsocketConsumer):
                                     "message": message,
                                     "pk": self.user.pk,
                                     "username": str(self.user),
+                                    "timestamp": history.timestamp.isoformat(),
                                 },
                             )
                     except (KeyError, ValueError):
