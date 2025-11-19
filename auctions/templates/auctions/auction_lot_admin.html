@@ -11,6 +11,9 @@
   </small>
     {% if not auction.is_online %}<a class='btn btn-sm btn-primary' href="{{ auction.set_lot_winners_link }}"><i class="bi bi-calendar-check"></i> Set winners</a>{% endif %}
     <a id='all_lot_list' href="{% url 'lot_list' slug=auction.slug %}" class="btn btn-sm mt-2 mb-2 btn-primary"><i class="bi bi-download"></i> Export lot CSV</a>
+    <button class="btn btn-sm btn-warning mt-2 mb-2" type="button" data-bs-toggle="collapse" data-bs-target="#csvImportLots" aria-expanded="false" aria-controls="csvImportLots">
+      <i class="bi bi-file-earmark-spreadsheet"></i> Import lots from CSV
+    </button>
     <a href="{{auction.view_lot_link}}" class="btn btn-sm btn-primary"><i class="bi bi-calendar"></i> See user view</a>
 {% if auction.online_bidding != "disable" and not auction.is_online%}
 <a id='bulk_set_lots_won' href="#" class="btn btn-sm mt-2  mb-2 btn-primary"
@@ -20,6 +23,20 @@
     hx-trigger="click"
     _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"><i class="bi bi-calendar-check-fill"></i> Sell lots to online high bidder</a>
 {% endif %}
+
+<div class="collapse mt-3" id="csvImportLots">
+  <div class="card card-body">
+    <h5>Import lots from CSV</h5>
+    <small>Upload a CSV file with columns: Name, Email, Lot Number, Lot Name, Description, Quantity, Reserve Price, Buy Now Price, Category, Breeder Points, Donation{% if auction.use_custom_checkbox_field and auction.custom_checkbox_name %}, {{ auction.custom_checkbox_name }}{% endif %}{% if auction.custom_field_1 != "disable" and auction.custom_field_1_name %}, {{ auction.custom_field_1_name }}{% endif %}</small>
+    <br><small class="text-muted">If lot number is provided, the existing lot will be updated. Otherwise, a new lot will be created for the user (matched by email or name).</small>
+    <form method="POST" action="{% url 'import_lots_from_csv' slug=auction.slug %}" enctype="multipart/form-data" hx-post="{% url 'import_lots_from_csv' slug=auction.slug %}" hx-encoding="multipart/form-data" class="mt-2">
+      {% csrf_token %}
+      <input type="file" name="csv_file" accept=".csv" class="form-control mb-2">
+      <button type="submit" class="btn btn-warning">Upload CSV</button>
+    </form>
+  </div>
+</div>
+
   <form class="col-sm-12 mt-2">
     {% crispy filter.form %}
   </form>

@@ -2218,7 +2218,7 @@ class AuctionLots(LoginRequiredMixin, SingleTableMixin, AuctionViewMixin, Filter
         if self.request.htmx:
             template_name = "tables/table_generic.html"
         else:
-            template_name = "auctions/auction_lot_admin.html"
+            template_name = "auctions/auction_lot_list.html"
         return template_name
 
     def get_context_data(self, **kwargs):
@@ -3276,7 +3276,7 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
         csv_file = request.FILES.get("csv_file", None)
         if not csv_file:
             messages.error(request, "No CSV file provided")
-            url = reverse("bulk_add_users", kwargs={"slug": self.auction.slug})
+            url = reverse("auction_lot_list", kwargs={"slug": self.auction.slug})
             response = HttpResponse(status=200)
             response["HX-Redirect"] = url
             return response
@@ -3287,7 +3287,7 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
             return self.process_csv_data(csv_reader)
         except (UnicodeDecodeError, ValueError) as e:
             messages.error(request, f"Unable to read file. Make sure this is a valid UTF-8 CSV file. Error was: {e}")
-            url = reverse("bulk_add_users", kwargs={"slug": self.auction.slug})
+            url = reverse("auction_lot_list", kwargs={"slug": self.auction.slug})
             response = HttpResponse(status=200)
             response["HX-Redirect"] = url
             return response
@@ -3324,8 +3324,15 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
         category_fields = ["category", "species category", "species_category"]
         i_bred_this_fish_fields = ["breeder points", "i bred this fish", "i_bred_this_fish", "bred"]
         donation_fields = ["donation", "donate"]
+
+        # Use auction's custom field names for matching
         custom_checkbox_fields = ["custom checkbox", "custom_checkbox"]
+        if self.auction.use_custom_checkbox_field and self.auction.custom_checkbox_name:
+            custom_checkbox_fields.append(self.auction.custom_checkbox_name.lower())
+
         custom_field_1_fields = ["custom field", "custom_field_1", "custom field 1"]
+        if self.auction.custom_field_1 != "disable" and self.auction.custom_field_1_name:
+            custom_field_1_fields.append(self.auction.custom_field_1_name.lower())
 
         # Track results
         lots_created = 0
@@ -3335,7 +3342,6 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
             "missing_info": 0,
             "closed_invoices": 0,
             "no_lot_number_no_bidder": 0,
-            "invalid_lot_number": 0,
         }
 
         try:
@@ -3398,6 +3404,7 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
                         .first()
                     )
                     if not lot:
+                        # Try to parse as int for lot_number_int search, but don't error if it fails
                         try:
                             lot_number_int = int(lot_number)
                             lot = (
@@ -3406,8 +3413,8 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
                                 .first()
                             )
                         except ValueError:
-                            errors["invalid_lot_number"] += 1
-                            continue
+                            # Lot number is not numeric, that's fine - it might be a custom lot number
+                            pass
 
                     if lot:
                         # Update existing lot (don't update winner, winning_price, partial_refund, banned)
@@ -3520,10 +3527,6 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
                     self.request,
                     f"{errors['closed_invoices']} lot(s) not created: user's invoice is not open",
                 )
-            if errors["invalid_lot_number"]:
-                messages.warning(
-                    self.request, f"{errors['invalid_lot_number']} row(s) skipped: invalid lot number format"
-                )
 
             # Update auction history
             if lots_created or lots_updated:
@@ -3532,7 +3535,7 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
                     history_msg += f", {users_created} users added"
                 self.auction.create_history(applies_to="LOTS", action=history_msg, user=self.request.user)
 
-            url = reverse("auction_tos_list", kwargs={"slug": self.auction.slug})
+            url = reverse("auction_lot_list", kwargs={"slug": self.auction.slug})
             response = HttpResponse(status=200)
             response["HX-Redirect"] = url
             return response
@@ -3541,7 +3544,7 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
             messages.error(
                 self.request, f"Unable to read file. Make sure this is a valid UTF-8 CSV file. Error was: {e}"
             )
-            url = reverse("bulk_add_users", kwargs={"slug": self.auction.slug})
+            url = reverse("auction_lot_list", kwargs={"slug": self.auction.slug})
             response = HttpResponse(status=200)
             response["HX-Redirect"] = url
             return response

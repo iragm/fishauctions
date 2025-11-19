@@ -20,45 +20,6 @@
   </div>
 </div>
 
-<div class="btn-group ms-2">
-  <button class="btn btn-sm btn-info" type="button" data-bs-toggle="collapse" data-bs-target="#csvImportUsers" aria-expanded="false" aria-controls="csvImportUsers">
-    <i class="bi bi-file-earmark-spreadsheet"></i> Import users from CSV
-  </button>
-</div>
-
-<div class="btn-group ms-2">
-  <button class="btn btn-sm btn-warning" type="button" data-bs-toggle="collapse" data-bs-target="#csvImportLots" aria-expanded="false" aria-controls="csvImportLots">
-    <i class="bi bi-file-earmark-spreadsheet"></i> Import lots from CSV
-  </button>
-</div>
-
-<br>
-
-<div class="collapse mt-3" id="csvImportUsers">
-  <div class="card card-body">
-    <h5>Import users from CSV</h5>
-    <small>Upload a CSV file with columns: Name, Email, Phone, Address, Bidder Number</small>
-    <form method="POST" action="{% url 'bulk_add_users' slug=auction.slug %}" enctype="multipart/form-data" hx-post="{% url 'bulk_add_users' slug=auction.slug %}" hx-encoding="multipart/form-data" class="mt-2">
-      {% csrf_token %}
-      <input type="file" name="csv_file" accept=".csv" class="form-control mb-2">
-      <button type="submit" class="btn btn-primary">Upload CSV</button>
-    </form>
-  </div>
-</div>
-
-<div class="collapse mt-3" id="csvImportLots">
-  <div class="card card-body">
-    <h5>Import lots from CSV</h5>
-    <small>Upload a CSV file with columns: Name, Email, Lot Number, Lot Name, Description, Quantity, Reserve Price, Buy Now Price, Category, Breeder Points, Donation, Custom Checkbox, Custom Field 1</small>
-    <br><small class="text-muted">If lot number is provided, the existing lot will be updated. Otherwise, a new lot will be created for the user (matched by email or name).</small>
-    <form method="POST" action="{% url 'import_lots_from_csv' slug=auction.slug %}" enctype="multipart/form-data" hx-post="{% url 'import_lots_from_csv' slug=auction.slug %}" hx-encoding="multipart/form-data" class="mt-2">
-      {% csrf_token %}
-      <input type="file" name="csv_file" accept=".csv" class="form-control mb-2">
-      <button type="submit" class="btn btn-warning">Upload CSV</button>
-    </form>
-  </div>
-</div>
-
 
 <br><small>Use this form to quickly add users to your auction</small>
   {{ link_formset.management_form }}
