@@ -48,6 +48,9 @@ from markdownfield.models import MarkdownField, RenderedMarkdownField
 from markdownfield.validators import VALIDATOR_STANDARD
 from post_office import mail
 from pytz import timezone as pytz_timezone
+from webpush.models import PushInformation
+
+from .helper_functions import bin_data
 
 logger = logging.getLogger(__name__)
 
@@ -817,6 +820,12 @@ class Auction(models.Model):
     google_drive_link.help_text = "Link to a Google Sheet with user information.  Make sure the sheet is shared with 'anyone with the link can view'."
     last_sync_time = models.DateTimeField(blank=True, null=True)
     last_sync_time.help_text = "Last time user data was synchronized from Google Drive"
+    cached_stats = models.JSONField(blank=True, null=True, default=None)
+    cached_stats.help_text = "Cached auction statistics data to avoid recalculating on every page load"
+    last_stats_update = models.DateTimeField(blank=True, null=True)
+    last_stats_update.help_text = "Timestamp of when auction statistics were last calculated"
+    next_update_due = models.DateTimeField(blank=True, null=True)
+    next_update_due.help_text = "Timestamp for when the next statistics update should be run"
 
     @property
     def promotion_request_mailto_query(self):
@@ -1148,6 +1157,21 @@ class Auction(models.Model):
         return False
 
     @property
+    def has_non_logical_times(self):
+        """Check if auction start or end times are not set to logical times (ending in :00:00 or :30:00).
+        Returns the edit url if times are illogical, False otherwise."""
+        # A logical time has minutes of 00 or 30, and seconds of 00
+        for date_field in [self.date_start, self.date_end]:
+            if date_field:
+                local_time = date_field.astimezone(self.timezone)
+                minutes = local_time.minute
+                seconds = local_time.second
+                # Check if time is not :00:00 or :30:00
+                if not ((minutes == 0 or minutes == 30) and seconds == 0):
+                    return reverse("edit_auction", kwargs={"slug": self.slug})
+        return False
+
+    @property
     def timezone(self):
         try:
             return pytz_timezone(self.created_by.userdata.timezone)
@@ -1451,6 +1475,86 @@ class Auction(models.Model):
             return 100
 
     @property
+    def lots_sold_per_minute(self):
+        """Calculate the average lots sold per minute for in-person auctions.
+        This uses the same logic as the auctioneer speed graph, ignoring the first and last 10% of lots."""
+        if self.is_online:
+            return 0  # Not applicable for online auctions
+
+        ignore_percent = 10
+        lots = (
+            Lot.objects.exclude(Q(date_end__isnull=True) | Q(is_deleted=True))
+            .filter(auction=self, winning_price__isnull=False)
+            .order_by("-date_end")
+        )
+        total_lots = lots.count()
+
+        if total_lots < 10:  # Not enough lots for meaningful calculation
+            return 0
+
+        # Calculate start and end indices to ignore first and last 10%
+        start_index = int(ignore_percent / 100 * total_lots)
+        end_index = int((1 - (ignore_percent / 100)) * total_lots) - 1
+
+        if start_index >= end_index:
+            return 0
+
+        # Get the time range for the middle 80% of lots
+        start_date = lots[start_index].date_end
+        end_date = lots[end_index].date_end
+
+        # Calculate total time in minutes
+        total_time = (start_date - end_date).total_seconds() / 60
+
+        # Calculate number of lots in this time period
+        num_lots = end_index - start_index
+
+        if total_time <= 0:
+            return 0
+
+        # Return lots per minute
+        return num_lots / total_time
+
+    @property
+    def total_auction_duration(self):
+        """For in-person auctions, this also uses the same logic as the auctioneer speed graph, ignoring the first and last 10% of lots."""
+        if self.is_online:
+            return 0  # Not applicable for online auctions
+
+        ignore_percent = 10
+        lots = (
+            Lot.objects.exclude(Q(date_end__isnull=True) | Q(is_deleted=True))
+            .filter(auction=self, winning_price__isnull=False)
+            .order_by("-date_end")
+        )
+        total_lots = lots.count()
+
+        if total_lots < 10:  # Not enough lots for meaningful calculation
+            return 0
+
+        # Calculate start and end indices to ignore first and last 10%
+        start_index = int(ignore_percent / 100 * total_lots)
+        end_index = int((1 - (ignore_percent / 100)) * total_lots) - 1
+
+        if start_index >= end_index:
+            return 0
+
+        # Get the time range for the middle 80% of lots
+        start_date = lots[start_index].date_end
+        end_date = lots[end_index].date_end
+
+        # Calculate total time in minutes
+        middle_time = (start_date - end_date).total_seconds() / 60
+        return middle_time + middle_time * ignore_percent * 2 / 100
+
+    @property
+    def total_auction_duration_str(self):
+        """Format total_auction_duration (minutes) as 'Hh MMm'."""
+        minutes_total = int(round(self.total_auction_duration or 0))
+        hours, minutes = divmod(minutes_total, 60)
+        return f"{hours}h {minutes:02d}m"
+
+    @property
     def template_lot_link(self):
         """Not directly used in templates, use template_lot_link_first_column and template_lot_link_separate_column instead"""
         if timezone.now() > self.lot_submission_start_date:
@@ -1725,6 +1829,591 @@ class Auction(models.Model):
     def auction_admins_pks(self):
         """For use in querysets, pks only"""
         return self.auction_admins_qs.values_list("user__pk", flat=True)
+
+    # Stat getter/setter properties
+    @property
+    def get_stat_activity(self):
+        """Get activity chart data from cached stats"""
+        if self.cached_stats and "activity" in self.cached_stats:
+            return self.cached_stats["activity"]
+        return {"labels": [], "providers": [], "data": []}
+
+    def set_stat_activity(self):
+        """Calculate and return activity chart data"""
+        bins = 21
+        days_before = 16
+        days_after = bins - days_before
+        dates_messed_with = False
+
+        if self.is_online:
+            date_start = self.date_end - timezone.timedelta(days=days_before)
+            date_end = self.date_end + timezone.timedelta(days=days_after)
+        else:  # in person
+            date_start = self.date_start - timezone.timedelta(days=days_before)
+            date_end = self.date_start + timezone.timedelta(days=days_after)
+
+        # if date_end is in the future, shift the graph to show the same range, but for the present
+        if date_end > timezone.now():
+            time_difference = date_end - date_start
+            date_end = timezone.now()
+            date_start = date_end - time_difference
+            dates_messed_with = True
+
+        views = PageView.objects.filter(Q(auction=self) | Q(lot_number__auction=self))
+        joins = AuctionTOS.objects.filter(auction=self)
+        new_lots = Lot.objects.filter(auction=self)
+        searches = SearchHistory.objects.filter(auction=self)
+        bids = LotHistory.objects.filter(lot__auction=self, changed_price=True)
+        watches = Watch.objects.filter(lot_number__auction=self)
+
+        return {
+            "labels": self._get_activity_labels(bins, days_before, days_after, dates_messed_with),
+            "providers": ["Views", "Joins", "New lots", "Searches", "Bids", "Watches"],
+            "data": [
+                bin_data(views, "date_start", bins, date_start, date_end),
+                bin_data(joins, "createdon", bins, date_start, date_end),
+                bin_data(new_lots, "date_posted", bins, date_start, date_end),
+                bin_data(searches, "createdon", bins, date_start, date_end),
+                bin_data(bids, "timestamp", bins, date_start, date_end),
+                bin_data(watches, "createdon", bins, date_start, date_end),
+            ],
+        }
+
+    @property
+    def get_stat_attrition(self):
+        """Get attrition chart data from cached stats"""
+        if self.cached_stats and "attrition" in self.cached_stats:
+            return self.cached_stats["attrition"]
+        return {"labels": [], "providers": [], "data": []}
+
+    def set_stat_attrition(self):
+        """Calculate and return attrition chart data"""
+        ignore_percent = 10
+        lots = (
+            Lot.objects.exclude(Q(date_end__isnull=True) | Q(is_deleted=True))
+            .filter(auction=self, winning_price__isnull=False)
+            .order_by("-date_end")
+        )
+        total_lots = lots.count()
+        if total_lots > 0:
+            start_index = int(ignore_percent / 100 * total_lots)
+            end_index = int((1 - (ignore_percent / 100)) * total_lots) - 1
+            start_date = lots[start_index].date_end
+            end_date = lots[end_index].date_end if total_lots > 1 else start_date
+            total_runtime = end_date - start_date
+            add_back_on = total_runtime / ignore_percent
+            start_date = start_date - (add_back_on * 2)
+            end_date = end_date + (add_back_on * 2)
+            lots = lots.filter(date_end__lte=start_date, date_end__gte=end_date)
+
+            attrition_data = [
+                {
+                    "x": (lot.date_end - end_date).total_seconds() // 60,
+                    "y": lot.winning_price,
+                }
+                for lot in lots
+            ]
+            return {
+                "labels": [],
+                "providers": ["Lots"],
+                "data": [attrition_data],
+            }
+        else:
+            return {"labels": [], "providers": ["Lots"], "data": [[]]}
+
+    @property
+    def get_stat_auctioneer_speed(self):
+        """Get auctioneer speed chart data from cached stats"""
+        if self.cached_stats and "auctioneer_speed" in self.cached_stats:
+            return self.cached_stats["auctioneer_speed"]
+        return {"labels": [], "providers": [], "data": []}
+
+    def set_stat_auctioneer_speed(self):
+        """Calculate and return auctioneer speed chart data"""
+        lots = (
+            Lot.objects.exclude(Q(date_end__isnull=True) | Q(is_deleted=True))
+            .filter(auction=self, winning_price__isnull=False)
+            .order_by("-date_end")
+        )
+        auctioneer_data = []
+        for i in range(1, len(lots)):
+            minutes = (lots[i - 1].date_end - lots[i].date_end).total_seconds() / 60
+            ignore_if_more_than = 3  # minutes
+            if minutes <= ignore_if_more_than:
+                auctioneer_data.append({"x": i, "y": minutes})
+        return {
+            "labels": [],
+            "providers": ["Minutes per lot"],
+            "data": [auctioneer_data],
+        }
+
+    @property
+    def get_stat_lot_sell_prices(self):
+        """Get lot sell prices chart data from cached stats"""
+        if self.cached_stats and "lot_sell_prices" in self.cached_stats:
+            return self.cached_stats["lot_sell_prices"]
+        return {"labels": [], "providers": [], "data": []}
+
+    def set_stat_lot_sell_prices(self):
+        """Calculate and return lot sell prices chart data"""
+        sold_lots = self.lots_qs.filter(winning_price__isnull=False)
+
+        # Make bins dynamic based on actual sell prices
+        if sold_lots.exists():
+            from django.db.models import Max
+
+            max_price = sold_lots.aggregate(max_price=Max("winning_price"))["max_price"] or 40
+            # Round up to nearest $10 for cleaner bins
+            max_price = int((max_price + 9) // 10 * 10)
+
+            # Create bins with $2 intervals up to max price
+            num_bins = min(max_price // 2, 30)  # Cap at 30 bins to avoid too many
+            if num_bins < 10:
+                num_bins = 10  # Minimum 10 bins
+
+            histogram = bin_data(
+                sold_lots,
+                "winning_price",
+                number_of_bins=num_bins,
+                start_bin=1,
+                end_bin=max_price - 1,
+                add_column_for_high_overflow=True,
+            )
+
+            # Generate labels dynamically
+            labels = ["Not sold"]
+            for i in range(0, max_price - 1, 2):
+                labels.append(f"${i + 1}-{i + 2}")
+            labels.append(f"${max_price}+")
+
+            return {
+                "labels": labels,
+                "providers": ["Number of lots"],
+                "data": [[self.total_unsold_lots] + histogram],
+            }
+        else:
+            # No sold lots, use default bins
+            histogram = bin_data(
+                sold_lots,
+                "winning_price",
+                number_of_bins=19,
+                start_bin=1,
+                end_bin=39,
+                add_column_for_high_overflow=True,
+            )
+            return {
+                "labels": [
+                    "Not sold",
+                    "$1-2",
+                    "$3-4",
+                    "$5-6",
+                    "$7-8",
+                    "$9-10",
+                    "$11-12",
+                    "$13-14",
+                    "$15-16",
+                    "$17-18",
+                    "$19-20",
+                    "$21-22",
+                    "$23-24",
+                    "$25-26",
+                    "$27-28",
+                    "$29-30",
+                    "$31-32",
+                    "$33-34",
+                    "$35-36",
+                    "$37-38",
+                    "$39-40",
+                    "$40+",
+                ],
+                "providers": ["Number of lots"],
+                "data": [[self.total_unsold_lots] + histogram],
+            }
+
+    @property
+    def get_stat_referrers(self):
+        """Get referrers chart data from cached stats"""
+        if self.cached_stats and "referrers" in self.cached_stats:
+            return self.cached_stats["referrers"]
+        return {"labels": [], "providers": [], "data": []}
+
+    def set_stat_referrers(self):
+        """Calculate and return referrers chart data"""
+        from django.contrib.sites.models import Site
+
+        views = (
+            PageView.objects.filter(Q(auction=self) | Q(lot_number__auction=self))
+            .exclude(referrer__isnull=True)
+            .exclude(referrer__startswith=Site.objects.get_current().domain)
+            .exclude(referrer__exact="")
+            .values("referrer")
+            .annotate(count=Count("referrer"))
+        )
+        labels = []
+        data = []
+        other = 0
+        for view in views:
+            if view["count"] > 1:
+                labels.append(view["referrer"])
+                data.append(view["count"])
+            else:
+                other += 1
+        labels.append("Other")
+        data.append(other)
+        return {
+            "labels": labels,
+            "providers": ["Number of clicks"],
+            "data": [data],
+        }
+
+    @property
+    def get_stat_images(self):
+        """Get images chart data from cached stats"""
+        if self.cached_stats and "images" in self.cached_stats:
+            return self.cached_stats["images"]
+        return {"labels": [], "providers": [], "data": []}
+
+    def set_stat_images(self):
+        """Calculate and return images chart data"""
+        from django.db.models import Avg
+
+        lots = Lot.objects.filter(auction=self, winning_price__isnull=False).annotate(num_images=Count("lotimage"))
+        lots_with_no_images = lots.filter(num_images=0)
+        lots_with_one_image = lots.filter(num_images=1)
+        lots_with_one_or_more_images = lots.filter(num_images__gt=1)
+        medians = []
+        averages = []
+        counts = []
+        for lots_subset in [
+            lots_with_no_images,
+            lots_with_one_image,
+            lots_with_one_or_more_images,
+        ]:
+            try:
+                medians.append(median_value(lots_subset, "winning_price"))
+            except:
+                medians.append(0)
+            averages.append(lots_subset.aggregate(avg_value=Avg("winning_price"))["avg_value"])
+            counts.append(lots_subset.count())
+        return {
+            "labels": ["No images", "One image", "More than one image"],
+            "providers": ["Median sell price", "Average sell price", "Number of lots"],
+            "data": [medians, averages, counts],
+        }
+
+    @property
+    def get_stat_travel_distance(self):
+        """Get travel distance chart data from cached stats"""
+        if self.cached_stats and "travel_distance" in self.cached_stats:
+            return self.cached_stats["travel_distance"]
+        return {"labels": [], "providers": [], "data": []}
+
+    def set_stat_travel_distance(self):
+        """Calculate and return travel distance chart data"""
+        auctiontos = AuctionTOS.objects.filter(auction=self, user__isnull=False)
+        histogram = bin_data(
+            auctiontos,
+            "distance_traveled",
+            number_of_bins=5,
+            start_bin=1,
+            end_bin=51,
+            add_column_for_high_overflow=True,
+        )
+        return {
+            "labels": [
+                "1-10 miles",
+                "11-20 miles",
+                "21-30 miles",
+                "31-40 miles",
+                "41-50 miles",
+                "51+ miles",
+            ],
+            "providers": ["Number of users"],
+            "data": [histogram],
+        }
+
+    @property
+    def get_stat_previous_auctions(self):
+        """Get previous auctions chart data from cached stats"""
+        if self.cached_stats and "previous_auctions" in self.cached_stats:
+            return self.cached_stats["previous_auctions"]
+        return {"labels": [], "providers": [], "data": []}
+
+    def set_stat_previous_auctions(self):
+        """Calculate and return previous auctions chart data"""
+        auctiontos = AuctionTOS.objects.filter(auction=self, email__isnull=False)
+        histogram = bin_data(
+            auctiontos,
+            "previous_auctions_count",
+            number_of_bins=2,
+            start_bin=0,
+            end_bin=2,
+            add_column_for_high_overflow=True,
+        )
+        return {
+            "labels": ["First auction", "1 previous auction", "2+ previous auctions"],
+            "providers": ["Number of users"],
+            "data": [histogram],
+        }
+
+    @property
+    def get_stat_lots_submitted(self):
+        """Get lots submitted chart data from cached stats"""
+        if self.cached_stats and "lots_submitted" in self.cached_stats:
+            return self.cached_stats["lots_submitted"]
+        return {"labels": [], "providers": [], "data": []}
+
+    def set_stat_lots_submitted(self):
+        """Calculate and return lots submitted chart data"""
+        invoices = Invoice.objects.filter(auction=self)
+        histogram = bin_data(
+            invoices,
+            "lots_sold",
+            number_of_bins=4,
+            start_bin=1,
+            end_bin=9,
+            add_column_for_low_overflow=True,
+            add_column_for_high_overflow=True,
+        )
+        return {
+            "labels": [
+                "Buyer only (0 lots sold)",
+                "1-2 lots",
+                "3-4 lots",
+                "5-6 lots",
+                "7-8 lots",
+                "9+ lots",
+            ],
+            "providers": ["Number of users"],
+            "data": [histogram],
+        }
+
+    @property
+    def get_stat_location_volume(self):
+        """Get location volume chart data from cached stats"""
+        if self.cached_stats and "location_volume" in self.cached_stats:
+            return self.cached_stats["location_volume"]
+        return {"labels": [], "providers": [], "data": []}
+
+    def set_stat_location_volume(self):
+        """Calculate and return location volume chart data"""
+        locations = []
+        sold = []
+        bought = []
+        for location in self.location_qs:
+            locations.append(location.name)
+            sold.append(location.total_sold)
+            bought.append(location.total_bought)
+        return {
+            "labels": locations,
+            "providers": ["Total bought", "Total sold"],
+            "data": [bought, sold],
+        }
+
+    @property
+    def get_stat_feature_use(self):
+        """Get feature use chart data from cached stats"""
+        if self.cached_stats and "feature_use" in self.cached_stats:
+            return self.cached_stats["feature_use"]
+        return {"labels": [], "providers": [], "data": []}
+
+    def set_stat_feature_use(self):
+        """Calculate and return feature use chart data"""
+        auctiontos = AuctionTOS.objects.filter(auction=self)
+        auctiontos_with_account = auctiontos.filter(user__isnull=False)
+        searches = SearchHistory.objects.filter(user__isnull=False, auction=self).values("user").distinct().count()
+        seach_percent = int(searches / auctiontos_with_account.count() * 100) if auctiontos_with_account.count() else 0
+        watch_qs = Watch.objects.filter(lot_number__auction=self).values("user").distinct()
+        watches = watch_qs.count()
+        watch_percent = int(watches / auctiontos_with_account.count() * 100) if auctiontos_with_account.count() else 0
+        notifications = (
+            PushInformation.objects.filter(user__in=watch_qs, user__userdata__push_notifications_when_lots_sell=True)
+            .values("user")
+            .distinct()
+            .count()
+        )
+        notification_percent = (
+            int(notifications / auctiontos_with_account.count() * 100) if auctiontos_with_account.count() else 0
+        )
+        has_used_proxy_bidding = UserData.objects.filter(
+            has_used_proxy_bidding=True,
+            user__in=auctiontos_with_account.values_list("user"),
+        ).count()
+        has_used_proxy_bidding_percent = (
+            int(has_used_proxy_bidding / auctiontos_with_account.count() * 100)
+            if auctiontos_with_account.count()
+            else 0
+        )
+        chat = (
+            LotHistory.objects.filter(
+                changed_price=False,
+                lot__auction=self,
+                user__in=auctiontos_with_account.values_list("user"),
+            )
+            .values("user")
+            .distinct()
+            .count()
+        )
+        chat_percent = int(chat / auctiontos_with_account.count() * 100) if auctiontos_with_account.count() else 0
+        if self.is_online:
+            lot_with_buy_now = (
+                Lot.objects.filter(auction=self, buy_now_used=True).values("auctiontos_winner").distinct().count()
+            )
+        else:
+            from django.db.models import F
+
+            lot_with_buy_now = (
+                Lot.objects.filter(auction=self, winning_price=F("buy_now_price"))
+                .values("auctiontos_winner")
+                .distinct()
+                .count()
+            )
+        if auctiontos.count() == 0:
+            lot_with_buy_now_percent = 0
+            account_percent = 0
+        else:
+            account_percent = int(auctiontos_with_account.count() / auctiontos.count() * 100)
+            lot_with_buy_now_percent = int(lot_with_buy_now / auctiontos.count() * 100)
+        invoices = Invoice.objects.filter(auction=self)
+        viewed_invoices = invoices.filter(opened=True)
+        if invoices.count():
+            view_invoice_percent = int(viewed_invoices.count() / invoices.count() * 100)
+        else:
+            view_invoice_percent = 0
+        sold_lots = Lot.objects.filter(auction=self, auctiontos_winner__isnull=False)
+        leave_feedback = sold_lots.filter(~Q(feedback_rating=0)).values("auctiontos_winner").distinct().count()
+        all_sold_lots = sold_lots.values("auctiontos_winner").distinct().count()
+        if all_sold_lots == 0:
+            leave_feedback_percent = 0
+        else:
+            leave_feedback_percent = int(leave_feedback / all_sold_lots * 100)
+        return {
+            "labels": [
+                "An account",
+                "Search",
+                "Watch",
+                "Push notifications as lots sell",
+                "Proxy bidding",
+                "Chat",
+                "Buy now",
+                "View invoice",
+                "Leave feedback for sellers",
+            ],
+            "providers": ["Percent of users"],
+            "data": [
+                [
+                    account_percent,
+                    seach_percent,
+                    watch_percent,
+                    notification_percent,
+                    has_used_proxy_bidding_percent,
+                    chat_percent,
+                    lot_with_buy_now_percent,
+                    view_invoice_percent,
+                    leave_feedback_percent,
+                ]
+            ],
+        }
+
+    def get_stat_misc(self):
+        """A few one-off stats that are slow to calculate and/or dependent on page views"""
+        if self.cached_stats and "misc" in self.cached_stats:
+            return self.cached_stats["misc"]
+        return {}
+
+    def set_stat_misc(self):
+        """A few one-off stats that are slow to calculate and/or dependent on page views"""
+
+        all_views = PageView.objects.filter(Q(auction=self) | Q(lot_number__auction=self))
+        anonymous_views = all_views.values("session_id").annotate(c=Count("session_id")).count()
+        user_views = all_views.values("user").annotate(c=Count("user")).count()
+        total_views = anonymous_views + user_views
+
+        total_bidders = User.objects.filter(bid__lot_number__auction=self).annotate(c=Count("id")).count()
+        total_winners = User.objects.filter(winner__auction=self).annotate(c=Count("id")).count()
+
+        # Additional email/reminder stats
+        reminder_emails_sent = self.number_of_reminder_emails
+        reminder_email_click_rate = self.reminder_email_clicks
+        reminder_email_join_rate = self.reminder_email_joins
+
+        # QR code scans
+        qr_scans = self.number_of_lots_with_scanned_qr
+
+        return {
+            "total_unique_views": total_views,
+            "logged_in_unique_views": user_views,
+            "anonymous_unique_views": anonymous_views,
+            "total_bidders": total_bidders,
+            "total_winners": total_winners,
+            "reminder_emails_sent": reminder_emails_sent,
+            "reminder_email_click_rate": reminder_email_click_rate,
+            "reminder_email_join_rate": reminder_email_join_rate,
+            "number_of_lots_with_scanned_qr": qr_scans,
+        }
+
+    def recalculate_stats(self):
+        """Recalculate and cache all auction statistics.
+        This method calls all the setter methods to calculate chart data
+        and stores it in the cached_stats JSONField to avoid expensive recalculations.
+        """
+        stats = {}
+
+        # Call all setter methods to calculate stats
+        stats["activity"] = self.set_stat_activity()
+        stats["attrition"] = self.set_stat_attrition()
+        stats["auctioneer_speed"] = self.set_stat_auctioneer_speed()
+        stats["lot_sell_prices"] = self.set_stat_lot_sell_prices()
+        stats["referrers"] = self.set_stat_referrers()
+        stats["images"] = self.set_stat_images()
+        stats["travel_distance"] = self.set_stat_travel_distance()
+        stats["previous_auctions"] = self.set_stat_previous_auctions()
+        stats["lots_submitted"] = self.set_stat_lots_submitted()
+        stats["location_volume"] = self.set_stat_location_volume()
+        stats["feature_use"] = self.set_stat_feature_use()
+        stats["misc"] = self.set_stat_misc()
+
+        # Save the stats
+        self.cached_stats = stats
+        self.last_stats_update = timezone.now()
+
+        # Smart scheduling based on auction age and status
+        # Active auctions (start date within a week): recalculate every 4 hours
+        # Other auctions: recalculate once per day
+        # Auctions > 90 days old: don't recalculate automatically
+        now = timezone.now()
+
+        if self.date_start:
+            days_until_start = (self.date_start - now).days
+            days_since_start = (now - self.date_start).days
+
+            # Auctions > 90 days in the past aren't recalculated at all
+            if days_since_start > 90:
+                self.next_update_due = now + timezone.timedelta(hours=4380000)
+            # Active auctions (started within 7 days ago or start within 7 days) - every 4 hours
+            elif -7 <= days_until_start <= 7:
+                self.next_update_due = now + timezone.timedelta(hours=4)
+            # Other auctions - once per day
+            else:
+                self.next_update_due = now + timezone.timedelta(days=1)
+        else:
+            # No start date set - use daily updates
+            self.next_update_due = now + timezone.timedelta(days=1)
+
+        self.save(update_fields=["cached_stats", "last_stats_update", "next_update_due"])
+
+        return stats
+
+    def _get_activity_labels(self, bins, days_before, days_after, dates_messed_with):
+        """Helper method to generate labels for activity chart"""
+        if dates_messed_with:
+            return [(f"{i - 1} days ago") for i in range(bins, 0, -1)]
+        before = [(f"{i} days before") for i in range(days_before, 0, -1)]
+        after = [(f"{i} days after") for i in range(1, days_after)]
+        midpoint = "start"
+        if self.is_online:
+            midpoint = "end"
+        return before + [midpoint] + after
 
     def create_history(self, applies_to, action="Edited", user=None, form=None):
         """Applies to can be RULES, USERS, INVOICES, LOTS, LOT_WINNERS, user should be the user making the change or None if it's a system change.
@@ -3293,6 +3982,7 @@ class Lot(models.Model):
             if (
                 not self.auction.is_online
                 and self.auction.online_bidding != "disable"
+                and self.auction.date_online_bidding_starts
                 and self.auction.date_online_bidding_starts > first_bid_date
             ):
                 return self.auction.date_online_bidding_starts
@@ -3312,9 +4002,17 @@ class Lot(models.Model):
                 return "This auction doesn't allow online bidding"
             if not self.auction.started:
                 return "Bidding hasn't opened yet for this auction"
-            if not self.auction.is_online and timezone.now() > self.auction.date_online_bidding_ends:
+            if (
+                not self.auction.is_online
+                and self.auction.date_online_bidding_ends
+                and timezone.now() > self.auction.date_online_bidding_ends
+            ):
                 return "Online bidding has ended for this auction"
-            if not self.auction.is_online and timezone.now() < self.auction.date_online_bidding_starts:
+            if (
+                not self.auction.is_online
+                and self.auction.date_online_bidding_starts
+                and timezone.now() < self.auction.date_online_bidding_starts
+            ):
                 return "Online bidding hasn't started yet for this auction"
             if self.auction.online_bidding == "buy_now_only" and not self.buy_now_price:
                 return "This lot does not have a buy now price set, you can't buy it now"

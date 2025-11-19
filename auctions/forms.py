@@ -86,6 +86,7 @@ class QuickAddTOS(forms.ModelForm):
         if not self.auction.multi_location:
             self.fields["pickup_location"].initial = self.auction.location_qs.first()
             self.fields["pickup_location"].widget = HiddenInput()
+        self.fields["is_club_member"].label = self.auction.alternative_split_label
 
     def clean(self):
         cleaned_data = super().clean()
@@ -2079,7 +2080,7 @@ class AuctionEditForm(forms.ModelForm):
                 "promote_this_auction",
                 "Edit the text in the rules section above before promoting this auction.  There's still placeholder text in there that needs to be removed.",
             )
-        elif not saved_instance.created_by.userdata.is_trusted:
+        elif cleaned_data.get("promote_this_auction") and not saved_instance.created_by.userdata.is_trusted:
             self.add_error("promote_this_auction", "Your account doesn't have permission to promote auctions.")
         return cleaned_data
 

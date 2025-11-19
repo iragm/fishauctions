@@ -2072,6 +2072,58 @@ class AuctionPropertyTests(StandardTestCase):
         assert self.online_auction.number_of_locations == 1
         assert self.online_auction.all_location_count == 2
 
+    def test_has_non_logical_times(self):
+        """Test that has_non_logical_times property detects illogical auction times"""
+        # Create an auction with logical times (ending in :00:00)
+        logical_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Logical time auction",
+            is_online=True,
+            date_start=timezone.now().replace(hour=14, minute=0, second=0, microsecond=0),
+            date_end=timezone.now().replace(hour=18, minute=0, second=0, microsecond=0) + datetime.timedelta(days=1),
+        )
+        assert logical_auction.has_non_logical_times is False
+
+        # Create an auction with logical times (ending in :30:00)
+        logical_auction_30 = Auction.objects.create(
+            created_by=self.user,
+            title="Logical time auction at 30",
+            is_online=True,
+            date_start=timezone.now().replace(hour=14, minute=30, second=0, microsecond=0),
+            date_end=timezone.now().replace(hour=18, minute=30, second=0, microsecond=0) + datetime.timedelta(days=1),
+        )
+        assert logical_auction_30.has_non_logical_times is False
+
+        # Create an auction with non-logical start time
+        illogical_start = Auction.objects.create(
+            created_by=self.user,
+            title="Illogical start time auction",
+            is_online=True,
+            date_start=timezone.now().replace(hour=14, minute=23, second=0, microsecond=0),
+            date_end=timezone.now().replace(hour=18, minute=0, second=0, microsecond=0) + datetime.timedelta(days=1),
+        )
+        assert illogical_start.has_non_logical_times is not False
+
+        # Create an auction with non-logical end time
+        illogical_end = Auction.objects.create(
+            created_by=self.user,
+            title="Illogical end time auction",
+            is_online=True,
+            date_start=timezone.now().replace(hour=14, minute=0, second=0, microsecond=0),
+            date_end=timezone.now().replace(hour=18, minute=15, second=0, microsecond=0) + datetime.timedelta(days=1),
+        )
+        assert illogical_end.has_non_logical_times is not False
+
+        # Create an auction with seconds not zero
+        illogical_seconds = Auction.objects.create(
+            created_by=self.user,
+            title="Illogical seconds auction",
+            is_online=True,
+            date_start=timezone.now().replace(hour=14, minute=0, second=30, microsecond=0),
+            date_end=timezone.now().replace(hour=18, minute=0, second=0, microsecond=0) + datetime.timedelta(days=1),
+        )
+        assert illogical_seconds.has_non_logical_times is not False
+
 
 class LotPropertyTests(StandardTestCase):
     """Test Lot model properties"""
@@ -2406,6 +2458,58 @@ class AuctionStatsViewTests(StandardTestCase):
         url = f"/auctions/{self.online_auction.slug}/stats/"
         response = self.client.get(url)
         assert response.status_code == 200
+
+    def test_auction_stats_recalculation_threshold(self):
+        """Stats recalculation respects 20-minute threshold"""
+        from django.utils import timezone
+
+        self.client.login(username=self.user.username, password="testpassword")
+        url = f"/auctions/{self.online_auction.slug}/stats/"
+
+        # Test 1: Stats older than 20 minutes should trigger recalculation
+        old_time = timezone.now() - timezone.timedelta(minutes=25)
+        self.online_auction.last_stats_update = old_time
+        self.online_auction.next_update_due = None
+        self.online_auction.save()
+
+        response = self.client.get(url)
+        assert response.status_code == 200
+        # Should show recalculation message in context
+        assert response.context.get("stats_being_recalculated") is True, "Should show recalculation message"
+
+        self.online_auction.refresh_from_db()
+        # next_update_due should be set (scheduled for recalculation)
+        assert self.online_auction.next_update_due is not None, "next_update_due should be set for old stats"
+
+        # Test 2: Stats within 20 minutes should NOT trigger recalculation
+        recent_time = timezone.now() - timezone.timedelta(minutes=10)
+        self.online_auction.last_stats_update = recent_time
+        self.online_auction.next_update_due = None
+        self.online_auction.save()
+
+        response = self.client.get(url)
+        assert response.status_code == 200
+        # Should NOT show recalculation message in context
+        assert response.context.get("stats_being_recalculated") is not True, "Should not show recalculation message"
+
+        self.online_auction.refresh_from_db()
+        # next_update_due should remain None (no recalculation scheduled)
+        assert self.online_auction.next_update_due is None, "next_update_due should not be set for recent stats"
+
+        # Test 3: Already scheduled recalculation should not reschedule
+        old_time = timezone.now() - timezone.timedelta(minutes=25)
+        scheduled_time = timezone.now() + timezone.timedelta(minutes=2)
+        self.online_auction.last_stats_update = old_time
+        self.online_auction.next_update_due = scheduled_time
+        self.online_auction.save()
+
+        response = self.client.get(url)
+        assert response.status_code == 200
+        # Should still show recalculation message but not reschedule
+        assert response.context.get("stats_being_recalculated") is True, "Should show recalculation message"
+
+        self.online_auction.refresh_from_db()
+        assert self.online_auction.next_update_due == scheduled_time, "Should not reschedule if already scheduled"
 
 
 class BulkAddLotsViewTests(StandardTestCase):
@@ -3788,6 +3892,221 @@ class WebSocketConsumerTests(StandardTestCase):
         finally:
             await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
 
+    async def test_lot_consumer_bid_before_online_bidding_starts(self):
+        """Test that bids cannot be placed before online bidding starts for in-person auctions"""
+        from channels.db import database_sync_to_async
+        from channels.testing import WebsocketCommunicator
+
+        from auctions.consumers import LotConsumer
+
+        # Create an in-person auction with online bidding that hasn't started yet
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        online_bidding_start = timezone.now() + datetime.timedelta(hours=2)
+        online_bidding_end = timezone.now() + datetime.timedelta(days=2)
+
+        auction = await database_sync_to_async(Auction.objects.create)(
+            created_by=self.user,
+            title="In-person auction with future online bidding",
+            is_online=False,
+            date_start=timezone.now(),
+            date_end=theFuture,
+            date_online_bidding_starts=online_bidding_start,
+            date_online_bidding_ends=online_bidding_end,
+            online_bidding="allow",
+        )
+        location = await database_sync_to_async(PickupLocation.objects.create)(
+            name="test location", auction=auction, pickup_time=theFuture
+        )
+        seller_tos = await database_sync_to_async(AuctionTOS.objects.create)(
+            user=self.user, auction=auction, pickup_location=location
+        )
+        await database_sync_to_async(AuctionTOS.objects.create)(
+            user=self.user_with_no_lots, auction=auction, pickup_location=location
+        )
+
+        lot = await database_sync_to_async(Lot.objects.create)(
+            lot_name="Test lot before online bidding",
+            auction=auction,
+            auctiontos_seller=seller_tos,
+            quantity=1,
+            reserve_price=10,
+            date_end=theFuture,
+        )
+
+        communicator = WebsocketCommunicator(
+            LotConsumer.as_asgi(),
+            f"/ws/lots/{lot.pk}/",
+        )
+        communicator.scope["user"] = self.user_with_no_lots
+        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
+
+        try:
+            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+
+            # Try to place a bid
+            await communicator.send_json_to({"bid": 15})
+
+            # Should receive an error about online bidding not started
+            found_error = False
+            for _ in range(5):
+                try:
+                    response = await communicator.receive_json_from(timeout=self.RECEIVE_TIMEOUT)
+                    if response.get("error"):
+                        found_error = True
+                        self.assertIn("hasn't started", response["error"].lower())
+                        break
+                except:
+                    break
+
+            self.assertTrue(found_error, "Did not receive expected error about online bidding not started")
+        finally:
+            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
+
+    async def test_lot_consumer_bid_after_online_bidding_ends(self):
+        """Test that bids cannot be placed after online bidding ends for in-person auctions"""
+        from channels.db import database_sync_to_async
+        from channels.testing import WebsocketCommunicator
+
+        from auctions.consumers import LotConsumer
+
+        # Create an in-person auction with online bidding that has ended
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        online_bidding_start = timezone.now() - datetime.timedelta(days=2)
+        online_bidding_end = timezone.now() - datetime.timedelta(hours=1)
+
+        auction = await database_sync_to_async(Auction.objects.create)(
+            created_by=self.user,
+            title="In-person auction with ended online bidding",
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(days=3),
+            date_end=theFuture,
+            date_online_bidding_starts=online_bidding_start,
+            date_online_bidding_ends=online_bidding_end,
+            online_bidding="allow",
+        )
+        location = await database_sync_to_async(PickupLocation.objects.create)(
+            name="test location", auction=auction, pickup_time=theFuture
+        )
+        seller_tos = await database_sync_to_async(AuctionTOS.objects.create)(
+            user=self.user, auction=auction, pickup_location=location
+        )
+        await database_sync_to_async(AuctionTOS.objects.create)(
+            user=self.user_with_no_lots, auction=auction, pickup_location=location
+        )
+
+        lot = await database_sync_to_async(Lot.objects.create)(
+            lot_name="Test lot after online bidding",
+            auction=auction,
+            auctiontos_seller=seller_tos,
+            quantity=1,
+            reserve_price=10,
+            date_end=theFuture,
+        )
+
+        communicator = WebsocketCommunicator(
+            LotConsumer.as_asgi(),
+            f"/ws/lots/{lot.pk}/",
+        )
+        communicator.scope["user"] = self.user_with_no_lots
+        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
+
+        try:
+            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+
+            # Try to place a bid
+            await communicator.send_json_to({"bid": 15})
+
+            # Should receive an error about online bidding ended
+            found_error = False
+            for _ in range(5):
+                try:
+                    response = await communicator.receive_json_from(timeout=self.RECEIVE_TIMEOUT)
+                    if response.get("error"):
+                        found_error = True
+                        self.assertIn("ended", response["error"].lower())
+                        break
+                except:
+                    break
+
+            self.assertTrue(found_error, "Did not receive expected error about online bidding ended")
+        finally:
+            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
+
+    async def test_lot_consumer_bid_on_sold_lot(self):
+        """Test that bids cannot be placed on lots that have already been sold"""
+        from channels.db import database_sync_to_async
+        from channels.testing import WebsocketCommunicator
+
+        from auctions.consumers import LotConsumer
+
+        # Create a sold lot
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        auction = await database_sync_to_async(Auction.objects.create)(
+            created_by=self.user,
+            title="Auction with sold lot",
+            is_online=True,
+            date_start=timezone.now(),
+            date_end=theFuture,
+        )
+        location = await database_sync_to_async(PickupLocation.objects.create)(
+            name="test location", auction=auction, pickup_time=theFuture
+        )
+        seller_tos = await database_sync_to_async(AuctionTOS.objects.create)(
+            user=self.user, auction=auction, pickup_location=location
+        )
+        winner_tos = await database_sync_to_async(AuctionTOS.objects.create)(
+            user=self.user_with_no_lots, auction=auction, pickup_location=location
+        )
+
+        lot = await database_sync_to_async(Lot.objects.create)(
+            lot_name="Sold lot",
+            auction=auction,
+            auctiontos_seller=seller_tos,
+            quantity=1,
+            reserve_price=10,
+            date_end=theFuture,
+            winner=self.user_with_no_lots,
+            auctiontos_winner=winner_tos,
+            winning_price=20,
+        )
+
+        # Try to bid as another user
+        another_user = await database_sync_to_async(User.objects.create_user)(
+            username="another_bidder", password="testpassword", email="another@example.com"
+        )
+        await database_sync_to_async(AuctionTOS.objects.create)(
+            user=another_user, auction=auction, pickup_location=location
+        )
+
+        communicator = WebsocketCommunicator(
+            LotConsumer.as_asgi(),
+            f"/ws/lots/{lot.pk}/",
+        )
+        communicator.scope["user"] = another_user
+        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
+
+        try:
+            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+
+            # Try to place a bid
+            await communicator.send_json_to({"bid": 25})
+
+            # Should receive an error about lot being sold
+            found_error = False
+            for _ in range(5):
+                try:
+                    response = await communicator.receive_json_from(timeout=self.RECEIVE_TIMEOUT)
+                    if response.get("error"):
+                        found_error = True
+                        self.assertIn("sold", response["error"].lower())
+                        break
+                except:
+                    break
+
+            self.assertTrue(found_error, "Did not receive expected error about lot being sold")
+        finally:
+            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
+
     async def test_lot_consumer_auction_admin_can_view(self):
         """Test that auction admins can connect to lot consumer"""
         from channels.db import database_sync_to_async
@@ -4074,3 +4393,197 @@ class HasEverGrantedPermissionTests(StandardTestCase):
         tos_qs = self.online_auction.tos_qs.filter(user=new_user)
         tos = tos_qs.first()
         self.assertFalse(tos.has_ever_granted_permission)
+
+
+class UpdateAuctionStatsCommandTestCase(StandardTestCase):
+    """Test the update_auction_stats management command"""
+
+    def test_command_processes_single_auction(self):
+        """Test that the command processes only one auction per run"""
+        import datetime
+
+        from django.core.management import call_command
+        from django.utils import timezone
+
+        # Set up multiple auctions with due stats updates
+        now = timezone.now()
+
+        # Ensure setUp auctions don't interfere by setting their next_update_due to far future
+        self.online_auction.next_update_due = now + datetime.timedelta(days=365)
+        self.online_auction.save()
+        self.in_person_auction.next_update_due = now + datetime.timedelta(days=365)
+        self.in_person_auction.save()
+
+        # Create three auctions with different next_update_due times
+        auction1 = Auction.objects.create(
+            created_by=self.user,
+            title="Auction 1 - oldest",
+            is_online=True,
+            date_start=now - datetime.timedelta(days=5),
+            date_end=now + datetime.timedelta(days=2),
+        )
+        auction1.next_update_due = now - datetime.timedelta(hours=5)  # Most overdue
+        auction1.save()
+
+        auction2 = Auction.objects.create(
+            created_by=self.user,
+            title="Auction 2 - middle",
+            is_online=True,
+            date_start=now - datetime.timedelta(days=4),
+            date_end=now + datetime.timedelta(days=2),
+        )
+        auction2.next_update_due = now - datetime.timedelta(hours=3)  # Second most overdue
+        auction2.save()
+
+        auction3 = Auction.objects.create(
+            created_by=self.user,
+            title="Auction 3 - newest",
+            is_online=True,
+            date_start=now - datetime.timedelta(days=3),
+            date_end=now + datetime.timedelta(days=2),
+        )
+        auction3.next_update_due = now - datetime.timedelta(hours=1)  # Least overdue
+        auction3.save()
+
+        # Store the original next_update_due times
+        original_due_1 = auction1.next_update_due
+        original_due_2 = auction2.next_update_due
+        original_due_3 = auction3.next_update_due
+
+        # Run the command once
+        call_command("update_auction_stats")
+
+        # Refresh from database
+        auction1.refresh_from_db()
+        auction2.refresh_from_db()
+        auction3.refresh_from_db()
+
+        # The most overdue auction (auction1) should have been updated
+        self.assertIsNotNone(auction1.last_stats_update)
+        self.assertNotEqual(auction1.next_update_due, original_due_1)
+        # The new next_update_due should be in the future
+        self.assertGreater(auction1.next_update_due, now)
+
+        # The other two auctions should NOT have been updated
+        self.assertEqual(auction2.next_update_due, original_due_2)
+        self.assertEqual(auction3.next_update_due, original_due_3)
+
+    def test_command_orders_by_next_update_due(self):
+        """Test that the command processes the most overdue auction first"""
+        import datetime
+
+        from django.core.management import call_command
+        from django.utils import timezone
+
+        now = timezone.now()
+
+        # Ensure setUp auctions don't interfere by setting their next_update_due to far future
+        self.online_auction.next_update_due = now + datetime.timedelta(days=365)
+        self.online_auction.save()
+        self.in_person_auction.next_update_due = now + datetime.timedelta(days=365)
+        self.in_person_auction.save()
+
+        # Create two auctions with different next_update_due times
+        newer_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Newer auction",
+            is_online=True,
+            date_start=now - datetime.timedelta(days=3),
+            date_end=now + datetime.timedelta(days=2),
+        )
+        newer_auction.next_update_due = now - datetime.timedelta(hours=1)  # Less overdue
+        newer_auction.save()
+
+        older_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Older auction",
+            is_online=True,
+            date_start=now - datetime.timedelta(days=5),
+            date_end=now + datetime.timedelta(days=2),
+        )
+        older_auction.next_update_due = now - datetime.timedelta(hours=5)  # More overdue
+        older_auction.save()
+
+        # Run the command
+        call_command("update_auction_stats")
+
+        # Refresh from database
+        newer_auction.refresh_from_db()
+        older_auction.refresh_from_db()
+
+        # The older (more overdue) auction should have been processed
+        self.assertIsNotNone(older_auction.last_stats_update)
+        self.assertGreater(older_auction.next_update_due, now)
+
+        # The newer auction should not have been processed yet
+        self.assertEqual(newer_auction.next_update_due, now - datetime.timedelta(hours=1))
+        self.assertIsNone(newer_auction.last_stats_update)
+
+    def test_command_handles_no_due_auctions(self):
+        """Test that the command handles the case when no auctions are due"""
+        import datetime
+
+        from django.core.management import call_command
+        from django.utils import timezone
+
+        now = timezone.now()
+
+        # Create an auction with next_update_due in the future
+        future_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Future auction",
+            is_online=True,
+            date_start=now - datetime.timedelta(days=3),
+            date_end=now + datetime.timedelta(days=2),
+        )
+        future_auction.next_update_due = now + datetime.timedelta(hours=5)
+        future_auction.save()
+
+        # Run the command - should not raise any errors
+        call_command("update_auction_stats")
+
+        # Refresh from database
+        future_auction.refresh_from_db()
+
+        # The auction should not have been processed
+        self.assertEqual(future_auction.next_update_due, now + datetime.timedelta(hours=5))
+        self.assertIsNone(future_auction.last_stats_update)
+
+
+class LotsByUserViewTest(StandardTestCase):
+    """Test for the LotsByUser view to ensure it handles missing 'user' parameter correctly"""
+
+    def test_lots_by_user_missing_user_parameter(self):
+        """Test that the view doesn't crash when 'user' parameter is missing"""
+        # Access the URL without user parameter, only with auction parameter
+        url = reverse("user_lots") + f"?auction={self.online_auction.slug}"
+        response = self.client.get(url)
+
+        # Should return 200, not crash with MultiValueDictKeyError
+        self.assertEqual(response.status_code, 200)
+
+        # Context should have user set to None
+        self.assertIsNone(response.context["user"])
+
+    def test_lots_by_user_with_valid_user_parameter(self):
+        """Test that the view works correctly with a valid user parameter"""
+        url = reverse("user_lots") + f"?user={self.user.username}"
+        response = self.client.get(url)
+
+        # Should return 200
+        self.assertEqual(response.status_code, 200)
+
+        # Context should have the correct user
+        self.assertEqual(response.context["user"], self.user)
+        self.assertEqual(response.context["view"], "user")
+
+    def test_lots_by_user_with_invalid_user_parameter(self):
+        """Test that the view handles non-existent username gracefully"""
+        url = reverse("user_lots") + "?user=nonexistent_user"
+        response = self.client.get(url)
+
+        # Should return 200, not crash
+        self.assertEqual(response.status_code, 200)
+
+        # Context should have user set to None
+        self.assertIsNone(response.context["user"])
