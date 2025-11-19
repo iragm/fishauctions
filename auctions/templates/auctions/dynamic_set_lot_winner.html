@@ -192,7 +192,7 @@
 
     let result = '';
     let words = text.toLowerCase().split(/[\s-]+/);
-    
+
     for (let word of words) {
       if (numberWords[word] !== undefined) {
         result += numberWords[word];
@@ -200,7 +200,7 @@
         result += word;
       }
     }
-    
+
     return result || null;
   }
 
@@ -208,7 +208,7 @@
   function handleVoiceResult(text) {
     text = text.toLowerCase().trim();
     console.log('Voice recognized:', text);
-    
+
     // Check for undo command
     if (/\bundo\b/.test(text)) {
       console.log('Undo command detected');
@@ -217,7 +217,7 @@
       }
       return;
     }
-    
+
     // Check for sold command
     if (/\bsold\b/.test(text)) {
       console.log('Sold command detected');
@@ -226,7 +226,7 @@
       tryAutoSubmit();
       return;
     }
-    
+
     // Check for lot number
     let lotMatch = text.match(/\blot\s+(?:number\s+)?(\d+|(?:[\w-]+\s*)+?)(?:\s|$)/i);
     if (lotMatch) {
@@ -240,7 +240,7 @@
         return;
       }
     }
-    
+
     // Check for price (dollar/dollars)
     let priceMatch = text.match(/(\d+|(?:[\w-]+\s*)+?)\s+dollars?/i);
     if (priceMatch) {
@@ -254,7 +254,7 @@
         return;
       }
     }
-    
+
     // Check for bidder number
     let bidderMatch = text.match(/\bbidder\s+(\d+|[a-z]|(?:[\w-]+\s*)+?)(?:\s|$)/i);
     if (bidderMatch) {
@@ -280,7 +280,7 @@
       let lot = $("#lot").val();
       let price = $("#price").val();
       let winner = $("#winner").val();
-      
+
       if (lot && price && winner) {
         console.log('Auto-submitting form...');
         sendFormData('save');
@@ -295,18 +295,18 @@
   // Initialize voice recognition
   async function startVoiceRecognition() {
     if (isListening) return;
-    
+
     try {
       $("#voice-status").text("Requesting microphone access...");
       $("#voice-btn").prop("disabled", true);
-      
+
       // Check if Vosklet library is loaded
       if (typeof loadVosklet === 'undefined') {
         $("#voice-status").text("Voice recognition library not loaded yet. Please wait and try again.");
         $("#voice-btn").prop("disabled", false);
         return;
       }
-      
+
       // Request microphone access with proper error handling
       let stream;
       try {
@@ -321,7 +321,7 @@
       } catch (micError) {
         // Handle microphone permission denial or device errors
         let errorMessage = "Microphone access denied. Please allow microphone access in your browser settings.";
-        
+
         if (micError.name === 'NotAllowedError' || micError.name === 'PermissionDeniedError') {
           errorMessage = "Microphone access denied. Please allow microphone access and try again.";
         } else if (micError.name === 'NotFoundError' || micError.name === 'DevicesNotFoundError') {
@@ -333,15 +333,15 @@
         } else if (micError.name === 'TypeError') {
           errorMessage = "Browser doesn't support microphone access.";
         }
-        
+
         console.error("Microphone access error:", micError);
         $("#voice-status").text(errorMessage);
         $("#voice-btn").prop("disabled", false);
         return;
       }
-      
+
       $("#voice-status").text("Initializing speech recognition...");
-      
+
       let ctx = new AudioContext({ sinkId: { type: "none" } });
       let micNode = ctx.createMediaStreamSource(stream);
 
@@ -374,7 +374,7 @@
       $("#voice-btn").html('<i class="bi bi-mic-fill"></i> Stop Listening');
       $("#voice-status").text("Listening...");
       $("#voice-btn").prop("disabled", false);
-      
+
     } catch (err) {
       console.error("Voice recognition error:", err);
       let errorMessage = "Failed to start voice recognition: " + err.message;
@@ -383,7 +383,7 @@
       }
       $("#voice-status").text(errorMessage);
       $("#voice-btn").prop("disabled", false);
-      
+
       // Reset state
       isListening = false;
       voiceRecognizer = null;
@@ -393,18 +393,18 @@
   // Stop voice recognition
   function stopVoiceRecognition() {
     if (!isListening || !voiceRecognizer) return;
-    
+
     try {
       // Stop all media stream tracks
       if (voiceRecognizer.stream) {
         voiceRecognizer.stream.getTracks().forEach(track => track.stop());
       }
-      
+
       // Close audio context
       if (voiceRecognizer.ctx) {
         voiceRecognizer.ctx.close();
       }
-      
+
       voiceRecognizer = null;
       isListening = false;
       $("#voice-btn").removeClass("btn-danger").addClass("btn-primary");

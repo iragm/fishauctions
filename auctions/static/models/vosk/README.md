@@ -10,7 +10,7 @@ https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
 ## Installation Steps
 
 1. Download the model zip file from the link above
-2. Extract the contents 
+2. Extract the contents
 3. Place the extracted `vosk-model-small-en-us-0.15` directory here
 4. The final structure should be:
    ```
@@ -40,7 +40,7 @@ The Vosklet library accesses the model directory via HTTP requests to individual
   - `/static/models/vosk/vosk-model-small-en-us-0.15/am/final.mdl`
   - etc.
 
-**Important**: 
+**Important**:
 - The model URL must end with a trailing slash (`/`)
 - Vosklet will fetch individual files from within the directory
 - nginx serves these files with Cross-Origin headers to enable WebAssembly
@@ -61,4 +61,3 @@ Both URLs should return file contents (not 403 or 404 errors).
 ## Usage
 
 The voice recognition feature in the "Set Lot Winners" page will automatically use this model when available. If the model files are not present, the voice recognition will fail to initialize with an error message about the model not being found.
-

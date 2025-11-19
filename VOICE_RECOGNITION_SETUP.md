@@ -106,7 +106,7 @@ Run `./download_vendor_resources.sh` to download:
 5. **Bootstrap Icons Fonts**
    - Source: https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/fonts/bootstrap-icons.woff2
    - Destination: `auctions/static/fonts/bootstrap-icons.woff2`
-   
+
    - Source: https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/fonts/bootstrap-icons.woff
    - Destination: `auctions/static/fonts/bootstrap-icons.woff`
 
