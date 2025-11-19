@@ -3269,6 +3269,287 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         return super().dispatch(request, *args, **kwargs)
 
 
+class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
+    """Import or update lots from a CSV file"""
+
+    def post(self, request, *args, **kwargs):
+        csv_file = request.FILES.get("csv_file", None)
+        if not csv_file:
+            messages.error(request, "No CSV file provided")
+            url = reverse("auction_lot_list", kwargs={"slug": self.auction.slug})
+            response = HttpResponse(status=200)
+            response["HX-Redirect"] = url
+            return response
+
+        try:
+            csv_file.seek(0)
+            csv_reader = csv.DictReader(TextIOWrapper(csv_file.file))
+            return self.process_csv_data(csv_reader)
+        except (UnicodeDecodeError, ValueError) as e:
+            messages.error(request, f"Unable to read file. Make sure this is a valid UTF-8 CSV file. Error was: {e}")
+            url = reverse("auction_lot_list", kwargs={"slug": self.auction.slug})
+            response = HttpResponse(status=200)
+            response["HX-Redirect"] = url
+            return response
+
+    def process_csv_data(self, csv_reader):
+        """Process CSV data and create/update lots"""
+
+        def extract_info(row, field_name_list, default_response=""):
+            """Extract value from row using case-insensitive field name matching"""
+            case_insensitive_row = {k.lower(): v for k, v in row.items()}
+            for name in field_name_list:
+                value = case_insensitive_row.get(name)
+                if value is not None:
+                    return value
+            return default_response
+
+        def columns_exist(field_names, columns):
+            """Returns True if any value in the list `columns` exists in the file"""
+            case_insensitive_row = {k.lower() for k in field_names}
+            for column in columns:
+                if column in case_insensitive_row:
+                    return True
+            return False
+
+        # Define field name variations for CSV columns
+        lot_number_fields = ["lot number", "lot_number", "lot #", "number"]
+        email_field_names = ["email", "e-mail", "email address", "e-mail address"]
+        name_field_names = ["name", "full name", "first name", "firstname", "bidder name"]
+        lot_name_fields = ["lot name", "lot_name", "item", "item name"]
+        description_fields = ["description", "desc", "details"]
+        quantity_fields = ["quantity", "qty", "amount"]
+        reserve_price_fields = ["reserve price", "reserve_price", "minimum bid", "min bid", "starting bid"]
+        buy_now_price_fields = ["buy now price", "buy_now_price", "buy now", "buynow"]
+        category_fields = ["category", "species category", "species_category"]
+        i_bred_this_fish_fields = ["breeder points", "i bred this fish", "i_bred_this_fish", "bred"]
+        donation_fields = ["donation", "donate"]
+
+        # Use auction's custom field names for matching
+        custom_checkbox_fields = ["custom checkbox", "custom_checkbox"]
+        if self.auction.use_custom_checkbox_field and self.auction.custom_checkbox_name:
+            custom_checkbox_fields.append(self.auction.custom_checkbox_name.lower())
+
+        custom_field_1_fields = ["custom field", "custom_field_1", "custom field 1"]
+        if self.auction.custom_field_1 != "disable" and self.auction.custom_field_1_name:
+            custom_field_1_fields.append(self.auction.custom_field_1_name.lower())
+
+        # Track results
+        lots_created = 0
+        lots_updated = 0
+        users_created = 0
+        errors = {
+            "missing_info": 0,
+            "closed_invoices": 0,
+            "no_lot_number_no_bidder": 0,
+        }
+
+        try:
+            for row in csv_reader:
+                # Extract core fields
+                lot_number = extract_info(row, lot_number_fields)
+                email = extract_info(row, email_field_names)
+                name = extract_info(row, name_field_names)
+
+                # Extract lot fields
+                lot_name = extract_info(row, lot_name_fields)
+                description = extract_info(row, description_fields)
+                quantity_str = extract_info(row, quantity_fields, "1")
+                reserve_price_str = extract_info(row, reserve_price_fields)
+                buy_now_price_str = extract_info(row, buy_now_price_fields)
+                category_name = extract_info(row, category_fields)
+                i_bred_this_fish_str = extract_info(row, i_bred_this_fish_fields)
+                donation_str = extract_info(row, donation_fields)
+                custom_checkbox_str = extract_info(row, custom_checkbox_fields)
+                custom_field_1 = extract_info(row, custom_field_1_fields)
+
+                # Convert boolean fields
+                def to_bool(value):
+                    if isinstance(value, str):
+                        return value.lower() in ["yes", "true", "1", "y", "t"]
+                    return bool(value)
+
+                i_bred_this_fish = to_bool(i_bred_this_fish_str)
+                donation = to_bool(donation_str)
+                custom_checkbox = to_bool(custom_checkbox_str)
+
+                # Convert numeric fields
+                try:
+                    quantity = int(quantity_str) if quantity_str else 1
+                except ValueError:
+                    quantity = 1
+
+                try:
+                    reserve_price = int(reserve_price_str) if reserve_price_str else None
+                except ValueError:
+                    reserve_price = None
+
+                try:
+                    buy_now_price = int(buy_now_price_str) if buy_now_price_str else None
+                except ValueError:
+                    buy_now_price = None
+
+                # Look up category
+                category = None
+                if category_name:
+                    category = Category.objects.filter(name__iexact=category_name).first()
+
+                # Step 1: If lot number exists, try to find and update the lot
+                lot = None
+                if lot_number:
+                    # Search by custom_lot_number first, then lot_number_int
+                    lot = (
+                        Lot.objects.exclude(is_deleted=True)
+                        .filter(auction=self.auction, custom_lot_number=lot_number)
+                        .first()
+                    )
+                    if not lot:
+                        # Try to parse as int for lot_number_int search, but don't error if it fails
+                        try:
+                            lot_number_int = int(lot_number)
+                            lot = (
+                                Lot.objects.exclude(is_deleted=True)
+                                .filter(auction=self.auction, lot_number_int=lot_number_int)
+                                .first()
+                            )
+                        except ValueError:
+                            # Lot number is not numeric, that's fine - it might be a custom lot number
+                            pass
+
+                    if lot:
+                        # Update existing lot (don't update winner, winning_price, partial_refund, banned)
+                        if lot_name:
+                            lot.lot_name = lot_name[:40]
+                        if description:
+                            lot.summernote_description = description
+                        if quantity:
+                            lot.quantity = quantity
+                        if reserve_price is not None:
+                            lot.reserve_price = reserve_price
+                        if buy_now_price is not None:
+                            lot.buy_now_price = buy_now_price
+                        if category:
+                            lot.species_category = category
+                        # Boolean fields always update
+                        lot.i_bred_this_fish = i_bred_this_fish
+                        lot.donation = donation
+                        lot.custom_checkbox = custom_checkbox
+                        if custom_field_1:
+                            lot.custom_field_1 = custom_field_1[:60]
+                        lot.save()
+                        lots_updated += 1
+                        continue
+
+                # Step 2: No existing lot found, try to create a new one
+                # Need both name and email to find/create user
+                if not name or not email:
+                    errors["no_lot_number_no_bidder"] += 1
+                    continue
+
+                # Step 3: Find or create AuctionTOS
+                tos = self.auction.find_user(name=name, email=email)
+                if not tos:
+                    # Create new AuctionTOS
+                    tos = AuctionTOS.objects.create(
+                        auction=self.auction,
+                        pickup_location=self.auction.location_qs.first(),
+                        manually_added=True,
+                        name=name[:181],
+                        email=email[:254],
+                    )
+                    users_created += 1
+                    # Update auction history
+                    self.auction.create_history(
+                        applies_to="USERS",
+                        action=f"Added user {name} via CSV import",
+                        user=self.request.user,
+                    )
+
+                # Step 4: Check invoice status
+                invoice = Invoice.objects.filter(auctiontos_user=tos, auction=self.auction).first()
+                if not invoice:
+                    invoice = Invoice.objects.create(auctiontos_user=tos, auction=self.auction)
+
+                if invoice.status != "DRAFT":
+                    errors["closed_invoices"] += 1
+                    continue
+
+                # Step 5: Create new lot
+                if not lot_name:
+                    errors["missing_info"] += 1
+                    continue
+
+                new_lot = Lot(
+                    lot_name=lot_name[:40],
+                    summernote_description=description if description else "",
+                    quantity=quantity,
+                    reserve_price=reserve_price if reserve_price is not None else self.auction.minimum_bid,
+                    buy_now_price=buy_now_price,
+                    i_bred_this_fish=i_bred_this_fish,
+                    donation=donation,
+                    custom_checkbox=custom_checkbox,
+                    custom_field_1=custom_field_1[:60] if custom_field_1 else "",
+                    auctiontos_seller=tos,
+                    auction=self.auction,
+                    added_by=self.request.user,
+                )
+                if tos.user:
+                    new_lot.user = tos.user
+                if category:
+                    new_lot.species_category = category
+                new_lot.save()
+                lots_created += 1
+
+            # Build success/error messages
+            msg_parts = []
+            if lots_created:
+                msg_parts.append(f"{lots_created} lot{'s' if lots_created != 1 else ''} created")
+            if lots_updated:
+                msg_parts.append(f"{lots_updated} lot{'s' if lots_updated != 1 else ''} updated")
+            if users_created:
+                msg_parts.append(f"{users_created} user{'s' if users_created != 1 else ''} added")
+
+            if msg_parts:
+                messages.success(self.request, ", ".join(msg_parts))
+
+            # Report errors separately for clarity
+            if errors["no_lot_number_no_bidder"]:
+                messages.warning(
+                    self.request,
+                    f"{errors['no_lot_number_no_bidder']} row(s) skipped: missing lot number and bidder information",
+                )
+            if errors["missing_info"]:
+                messages.warning(
+                    self.request, f"{errors['missing_info']} row(s) skipped: missing required lot information"
+                )
+            if errors["closed_invoices"]:
+                messages.warning(
+                    self.request,
+                    f"{errors['closed_invoices']} lot(s) not created: user's invoice is not open",
+                )
+
+            # Update auction history
+            if lots_created or lots_updated:
+                history_msg = f"CSV import: {lots_created} lots created, {lots_updated} lots updated"
+                if users_created:
+                    history_msg += f", {users_created} users added"
+                self.auction.create_history(applies_to="LOTS", action=history_msg, user=self.request.user)
+
+            url = reverse("auction_lot_list", kwargs={"slug": self.auction.slug})
+            response = HttpResponse(status=200)
+            response["HX-Redirect"] = url
+            return response
+
+        except (UnicodeDecodeError, ValueError) as e:
+            messages.error(
+                self.request, f"Unable to read file. Make sure this is a valid UTF-8 CSV file. Error was: {e}"
+            )
+            url = reverse("auction_lot_list", kwargs={"slug": self.auction.slug})
+            response = HttpResponse(status=200)
+            response["HX-Redirect"] = url
+            return response
+
+
 class ViewLot(DetailView):
     """Show the picture and detailed information about a lot, and allow users to place bids"""
 
