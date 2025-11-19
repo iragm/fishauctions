@@ -11,3 +11,4 @@ staticfiles/
 logs/
 tos.html
 auctions/static/models/
+auctions/static/js/vendor/Vosklet.wasm
