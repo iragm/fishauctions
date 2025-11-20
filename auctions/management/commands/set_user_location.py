@@ -56,11 +56,17 @@ class Command(BaseCommand):
                                     country_name = value.get("country", "")
                                     if country_name == "United States":
                                         user.distance_unit = "mi"
+                                        user.preferred_currency = "USD"
                                     elif country_name == "Canada":
                                         user.distance_unit = "km"
+                                        user.preferred_currency = "CAD"
+                                    elif country_name == "United Kingdom":
+                                        user.distance_unit = "km"
+                                        user.preferred_currency = "GBP"
                                     else:
                                         # Default to km for all other countries
                                         user.distance_unit = "km"
+                                        user.preferred_currency = "USD"
                                     user.save()
                                     logger.info(
                                         "assigning %s with IP %s a location", user.user.email, user.last_ip_address

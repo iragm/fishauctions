@@ -2759,6 +2759,7 @@ class ChangeUserPreferencesForm(forms.ModelForm):
             "email_visible",
             "show_ads",
             "distance_unit",
+            "preferred_currency",
             "email_me_about_new_auctions",
             "email_me_about_new_auctions_distance",
             "email_me_about_new_local_lots",
@@ -2833,6 +2834,10 @@ class ChangeUserPreferencesForm(forms.ModelForm):
                 ),
                 Div(
                     "distance_unit",
+                    css_class="col-md-4",
+                ),
+                Div(
+                    "preferred_currency",
                     css_class="col-md-4",
                 ),
                 css_class="row",

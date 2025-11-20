@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% load crispy_forms_tags %}
+{% load currency_filters %}
 {% block title %} {{ auction.title }} {% endblock %}
 {% load static %}
 {% block extra_js %}
@@ -180,9 +181,9 @@ function initMap() {
                 {% else %} {% if auction.winning_bid_percent_to_club %} <li>{% if auction.pre_register_lot_discount_percent %}For lots registered by auction staff on site, you{% else %}You{% endif %} will be charged {{ auction.winning_bid_percent_to_club }}% of the winning price per lot you sell</li> {% endif %}
                 {% if auction.lot_entry_fee %} <li>You will be charged a flat rate of ${{ auction.lot_entry_fee }} per lot you sell</li> {% endif %}
                 {% endif %}
-                {% if auction.unsold_lot_fee %}<li>If your lot does not sell, you will be charged ${{ auction.unsold_lot_fee }}</li>{% endif %}
-                {% if auction.force_donation_threshold %}<li>If your lot sells for ${{auction.force_donation_threshold}} or less, it will be considered a donation to the club</li>{% endif %}
-                {% if auction.minimum_bid > 2 %} <li>There will be a minimum bid of ${{auction.minimum_bid}} on all lots{% if auction.reserve_price != "disable" %}, and sellers can set their own minimum bids{% endif %}</li> {% endif %}
+                {% if auction.unsold_lot_fee %}<li>If your lot does not sell, you will be charged {{ auction.currency_symbol }}{{ auction.unsold_lot_fee }}</li>{% endif %}
+                {% if auction.force_donation_threshold %}<li>If your lot sells for {{ auction.currency_symbol }}{{auction.force_donation_threshold}} or less, it will be considered a donation to the club</li>{% endif %}
+                {% if auction.minimum_bid > 2 %} <li>There will be a minimum bid of {{ auction.currency_symbol }}{{auction.minimum_bid}} on all lots{% if auction.reserve_price != "disable" %}, and sellers can set their own minimum bids{% endif %}</li> {% endif %}
                 {% if auction.buy_now != 'disable' %} <li>Sellers can set a buy now price on their lots, which will allow a lot to be sold without bidding</li> {% endif %}
             </ul>
 

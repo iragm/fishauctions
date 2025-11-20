@@ -898,6 +898,20 @@ class Auction(models.Model):
             result = "The " + result
         return result
 
+    @property
+    def currency(self):
+        """Get the currency for this auction based on the creator"""
+        if self.created_by:
+            return self.created_by.userdata.currency
+        return "USD"
+
+    @property
+    def currency_symbol(self):
+        """Get the currency symbol for this auction"""
+        if self.currency == "GBP":
+            return "£"
+        return "$"
+
     def delete(self, *args, **kwargs):
         self.is_deleted = True
         self.save()
@@ -3407,6 +3421,22 @@ class Lot(models.Model):
     def __str__(self):
         return "" + str(self.lot_number_display) + " - " + self.lot_name
 
+    @property
+    def currency(self):
+        """Get the currency for this lot based on the auction creator or lot owner"""
+        if self.auction and self.auction.created_by:
+            return self.auction.created_by.userdata.currency
+        elif self.user:
+            return self.user.userdata.currency
+        return "USD"
+
+    @property
+    def currency_symbol(self):
+        """Get the currency symbol for this lot"""
+        if self.currency == "GBP":
+            return "£"
+        return "$"
+
     def add_winner_message(self, user, tos, winning_price):
         """Create a lot history message when a winner is declared (or changed)
         It's critical that this function is called every time the winner is changed so that invoices get recalculated"""
@@ -4522,6 +4552,20 @@ class Invoice(models.Model):
     memo.help_text = "Only other auction admins can see this"
 
     @property
+    def currency(self):
+        """Get the currency for this invoice based on the auction creator"""
+        if self.auction and self.auction.created_by:
+            return self.auction.created_by.userdata.currency
+        return "USD"
+
+    @property
+    def currency_symbol(self):
+        """Get the currency symbol for this invoice"""
+        if self.currency == "GBP":
+            return "£"
+        return "$"
+
+    @property
     def show_payment_button(self):
         """True if we can show the PayPal button"""
         if not (settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET):
@@ -5315,6 +5359,13 @@ class UserData(models.Model):
         verbose_name="Distance unit",
     )
     distance_unit.help_text = "Unit for displaying distances"
+    preferred_currency = models.CharField(
+        max_length=10,
+        choices=[("USD", "US Dollar ($)"), ("CAD", "Canadian Dollar ($)"), ("GBP", "British Pound (£)")],
+        default="USD",
+        verbose_name="Preferred currency",
+    )
+    preferred_currency.help_text = "Currency to display for prices"
 
     # breederboard info
     rank_unique_species = models.PositiveIntegerField(null=True, blank=True)
@@ -5598,9 +5649,14 @@ class UserData(models.Model):
 
     @property
     def currency(self):
+        # First check if user has set a preferred currency
+        if self.preferred_currency:
+            return self.preferred_currency
+        # Fall back to PayPalSeller if available
         paypal_seller = PayPalSeller.objects.filter(user=self.user).first()
         if paypal_seller and paypal_seller.currency:
             return paypal_seller.currency
+        # Fall back to location-based currency
         if not self.location:
             return "USD"
         if self.location.name == "Canada":

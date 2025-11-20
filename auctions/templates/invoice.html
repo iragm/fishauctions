@@ -1,5 +1,6 @@
 {% extends base_template_name %}
 {% load crispy_forms_tags %}
+{% load currency_filters %}
 {% block title %} Invoice for {{ invoice.label }} {% endblock %}
 {% load static %}
 {% block extra_js %}
@@ -247,22 +248,22 @@ document.addEventListener("DOMContentLoaded", function() {
   </tr>
   <tr>
     <td>Total payout</td>
-    <td>${{ invoice.total_sold|floatformat:2 }}</td>
+    <td>{{ invoice.currency_symbol }}{{ invoice.total_sold|floatformat:2 }}</td>
   </tr>
   <tr>
     <td>Total bought</td>
-    <td>${{ invoice.total_bought|floatformat:2 }}</td>
+    <td>{{ invoice.currency_symbol }}{{ invoice.total_bought|floatformat:2 }}</td>
   </tr>
   {% if invoice.first_bid_payout %}
     <tr>
       <td>Auction promotion</td>
-      <td>${{ invoice.first_bid_payout|floatformat:2 }}</td>
+      <td>{{ invoice.currency_symbol }}{{ invoice.first_bid_payout|floatformat:2 }}</td>
     </tr>
   {% endif %}
   {% if invoice.tax %}
   <tr>
     <td>Tax</td>
-    <td>${{invoice.tax|floatformat:2 }}</td>
+    <td>{{ invoice.currency_symbol }}{{invoice.tax|floatformat:2 }}</td>
   </tr>
   {% endif %}
   {% for adjustment in invoice.changed_adjustments %}
@@ -274,7 +275,7 @@ document.addEventListener("DOMContentLoaded", function() {
   {% for payment in invoice.payments.all %}
     <tr>
       <td>{{ payment.payment_method }}{% if payment.external_id %} ({{ payment.external_id }}){% endif %}</td>
-      <td>${{ payment.amount|floatformat:2 }}</td>
+      <td>{{ invoice.currency_symbol }}{{ payment.amount|floatformat:2 }}</td>
     </tr>
   {% endfor %}
   <tr>
@@ -346,7 +347,7 @@ document.addEventListener("DOMContentLoaded", function() {
         {% endif %}
         <td>
           {% if lot.winning_price %}
-            ${{ lot.winning_price|floatformat:2 }}
+            {{ invoice.currency_symbol }}{{ lot.winning_price|floatformat:2 }}
           {% else %}
             {% if lot.banned %}
               Removed
@@ -355,12 +356,12 @@ document.addEventListener("DOMContentLoaded", function() {
             {% endif %}
           {% endif %}
         </td>
-        <td>${{ lot.club_cut|floatformat:2 }}{% if lot.pre_register_discount %}*{% endif %}</td>
+        <td>{{ invoice.currency_symbol }}{{ lot.club_cut|floatformat:2 }}{% if lot.pre_register_discount %}*{% endif %}</td>
         <td>
           {% if lot.donation %}
             Donation
           {% else %}
-            ${{ lot.your_cut|floatformat:2 }}
+            {{ invoice.currency_symbol }}{{ lot.your_cut|floatformat:2 }}
           {% endif %}
         </td>
       </tr>
@@ -368,8 +369,8 @@ document.addEventListener("DOMContentLoaded", function() {
   </tbody>
 </table>
 <small><div class="float-right">{% if invoice.pre_register_used %}*Pre-registeration discount applied{% endif %}</small><br></div>
-<b>Total donations:</b> ${{ invoice.total_donations|floatformat:2 }}<br>
-<b>Total payout:</b> ${{ invoice.total_sold|floatformat:2 }}<br>
+<b>Total donations:</b> {{ invoice.currency_symbol }}{{ invoice.total_donations|floatformat:2 }}<br>
+<b>Total payout:</b> {{ invoice.currency_symbol }}{{ invoice.total_sold|floatformat:2 }}<br>
 {% endif %}
 <br>
 <br>
@@ -431,13 +432,13 @@ document.addEventListener("DOMContentLoaded", function() {
           </td>
           {% endif %}
           <td>
-            ${{ lot.final_price|floatformat:2 }}
+            {{ invoice.currency_symbol }}{{ lot.final_price|floatformat:2 }}
           </td>
         </tr>
       {% endfor %}
     </tbody>
   </table>
-  <b>Total bought:</b> ${{ invoice.total_bought|floatformat:2 }}     <br>
+  <b>Total bought:</b> {{ invoice.currency_symbol }}{{ invoice.total_bought|floatformat:2 }}     <br>
   </div>
 {% endif %}
 {% if request.user.is_superuser and show_links %}
