@@ -5372,7 +5372,7 @@ class UserData(models.Model):
         default="USD",
         verbose_name="Preferred currency",
     )
-    preferred_currency.help_text = "Currency to display for prices"
+    preferred_currency.help_text = "This currency will be used in any auctions you create"
 
     # breederboard info
     rank_unique_species = models.PositiveIntegerField(null=True, blank=True)
