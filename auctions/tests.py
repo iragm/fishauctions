@@ -2868,6 +2868,7 @@ class DistanceUnitTests(StandardTestCase):
         # When user submits with 80 km, it should save as ~50 miles
         form_data = {
             "distance_unit": "km",
+            "preferred_currency": "USD",
             "local_distance": 80,
             "email_me_about_new_auctions_distance": 160,
             "email_me_about_new_in_person_auctions_distance": 160,
@@ -2904,6 +2905,7 @@ class DistanceUnitTests(StandardTestCase):
 
         form_data = {
             "distance_unit": "mi",
+            "preferred_currency": "USD",
             "local_distance": 50,
             "email_me_about_new_auctions_distance": 100,
             "email_me_about_new_in_person_auctions_distance": 100,
@@ -4939,12 +4941,25 @@ class CurrencyCustomizationTests(StandardTestCase):
         self.assertEqual(response.status_code, 200)
 
         # Change currency to GBP
-        url = reverse("change_preferences")
+        url = reverse("preferences")
         response = self.client.post(
             url,
             {
                 "preferred_currency": "GBP",
                 "distance_unit": "mi",
+                "email_visible": False,
+                "show_ads": True,
+                "email_me_about_new_auctions": True,
+                "email_me_about_new_local_lots": True,
+                "email_me_about_new_lots_ship_to_location": True,
+                "email_me_when_people_comment_on_my_lots": True,
+                "email_me_about_new_chat_replies": True,
+                "email_me_about_new_in_person_auctions": True,
+                "send_reminder_emails_about_joining_auctions": True,
+                "username_visible": True,
+                "share_lot_images": True,
+                "auto_add_images": True,
+                "push_notifications_when_lots_sell": False,
             },
             follow=True,
         )
