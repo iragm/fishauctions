@@ -1997,8 +1997,8 @@ class Auction(models.Model):
             # Generate labels dynamically
             labels = ["Not sold"]
             for i in range(0, max_price - 1, 2):
-                labels.append(f"${i + 1}-{i + 2}")
-            labels.append(f"${max_price}+")
+                labels.append(f"{self.currency_symbol}{i + 1}-{i + 2}")
+            labels.append(f"{self.currency_symbol}{max_price}+")
 
             return {
                 "labels": labels,
@@ -2018,27 +2018,27 @@ class Auction(models.Model):
             return {
                 "labels": [
                     "Not sold",
-                    "$1-2",
-                    "$3-4",
-                    "$5-6",
-                    "$7-8",
-                    "$9-10",
-                    "$11-12",
-                    "$13-14",
-                    "$15-16",
-                    "$17-18",
-                    "$19-20",
-                    "$21-22",
-                    "$23-24",
-                    "$25-26",
-                    "$27-28",
-                    "$29-30",
-                    "$31-32",
-                    "$33-34",
-                    "$35-36",
-                    "$37-38",
-                    "$39-40",
-                    "$40+",
+                    f"{self.currency_symbol}1-2",
+                    f"{self.currency_symbol}3-4",
+                    f"{self.currency_symbol}5-6",
+                    f"{self.currency_symbol}7-8",
+                    f"{self.currency_symbol}9-10",
+                    f"{self.currency_symbol}11-12",
+                    f"{self.currency_symbol}13-14",
+                    f"{self.currency_symbol}15-16",
+                    f"{self.currency_symbol}17-18",
+                    f"{self.currency_symbol}19-20",
+                    f"{self.currency_symbol}21-22",
+                    f"{self.currency_symbol}23-24",
+                    f"{self.currency_symbol}25-26",
+                    f"{self.currency_symbol}27-28",
+                    f"{self.currency_symbol}29-30",
+                    f"{self.currency_symbol}31-32",
+                    f"{self.currency_symbol}33-34",
+                    f"{self.currency_symbol}35-36",
+                    f"{self.currency_symbol}37-38",
+                    f"{self.currency_symbol}39-40",
+                    f"{self.currency_symbol}40+",
                 ],
                 "providers": ["Number of lots"],
                 "data": [[self.total_unsold_lots] + histogram],
@@ -3440,7 +3440,7 @@ class Lot(models.Model):
     def add_winner_message(self, user, tos, winning_price):
         """Create a lot history message when a winner is declared (or changed)
         It's critical that this function is called every time the winner is changed so that invoices get recalculated"""
-        message = f"{user.username} has set bidder {tos} as the winner of this lot (${winning_price})"
+        message = f"{user.username} has set bidder {tos} as the winner of this lot ({self.currency_symbol}{winning_price})"
         LotHistory.objects.create(
             lot=self,
             user=user,
@@ -4976,7 +4976,9 @@ class InvoiceAdjustment(models.Model):
         if self.adjustment_type in ["DISCOUNT", "DISCOUNT_PERCENT"]:
             result += "-"
         if self.adjustment_type in ["ADD", "DISCOUNT"]:
-            result += f"${self.formatted_float_value}"
+            # Get currency symbol from the invoice
+            currency_symbol = self.invoice.currency_symbol if self.invoice else "$"
+            result += f"{currency_symbol}{self.formatted_float_value}"
         else:
             result += f"{self.amount}%"
         return result
