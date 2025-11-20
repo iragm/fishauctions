@@ -52,7 +52,7 @@ class Command(BaseCommand):
                                         user.location = next(
                                             value for value in [continent, country, default] if value is not None
                                         )
-                                    # Set distance_unit based on country
+                                    # Set distance_unit and preferred_currency based on country
                                     country_name = value.get("country", "")
                                     if country_name == "United States":
                                         user.distance_unit = "mi"
@@ -63,8 +63,44 @@ class Command(BaseCommand):
                                     elif country_name == "United Kingdom":
                                         user.distance_unit = "km"
                                         user.preferred_currency = "GBP"
+                                    elif country_name == "Australia":
+                                        user.distance_unit = "km"
+                                        user.preferred_currency = "AUD"
+                                    elif country_name == "Japan":
+                                        user.distance_unit = "km"
+                                        user.preferred_currency = "JPY"
+                                    elif country_name == "China":
+                                        user.distance_unit = "km"
+                                        user.preferred_currency = "CNY"
+                                    elif country_name == "Switzerland":
+                                        user.distance_unit = "km"
+                                        user.preferred_currency = "CHF"
+                                    elif country_name in [
+                                        "Austria",
+                                        "Belgium",
+                                        "Cyprus",
+                                        "Estonia",
+                                        "Finland",
+                                        "France",
+                                        "Germany",
+                                        "Greece",
+                                        "Ireland",
+                                        "Italy",
+                                        "Latvia",
+                                        "Lithuania",
+                                        "Luxembourg",
+                                        "Malta",
+                                        "Netherlands",
+                                        "Portugal",
+                                        "Slovakia",
+                                        "Slovenia",
+                                        "Spain",
+                                    ]:
+                                        # Eurozone countries
+                                        user.distance_unit = "km"
+                                        user.preferred_currency = "EUR"
                                     else:
-                                        # Default to km for all other countries
+                                        # Default to km and USD for all other countries
                                         user.distance_unit = "km"
                                         user.preferred_currency = "USD"
                                     user.save()

@@ -50,7 +50,7 @@ from post_office import mail
 from pytz import timezone as pytz_timezone
 from webpush.models import PushInformation
 
-from .helper_functions import bin_data
+from .helper_functions import bin_data, get_currency_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -908,9 +908,7 @@ class Auction(models.Model):
     @property
     def currency_symbol(self):
         """Get the currency symbol for this auction"""
-        if self.currency == "GBP":
-            return "£"
-        return "$"
+        return get_currency_symbol(self.currency)
 
     def delete(self, *args, **kwargs):
         self.is_deleted = True
@@ -3433,14 +3431,14 @@ class Lot(models.Model):
     @property
     def currency_symbol(self):
         """Get the currency symbol for this lot"""
-        if self.currency == "GBP":
-            return "£"
-        return "$"
+        return get_currency_symbol(self.currency)
 
     def add_winner_message(self, user, tos, winning_price):
         """Create a lot history message when a winner is declared (or changed)
         It's critical that this function is called every time the winner is changed so that invoices get recalculated"""
-        message = f"{user.username} has set bidder {tos} as the winner of this lot ({self.currency_symbol}{winning_price})"
+        message = (
+            f"{user.username} has set bidder {tos} as the winner of this lot ({self.currency_symbol}{winning_price})"
+        )
         LotHistory.objects.create(
             lot=self,
             user=user,
@@ -4561,9 +4559,7 @@ class Invoice(models.Model):
     @property
     def currency_symbol(self):
         """Get the currency symbol for this invoice"""
-        if self.currency == "GBP":
-            return "£"
-        return "$"
+        return get_currency_symbol(self.currency)
 
     @property
     def show_payment_button(self):
@@ -5363,7 +5359,16 @@ class UserData(models.Model):
     distance_unit.help_text = "Unit for displaying distances"
     preferred_currency = models.CharField(
         max_length=10,
-        choices=[("USD", "US Dollar ($)"), ("CAD", "Canadian Dollar ($)"), ("GBP", "British Pound (£)")],
+        choices=[
+            ("USD", "US Dollar ($)"),
+            ("CAD", "Canadian Dollar ($)"),
+            ("GBP", "British Pound (£)"),
+            ("EUR", "Euro (€)"),
+            ("JPY", "Japanese Yen (¥)"),
+            ("AUD", "Australian Dollar ($)"),
+            ("CHF", "Swiss Franc (CHF)"),
+            ("CNY", "Chinese Yuan (¥)"),
+        ],
         default="USD",
         verbose_name="Preferred currency",
     )

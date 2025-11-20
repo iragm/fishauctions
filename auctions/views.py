@@ -2591,7 +2591,9 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                     "success_message": f"Lot {lot.lot_number_display} already sold for {lot.currency_symbol}{lot.winning_price} to {lot.auctiontos_winner.bidder_number}.  If this is not correct, you can undo this sale",
                 }
         if lot and (action == "validate" or not result["success_message"]) and lot.high_bidder:
-            result["online_high_bidder_message"] = f"Sell to {lot.high_bidder_for_admins} for {lot.currency_symbol}{lot.high_bid}"
+            result["online_high_bidder_message"] = (
+                f"Sell to {lot.high_bidder_for_admins} for {lot.currency_symbol}{lot.high_bid}"
+            )
             # js code is not in place for this, also remove code from view_lot_simple
         if lot and not lot_error:
             lot = "valid"

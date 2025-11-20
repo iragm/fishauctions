@@ -5,6 +5,27 @@ from collections import Counter
 from datetime import datetime, timedelta
 
 
+def get_currency_symbol(currency_code):
+    """
+    Get the currency symbol for a given currency code.
+    Args:
+        currency_code: Currency code (USD, CAD, GBP, EUR, JPY, AUD, CHF, CNY)
+    Returns:
+        Currency symbol string ($, £, €, ¥, CHF)
+    """
+    symbol_map = {
+        "GBP": "£",
+        "EUR": "€",
+        "JPY": "¥",
+        "CNY": "¥",
+        "CHF": "CHF",
+        "USD": "$",
+        "CAD": "$",
+        "AUD": "$",
+    }
+    return symbol_map.get(currency_code, "$")
+
+
 def bin_data(
     queryset,
     field_name,
