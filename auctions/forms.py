@@ -24,6 +24,7 @@ from django_recaptcha.fields import ReCaptchaField
 from django_recaptcha.widgets import ReCaptchaV2Invisible
 from django_summernote.widgets import SummernoteWidget
 
+from .helper_functions import get_currency_symbol
 from .models import (
     Auction,
     AuctionTOS,
@@ -39,7 +40,6 @@ from .models import (
     UserData,
     UserLabelPrefs,
 )
-from .helper_functions import get_currency_symbol
 
 # Distance conversion constant
 MILES_TO_KM = 1.60934
