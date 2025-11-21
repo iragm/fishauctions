@@ -7118,10 +7118,9 @@ class SquareCallbackView(LoginRequiredMixin, View):
             # Determine environment
             env = SquareEnvironment.SANDBOX if settings.SQUARE_ENVIRONMENT == "sandbox" else SquareEnvironment.PRODUCTION
             
-            client = Square(
-                token="",  # Not needed for OAuth token exchange
-                environment=env,
-            )
+            # For OAuth token exchange, we don't need a token
+            # Don't pass empty string as it causes "Illegal header value" error
+            client = Square(environment=env)
             
             # Exchange code for access token using new API
             result = client.o_auth.obtain_token(
