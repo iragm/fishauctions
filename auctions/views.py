@@ -1379,7 +1379,7 @@ class MyWonLotCSV(LoginRequiredMixin, View):
                     lot.lot_number_display,
                     lot.lot_name,
                     lot.auction,
-                    f"${lot.winning_price}",
+                    f"{lot.currency_symbol}{lot.winning_price}",
                     "https://" + lot.full_lot_link,
                 ]
             )
@@ -2588,10 +2588,12 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 result = {
                     "banner": "error",
                     "last_sold_lot_number": lot.lot_number_display,
-                    "success_message": f"Lot {lot.lot_number_display} already sold for ${lot.winning_price} to {lot.auctiontos_winner.bidder_number}.  If this is not correct, you can undo this sale",
+                    "success_message": f"Lot {lot.lot_number_display} already sold for {lot.currency_symbol}{lot.winning_price} to {lot.auctiontos_winner.bidder_number}.  If this is not correct, you can undo this sale",
                 }
         if lot and (action == "validate" or not result["success_message"]) and lot.high_bidder:
-            result["online_high_bidder_message"] = f"Sell to {lot.high_bidder_for_admins} for ${lot.high_bid}"
+            result["online_high_bidder_message"] = (
+                f"Sell to {lot.high_bidder_for_admins} for {lot.currency_symbol}{lot.high_bid}"
+            )
             # js code is not in place for this, also remove code from view_lot_simple
         if lot and not lot_error:
             lot = "valid"
@@ -8060,13 +8062,13 @@ class AuctionStatsLotSellPricesJSONView(AuctionStatsBarChartJSONView):
 
             labels = ["Not sold"]
             for i in range(0, max_price - 1, 2):
-                labels.append(f"${i + 1}-{i + 2}")
-            labels.append(f"${max_price}+")
+                labels.append(f"{self.auction.currency_symbol}{i + 1}-{i + 2}")
+            labels.append(f"{self.auction.currency_symbol}{max_price}+")
             return labels
         else:
             # No sold lots, use default
-            labels = [(f"${i + 1}-{i + 2}") for i in range(0, 37, 2)]
-            return ["Not sold"] + labels + ["$40+"]
+            labels = [(f"{self.auction.currency_symbol}{i + 1}-{i + 2}") for i in range(0, 37, 2)]
+            return ["Not sold"] + labels + [f"{self.auction.currency_symbol}40+"]
 
     def get_providers(self):
         providers = []
