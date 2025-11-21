@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load currency_filters %}
 
 {% block title %}Invoices{% endblock %}
 {% load static %}
@@ -21,9 +22,9 @@
             <tr>
               <td><a href="/invoices/{{invoice.pk}}/">{{ invoice.label }}</a></td>
               <td>{% if invoice.user_should_be_paid or invoice.net == 0 %}
-                  ${{ invoice.calculated_total|floatformat:2 }}
+                  {{ invoice.currency_symbol }}{{ invoice.calculated_total|floatformat:2 }}
                 {% else %}
-                  <span class='text-danger'>(${{ invoice.calculated_total|floatformat:2 }})</span>
+                  <span class='text-danger'>({{ invoice.currency_symbol }}{{ invoice.calculated_total|floatformat:2 }})</span>
                 {% endif %}
                 </td>
               <td>{{ invoice.get_status_display }}</td>

@@ -5398,19 +5398,6 @@ class UserData(models.Model):
     def last_auction_created(self):
         return Auction.objects.filter(created_by=self.user).order_by("-date_posted").first()
 
-    def save(self, *args, **kwargs):
-        """Override save to invalidate auction cached_stats when currency changes"""
-        # Check if this is an update (not a new instance) and if preferred_currency changed
-        if self.pk:
-            try:
-                old_instance = UserData.objects.get(pk=self.pk)
-                if old_instance.preferred_currency != self.preferred_currency:
-                    # Currency changed - invalidate cached stats for all auctions created by this user
-                    Auction.objects.filter(created_by=self.user).update(cached_stats=None)
-            except UserData.DoesNotExist:
-                pass
-        super().save(*args, **kwargs)
-
     def __str__(self):
         return f"{self.user.username}'s data"
 
