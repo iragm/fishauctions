@@ -20,7 +20,8 @@
 
 {% block core_js %}
 {# Self-hosted jQuery, Bootstrap for cross-origin isolation #}
-<script type="text/javascript" src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+{# jQuery must be self-hosted to enable cross-origin isolation - will be added to download script #}
+<script type="text/javascript" src="{% static 'js/vendor/jquery.min.js' %}"></script>
 <script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
 {% endblock %}
 
