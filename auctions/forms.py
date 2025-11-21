@@ -39,6 +39,7 @@ from .models import (
     UserData,
     UserLabelPrefs,
 )
+from .helper_functions import get_currency_symbol
 
 # Distance conversion constant
 MILES_TO_KM = 1.60934
@@ -1801,8 +1802,17 @@ class AuctionEditForm(forms.ModelForm):
         self.fields["user_cut"].initial = 100 - self.instance.winning_bid_percent_to_club
         self.fields["club_member_cut"].initial = 100 - self.instance.winning_bid_percent_to_club_for_club_members
 
-        # Get currency symbol from the user creating/editing the auction
-        currency_symbol = self.user.userdata.currency_symbol if self.user and hasattr(self.user, "userdata") else "$"
+        # Get currency symbol from the auction creator (when editing) or current user (when creating)
+        if self.instance and self.instance.pk and self.instance.created_by:
+            # Editing an existing auction - use the auction creator's currency
+            currency = self.instance.created_by.userdata.currency
+        elif self.user and hasattr(self.user, "userdata"):
+            # Creating a new auction - use the current user's currency
+            currency = self.user.userdata.currency
+        else:
+            # Fallback to USD
+            currency = "USD"
+        currency_symbol = get_currency_symbol(currency)
 
         self.helper = FormHelper()
         self.helper.form_method = "post"
