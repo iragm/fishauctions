@@ -7072,12 +7072,16 @@ class SquareConnectView(LoginRequiredMixin, View):
         # Square OAuth authorization endpoint
         square_auth_url = "https://connect.squareup.com/oauth2/authorize" if not settings.DEBUG else "https://connect.squareupsandbox.com/oauth2/authorize"
         
+        # Build redirect URI - must match what's configured in Square app and what we send in token exchange
+        redirect_uri = request.build_absolute_uri("/square/onboard/success/")
+        
         # Build OAuth parameters
         params = {
             "client_id": settings.SQUARE_APPLICATION_ID,
             "scope": "PAYMENTS_WRITE PAYMENTS_READ MERCHANT_PROFILE_READ",
             "state": state,
             "session": "false",  # Don't require login if already logged in
+            "redirect_uri": redirect_uri,
         }
         
         # Build redirect URL
@@ -7122,12 +7126,16 @@ class SquareCallbackView(LoginRequiredMixin, View):
             # Don't pass empty string as it causes "Illegal header value" error
             client = Square(environment=env)
             
+            # Build redirect URI - must match what was sent in authorization request
+            redirect_uri = request.build_absolute_uri("/square/onboard/success/")
+            
             # Exchange code for access token using new API
             result = client.o_auth.obtain_token(
                 client_id=settings.SQUARE_APPLICATION_ID,
                 client_secret=settings.SQUARE_CLIENT_SECRET,
                 code=code,
                 grant_type="authorization_code",
+                redirect_uri=redirect_uri,
             )
             
             # New API returns response object directly (no is_error check needed, raises on error)
