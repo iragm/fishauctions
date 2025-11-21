@@ -21,9 +21,9 @@ class CrossOriginIsolationMiddleware:
 
         # Add COOP header - allows popups while isolating the browsing context
         # Using 'same-origin' would be more secure but breaks OAuth popups
-        response["Cross-Origin-Opener-Policy"] = "same-origin-allow-popups"
+        response["Cross-Origin-Opener-Policy"] = "same-origin"
 
         # Add COEP header - requires all resources to be loaded with CORS or same-origin
         response["Cross-Origin-Embedder-Policy"] = "require-corp"
-
+        response["Cross-Origin-Resource-Policy"] = "cross-origin"
         return response
