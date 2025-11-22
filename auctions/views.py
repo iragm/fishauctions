@@ -155,6 +155,7 @@ from .models import (
     PayPalSeller,
     PickupLocation,
     SearchHistory,
+    SquareSeller,
     UserBan,
     UserData,
     UserIgnoreCategory,
@@ -4881,6 +4882,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "use_i_bred_this_fish_field",
                 "use_seller_dash_lot_numbering",
                 "enable_online_payments",
+                "enable_square_payments",
                 "alternative_split_label",
                 "google_drive_link",
             ]
@@ -5023,8 +5025,14 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                 if str(request.GET.get("enable_online_payments", "")).lower() in ("1", "true"):
                     self.auction.enable_online_payments = True
                     self.auction.save()
+                if str(request.GET.get("enable_square_payments", "")).lower() in ("1", "true"):
+                    self.auction.enable_square_payments = True
+                    self.auction.save()
                 if str(request.GET.get("dismissed_paypal_banner", "")).lower() in ("1", "true"):
                     self.auction.dismissed_paypal_banner = True
+                    self.auction.save()
+                if str(request.GET.get("dismissed_square_banner", "")).lower() in ("1", "true"):
+                    self.auction.dismissed_square_banner = True
                     self.auction.save()
                 if str(request.GET.get("never_show_paypal_connect", "")).lower() in ("1", "true"):
                     messages.info(
@@ -5032,6 +5040,13 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                         "You won't see the PayPal connection prompt again.  You can always enable PayPal under Preferences>More>Connect your PayPal account.",
                     )
                     request.user.userdata.never_show_paypal_connect = True
+                    request.user.userdata.save()
+                if str(request.GET.get("never_show_square_connect", "")).lower() in ("1", "true"):
+                    messages.info(
+                        request,
+                        "You won't see the Square connection prompt again.  You can always enable Square under Preferences>More>Connect your Square account.",
+                    )
+                    request.user.userdata.never_show_square_connect = True
                     request.user.userdata.save()
         return super().get(request, *args, **kwargs)
 
@@ -6934,6 +6949,339 @@ class PayPalSellerDeleteView(LoginRequiredMixin, DeleteView):
 
     def get_success_url(self):
         return reverse("paypal_seller")
+
+
+class SquareAPIMixin:
+    """Couple API methods for Square stuff using CreatePaymentLink API
+    All operations require OAuth - no platform credentials
+    Updated for Square SDK v42+ (new API)"""
+
+    def _get_square_client(self, merchant_access_token):
+        """Initialize and return Square SDK client using merchant's OAuth token
+        Raises ValueError if no token provided
+        Uses new Square SDK v42+ API"""
+        from square import Square
+        from square.client import SquareEnvironment
+
+        if not merchant_access_token:
+            raise ValueError("Square merchant access token required - seller must link their Square account via OAuth")
+        
+        # Determine environment
+        env = SquareEnvironment.SANDBOX if settings.SQUARE_ENVIRONMENT == "sandbox" else SquareEnvironment.PRODUCTION
+        
+        return Square(
+            token=merchant_access_token,
+            environment=env,
+        )
+
+    def create_payment_link(self, invoice):
+        """Create a Square payment link for an invoice using CreatePaymentLink API
+        Requires merchant to have linked their Square account via OAuth
+        Returns the payment link URL or None if the request failed
+        Uses new Square SDK v42+ API"""
+        try:
+            # Get merchant's OAuth token - required
+            seller = SquareSeller.objects.filter(user=invoice.auction.created_by).first()
+            if not seller or not seller.access_token:
+                logger.error("Square payment link creation failed: No OAuth token for user %s", invoice.auction.created_by.pk)
+                return None
+            
+            # Also need the merchant's location ID
+            if not seller.square_merchant_id:
+                logger.error("Square payment link creation failed: No merchant ID for user %s", invoice.auction.created_by.pk)
+                return None
+
+            client = self._get_square_client(seller.access_token)
+            currency = invoice.auction.created_by.userdata.currency
+
+            # Calculate totals
+            target_total = int((Decimal("0.00") - Decimal(invoice.net_after_payments)) * 100)  # cents
+
+            # Create the payment link
+            # Note: Square requires a location_id which we need to get from the merchant's account
+            # We'll fetch the first active location from their account
+            try:
+                locations_result = client.locations.list()
+                
+                # New API returns response directly
+                if not locations_result or not hasattr(locations_result, 'locations'):
+                    logger.error("Failed to get Square locations for merchant %s: No locations found", seller.square_merchant_id)
+                    return None
+                
+                # Use the first active location
+                active_locations = [loc for loc in locations_result.locations if loc.status == "ACTIVE"]
+                if not active_locations:
+                    logger.error("No active Square locations found for merchant %s", seller.square_merchant_id)
+                    return None
+                
+                location_id = active_locations[0].id
+            except Exception as e:
+                logger.exception("Error fetching Square locations: %s", e)
+                return None
+            
+            # Create payment link using new API
+            # Import parameter types
+            from square.requests import QuickPayParams, CheckoutOptionsParams, PrePopulatedDataParams, MoneyParams
+            
+            # Note: QuickPay doesn't support reference_id, so we encode invoice ID in payment_note
+            payment_note = f"Invoice #{invoice.pk} - Bidder {invoice.auctiontos_user.bidder_number} in {invoice.auction.title}"[:500]
+            
+            try:
+                result = client.checkout.payment_links.create(
+                    idempotency_key=str(uuid.uuid4()),
+                    quick_pay=QuickPayParams(
+                        name=f"Invoice for {invoice.auction.title}",
+                        price_money=MoneyParams(
+                            amount=target_total,
+                            currency=currency,
+                        ),
+                        location_id=location_id,
+                    ),
+                    checkout_options=CheckoutOptionsParams(
+                        redirect_url=self.request.build_absolute_uri("/square/success/"),
+                        ask_for_shipping_address=False,
+                    ),
+                    pre_populated_data=PrePopulatedDataParams(
+                        buyer_email=invoice.auctiontos_user.email or None,
+                    ),
+                    payment_note=payment_note,
+                )
+                
+                # In new API, response object has attributes directly
+                if result and hasattr(result, 'payment_link') and result.payment_link:
+                    return result.payment_link.url
+                else:
+                    logger.error("Square payment link creation failed: No payment link in response")
+                    return None
+                    
+            except Exception as api_error:
+                logger.exception("Square API error creating payment link: %s", api_error)
+                return None
+
+        except Exception as e:
+            logger.exception("Error creating Square payment link: %s", e)
+            return None
+
+
+class SquareConnectView(LoginRequiredMixin, View):
+    """Start the Square OAuth process for a seller"""
+
+    def get(self, request):
+        # Build Square OAuth URL
+        # Use the user's unsubscribe_link as state parameter for security
+        state = request.user.userdata.unsubscribe_link
+        
+        # Square OAuth authorization endpoint - use SQUARE_ENVIRONMENT setting
+        square_auth_url = "https://connect.squareupsandbox.com/oauth2/authorize" if settings.SQUARE_ENVIRONMENT == "sandbox" else "https://connect.squareup.com/oauth2/authorize"
+        
+        # Build redirect URI - must match what's configured in Square app and what we send in token exchange
+        redirect_uri = request.build_absolute_uri("/square/onboard/success/")
+        
+        # Build OAuth parameters
+        params = {
+            "client_id": settings.SQUARE_APPLICATION_ID,
+            "scope": "PAYMENTS_WRITE PAYMENTS_READ MERCHANT_PROFILE_READ",
+            "state": state,
+            "session": "false",  # Don't require login if already logged in
+            "redirect_uri": redirect_uri,
+        }
+        
+        # Build redirect URL
+        oauth_url = f"{square_auth_url}?{urlencode(params)}"
+        
+        return redirect(oauth_url)
+
+
+class SquareCallbackView(LoginRequiredMixin, View):
+    """After OAuth, Square redirects here
+    Uses new Square SDK v42+ API"""
+
+    def get(self, request):
+        # Get authorization code and state from Square
+        code = request.GET.get("code")
+        state = request.GET.get("state")
+        error = request.GET.get("error")
+        error_description = request.GET.get("error_description")
+        
+        if error:
+            messages.error(request, f"Square authorization failed: {error_description or error}")
+            return redirect("/square/")
+        
+        if not code or not state:
+            messages.error(request, "Missing authorization code from Square")
+            return redirect("/square/")
+        
+        # Verify state matches user's unsubscribe_link for security
+        if state != request.user.userdata.unsubscribe_link:
+            messages.error(request, "Invalid state parameter - please try again")
+            return redirect("/square/")
+        
+        # Exchange authorization code for access token
+        try:
+            from square import Square
+            from square.client import SquareEnvironment
+            
+            # Determine environment
+            env = SquareEnvironment.SANDBOX if settings.SQUARE_ENVIRONMENT == "sandbox" else SquareEnvironment.PRODUCTION
+            
+            # For OAuth token exchange, we don't need a token
+            # Don't pass empty string as it causes "Illegal header value" error
+            client = Square(environment=env)
+            
+            # Build redirect URI - must match what was sent in authorization request
+            redirect_uri = request.build_absolute_uri("/square/onboard/success/")
+            
+            # Log the OAuth attempt for debugging
+            logger.info(
+                "Attempting Square OAuth token exchange: environment=%s, client_id=%s, redirect_uri=%s",
+                settings.SQUARE_ENVIRONMENT,
+                settings.SQUARE_APPLICATION_ID,
+                redirect_uri,
+            )
+            
+            # Exchange code for access token using new API
+            result = client.o_auth.obtain_token(
+                client_id=settings.SQUARE_APPLICATION_ID,
+                client_secret=settings.SQUARE_CLIENT_SECRET,
+                code=code,
+                grant_type="authorization_code",
+                redirect_uri=redirect_uri,
+            )
+            
+            # New API returns response object directly (no is_error check needed, raises on error)
+            # Extract token info from response
+            access_token = result.access_token
+            refresh_token = result.refresh_token if hasattr(result, 'refresh_token') else None
+            expires_at = result.expires_at if hasattr(result, 'expires_at') else None
+            merchant_id = result.merchant_id if hasattr(result, 'merchant_id') else None
+            
+            if not access_token or not merchant_id:
+                logger.error("Square OAuth token exchange failed: Missing required fields in response")
+                messages.error(request, "Failed to connect Square account. Please try again.")
+                return redirect("/square/")
+            
+            # Get merchant info to verify account
+            merchant_client = Square(
+                token=access_token,
+                environment=env,
+            )
+            
+            merchant_result = merchant_client.merchants.retrieve(merchant_id=merchant_id)
+            
+            # Extract merchant info from response
+            merchant_info = merchant_result.merchant if hasattr(merchant_result, 'merchant') else None
+            if not merchant_info:
+                logger.error("Failed to retrieve Square merchant info: No merchant in response")
+                messages.error(request, "Failed to verify Square account. Please try again.")
+                return redirect("/square/")
+            
+            email = merchant_info.business_email if hasattr(merchant_info, 'business_email') else None
+            if not email and hasattr(merchant_info, 'email'):
+                email = merchant_info.email
+            currency = merchant_info.currency if hasattr(merchant_info, 'currency') else "USD"
+            
+            # Save or update SquareSeller
+            seller, created = SquareSeller.objects.get_or_create(user=request.user)
+            seller.square_merchant_id = merchant_id
+            seller.access_token = access_token
+            seller.refresh_token = refresh_token
+            if expires_at:
+                from datetime import datetime
+                # Handle ISO 8601 format
+                try:
+                    seller.token_expires_at = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+                except (ValueError, AttributeError):
+                    # If expires_at is already a datetime object
+                    if isinstance(expires_at, datetime):
+                        seller.token_expires_at = expires_at
+            seller.currency = currency
+            seller.payer_email = email
+            seller.save()
+            
+            messages.success(
+                request,
+                "You're all set - Square account linked! Your users will see a Square button on invoices.",
+            )
+            
+            # Redirect to last auction or home
+            if request.user.userdata.last_auction_created:
+                return redirect(
+                    request.user.userdata.last_auction_created.get_absolute_url() + "?enable_square_payments=True"
+                )
+            return redirect("/square/")
+            
+        except Exception as e:
+            logger.exception("Error during Square OAuth: %s", e)
+            # Provide more specific error message if it's an API error
+            if hasattr(e, 'body') and isinstance(e.body, dict):
+                error_msg = e.body.get('message', str(e))
+                error_type = e.body.get('type', 'unknown')
+                logger.error("Square OAuth API Error: type=%s, message=%s", error_type, error_msg)
+                messages.error(request, f"Square OAuth failed: {error_msg}. Please check your Square application settings.")
+            else:
+                messages.error(request, "An error occurred connecting your Square account. Please try again.")
+            return redirect("/square/")
+
+
+class CreateSquarePaymentLinkView(SquareAPIMixin, View):
+    """Create a Square payment link for an invoice"""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.invoice = get_object_or_404(Invoice, no_login_link=kwargs.pop("uuid"))
+        if not self.invoice.show_square_button:
+            messages.error(request, "Square payments are not available for this invoice")
+            return redirect(reverse("invoice_no_login", kwargs={"uuid": self.invoice.no_login_link}))
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        """Create the payment link"""
+        payment_url = self.create_payment_link(self.invoice)
+        if not payment_url:
+            messages.error(request, "Failed to create Square payment link. Please try again or contact support.")
+            return redirect(self.invoice.get_absolute_url())
+        
+        # Add processing message and redirect to invoice to show status
+        messages.info(request, "Square payment processing... You'll be redirected to complete payment.")
+        return redirect(payment_url)
+
+
+class SquareSuccessView(View):
+    """Handle redirect after Square payment"""
+
+    def get(self, request, *args, **kwargs):
+        # Square payment link can include order_id or reference_id in query params
+        # For now, show processing message and redirect to home
+        # The webhook will update the invoice status
+        messages.info(request, "Square payment processing... Your invoice will be updated shortly.")
+        
+        # Try to get invoice reference if available
+        # Square may pass back custom data in query params depending on configuration
+        return redirect("/")
+
+
+class SquareInfoView(TemplateView):
+    template_name = "auctions/square_seller.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        if self.request.user.is_authenticated:
+            context["seller"] = SquareSeller.objects.filter(user=self.request.user).first()
+            context["auction"] = self.request.user.userdata.last_auction_created
+        else:
+            context["seller"] = None
+            context["auction"] = None
+        return context
+
+
+class SquareSellerDeleteView(LoginRequiredMixin, DeleteView):
+    template_name = "auctions/square_seller_confirm_delete.html"
+    model = SquareSeller
+
+    def get_object(self, queryset=None):
+        return get_object_or_404(SquareSeller, user=self.request.user)
+
+    def get_success_url(self):
+        return reverse("square_seller")
 
 
 class UserView(DetailView):
@@ -9484,6 +9832,125 @@ class PayPalWebhookView(PayPalAPIMixin, View):
         return JsonResponse({"status": "ok"})
 
 
+class SquareWebhookView(SquareAPIMixin, View):
+    """Handle Square webhook events for payment notifications"""
+
+    @method_decorator(csrf_exempt)
+    def dispatch(self, *args, **kwargs):
+        return super().dispatch(*args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        # Read raw body
+        try:
+            event = json.loads(request.body.decode("utf-8"))
+        except Exception as exc:
+            logger.exception("Invalid JSON in Square webhook: %s", exc)
+            return HttpResponseBadRequest("invalid json")
+
+        # Verify webhook signature if configured
+        if settings.SQUARE_WEBHOOK_SIGNATURE_KEY:
+            signature = request.headers.get("X-Square-Signature", "")
+            # TODO: Implement signature verification
+            # Square uses HMAC-SHA256 to sign webhook notifications
+
+        event_type = event.get("type")
+        logger.info("Received Square webhook: %s", event_type)
+
+        if event_type == "payment.updated":
+            # Payment completed or updated
+            data = event.get("data", {})
+            payment_object = data.get("object", {})
+            payment = payment_object.get("payment", {})
+
+            payment_status = payment.get("status")
+            payment_id = payment.get("id")
+            reference_id = payment.get("reference_id")
+            note = payment.get("note", "")
+            
+            # Try to extract invoice ID from reference_id or payment note
+            # Since QuickPay doesn't support reference_id, we encode it in the note as "Invoice #123 - ..."
+            invoice_id = None
+            if reference_id:
+                invoice_id = reference_id
+            elif note and "Invoice #" in note:
+                # Parse "Invoice #123 - ..." to extract the ID
+                try:
+                    import re
+                    match = re.search(r'Invoice #(\d+)', note)
+                    if match:
+                        invoice_id = match.group(1)
+                except Exception as e:
+                    logger.error("Error parsing invoice ID from note: %s", e)
+            
+            # Handle APPROVED status - send websocket to hide QR code
+            if payment_status == "APPROVED" and invoice_id:
+                invoice = Invoice.objects.filter(pk=invoice_id).first()
+                if invoice:
+                    # Send websocket notification to quick checkout to hide QR code
+                    channel_layer = channels.layers.get_channel_layer()
+                    async_to_sync(channel_layer.group_send)(
+                        f"auctions_{invoice.auction.pk}",
+                        {"type": "capture_complete", "pk": invoice.pk},
+                    )
+                    logger.info("Square payment approved, sent websocket for invoice %s", invoice.pk)
+
+            # Handle COMPLETED status - create payment record and mark invoice paid
+            if payment_status == "COMPLETED" and invoice_id:
+                invoice = Invoice.objects.filter(pk=invoice_id).first()
+                if invoice:
+                    # Create payment record
+                    amount_money = payment.get("amount_money", {})
+                    amount_value = Decimal(amount_money.get("amount", 0)) / 100
+                    currency = amount_money.get("currency", "USD")
+
+                    payment_record, created = InvoicePayment.objects.get_or_create(
+                        invoice=invoice,
+                        external_id=payment_id,
+                        defaults={
+                            "amount": amount_value,
+                            "currency": currency,
+                            "status": "COMPLETED",
+                            "payment_method": "square",
+                            "payer_email": payment.get("buyer_email_address"),
+                        },
+                    )
+
+                    if invoice.net_after_payments >= 0:
+                        invoice.status = "PAID"
+                        invoice.save()
+
+                    # Send websocket notification for payment completion
+                    channel_layer = channels.layers.get_channel_layer()
+                    async_to_sync(channel_layer.group_send)(
+                        f"invoice_{invoice.pk}",
+                        {
+                            "type": "invoice_status",
+                            "message": "paid",
+                        },
+                    )
+
+                    logger.info("Square payment completed for invoice %s", invoice.pk)
+
+        elif event_type == "refund.updated":
+            # Refund processed
+            data = event.get("data", {})
+            refund_object = data.get("object", {})
+            refund = refund_object.get("refund", {})
+
+            if refund.get("status") == "COMPLETED":
+                payment_id = refund.get("payment_id")
+                # Find the original payment and mark refund
+                payment_record = InvoicePayment.objects.filter(external_id=payment_id).first()
+                if payment_record:
+                    refund_amount = Decimal(refund.get("amount_money", {}).get("amount", 0)) / 100
+                    payment_record.amount_available_to_refund -= refund_amount
+                    payment_record.save()
+
+                    logger.info("Square refund completed for payment %s", payment_id)
+
+        return HttpResponse(status=200)
+
+
 class QuickCheckout(AuctionViewMixin, TemplateView):
     """Enter a bidder number or name and mark their invoice as paid
     For https://github.com/iragm/fishauctions/issues/292"""
@@ -9496,7 +9963,7 @@ class QuickCheckout(AuctionViewMixin, TemplateView):
         return context
 
 
-class QuickCheckoutHTMX(AuctionViewMixin, PayPalAPIMixin, TemplateView):
+class QuickCheckoutHTMX(AuctionViewMixin, PayPalAPIMixin, SquareAPIMixin, TemplateView):
     """For use with HTMX calls on QuickCheckout"""
 
     template_name = "auctions/quick_checkout_htmx.html"
@@ -9515,7 +9982,11 @@ class QuickCheckoutHTMX(AuctionViewMixin, PayPalAPIMixin, TemplateView):
             if context["tos"]:
                 invoice = context["tos"].invoice
                 context["invoice"] = invoice
-            if invoice and invoice.show_payment_button and not invoice.reason_for_payment_not_available:
-                # generate a paypal order to be placed in a QR code for the user to scan
-                context["qr_code_link"] = self.create_order(invoice)
+            if invoice:
+                # Generate PayPal QR code if available
+                if invoice.show_paypal_button and not invoice.reason_for_payment_not_available:
+                    context["paypal_qr_code_link"] = self.create_order(invoice)
+                # Generate Square QR code if available
+                if invoice.show_square_button and not invoice.reason_for_payment_not_available:
+                    context["square_qr_code_link"] = self.create_payment_link(invoice)
         return context

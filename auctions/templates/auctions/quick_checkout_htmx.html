@@ -12,19 +12,30 @@
         {% if tos.is_club_member %}<span class="badge bg-info ms-1 me-1" title="Alternate selling fees will be applied">{{ tos.auction.alternative_split_label|capfirst }}</span>{% endif %}
         {% if tos.memo %}Memo: {{ tos.memo }}<br>{% endif %}
         {% if tos.possible_duplicate %}Note: This user may be a duplicate, confirm that this is their only bidder number<br>{% endif %}
-        {% if qr_code_link %}
+        {% if paypal_qr_code_link or square_qr_code_link %}
           <div class="row justify-content-center my-2">
-            <div class="col-12 col-lg-4 text-center">
-              <!-- Tiny inline CSS to force any img inside this wrapper to be responsive -->
+            {% if paypal_qr_code_link %}
+            <div class="col-12 {% if square_qr_code_link %}col-lg-6{% else %}col-lg-4{% endif %} text-center">
               <style>
-                #invoice_{{invoice.pk}}_qr_wrapper img { max-width: 100%; height: auto; }
+                #invoice_{{invoice.pk}}_paypal_qr_wrapper img { max-width: 100%; height: auto; }
               </style>
-              <div id="invoice_{{invoice.pk}}_qr_wrapper" aria-label="Payment QR code">
-                {% qr_from_text qr_code_link size="L" image_format="png" %}
-                <!-- <a href="{{ qr_code_link }}" class="d-block small mb-2">{{ qr_code_link }}</a> -->
-                <span id="invoice_{{invoice.pk}}_qr_scan" class="d-block mb-2">Scan this code to pay with PayPal</span>
+              <div id="invoice_{{invoice.pk}}_paypal_qr_wrapper" aria-label="PayPal Payment QR code">
+                {% qr_from_text paypal_qr_code_link size="L" image_format="png" %}
+                <span id="invoice_{{invoice.pk}}_paypal_qr_scan" class="d-block mb-2">Scan this code to pay with PayPal</span>
               </div>
             </div>
+            {% endif %}
+            {% if square_qr_code_link %}
+            <div class="col-12 {% if paypal_qr_code_link %}col-lg-6{% else %}col-lg-4{% endif %} text-center">
+              <style>
+                #invoice_{{invoice.pk}}_square_qr_wrapper img { max-width: 100%; height: auto; }
+              </style>
+              <div id="invoice_{{invoice.pk}}_square_qr_wrapper" aria-label="Square Payment QR code">
+                {% qr_from_text square_qr_code_link size="L" image_format="png" %}
+                <span id="invoice_{{invoice.pk}}_square_qr_scan" class="d-block mb-2">Scan this code to pay with Square</span>
+              </div>
+            </div>
+            {% endif %}
           </div>
         {% endif %}
         <a href="{{ invoice.get_absolute_url }}" target="_blank"><i class="bi bi-arrow-up-right-square-fill"></i> View or adjust invoice</a>
