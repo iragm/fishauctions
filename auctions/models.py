@@ -43,6 +43,7 @@ from django.utils import html, timezone
 from django.utils.safestring import mark_safe
 from easy_thumbnails.fields import ThumbnailerImageField
 from easy_thumbnails.files import get_thumbnailer
+# from encrypted_model_fields.fields import EncryptedCharField  # TODO: Enable when FIELD_ENCRYPTION_KEY is configured
 from location_field.models.plain import PlainLocationField
 from markdownfield.models import MarkdownField, RenderedMarkdownField
 from markdownfield.validators import VALIDATOR_STANDARD
@@ -5776,10 +5777,15 @@ class PayPalSeller(models.Model):
 class SquareSeller(models.Model):
     """Extension of user model to store Square info for sellers
     Similar to PayPalSeller, stores Square merchant information and OAuth tokens
+    TODO: OAuth tokens should be encrypted at rest for security
+    Currently using CharField - migrate to EncryptedCharField when FIELD_ENCRYPTION_KEY is properly configured
     """
 
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     square_merchant_id = models.CharField(max_length=64, blank=True, null=True)
+    # TODO: Migrate to EncryptedCharField for production security
+    # access_token = EncryptedCharField(max_length=500, blank=True, null=True)
+    # refresh_token = EncryptedCharField(max_length=500, blank=True, null=True)
     access_token = models.CharField(max_length=500, blank=True, null=True)
     refresh_token = models.CharField(max_length=500, blank=True, null=True)
     token_expires_at = models.DateTimeField(blank=True, null=True)
@@ -5797,6 +5803,72 @@ class SquareSeller(models.Model):
         else:
             result += f"{self.user.first_name} {self.user.last_name}'s Square account"
         return result
+
+    def is_token_expired(self):
+        """Check if the access token is expired or will expire soon (within 1 hour)"""
+        if not self.token_expires_at:
+            return False
+        from datetime import timedelta
+        buffer_time = timedelta(hours=1)
+        return timezone.now() + buffer_time >= self.token_expires_at
+
+    def refresh_access_token(self):
+        """Refresh the Square access token using the refresh token
+        Returns True if successful, False otherwise
+        """
+        if not self.refresh_token:
+            logger.error("Cannot refresh Square token: no refresh_token available for user %s", self.user.pk)
+            return False
+
+        try:
+            from square import Square
+            from square.client import SquareEnvironment
+
+            # Determine environment
+            env = SquareEnvironment.SANDBOX if settings.SQUARE_ENVIRONMENT == "sandbox" else SquareEnvironment.PRODUCTION
+
+            # Create client without authentication
+            client = Square(environment=env)
+
+            # Request new access token using refresh token
+            result = client.o_auth.obtain_token(
+                client_id=settings.SQUARE_APPLICATION_ID,
+                client_secret=settings.SQUARE_CLIENT_SECRET,
+                grant_type="refresh_token",
+                refresh_token=self.refresh_token,
+            )
+
+            # Update tokens
+            self.access_token = result.access_token
+            # Square returns the same refresh_token in code flow, new one in PKCE flow
+            if hasattr(result, 'refresh_token') and result.refresh_token:
+                self.refresh_token = result.refresh_token
+            if hasattr(result, 'expires_at') and result.expires_at:
+                from datetime import datetime
+                try:
+                    self.token_expires_at = datetime.fromisoformat(result.expires_at.replace("Z", "+00:00"))
+                except (ValueError, AttributeError):
+                    if isinstance(result.expires_at, datetime):
+                        self.token_expires_at = result.expires_at
+
+            self.save()
+            logger.info("Successfully refreshed Square access token for user %s", self.user.pk)
+            return True
+
+        except Exception as e:
+            logger.exception("Error refreshing Square access token for user %s: %s", self.user.pk, e)
+            return False
+
+    def get_valid_access_token(self):
+        """Get a valid access token, refreshing if necessary
+        Returns the access token or None if unable to get a valid token
+        """
+        if self.is_token_expired():
+            logger.info("Square token expired for user %s, attempting refresh", self.user.pk)
+            if not self.refresh_access_token():
+                logger.error("Failed to refresh Square token for user %s", self.user.pk)
+                return None
+        return self.access_token
 
     def delete(self):
         auctions = Auction.objects.filter(created_by=self.user, enable_square_payments=True)

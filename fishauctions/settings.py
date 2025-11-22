@@ -687,5 +687,16 @@ PAYPAL_PLATFORM_FEE = Decimal(str(os.environ.get("PAYPAL_PLATFORM_FEE", "0") or 
 SQUARE_ENVIRONMENT = os.environ.get("SQUARE_ENVIRONMENT", "sandbox" if DEBUG else "production")
 SQUARE_APPLICATION_ID = os.environ.get("SQUARE_APPLICATION_ID", "")
 SQUARE_CLIENT_SECRET = os.environ.get("SQUARE_CLIENT_SECRET", "")  # For OAuth token exchange
-# Optional signing secret for webhook verification
+# Webhook signature key for verifying Square webhook notifications
 SQUARE_WEBHOOK_SIGNATURE_KEY = os.environ.get("SQUARE_WEBHOOK_SIGNATURE_KEY", "")
+
+# Field encryption key for django-encrypted-model-fields
+# This should be a Fernet key - generate with: from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())
+# For development/testing, we generate a key if not set (NOT FOR PRODUCTION!)
+_encryption_key = os.environ.get("FIELD_ENCRYPTION_KEY", "")
+if not _encryption_key and DEBUG:
+    # Generate a temporary key for development only
+    from cryptography.fernet import Fernet
+    _encryption_key = Fernet.generate_key().decode()
+    print("WARNING: Using auto-generated FIELD_ENCRYPTION_KEY for development. Set FIELD_ENCRYPTION_KEY in production!")
+FIELD_ENCRYPTION_KEY = _encryption_key
