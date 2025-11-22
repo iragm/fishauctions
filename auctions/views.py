@@ -7078,76 +7078,83 @@ class SquareAPIMixin:
                 logger.error("Computed amount is not positive for invoice %s: %s cents", invoice.pk, amount_cents)
                 return None
 
-            # Build CreatePaymentLink payload (Quick Pay)
+            # Build CreatePaymentLink using Square SDK v42+ typed parameters
             payment_note = f"Invoice #{invoice.pk} - Bidder {getattr(invoice, 'auctiontos_user', getattr(invoice, 'auction_to_user', None)).bidder_number if getattr(invoice, 'auctiontos_user', None) else ''} in {invoice.auction.title}"[
                 :500
             ]
 
-            payload = {
-                "idempotency_key": str(uuid.uuid4()),
-                "quick_pay": {
-                    "name": f"Invoice for {invoice.auction.title}",
-                    "price_money": {
-                        "amount": amount_cents,
-                        "currency": currency,
-                    },
-                    "location_id": location_id,
-                },
-                "checkout_options": {
-                    "redirect_url": self.request.build_absolute_uri("/square/success/"),
-                    "ask_for_shipping_address": False,
-                },
-                "pre_populated_data": {
-                    "buyer_email": (
-                        getattr(invoice, "auctiontos_user", None) and getattr(invoice.auctiontos_user, "email", None)
-                    )
-                    or None
-                },
-                "payment_note": payment_note,
-            }
-
-            # POST to CreatePaymentLink endpoint (use sandbox/production base)
-            base = (
-                "https://connect.squareup.com"
-                if settings.SQUARE_ENVIRONMENT != "sandbox"
-                else "https://connect.squareupsandbox.com"
-            )
-            url = f"{base}/v2/online-checkout/payment-links"
-            headers = {
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            }
-
+            # Use Square SDK v42+ with typed parameters instead of raw HTTP
             try:
-                resp = requests.post(url, json=payload, headers=headers, timeout=10)
+                from square.requests import (
+                    QuickPayParams,
+                    MoneyParams,
+                    CheckoutOptionsParams,
+                    PrePopulatedDataParams,
+                )
+
+                client = self._get_square_client(access_token)
+
+                # Create payment link with typed parameters
+                result = client.checkout.payment_links.create(
+                    idempotency_key=str(uuid.uuid4()),
+                    quick_pay=QuickPayParams(
+                        name=f"Invoice for {invoice.auction.title}",
+                        price_money=MoneyParams(
+                            amount=amount_cents,
+                            currency=currency,
+                        ),
+                        location_id=location_id,
+                    ),
+                    checkout_options=CheckoutOptionsParams(
+                        redirect_url=self.request.build_absolute_uri("/square/success/"),
+                        ask_for_shipping_address=False,
+                    ),
+                    pre_populated_data=PrePopulatedDataParams(
+                        buyer_email=(
+                            getattr(invoice, "auctiontos_user", None) and getattr(invoice.auctiontos_user, "email", None)
+                        )
+                        or None
+                    ),
+                    payment_note=payment_note,
+                )
+
+                # Extract URL from response
+                if hasattr(result, "payment_link") and result.payment_link:
+                    payment_link = result.payment_link
+                    if hasattr(payment_link, "url"):
+                        # Also create an order with reference_id for better tracking
+                        try:
+                            from square.requests import CreateOrderParams, OrderParams, OrderLineItemParams
+
+                            order_result = client.orders.create(
+                                order=CreateOrderParams(
+                                    reference_id=str(invoice.pk),  # This is the key improvement!
+                                    location_id=location_id,
+                                    line_items=[
+                                        OrderLineItemParams(
+                                            name=f"Invoice for {invoice.auction.title}",
+                                            quantity="1",
+                                            base_price_money=MoneyParams(
+                                                amount=amount_cents,
+                                                currency=currency,
+                                            ),
+                                        )
+                                    ],
+                                )
+                            )
+                            logger.info("Created Square order with reference_id=%s for invoice %s", invoice.pk, invoice.pk)
+                        except Exception as e:
+                            # Order creation is optional - payment link still works without it
+                            logger.warning("Failed to create Square order for invoice %s: %s", invoice.pk, e)
+
+                        return payment_link.url
+
+                logger.error("Square payment link response missing URL: %s", result)
+                return None
+
             except Exception as e:
-                logger.exception("HTTP request to create payment link failed: %s", e)
+                logger.exception("Square SDK payment link creation failed: %s", e)
                 return None
-
-            # Inspect response
-            if resp.status_code not in (200, 201):
-                # Log body for debugging
-                try:
-                    logger.error("CreatePaymentLink failed: status=%s body=%s", resp.status_code, resp.json())
-                except Exception:
-                    logger.error("CreatePaymentLink failed: status=%s body=%s", resp.status_code, resp.text)
-                return None
-
-            try:
-                body = resp.json()
-            except Exception:
-                logger.exception("CreatePaymentLink returned non-JSON response: %s", resp.text)
-                return None
-
-            # Extract URL
-            payment_link = body.get("payment_link") or {}
-            url_result = payment_link.get("url")
-            if not url_result:
-                logger.error("Square payment link creation failed: response missing payment_link.url: %s", body)
-                return None
-
-            return url_result
 
         except Exception as exc:
             logger.exception("Error creating Square payment link: %s", exc)
@@ -9981,22 +9988,38 @@ class SquareWebhookView(SquareAPIMixin, View):
 
             payment_status = payment.get("status")
             payment_id = payment.get("id")
-            reference_id = payment.get("reference_id")
+            order_id = payment.get("order_id")
             note = payment.get("note", "")
 
-            # Try to extract invoice ID from reference_id or payment note
-            # Since QuickPay doesn't support reference_id, we encode it in the note as "Invoice #123 - ..."
+            # Try to extract invoice ID from order reference_id or payment note
+            # With SDK v42+, we create an order with reference_id set to invoice.pk
             invoice_id = None
-            if reference_id:
-                invoice_id = reference_id
-            elif note and "Invoice #" in note:
-                # Parse "Invoice #123 - ..." to extract the ID
+            
+            # First try to get reference_id from the order
+            # The order data should be in the webhook payload
+            if order_id:
+                # Check if order data is in the webhook payload
+                try:
+                    # Look for order in the webhook event data
+                    order_data = None
+                    # Sometimes the order is nested in the event data
+                    if "order" in data.get("object", {}):
+                        order_data = data["object"]["order"]
+                    
+                    if order_data and "reference_id" in order_data:
+                        invoice_id = order_data["reference_id"]
+                        logger.info("Found invoice ID from webhook order reference_id: %s", invoice_id)
+                except Exception as e:
+                    logger.warning("Could not extract reference_id from webhook order data: %s", e)
+            
+            # Fall back to parsing payment note (backwards compatibility)
+            if not invoice_id and note and "Invoice #" in note:
                 try:
                     import re
-
                     match = re.search(r"Invoice #(\d+)", note)
                     if match:
                         invoice_id = match.group(1)
+                        logger.info("Found invoice ID from payment note: %s", invoice_id)
                 except Exception as e:
                     logger.error("Error parsing invoice ID from note: %s", e)
 

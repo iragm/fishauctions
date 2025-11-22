@@ -3627,6 +3627,179 @@ class Lot(models.Model):
         self.partial_refund_percent = amount
         self.save()
 
+    @property
+    def square_refund_possible(self):
+        """Returns True if there's a Square payment associated with this lot's invoice
+        with enough funds to cover the lot's cost"""
+        if not self.winning_price or self.winning_price <= 0:
+            return False
+        
+        # Get the buyer's invoice - use model references directly since they're defined later
+        from auctions.models import Invoice, InvoicePayment
+        
+        invoice = None
+        try:
+            if self.auctiontos_winner:
+                invoice = Invoice.objects.get(auctiontos_user=self.auctiontos_winner)
+            elif self.winner:
+                invoice = Invoice.objects.get(user=self.winner, auction=self.auction)
+        except Invoice.DoesNotExist:
+            return False
+        except Invoice.MultipleObjectsReturned:
+            # Get the first one
+            if self.auctiontos_winner:
+                invoice = Invoice.objects.filter(auctiontos_user=self.auctiontos_winner).first()
+            elif self.winner:
+                invoice = Invoice.objects.filter(user=self.winner, auction=self.auction).first()
+        
+        if not invoice:
+            return False
+        
+        # Check for Square payments with available refund amount
+        payment = (
+            InvoicePayment.objects.filter(invoice=invoice, payment_method="square")
+            .exclude(amount__lt=0)
+            .order_by("-amount_available_to_refund")
+            .first()
+        )
+        
+        if not payment:
+            return False
+        
+        # Check if there's enough available to refund
+        lot_cost = Decimal(str(self.winning_price))
+        return payment.amount_available_to_refund >= lot_cost
+
+    def square_refund(self, percent):
+        """Create a Square refund for this lot
+        Args:
+            percent: Percentage of lot winning_price to refund (0-100)
+        Returns:
+            Error message string or None on success
+        """
+        from square import Square
+        from square.client import SquareEnvironment
+        from auctions.models import Invoice, InvoicePayment, SquareSeller
+        
+        if not self.winning_price or self.winning_price <= 0:
+            return "No valid winning price for this lot"
+        
+        if percent < 0 or percent > 100:
+            return "Refund percent must be between 0 and 100"
+        
+        # Calculate refund amount
+        refund_amount = (Decimal(str(self.winning_price)) * Decimal(str(percent))) / Decimal("100")
+        if refund_amount <= 0:
+            return "Refund amount must be positive"
+        
+        # Get the buyer's invoice
+        invoice = None
+        try:
+            if self.auctiontos_winner:
+                invoice = Invoice.objects.get(auctiontos_user=self.auctiontos_winner)
+            elif self.winner:
+                invoice = Invoice.objects.get(user=self.winner, auction=self.auction)
+        except Invoice.DoesNotExist:
+            return "No invoice found for winner"
+        except Invoice.MultipleObjectsReturned:
+            if self.auctiontos_winner:
+                invoice = Invoice.objects.filter(auctiontos_user=self.auctiontos_winner).first()
+            elif self.winner:
+                invoice = Invoice.objects.filter(user=self.winner, auction=self.auction).first()
+        
+        if not invoice:
+            return "Could not find winner's invoice"
+        
+        # Find the Square payment
+        payment = (
+            InvoicePayment.objects.filter(invoice=invoice, payment_method="square")
+            .exclude(amount__lt=0)
+            .order_by("-amount_available_to_refund")
+            .first()
+        )
+        
+        if not payment:
+            return "No Square payment found for this invoice"
+        
+        if payment.amount_available_to_refund < refund_amount:
+            return f"Insufficient funds available to refund. Available: {payment.amount_available_to_refund}, Requested: {refund_amount}"
+        
+        # Get seller's Square credentials
+        seller = SquareSeller.objects.filter(user=self.auction.created_by).first()
+        if not seller:
+            return "Seller has not connected their Square account"
+        
+        # Get valid access token
+        access_token = seller.get_valid_access_token()
+        if not access_token:
+            return "Seller's Square token has expired"
+        
+        try:
+            # Initialize Square client
+            env = SquareEnvironment.SANDBOX if settings.SQUARE_ENVIRONMENT == "sandbox" else SquareEnvironment.PRODUCTION
+            client = Square(token=access_token, environment=env)
+            
+            # Convert amount to cents
+            refund_amount_cents = int(refund_amount * 100)
+            
+            # Create refund using Square Refunds API
+            from square.requests import RefundPaymentParams, MoneyParams
+            
+            refund_result = client.refunds.refund_payment(
+                payment_id=payment.external_id,
+                idempotency_key=str(uuid.uuid4()),
+                amount_money=MoneyParams(
+                    amount=refund_amount_cents,
+                    currency=payment.currency,
+                ),
+                reason=f"Refund for lot #{self.lot_number} - {percent}% refund",
+            )
+            
+            # Extract refund details
+            refund = refund_result.refund if hasattr(refund_result, "refund") else None
+            if not refund:
+                logger.error("Square refund response missing refund object")
+                return "Square refund failed - no refund object in response"
+            
+            refund_id = refund.id if hasattr(refund, "id") else None
+            if not refund_id:
+                return "Square refund failed - no refund ID returned"
+            
+            # Update original payment's available refund amount
+            payment.amount_available_to_refund = payment.amount_available_to_refund - refund_amount
+            payment.save()
+            
+            # Create negative InvoicePayment record for the refund
+            refund_payment, created = InvoicePayment.objects.update_or_create(
+                external_id=refund_id,
+                defaults={
+                    "invoice": invoice,
+                    "amount": -abs(refund_amount),  # Negative amount for refund
+                    "currency": payment.currency,
+                    "payment_method": "Square Refund",
+                    "memo": f"Refund for lot #{self.lot_number} - {percent}% refund",
+                },
+            )
+            
+            # Recalculate invoice
+            invoice.recalculate
+            
+            # Log the action
+            action = f"Square refund issued: {refund_amount} {payment.currency} for lot #{self.lot_number} (refund ID: {refund_id})"
+            invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
+            
+            logger.info("Square refund successful for lot %s: %s %s (refund_id=%s)", 
+                       self.lot_number, refund_amount, payment.currency, refund_id)
+            
+            return None  # Success
+            
+        except Exception as e:
+            error_msg = str(e)
+            if hasattr(e, "body") and isinstance(e.body, dict):
+                error_msg = e.body.get("message", str(e))
+            logger.exception("Square refund failed for lot %s: %s", self.lot_number, error_msg)
+            return f"Square refund failed: {error_msg}"
+
     def remove(self, banned, user, message=None):
         """Call this to add a message when banning (removing) a lot"""
         if banned and banned != self.banned:
