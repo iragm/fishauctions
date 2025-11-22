@@ -7069,8 +7069,8 @@ class SquareConnectView(LoginRequiredMixin, View):
         # Use the user's unsubscribe_link as state parameter for security
         state = request.user.userdata.unsubscribe_link
         
-        # Square OAuth authorization endpoint
-        square_auth_url = "https://connect.squareup.com/oauth2/authorize" if not settings.DEBUG else "https://connect.squareupsandbox.com/oauth2/authorize"
+        # Square OAuth authorization endpoint - use SQUARE_ENVIRONMENT setting
+        square_auth_url = "https://connect.squareupsandbox.com/oauth2/authorize" if settings.SQUARE_ENVIRONMENT == "sandbox" else "https://connect.squareup.com/oauth2/authorize"
         
         # Build redirect URI - must match what's configured in Square app and what we send in token exchange
         redirect_uri = request.build_absolute_uri("/square/onboard/success/")
@@ -7128,6 +7128,14 @@ class SquareCallbackView(LoginRequiredMixin, View):
             
             # Build redirect URI - must match what was sent in authorization request
             redirect_uri = request.build_absolute_uri("/square/onboard/success/")
+            
+            # Log the OAuth attempt for debugging
+            logger.info(
+                "Attempting Square OAuth token exchange: environment=%s, client_id=%s, redirect_uri=%s",
+                settings.SQUARE_ENVIRONMENT,
+                settings.SQUARE_APPLICATION_ID,
+                redirect_uri,
+            )
             
             # Exchange code for access token using new API
             result = client.o_auth.obtain_token(
@@ -7202,7 +7210,14 @@ class SquareCallbackView(LoginRequiredMixin, View):
             
         except Exception as e:
             logger.exception("Error during Square OAuth: %s", e)
-            messages.error(request, "An error occurred connecting your Square account. Please try again.")
+            # Provide more specific error message if it's an API error
+            if hasattr(e, 'body') and isinstance(e.body, dict):
+                error_msg = e.body.get('message', str(e))
+                error_type = e.body.get('type', 'unknown')
+                logger.error("Square OAuth API Error: type=%s, message=%s", error_type, error_msg)
+                messages.error(request, f"Square OAuth failed: {error_msg}. Please check your Square application settings.")
+            else:
+                messages.error(request, "An error occurred connecting your Square account. Please try again.")
             return redirect("/square/")
 
 
