@@ -186,6 +186,7 @@ INSTALLED_APPS = [
     "chartjs",
     "django_ses",
     "webpush",
+    "django_celery_beat",
 ]
 ASGI_APPLICATION = "fishauctions.asgi.application"
 MIDDLEWARE = [
@@ -345,6 +346,7 @@ POST_OFFICE = {
     "BACKENDS": {
         "default": os.environ.get("POST_OFFICE_EMAIL_BACKEND", "django_ses.SESBackend"),
     },
+    "CELERY_ENABLED": True,  # Enable Celery for immediate email delivery
 }
 # django-ses configuration
 AWS_SES_AUTO_THROTTLE = 0.5
@@ -681,3 +683,42 @@ PAYPAL_SECRET = os.environ.get("PAYPAL_SECRET", "")
 PARTNER_MERCHANT_ID = os.environ.get("PARTNER_MERCHANT_ID", "")
 PAYPAL_BN_CODE = os.environ.get("PAYPAL_BN_CODE", "")
 PAYPAL_PLATFORM_FEE = Decimal(str(os.environ.get("PAYPAL_PLATFORM_FEE", "0") or "0"))
+
+# Celery Configuration
+# https://docs.celeryproject.org/en/stable/django/first-steps-with-django.html
+
+# Celery Broker URL using Redis
+CELERY_BROKER_URL = (
+    "redis://:"
+    + os.environ.get("REDIS_PASSWORD", "unsecure")
+    + "@"
+    + os.environ.get("REDIS_HOST", "redis")
+    + ":6379/1"
+)
+
+# Celery Result Backend using Redis
+CELERY_RESULT_BACKEND = (
+    "redis://:"
+    + os.environ.get("REDIS_PASSWORD", "unsecure")
+    + "@"
+    + os.environ.get("REDIS_HOST", "redis")
+    + ":6379/2"
+)
+
+# Celery Settings
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_ENABLE_UTC = True
+
+# Celery Beat Scheduler (for periodic tasks)
+CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+
+# Task time limits (in seconds)
+CELERY_TASK_SOFT_TIME_LIMIT = 300  # 5 minutes
+CELERY_TASK_TIME_LIMIT = 600  # 10 minutes
+
+# Worker settings
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_WORKER_MAX_TASKS_PER_CHILD = 1000

@@ -12,6 +12,33 @@ services:
     env_file: .env
     depends_on:
       - db
+      - redis
+    restart: always
+
+  celery_worker:
+    build: .
+    container_name: celery_worker
+    command: celery -A fishauctions worker --loglevel=info --concurrency=2
+    volumes:
+      - .:/home/app/web
+      - ./logs:/home/logs
+    env_file: .env
+    depends_on:
+      - db
+      - redis
+    restart: always
+
+  celery_beat:
+    build: .
+    container_name: celery_beat
+    command: celery -A fishauctions beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    volumes:
+      - .:/home/app/web
+      - ./logs:/home/logs
+    env_file: .env
+    depends_on:
+      - db
+      - redis
     restart: always
 
   test:
