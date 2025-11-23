@@ -2,6 +2,7 @@
   {% load el_pagination_tags %}
 {% endif %}
 {% load distance_filters %}
+{% load currency_filters %}
 {% if not object_list %}
   {% if embed == 'all_lots' %}
   <h5>No lots found</h5>
@@ -57,7 +58,7 @@
       <td>{% if lot.donation %}Donation{% else %}{{ lot.seller_as_str }}{% endif %}</td>
       <td>{{ lot.species_category }}</td>
       <td><a href="{{ lot.lot_link }}?src=lot_list">{{ lot.lot_name }}</a></td>
-      <td>${{ lot.high_bid }} </td>
+      <td>{{ lot.currency_symbol }}{{ lot.high_bid }} </td>
       <td>{{ lot.high_bidder_display }}</td>
       <td>{% if lot.user == request.user %}{% if lot.owner_chats %}<span class='text-warning'>{{ lot.owner_chats }}</span>{% else %}Views: {{ lot.page_views }}{% endif %}
         {% else %}

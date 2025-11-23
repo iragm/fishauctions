@@ -2,6 +2,7 @@
 {% block title %}{{ lot.lot_name }}{% if lot.ended %} (Ended){% endif %}{% endblock %}
 {% load static %}
 {% load webpush_notifications %}
+{% load currency_filters %}
 {% block extra_head %}
     {% webpush_header %}
 {% endblock %}
@@ -313,7 +314,7 @@ function deactivate_lot() {
                                 </span></b></td>
                                 <td>
                                 {% if lot.sold %}
-                                    $<span id="price">{{lot.winning_price}}</span> <span id="high_bidder_name">{% if lot.winner %}
+                                    {{ lot.currency_symbol }}<span id="price">{{lot.winning_price}}</span> <span id="high_bidder_name">{% if lot.winner %}
                                         {% if lot.winner.userdata.username_visible %}
                                             <a href="{% url 'userpage' slug=lot.winner %}">{{ lot.winner }}</a>
                                         {% else %}
@@ -331,7 +332,7 @@ function deactivate_lot() {
                                         {% else %}
                                             {% if lot.high_bidder %}
                                             <span>
-                                                $<span id="price">{{ lot.high_bid }}</span>
+                                                {{ lot.currency_symbol }}<span id="price">{{ lot.high_bid }}</span>
                                                 {% if lot.high_bidder.pk == request.user.id %}
                                                 <span id="high_bidder_name"> - you're winning!</span>
                                                 {% else %}
@@ -339,7 +340,7 @@ function deactivate_lot() {
                                                 {% endif %}
                                                 <span id="your_bid">
                                                     {% if viewer_bid %}
-                                                    Your max bid is $<span id='your_bid_price'>{{ viewer_bid }}</span>
+                                                    Your max bid is {{ lot.currency_symbol }}<span id='your_bid_price'>{{ viewer_bid }}</span>
                                                     {% if lot.bids_can_be_removed and lot.auction.allow_deleting_bids %}
                                                         <a href="{% url 'delete_bid' pk=viewer_bid_pk %}" class='btn btn-danger btn-sm'>Remove your bid</a>
                                                     {% endif %}
@@ -347,7 +348,7 @@ function deactivate_lot() {
                                                 {% if is_auction_admin %}{{ lot.auction_show_high_bidder_template }}{% endif %}
                                             </span>
                                             {% else %}
-                                                $<span id="price">{{ lot.reserve_price }} {% if lot.buy_now_price and not lot.bidding_error %}<button type="button" class='btn btn-sm btn-success text-black' id="buy-now">Buy now: ${{lot.buy_now_price}}</button>{% endif %}</span> <span id="high_bidder_name"></span><span id="your_bid"></span>
+                                                {{ lot.currency_symbol }}<span id="price">{{ lot.reserve_price }} {% if lot.buy_now_price and not lot.bidding_error %}<button type="button" class='btn btn-sm btn-success text-black' id="buy-now">Buy now: {{ lot.currency_symbol }}{{lot.buy_now_price}}</button>{% endif %}</span> <span id="high_bidder_name"></span><span id="your_bid"></span>
                                             {% endif %}
                                         {% endif %}
                                     {% endif %}
@@ -451,7 +452,7 @@ function deactivate_lot() {
                         <div class="col-auto">
                             <div class="input-group">
                                 <div class="input-group-prepend">
-                                    <span class="input-group-text">$</span>
+                                    <span class="input-group-text">{{ lot.currency_symbol }}</span>
                                 </div>
                                 <input type="number" id='bid_amount' min="1" value="{{ amount }}" class="form-control" aria-label="Amount (to the nearest dollar)">
                                 <div class="input-group-append">

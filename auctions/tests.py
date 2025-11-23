@@ -2868,6 +2868,7 @@ class DistanceUnitTests(StandardTestCase):
         # When user submits with 80 km, it should save as ~50 miles
         form_data = {
             "distance_unit": "km",
+            "preferred_currency": "USD",
             "local_distance": 80,
             "email_me_about_new_auctions_distance": 160,
             "email_me_about_new_in_person_auctions_distance": 160,
@@ -2904,6 +2905,7 @@ class DistanceUnitTests(StandardTestCase):
 
         form_data = {
             "distance_unit": "mi",
+            "preferred_currency": "USD",
             "local_distance": 50,
             "email_me_about_new_auctions_distance": 100,
             "email_me_about_new_in_person_auctions_distance": 100,
@@ -5271,3 +5273,238 @@ class SquareOAuthRevocationTests(StandardTestCase):
                 any("Square OAuth revoked for merchant MLF3WZS2N9WVG" in msg for msg in log_messages),
                 f"Expected log message not found. Logs: {log_messages}",
             )
+class CurrencyCustomizationTests(StandardTestCase):
+    """Tests for currency display customization"""
+
+    def test_userdata_default_currency(self):
+        """Test that UserData has a default currency of USD"""
+        user = User.objects.create_user(username="test_currency_user", password="testpassword")
+        self.assertEqual(user.userdata.preferred_currency, "USD")
+        self.assertEqual(user.userdata.currency, "USD")
+
+    def test_userdata_preferred_currency_gbp(self):
+        """Test that UserData can be set to GBP"""
+        user = User.objects.create_user(username="uk_user", password="testpassword")
+        user.userdata.preferred_currency = "GBP"
+        user.userdata.save()
+        self.assertEqual(user.userdata.currency, "GBP")
+
+    def test_userdata_preferred_currency_cad(self):
+        """Test that UserData can be set to CAD"""
+        user = User.objects.create_user(username="ca_user", password="testpassword")
+        user.userdata.preferred_currency = "CAD"
+        user.userdata.save()
+        self.assertEqual(user.userdata.currency, "CAD")
+
+    def test_lot_currency_from_auction_creator(self):
+        """Test that Lot gets currency from auction creator"""
+        # Set auction creator to GBP
+        self.user.userdata.preferred_currency = "GBP"
+        self.user.userdata.save()
+
+        lot = Lot.objects.create(
+            lot_name="Test Lot",
+            auction=self.online_auction,
+            quantity=1,
+            user=self.user,
+        )
+
+        self.assertEqual(lot.currency, "GBP")
+        self.assertEqual(lot.currency_symbol, "£")
+
+    def test_lot_currency_from_lot_owner_standalone(self):
+        """Test that standalone lot gets currency from owner"""
+        # Create a user with CAD preference
+        cad_user = User.objects.create_user(username="cad_user", password="testpassword")
+        cad_user.userdata.preferred_currency = "CAD"
+        cad_user.userdata.save()
+
+        # Create a standalone lot (no auction)
+        lot = Lot.objects.create(
+            lot_name="Standalone Lot",
+            auction=None,
+            quantity=1,
+            user=cad_user,
+        )
+
+        self.assertEqual(lot.currency, "CAD")
+        self.assertEqual(lot.currency_symbol, "$")
+
+    def test_auction_currency_from_creator(self):
+        """Test that Auction gets currency from creator"""
+        # Set auction creator to GBP
+        self.user.userdata.preferred_currency = "GBP"
+        self.user.userdata.save()
+
+        self.assertEqual(self.online_auction.currency, "GBP")
+        self.assertEqual(self.online_auction.currency_symbol, "£")
+
+    def test_invoice_currency_from_auction_creator(self):
+        """Test that Invoice gets currency from auction creator"""
+        # Set auction creator to CAD
+        self.user.userdata.preferred_currency = "CAD"
+        self.user.userdata.save()
+
+        invoice = Invoice.objects.create(auctiontos_user=self.online_tos, auction=self.online_auction)
+
+        self.assertEqual(invoice.currency, "CAD")
+        self.assertEqual(invoice.currency_symbol, "$")
+
+    def test_currency_symbol_usd(self):
+        """Test USD currency symbol"""
+        user = User.objects.create_user(username="usd_user", password="testpassword")
+        user.userdata.preferred_currency = "USD"
+        user.userdata.save()
+
+        lot = Lot.objects.create(
+            lot_name="USD Lot",
+            auction=None,
+            quantity=1,
+            user=user,
+        )
+
+        self.assertEqual(lot.currency_symbol, "$")
+
+    def test_currency_symbol_gbp(self):
+        """Test GBP currency symbol"""
+        user = User.objects.create_user(username="gbp_user", password="testpassword")
+        user.userdata.preferred_currency = "GBP"
+        user.userdata.save()
+
+        lot = Lot.objects.create(
+            lot_name="GBP Lot",
+            auction=None,
+            quantity=1,
+            user=user,
+        )
+
+        self.assertEqual(lot.currency_symbol, "£")
+
+    def test_change_user_preferences_form_includes_currency(self):
+        """Test that ChangeUserPreferencesForm includes preferred_currency field"""
+        from .forms import ChangeUserPreferencesForm
+
+        form = ChangeUserPreferencesForm(user=self.user, instance=self.user.userdata)
+        self.assertIn("preferred_currency", form.fields)
+
+    def test_preferences_view_can_change_currency(self):
+        """Test that user can change their preferred currency via preferences page"""
+        self.client.login(username="my_lot", password="testpassword")
+
+        url = reverse("userpage", kwargs={"slug": self.user.username})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+
+        # Change currency to GBP
+        url = reverse("preferences")
+        response = self.client.post(
+            url,
+            {
+                "preferred_currency": "GBP",
+                "distance_unit": "mi",
+                "email_visible": False,
+                "show_ads": True,
+                "email_me_about_new_auctions": True,
+                "email_me_about_new_local_lots": True,
+                "email_me_about_new_lots_ship_to_location": True,
+                "email_me_when_people_comment_on_my_lots": True,
+                "email_me_about_new_chat_replies": True,
+                "email_me_about_new_in_person_auctions": True,
+                "send_reminder_emails_about_joining_auctions": True,
+                "username_visible": True,
+                "share_lot_images": True,
+                "auto_add_images": True,
+                "push_notifications_when_lots_sell": False,
+            },
+            follow=True,
+        )
+
+        # Check that currency was changed
+        self.user.userdata.refresh_from_db()
+        self.assertEqual(self.user.userdata.preferred_currency, "GBP")
+
+    def test_currency_symbol_eur(self):
+        """Test EUR currency symbol"""
+        user = User.objects.create_user(username="eur_user", password="testpassword")
+        user.userdata.preferred_currency = "EUR"
+        user.userdata.save()
+
+        lot = Lot.objects.create(
+            lot_name="EUR Lot",
+            auction=None,
+            quantity=1,
+            user=user,
+        )
+
+        self.assertEqual(lot.currency_symbol, "€")
+
+    def test_currency_symbol_jpy(self):
+        """Test JPY currency symbol"""
+        user = User.objects.create_user(username="jpy_user", password="testpassword")
+        user.userdata.preferred_currency = "JPY"
+        user.userdata.save()
+
+        lot = Lot.objects.create(
+            lot_name="JPY Lot",
+            auction=None,
+            quantity=1,
+            user=user,
+        )
+
+        self.assertEqual(lot.currency_symbol, "¥")
+
+    def test_currency_symbol_aud(self):
+        """Test AUD currency symbol"""
+        user = User.objects.create_user(username="aud_user", password="testpassword")
+        user.userdata.preferred_currency = "AUD"
+        user.userdata.save()
+
+        lot = Lot.objects.create(
+            lot_name="AUD Lot",
+            auction=None,
+            quantity=1,
+            user=user,
+        )
+
+        self.assertEqual(lot.currency_symbol, "$")
+
+    def test_currency_symbol_chf(self):
+        """Test CHF currency symbol"""
+        user = User.objects.create_user(username="chf_user", password="testpassword")
+        user.userdata.preferred_currency = "CHF"
+        user.userdata.save()
+
+        lot = Lot.objects.create(
+            lot_name="CHF Lot",
+            auction=None,
+            quantity=1,
+            user=user,
+        )
+
+        self.assertEqual(lot.currency_symbol, "CHF")
+
+    def test_currency_symbol_cny(self):
+        """Test CNY currency symbol"""
+        user = User.objects.create_user(username="cny_user", password="testpassword")
+        user.userdata.preferred_currency = "CNY"
+        user.userdata.save()
+
+        lot = Lot.objects.create(
+            lot_name="CNY Lot",
+            auction=None,
+            quantity=1,
+            user=user,
+        )
+
+        self.assertEqual(lot.currency_symbol, "¥")
+
+    def test_all_currency_choices_available(self):
+        """Test that all 8 currencies are available in choices"""
+        from .forms import ChangeUserPreferencesForm
+
+        form = ChangeUserPreferencesForm(user=self.user, instance=self.user.userdata)
+        currency_choices = [choice[0] for choice in form.fields["preferred_currency"].choices]
+
+        expected_currencies = ["USD", "CAD", "GBP", "EUR", "JPY", "AUD", "CHF", "CNY"]
+        for currency in expected_currencies:
+            self.assertIn(currency, currency_choices)

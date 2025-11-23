@@ -24,6 +24,7 @@ from django_recaptcha.fields import ReCaptchaField
 from django_recaptcha.widgets import ReCaptchaV2Invisible
 from django_summernote.widgets import SummernoteWidget
 
+from .helper_functions import get_currency_symbol
 from .models import (
     Auction,
     AuctionTOS,
@@ -403,6 +404,8 @@ class WinnerLot(forms.Form):
     def __init__(self, auction, *args, **kwargs):
         self.auction_pk = auction.pk
         super().__init__(*args, **kwargs)
+        # Get currency symbol from auction creator
+        currency_symbol = auction.currency_symbol if auction else "$"
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_class = "form"
@@ -413,7 +416,7 @@ class WinnerLot(forms.Form):
             "auction",
             "lot",
             "winner",
-            PrependedAppendedText("winning_price", "$", ".00"),
+            PrependedAppendedText("winning_price", currency_symbol, ".00"),
             # Div(
             #     Div('lot',css_class='col-md-5',),
             #     Div('winner',css_class='col-md-3',),
@@ -454,6 +457,8 @@ class WinnerLotSimpleImages(WinnerLotSimple):
 
     def __init__(self, auction, *args, **kwargs):
         super().__init__(auction, *args, **kwargs)
+        # Get currency symbol from auction creator
+        currency_symbol = auction.currency_symbol if auction else "$"
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_class = "form"
@@ -475,7 +480,7 @@ class WinnerLotSimpleImages(WinnerLotSimple):
             Div(
                 Div("lot", css_class="col-md-3"),
                 Div(
-                    PrependedAppendedText("winning_price", "$", ".00"),
+                    PrependedAppendedText("winning_price", currency_symbol, ".00"),
                     css_class="col-md-4",
                 ),
                 Div("winner", css_class="col-md-3"),
@@ -1815,6 +1820,18 @@ class AuctionEditForm(forms.ModelForm):
         self.fields["user_cut"].initial = 100 - self.instance.winning_bid_percent_to_club
         self.fields["club_member_cut"].initial = 100 - self.instance.winning_bid_percent_to_club_for_club_members
 
+        # Get currency symbol from the auction creator (when editing) or current user (when creating)
+        if self.instance and self.instance.pk and self.instance.created_by:
+            # Editing an existing auction - use the auction creator's currency
+            currency = self.instance.created_by.userdata.currency
+        elif self.user and hasattr(self.user, "userdata"):
+            # Creating a new auction - use the current user's currency
+            currency = self.user.userdata.currency
+        else:
+            # Fallback to USD
+            currency = "USD"
+        currency_symbol = get_currency_symbol(currency)
+
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_id = "auction-form"
@@ -1847,13 +1864,13 @@ class AuctionEditForm(forms.ModelForm):
             Div(
                 PrependedAppendedText(
                     "unsold_lot_fee",
-                    "$",
+                    currency_symbol,
                     ".00",
                     wrapper_class="col-lg-3",
                 ),
                 PrependedAppendedText(
                     "lot_entry_fee",
-                    "$",
+                    currency_symbol,
                     ".00",
                     wrapper_class="col-lg-3",
                 ),
@@ -1871,7 +1888,7 @@ class AuctionEditForm(forms.ModelForm):
                 ),
                 PrependedAppendedText(
                     "force_donation_threshold",
-                    "$",
+                    currency_symbol,
                     ".00",
                     wrapper_class="col-lg-3",
                 ),
@@ -1895,7 +1912,7 @@ class AuctionEditForm(forms.ModelForm):
                 ),
                 PrependedAppendedText(
                     "lot_entry_fee_for_club_members",
-                    "$",
+                    currency_symbol,
                     ".00",
                     wrapper_class="col-lg-3",
                 ),
@@ -2781,6 +2798,7 @@ class ChangeUserPreferencesForm(forms.ModelForm):
             "email_visible",
             "show_ads",
             "distance_unit",
+            "preferred_currency",
             "email_me_about_new_auctions",
             "email_me_about_new_auctions_distance",
             "email_me_about_new_local_lots",
@@ -2855,6 +2873,10 @@ class ChangeUserPreferencesForm(forms.ModelForm):
                 ),
                 Div(
                     "distance_unit",
+                    css_class="col-md-4",
+                ),
+                Div(
+                    "preferred_currency",
                     css_class="col-md-4",
                 ),
                 css_class="row",
