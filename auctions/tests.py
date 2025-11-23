@@ -5244,9 +5244,8 @@ class SquareOAuthRevocationTests(StandardTestCase):
 
     def test_oauth_revocation_logs_event(self):
         """Test that OAuth revocation is properly logged"""
-        from django.urls import reverse
 
-        import logging
+        from django.urls import reverse
 
         # Capture log output
         with self.assertLogs("auctions.views", level="INFO") as log_context:
@@ -5258,9 +5257,7 @@ class SquareOAuthRevocationTests(StandardTestCase):
                 "data": {
                     "type": "revocation",
                     "id": "test-revocation-id",
-                    "object": {
-                        "revocation": {"revoked_at": "2025-11-23T16:29:12Z", "revoker_type": "MERCHANT"}
-                    },
+                    "object": {"revocation": {"revoked_at": "2025-11-23T16:29:12Z", "revoker_type": "MERCHANT"}},
                 },
             }
 
