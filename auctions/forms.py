@@ -36,6 +36,7 @@ from .models import (
     LotImage,
     PayPalSeller,
     PickupLocation,
+    SquareSeller,
     UserBan,
     UserData,
     UserLabelPrefs,
@@ -1295,6 +1296,12 @@ class LotRefundForm(forms.ModelForm):
             self.fields["partial_refund_percent"].widget = HiddenInput()
         else:
             self.fields["banned"].widget = HiddenInput()
+
+        # Add Square refund info message if applicable
+        square_refund_msg = ""
+        if self.lot.square_refund_possible and not self.lot.no_more_refunds_possible:
+            square_refund_msg = '<div class="alert alert-info mt-3"><i class="bi bi-square"></i> <strong>Square refund will be automatically issued</strong> when you save this form.</div>'
+
         save_button_html = f'<button hx-post="{reverse("lot_refund", kwargs={"pk": self.lot.pk})}" hx-target="#modals-here" type="submit" class="btn bg-success float-right ms-2">Save</button>'
         self.helper = FormHelper()
         self.helper.form_method = "post"
@@ -1311,6 +1318,7 @@ class LotRefundForm(forms.ModelForm):
                 ),
                 css_class="col-md-12",
             ),
+            HTML(square_refund_msg) if square_refund_msg else Div(),
             Div(
                 Div(
                     "banned",
@@ -1734,6 +1742,7 @@ class AuctionEditForm(forms.ModelForm):
             "use_reference_link",
             "use_description",
             "enable_online_payments",
+            "enable_square_payments",
         ]
         widgets = {
             "date_start": DateTimePickerInput(),
@@ -1769,6 +1778,15 @@ class AuctionEditForm(forms.ModelForm):
                 # show payments option
                 pass
                 self.fields["enable_online_payments"].widget = forms.HiddenInput()
+
+        square_seller = SquareSeller.objects.filter(user=self.instance.created_by).first()
+        if square_seller:
+            self.fields["enable_square_payments"].help_text += f"<br>Payments sent to {square_seller}"
+        else:
+            # Square requires OAuth - no fallback for superusers
+            # Hide the field if seller hasn't linked their Square account
+            if not self.instance.created_by.userdata.square_enabled:
+                self.fields["enable_square_payments"].widget = forms.HiddenInput()
         # self.fields['notes'].help_text = "Foo"
         if self.instance.is_online:
             self.fields[
@@ -2030,7 +2048,11 @@ class AuctionEditForm(forms.ModelForm):
                 ),
                 Div(
                     "enable_online_payments",
-                    css_class="col-md-6",
+                    css_class="col-md-3",
+                ),
+                Div(
+                    "enable_square_payments",
+                    css_class="col-md-3",
                 ),
                 Div(
                     "invoice_payment_instructions",

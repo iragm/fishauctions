@@ -56,6 +56,8 @@ brotli==1.2.0
 certifi==2025.11.12
     # via
     #   -r requirements.in
+    #   httpcore
+    #   httpx
     #   requests
 cffi==2.0.0
     # via
@@ -184,13 +186,19 @@ frozenlist==1.8.0
 gunicorn==23.0.0
     # via -r requirements.in
 h11==0.16.0
-    # via uvicorn
+    # via
+    #   httpcore
+    #   uvicorn
 heif-image-plugin==0.7.0
     # via -r requirements.in
 http-ece==1.2.1
     # via pywebpush
+httpcore==1.0.9
+    # via httpx
 httptools==0.7.1
     # via uvicorn
+httpx==0.28.1
+    # via squareup
 hyperlink==21.0.0
     # via
     #   -r requirements.in
@@ -200,6 +208,7 @@ idna==3.11
     # via
     #   -r requirements.in
     #   anyio
+    #   httpx
     #   hyperlink
     #   requests
     #   twisted
@@ -268,8 +277,11 @@ pydantic==2.12.4
     # via
     #   django-bootstrap-datepicker-plus
     #   django-qr-code
+    #   squareup
 pydantic-core==2.41.5
-    # via pydantic
+    # via
+    #   pydantic
+    #   squareup
 pydyf==0.11.0
     # via weasyprint
 pyhamcrest==2.1.0
@@ -340,6 +352,8 @@ sqlparse==0.5.3
     #   -r requirements.in
     #   django
     #   django-debug-toolbar
+squareup==43.2.0.20251016
+    # via -r requirements.in
 tinycss2==1.4.0
     # via
     #   bleach
@@ -364,6 +378,7 @@ typing-extensions==4.15.0
     #   pydantic
     #   pydantic-core
     #   pyopenssl
+    #   squareup
     #   twisted
     #   typing-inspection
 typing-inspection==0.4.2

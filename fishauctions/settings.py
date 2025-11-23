@@ -476,6 +476,7 @@ if os.environ.get("ALLOW_USERS_TO_CREATE_LOTS", "True") == "False":
 else:
     ALLOW_USERS_TO_CREATE_LOTS = True
 PAYPAL_ENABLED_FOR_USERS = os.environ.get("PAYPAL_ENABLED_FOR_USERS", "False") == "True"
+SQUARE_ENABLED_FOR_USERS = os.environ.get("SQUARE_ENABLED_FOR_USERS", "False") == "True"
 if os.environ.get("USERS_ARE_TRUSTED_BY_DEFAULT", "True") == "False":
     USERS_ARE_TRUSTED_BY_DEFAULT = False
 else:
@@ -681,3 +682,30 @@ PAYPAL_SECRET = os.environ.get("PAYPAL_SECRET", "")
 PARTNER_MERCHANT_ID = os.environ.get("PARTNER_MERCHANT_ID", "")
 PAYPAL_BN_CODE = os.environ.get("PAYPAL_BN_CODE", "")
 PAYPAL_PLATFORM_FEE = Decimal(str(os.environ.get("PAYPAL_PLATFORM_FEE", "0") or "0"))
+
+# Square settings - OAuth only, no platform credentials
+SQUARE_ENVIRONMENT = os.environ.get("SQUARE_ENVIRONMENT", "sandbox" if DEBUG else "production")
+SQUARE_APPLICATION_ID = os.environ.get("SQUARE_APPLICATION_ID", "")
+SQUARE_CLIENT_SECRET = os.environ.get("SQUARE_CLIENT_SECRET", "")  # For OAuth token exchange
+# Webhook signature key for verifying Square webhook notifications
+SQUARE_WEBHOOK_SIGNATURE_KEY = os.environ.get("SQUARE_WEBHOOK_SIGNATURE_KEY", "")
+
+# Field encryption key for django-encrypted-model-fields
+# This should be a Fernet key - generate with: from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())
+# FIELD_ENCRYPTION_KEY is required for encrypted model fields (SquareSeller OAuth tokens)
+_encryption_key = os.environ.get("FIELD_ENCRYPTION_KEY", "")
+if not _encryption_key:
+    from cryptography.fernet import Fernet
+    from django.core.exceptions import ImproperlyConfigured
+
+    # Generate a key and show the user how to add it to .env
+    generated_key = Fernet.generate_key().decode()
+    env_line = f"FIELD_ENCRYPTION_KEY={generated_key}"
+    print("\n" + "=" * 80)  # noqa: T201
+    print("FIELD_ENCRYPTION_KEY is required but not set!")  # noqa: T201
+    print("Add this line to your .env file:")  # noqa: T201
+    print(f"\n{env_line}\n")  # noqa: T201
+    print("=" * 80 + "\n")  # noqa: T201
+    msg = f"FIELD_ENCRYPTION_KEY environment variable is required. Add this to your .env file: {env_line}"
+    raise ImproperlyConfigured(msg)
+FIELD_ENCRYPTION_KEY = _encryption_key
