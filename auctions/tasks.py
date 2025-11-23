@@ -15,7 +15,7 @@ def endauctions(self):
     Set the winner and winning price on all ended lots.
     Send lot ending soon and lot ended messages to websocket connected users.
     Sets active to false on lots.
-    
+
     Previously run every minute via cron.
     """
     call_command("endauctions")
@@ -25,7 +25,7 @@ def endauctions(self):
 def sendnotifications(self):
     """
     Send notifications about watched items.
-    
+
     Previously run every 15 minutes via cron.
     """
     call_command("sendnotifications")
@@ -35,7 +35,7 @@ def sendnotifications(self):
 def auctiontos_notifications(self):
     """
     Welcome and print reminder emails.
-    
+
     Previously run every 15 minutes via cron.
     """
     call_command("auctiontos_notifications")
@@ -45,7 +45,7 @@ def auctiontos_notifications(self):
 def email_invoice(self):
     """
     Email users about invoices.
-    
+
     Previously run every 15 minutes via cron.
     """
     call_command("email_invoice")
@@ -55,7 +55,7 @@ def email_invoice(self):
 def auction_emails(self):
     """
     Send auction-related drip marketing emails.
-    
+
     Previously run every 4 minutes via cron.
     """
     call_command("auction_emails")
@@ -65,7 +65,7 @@ def auction_emails(self):
 def email_unseen_chats(self):
     """
     Send notifications about unread chat messages.
-    
+
     Previously run daily at 10:00 via cron.
     """
     call_command("email_unseen_chats")
@@ -75,7 +75,7 @@ def email_unseen_chats(self):
 def weekly_promo(self):
     """
     Send weekly promotional email advertising auctions and lots near you.
-    
+
     Previously run weekly on Wednesday at 9:30 via cron.
     """
     call_command("weekly_promo")
@@ -85,7 +85,7 @@ def weekly_promo(self):
 def set_user_location(self):
     """
     Set user lat/long based on their IP address.
-    
+
     Previously run every 2 hours via cron.
     """
     call_command("set_user_location")
@@ -95,7 +95,7 @@ def set_user_location(self):
 def remove_duplicate_views(self):
     """
     Remove duplicate page views.
-    
+
     Previously run every 15 minutes via cron.
     """
     call_command("remove_duplicate_views")
@@ -105,7 +105,7 @@ def remove_duplicate_views(self):
 def webpush_notifications_deduplicate(self):
     """
     Deduplicate web push notification subscriptions.
-    
+
     Previously run daily at 10:00 via cron.
     """
     call_command("webpush_notifications_deduplicate")
@@ -115,7 +115,7 @@ def webpush_notifications_deduplicate(self):
 def update_auction_stats(self):
     """
     Update cached auction statistics for auctions whose next_update_due is past due.
-    
+
     Previously run every minute via cron.
     """
     call_command("update_auction_stats")

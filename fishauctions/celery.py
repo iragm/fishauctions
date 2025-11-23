@@ -91,4 +91,7 @@ app.conf.beat_schedule = {
 @app.task(bind=True, ignore_result=True)
 def debug_task(self):
     """Debug task for testing Celery configuration."""
-    print(f"Request: {self.request!r}")
+    import logging
+
+    logger = logging.getLogger(__name__)
+    logger.info("Request: %s", self.request)
