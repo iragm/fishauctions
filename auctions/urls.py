@@ -518,5 +518,5 @@ urlpatterns = [
     ),
     re_path(r"^webpush/", include("webpush.urls")),
     re_path(r"^paypal/webhook/$", views.PayPalWebhookView.as_view(), name="paypal-webhook"),
-    re_path(r"^square/webhook/$", views.SquareWebhookView.as_view(), name="square-webhook"),
+    re_path(r"^square/webhook/$", views.SquareWebhookView.as_view(), name="square_webhook"),
 ]
