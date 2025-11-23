@@ -7132,7 +7132,10 @@ class CreateSquarePaymentLinkView(SquareAPIMixin, View):
             return redirect(self.invoice.get_absolute_url())
 
         # Add processing message and redirect to invoice to show status
-        messages.info(request, "Square payment processing... You'll be redirected to complete payment.")
+        messages.info(
+            request,
+            "You'll see the payment confirmation on your invoice.  Payment generally confirms within a few minutes.",
+        )
         return redirect(payment_url)
 
 
