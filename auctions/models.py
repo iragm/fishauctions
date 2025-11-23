@@ -43,8 +43,7 @@ from django.utils import html, timezone
 from django.utils.safestring import mark_safe
 from easy_thumbnails.fields import ThumbnailerImageField
 from easy_thumbnails.files import get_thumbnailer
-
-# from encrypted_model_fields.fields import EncryptedCharField  # TODO: Enable when FIELD_ENCRYPTION_KEY is configured
+from encrypted_model_fields.fields import EncryptedCharField
 from location_field.models.plain import PlainLocationField
 from markdownfield.models import MarkdownField, RenderedMarkdownField
 from markdownfield.validators import VALIDATOR_STANDARD
@@ -3635,7 +3634,7 @@ class Lot(models.Model):
                     import logging
 
                     logger = logging.getLogger(__name__)
-                    logger.error(f"Square refund failed for lot {self.pk}: {error}")
+                    logger.error("Square refund failed for lot %s: %s", self.pk, error)
                     if not message:
                         message = f"{user} has issued a {amount}% refund on this lot. Square refund failed: {error}"
                 else:
@@ -3657,7 +3656,6 @@ class Lot(models.Model):
         Returns Invoice object or None if not found
         """
         from auctions.models import Invoice
-        from django.db.models import Q
 
         if not (self.auctiontos_winner or self.winner):
             return None
@@ -3674,12 +3672,11 @@ class Lot(models.Model):
             return None
 
     @property
-    def seller_invoice(self):
+    def sellers_invoice(self):
         """Get the Invoice for this lot's seller
         Returns Invoice object or None if not found
         """
         from auctions.models import Invoice
-        from django.db.models import Q
 
         if not (self.auctiontos_seller or self.user):
             return None
@@ -3711,8 +3708,9 @@ class Lot(models.Model):
             return False
 
         # Check for Square payments with available refund amount
-        from auctions.models import InvoicePayment
         from decimal import Decimal
+
+        from auctions.models import InvoicePayment
 
         payment = (
             InvoicePayment.objects.filter(invoice=invoice, payment_method="square")
@@ -3735,8 +3733,9 @@ class Lot(models.Model):
         Returns:
             Error message string or None on success
         """
-        from auctions.models import InvoicePayment, SquareSeller
         from decimal import Decimal
+
+        from auctions.models import InvoicePayment, SquareSeller
 
         if not self.winning_price or self.winning_price <= 0:
             return "No valid winning price for this lot"
@@ -3830,7 +3829,7 @@ class Lot(models.Model):
     @property
     def seller_invoice_link(self):
         """/invoices/123 for the auction/seller of this lot"""
-        invoice = self.seller_invoice
+        invoice = self.sellers_invoice
         if invoice:
             return f"/invoices/{invoice.pk}"
         return ""
@@ -5921,9 +5920,6 @@ class SquareSeller(models.Model):
 
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     square_merchant_id = models.CharField(max_length=64, blank=True, null=True)
-    # OAuth tokens encrypted at rest for security
-    from encrypted_model_fields.fields import EncryptedCharField
-
     access_token = EncryptedCharField(max_length=500, blank=True, null=True)
     refresh_token = EncryptedCharField(max_length=500, blank=True, null=True)
     token_expires_at = models.DateTimeField(blank=True, null=True)
@@ -6150,7 +6146,6 @@ class SquareSeller(models.Model):
 
         try:
             import uuid
-
             from decimal import Decimal
 
             # Convert amount to cents
