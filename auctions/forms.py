@@ -2031,7 +2031,11 @@ class AuctionEditForm(forms.ModelForm):
                 ),
                 Div(
                     "enable_online_payments",
-                    css_class="col-md-6",
+                    css_class="col-md-3",
+                ),
+                Div(
+                    "enable_square_payments",
+                    css_class="col-md-3",
                 ),
                 Div(
                     "invoice_payment_instructions",

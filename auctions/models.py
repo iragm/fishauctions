@@ -5908,6 +5908,7 @@ class PayPalSeller(models.Model):
                 action=f"PayPal partner consent from {self.payer_email} has been revoked.  Relink your PayPal account to re-enable payments.",
                 user=None,
             )
+            auction.enable_online_payments = False
             auction.save()
         return super().delete()
 
@@ -6175,9 +6176,10 @@ class SquareSeller(models.Model):
         for auction in auctions:
             auction.create_history(
                 applies_to="INVOICES",
-                action=f"Square account from {self.payer_email} has been disconnected. Relink your Square account to re-enable payments.",
+                action=f"Square account from {self.payer_email or self.user} has been disconnected. Relink your Square account to re-enable payments.",
                 user=None,
             )
+            auction.enable_square_payments = False
             auction.save()
         return super().delete()
 

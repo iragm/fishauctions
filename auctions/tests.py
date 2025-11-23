@@ -5120,7 +5120,7 @@ class SquarePaymentSuccessViewTests(StandardTestCase):
         self.assertFalse(self.invoice.opened)
 
         url = reverse("square_payment_success", kwargs={"uuid": self.invoice.no_login_link})
-        response = self.client.get(url)
+        self.client.get(url)
 
         self.invoice.refresh_from_db()
         self.assertTrue(self.invoice.opened)
@@ -5134,7 +5134,7 @@ class SquarePaymentSuccessViewTests(StandardTestCase):
         self.tosA.save()
 
         url = reverse("square_payment_success", kwargs={"uuid": self.invoice.no_login_link})
-        response = self.client.get(url)
+        self.client.get(url)
 
         self.tosA.refresh_from_db()
         # Email status should NOT have changed to VALID
@@ -5149,7 +5149,7 @@ class SquarePaymentSuccessViewTests(StandardTestCase):
         self.tosA.save()
 
         url = reverse("invoice_no_login", kwargs={"uuid": self.invoice.no_login_link})
-        response = self.client.get(url)
+        self.client.get(url)
 
         self.tosA.refresh_from_db()
         # Email status SHOULD have changed to VALID for regular invoice links
