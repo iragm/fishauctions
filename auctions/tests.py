@@ -5164,3 +5164,110 @@ class SquarePaymentSuccessViewTests(StandardTestCase):
             self.assertTrue(url.startswith("/invoices/square-success/"))
         except Exception as e:
             self.fail(f"square_payment_success URL pattern not configured: {e}")
+
+
+class SquareOAuthRevocationTests(StandardTestCase):
+    """Tests for Square OAuth authorization revocation handling"""
+
+    def setUp(self):
+        super().setUp()
+        from .models import SquareSeller
+
+        # Create Square seller for testing revocation
+        self.square_seller = SquareSeller.objects.create(
+            user=self.admin_user,
+            merchant_id="MLF3WZS2N9WVG",
+            access_token="TEST_ACCESS_TOKEN",
+            refresh_token="TEST_REFRESH_TOKEN",
+            token_expires_at=timezone.now() + datetime.timedelta(days=30),
+            currency="USD",
+        )
+
+    def test_oauth_revocation_deletes_square_seller(self):
+        """Test that oauth.authorization.revoked webhook deletes SquareSeller"""
+        from django.urls import reverse
+
+        from .models import SquareSeller
+
+        # Verify seller exists
+        self.assertTrue(SquareSeller.objects.filter(merchant_id="MLF3WZS2N9WVG").exists())
+
+        # Simulate Square revocation webhook
+        webhook_data = {
+            "merchant_id": "MLF3WZS2N9WVG",
+            "type": "oauth.authorization.revoked",
+            "event_id": "957299eb-98e4-399c-b7d9-e73ddeff19df",
+            "created_at": "2025-11-23T16:29:14.35551833Z",
+            "data": {
+                "type": "revocation",
+                "id": "6ea8bc48-7c2e-43d1-bd36-c865f6c4083d",
+                "object": {"revocation": {"revoked_at": "2025-11-23T16:29:12Z", "revoker_type": "MERCHANT"}},
+            },
+        }
+
+        url = reverse("square_webhook")
+        response = self.client.post(url, data=webhook_data, content_type="application/json")
+
+        # Should return 200
+        self.assertEqual(response.status_code, 200)
+
+        # SquareSeller should be deleted
+        self.assertFalse(SquareSeller.objects.filter(merchant_id="MLF3WZS2N9WVG").exists())
+
+    def test_oauth_revocation_handles_missing_seller(self):
+        """Test that revocation webhook handles missing SquareSeller gracefully"""
+        from django.urls import reverse
+
+        # Delete the seller before webhook
+        self.square_seller.delete()
+
+        # Simulate revocation webhook for non-existent seller
+        webhook_data = {
+            "merchant_id": "NONEXISTENT_MERCHANT",
+            "type": "oauth.authorization.revoked",
+            "event_id": "test-event-id",
+            "created_at": "2025-11-23T16:29:14.35551833Z",
+            "data": {
+                "type": "revocation",
+                "id": "test-revocation-id",
+                "object": {"revocation": {"revoked_at": "2025-11-23T16:29:12Z", "revoker_type": "MERCHANT"}},
+            },
+        }
+
+        url = reverse("square_webhook")
+        response = self.client.post(url, data=webhook_data, content_type="application/json")
+
+        # Should still return 200 (graceful handling)
+        self.assertEqual(response.status_code, 200)
+
+    def test_oauth_revocation_logs_event(self):
+        """Test that OAuth revocation is properly logged"""
+        from django.urls import reverse
+
+        import logging
+
+        # Capture log output
+        with self.assertLogs("auctions.views", level="INFO") as log_context:
+            webhook_data = {
+                "merchant_id": "MLF3WZS2N9WVG",
+                "type": "oauth.authorization.revoked",
+                "event_id": "test-event-id",
+                "created_at": "2025-11-23T16:29:14.35551833Z",
+                "data": {
+                    "type": "revocation",
+                    "id": "test-revocation-id",
+                    "object": {
+                        "revocation": {"revoked_at": "2025-11-23T16:29:12Z", "revoker_type": "MERCHANT"}
+                    },
+                },
+            }
+
+            url = reverse("square_webhook")
+            self.client.post(url, data=webhook_data, content_type="application/json")
+
+            # Check that revocation was logged
+            log_messages = [record.message for record in log_context.records]
+            self.assertTrue(
+                any("Square OAuth revoked for merchant MLF3WZS2N9WVG" in msg for msg in log_messages),
+                f"Expected log message not found. Logs: {log_messages}",
+            )

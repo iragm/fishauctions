@@ -9895,6 +9895,25 @@ class SquareWebhookView(SquareAPIMixin, View):
                     payment_record.invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
                     logger.info("Square refund completed for payment %s", payment_id)
 
+        elif event_type == "oauth.authorization.revoked":
+            # Merchant revoked OAuth authorization - delete SquareSeller instance
+            merchant_id = event.get("merchant_id")
+            if merchant_id:
+                try:
+                    square_seller = SquareSeller.objects.get(merchant_id=merchant_id)
+                    revocation = event.get("data", {}).get("object", {}).get("revocation", {})
+                    revoked_at = revocation.get("revoked_at", "unknown")
+                    revoker_type = revocation.get("revoker_type", "unknown")
+                    logger.info(
+                        f"Square OAuth revoked for merchant {merchant_id} at {revoked_at} by {revoker_type}"
+                    )
+                    square_seller.delete()
+                    logger.info(f"Deleted SquareSeller for merchant {merchant_id}")
+                except SquareSeller.DoesNotExist:
+                    logger.warning(f"SquareSeller not found for merchant {merchant_id} during revocation")
+                except Exception as e:
+                    logger.exception(f"Error processing OAuth revocation for merchant {merchant_id}: {e}")
+
         return HttpResponse(status=200)
 
 
