@@ -1291,6 +1291,12 @@ class LotRefundForm(forms.ModelForm):
             self.fields["partial_refund_percent"].widget = HiddenInput()
         else:
             self.fields["banned"].widget = HiddenInput()
+
+        # Add Square refund info message if applicable
+        square_refund_msg = ""
+        if self.lot.square_refund_possible and not self.lot.no_more_refunds_possible:
+            square_refund_msg = '<div class="alert alert-info mt-3"><i class="bi bi-square"></i> <strong>Square refund will be automatically issued</strong> when you save this form.</div>'
+
         save_button_html = f'<button hx-post="{reverse("lot_refund", kwargs={"pk": self.lot.pk})}" hx-target="#modals-here" type="submit" class="btn bg-success float-right ms-2">Save</button>'
         self.helper = FormHelper()
         self.helper.form_method = "post"
@@ -1307,6 +1313,7 @@ class LotRefundForm(forms.ModelForm):
                 ),
                 css_class="col-md-12",
             ),
+            HTML(square_refund_msg) if square_refund_msg else Div(),
             Div(
                 Div(
                     "banned",

@@ -5,6 +5,7 @@ A free, full featured auction platform:
 * Run online or in-person auctions
 * Reserve and buy now prices
 * Automatic invoicing
+* **Integrated payment processing** with PayPal and Square (OAuth-based seller accounts)
 * Using a projector, show pictures of lots as they are auctioned off
 * Users don't need to create an account for in-person auctions
 * Support for Breeder Award Programs/Breeder Participation Programs
@@ -88,6 +89,59 @@ To check if code passes the linting check *without* modifying any files on disk,
 Run these with docker exec after docker compose is up.  For example: `docker exec -it django python3 manage.py makemigrations`
 
 A note on migrations: occasionally webpush seems to give permission denied about a file `0006_alter_subscriptioninfo_user_agent.py`.  If this happens, just run `docker exec -u root -it django python3 manage.py makemigrations`
+
+#### Payment Processing (PayPal & Square)
+
+This platform supports integrated payment processing through PayPal and Square, allowing sellers to receive payments directly for their sold lots.
+
+**PayPal Integration:**
+- OAuth-based seller onboarding
+- Automatic invoice payment processing
+- Refund support via PayPal API
+- QR code generation for quick checkout
+
+**Square Integration:**
+- OAuth-only approach (no platform credentials needed)
+- Square CreatePaymentLink API (SDK v42+)
+- Automatic token refresh for reliable payment processing
+- Webhook signature verification for security
+- Complete refund support via Square Refunds API
+- Encrypted OAuth token storage (requires FIELD_ENCRYPTION_KEY)
+- Automatic refund processing when removing/refunding lots
+- Refund protection to prevent multiple refunds on same lot
+
+**Configuration:**
+
+For Square payments, add these to your `.env` file:
+```bash
+# Square OAuth settings (required)
+SQUARE_ENABLED_FOR_USERS=True
+SQUARE_ENVIRONMENT=sandbox  # or production
+SQUARE_APPLICATION_ID=sq0idp-xxxxx
+SQUARE_CLIENT_SECRET=sq0csp-xxxxx
+
+# Encryption key for OAuth tokens (required)
+# Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+FIELD_ENCRYPTION_KEY=your_fernet_key_here
+
+# Optional webhook signature verification
+SQUARE_WEBHOOK_SIGNATURE_KEY=your_webhook_key
+```
+
+For PayPal payments, similar OAuth configuration is needed (see .env.example for details).
+
+**Management Commands:**
+- `python manage.py change_square on|off` - Toggle Square payments for all users
+- `python manage.py change_paypal on|off` - Toggle PayPal payments for all users
+
+**Key Features:**
+- Sellers connect their own PayPal/Square accounts via OAuth
+- Payments go directly to sellers (platform doesn't hold funds)
+- Automatic invoice generation with payment links
+- QR codes for in-person checkout
+- Real-time webhook processing for payment status
+- Automatic refunds when lots are removed or refunded
+- Both payment methods can be enabled simultaneously
 
 ### Developing in VSCode
 

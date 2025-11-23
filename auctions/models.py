@@ -3343,6 +3343,10 @@ class Lot(models.Model):
     partial_refund_percent = models.IntegerField(
         default=0, validators=[MinValueValidator(0), MaxValueValidator(100)], blank=True
     )
+    no_more_refunds_possible = models.BooleanField(default=False)
+    no_more_refunds_possible.help_text = (
+        "Set to True after a Square refund is issued to prevent multiple refunds that would unbalance the books"
+    )
     max_bid_revealed_by = models.ForeignKey(
         User, null=True, blank=True, on_delete=models.SET_NULL, related_name="max_bid_revealed_by"
     )
@@ -3620,10 +3624,29 @@ class Lot(models.Model):
         return self
 
     def refund(self, amount, user, message=None):
-        """Call this to add a message when refunding a lot"""
+        """Call this to add a message when refunding a lot
+        If square_refund_possible, automatically processes Square refund"""
         if amount and amount != self.partial_refund_percent:
-            if not message:
-                message = f"{user} has issued a {amount}% refund on this lot."
+            # Check if we should process a Square refund automatically
+            if self.square_refund_possible and not self.no_more_refunds_possible:
+                error = self.square_refund(amount)
+                if error:
+                    # Log the error but continue with the refund record
+                    import logging
+
+                    logger = logging.getLogger(__name__)
+                    logger.error(f"Square refund failed for lot {self.pk}: {error}")
+                    if not message:
+                        message = f"{user} has issued a {amount}% refund on this lot. Square refund failed: {error}"
+                else:
+                    if not message:
+                        message = (
+                            f"{user} has issued a {amount}% refund on this lot. Square refund processed automatically."
+                        )
+            else:
+                if not message:
+                    message = f"{user} has issued a {amount}% refund on this lot."
+
             LotHistory.objects.create(lot=self, user=user, message=message, changed_price=True)
         self.partial_refund_percent = amount
         self.save()
@@ -3645,7 +3668,7 @@ class Lot(models.Model):
                 query |= Q(auctiontos_user=self.auctiontos_winner)
             if self.winner:
                 query |= Q(user=self.winner, auction=self.auction)
-            
+
             return Invoice.objects.filter(query).first()
         except Exception:
             return None
@@ -3667,7 +3690,7 @@ class Lot(models.Model):
                 query |= Q(auctiontos_user=self.auctiontos_seller)
             if self.user:
                 query |= Q(user=self.user, auction=self.auction)
-            
+
             return Invoice.objects.filter(query).first()
         except Exception:
             return None
@@ -3675,8 +3698,12 @@ class Lot(models.Model):
     @property
     def square_refund_possible(self):
         """Returns True if there's a Square payment associated with this lot's invoice
-        with enough funds to cover the lot's cost"""
+        with enough funds to cover the lot's cost and no refund has been issued yet"""
         if not self.winning_price or self.winning_price <= 0:
+            return False
+
+        # Check if a refund has already been issued
+        if self.no_more_refunds_possible:
             return False
 
         invoice = self.winner_invoice
@@ -3751,6 +3778,10 @@ class Lot(models.Model):
         error = seller.process_refund(payment, refund_amount, reason)
         if error:
             return error
+
+        # Mark that a refund has been issued to prevent double refunds
+        self.no_more_refunds_possible = True
+        self.save()
 
         # Webhook will create the negative InvoicePayment record
         return None
@@ -6078,9 +6109,7 @@ class SquareSeller(models.Model):
                     ),
                     "ask_for_shipping_address": False,
                 },
-                pre_populated_data={
-                    "buyer_email": getattr(getattr(invoice, "auctiontos_user", None), "email", None)
-                },
+                pre_populated_data={"buyer_email": getattr(getattr(invoice, "auctiontos_user", None), "email", None)},
                 order={
                     "location_id": location_id,
                     "reference_id": str(invoice.pk),
