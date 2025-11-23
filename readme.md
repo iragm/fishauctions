@@ -61,8 +61,19 @@ In keeping with 12 Factor, all configuration is done from the .env file and the 
 - Production uses SWAG to add a cert, dev uses plain old Nginx to serve just http content.
 - Production uses Gunicorn with a Uvicorn worker process, development uses Uvicorn with a --reload flag (this is configured in entrypoint.sh)
 
-#### Cron jobs
-Some cron jobs are used to manage models - these run automatically if you're in production (debug=False), but will need to be run manually in development.  These can be found in the crontab file in the same folder as this readme.
+#### Task Scheduling with Celery
+This project uses Celery with Celery Beat for scheduled tasks (replacing cron jobs). Tasks include:
+- Ending auctions and declaring winners
+- Sending email notifications
+- Processing invoices
+- Updating auction statistics
+- And more...
+
+Celery services (`celery_worker` and `celery_beat`) run automatically when you start the project with `docker compose up -d`. Email delivery is immediate via django-post-office's Celery integration.
+
+For more details, see [CELERY.md](CELERY.md).
+
+**Note**: The old crontab file is kept for reference but is no longer active. All scheduled tasks are now managed by Celery.
 
 #### Adding packages
 New packages can be added to requirements.in (in addition to the standard Django settings file) for production dependencies, or requirements-test.in for test dependencies.  Then run `./.github/scripts/update-packages.sh` to generate updated requirements.txt files.
