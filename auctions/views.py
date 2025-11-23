@@ -6951,124 +6951,22 @@ class PayPalSellerDeleteView(LoginRequiredMixin, DeleteView):
 
 
 class SquareAPIMixin:
-    """Couple API methods for Square stuff using CreatePaymentLink API
-    All operations require OAuth - no platform credentials
-    Updated for Square SDK v42+ (new API)"""
-
-    def _get_square_client(self, merchant_access_token):
-        """Initialize and return Square SDK client using merchant's OAuth token
-        Raises ValueError if no token provided
-        Uses new Square SDK v42+ API"""
-        from square import Square
-        from square.client import SquareEnvironment
-
-        if not merchant_access_token:
-            msg = "Square merchant access token required - seller must link their Square account via OAuth"
-            raise ValueError(msg)
-
-        # Determine environment
-        env = SquareEnvironment.SANDBOX if settings.SQUARE_ENVIRONMENT == "sandbox" else SquareEnvironment.PRODUCTION
-
-        self.client = Square(
-            token=merchant_access_token,
-            environment=env,
-        )
-        return self.client
-
-    def connect(self, merchant_access_token):
-        """Initialize Square client for this seller using their OAuth token"""
-        self._get_square_client(merchant_access_token)
-
-    @property
-    def location(self):
-        if not self.client:
-            msg = "Square client not initialized"
-            raise ValueError(msg)
-        loc_resp = self.client.locations.list()
-        if getattr(loc_resp, "errors", None):
-            logger.error("Failed to fetch Square locations: %s", loc_resp.errors)
-            return None
-
-        # loc_resp.locations is typically a list of Location model objects
-        locations = getattr(loc_resp, "locations", []) or []
-        active_locations = [loc for loc in locations if getattr(loc, "status", None) == "ACTIVE"]
-
-        if not active_locations:
-            logger.error("No ACTIVE Square locations found for merchant %s", self.client)
-            return None
-
-        location_id = getattr(active_locations[0], "id", None)
-        if not location_id:
-            logger.error("Could not determine location id for merchant %s", self.client)
-            return None
-        return location_id
+    """Mixin for Square payment link creation
+    Delegates to SquareSeller model methods for Square API operations
+    All operations require OAuth - no platform credentials"""
 
     def create_payment_link(self, invoice):
+        """Create a Square payment link using SquareSeller model methods
+        Returns payment URL (string) or None on failure
         """
-        Create a Square payment link using v42+/v43 SDK patterns.
-        Returns payment URL (string) or None on failure.
-        """
-        try:
-            seller = SquareSeller.objects.filter(user=invoice.auction.created_by).first()
-            if not seller:
-                logger.error("No SquareSeller for user %s", invoice.auction.created_by.pk)
-                return None
+        from auctions.models import SquareSeller
 
-            access_token = seller.get_valid_access_token()
-            if not access_token:
-                logger.error("No valid OAuth token for user %s", invoice.auction.created_by.pk)
-                return None
-
-            client = self.connect(access_token)
-
-            try:
-                amount_decimal = Decimal("0.00") - Decimal(invoice.net_after_payments)
-                amount_cents = int(max(amount_decimal, Decimal("0.00")) * 100)
-            except Exception:
-                logger.exception("Failed to compute payment amount for invoice %s", invoice.pk)
-                return None
-
-            if amount_cents <= 0:
-                logger.error("Computed amount invalid for invoice %s: %s cents", invoice.pk, amount_cents)
-                return None
-
-            payment_note = f"Bidder {invoice.auctiontos_user.bidder_number} in {invoice.auction.title}"[:500]
-
-            link_resp = client.checkout.payment_links.create(
-                idempotency_key=str(uuid.uuid4()),
-                checkout_options={
-                    "redirect_url": self.request.build_absolute_uri(
-                        reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link})
-                    ),
-                    "ask_for_shipping_address": False,
-                },
-                pre_populated_data={"buyer_email": getattr(getattr(invoice, "auctiontos_user", None), "email", None)},
-                order={
-                    "location_id": self.location,
-                    "reference_id": str(invoice.pk),
-                    "line_items": [
-                        {
-                            "name": payment_note,
-                            "quantity": "1",
-                            "base_price_money": {"amount": amount_cents, "currency": seller.currency},
-                        }
-                    ],
-                },
-            )
-
-            payment_link_obj = getattr(link_resp, "payment_link", None)
-            payment_url = getattr(payment_link_obj, "url", None)
-            if not payment_url:
-                logger.error("Payment link response missing URL for invoice %s: %s", invoice.pk, link_resp)
-                return None
-
-            return payment_url
-
-        except Exception:
-            logger.exception(
-                "Unhandled error creating Square payment link for invoice %s", getattr(invoice, "pk", "<unknown>")
-            )
+        seller = SquareSeller.objects.filter(user=invoice.auction.created_by).first()
+        if not seller:
+            logger.error("No SquareSeller for user %s", invoice.auction.created_by.pk)
             return None
+
+        return seller.create_payment_link(invoice, self.request)
 
 
 class SquareConnectView(LoginRequiredMixin, View):

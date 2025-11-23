@@ -3629,34 +3629,64 @@ class Lot(models.Model):
         self.save()
 
     @property
+    def winner_invoice(self):
+        """Get the Invoice for this lot's winner
+        Returns Invoice object or None if not found
+        """
+        from auctions.models import Invoice
+        from django.db.models import Q
+
+        if not (self.auctiontos_winner or self.winner):
+            return None
+
+        try:
+            query = Q()
+            if self.auctiontos_winner:
+                query |= Q(auctiontos_user=self.auctiontos_winner)
+            if self.winner:
+                query |= Q(user=self.winner, auction=self.auction)
+            
+            return Invoice.objects.filter(query).first()
+        except Exception:
+            return None
+
+    @property
+    def seller_invoice(self):
+        """Get the Invoice for this lot's seller
+        Returns Invoice object or None if not found
+        """
+        from auctions.models import Invoice
+        from django.db.models import Q
+
+        if not (self.auctiontos_seller or self.user):
+            return None
+
+        try:
+            query = Q()
+            if self.auctiontos_seller:
+                query |= Q(auctiontos_user=self.auctiontos_seller)
+            if self.user:
+                query |= Q(user=self.user, auction=self.auction)
+            
+            return Invoice.objects.filter(query).first()
+        except Exception:
+            return None
+
+    @property
     def square_refund_possible(self):
         """Returns True if there's a Square payment associated with this lot's invoice
         with enough funds to cover the lot's cost"""
         if not self.winning_price or self.winning_price <= 0:
             return False
 
-        # Get the buyer's invoice - use model references directly since they're defined later
-        from auctions.models import Invoice, InvoicePayment
-
-        invoice = None
-        try:
-            if self.auctiontos_winner:
-                invoice = Invoice.objects.get(auctiontos_user=self.auctiontos_winner)
-            elif self.winner:
-                invoice = Invoice.objects.get(user=self.winner, auction=self.auction)
-        except Invoice.DoesNotExist:
-            return False
-        except Invoice.MultipleObjectsReturned:
-            # Get the first one
-            if self.auctiontos_winner:
-                invoice = Invoice.objects.filter(auctiontos_user=self.auctiontos_winner).first()
-            elif self.winner:
-                invoice = Invoice.objects.filter(user=self.winner, auction=self.auction).first()
-
+        invoice = self.winner_invoice
         if not invoice:
             return False
 
         # Check for Square payments with available refund amount
+        from auctions.models import InvoicePayment
+        from decimal import Decimal
+
         payment = (
             InvoicePayment.objects.filter(invoice=invoice, payment_method="square")
             .exclude(amount__lt=0)
@@ -3678,10 +3708,8 @@ class Lot(models.Model):
         Returns:
             Error message string or None on success
         """
-        from square import Square
-        from square.client import SquareEnvironment
-
-        from auctions.models import Invoice, InvoicePayment, SquareSeller
+        from auctions.models import InvoicePayment, SquareSeller
+        from decimal import Decimal
 
         if not self.winning_price or self.winning_price <= 0:
             return "No valid winning price for this lot"
@@ -3694,23 +3722,10 @@ class Lot(models.Model):
         if refund_amount <= 0:
             return "Refund amount must be positive"
 
-        # Get the buyer's invoice
-        invoice = None
-        try:
-            if self.auctiontos_winner:
-                invoice = Invoice.objects.get(auctiontos_user=self.auctiontos_winner)
-            elif self.winner:
-                invoice = Invoice.objects.get(user=self.winner, auction=self.auction)
-        except Invoice.DoesNotExist:
-            return "No invoice found for winner"
-        except Invoice.MultipleObjectsReturned:
-            if self.auctiontos_winner:
-                invoice = Invoice.objects.filter(auctiontos_user=self.auctiontos_winner).first()
-            elif self.winner:
-                invoice = Invoice.objects.filter(user=self.winner, auction=self.auction).first()
-
+        # Get the buyer's invoice using the property
+        invoice = self.winner_invoice
         if not invoice:
-            return "Could not find winner's invoice"
+            return "No invoice found for winner"
 
         # Find the Square payment
         payment = (
@@ -3731,38 +3746,14 @@ class Lot(models.Model):
         if not seller:
             return "Seller has not connected their Square account"
 
-        # Get valid access token
-        access_token = seller.get_valid_access_token()
-        if not access_token:
-            return "Seller's Square token has expired"
+        # Process refund using SquareSeller method
+        reason = f"Lot {self.lot_number_display} - {percent}% refund"
+        error = seller.process_refund(payment, refund_amount, reason)
+        if error:
+            return error
 
-        try:
-            # Initialize Square client
-            env = (
-                SquareEnvironment.SANDBOX if settings.SQUARE_ENVIRONMENT == "sandbox" else SquareEnvironment.PRODUCTION
-            )
-            client = Square(token=access_token, environment=env)
-
-            # Convert amount to cents
-            refund_amount_cents = int(refund_amount * 100)
-
-            client.refunds.refund_payment(
-                payment_id=payment.external_id,
-                idempotency_key=str(uuid.uuid4()),
-                amount_money={
-                    "amount": refund_amount_cents,
-                    "currency": payment.currency,
-                },
-                reason=f"Lot {self.lot_number_display} - {percent}% refund",
-            )
-            # that's it - the webhook will do the rest of the work
-
-        except Exception as e:
-            error_msg = str(e)
-            if hasattr(e, "body") and isinstance(e.body, dict):
-                error_msg = e.body.get("message", str(e))
-            logger.exception("Square refund failed for lot %s: %s", self.lot_number, error_msg)
-            return f"Square refund failed: {error_msg}"
+        # Webhook will create the negative InvoicePayment record
+        return None
 
     def remove(self, banned, user, message=None):
         """Call this to add a message when banning (removing) a lot"""
@@ -3808,35 +3799,17 @@ class Lot(models.Model):
     @property
     def seller_invoice_link(self):
         """/invoices/123 for the auction/seller of this lot"""
-        try:
-            if self.auctiontos_seller:
-                invoice = Invoice.objects.get(auctiontos_user=self.auctiontos_seller)
-                return f"/invoices/{invoice.pk}"
-        except:
-            pass
-        try:
-            if self.user:
-                invoice = Invoice.objects.get(user=self.user, auction=self.auction)
-                return f"/invoices/{invoice.pk}"
-        except:
-            pass
+        invoice = self.seller_invoice
+        if invoice:
+            return f"/invoices/{invoice.pk}"
         return ""
 
     @property
     def winner_invoice_link(self):
         """/invoices/123 for the auction/winner of this lot"""
-        try:
-            if self.auctiontos_winner:
-                invoice = Invoice.objects.get(auctiontos_user=self.auctiontos_winner)
-                return f"/invoices/{invoice.pk}"
-        except:
-            pass
-        try:
-            if self.winner:
-                invoice = Invoice.objects.get(user=self.winner, auction=self.auction)
-                return f"/invoices/{invoice.pk}"
-        except:
-            pass
+        invoice = self.winner_invoice
+        if invoice:
+            return f"/invoices/{invoice.pk}"
         return ""
 
     @property
@@ -5912,17 +5885,16 @@ class PayPalSeller(models.Model):
 class SquareSeller(models.Model):
     """Extension of user model to store Square info for sellers
     Similar to PayPalSeller, stores Square merchant information and OAuth tokens
-    TODO: OAuth tokens should be encrypted at rest for security
-    Currently using CharField - migrate to EncryptedCharField when FIELD_ENCRYPTION_KEY is properly configured
+    OAuth tokens are encrypted at rest for security using django-encrypted-model-fields
     """
 
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     square_merchant_id = models.CharField(max_length=64, blank=True, null=True)
-    # TODO: Migrate to EncryptedCharField for production security
-    # access_token = EncryptedCharField(max_length=500, blank=True, null=True)
-    # refresh_token = EncryptedCharField(max_length=500, blank=True, null=True)
-    access_token = models.CharField(max_length=500, blank=True, null=True)
-    refresh_token = models.CharField(max_length=500, blank=True, null=True)
+    # OAuth tokens encrypted at rest for security
+    from encrypted_model_fields.fields import EncryptedCharField
+
+    access_token = EncryptedCharField(max_length=500, blank=True, null=True)
+    refresh_token = EncryptedCharField(max_length=500, blank=True, null=True)
     token_expires_at = models.DateTimeField(blank=True, null=True)
     currency = models.CharField(max_length=10, default="USD")
     payer_email = models.EmailField(blank=True, null=True)
@@ -6008,6 +5980,171 @@ class SquareSeller(models.Model):
                 logger.error("Failed to refresh Square token for user %s", self.user.pk)
                 return None
         return self.access_token
+
+    def get_square_client(self):
+        """Initialize and return Square SDK client using this seller's OAuth token
+        Returns Square client or None if token is invalid
+        """
+        access_token = self.get_valid_access_token()
+        if not access_token:
+            logger.error("No valid OAuth token for user %s", self.user.pk)
+            return None
+
+        try:
+            from square import Square
+            from square.client import SquareEnvironment
+
+            env = (
+                SquareEnvironment.SANDBOX if settings.SQUARE_ENVIRONMENT == "sandbox" else SquareEnvironment.PRODUCTION
+            )
+            return Square(token=access_token, environment=env)
+        except Exception as e:
+            logger.exception("Error initializing Square client for user %s: %s", self.user.pk, e)
+            return None
+
+    def get_location_id(self):
+        """Get the first active location ID for this merchant
+        Returns location_id string or None if no active location found
+        """
+        client = self.get_square_client()
+        if not client:
+            return None
+
+        try:
+            loc_resp = client.locations.list()
+            if getattr(loc_resp, "errors", None):
+                logger.error("Failed to fetch Square locations for user %s: %s", self.user.pk, loc_resp.errors)
+                return None
+
+            locations = getattr(loc_resp, "locations", []) or []
+            active_locations = [loc for loc in locations if getattr(loc, "status", None) == "ACTIVE"]
+
+            if not active_locations:
+                logger.error("No ACTIVE Square locations found for user %s", self.user.pk)
+                return None
+
+            location_id = getattr(active_locations[0], "id", None)
+            if not location_id:
+                logger.error("Could not determine location id for user %s", self.user.pk)
+                return None
+
+            return location_id
+        except Exception as e:
+            logger.exception("Error fetching Square location for user %s: %s", self.user.pk, e)
+            return None
+
+    def create_payment_link(self, invoice, request):
+        """Create a Square payment link for the given invoice
+        Args:
+            invoice: Invoice object to create payment for
+            request: HttpRequest object for building redirect URL
+        Returns:
+            payment URL string or None on failure
+        """
+        client = self.get_square_client()
+        if not client:
+            return None
+
+        location_id = self.get_location_id()
+        if not location_id:
+            logger.error("No location ID available for user %s", self.user.pk)
+            return None
+
+        try:
+            from decimal import Decimal
+
+            amount_decimal = Decimal("0.00") - Decimal(invoice.net_after_payments)
+            amount_cents = int(max(amount_decimal, Decimal("0.00")) * 100)
+        except Exception:
+            logger.exception("Failed to compute payment amount for invoice %s", invoice.pk)
+            return None
+
+        if amount_cents <= 0:
+            logger.error("Computed amount invalid for invoice %s: %s cents", invoice.pk, amount_cents)
+            return None
+
+        try:
+            import uuid
+
+            from django.urls import reverse
+
+            payment_note = f"Bidder {invoice.auctiontos_user.bidder_number} in {invoice.auction.title}"[:500]
+
+            link_resp = client.checkout.payment_links.create(
+                idempotency_key=str(uuid.uuid4()),
+                checkout_options={
+                    "redirect_url": request.build_absolute_uri(
+                        reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link})
+                    ),
+                    "ask_for_shipping_address": False,
+                },
+                pre_populated_data={
+                    "buyer_email": getattr(getattr(invoice, "auctiontos_user", None), "email", None)
+                },
+                order={
+                    "location_id": location_id,
+                    "reference_id": str(invoice.pk),
+                    "line_items": [
+                        {
+                            "name": payment_note,
+                            "quantity": "1",
+                            "base_price_money": {"amount": amount_cents, "currency": self.currency},
+                        }
+                    ],
+                },
+            )
+
+            payment_link_obj = getattr(link_resp, "payment_link", None)
+            payment_url = getattr(payment_link_obj, "url", None)
+            if not payment_url:
+                logger.error("Payment link response missing URL for invoice %s: %s", invoice.pk, link_resp)
+                return None
+
+            return payment_url
+
+        except Exception:
+            logger.exception("Error creating Square payment link for invoice %s", invoice.pk)
+            return None
+
+    def process_refund(self, payment, refund_amount, reason):
+        """Process a Square refund
+        Args:
+            payment: InvoicePayment object with external_id for the payment
+            refund_amount: Decimal amount to refund
+            reason: String reason for the refund
+        Returns:
+            Error message string or None on success
+        """
+        client = self.get_square_client()
+        if not client:
+            return "Failed to initialize Square client"
+
+        try:
+            import uuid
+
+            from decimal import Decimal
+
+            # Convert amount to cents
+            refund_amount_cents = int(Decimal(str(refund_amount)) * 100)
+
+            client.refunds.refund_payment(
+                payment_id=payment.external_id,
+                idempotency_key=str(uuid.uuid4()),
+                amount_money={
+                    "amount": refund_amount_cents,
+                    "currency": payment.currency,
+                },
+                reason=reason,
+            )
+            # Webhook will handle creating the negative InvoicePayment record
+            return None
+
+        except Exception as e:
+            error_msg = str(e)
+            if hasattr(e, "body") and isinstance(e.body, dict):
+                error_msg = e.body.get("message", str(e))
+            logger.exception("Square refund failed for payment %s: %s", payment.external_id, error_msg)
+            return f"Square refund failed: {error_msg}"
 
     def delete(self):
         auctions = Auction.objects.filter(created_by=self.user, enable_square_payments=True)
