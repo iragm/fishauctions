@@ -150,7 +150,11 @@ urlpatterns = [
     path("square/connect/", views.SquareConnectView.as_view(), name="square_connect"),
     path("square/onboard/success/", views.SquareCallbackView.as_view(), name="square_callback"),
     path("api/invoices/<uuid:uuid>/paypal/", views.CreatePayPalOrderView.as_view(), name="create_paypal_order"),
-    path("api/invoices/<uuid:uuid>/square/", views.CreateSquarePaymentLinkView.as_view(), name="create_square_payment_link"),
+    path(
+        "api/invoices/<uuid:uuid>/square/",
+        views.CreateSquarePaymentLinkView.as_view(),
+        name="create_square_payment_link",
+    ),
     path(
         "auctions/<slug:slug>/quick-add-images/<slug:bidder_number>",
         login_required(views.QuickBulkAddImages.as_view()),

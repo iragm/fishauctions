@@ -697,6 +697,7 @@ _encryption_key = os.environ.get("FIELD_ENCRYPTION_KEY", "")
 if not _encryption_key and DEBUG:
     # Generate a temporary key for development only
     from cryptography.fernet import Fernet
+
     _encryption_key = Fernet.generate_key().decode()
-    print("WARNING: Using auto-generated FIELD_ENCRYPTION_KEY for development. Set FIELD_ENCRYPTION_KEY in production!")
+    print("WARNING: Using auto-generated FIELD_ENCRYPTION_KEY for development. Set FIELD_ENCRYPTION_KEY in production!")  # noqa
 FIELD_ENCRYPTION_KEY = _encryption_key

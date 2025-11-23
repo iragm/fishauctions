@@ -4,25 +4,24 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('auctions', '0206_auction_dismissed_square_banner_and_more'),
+        ("auctions", "0206_auction_dismissed_square_banner_and_more"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='squareseller',
-            name='access_token',
+            model_name="squareseller",
+            name="access_token",
             field=models.CharField(blank=True, max_length=500, null=True),
         ),
         migrations.AddField(
-            model_name='squareseller',
-            name='refresh_token',
+            model_name="squareseller",
+            name="refresh_token",
             field=models.CharField(blank=True, max_length=500, null=True),
         ),
         migrations.AddField(
-            model_name='squareseller',
-            name='token_expires_at',
+            model_name="squareseller",
+            name="token_expires_at",
             field=models.DateTimeField(blank=True, null=True),
         ),
     ]
