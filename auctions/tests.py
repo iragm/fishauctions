@@ -4821,8 +4821,9 @@ class SquarePaymentTests(StandardTestCase):
 
     def setUp(self):
         super().setUp()
-        from auctions.models import SquareSeller, Invoice, InvoicePayment, UserData
         from decimal import Decimal
+
+        from .models import Invoice, InvoicePayment, SquareSeller, UserData
 
         # Enable Square for test users
         for user in [self.admin_user, self.user]:
@@ -4956,8 +4957,9 @@ class SquarePaymentTests(StandardTestCase):
 
     def test_invoice_payment_square_method(self):
         """Test that Square payments are properly recorded"""
-        from auctions.models import InvoicePayment
         from decimal import Decimal
+
+        from auctions.models import InvoicePayment
 
         payment = InvoicePayment.objects.filter(payment_method="square", invoice=self.test_invoice).first()
         self.assertIsNotNone(payment)
@@ -4981,7 +4983,7 @@ class SquarePaymentTests(StandardTestCase):
         try:
             self.lot.refund(100, self.admin_user, "Test refund")
             # The refund method should handle the case where Square API is not available
-        except Exception as e:
+        except Exception:
             # We expect this might fail in tests since we don't have real Square credentials
             # but we want to ensure the code path is exercised
             pass
@@ -5020,12 +5022,9 @@ class SquarePaymentTests(StandardTestCase):
 
     def test_square_management_command_exists(self):
         """Test that change_square management command exists"""
-        from django.core.management import call_command
-        from io import StringIO
 
         # Test that command exists and can be imported
         try:
-            out = StringIO()
             # Don't actually run the command, just verify it exists
             from django.core.management import load_command_class
 
@@ -5039,8 +5038,9 @@ class SquareRefundFormTests(StandardTestCase):
 
     def setUp(self):
         super().setUp()
-        from auctions.models import SquareSeller, InvoicePayment, UserData
         from decimal import Decimal
+
+        from auctions.models import InvoicePayment, SquareSeller, UserData
 
         # Enable Square
         userdata, _ = UserData.objects.get_or_create(user=self.admin_user)
