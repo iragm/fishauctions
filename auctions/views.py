@@ -5760,6 +5760,11 @@ class SquarePaymentSuccessView(InvoiceNoLoginView):
         # Call grandparent (InvoiceView) dispatch instead
         return InvoiceView.dispatch(self, request, *args, **kwargs)
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["hide_payment_button"] = True
+        return context
+
 
 class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
     """View and print labels for an auction"""

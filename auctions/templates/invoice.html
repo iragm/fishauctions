@@ -116,7 +116,7 @@ document.addEventListener("DOMContentLoaded", function() {
       {% endif %}
       {% if invoice.auctiontos_user.user == request.user or using_no_login_link %}
 
-        {% if invoice.show_payment_button %}
+        {% if invoice.show_payment_button and not hide_payment_button%}
           {% if invoice.reason_for_payment_not_available %}
               <button
                 type="submit"
