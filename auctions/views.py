@@ -9906,7 +9906,7 @@ class SquareWebhookView(SquareAPIMixin, View):
             # Merchant revoked OAuth authorization - delete SquareSeller instance
             merchant_id = event.get("merchant_id")
             if merchant_id:
-                square_seller = SquareSeller.objects.filter(merchant_id=merchant_id).first()
+                square_seller = SquareSeller.objects.filter(square_merchant_id=merchant_id).first()
                 if square_seller:
                     square_seller.delete()
         return HttpResponse(status=200)

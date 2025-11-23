@@ -4836,7 +4836,7 @@ class SquarePaymentTests(StandardTestCase):
         # Create Square seller for admin
         self.square_seller = SquareSeller.objects.create(
             user=self.admin_user,
-            merchant_id="TEST_MERCHANT_ID",
+            square_merchant_id="TEST_MERCHANT_ID",
             access_token="TEST_ACCESS_TOKEN",
             refresh_token="TEST_REFRESH_TOKEN",
             token_expires_at=timezone.now() + datetime.timedelta(days=30),
@@ -4850,7 +4850,7 @@ class SquarePaymentTests(StandardTestCase):
             payment_method="square",
             amount=Decimal("100.00"),
             amount_available_to_refund=Decimal("100.00"),
-            square_payment_id="TEST_PAYMENT_ID",
+            external_id="TEST_PAYMENT_ID",
         )
 
     def test_square_seller_creation(self):
@@ -5052,7 +5052,7 @@ class SquareRefundFormTests(StandardTestCase):
         # Create Square seller
         self.square_seller = SquareSeller.objects.create(
             user=self.admin_user,
-            merchant_id="TEST_MERCHANT_ID",
+            square_merchant_id="TEST_MERCHANT_ID",
             access_token="TEST_ACCESS_TOKEN",
             refresh_token="TEST_REFRESH_TOKEN",
             token_expires_at=timezone.now() + datetime.timedelta(days=30),
@@ -5064,7 +5064,7 @@ class SquareRefundFormTests(StandardTestCase):
             payment_method="square",
             amount=Decimal("100.00"),
             amount_available_to_refund=Decimal("100.00"),
-            square_payment_id="TEST_PAYMENT_ID",
+            external_id="TEST_PAYMENT_ID",
         )
 
         # Set lot to have Square refund possible
@@ -5178,7 +5178,7 @@ class SquareOAuthRevocationTests(StandardTestCase):
         # Create Square seller for testing revocation
         self.square_seller = SquareSeller.objects.create(
             user=self.admin_user,
-            merchant_id="MLF3WZS2N9WVG",
+            square_merchant_id="MLF3WZS2N9WVG",
             access_token="TEST_ACCESS_TOKEN",
             refresh_token="TEST_REFRESH_TOKEN",
             token_expires_at=timezone.now() + datetime.timedelta(days=30),
@@ -5192,7 +5192,7 @@ class SquareOAuthRevocationTests(StandardTestCase):
         from .models import SquareSeller
 
         # Verify seller exists
-        self.assertTrue(SquareSeller.objects.filter(merchant_id="MLF3WZS2N9WVG").exists())
+        self.assertTrue(SquareSeller.objects.filter(square_merchant_id="MLF3WZS2N9WVG").exists())
 
         # Simulate Square revocation webhook
         webhook_data = {
@@ -5214,7 +5214,7 @@ class SquareOAuthRevocationTests(StandardTestCase):
         self.assertEqual(response.status_code, 200)
 
         # SquareSeller should be deleted
-        self.assertFalse(SquareSeller.objects.filter(merchant_id="MLF3WZS2N9WVG").exists())
+        self.assertFalse(SquareSeller.objects.filter(square_merchant_id="MLF3WZS2N9WVG").exists())
 
     def test_oauth_revocation_handles_missing_seller(self):
         """Test that revocation webhook handles missing SquareSeller gracefully"""
