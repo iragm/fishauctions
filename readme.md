@@ -90,59 +90,6 @@ Run these with docker exec after docker compose is up.  For example: `docker exe
 
 A note on migrations: occasionally webpush seems to give permission denied about a file `0006_alter_subscriptioninfo_user_agent.py`.  If this happens, just run `docker exec -u root -it django python3 manage.py makemigrations`
 
-#### Payment Processing (PayPal & Square)
-
-This platform supports integrated payment processing through PayPal and Square, allowing sellers to receive payments directly for their sold lots.
-
-**PayPal Integration:**
-- OAuth-based seller onboarding
-- Automatic invoice payment processing
-- Refund support via PayPal API
-- QR code generation for quick checkout
-
-**Square Integration:**
-- OAuth-only approach (no platform credentials needed)
-- Square CreatePaymentLink API (SDK v42+)
-- Automatic token refresh for reliable payment processing
-- Webhook signature verification for security
-- Complete refund support via Square Refunds API
-- Encrypted OAuth token storage (requires FIELD_ENCRYPTION_KEY)
-- Automatic refund processing when removing/refunding lots
-- Refund protection to prevent multiple refunds on same lot
-
-**Configuration:**
-
-For Square payments, add these to your `.env` file:
-```bash
-# Square OAuth settings (required)
-SQUARE_ENABLED_FOR_USERS=True
-SQUARE_ENVIRONMENT=sandbox  # or production
-SQUARE_APPLICATION_ID=sq0idp-xxxxx
-SQUARE_CLIENT_SECRET=sq0csp-xxxxx
-
-# Encryption key for OAuth tokens (required)
-# Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-FIELD_ENCRYPTION_KEY=your_fernet_key_here
-
-# Optional webhook signature verification
-SQUARE_WEBHOOK_SIGNATURE_KEY=your_webhook_key
-```
-
-For PayPal payments, similar OAuth configuration is needed (see .env.example for details).
-
-**Management Commands:**
-- `python manage.py change_square on|off` - Toggle Square payments for all users
-- `python manage.py change_paypal on|off` - Toggle PayPal payments for all users
-
-**Key Features:**
-- Sellers connect their own PayPal/Square accounts via OAuth
-- Payments go directly to sellers (platform doesn't hold funds)
-- Automatic invoice generation with payment links
-- QR codes for in-person checkout
-- Real-time webhook processing for payment status
-- Automatic refunds when lots are removed or refunded
-- Both payment methods can be enabled simultaneously
-
 ### Developing in VSCode
 
 This project is optimized for development in [Visual Studio Code](https://code.visualstudio.com/).
@@ -173,7 +120,7 @@ Support for you running your own auction website is extremely limited (read: non
 * Get a [Google Maps API key](https://console.cloud.google.com/)
 * Get a Google OAUTH key by following the [app registration section here](https://docs.allauth.org/en/latest/socialaccount/providers/google.html).  Just do steps 1 and 2 and make a note of the secret keys, the Django configuration has already been done.
 * Get a [Recaptcha v2 invisible key](https://cloud.google.com/security/products/recaptcha)
-* For Payments, create a [PayPal App](https://developer.paypal.com/dashboard/applications/live) and note the client id and secret.
+* For Payments, create a [PayPal App](https://developer.paypal.com/dashboard/applications/live) and note the client id and secret, or create a Square App and get the secret/app id.  See the Payments section for more information.
 
 ### Deploy the website
 Log into your VM and enter the following:
@@ -272,6 +219,32 @@ Finally, create a file called `tos.html` with your terms of service in the same 
 
 With a little luck, things worked.  If not, open an issue and provide as much detail as possible.  Don't put your keys in the issue, but do include any logs.  Remember that support is very limited for custom production deployments.  If something isn't talked about in this guide, I'm not really interested in helping with it.
 
+#### Payments (PayPal & Square)
+
+**Note that PayPal won't give us the time of day and you need approval to be a platform seller, so while this has been implemented, it hasn't actually been used!**  Square payments work fine, use those instead.
+
+For Square payments, go to the Square App section [here](https://developer.squareup.com/apps), create your app.  In the Oauth section, set your redirect URL to `https://example.com/square/onboard/success/`, with your domain insead of example.com.  Https and the trailing / are required.
+
+Under Webhooks>Subscriptions, add a subscription to `https://example.com/square/webhook/`
+
+Next, add these to your `.env` file:
+```bash
+SQUARE_ENABLED_FOR_USERS=True
+SQUARE_ENVIRONMENT=production # or blank to use sandbox in development
+# from https://developer.squareup.com/apps Applications>Oauth
+SQUARE_APPLICATION_ID=sq0idp-xxxxx
+SQUARE_CLIENT_SECRET=sq0csp-xxxxx
+# from https://developer.squareup.com/apps Applications>Webhooks>Subscriptions>[name]>Signature Key
+SQUARE_WEBHOOK_SIGNATURE_KEY=your_webhook_key
+FIELD_ENCRYPTION_KEY=your_fernet_key_here
+```
+
+
+For PayPal payments, similar OAuth configuration is needed (see .env.example for details).
+
+If you have existing users, enable Square payments for them by running `docker exec -it django python3 manage.py  change_square on`.  `SQUARE_ENABLED_FOR_USERS` will determine if any newly created users will be able to link their account.
+
+
 ### Post setup:
 If you didn't get any errors, shut down the containers with control+c and then restart them in detached mode (`docker compose up -d`).  Create a super user with `docker exec -it django python3 manage.py createsuperuser` and then browse to the website and try to log in with that user (if you don't get a verification email, you can use the steps in the development section above to create a super user with a verified email, but don't forget to change the password!).
 
@@ -295,8 +268,7 @@ There's quite a bit of other stuff (ads, google analytics, etc.) that was enable
 
 * you want to disable the captcha on sign up
 * or you can't figure out how to get a Vapid key and you want to disable push notifications
-* or you want to disable google ouath
-* or you want to pull updates from your own repo
+* or you want to disable google oauth
 
 or whatever, **make a pull request**.  Make sure that the default settings keep things as they are.
 
