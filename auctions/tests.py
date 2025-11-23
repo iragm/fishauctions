@@ -4819,7 +4819,7 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
 
 
 class SquarePaymentTests(StandardTestCase):
-    """Tests for Square payment integration"""
+    """Tests for Square payment oauth integration"""
 
     def setUp(self):
         super().setUp()
