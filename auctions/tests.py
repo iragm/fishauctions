@@ -5270,6 +5270,8 @@ class SquareOAuthRevocationTests(StandardTestCase):
                 any("Square OAuth revoked for merchant MLF3WZS2N9WVG" in msg for msg in log_messages),
                 f"Expected log message not found. Logs: {log_messages}",
             )
+
+
 class CurrencyCustomizationTests(StandardTestCase):
     """Tests for currency display customization"""
 
