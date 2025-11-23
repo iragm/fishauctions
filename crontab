@@ -16,7 +16,7 @@
 # */15 * * * * /home/app/web/task.sh sendnotifications
 # Celery task: auctions.tasks.sendnotifications (runs every 15 minutes)
 
-# welcome and print erminder emails
+# welcome and print reminder emails
 # */15 * * * * /home/app/web/task.sh auctiontos_notifications
 # Celery task: auctions.tasks.auctiontos_notifications (runs every 15 minutes)
 
