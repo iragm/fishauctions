@@ -6101,7 +6101,7 @@ class SquareSeller(models.Model):
                 idempotency_key=str(uuid.uuid4()),
                 checkout_options={
                     "redirect_url": request.build_absolute_uri(
-                        reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link})
+                        reverse("square_payment_success", kwargs={"uuid": invoice.no_login_link})
                     ),
                     "ask_for_shipping_address": False,
                 },

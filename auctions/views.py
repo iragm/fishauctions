@@ -5743,6 +5743,24 @@ class InvoiceNoLoginView(InvoiceView):
         return super().dispatch(request, *args, **kwargs)
 
 
+class SquarePaymentSuccessView(InvoiceNoLoginView):
+    """
+    Success redirect for Square payment links.
+    Marks invoice as opened but does NOT verify email address.
+    This prevents incorrectly marking emails as valid when users scan QR codes.
+    """
+
+    def dispatch(self, request, *args, **kwargs):
+        self.uuid = kwargs.get("uuid", None)
+        invoice = self.get_object()
+        # Mark invoice as opened but don't verify email
+        invoice.opened = True
+        invoice.save()
+        # Skip the parent's dispatch which marks email as VALID
+        # Call grandparent (InvoiceView) dispatch instead
+        return InvoiceView.dispatch(self, request, *args, **kwargs)
+
+
 class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
     """View and print labels for an auction"""
 

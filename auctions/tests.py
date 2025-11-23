@@ -5098,3 +5098,69 @@ class SquareRefundFormTests(StandardTestCase):
         form = LotRefundForm(lot=unsold_lot)
         self.assertIsNotNone(form)
         self.assertFalse(unsold_lot.square_refund_possible)
+
+
+class SquarePaymentSuccessViewTests(StandardTestCase):
+    """Tests for SquarePaymentSuccessView that doesn't verify email"""
+
+    def setUp(self):
+        super().setUp()
+        # Create invoice with no_login_link
+        self.invoice = Invoice.objects.create(
+            auctiontos_user=self.tosA,
+            auction=self.auctionA,
+            user=self.userA,
+        )
+        self.invoice.save()
+
+    def test_square_payment_success_view_marks_invoice_opened(self):
+        """Test that SquarePaymentSuccessView marks invoice as opened"""
+        from django.urls import reverse
+
+        self.assertFalse(self.invoice.opened)
+
+        url = reverse("square_payment_success", kwargs={"uuid": self.invoice.no_login_link})
+        response = self.client.get(url)
+
+        self.invoice.refresh_from_db()
+        self.assertTrue(self.invoice.opened)
+
+    def test_square_payment_success_view_does_not_verify_email(self):
+        """Test that SquarePaymentSuccessView does NOT mark email as VALID"""
+        from django.urls import reverse
+
+        # Set initial email status to something other than VALID
+        self.tosA.email_address_status = "UNKNOWN"
+        self.tosA.save()
+
+        url = reverse("square_payment_success", kwargs={"uuid": self.invoice.no_login_link})
+        response = self.client.get(url)
+
+        self.tosA.refresh_from_db()
+        # Email status should NOT have changed to VALID
+        self.assertEqual(self.tosA.email_address_status, "UNKNOWN")
+
+    def test_invoice_no_login_view_still_verifies_email(self):
+        """Test that InvoiceNoLoginView still marks email as VALID (for comparison)"""
+        from django.urls import reverse
+
+        # Set initial email status
+        self.tosA.email_address_status = "UNKNOWN"
+        self.tosA.save()
+
+        url = reverse("invoice_no_login", kwargs={"uuid": self.invoice.no_login_link})
+        response = self.client.get(url)
+
+        self.tosA.refresh_from_db()
+        # Email status SHOULD have changed to VALID for regular invoice links
+        self.assertEqual(self.tosA.email_address_status, "VALID")
+
+    def test_square_payment_success_url_pattern_exists(self):
+        """Test that square_payment_success URL pattern is configured"""
+        from django.urls import reverse
+
+        try:
+            url = reverse("square_payment_success", kwargs={"uuid": self.invoice.no_login_link})
+            self.assertTrue(url.startswith("/invoices/square-success/"))
+        except Exception as e:
+            self.fail(f"square_payment_success URL pattern not configured: {e}")
