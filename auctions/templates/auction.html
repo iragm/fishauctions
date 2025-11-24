@@ -16,9 +16,11 @@ function copyLink() {
   // Show feedback
   var feedback = document.getElementById("copyFeedback");
   if (feedback) {
-    feedback.style.display = "block";
+    feedback.classList.remove("d-none");
+    feedback.classList.add("d-block");
     setTimeout(function() {
-      feedback.style.display = "none";
+      feedback.classList.remove("d-block");
+      feedback.classList.add("d-none");
     }, 3000);
   }
 }
@@ -169,8 +171,8 @@ function initMap() {
                     {% if view.is_auction_admin or request.user.is_superuser %}
                     <hr class="my-3">
                     <div class="d-grid">
-                        <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#adminActions" aria-expanded="false" aria-controls="adminActions">
-                            <i class="bi bi-gear-fill"></i> Admin Actions
+                        <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#adminActions" aria-expanded="false" aria-controls="adminActions" aria-label="Show or hide admin actions">
+                            <i class="bi bi-gear-fill"></i> Admin Actions <i class="bi bi-chevron-down"></i>
                         </button>
                     </div>
                     <div class="collapse mt-2" id="adminActions">
@@ -214,8 +216,8 @@ function initMap() {
             <div class="card mb-4">
                 <div class="card-header">
                     <h5 class="mb-0">
-                        <button class="btn btn-link text-decoration-none w-100 text-start" type="button" data-bs-toggle="collapse" data-bs-target="#auctionRules" aria-expanded="true" aria-controls="auctionRules">
-                            <i class="bi bi-card-checklist"></i> Auction Rules & Details
+                        <button class="btn btn-link text-decoration-none w-100 text-start" type="button" data-bs-toggle="collapse" data-bs-target="#auctionRules" aria-expanded="true" aria-controls="auctionRules" aria-label="Show or hide auction rules and details">
+                            <i class="bi bi-card-checklist"></i> Auction Rules & Details <i class="bi bi-chevron-up"></i>
                         </button>
                     </h5>
                 </div>
@@ -381,7 +383,7 @@ function initMap() {
                             <input class="form-control form-control-sm" id='copyShareLink' type="text" value="https://{{ domain }}/?{{ auction.slug }}" readonly>
                             <button class='btn btn-sm btn-primary' onclick="copyLink()"><i class="bi bi-copy"></i> Copy</button>
                         </div>
-                        <div class="valid-feedback d-block" id="copyFeedback" style="display:none !important;">
+                        <div class="valid-feedback d-none" id="copyFeedback">
                             <i class="bi bi-check-circle-fill"></i> Copied! Thanks for spreading the word!
                         </div>
                     </div>
