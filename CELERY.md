@@ -99,12 +99,17 @@ POST_OFFICE = {
 # Start all services including Celery
 docker compose up -d
 
+# Initial setup: Populate periodic tasks in the database
+docker exec -it django python manage.py setup_celery_beat
+
 # Check Celery worker logs
 docker logs celery_worker -f
 
 # Check Celery beat logs
 docker logs celery_beat -f
 ```
+
+**Important**: After the first deployment or when adding new tasks, you must run `docker exec -it django python manage.py setup_celery_beat` to populate the periodic tasks in the database. This creates the task entries that appear in Django admin.
 
 ### Service Configuration
 
@@ -120,15 +125,29 @@ docker logs celery_beat -f
 
 ## Managing Periodic Tasks
 
+### Initial Setup
+
+After starting the services for the first time, you need to populate the periodic tasks in the database:
+
+```bash
+docker exec -it django python manage.py setup_celery_beat
+```
+
+This management command reads the `beat_schedule` from `fishauctions/celery.py` and creates corresponding database entries for django-celery-beat. You need to run this:
+- After first deployment
+- When adding new tasks to `fishauctions/celery.py`
+- When modifying task schedules in code (optional - you can also modify via admin)
+
 ### Via Django Admin
 
-1. Navigate to Django Admin → Periodic Tasks
-2. Tasks are automatically created from `fishauctions/celery.py` beat schedule
+1. Navigate to Django Admin → Periodic Tasks → Periodic tasks
+2. You'll see all tasks created by the setup command
 3. You can:
    - Enable/disable tasks
    - Modify schedules
    - View task execution history
    - Manually trigger tasks
+   - Add new tasks
 
 ### Via Code
 
@@ -142,6 +161,8 @@ app.conf.beat_schedule = {
     },
 }
 ```
+
+After modifying the beat schedule in code, run `python manage.py setup_celery_beat` to sync changes to the database.
 
 ## Manual Task Execution
 

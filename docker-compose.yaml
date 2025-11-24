@@ -18,7 +18,7 @@ services:
   celery_worker:
     build: .
     container_name: celery_worker
-    command: celery -A fishauctions worker --loglevel=info --concurrency=2
+    entrypoint: ["sh", "./celery_worker_entrypoint.sh"]
     volumes:
       - .:/home/app/web
       - ./logs:/home/logs
@@ -31,7 +31,7 @@ services:
   celery_beat:
     build: .
     container_name: celery_beat
-    command: celery -A fishauctions beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    entrypoint: ["sh", "./celery_beat_entrypoint.sh"]
     volumes:
       - .:/home/app/web
       - ./logs:/home/logs

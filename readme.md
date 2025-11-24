@@ -71,6 +71,11 @@ This project uses Celery with Celery Beat for scheduled tasks (replacing cron jo
 
 Celery services (`celery_worker` and `celery_beat`) run automatically when you start the project with `docker compose up -d`. Email delivery is immediate via django-post-office's Celery integration.
 
+**Initial Setup**: After first starting the project, run this command to populate periodic tasks in the database:
+```bash
+docker exec -it django python manage.py setup_celery_beat
+```
+
 For more details, see [CELERY.md](CELERY.md).
 
 **Note**: The old crontab file is kept for reference but is no longer active. All scheduled tasks are now managed by Celery.
