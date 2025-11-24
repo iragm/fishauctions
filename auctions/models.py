@@ -3575,14 +3575,14 @@ class Lot(models.Model):
                 self.winner.email,
                 headers={"Reply-to": self.user.email},
                 template="non_auction_lot_winner",
-                context={"lot": self, "domain": current_site.domain},
+                context={"lot": self, "domain": current_site.domain, "reply_to_email": self.user.email},
             )
             # now, email the seller
             mail.send(
                 self.user.email,
                 headers={"Reply-to": self.winner.email},
                 template="non_auction_lot_seller",
-                context={"lot": self, "domain": current_site.domain},
+                context={"lot": self, "domain": current_site.domain, "reply_to_email": self.winner.email},
             )
 
     def process_relist_logic(self):

@@ -32,6 +32,7 @@ class Command(BaseCommand):
                         "domain": current_site.domain,
                         "location": invoice.location,
                         "invoice": invoice,
+                        "reply_to_email": contact_email,
                     },
                 )
             invoice.email_sent = True
