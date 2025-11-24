@@ -41,4 +41,4 @@ docker exec -it django python3 manage.py test --verbosity=2
 
 ## Continuous Integration
 
-The GitHub Actions workflow in `.github/workflows/image-builds.yml` automatically runs tests against MariaDB as part of the CI pipeline. The `docker compose up --wait` command ensures the database is fully ready before running tests.
+The GitHub Actions workflow in `.github/workflows/image-builds.yml` automatically runs tests against MariaDB as part of the CI pipeline. The `docker compose up --detach --wait --wait-timeout 60` command ensures the database is fully ready before running tests.
