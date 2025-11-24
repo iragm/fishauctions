@@ -1,5 +1,6 @@
 import datetime
 from decimal import Decimal
+from urllib.parse import parse_qs, urlparse
 
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -5047,8 +5048,6 @@ class SquarePaymentTests(StandardTestCase):
         self.assertIn("connect.squareup", response.url)
 
         # Verify redirect_uri parameter is using https
-        from urllib.parse import parse_qs, urlparse
-
         parsed = urlparse(response.url)
         params = parse_qs(parsed.query)
 
@@ -5075,8 +5074,6 @@ class SquarePaymentTests(StandardTestCase):
         self.assertIn("connect.squareup", response.url)
 
         # Verify redirect_uri parameter
-        from urllib.parse import parse_qs, urlparse
-
         parsed = urlparse(response.url)
         params = parse_qs(parsed.query)
 
