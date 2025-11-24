@@ -89,6 +89,21 @@ function paymentCompleted(pk) {
                                 style="font-size:${sizePx}px; line-height:1;"></i>`;
     }
   });
+
+  // Update invoice status buttons to show "Paid" state
+  const invoiceButtons = document.getElementById(`invoice-buttons-${pk}`);
+  if (invoiceButtons) {
+    // Update all buttons: set non-paid buttons to secondary, paid button to success
+    invoiceButtons.querySelectorAll('button').forEach(btn => {
+      if (btn.id === `${pk}_PAID`) {
+        btn.classList.remove('btn-secondary');
+        btn.classList.add('btn-success');
+      } else {
+        btn.classList.remove('btn-info');
+        btn.classList.add('btn-secondary');
+      }
+    });
+  }
 }
 </script>
 {% endblock %}

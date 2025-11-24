@@ -2389,6 +2389,52 @@ class InvoiceViewTests(StandardTestCase):
         assert response.status_code == 200
 
 
+class InvoiceStatusButtonTests(StandardTestCase):
+    """Test invoice status buttons can be clicked and update correctly"""
+
+    def test_invoice_status_button_paid(self):
+        """Admin can mark invoice as paid via button click"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = f"/api/payinvoice/{self.invoice.pk}/PAID"
+        response = self.client.post(url)
+        assert response.status_code == 200, (
+            f"Expected 200, got {response.status_code}, content: {response.content.decode()[:500]}"
+        )
+        # Verify the invoice was updated
+        self.invoice.refresh_from_db()
+        assert self.invoice.status == "PAID"
+        # Verify response contains updated buttons with correct ID and status
+        content = response.content.decode()
+        assert f"id='invoice-buttons-{self.invoice.pk}'" in content, (
+            f"Expected invoice-buttons ID in content: {content}"
+        )
+        assert f'id="{self.invoice.pk}_PAID"' in content
+        assert "btn-success" in content  # Paid button should be success
+
+    def test_invoice_status_button_draft(self):
+        """Admin can mark invoice as draft (open) via button click"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        # First set to PAID
+        self.invoice.status = "PAID"
+        self.invoice.save()
+        # Then change back to DRAFT
+        url = f"/api/payinvoice/{self.invoice.pk}/DRAFT"
+        response = self.client.post(url)
+        assert response.status_code == 200
+        self.invoice.refresh_from_db()
+        assert self.invoice.status == "DRAFT"
+        content = response.content.decode()
+        assert f"id='invoice-buttons-{self.invoice.pk}'" in content
+        assert "btn-info" in content  # Open button should be info when active
+
+    def test_invoice_status_button_anonymous_denied(self):
+        """Anonymous users cannot change invoice status"""
+        url = f"/api/payinvoice/{self.invoice.pk}/PAID"
+        response = self.client.post(url)
+        # Should redirect to login
+        assert response.status_code == 302
+
+
 class PickupLocationTests(StandardTestCase):
     """Test PickupLocation model properties and views"""
 

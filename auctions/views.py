@@ -7153,7 +7153,9 @@ class CreateSquarePaymentLinkView(SquareAPIMixin, View):
         """Create the payment link"""
         payment_url, error_message = self.create_payment_link(self.invoice)
         if not payment_url:
-            messages.error(request, error_message or "Failed to create Square payment link. Please try again or contact support.")
+            messages.error(
+                request, error_message or "Failed to create Square payment link. Please try again or contact support."
+            )
             return redirect(self.invoice.get_absolute_url())
 
         # Add processing message and redirect to invoice to show status
@@ -9982,5 +9984,7 @@ class QuickCheckoutHTMX(AuctionViewMixin, PayPalAPIMixin, SquareAPIMixin, Templa
                         context["square_qr_code_link"] = payment_url
                     elif error_message:
                         # Log the error but don't show QR code
-                        logger.warning("Square payment link creation failed for invoice %s: %s", invoice.pk, error_message)
+                        logger.warning(
+                            "Square payment link creation failed for invoice %s: %s", invoice.pk, error_message
+                        )
         return context
