@@ -6160,14 +6160,14 @@ class SquareSeller(models.Model):
             from django.urls import reverse
 
             payment_note = f"Bidder {invoice.auctiontos_user.bidder_number} in {invoice.auction.title}"[:500]
-            
+
             # Get and validate buyer email
             buyer_email = getattr(getattr(invoice, "auctiontos_user", None), "email", None)
-            
+
             # Validate email domain - Square blocks certain domains like example.com
             if buyer_email:
                 from django.conf import settings
-                
+
                 email_domain = buyer_email.split("@")[-1].lower() if "@" in buyer_email else ""
                 blocked_domains = settings.SQUARE_BLOCKED_EMAIL_DOMAINS
                 if email_domain in blocked_domains:
