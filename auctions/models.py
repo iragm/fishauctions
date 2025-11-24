@@ -6166,8 +6166,12 @@ class SquareSeller(models.Model):
             
             # Validate email domain - Square blocks certain domains like example.com
             if buyer_email:
+                from django.conf import settings
+                
                 email_domain = buyer_email.split("@")[-1].lower() if "@" in buyer_email else ""
-                blocked_domains = ["example.com", "example.org", "example.net", "test.com", "invalid.com"]
+                blocked_domains = getattr(settings, "SQUARE_BLOCKED_EMAIL_DOMAINS", [
+                    "example.com", "example.org", "example.net", "test.com", "invalid.com"
+                ])
                 if email_domain in blocked_domains:
                     buyer_email = None  # Don't send blocked email to Square
 

@@ -9925,7 +9925,7 @@ class SquareWebhookView(SquareAPIMixin, View):
                             "memo": refund.get("reason", "")[:500],
                         },
                     )
-                    payment_record.invoice.recalculate
+                    payment_record.invoice.recalculate()
                     action = f"Refund via Square for bidder {payment_record.invoice.auctiontos_user.bidder_number} in the amount of {refund_amount} {payment_record.currency}"
                     payment_record.invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
                     logger.info("Square refund completed for payment %s", payment_id)
