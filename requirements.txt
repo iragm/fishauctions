@@ -13,7 +13,9 @@ aiosignal==1.4.0
 annotated-types==0.7.0
     # via pydantic
 anyio==4.11.0
-    # via watchfiles
+    # via
+    #   httpx
+    #   watchfiles
 asgiref==3.11.0
     # via
     #   -r requirements.in
@@ -45,9 +47,9 @@ bleach[css]==6.3.0
     #   django-markdownfield
     #   django-post-office
     #   django-summernote
-boto3==1.41.0
+boto3==1.41.2
     # via django-ses
-botocore==1.41.0
+botocore==1.41.2
     # via
     #   boto3
     #   s3transfer
@@ -65,7 +67,7 @@ cffi==2.0.0
     #   cryptography
     #   pyheif
     #   weasyprint
-channels==4.3.1
+channels==4.3.2
     # via
     #   -r requirements.in
     #   channels-redis
@@ -129,7 +131,7 @@ django==5.2.8
     #   django-weasyprint
     #   easy-thumbnails
     #   jsonfield
-django-allauth==65.13.0
+django-allauth==65.13.1
     # via -r requirements.in
 django-autocomplete-light==3.12.1
     # via -r requirements.in
@@ -169,7 +171,7 @@ django-ses[events]==4.4.0
     # via -r requirements.in
 django-summernote==0.8.20.0
     # via -r requirements.in
-django-tables2==2.7.5
+django-tables2==2.8.0
     # via -r requirements.in
 django-weasyprint==2.4.0
     # via -r requirements.in
@@ -326,7 +328,7 @@ requests==2.32.5
     #   requests-oauthlib
 requests-oauthlib==2.0.0
     # via -r requirements.in
-s3transfer==0.14.0
+s3transfer==0.15.0
     # via boto3
 segno==1.6.6
     # via django-qr-code
