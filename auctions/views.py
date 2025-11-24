@@ -9829,15 +9829,26 @@ class SquareWebhookView(SquareAPIMixin, View):
             reference_id = None
             # Handle COMPLETED status - create payment record and mark invoice paid
             if payment_status == "COMPLETED":
-                seller = SquareSeller.objects.filter(square_merchant_id=event.get("merchant_id", "")).first()
-                if seller and seller.square_merchant_id:
-                    access_token = seller.get_valid_access_token()
-                    client = self.connect(access_token)
-                    order = client.orders.get(order_id=order_id)
-                    reference_id = order.get("order", {}).get("reference_id")
-                    if not reference_id:
-                        logger.error("reference id not found for Square order %s", order_id)
-                        logger.error(order)
+                merchant_id = event.get("merchant_id", "")
+                seller = SquareSeller.objects.filter(square_merchant_id=merchant_id).first()
+                if not seller:
+                    logger.warning("Square webhook: SquareSeller not found for merchant_id: %s", merchant_id)
+                elif seller.square_merchant_id:
+                    client = seller.get_square_client()
+                    if client:
+                        try:
+                            order_response = client.orders.get(order_id=order_id)
+                            if hasattr(order_response, "order"):
+                                reference_id = getattr(order_response.order, "reference_id", None)
+                            else:
+                                reference_id = order_response.get("order", {}).get("reference_id")
+                            if not reference_id:
+                                logger.error("reference id not found for Square order %s", order_id)
+                                logger.error(order_response)
+                        except Exception as e:
+                            logger.exception("Error retrieving Square order %s: %s", order_id, e)
+                    else:
+                        logger.error("Could not get Square client for user %s", seller.user.pk)
                 invoice = Invoice.objects.filter(pk=reference_id).first()
                 if invoice:
                     amount_money = payment.get("amount_money", {})

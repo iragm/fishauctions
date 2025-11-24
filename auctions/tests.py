@@ -1042,9 +1042,9 @@ class LotLabelViewTestCase(StandardTestCase):
         if should_exist:
             assert found, f"Expected message containing '{expected_text}', got: {[str(m) for m in messages_list]}"
         else:
-            assert (
-                not found
-            ), f"Should not have message containing '{expected_text}', got: {[str(m) for m in messages_list]}"
+            assert not found, (
+                f"Should not have message containing '{expected_text}', got: {[str(m) for m in messages_list]}"
+            )
 
     def test_user_can_print_own_labels(self):
         """Test that a regular user can print their own labels."""
@@ -5293,6 +5293,36 @@ class SquareOAuthRevocationTests(StandardTestCase):
         response = self.client.post(url, data=webhook_data, content_type="application/json")
 
         # Should still return 200 (graceful handling)
+        self.assertEqual(response.status_code, 200)
+
+    def test_payment_webhook_handles_missing_merchant(self):
+        """Test that payment webhook handles missing SquareSeller gracefully"""
+        from django.urls import reverse
+
+        # Simulate payment webhook with non-existent merchant_id
+        webhook_data = {
+            "merchant_id": "NONEXISTENT_MERCHANT",
+            "type": "payment.updated",
+            "event_id": "test-event-id",
+            "created_at": "2025-11-23T16:29:14.35551833Z",
+            "data": {
+                "type": "payment",
+                "id": "test-payment-id",
+                "object": {
+                    "payment": {
+                        "id": "test-payment-id",
+                        "status": "COMPLETED",
+                        "order_id": "test-order-id",
+                        "amount_money": {"amount": 1000, "currency": "USD"},
+                    }
+                },
+            },
+        }
+
+        url = reverse("square_webhook")
+        response = self.client.post(url, data=webhook_data, content_type="application/json")
+
+        # Should return 200 (graceful handling with logged warning)
         self.assertEqual(response.status_code, 200)
 
 
