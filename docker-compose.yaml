@@ -46,6 +46,7 @@ services:
       - ${DATABASE_PORT-3306}
     volumes:
       - mariadb_data:/var/lib/mysql
+      - ./db-init:/docker-entrypoint-initdb.d:ro
 
   redis:
     container_name: redis
