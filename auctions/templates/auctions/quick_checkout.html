@@ -47,7 +47,15 @@ $(document).ready(function() {
     console.log(data);
     if (data.type == "invoice_approved") {
       console.log(data);
-      document.getElementById("invoice_" + data.pk + "_qr_scan").innerHTML = "<span class='text-success'>Got it, processing payment...</span>";
+      // Update both PayPal and Square QR scan text if they exist
+      const paypalQrScan = document.getElementById("invoice_" + data.pk + "_paypal_qr_scan");
+      const squareQrScan = document.getElementById("invoice_" + data.pk + "_square_qr_scan");
+      if (paypalQrScan) {
+        paypalQrScan.innerHTML = "<span class='text-success'>Got it, processing payment...</span>";
+      }
+      if (squareQrScan) {
+        squareQrScan.innerHTML = "<span class='text-success'>Got it, processing payment...</span>";
+      }
 
     }
     else if (data.type == "capture_complete") {
@@ -67,15 +75,20 @@ function paymentCompleted(pk) {
     btnWrapper.parentNode.removeChild(btnWrapper);
   }
 
-  const qrWrapper = document.getElementById(`invoice_${pk}_qr_wrapper`);
-  if (qrWrapper) {
-    // Size the green check to approximately the same width as the QR code column
-    const w = Math.round(qrWrapper.getBoundingClientRect().width || qrWrapper.clientWidth || 0);
-    const sizePx = w > 0 ? w : 128; // fallback size
-    qrWrapper.innerHTML = `<i class="bi bi-check-circle-fill text-success d-inline-block"
-                              title="Paid" aria-label="Paid"
-                              style="font-size:${sizePx}px; line-height:1;"></i>`;
-  }
+  // Handle both PayPal and Square QR wrappers
+  const paypalQrWrapper = document.getElementById(`invoice_${pk}_paypal_qr_wrapper`);
+  const squareQrWrapper = document.getElementById(`invoice_${pk}_square_qr_wrapper`);
+
+  [paypalQrWrapper, squareQrWrapper].forEach(qrWrapper => {
+    if (qrWrapper) {
+      // Size the green check to approximately the same width as the QR code column
+      const w = Math.round(qrWrapper.getBoundingClientRect().width || qrWrapper.clientWidth || 0);
+      const sizePx = w > 0 ? w : 128; // fallback size
+      qrWrapper.innerHTML = `<i class="bi bi-check-circle-fill text-success d-inline-block"
+                                title="Paid" aria-label="Paid"
+                                style="font-size:${sizePx}px; line-height:1;"></i>`;
+    }
+  });
 }
 </script>
 {% endblock %}
