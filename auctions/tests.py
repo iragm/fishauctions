@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
 from django.test.client import Client
 from django.urls import reverse
 from django.utils import timezone
@@ -3637,19 +3637,29 @@ class LotEndauctionsMethodsTests(StandardTestCase):
         self.assertTrue(new_image.is_primary)
 
 
-class WebSocketConsumerTests(StandardTestCase):
+class WebSocketConsumerTests(TransactionTestCase):
     """Tests for websocket consumers (LotConsumer, UserConsumer, AuctionConsumer)
 
     Best practices for websocket tests in CI:
     - All operations have timeouts
     - Proper cleanup with try-finally blocks
     - Simplified message handling to avoid hanging
+    
+    Note: Uses TransactionTestCase instead of TestCase to properly handle
+    database transactions with async code and channels' database_sync_to_async
     """
 
     # Timeout constants for CI reliability
     CONNECT_TIMEOUT = 5
     DISCONNECT_TIMEOUT = 5
     RECEIVE_TIMEOUT = 3
+
+    def setUp(self):
+        """Set up test users needed for websocket tests"""
+        self.user = User.objects.create_user(username="test_user", password="testpassword", email="test@example.com")
+        self.admin_user = User.objects.create_user(
+            username="admin_user", password="testpassword", email="admin@example.com"
+        )
 
     async def _create_active_lot_with_auction(self, seller_user, bidder_user=None):
         """Helper method to create an active lot with a future-dated auction"""
