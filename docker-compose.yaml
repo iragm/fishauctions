@@ -11,7 +11,8 @@ services:
       - 8000
     env_file: .env
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     restart: always
 
   test:
@@ -47,6 +48,12 @@ services:
     volumes:
       - mariadb_data:/var/lib/mysql
       - ./db-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
 
   redis:
     container_name: redis

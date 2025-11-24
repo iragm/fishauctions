@@ -14,7 +14,9 @@ Tests now run against a MariaDB database instead of SQLite to better match the p
 
 2. **Database Permissions**: The MariaDB container is configured with initialization scripts in `db-init/` that automatically grant the necessary permissions for creating test databases.
 
-3. **No Production Impact**: The test database is completely separate from the production `auctions` database, so running tests never affects production data.
+3. **Health Checks**: The database service includes a health check to ensure it's fully ready before tests run. This prevents connection errors during CI/CD or when starting fresh containers.
+
+4. **No Production Impact**: The test database is completely separate from the production `auctions` database, so running tests never affects production data.
 
 ## Running Tests
 
@@ -34,9 +36,9 @@ docker exec -it django python3 manage.py test --verbosity=2
 
 ## Requirements
 
-- The database container must be running (`docker compose up -d db`)
+- The database container must be running and healthy (`docker compose up -d`)
 - The database user must have CREATE and test database privileges (automatically configured via `db-init/01-grant-test-permissions.sql`)
 
 ## Continuous Integration
 
-The GitHub Actions workflow in `.github/workflows/image-builds.yml` automatically runs tests against MariaDB as part of the CI pipeline.
+The GitHub Actions workflow in `.github/workflows/image-builds.yml` automatically runs tests against MariaDB as part of the CI pipeline. The `docker compose up --wait` command ensures the database is fully ready before running tests.
