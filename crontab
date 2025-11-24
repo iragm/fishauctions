@@ -58,4 +58,3 @@
 # update cached auction statistics
 # * * * * * /home/app/web/task.sh update_auction_stats
 # Celery task: auctions.tasks.update_auction_stats (runs every minute)
-
