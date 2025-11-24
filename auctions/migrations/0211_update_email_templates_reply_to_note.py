@@ -177,6 +177,7 @@ Make sure to direct your reply to {{reply_to_email}}""",
             "html_content": """Hello {{ tos.name }},<br>
 <br>
 Thanks for adding lots to {{ tos.auction }}!  {% if tos.auction.is_online%}Now that the auction has ended,{% else %}Before you bring your lots to the auction,{%endif%} please <a href="https://{{domain}}{{tos.auction.label_print_link}}">print your labels from here</a>.<br>{% if not tos.auction.is_online%}If you want to add more lots, add them before printing your labels.{%endif%}
+<ol>
 <li>Print labels on regular paper</li>
 <li>Cut them out</li>
 <li>Use packing tape to attach them to your lots</li>
