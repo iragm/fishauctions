@@ -6982,14 +6982,14 @@ class SquareAPIMixin:
 
     def create_payment_link(self, invoice):
         """Create a Square payment link using SquareSeller model methods
-        Returns payment URL (string) or None on failure
+        Returns tuple: (payment_url, error_message)
         """
         from auctions.models import SquareSeller
 
         seller = SquareSeller.objects.filter(user=invoice.auction.created_by).first()
         if not seller:
             logger.error("No SquareSeller for user %s", invoice.auction.created_by.pk)
-            return None
+            return None, "Seller has not connected their Square account"
 
         return seller.create_payment_link(invoice, self.request)
 
@@ -7151,9 +7151,9 @@ class CreateSquarePaymentLinkView(SquareAPIMixin, View):
 
     def post(self, request, *args, **kwargs):
         """Create the payment link"""
-        payment_url = self.create_payment_link(self.invoice)
+        payment_url, error_message = self.create_payment_link(self.invoice)
         if not payment_url:
-            messages.error(request, "Failed to create Square payment link. Please try again or contact support.")
+            messages.error(request, error_message or "Failed to create Square payment link. Please try again or contact support.")
             return redirect(self.invoice.get_absolute_url())
 
         # Add processing message and redirect to invoice to show status
@@ -9862,10 +9862,15 @@ class SquareWebhookView(SquareAPIMixin, View):
                             external_id=payment_id,
                             defaults={
                                 "amount": amount_value,
+                                "amount_available_to_refund": amount_value,
                                 "currency": currency,
                                 "payment_method": "Square",
                             },
                         )
+                        # If payment already existed, make sure amount_available_to_refund is set
+                        if not created and payment_record.amount_available_to_refund == Decimal("0.00"):
+                            payment_record.amount_available_to_refund = amount_value
+                            payment_record.save()
                         action = f"Payment via Square for bidder {invoice.auctiontos_user.bidder_number} in the amount of {amount_value} {currency}"
                         invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
                         if invoice.net_after_payments >= 0:
@@ -9874,11 +9879,20 @@ class SquareWebhookView(SquareAPIMixin, View):
 
                             # Send websocket notification for payment completion
                             channel_layer = channels.layers.get_channel_layer()
+                            # Send to invoice-specific group for invoice detail pages
                             async_to_sync(channel_layer.group_send)(
                                 f"invoice_{invoice.pk}",
                                 {
                                     "type": "invoice_status",
                                     "message": "paid",
+                                },
+                            )
+                            # Send to auction group for quick checkout page
+                            async_to_sync(channel_layer.group_send)(
+                                f"auctions_{invoice.auction.pk}",
+                                {
+                                    "type": "invoice_paid",
+                                    "pk": invoice.pk,
                                 },
                             )
                         logger.info("Square payment completed for invoice %s", invoice.pk)
@@ -9905,7 +9919,7 @@ class SquareWebhookView(SquareAPIMixin, View):
                         external_id=refund_id,
                         defaults={
                             "invoice": payment_record.invoice,
-                            "amount": refund_amount,
+                            "amount": -refund_amount,  # Negative for refund
                             "currency": payment_record.currency,
                             "payment_method": "Square Refund",
                             "memo": refund.get("reason", "")[:500],
@@ -9963,5 +9977,10 @@ class QuickCheckoutHTMX(AuctionViewMixin, PayPalAPIMixin, SquareAPIMixin, Templa
                     context["paypal_qr_code_link"] = self.create_order(invoice)
                 # Generate Square QR code if available
                 if invoice.show_square_button and not invoice.reason_for_payment_not_available:
-                    context["square_qr_code_link"] = self.create_payment_link(invoice)
+                    payment_url, error_message = self.create_payment_link(invoice)
+                    if payment_url:
+                        context["square_qr_code_link"] = payment_url
+                    elif error_message:
+                        # Log the error but don't show QR code
+                        logger.warning("Square payment link creation failed for invoice %s: %s", invoice.pk, error_message)
         return context
