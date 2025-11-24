@@ -397,6 +397,11 @@ THUMBNAIL_DEFAULT_STORAGE_ALIAS = "default"
 
 SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
 
+# Trust X-Forwarded-Proto header from nginx proxy for HTTPS detection
+# This is required for request.build_absolute_uri() to generate https:// URLs
+# when behind a reverse proxy
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
 SOCIALACCOUNT_PROVIDERS = {
     "google": {
         "SCOPE": [

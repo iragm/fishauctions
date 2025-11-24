@@ -1042,9 +1042,9 @@ class LotLabelViewTestCase(StandardTestCase):
         if should_exist:
             assert found, f"Expected message containing '{expected_text}', got: {[str(m) for m in messages_list]}"
         else:
-            assert not found, (
-                f"Should not have message containing '{expected_text}', got: {[str(m) for m in messages_list]}"
-            )
+            assert (
+                not found
+            ), f"Should not have message containing '{expected_text}', got: {[str(m) for m in messages_list]}"
 
     def test_user_can_print_own_labels(self):
         """Test that a regular user can print their own labels."""
@@ -5029,6 +5029,62 @@ class SquarePaymentTests(StandardTestCase):
             load_command_class("auctions", "change_square")
         except Exception as e:
             self.fail(f"change_square management command not found: {e}")
+
+    def test_square_oauth_redirect_uri_with_https(self):
+        """Test that Square OAuth redirect URI uses https when X-Forwarded-Proto is set"""
+        from django.urls import reverse
+
+        # Login as admin user
+        self.client.force_login(self.admin_user)
+
+        # Test the Square connect view with X-Forwarded-Proto header
+        response = self.client.get(
+            reverse("square_connect"), HTTP_X_FORWARDED_PROTO="https", HTTP_HOST="auction.fish", follow=False
+        )
+
+        # Should redirect to Square OAuth URL
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("connect.squareup", response.url)
+
+        # Verify redirect_uri parameter is using https
+        from urllib.parse import parse_qs, urlparse
+
+        parsed = urlparse(response.url)
+        params = parse_qs(parsed.query)
+
+        # Check that redirect_uri exists and uses https
+        self.assertIn("redirect_uri", params)
+        redirect_uri = params["redirect_uri"][0]
+        self.assertTrue(
+            redirect_uri.startswith("https://"), f"Redirect URI should start with https://, got: {redirect_uri}"
+        )
+        self.assertIn("/square/onboard/success/", redirect_uri)
+
+    def test_square_oauth_redirect_uri_without_proxy_header(self):
+        """Test that Square OAuth redirect URI defaults to http when no X-Forwarded-Proto header"""
+        from django.urls import reverse
+
+        # Login as admin user
+        self.client.force_login(self.admin_user)
+
+        # Test the Square connect view without X-Forwarded-Proto header
+        response = self.client.get(reverse("square_connect"), HTTP_HOST="testserver", follow=False)
+
+        # Should redirect to Square OAuth URL
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("connect.squareup", response.url)
+
+        # Verify redirect_uri parameter
+        from urllib.parse import parse_qs, urlparse
+
+        parsed = urlparse(response.url)
+        params = parse_qs(parsed.query)
+
+        # Check that redirect_uri exists
+        self.assertIn("redirect_uri", params)
+        redirect_uri = params["redirect_uri"][0]
+        # Without the proxy header in test environment, it will use http
+        self.assertIn("/square/onboard/success/", redirect_uri)
 
 
 class SquareRefundFormTests(StandardTestCase):
