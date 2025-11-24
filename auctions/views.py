@@ -9838,10 +9838,9 @@ class SquareWebhookView(SquareAPIMixin, View):
                     if client:
                         try:
                             order_response = client.orders.get(order_id=order_id)
-                            if hasattr(order_response, "order"):
+                            # Square SDK returns response objects with attributes
+                            if hasattr(order_response, "order") and order_response.order:
                                 reference_id = getattr(order_response.order, "reference_id", None)
-                            else:
-                                reference_id = order_response.get("order", {}).get("reference_id")
                             if not reference_id:
                                 logger.error("reference id not found for Square order %s", order_id)
                                 logger.error(order_response)
