@@ -9848,38 +9848,43 @@ class SquareWebhookView(SquareAPIMixin, View):
                             logger.exception("Error retrieving Square order %s: %s", order_id, e)
                     else:
                         logger.error("Could not get Square client for user %s", seller.user.pk)
-                invoice = Invoice.objects.filter(pk=reference_id).first()
-                if invoice:
-                    amount_money = payment.get("amount_money", {})
-                    amount_value = Decimal(amount_money.get("amount", 0)) / 100
-                    currency = amount_money.get("currency", "USD")
 
-                    payment_record, created = InvoicePayment.objects.get_or_create(
-                        invoice=invoice,
-                        external_id=payment_id,
-                        defaults={
-                            "amount": amount_value,
-                            "currency": currency,
-                            "status": "COMPLETED",
-                            "payment_method": "Square",
-                        },
-                    )
-                    action = f"Payment via Square for bidder {invoice.auction.tos_user.bidder_number} in the amount of {amount_value} {currency}"
-                    invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
-                    if invoice.net_after_payments >= 0:
-                        invoice.status = "PAID"
-                        invoice.save()
+                # Only proceed if we have a reference_id to look up the invoice
+                if reference_id:
+                    invoice = Invoice.objects.filter(pk=reference_id).first()
+                    if invoice:
+                        amount_money = payment.get("amount_money", {})
+                        amount_value = Decimal(amount_money.get("amount", 0)) / 100
+                        currency = amount_money.get("currency", "USD")
 
-                        # Send websocket notification for payment completion
-                        channel_layer = channels.layers.get_channel_layer()
-                        async_to_sync(channel_layer.group_send)(
-                            f"invoice_{invoice.pk}",
-                            {
-                                "type": "invoice_status",
-                                "message": "paid",
+                        payment_record, created = InvoicePayment.objects.get_or_create(
+                            invoice=invoice,
+                            external_id=payment_id,
+                            defaults={
+                                "amount": amount_value,
+                                "currency": currency,
+                                "status": "COMPLETED",
+                                "payment_method": "Square",
                             },
                         )
-                    logger.info("Square payment completed for invoice %s", invoice.pk)
+                        action = f"Payment via Square for bidder {invoice.auction.tos_user.bidder_number} in the amount of {amount_value} {currency}"
+                        invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
+                        if invoice.net_after_payments >= 0:
+                            invoice.status = "PAID"
+                            invoice.save()
+
+                            # Send websocket notification for payment completion
+                            channel_layer = channels.layers.get_channel_layer()
+                            async_to_sync(channel_layer.group_send)(
+                                f"invoice_{invoice.pk}",
+                                {
+                                    "type": "invoice_status",
+                                    "message": "paid",
+                                },
+                            )
+                        logger.info("Square payment completed for invoice %s", invoice.pk)
+                    else:
+                        logger.warning("Square webhook: Invoice not found for reference_id: %s", reference_id)
 
         elif event_type == "refund.updated":
             # Refund processed
