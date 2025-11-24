@@ -9919,7 +9919,7 @@ class SquareWebhookView(SquareAPIMixin, View):
                         external_id=refund_id,
                         defaults={
                             "invoice": payment_record.invoice,
-                            "amount": -refund_amount,  # Negative for refund
+                            "amount": -abs(refund_amount),  # Ensure negative for refund
                             "currency": payment_record.currency,
                             "payment_method": "Square Refund",
                             "memo": refund.get("reason", "")[:500],
