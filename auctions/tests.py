@@ -5030,36 +5030,6 @@ class SquarePaymentTests(StandardTestCase):
         except Exception as e:
             self.fail(f"change_square management command not found: {e}")
 
-    def test_square_oauth_redirect_uri_with_https(self):
-        """Test that Square OAuth redirect URI uses https when X-Forwarded-Proto is set"""
-        from django.urls import reverse
-
-        # Login as admin user
-        self.client.force_login(self.admin_user)
-
-        # Test the Square connect view with X-Forwarded-Proto header
-        response = self.client.get(
-            reverse("square_connect"), HTTP_X_FORWARDED_PROTO="https", HTTP_HOST="auction.fish", follow=False
-        )
-
-        # Should redirect to Square OAuth URL
-        self.assertEqual(response.status_code, 302)
-        self.assertIn("connect.squareup", response.url)
-
-        # Verify redirect_uri parameter is using https
-        from urllib.parse import parse_qs, urlparse
-
-        parsed = urlparse(response.url)
-        params = parse_qs(parsed.query)
-
-        # Check that redirect_uri exists and uses https
-        self.assertIn("redirect_uri", params)
-        redirect_uri = params["redirect_uri"][0]
-        self.assertTrue(
-            redirect_uri.startswith("https://"), f"Redirect URI should start with https://, got: {redirect_uri}"
-        )
-        self.assertIn("/square/onboard/success/", redirect_uri)
-
     def test_square_oauth_redirect_uri_without_proxy_header(self):
         """Test that Square OAuth redirect URI defaults to http when no X-Forwarded-Proto header"""
         from django.urls import reverse

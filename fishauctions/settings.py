@@ -694,6 +694,15 @@ SQUARE_APPLICATION_ID = os.environ.get("SQUARE_APPLICATION_ID", "")
 SQUARE_CLIENT_SECRET = os.environ.get("SQUARE_CLIENT_SECRET", "")  # For OAuth token exchange
 # Webhook signature key for verifying Square webhook notifications
 SQUARE_WEBHOOK_SIGNATURE_KEY = os.environ.get("SQUARE_WEBHOOK_SIGNATURE_KEY", "")
+# Email domains blocked by Square payment links (comma-separated)
+_blocked_domains_raw = os.environ.get(
+    "SQUARE_BLOCKED_EMAIL_DOMAINS", "example.com,example.org,example.net,test.com,invalid.com"
+)
+SQUARE_BLOCKED_EMAIL_DOMAINS = []
+for domain in _blocked_domains_raw.split(","):
+    stripped = domain.strip().lower()
+    if stripped:
+        SQUARE_BLOCKED_EMAIL_DOMAINS.append(stripped)
 
 # Field encryption key for django-encrypted-model-fields
 # This should be a Fernet key - generate with: from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())
