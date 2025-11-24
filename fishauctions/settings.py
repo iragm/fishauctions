@@ -689,20 +689,12 @@ PAYPAL_PLATFORM_FEE = Decimal(str(os.environ.get("PAYPAL_PLATFORM_FEE", "0") or 
 
 # Celery Broker URL using Redis
 CELERY_BROKER_URL = (
-    "redis://:"
-    + os.environ.get("REDIS_PASSWORD", "unsecure")
-    + "@"
-    + os.environ.get("REDIS_HOST", "redis")
-    + ":6379/1"
+    "redis://:" + os.environ.get("REDIS_PASSWORD", "unsecure") + "@" + os.environ.get("REDIS_HOST", "redis") + ":6379/1"
 )
 
 # Celery Result Backend using Redis
 CELERY_RESULT_BACKEND = (
-    "redis://:"
-    + os.environ.get("REDIS_PASSWORD", "unsecure")
-    + "@"
-    + os.environ.get("REDIS_HOST", "redis")
-    + ":6379/2"
+    "redis://:" + os.environ.get("REDIS_PASSWORD", "unsecure") + "@" + os.environ.get("REDIS_HOST", "redis") + ":6379/2"
 )
 
 # Celery Settings
