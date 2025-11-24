@@ -5325,6 +5325,69 @@ class SquareOAuthRevocationTests(StandardTestCase):
         # Should return 200 (graceful handling with logged warning)
         self.assertEqual(response.status_code, 200)
 
+    def test_payment_webhook_creates_invoice_payment(self):
+        """Test that payment.updated webhook successfully creates InvoicePayment without status field"""
+        from decimal import Decimal
+        from unittest.mock import Mock, patch
+
+        from django.urls import reverse
+
+        from .models import Invoice, InvoicePayment, SquareSeller
+
+        # Create an invoice for the test
+        test_invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.online_tos)
+
+        # Mock the entire Square orders.get flow
+        mock_order = Mock()
+        mock_order.reference_id = str(test_invoice.pk)
+
+        mock_order_response = Mock()
+        mock_order_response.order = mock_order
+
+        mock_orders_api = Mock()
+        mock_orders_api.get = Mock(return_value=mock_order_response)
+
+        mock_client = Mock()
+        mock_client.orders = mock_orders_api
+
+        # Patch get_square_client at the class level so any instance returns our mock
+        with patch.object(SquareSeller, "get_square_client", return_value=mock_client):
+            # Simulate payment.updated webhook with COMPLETED status
+            webhook_data = {
+                "merchant_id": "MLF3WZS2N9WVG",
+                "type": "payment.updated",
+                "event_id": "test-payment-event",
+                "created_at": "2025-11-23T16:29:14.35551833Z",
+                "data": {
+                    "type": "payment",
+                    "id": "test-payment-updated-id",
+                    "object": {
+                        "payment": {
+                            "id": "PAYMENT_123456",
+                            "status": "COMPLETED",
+                            "order_id": "ORDER_123456",
+                            "amount_money": {"amount": 5000, "currency": "USD"},
+                        }
+                    },
+                },
+            }
+
+            url = reverse("square_webhook")
+            response = self.client.post(url, data=webhook_data, content_type="application/json")
+
+            # Should return 200
+            self.assertEqual(response.status_code, 200)
+
+            # Verify InvoicePayment was created without status field
+            payment = InvoicePayment.objects.filter(external_id="PAYMENT_123456").first()
+            self.assertIsNotNone(payment)
+            self.assertEqual(payment.invoice, test_invoice)
+            self.assertEqual(payment.amount, Decimal("50.00"))  # 5000 cents = $50
+            self.assertEqual(payment.currency, "USD")
+            self.assertEqual(payment.payment_method, "Square")
+            # Verify that the status field is not present (would raise AttributeError if accessed)
+            self.assertFalse(hasattr(payment, "status") and payment.status)
+
 
 class CurrencyCustomizationTests(StandardTestCase):
     """Tests for currency display customization"""

@@ -9863,11 +9863,10 @@ class SquareWebhookView(SquareAPIMixin, View):
                             defaults={
                                 "amount": amount_value,
                                 "currency": currency,
-                                "status": "COMPLETED",
                                 "payment_method": "Square",
                             },
                         )
-                        action = f"Payment via Square for bidder {invoice.auction.tos_user.bidder_number} in the amount of {amount_value} {currency}"
+                        action = f"Payment via Square for bidder {invoice.auctiontos_user.bidder_number} in the amount of {amount_value} {currency}"
                         invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
                         if invoice.net_after_payments >= 0:
                             invoice.status = "PAID"
@@ -9913,7 +9912,7 @@ class SquareWebhookView(SquareAPIMixin, View):
                         },
                     )
                     payment_record.invoice.recalculate
-                    action = f"Payment via Square for bidder {payment_record.invoice.auction.tos_user.bidder_number} in the amount of {refund_amount} {payment_record.currency}"
+                    action = f"Refund via Square for bidder {payment_record.invoice.auctiontos_user.bidder_number} in the amount of {refund_amount} {payment_record.currency}"
                     payment_record.invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
                     logger.info("Square refund completed for payment %s", payment_id)
 
