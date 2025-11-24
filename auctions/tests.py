@@ -324,7 +324,7 @@ class LotModelTests(TestCase):
         )
         user = User.objects.create(username="Test user")
         Bid.objects.create(user=user, lot_number=lot, amount=10)
-        assert lot.high_bidder.pk is user.pk
+        assert lot.high_bidder.pk == user.pk
         assert lot.high_bid == 5
 
     def test_lot_with_two_bids(self):
@@ -341,7 +341,7 @@ class LotModelTests(TestCase):
         userB = User.objects.create(username="Test user B")
         Bid.objects.create(user=userA, lot_number=lot, amount=10)
         Bid.objects.create(user=userB, lot_number=lot, amount=6)
-        assert lot.high_bidder.pk is userA.pk
+        assert lot.high_bidder.pk == userA.pk
         assert lot.high_bid == 7
 
     def test_lot_with_two_changing_bids(self):
@@ -357,28 +357,28 @@ class LotModelTests(TestCase):
         jeff = User.objects.create(username="Jeff")
         gary = User.objects.create(username="Gary")
         jeffBid = Bid.objects.create(user=jeff, lot_number=lot, amount=20)
-        assert lot.high_bidder.pk is jeff.pk
+        assert lot.high_bidder.pk == jeff.pk
         assert lot.high_bid == 20
         garyBid = Bid.objects.create(user=gary, lot_number=lot, amount=20)
-        assert lot.high_bidder.pk is jeff.pk
+        assert lot.high_bidder.pk == jeff.pk
         assert lot.high_bid == 20
         # check the order
         jeffBid.last_bid_time = timezone.now()
         jeffBid.save()
-        assert lot.high_bidder.pk is gary.pk
+        assert lot.high_bidder.pk == gary.pk
         assert lot.high_bid == 20
         garyBid.amount = 30
         garyBid.save()
-        assert lot.high_bidder.pk is gary.pk
+        assert lot.high_bidder.pk == gary.pk
         assert lot.high_bid == 21
         garyBid.last_bid_time = timezone.now()
         garyBid.save()
-        assert lot.high_bidder.pk is gary.pk
+        assert lot.high_bidder.pk == gary.pk
         assert lot.high_bid == 21
         jeffBid.amount = 30
         jeffBid.last_bid_time = timezone.now()
         jeffBid.save()
-        assert lot.high_bidder.pk is gary.pk
+        assert lot.high_bidder.pk == gary.pk
         assert lot.high_bid == 30
 
     def test_lot_with_tie_bids(self):
@@ -401,7 +401,7 @@ class LotModelTests(TestCase):
         bidA.save()
         bidB.last_bid_time = tenDaysAgo
         bidB.save()
-        assert lot.high_bidder.pk is userB.pk
+        assert lot.high_bidder.pk == userB.pk
         assert lot.high_bid == 6
         assert lot.max_bid == 6
 
@@ -430,7 +430,7 @@ class LotModelTests(TestCase):
         bidB.save()
         bidC.last_bid_time = oneDaysAgo
         bidC.save()
-        assert lot.high_bidder.pk is userB.pk
+        assert lot.high_bidder.pk == userB.pk
         assert lot.high_bid == 7
         assert lot.max_bid == 7
 
@@ -451,7 +451,7 @@ class LotModelTests(TestCase):
         bidA.last_bid_time = afterEndTime
         bidA.save()
         Bid.objects.create(user=userB, lot_number=lot, amount=6)
-        assert lot.high_bidder.pk is userB.pk
+        assert lot.high_bidder.pk == userB.pk
         assert lot.high_bid == 5
 
     def test_lot_with_one_bids_below_reserve(self):

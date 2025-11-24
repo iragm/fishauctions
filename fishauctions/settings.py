@@ -292,9 +292,14 @@ DATABASES = {
         "PORT": os.environ.get("DATABASE_PORT", "3306"),
         "OPTIONS": {
             "charset": "utf8mb4",
+            "init_command": "SET sql_mode='STRICT_TRANS_TABLES'",
         },
         "CONN_MAX_AGE": 0,  # don't reuse connections for ASGI
         "CONN_HEALTH_CHECKS": True,
+        "TEST": {
+            "CHARSET": "utf8mb4",
+            "COLLATION": "utf8mb4_unicode_ci",
+        },
     }
 }
 
