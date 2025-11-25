@@ -5405,6 +5405,244 @@ class SquareOAuthRevocationTests(StandardTestCase):
             self.assertFalse(hasattr(payment, "status") and payment.status)
 
 
+class SquareWebhookSignatureValidationTests(StandardTestCase):
+    """Tests for Square webhook signature validation
+
+    Confirms that SQUARE_WEBHOOK_SIGNATURE_KEY is actually respected
+    and that we don't validate forged requests.
+    """
+
+    def setUp(self):
+        super().setUp()
+        import hashlib
+        import hmac
+
+        from .models import SquareSeller
+
+        # Create Square seller for testing
+        self.square_seller = SquareSeller.objects.create(
+            user=self.admin_user,
+            square_merchant_id="TEST_MERCHANT_ID",
+            access_token="TEST_ACCESS_TOKEN",
+            refresh_token="TEST_REFRESH_TOKEN",
+            token_expires_at=timezone.now() + datetime.timedelta(days=30),
+            currency="USD",
+        )
+
+        # Test signature key
+        self.signature_key = "test-signature-key-12345"
+
+        # Store hashlib and hmac for signature computation
+        self.hashlib = hashlib
+        self.hmac = hmac
+
+    def compute_valid_signature(self, url, body):
+        """Compute a valid HMAC-SHA256 signature for testing"""
+        message = (url + body).encode("utf-8")
+        key = self.signature_key.encode("utf-8")
+        return self.hmac.new(key, message, self.hashlib.sha256).hexdigest()
+
+    def test_forged_signature_is_rejected(self):
+        """Test that requests with invalid/forged signatures are rejected when key is configured"""
+        from django.test import override_settings
+        from django.urls import reverse
+
+        webhook_data = {
+            "merchant_id": "TEST_MERCHANT_ID",
+            "type": "oauth.authorization.revoked",
+            "event_id": "test-event-id",
+            "created_at": "2025-11-23T16:29:14.35551833Z",
+            "data": {
+                "type": "revocation",
+                "id": "test-revocation-id",
+                "object": {"revocation": {"revoked_at": "2025-11-23T16:29:12Z", "revoker_type": "MERCHANT"}},
+            },
+        }
+
+        url = reverse("square_webhook")
+
+        # Test with signature key configured - forged signature should be rejected
+        with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY=self.signature_key):
+            # Send with a forged/invalid signature
+            response = self.client.post(
+                url,
+                data=webhook_data,
+                content_type="application/json",
+                HTTP_X_SQUARE_HMACSHA256_SIGNATURE="forged-invalid-signature",
+            )
+
+            # Should return 403 Forbidden
+            self.assertEqual(response.status_code, 403)
+            self.assertIn(b"invalid signature", response.content)
+
+    def test_missing_signature_header_is_rejected(self):
+        """Test that requests without signature header are rejected when key is configured"""
+        from django.test import override_settings
+        from django.urls import reverse
+
+        webhook_data = {
+            "merchant_id": "TEST_MERCHANT_ID",
+            "type": "oauth.authorization.revoked",
+            "event_id": "test-event-id",
+            "created_at": "2025-11-23T16:29:14.35551833Z",
+            "data": {
+                "type": "revocation",
+                "id": "test-revocation-id",
+                "object": {"revocation": {"revoked_at": "2025-11-23T16:29:12Z", "revoker_type": "MERCHANT"}},
+            },
+        }
+
+        url = reverse("square_webhook")
+
+        # Test with signature key configured - missing signature should be rejected
+        with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY=self.signature_key):
+            # Send without signature header
+            response = self.client.post(
+                url,
+                data=webhook_data,
+                content_type="application/json",
+            )
+
+            # Should return 403 Forbidden
+            self.assertEqual(response.status_code, 403)
+            self.assertIn(b"missing signature", response.content)
+
+    def test_valid_signature_is_accepted(self):
+        """Test that requests with valid signatures are accepted when key is configured"""
+        import json
+
+        from django.test import override_settings
+        from django.urls import reverse
+
+        webhook_data = {
+            "merchant_id": "TEST_MERCHANT_ID",
+            "type": "oauth.authorization.revoked",
+            "event_id": "test-event-id",
+            "created_at": "2025-11-23T16:29:14.35551833Z",
+            "data": {
+                "type": "revocation",
+                "id": "test-revocation-id",
+                "object": {"revocation": {"revoked_at": "2025-11-23T16:29:12Z", "revoker_type": "MERCHANT"}},
+            },
+        }
+
+        url = reverse("square_webhook")
+        body = json.dumps(webhook_data)
+
+        # Build the full URL as the test client would see it
+        # The test client uses HTTP on localhost by default
+        full_url = "http://testserver" + url
+
+        # Compute the correct signature
+        valid_signature = self.compute_valid_signature(full_url, body)
+
+        # Test with signature key configured - valid signature should be accepted
+        with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY=self.signature_key):
+            response = self.client.post(
+                url,
+                data=body,
+                content_type="application/json",
+                HTTP_X_SQUARE_HMACSHA256_SIGNATURE=valid_signature,
+            )
+
+            # Should return 200 OK
+            self.assertEqual(response.status_code, 200)
+
+    def test_wrong_signature_key_is_rejected(self):
+        """Test that signatures computed with a different key are rejected"""
+        import json
+
+        from django.test import override_settings
+        from django.urls import reverse
+
+        webhook_data = {
+            "merchant_id": "TEST_MERCHANT_ID",
+            "type": "oauth.authorization.revoked",
+            "event_id": "test-event-id",
+            "created_at": "2025-11-23T16:29:14.35551833Z",
+            "data": {
+                "type": "revocation",
+                "id": "test-revocation-id",
+                "object": {"revocation": {"revoked_at": "2025-11-23T16:29:12Z", "revoker_type": "MERCHANT"}},
+            },
+        }
+
+        url = reverse("square_webhook")
+        body = json.dumps(webhook_data)
+        full_url = "http://testserver" + url
+
+        # Compute signature with a DIFFERENT key (attacker's key)
+        wrong_key = "attacker-key-different"
+        message = (full_url + body).encode("utf-8")
+        key = wrong_key.encode("utf-8")
+        wrong_signature = self.hmac.new(key, message, self.hashlib.sha256).hexdigest()
+
+        # Test with correct signature key configured - wrong key signature should be rejected
+        with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY=self.signature_key):
+            response = self.client.post(
+                url,
+                data=body,
+                content_type="application/json",
+                HTTP_X_SQUARE_HMACSHA256_SIGNATURE=wrong_signature,
+            )
+
+            # Should return 403 Forbidden
+            self.assertEqual(response.status_code, 403)
+            self.assertIn(b"invalid signature", response.content)
+
+    def test_tampered_body_is_rejected(self):
+        """Test that a valid signature for different body data is rejected"""
+        import json
+
+        from django.test import override_settings
+        from django.urls import reverse
+
+        original_webhook_data = {
+            "merchant_id": "TEST_MERCHANT_ID",
+            "type": "oauth.authorization.revoked",
+            "event_id": "test-event-id",
+            "created_at": "2025-11-23T16:29:14.35551833Z",
+            "data": {
+                "type": "revocation",
+                "id": "original-id",
+                "object": {"revocation": {"revoked_at": "2025-11-23T16:29:12Z", "revoker_type": "MERCHANT"}},
+            },
+        }
+
+        tampered_webhook_data = {
+            "merchant_id": "DIFFERENT_MERCHANT",  # Attacker tries to change the merchant
+            "type": "oauth.authorization.revoked",
+            "event_id": "test-event-id",
+            "created_at": "2025-11-23T16:29:14.35551833Z",
+            "data": {
+                "type": "revocation",
+                "id": "tampered-id",
+                "object": {"revocation": {"revoked_at": "2025-11-23T16:29:12Z", "revoker_type": "MERCHANT"}},
+            },
+        }
+
+        url = reverse("square_webhook")
+        original_body = json.dumps(original_webhook_data)
+        tampered_body = json.dumps(tampered_webhook_data)
+        full_url = "http://testserver" + url
+
+        # Compute valid signature for ORIGINAL body
+        valid_signature = self.compute_valid_signature(full_url, original_body)
+
+        # Test: Send tampered body with signature for original body
+        with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY=self.signature_key):
+            response = self.client.post(
+                url,
+                data=tampered_body,
+                content_type="application/json",
+                HTTP_X_SQUARE_HMACSHA256_SIGNATURE=valid_signature,
+            )
+
+            # Should return 403 Forbidden because body doesn't match signature
+            self.assertEqual(response.status_code, 403)
+            self.assertIn(b"invalid signature", response.content)
+
+
 class CurrencyCustomizationTests(StandardTestCase):
     """Tests for currency display customization"""
 
