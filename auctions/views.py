@@ -6982,14 +6982,14 @@ class SquareAPIMixin:
 
     def create_payment_link(self, invoice):
         """Create a Square payment link using SquareSeller model methods
-        Returns payment URL (string) or None on failure
+        Returns tuple: (payment_url, error_message)
         """
         from auctions.models import SquareSeller
 
         seller = SquareSeller.objects.filter(user=invoice.auction.created_by).first()
         if not seller:
             logger.error("No SquareSeller for user %s", invoice.auction.created_by.pk)
-            return None
+            return None, "Seller has not connected their Square account"
 
         return seller.create_payment_link(invoice, self.request)
 
@@ -7151,9 +7151,11 @@ class CreateSquarePaymentLinkView(SquareAPIMixin, View):
 
     def post(self, request, *args, **kwargs):
         """Create the payment link"""
-        payment_url = self.create_payment_link(self.invoice)
+        payment_url, error_message = self.create_payment_link(self.invoice)
         if not payment_url:
-            messages.error(request, "Failed to create Square payment link. Please try again or contact support.")
+            messages.error(
+                request, error_message or "Failed to create Square payment link. Please try again or contact support."
+            )
             return redirect(self.invoice.get_absolute_url())
 
         # Add processing message and redirect to invoice to show status
@@ -9767,7 +9769,7 @@ class SquareWebhookView(SquareAPIMixin, View):
         """
         if not settings.SQUARE_WEBHOOK_SIGNATURE_KEY:
             logger.warning("SQUARE_WEBHOOK_SIGNATURE_KEY not configured - skipping signature verification")
-            if settings.debug:
+            if settings.DEBUG:
                 return True  # Allow webhook if signature key not configured
             else:
                 return False  # Reject webhook if signature key not configured in production
@@ -9795,6 +9797,12 @@ class SquareWebhookView(SquareAPIMixin, View):
             return False
 
     def post(self, request, *args, **kwargs):
+        # In production, require SQUARE_WEBHOOK_SIGNATURE_KEY if Square is configured
+        if not settings.DEBUG and not settings.SQUARE_WEBHOOK_SIGNATURE_KEY:
+            if settings.SQUARE_APPLICATION_ID or settings.SQUARE_CLIENT_SECRET:
+                msg = "SQUARE_WEBHOOK_SIGNATURE_KEY must be set in production when Square is configured"
+                raise ImproperlyConfigured(msg)
+
         # Read raw body
         try:
             raw_body = request.body.decode("utf-8")
@@ -9829,47 +9837,75 @@ class SquareWebhookView(SquareAPIMixin, View):
             reference_id = None
             # Handle COMPLETED status - create payment record and mark invoice paid
             if payment_status == "COMPLETED":
-                seller = SquareSeller.objects.filter(square_merchant_id=event.get("merchant_id", "")).first()
-                if seller and seller.square_merchant_id:
-                    access_token = seller.get_valid_access_token()
-                    client = self.connect(access_token)
-                    order = client.orders.get(order_id=order_id)
-                    reference_id = order.get("order", {}).get("reference_id")
-                    if not reference_id:
-                        logger.error("reference id not found for Square order %s", order_id)
-                        logger.error(order)
-                invoice = Invoice.objects.filter(pk=reference_id).first()
-                if invoice:
-                    amount_money = payment.get("amount_money", {})
-                    amount_value = Decimal(amount_money.get("amount", 0)) / 100
-                    currency = amount_money.get("currency", "USD")
+                merchant_id = event.get("merchant_id", "")
+                seller = SquareSeller.objects.filter(square_merchant_id=merchant_id).first()
+                if not seller:
+                    logger.warning("Square webhook: SquareSeller not found for merchant_id: %s", merchant_id)
+                elif seller.square_merchant_id:
+                    client = seller.get_square_client()
+                    if client:
+                        try:
+                            order_response = client.orders.get(order_id=order_id)
+                            # Square SDK returns response objects with attributes
+                            if hasattr(order_response, "order") and order_response.order:
+                                reference_id = getattr(order_response.order, "reference_id", None)
+                            if not reference_id:
+                                logger.error("reference id not found for Square order %s", order_id)
+                                logger.error(order_response)
+                        except Exception as e:
+                            logger.exception("Error retrieving Square order %s: %s", order_id, e)
+                    else:
+                        logger.error("Could not get Square client for user %s", seller.user.pk)
 
-                    payment_record, created = InvoicePayment.objects.get_or_create(
-                        invoice=invoice,
-                        external_id=payment_id,
-                        defaults={
-                            "amount": amount_value,
-                            "currency": currency,
-                            "status": "COMPLETED",
-                            "payment_method": "Square",
-                        },
-                    )
-                    action = f"Payment via Square for bidder {invoice.auction.tos_user.bidder_number} in the amount of {amount_value} {currency}"
-                    invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
-                    if invoice.net_after_payments >= 0:
-                        invoice.status = "PAID"
-                        invoice.save()
+                # Only proceed if we have a reference_id to look up the invoice
+                if reference_id:
+                    invoice = Invoice.objects.filter(pk=reference_id).first()
+                    if invoice:
+                        amount_money = payment.get("amount_money", {})
+                        amount_value = Decimal(amount_money.get("amount", 0)) / 100
+                        currency = amount_money.get("currency", "USD")
 
-                        # Send websocket notification for payment completion
-                        channel_layer = channels.layers.get_channel_layer()
-                        async_to_sync(channel_layer.group_send)(
-                            f"invoice_{invoice.pk}",
-                            {
-                                "type": "invoice_status",
-                                "message": "paid",
+                        payment_record, created = InvoicePayment.objects.get_or_create(
+                            invoice=invoice,
+                            external_id=payment_id,
+                            defaults={
+                                "amount": amount_value,
+                                "amount_available_to_refund": amount_value,
+                                "currency": currency,
+                                "payment_method": "Square",
                             },
                         )
-                    logger.info("Square payment completed for invoice %s", invoice.pk)
+                        # If payment already existed, make sure amount_available_to_refund is set
+                        if not created and payment_record.amount_available_to_refund == Decimal("0.00"):
+                            payment_record.amount_available_to_refund = amount_value
+                            payment_record.save()
+                        action = f"Payment via Square for bidder {invoice.auctiontos_user.bidder_number} in the amount of {amount_value} {currency}"
+                        invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
+                        if invoice.net_after_payments >= 0:
+                            invoice.status = "PAID"
+                            invoice.save()
+
+                            # Send websocket notification for payment completion
+                            channel_layer = channels.layers.get_channel_layer()
+                            # Send to invoice-specific group for invoice detail pages
+                            async_to_sync(channel_layer.group_send)(
+                                f"invoice_{invoice.pk}",
+                                {
+                                    "type": "invoice_status",
+                                    "message": "paid",
+                                },
+                            )
+                            # Send to auction group for quick checkout page
+                            async_to_sync(channel_layer.group_send)(
+                                f"auctions_{invoice.auction.pk}",
+                                {
+                                    "type": "invoice_paid",
+                                    "pk": invoice.pk,
+                                },
+                            )
+                        logger.info("Square payment completed for invoice %s", invoice.pk)
+                    else:
+                        logger.warning("Square webhook: Invoice not found for reference_id: %s", reference_id)
 
         elif event_type == "refund.updated":
             # Refund processed
@@ -9891,14 +9927,14 @@ class SquareWebhookView(SquareAPIMixin, View):
                         external_id=refund_id,
                         defaults={
                             "invoice": payment_record.invoice,
-                            "amount": refund_amount,
+                            "amount": -abs(refund_amount),  # Ensure negative for refund
                             "currency": payment_record.currency,
                             "payment_method": "Square Refund",
                             "memo": refund.get("reason", "")[:500],
                         },
                     )
                     payment_record.invoice.recalculate
-                    action = f"Payment via Square for bidder {payment_record.invoice.auction.tos_user.bidder_number} in the amount of {refund_amount} {payment_record.currency}"
+                    action = f"Refund via Square for bidder {payment_record.invoice.auctiontos_user.bidder_number} in the amount of {refund_amount} {payment_record.currency}"
                     payment_record.invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
                     logger.info("Square refund completed for payment %s", payment_id)
 
@@ -9949,5 +9985,12 @@ class QuickCheckoutHTMX(AuctionViewMixin, PayPalAPIMixin, SquareAPIMixin, Templa
                     context["paypal_qr_code_link"] = self.create_order(invoice)
                 # Generate Square QR code if available
                 if invoice.show_square_button and not invoice.reason_for_payment_not_available:
-                    context["square_qr_code_link"] = self.create_payment_link(invoice)
+                    payment_url, error_message = self.create_payment_link(invoice)
+                    if payment_url:
+                        context["square_qr_code_link"] = payment_url
+                    elif error_message:
+                        # Log the error but don't show QR code
+                        logger.warning(
+                            "Square payment link creation failed for invoice %s: %s", invoice.pk, error_message
+                        )
         return context

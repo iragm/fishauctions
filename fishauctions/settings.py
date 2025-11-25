@@ -186,6 +186,7 @@ INSTALLED_APPS = [
     "chartjs",
     "django_ses",
     "webpush",
+    "django_celery_beat",
 ]
 ASGI_APPLICATION = "fishauctions.asgi.application"
 MIDDLEWARE = [
@@ -344,6 +345,7 @@ POST_OFFICE = {
     "BACKENDS": {
         "default": os.environ.get("POST_OFFICE_EMAIL_BACKEND", "django_ses.SESBackend"),
     },
+    "CELERY_ENABLED": True,  # Enable Celery for immediate email delivery
 }
 # django-ses configuration
 AWS_SES_AUTO_THROTTLE = 0.5
@@ -395,6 +397,11 @@ THUMBNAIL_ALIASES = {
 THUMBNAIL_DEFAULT_STORAGE_ALIAS = "default"
 
 SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
+
+# Trust X-Forwarded-Proto header from nginx proxy for HTTPS detection
+# This is required for request.build_absolute_uri() to generate https:// URLs
+# when behind a reverse proxy
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 SOCIALACCOUNT_PROVIDERS = {
     "google": {
@@ -682,12 +689,51 @@ PARTNER_MERCHANT_ID = os.environ.get("PARTNER_MERCHANT_ID", "")
 PAYPAL_BN_CODE = os.environ.get("PAYPAL_BN_CODE", "")
 PAYPAL_PLATFORM_FEE = Decimal(str(os.environ.get("PAYPAL_PLATFORM_FEE", "0") or "0"))
 
+# Celery Configuration
+# https://docs.celeryproject.org/en/stable/django/first-steps-with-django.html
+
+# Celery Broker URL using Redis
+CELERY_BROKER_URL = (
+    "redis://:" + os.environ.get("REDIS_PASSWORD", "unsecure") + "@" + os.environ.get("REDIS_HOST", "redis") + ":6379/1"
+)
+
+# Celery Result Backend using Redis
+CELERY_RESULT_BACKEND = (
+    "redis://:" + os.environ.get("REDIS_PASSWORD", "unsecure") + "@" + os.environ.get("REDIS_HOST", "redis") + ":6379/2"
+)
+
+# Celery Settings
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_ENABLE_UTC = True
+
+# Celery Beat Scheduler (for periodic tasks)
+CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+
+# Task time limits (in seconds)
+CELERY_TASK_SOFT_TIME_LIMIT = 300  # 5 minutes
+CELERY_TASK_TIME_LIMIT = 600  # 10 minutes
+
+# Worker settings
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_WORKER_MAX_TASKS_PER_CHILD = 1000
 # Square settings - OAuth only, no platform credentials
 SQUARE_ENVIRONMENT = os.environ.get("SQUARE_ENVIRONMENT", "sandbox" if DEBUG else "production")
 SQUARE_APPLICATION_ID = os.environ.get("SQUARE_APPLICATION_ID", "")
 SQUARE_CLIENT_SECRET = os.environ.get("SQUARE_CLIENT_SECRET", "")  # For OAuth token exchange
 # Webhook signature key for verifying Square webhook notifications
 SQUARE_WEBHOOK_SIGNATURE_KEY = os.environ.get("SQUARE_WEBHOOK_SIGNATURE_KEY", "")
+# Email domains blocked by Square payment links (comma-separated)
+_blocked_domains_raw = os.environ.get(
+    "SQUARE_BLOCKED_EMAIL_DOMAINS", "example.com,example.org,example.net,test.com,invalid.com"
+)
+SQUARE_BLOCKED_EMAIL_DOMAINS = []
+for domain in _blocked_domains_raw.split(","):
+    stripped = domain.strip().lower()
+    if stripped:
+        SQUARE_BLOCKED_EMAIL_DOMAINS.append(stripped)
 
 # Field encryption key for django-encrypted-model-fields
 # This should be a Fernet key - generate with: from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())

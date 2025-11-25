@@ -13,6 +13,34 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      - db
+      - redis
+    restart: always
+
+  celery_worker:
+    build: .
+    container_name: celery_worker
+    entrypoint: ["sh", "./celery_worker_entrypoint.sh"]
+    volumes:
+      - .:/home/app/web
+      - ./logs:/home/logs
+    env_file: .env
+    depends_on:
+      - db
+      - redis
+    restart: always
+
+  celery_beat:
+    build: .
+    container_name: celery_beat
+    entrypoint: ["sh", "./celery_beat_entrypoint.sh"]
+    volumes:
+      - .:/home/app/web
+      - ./logs:/home/logs
+    env_file: .env
+    depends_on:
+      - db
+      - redis
     restart: always
 
   test:

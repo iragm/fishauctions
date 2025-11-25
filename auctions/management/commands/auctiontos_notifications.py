@@ -27,6 +27,7 @@ def send_tos_notification(template, tos):
             "domain": current_site.domain,
             "tos": tos,
             "website_focus": settings.WEBSITE_FOCUS,
+            "reply_to_email": tos.auction.created_by.email,
         },
     )
 
@@ -179,5 +180,6 @@ class Command(BaseCommand):
                         "user": campaign.user,
                         "unsubscribe": userData.unsubscribe_link,
                         "mailing_address": settings.MAILING_ADDRESS,
+                        "reply_to_email": campaign.auction.created_by.email,
                     },
                 )

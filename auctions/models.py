@@ -3575,14 +3575,14 @@ class Lot(models.Model):
                 self.winner.email,
                 headers={"Reply-to": self.user.email},
                 template="non_auction_lot_winner",
-                context={"lot": self, "domain": current_site.domain},
+                context={"lot": self, "domain": current_site.domain, "reply_to_email": self.user.email},
             )
             # now, email the seller
             mail.send(
                 self.user.email,
                 headers={"Reply-to": self.winner.email},
                 template="non_auction_lot_seller",
-                context={"lot": self, "domain": current_site.domain},
+                context={"lot": self, "domain": current_site.domain, "reply_to_email": self.winner.email},
             )
 
     def process_relist_logic(self):
@@ -3741,7 +3741,7 @@ class Lot(models.Model):
         from auctions.models import InvoicePayment
 
         payment = (
-            InvoicePayment.objects.filter(invoice=invoice, payment_method="square")
+            InvoicePayment.objects.filter(invoice=invoice, payment_method__iexact="square")
             .exclude(amount__lt=0)
             .order_by("-amount_available_to_refund")
             .first()
@@ -3783,7 +3783,7 @@ class Lot(models.Model):
 
         # Find the Square payment
         payment = (
-            InvoicePayment.objects.filter(invoice=invoice, payment_method="square")
+            InvoicePayment.objects.filter(invoice=invoice, payment_method__iexact="square")
             .exclude(amount__lt=0)
             .order_by("-amount_available_to_refund")
             .first()
@@ -6130,16 +6130,16 @@ class SquareSeller(models.Model):
             invoice: Invoice object to create payment for
             request: HttpRequest object for building redirect URL
         Returns:
-            payment URL string or None on failure
+            tuple: (payment_url, error_message) - payment_url is None if error occurs
         """
         client = self.get_square_client()
         if not client:
-            return None
+            return None, "Failed to initialize Square client"
 
         location_id = self.get_location_id()
         if not location_id:
             logger.error("No location ID available for user %s", self.user.pk)
-            return None
+            return None, "Square location not configured"
 
         try:
             from decimal import Decimal
@@ -6148,11 +6148,11 @@ class SquareSeller(models.Model):
             amount_cents = int(max(amount_decimal, Decimal("0.00")) * 100)
         except Exception:
             logger.exception("Failed to compute payment amount for invoice %s", invoice.pk)
-            return None
+            return None, "Failed to calculate payment amount"
 
         if amount_cents <= 0:
             logger.error("Computed amount invalid for invoice %s: %s cents", invoice.pk, amount_cents)
-            return None
+            return None, "Invalid payment amount"
 
         try:
             import uuid
@@ -6160,6 +6160,18 @@ class SquareSeller(models.Model):
             from django.urls import reverse
 
             payment_note = f"Bidder {invoice.auctiontos_user.bidder_number} in {invoice.auction.title}"[:500]
+
+            # Get and validate buyer email
+            buyer_email = getattr(getattr(invoice, "auctiontos_user", None), "email", None)
+
+            # Validate email domain - Square blocks certain domains like example.com
+            if buyer_email:
+                from django.conf import settings
+
+                email_domain = buyer_email.split("@")[-1].lower() if "@" in buyer_email else ""
+                blocked_domains = settings.SQUARE_BLOCKED_EMAIL_DOMAINS
+                if email_domain in blocked_domains:
+                    buyer_email = None  # Don't send blocked email to Square
 
             link_resp = client.checkout.payment_links.create(
                 idempotency_key=str(uuid.uuid4()),
@@ -6169,7 +6181,7 @@ class SquareSeller(models.Model):
                     ),
                     "ask_for_shipping_address": False,
                 },
-                pre_populated_data={"buyer_email": getattr(getattr(invoice, "auctiontos_user", None), "email", None)},
+                pre_populated_data={"buyer_email": buyer_email} if buyer_email else {},
                 order={
                     "location_id": location_id,
                     "reference_id": str(invoice.pk),
@@ -6187,13 +6199,24 @@ class SquareSeller(models.Model):
             payment_url = getattr(payment_link_obj, "url", None)
             if not payment_url:
                 logger.error("Payment link response missing URL for invoice %s: %s", invoice.pk, link_resp)
-                return None
+                return None, "Square did not return a payment link"
 
-            return payment_url
+            return payment_url, None
 
-        except Exception:
+        except Exception as e:
             logger.exception("Error creating Square payment link for invoice %s", invoice.pk)
-            return None
+            # Try to extract error details from Square API error
+            error_msg = "Failed to create Square payment link"
+            if hasattr(e, "body") and isinstance(e.body, dict):
+                errors = e.body.get("errors", [])
+                if errors and isinstance(errors, list) and len(errors) > 0:
+                    error_detail = errors[0].get("detail", "")
+                    error_code = errors[0].get("code", "")
+                    if error_code == "INVALID_EMAIL_ADDRESS":
+                        error_msg = "The email address on your account is not valid for Square payments. Please contact the auction organizer to update your email address."
+                    elif error_detail:
+                        error_msg = f"Square error: {error_detail}"
+            return None, error_msg
 
     def process_refund(self, payment, refund_amount, reason):
         """Process a Square refund

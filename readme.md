@@ -62,9 +62,6 @@ In keeping with 12 Factor, all configuration is done from the .env file and the 
 - Production uses SWAG to add a cert, dev uses plain old Nginx to serve just http content.
 - Production uses Gunicorn with a Uvicorn worker process, development uses Uvicorn with a --reload flag (this is configured in entrypoint.sh)
 
-#### Cron jobs
-Some cron jobs are used to manage models - these run automatically if you're in production (debug=False), but will need to be run manually in development.  These can be found in the crontab file in the same folder as this readme.
-
 #### Adding packages
 New packages can be added to requirements.in (in addition to the standard Django settings file) for production dependencies, or requirements-test.in for test dependencies.  Then run `./.github/scripts/update-packages.sh` to generate updated requirements.txt files.
 

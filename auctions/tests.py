@@ -1,9 +1,12 @@
 import datetime
+import hashlib
+import hmac
+import json
 from decimal import Decimal
 
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase, TransactionTestCase
+from django.test import TestCase, override_settings, TransactionTestCase
 from django.test.client import Client
 from django.urls import reverse
 from django.utils import timezone
@@ -2387,6 +2390,52 @@ class InvoiceViewTests(StandardTestCase):
         url = reverse("invoice_by_pk", kwargs={"pk": self.invoice.pk})
         response = self.client.get(url)
         assert response.status_code == 200
+
+
+class InvoiceStatusButtonTests(StandardTestCase):
+    """Test invoice status buttons can be clicked and update correctly"""
+
+    def test_invoice_status_button_paid(self):
+        """Admin can mark invoice as paid via button click"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = f"/api/payinvoice/{self.invoice.pk}/PAID"
+        response = self.client.post(url)
+        assert response.status_code == 200, (
+            f"Expected 200, got {response.status_code}, content: {response.content.decode()[:500]}"
+        )
+        # Verify the invoice was updated
+        self.invoice.refresh_from_db()
+        assert self.invoice.status == "PAID"
+        # Verify response contains updated buttons with correct ID and status
+        content = response.content.decode()
+        assert f"id='invoice-buttons-{self.invoice.pk}'" in content, (
+            f"Expected invoice-buttons ID in content: {content}"
+        )
+        assert f'id="{self.invoice.pk}_PAID"' in content
+        assert "btn-success" in content  # Paid button should be success
+
+    def test_invoice_status_button_draft(self):
+        """Admin can mark invoice as draft (open) via button click"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        # First set to PAID
+        self.invoice.status = "PAID"
+        self.invoice.save()
+        # Then change back to DRAFT
+        url = f"/api/payinvoice/{self.invoice.pk}/DRAFT"
+        response = self.client.post(url)
+        assert response.status_code == 200
+        self.invoice.refresh_from_db()
+        assert self.invoice.status == "DRAFT"
+        content = response.content.decode()
+        assert f"id='invoice-buttons-{self.invoice.pk}'" in content
+        assert "btn-info" in content  # Open button should be info when active
+
+    def test_invoice_status_button_anonymous_denied(self):
+        """Anonymous users cannot change invoice status"""
+        url = f"/api/payinvoice/{self.invoice.pk}/PAID"
+        response = self.client.post(url)
+        # Should redirect to login
+        assert response.status_code == 302
 
 
 class PickupLocationTests(StandardTestCase):
@@ -5123,6 +5172,32 @@ class SquarePaymentTests(StandardTestCase):
         except Exception as e:
             self.fail(f"change_square management command not found: {e}")
 
+    def test_square_oauth_redirect_uri_without_proxy_header(self):
+        """Test that Square OAuth redirect URI defaults to http when no X-Forwarded-Proto header"""
+        from django.urls import reverse
+
+        # Login as admin user
+        self.client.force_login(self.admin_user)
+
+        # Test the Square connect view without X-Forwarded-Proto header
+        response = self.client.get(reverse("square_connect"), HTTP_HOST="testserver", follow=False)
+
+        # Should redirect to Square OAuth URL
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("connect.squareup", response.url)
+
+        # Verify redirect_uri parameter
+        from urllib.parse import parse_qs, urlparse
+
+        parsed = urlparse(response.url)
+        params = parse_qs(parsed.query)
+
+        # Check that redirect_uri exists
+        self.assertIn("redirect_uri", params)
+        redirect_uri = params["redirect_uri"][0]
+        # Without the proxy header in test environment, it will use http
+        self.assertIn("/square/onboard/success/", redirect_uri)
+
 
 class SquareRefundFormTests(StandardTestCase):
     """Tests for Square refund integration in forms"""
@@ -5331,6 +5406,284 @@ class SquareOAuthRevocationTests(StandardTestCase):
 
         # Should still return 200 (graceful handling)
         self.assertEqual(response.status_code, 200)
+
+    def test_payment_webhook_handles_missing_merchant(self):
+        """Test that payment webhook handles missing SquareSeller gracefully"""
+        from django.urls import reverse
+
+        # Simulate payment webhook with non-existent merchant_id
+        webhook_data = {
+            "merchant_id": "NONEXISTENT_MERCHANT",
+            "type": "payment.updated",
+            "event_id": "test-event-id",
+            "created_at": "2025-11-23T16:29:14.35551833Z",
+            "data": {
+                "type": "payment",
+                "id": "test-payment-id",
+                "object": {
+                    "payment": {
+                        "id": "test-payment-id",
+                        "status": "COMPLETED",
+                        "order_id": "test-order-id",
+                        "amount_money": {"amount": 1000, "currency": "USD"},
+                    }
+                },
+            },
+        }
+
+        url = reverse("square_webhook")
+        response = self.client.post(url, data=webhook_data, content_type="application/json")
+
+        # Should return 200 (graceful handling with logged warning)
+        self.assertEqual(response.status_code, 200)
+
+    def test_payment_webhook_creates_invoice_payment(self):
+        """Test that payment.updated webhook successfully creates InvoicePayment without status field"""
+        from decimal import Decimal
+        from unittest.mock import Mock, patch
+
+        from django.urls import reverse
+
+        from .models import Invoice, InvoicePayment, SquareSeller
+
+        # Create an invoice for the test
+        test_invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.online_tos)
+
+        # Mock the entire Square orders.get flow
+        mock_order = Mock()
+        mock_order.reference_id = str(test_invoice.pk)
+
+        mock_order_response = Mock()
+        mock_order_response.order = mock_order
+
+        mock_orders_api = Mock()
+        mock_orders_api.get = Mock(return_value=mock_order_response)
+
+        mock_client = Mock()
+        mock_client.orders = mock_orders_api
+
+        # Patch get_square_client at the class level so any instance returns our mock
+        with patch.object(SquareSeller, "get_square_client", return_value=mock_client):
+            # Simulate payment.updated webhook with COMPLETED status
+            webhook_data = {
+                "merchant_id": "MLF3WZS2N9WVG",
+                "type": "payment.updated",
+                "event_id": "test-payment-event",
+                "created_at": "2025-11-23T16:29:14.35551833Z",
+                "data": {
+                    "type": "payment",
+                    "id": "test-payment-updated-id",
+                    "object": {
+                        "payment": {
+                            "id": "PAYMENT_123456",
+                            "status": "COMPLETED",
+                            "order_id": "ORDER_123456",
+                            "amount_money": {"amount": 5000, "currency": "USD"},
+                        }
+                    },
+                },
+            }
+
+            url = reverse("square_webhook")
+            response = self.client.post(url, data=webhook_data, content_type="application/json")
+
+            # Should return 200
+            self.assertEqual(response.status_code, 200)
+
+            # Verify InvoicePayment was created without status field
+            payment = InvoicePayment.objects.filter(external_id="PAYMENT_123456").first()
+            self.assertIsNotNone(payment)
+            self.assertEqual(payment.invoice, test_invoice)
+            self.assertEqual(payment.amount, Decimal("50.00"))  # 5000 cents = $50
+            self.assertEqual(payment.currency, "USD")
+            self.assertEqual(payment.payment_method, "Square")
+            # Verify that the status field is not present (would raise AttributeError if accessed)
+            self.assertFalse(hasattr(payment, "status") and payment.status)
+
+
+class SquareWebhookSignatureValidationTests(StandardTestCase):
+    """Tests for Square webhook signature validation
+
+    Confirms that SQUARE_WEBHOOK_SIGNATURE_KEY is actually respected
+    and that we don't validate forged requests.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from .models import SquareSeller
+
+        # Create Square seller for testing
+        self.square_seller = SquareSeller.objects.create(
+            user=self.admin_user,
+            square_merchant_id="TEST_MERCHANT_ID",
+            access_token="TEST_ACCESS_TOKEN",
+            refresh_token="TEST_REFRESH_TOKEN",
+            token_expires_at=timezone.now() + datetime.timedelta(days=30),
+            currency="USD",
+        )
+
+        # Test signature key
+        self.signature_key = "test-signature-key-12345"
+
+        # Standard webhook data used across tests
+        self.webhook_data = {
+            "merchant_id": "TEST_MERCHANT_ID",
+            "type": "oauth.authorization.revoked",
+            "event_id": "test-event-id",
+            "created_at": "2025-11-23T16:29:14.35551833Z",
+            "data": {
+                "type": "revocation",
+                "id": "test-revocation-id",
+                "object": {"revocation": {"revoked_at": "2025-11-23T16:29:12Z", "revoker_type": "MERCHANT"}},
+            },
+        }
+
+    def compute_signature(self, url, body, key=None):
+        """Compute an HMAC-SHA256 signature for testing
+
+        Args:
+            url: The notification URL
+            body: The request body
+            key: Optional signature key (defaults to self.signature_key)
+        """
+        if key is None:
+            key = self.signature_key
+        message = (url + body).encode("utf-8")
+        key_bytes = key.encode("utf-8")
+        return hmac.new(key_bytes, message, hashlib.sha256).hexdigest()
+
+    def test_forged_signature_is_rejected(self):
+        """Test that requests with invalid/forged signatures are rejected when key is configured"""
+        url = reverse("square_webhook")
+
+        # Test with signature key configured - forged signature should be rejected
+        with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY=self.signature_key):
+            # Send with a forged/invalid signature
+            response = self.client.post(
+                url,
+                data=self.webhook_data,
+                content_type="application/json",
+                HTTP_X_SQUARE_HMACSHA256_SIGNATURE="forged-invalid-signature",
+            )
+
+            # Should return 403 Forbidden
+            self.assertEqual(response.status_code, 403)
+            self.assertIn(b"invalid signature", response.content)
+
+    def test_missing_signature_header_is_rejected(self):
+        """Test that requests without signature header are rejected when key is configured"""
+        url = reverse("square_webhook")
+
+        # Test with signature key configured - missing signature should be rejected
+        with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY=self.signature_key):
+            # Send without signature header
+            response = self.client.post(
+                url,
+                data=self.webhook_data,
+                content_type="application/json",
+            )
+
+            # Should return 403 Forbidden
+            self.assertEqual(response.status_code, 403)
+            self.assertIn(b"missing signature", response.content)
+
+    def test_valid_signature_is_accepted(self):
+        """Test that requests with valid signatures are accepted when key is configured"""
+        url = reverse("square_webhook")
+        body = json.dumps(self.webhook_data)
+
+        # Build the full URL as the test client would see it
+        # The test client uses HTTP on localhost by default
+        full_url = "http://testserver" + url
+
+        # Compute the correct signature
+        valid_signature = self.compute_signature(full_url, body)
+
+        # Test with signature key configured - valid signature should be accepted
+        with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY=self.signature_key):
+            response = self.client.post(
+                url,
+                data=body,
+                content_type="application/json",
+                HTTP_X_SQUARE_HMACSHA256_SIGNATURE=valid_signature,
+            )
+
+            # Should return 200 OK
+            self.assertEqual(response.status_code, 200)
+
+    def test_wrong_signature_key_is_rejected(self):
+        """Test that signatures computed with a different key are rejected"""
+        url = reverse("square_webhook")
+        body = json.dumps(self.webhook_data)
+        full_url = "http://testserver" + url
+
+        # Compute signature with a DIFFERENT key (attacker's key)
+        wrong_signature = self.compute_signature(full_url, body, key="attacker-key-different")
+
+        # Test with correct signature key configured - wrong key signature should be rejected
+        with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY=self.signature_key):
+            response = self.client.post(
+                url,
+                data=body,
+                content_type="application/json",
+                HTTP_X_SQUARE_HMACSHA256_SIGNATURE=wrong_signature,
+            )
+
+            # Should return 403 Forbidden
+            self.assertEqual(response.status_code, 403)
+            self.assertIn(b"invalid signature", response.content)
+
+    def test_tampered_body_is_rejected(self):
+        """Test that a valid signature for different body data is rejected"""
+        import copy
+
+        # Create tampered data by modifying a copy of the original
+        tampered_webhook_data = copy.deepcopy(self.webhook_data)
+        tampered_webhook_data["merchant_id"] = "DIFFERENT_MERCHANT"  # Attacker tries to change the merchant
+        tampered_webhook_data["data"]["id"] = "tampered-id"
+
+        url = reverse("square_webhook")
+        original_body = json.dumps(self.webhook_data)
+        tampered_body = json.dumps(tampered_webhook_data)
+        full_url = "http://testserver" + url
+
+        # Compute valid signature for ORIGINAL body
+        valid_signature = self.compute_signature(full_url, original_body)
+
+        # Test: Send tampered body with signature for original body
+        with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY=self.signature_key):
+            response = self.client.post(
+                url,
+                data=tampered_body,
+                content_type="application/json",
+                HTTP_X_SQUARE_HMACSHA256_SIGNATURE=valid_signature,
+            )
+
+            # Should return 403 Forbidden because body doesn't match signature
+            self.assertEqual(response.status_code, 403)
+            self.assertIn(b"invalid signature", response.content)
+
+    def test_improperly_configured_in_production_without_webhook_key(self):
+        """Test that ImproperlyConfigured is raised in production when Square is configured but webhook key is missing"""
+        from django.core.exceptions import ImproperlyConfigured
+
+        url = reverse("square_webhook")
+
+        # Simulate production mode (DEBUG=False) with Square configured but no webhook signature key
+        with override_settings(
+            DEBUG=False,
+            SQUARE_APPLICATION_ID="test-app-id",
+            SQUARE_CLIENT_SECRET="test-client-secret",
+            SQUARE_WEBHOOK_SIGNATURE_KEY="",
+        ):
+            with self.assertRaises(ImproperlyConfigured) as context:
+                self.client.post(
+                    url,
+                    data=self.webhook_data,
+                    content_type="application/json",
+                )
+
+            self.assertIn("SQUARE_WEBHOOK_SIGNATURE_KEY must be set", str(context.exception))
 
 
 class CurrencyCustomizationTests(StandardTestCase):

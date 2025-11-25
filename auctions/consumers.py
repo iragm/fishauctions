@@ -673,5 +673,5 @@ class AuctionConsumer(WebsocketConsumer):
 
     def disconnect(self, close_code):
         # Leave room group
-        async_to_sync(self.channel_layer.group_discard)(f"invoices_{self.pk}", self.channel_name)
+        async_to_sync(self.channel_layer.group_discard)(f"auctions_{self.pk}", self.channel_name)
         logger.debug("disconnected")
