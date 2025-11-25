@@ -16,17 +16,14 @@ def mark_existing_in_person_print_reminders_sent(apps, schema_editor):
     ).update(print_reminder_email_sent=True)
 
 
-def reverse_migration(apps, schema_editor):
-    # We cannot reliably reverse this migration since we don't know which ones
-    # were already True before the migration ran
-    pass
-
-
 class Migration(migrations.Migration):
     dependencies = [
         ("auctions", "0211_update_email_templates_reply_to_note"),
     ]
 
     operations = [
-        migrations.RunPython(mark_existing_in_person_print_reminders_sent, reverse_migration),
+        migrations.RunPython(
+            mark_existing_in_person_print_reminders_sent,
+            migrations.RunPython.noop,  # Migration is not reversible
+        ),
     ]
