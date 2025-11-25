@@ -16,40 +16,37 @@ def update_email_templates(apps, schema_editor):
 
 You can view your auction here: https://{{ domain }}/auctions/{{ auction.slug }}/
 
-{% if enable_help %}You can find tutorial videos here: https://{{ domain }}/blog/encouraging-participation/{% endif %}
+{% if enable_help %}You can find help here: https://{{ domain }}/auctions/{{ auction.slug }}/help/{% endif %}
 
 * {% if not auction.promote_this_auction %}Your auction isn't visible to users unless they have a link to it.  {% endif %}Use this link to share your auction: https://{{ domain }}/?{{ auction.slug }}{% if auction.multi_location %}
 
 * It looks like you've added more than one pickup location to your auction.  Here's some more information about how multi-locations auctions work:
 https://{{ domain }}/blog/multiple-location-auctions/{% endif %}
 
-* If you need to make changes to the rules, sooner is better than later.  You can edit your auction here: https://{{ domain }}/auctions/{{ auction.slug }}/edit/
-
-You'll get a few more emails like this over the course of your auction, unless you unsubscribe: https://{{ domain }}/unsubscribe/{{ unsubscribe }}/
-
 Just reply to this email if you have questions!
 
 Best wishes,
-{{ domain }}""",
+{{ domain }}
+
+Unsubscribe: https://{{ domain }}/unsubscribe/{{ unsubscribe }}/""",
             "html_content": """Hello {{ auction.created_by.first_name }},<br><br>
 
 {{ subject }}<br><br>
 
 <a href="https://{{ domain }}/auctions/{{ auction.slug }}/">View your auction here</a><br><br>
 
-{% if enable_help %}<a href="https://{{ domain }}/blog/encouraging-participation/">Check out our tutorial videos</a><br><br>{% endif %}
+{% if enable_help %}<a href="https://{{ domain }}/auctions/{{ auction.slug }}/help/">Get help with your auction</a><br><br>{% endif %}
 
 <ul>
 <li>{% if not auction.promote_this_auction %}Your auction isn't visible to users unless they have a link to it.  {% endif %}Use this link to share your auction: <a href="https://{{ domain }}/?{{ auction.slug }}">https://{{ domain }}/?{{ auction.slug }}</a></li>
 {% if auction.multi_location %}<li>It looks like you've added more than one pickup location to your auction.  Here's some <a href='https://{{ domain }}/blog/multiple-location-auctions/'>more information about how multi-locations auctions work</a>.</li>{% endif %}
-<li>If you need to make changes to the rules, sooner is better than later.  You can <a href='https://{{ domain }}/auctions/{{ auction.slug }}/edit/'>edit your auction here</a>.</li>
 </ul>
-
-You'll get a few more emails like this over the course of your auction, unless you <a href='https://{{ domain }}/unsubscribe/{{ unsubscribe }}/'>unsubscribe</a><br><br>
 
 Just reply to this email if you have questions!<br><br>
 
-Best wishes,<br>{{ domain }}""",
+Best wishes,<br>{{ domain }}<br><br>
+
+<small><a href="https://{{ domain }}/unsubscribe/{{ unsubscribe }}/">Unsubscribe</a></small>""",
         },
         {
             "name": "auction_thanks",
@@ -60,7 +57,7 @@ Thanks for choosing {{ domain }} to run your auction!
 
 * Take a look at the stats for {{ auction }}: https://{{ domain }}/auctions/{{ auction.slug }}/stats/
 
-* Remind your users to leave feedback on lots they've bought and sold: https://{{ domain }}/feedback/  It's probably a good idea to thank them for participating in {{ auction }}, and to encourage them to join your club.  Remember that you can download a list of users here: https://{{ domain }}/auctions/{{ auction.slug }}/report/
+* Remind your users to leave feedback on lots they've bought and sold: https://{{ domain }}/feedback/  It's probably a good idea to thank them for participating in {{ auction }}, and to encourage them to join your club.
 
 * If you haven't already done so, you should mark your invoices paid: https://{{ domain }}/auctions/{{ auction.slug }}/users/
 
@@ -68,7 +65,7 @@ Thanks for choosing {{ domain }} to run your auction!
 
 Once again, thank you very much for using {{ domain }}.  If you have suggestions to help improve the site, just reply to this email!
 
-Unsubscribe from these emails: https://{{ domain }}/unsubscribe/{{ unsubscribe }}/""",
+Unsubscribe: https://{{ domain }}/unsubscribe/{{ unsubscribe }}/""",
             "html_content": """Hello {{ auction.created_by.first_name }},<br><br>
 
 Thanks for choosing {{ domain }} to run your auction!<br><br>
@@ -76,7 +73,7 @@ Thanks for choosing {{ domain }} to run your auction!<br><br>
 <ul>
 <li>Take a look at the <a href="https://{{ domain }}/auctions/{{ auction.slug }}/stats/">stats for {{ auction }}</a>.</li>
 
-<li>Remind your users to <a href="https://{{ domain }}/feedback/">leave feedback</a> on lots they've bought and sold.  It's probably a good idea to thank them for participating in the {{ auction }}, and to encourage them to join your club.  Remember that you can <a href="https://{{ domain }}/auctions/{{ auction.slug }}/report/">download a list of users here</a>.</li>
+<li>Remind your users to <a href="https://{{ domain }}/feedback/">leave feedback</a> on lots they've bought and sold.  It's probably a good idea to thank them for participating in the {{ auction }}, and to encourage them to join your club.</li>
 
 <li>If you haven't already done so, you should <a href="https://{{ domain }}/auctions/{{ auction.slug }}/users/">mark your invoices paid</a>.</li>
 
@@ -135,11 +132,11 @@ class Migration(migrations.Migration):
             model_name="auction",
             name="email_fifth_sent",
         ),
-        # Add new email tracking fields
+        # Add new email tracking fields with default=True so existing auctions don't get emails
         migrations.AddField(
             model_name="auction",
             name="welcome_email_sent",
-            field=models.BooleanField(default=False),
+            field=models.BooleanField(default=True),
         ),
         migrations.AddField(
             model_name="auction",
@@ -149,7 +146,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name="auction",
             name="invoice_email_sent",
-            field=models.BooleanField(default=False),
+            field=models.BooleanField(default=True),
         ),
         migrations.AddField(
             model_name="auction",
@@ -159,7 +156,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name="auction",
             name="followup_email_sent",
-            field=models.BooleanField(default=False),
+            field=models.BooleanField(default=True),
         ),
         migrations.AddField(
             model_name="auction",
