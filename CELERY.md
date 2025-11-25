@@ -1,20 +1,12 @@
 # Celery Implementation for Fish Auctions
 
-This document describes the Celery implementation that replaces cron jobs for scheduled tasks.
+This document describes the Celery implementation for scheduled tasks and email delivery.
 
 ## Overview
 
-Celery has been implemented to handle:
-1. **Periodic tasks** - Previously handled by cron jobs (via Celery Beat)
-2. **Immediate email delivery** - Emails are now sent immediately via django-post-office's Celery integration
-
-## Benefits
-
-- **Immediate email delivery**: Emails are sent as soon as they're queued, not on a fixed schedule
-- **Better task management**: Tasks can be monitored, retried, and managed through Django admin
-- **Scalability**: Celery workers can be scaled independently
-- **Reliability**: Built-in retry mechanisms and error handling
-- **Visibility**: Task status and history available through django-celery-beat admin interface
+Celery handles:
+1. **Periodic tasks** - Scheduled tasks like ending auctions, sending notifications, etc.
+2. **Immediate email delivery** - Emails are sent immediately via django-post-office's Celery integration
 
 ## Architecture
 
@@ -28,7 +20,6 @@ Celery has been implemented to handle:
 2. **Celery Beat** (`celery_beat` container)
    - Scheduler for periodic tasks
    - Uses Django database as backend (django-celery-beat)
-   - Configuration in `fishauctions/celery.py`
 
 3. **Redis** (Broker and Result Backend)
    - Task queue (broker): Redis DB 1
@@ -43,8 +34,6 @@ Celery has been implemented to handle:
 - `docker-compose.yaml` - Celery worker and beat service definitions
 
 ## Task Schedule
-
-All tasks from the old crontab have been converted:
 
 | Task | Schedule | Description |
 |------|----------|-------------|
@@ -61,36 +50,6 @@ All tasks from the old crontab have been converted:
 | `webpush_notifications_deduplicate` | Daily at 10:00 | Remove duplicate push subscriptions |
 | `update_auction_stats` | Every minute | Update cached auction statistics |
 
-## Configuration
-
-### Environment Variables
-
-No new environment variables required. Celery uses existing:
-- `REDIS_PASSWORD` - Redis authentication
-- `REDIS_HOST` - Redis hostname (default: "redis")
-
-### Settings
-
-In `fishauctions/settings.py`:
-
-```python
-# Celery Configuration
-CELERY_BROKER_URL = "redis://:password@redis:6379/1"
-CELERY_RESULT_BACKEND = "redis://:password@redis:6379/2"
-CELERY_ACCEPT_CONTENT = ["json"]
-CELERY_TASK_SERIALIZER = "json"
-CELERY_RESULT_SERIALIZER = "json"
-CELERY_TIMEZONE = TIME_ZONE
-CELERY_ENABLE_UTC = True
-CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
-
-# POST_OFFICE Configuration
-POST_OFFICE = {
-    ...
-    "CELERY_ENABLED": True,  # Enable immediate email delivery
-}
-```
-
 ## Docker Services
 
 ### Starting Services
@@ -106,127 +65,15 @@ docker logs celery_worker -f
 docker logs celery_beat -f
 ```
 
-**Note**: Periodic tasks are automatically populated in the database on container startup via `entrypoint.sh`. You can also manually run `docker exec -it django python manage.py setup_celery_beat` to sync tasks if needed.
-
-### Service Configuration
-
-**celery_worker**:
-- Command: `celery -A fishauctions worker --loglevel=info --concurrency=2`
-- Depends on: db, redis
-- Auto-restart: always
-
-**celery_beat**:
-- Command: `celery -A fishauctions beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler`
-- Depends on: db, redis
-- Auto-restart: always
+Periodic tasks are automatically configured in the database on container startup.
 
 ## Managing Periodic Tasks
 
-### Automatic Setup
-
-Periodic tasks are automatically configured in the database on container startup. The `setup_celery_beat` management command runs automatically via `entrypoint.sh` after migrations.
-
-This management command reads the `beat_schedule` from `fishauctions/celery.py` and creates corresponding database entries for django-celery-beat. The command is idempotent (safe to run multiple times) and will:
-- Create new tasks that don't exist
-- Update existing tasks if their schedules have changed
-- Skip tasks that are already up to date
-
-You can also manually run the command if needed:
-```bash
-docker exec -it django python manage.py setup_celery_beat
-```
-
-### Via Django Admin
-
+Tasks are managed via Django Admin:
 1. Navigate to Django Admin → Periodic Tasks → Periodic tasks
-2. You'll see all tasks created by the setup command
-3. You can:
-   - Enable/disable tasks
-   - Modify schedules
-   - View task execution history
-   - Manually trigger tasks
-   - Add new tasks
+2. You can enable/disable tasks, modify schedules, and view execution history
 
-### Via Code
-
-Tasks are defined in `fishauctions/celery.py`:
-
-```python
-app.conf.beat_schedule = {
-    'task-name': {
-        'task': 'auctions.tasks.task_function',
-        'schedule': 60.0,  # seconds, or use crontab()
-    },
-}
-```
-
-After modifying the beat schedule in code, run `python manage.py setup_celery_beat` to sync changes to the database.
-
-## Manual Task Execution
-
-### Run a task immediately (for testing):
-
-```bash
-# Enter Django container
-docker exec -it django python manage.py shell
-
-# Import and run a task
-from auctions.tasks import endauctions
-endauctions.delay()  # Run asynchronously
-# or
-endauctions()  # Run synchronously (for testing)
-```
-
-### Run management commands (old way still works):
-
-```bash
-docker exec -it django python manage.py endauctions
-```
-
-## Monitoring
-
-### Check Celery Status
-
-```bash
-# Worker status
-docker exec -it celery_worker celery -A fishauctions inspect active
-
-# Scheduled tasks
-docker exec -it celery_beat celery -A fishauctions inspect scheduled
-
-# Worker stats
-docker exec -it celery_worker celery -A fishauctions inspect stats
-```
-
-### View Task Results
-
-Through Django admin:
-1. Navigate to → Periodic Tasks → Crontabs/Intervals
-2. View execution logs and results
-
-## Troubleshooting
-
-### Tasks Not Running
-
-1. Check worker is running: `docker ps | grep celery`
-2. Check worker logs: `docker logs celery_worker`
-3. Verify Redis connection: `docker logs redis`
-4. Check beat scheduler: `docker logs celery_beat`
-
-### Emails Not Being Sent Immediately
-
-1. Verify `POST_OFFICE['CELERY_ENABLED'] = True` in settings
-2. Check worker is processing tasks: `docker logs celery_worker`
-3. Verify post_office tasks are discovered:
-   ```bash
-   docker exec -it celery_worker celery -A fishauctions inspect registered
-   ```
-
-### Task Failures
-
-1. Check worker logs: `docker logs celery_worker -f`
-2. View in Django admin: Periodic Tasks → Task results
-3. Check task implementation in `auctions/tasks.py`
+Tasks are defined in `fishauctions/celery.py` and automatically synced to the database on startup.
 
 ## Development vs Production
 
@@ -241,32 +88,19 @@ Through Django admin:
 - Emails sent immediately when queued
 - Failed emails retried every 10 minutes
 
-## Migration from Cron
+## Troubleshooting
 
-The old crontab file has been preserved with documentation showing the mapping to Celery tasks. The cron jobs are **no longer active** - all scheduling is now handled by Celery Beat.
+### Tasks Not Running
 
-### Old Way (Deprecated)
-```bash
-# Via cron
-* * * * * /home/app/web/task.sh endauctions
-```
+1. Check worker is running: `docker ps | grep celery`
+2. Check worker logs: `docker logs celery_worker`
+3. Verify Redis connection: `docker logs redis`
+4. Check beat scheduler: `docker logs celery_beat`
 
-### New Way
-```python
-# Via Celery (automatic, configured in fishauctions/celery.py)
-'endauctions': {
-    'task': 'auctions.tasks.endauctions',
-    'schedule': 60.0,
-}
-```
+### Emails Not Being Sent Immediately
 
-## Testing
-
-Run Celery task tests:
-
-```bash
-docker exec -it django python manage.py test auctions.test_celery_tasks
-```
+1. Verify `POST_OFFICE['CELERY_ENABLED'] = True` in settings
+2. Check worker is processing tasks: `docker logs celery_worker`
 
 ## Additional Resources
 
