@@ -80,3 +80,4 @@ django-encrypted-model-fields
 celery
 django-celery-beat
 redis
+squareup

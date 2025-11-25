@@ -15,7 +15,9 @@ amqp==5.3.1
 annotated-types==0.7.0
     # via pydantic
 anyio==4.11.0
-    # via watchfiles
+    # via
+    #   httpx
+    #   watchfiles
 asgiref==3.11.0
     # via
     #   -r requirements.in
@@ -49,9 +51,9 @@ bleach[css]==6.3.0
     #   django-markdownfield
     #   django-post-office
     #   django-summernote
-boto3==1.41.0
+boto3==1.41.2
     # via django-ses
-botocore==1.41.0
+botocore==1.41.2
     # via
     #   boto3
     #   s3transfer
@@ -64,6 +66,8 @@ celery==5.5.3
 certifi==2025.11.12
     # via
     #   -r requirements.in
+    #   httpcore
+    #   httpx
     #   requests
 cffi==2.0.0
     # via
@@ -71,7 +75,7 @@ cffi==2.0.0
     #   cryptography
     #   pyheif
     #   weasyprint
-channels==4.3.1
+channels==4.3.2
     # via
     #   -r requirements.in
     #   channels-redis
@@ -150,7 +154,7 @@ django==5.2.8
     #   django-weasyprint
     #   easy-thumbnails
     #   jsonfield
-django-allauth==65.13.0
+django-allauth==65.13.1
     # via -r requirements.in
 django-autocomplete-light==3.12.1
     # via -r requirements.in
@@ -192,7 +196,7 @@ django-ses[events]==4.4.0
     # via -r requirements.in
 django-summernote==0.8.20.0
     # via -r requirements.in
-django-tables2==2.7.5
+django-tables2==2.8.0
     # via -r requirements.in
 django-timezone-field==7.1
     # via django-celery-beat
@@ -211,13 +215,19 @@ frozenlist==1.8.0
 gunicorn==23.0.0
     # via -r requirements.in
 h11==0.16.0
-    # via uvicorn
+    # via
+    #   httpcore
+    #   uvicorn
 heif-image-plugin==0.7.0
     # via -r requirements.in
 http-ece==1.2.1
     # via pywebpush
+httpcore==1.0.9
+    # via httpx
 httptools==0.7.1
     # via uvicorn
+httpx==0.28.1
+    # via squareup
 hyperlink==21.0.0
     # via
     #   -r requirements.in
@@ -227,6 +237,7 @@ idna==3.11
     # via
     #   -r requirements.in
     #   anyio
+    #   httpx
     #   hyperlink
     #   requests
     #   twisted
@@ -300,8 +311,11 @@ pydantic==2.12.4
     # via
     #   django-bootstrap-datepicker-plus
     #   django-qr-code
+    #   squareup
 pydantic-core==2.41.5
-    # via pydantic
+    # via
+    #   pydantic
+    #   squareup
 pydyf==0.11.0
     # via weasyprint
 pyhamcrest==2.1.0
@@ -352,7 +366,7 @@ requests==2.32.5
     #   requests-oauthlib
 requests-oauthlib==2.0.0
     # via -r requirements.in
-s3transfer==0.14.0
+s3transfer==0.15.0
     # via boto3
 segno==1.6.6
     # via django-qr-code
@@ -378,6 +392,8 @@ sqlparse==0.5.3
     #   -r requirements.in
     #   django
     #   django-debug-toolbar
+squareup==43.2.0.20251016
+    # via -r requirements.in
 tinycss2==1.4.0
     # via
     #   bleach
@@ -403,6 +419,7 @@ typing-extensions==4.15.0
     #   pydantic
     #   pydantic-core
     #   pyopenssl
+    #   squareup
     #   twisted
     #   typing-inspection
 typing-inspection==0.4.2

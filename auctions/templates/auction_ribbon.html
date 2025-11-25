@@ -60,6 +60,23 @@
     </div>
   </div>
   {% endif %}
+  {% if request.user.pk == auction.created_by.pk and auction.show_square_banner and auction.pk == request.user.userdata.last_auction_created.pk %}
+  <div class='mt-4 mb-4 p-2 bg-success text-white rounded bg-gradient bg-opacity-50'><h5>Enable payments with your Square account</h5>
+    <small>
+      <ul>
+        <li>Users will see a button to pay on their invoices</li>
+        <li>Invoices will automatically be marked paid as users pay</li>
+        <li>Funds will go directly to your Square account</li>
+      </ul>
+      It's "free": we don't charge anything, but normal Square fees apply.  <a href='{% url "square_seller" %}' class="text-white">Learn more about accepting payments with Square</a>.<br>
+    </small>
+    <div>
+      <a href="{% url 'square_connect' %}" class="btn btn-info btn-sm mt-2">Connect Square account and enable payments</a>
+      <a href='{% url "auction_main" slug=auction.slug %}?dismissed_square_banner=true' class="btn btn-outline-light btn-sm mt-2">Not this auction</a>
+      <a href='{% url "auction_main" slug=auction.slug %}?never_show_square_connect=true' class="btn btn-outline-light btn-sm mt-2">Never show this again</a>
+    </div>
+  </div>
+  {% endif %}
 {% endif %}
 <ul class="nav nav-tabs">
     <li class="nav-item">

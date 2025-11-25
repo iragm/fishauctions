@@ -136,6 +136,11 @@ urlpatterns = [
     ),
     path("invoices/<uuid:uuid>/", views.InvoiceNoLoginView.as_view(), name="invoice_no_login"),
     path(
+        "invoices/square-success/<uuid:uuid>/",
+        views.SquarePaymentSuccessView.as_view(),
+        name="square_payment_success",
+    ),
+    path(
         "invoices/create/<int:pk>/",
         login_required(views.InvoiceCreateView.as_view()),
         name="create_invoice",
@@ -147,7 +152,14 @@ urlpatterns = [
     ),
     path("paypal/connect/", views.PayPalConnectView.as_view(), name="paypal_connect"),
     path("paypal/onboard/success/", views.PayPalCallbackView.as_view(), name="paypal_callback"),
+    path("square/connect/", views.SquareConnectView.as_view(), name="square_connect"),
+    path("square/onboard/success/", views.SquareCallbackView.as_view(), name="square_callback"),
     path("api/invoices/<uuid:uuid>/paypal/", views.CreatePayPalOrderView.as_view(), name="create_paypal_order"),
+    path(
+        "api/invoices/<uuid:uuid>/square/",
+        views.CreateSquarePaymentLinkView.as_view(),
+        name="create_square_payment_link",
+    ),
     path(
         "auctions/<slug:slug>/quick-add-images/<slug:bidder_number>",
         login_required(views.QuickBulkAddImages.as_view()),
@@ -496,6 +508,9 @@ urlpatterns = [
     path("paypal/success/", views.PayPalSuccessView.as_view(), name="paypal_success"),
     path("paypal/", views.PayPalInfoView.as_view(), name="paypal_seller"),
     path("paypal/unlink/", views.PayPalSellerDeleteView.as_view(), name="paypal_seller_delete"),
+    path("square/success/", views.SquareSuccessView.as_view(), name="square_success"),
+    path("square/", views.SquareInfoView.as_view(), name="square_seller"),
+    path("square/unlink/", views.SquareSellerDeleteView.as_view(), name="square_seller_delete"),
     re_path(
         r"^ses/event-webhook/$",
         SESEventWebhookView.as_view(),
@@ -503,4 +518,5 @@ urlpatterns = [
     ),
     re_path(r"^webpush/", include("webpush.urls")),
     re_path(r"^paypal/webhook/$", views.PayPalWebhookView.as_view(), name="paypal-webhook"),
+    re_path(r"^square/webhook/$", views.SquareWebhookView.as_view(), name="square_webhook"),
 ]

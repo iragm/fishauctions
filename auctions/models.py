@@ -43,6 +43,7 @@ from django.utils import html, timezone
 from django.utils.safestring import mark_safe
 from easy_thumbnails.fields import ThumbnailerImageField
 from easy_thumbnails.files import get_thumbnailer
+from encrypted_model_fields.fields import EncryptedCharField
 from location_field.models.plain import PlainLocationField
 from markdownfield.models import MarkdownField, RenderedMarkdownField
 from markdownfield.validators import VALIDATOR_STANDARD
@@ -814,8 +815,13 @@ class Auction(models.Model):
     paypal_email_address.help_text = "Not currently used, this is configured in the model PayPalSeller"
     enable_online_payments = models.BooleanField(default=False, blank=True, verbose_name="PayPal payments")
     enable_online_payments.help_text = "Allow users to use PayPal to pay their invoices themselves."
-    dismissed_promo_banner = models.BooleanField(default=False, blank=True)
     dismissed_paypal_banner = models.BooleanField(default=False, blank=True)
+    square_email_address = models.EmailField(max_length=255, blank=True, null=True)
+    square_email_address.help_text = "Not currently used, this is configured in the model SquareSeller"
+    enable_square_payments = models.BooleanField(default=False, blank=True, verbose_name="Square payments")
+    enable_square_payments.help_text = "Allow users to use Square to pay their invoices themselves."
+    dismissed_square_banner = models.BooleanField(default=False, blank=True)
+    dismissed_promo_banner = models.BooleanField(default=False, blank=True)
     google_drive_link = models.URLField(max_length=500, blank=True, null=True, default="")
     google_drive_link.help_text = "Link to a Google Sheet with user information.  Make sure the sheet is shared with 'anyone with the link can view'."
     last_sync_time = models.DateTimeField(blank=True, null=True)
@@ -872,6 +878,19 @@ class Auction(models.Model):
         return None
 
     @property
+    def square_information(self):
+        """
+        Return the merchant ID for Square payments
+        Only returns ID if seller has linked their Square account via OAuth
+        """
+        from auctions.models import SquareSeller
+
+        seller = SquareSeller.objects.filter(user=self.created_by).first()
+        if seller:
+            return seller.square_merchant_id
+        return None
+
+    @property
     def show_paypal_banner(self):
         """Can we show the link your PayPal account banner?
         One more check is needed on the template:
@@ -887,6 +906,25 @@ class Auction(models.Model):
         # if self.enable_online_payments:
         #    return False
         if PayPalSeller.objects.filter(user=self.created_by).first():
+            return False
+        return True
+
+    @property
+    def show_square_banner(self):
+        """Can we show the link your Square account banner?
+        One more check is needed on the template:
+        this banner should only be shown to the auction creator"""
+        from auctions.models import SquareSeller
+
+        if self.dismissed_square_banner:
+            return False
+        if not self.created_by.userdata.square_enabled:
+            return False
+        if self.created_by.is_superuser:
+            return False
+        if self.created_by.userdata.never_show_square_connect:
+            return False
+        if SquareSeller.objects.filter(user=self.created_by).first():
             return False
         return True
 
@@ -3316,6 +3354,10 @@ class Lot(models.Model):
     partial_refund_percent = models.IntegerField(
         default=0, validators=[MinValueValidator(0), MaxValueValidator(100)], blank=True
     )
+    no_more_refunds_possible = models.BooleanField(default=False)
+    no_more_refunds_possible.help_text = (
+        "Set to True after a Square refund is issued to prevent multiple refunds that would unbalance the books"
+    )
     max_bid_revealed_by = models.ForeignKey(
         User, null=True, blank=True, on_delete=models.SET_NULL, related_name="max_bid_revealed_by"
     )
@@ -3609,13 +3651,167 @@ class Lot(models.Model):
         return self
 
     def refund(self, amount, user, message=None):
-        """Call this to add a message when refunding a lot"""
+        """Call this to add a message when refunding a lot
+        If square_refund_possible, automatically processes Square refund"""
         if amount and amount != self.partial_refund_percent:
-            if not message:
-                message = f"{user} has issued a {amount}% refund on this lot."
+            # Check if we should process a Square refund automatically
+            if self.square_refund_possible and not self.no_more_refunds_possible:
+                error = self.square_refund(amount)
+                if error:
+                    # Log the error but continue with the refund record
+                    import logging
+
+                    logger = logging.getLogger(__name__)
+                    logger.error("Square refund failed for lot %s: %s", self.pk, error)
+                    if not message:
+                        message = f"{user} has issued a {amount}% refund on this lot. Square refund failed: {error}"
+                else:
+                    if not message:
+                        message = (
+                            f"{user} has issued a {amount}% refund on this lot. Square refund processed automatically."
+                        )
+            else:
+                if not message:
+                    message = f"{user} has issued a {amount}% refund on this lot."
+
             LotHistory.objects.create(lot=self, user=user, message=message, changed_price=True)
         self.partial_refund_percent = amount
         self.save()
+
+    @property
+    def winner_invoice(self):
+        """Get the Invoice for this lot's winner
+        Returns Invoice object or None if not found
+        """
+        from auctions.models import Invoice
+
+        if not (self.auctiontos_winner or self.winner):
+            return None
+
+        try:
+            query = Q()
+            if self.auctiontos_winner:
+                query |= Q(auctiontos_user=self.auctiontos_winner)
+            if self.winner:
+                query |= Q(user=self.winner, auction=self.auction)
+
+            return Invoice.objects.filter(query).first()
+        except Exception:
+            return None
+
+    @property
+    def sellers_invoice(self):
+        """Get the Invoice for this lot's seller
+        Returns Invoice object or None if not found
+        """
+        from auctions.models import Invoice
+
+        if not (self.auctiontos_seller or self.user):
+            return None
+
+        try:
+            query = Q()
+            if self.auctiontos_seller:
+                query |= Q(auctiontos_user=self.auctiontos_seller)
+            if self.user:
+                query |= Q(user=self.user, auction=self.auction)
+
+            return Invoice.objects.filter(query).first()
+        except Exception:
+            return None
+
+    @property
+    def square_refund_possible(self):
+        """Returns True if there's a Square payment associated with this lot's invoice
+        with enough funds to cover the lot's cost and no refund has been issued yet"""
+        if not self.winning_price or self.winning_price <= 0:
+            return False
+
+        # Check if a refund has already been issued
+        if self.no_more_refunds_possible:
+            return False
+
+        invoice = self.winner_invoice
+        if not invoice:
+            return False
+
+        # Check for Square payments with available refund amount
+        from decimal import Decimal
+
+        from auctions.models import InvoicePayment
+
+        payment = (
+            InvoicePayment.objects.filter(invoice=invoice, payment_method__iexact="square")
+            .exclude(amount__lt=0)
+            .order_by("-amount_available_to_refund")
+            .first()
+        )
+
+        if not payment:
+            return False
+
+        # Check if there's enough available to refund
+        lot_cost = Decimal(str(self.winning_price))
+        return payment.amount_available_to_refund >= lot_cost
+
+    def square_refund(self, percent):
+        """Create a Square refund for this lot
+        Args:
+            percent: Percentage of lot winning_price to refund (0-100)
+        Returns:
+            Error message string or None on success
+        """
+        from decimal import Decimal
+
+        from auctions.models import InvoicePayment, SquareSeller
+
+        if not self.winning_price or self.winning_price <= 0:
+            return "No valid winning price for this lot"
+
+        if percent < 0 or percent > 100:
+            return "Refund percent must be between 0 and 100"
+
+        # Calculate refund amount
+        refund_amount = (Decimal(str(self.winning_price)) * Decimal(str(percent))) / Decimal(100)
+        if refund_amount <= 0:
+            return "Refund amount must be positive"
+
+        # Get the buyer's invoice using the property
+        invoice = self.winner_invoice
+        if not invoice:
+            return "No invoice found for winner"
+
+        # Find the Square payment
+        payment = (
+            InvoicePayment.objects.filter(invoice=invoice, payment_method__iexact="square")
+            .exclude(amount__lt=0)
+            .order_by("-amount_available_to_refund")
+            .first()
+        )
+
+        if not payment:
+            return "No Square payment found for this invoice"
+
+        if payment.amount_available_to_refund < refund_amount:
+            return f"Insufficient funds available to refund. Available: {payment.amount_available_to_refund}, Requested: {refund_amount}"
+
+        # Get seller's Square credentials
+        seller = SquareSeller.objects.filter(user=self.auction.created_by).first()
+        if not seller:
+            return "Seller has not connected their Square account"
+
+        # Process refund using SquareSeller method
+        reason = f"Lot {self.lot_number_display} - {percent}% refund"
+        error = seller.process_refund(payment, refund_amount, reason)
+        if error:
+            return error
+
+        # Mark that a refund has been issued to prevent double refunds
+        self.no_more_refunds_possible = True
+        self.save()
+
+        # Webhook will create the negative InvoicePayment record
+        return None
 
     def remove(self, banned, user, message=None):
         """Call this to add a message when banning (removing) a lot"""
@@ -3661,35 +3857,17 @@ class Lot(models.Model):
     @property
     def seller_invoice_link(self):
         """/invoices/123 for the auction/seller of this lot"""
-        try:
-            if self.auctiontos_seller:
-                invoice = Invoice.objects.get(auctiontos_user=self.auctiontos_seller)
-                return f"/invoices/{invoice.pk}"
-        except:
-            pass
-        try:
-            if self.user:
-                invoice = Invoice.objects.get(user=self.user, auction=self.auction)
-                return f"/invoices/{invoice.pk}"
-        except:
-            pass
+        invoice = self.sellers_invoice
+        if invoice:
+            return f"/invoices/{invoice.pk}"
         return ""
 
     @property
     def winner_invoice_link(self):
         """/invoices/123 for the auction/winner of this lot"""
-        try:
-            if self.auctiontos_winner:
-                invoice = Invoice.objects.get(auctiontos_user=self.auctiontos_winner)
-                return f"/invoices/{invoice.pk}"
-        except:
-            pass
-        try:
-            if self.winner:
-                invoice = Invoice.objects.get(user=self.winner, auction=self.auction)
-                return f"/invoices/{invoice.pk}"
-        except:
-            pass
+        invoice = self.winner_invoice
+        if invoice:
+            return f"/invoices/{invoice.pk}"
         return ""
 
     @property
@@ -4563,7 +4741,52 @@ class Invoice(models.Model):
 
     @property
     def show_payment_button(self):
-        """True if we can show the PayPal button"""
+        """True if we can show the PayPal or Square button"""
+        # Check PayPal
+        paypal_configured = settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET
+        # Square now requires OAuth - just check if OAuth is configured
+        square_configured = getattr(settings, "SQUARE_APPLICATION_ID", None) and getattr(
+            settings, "SQUARE_CLIENT_SECRET", None
+        )
+
+        if not (paypal_configured or square_configured):
+            return False
+        if self.status == "PAID":
+            return False
+        if self.net_after_payments >= 0:
+            return False
+        if not self.auction:
+            # change this if we ever allow direct person to person payments
+            return False
+
+        # Check if auction allows any payment method
+        has_payment_method = False
+        if self.auction.enable_online_payments:
+            if not self.auction.created_by.userdata.is_trusted:
+                return False
+            if (
+                not self.auction.created_by.is_superuser
+                and not self.auction.created_by.userdata.paypal_enabled
+                and not self.auction.paypal_information
+            ):
+                pass  # Check Square
+            else:
+                has_payment_method = True
+
+        if self.auction.enable_square_payments:
+            if not self.auction.created_by.userdata.is_trusted:
+                return False
+            # Square requires OAuth - check if seller has linked account
+            if not self.auction.created_by.userdata.square_enabled or not self.auction.square_information:
+                pass
+            else:
+                has_payment_method = True
+
+        return has_payment_method
+
+    @property
+    def show_paypal_button(self):
+        """True if we can show specifically the PayPal button"""
         if not (settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET):
             return False
         if self.auction and not self.auction.enable_online_payments:
@@ -4582,7 +4805,46 @@ class Invoice(models.Model):
         ):
             return False
         if not self.auction:
-            # change this if we ever allow direct person to person PayPal
+            return False
+        return True
+
+    @property
+    def show_square_button(self):
+        """True if we can show specifically the Square button
+        Square requires OAuth - seller must have linked their account"""
+        # Check OAuth is configured
+        if not (getattr(settings, "SQUARE_APPLICATION_ID", None) and getattr(settings, "SQUARE_CLIENT_SECRET", None)):
+            return False
+        if self.auction and not self.auction.enable_square_payments:
+            return False
+        if self.auction and not self.auction.created_by.userdata.is_trusted:
+            return False
+        if self.status == "PAID":
+            return False
+        if self.net_after_payments >= 0:
+            return False
+        # Square requires OAuth - check if seller has linked their account
+        if self.auction and not self.auction.created_by.userdata.square_enabled:
+            return False
+        if self.auction and not self.auction.square_information:
+            return False
+        if not self.auction:
+            return False
+        return True
+        if self.auction and not self.auction.created_by.userdata.is_trusted:
+            return False
+        if self.status == "PAID":
+            return False
+        if self.net_after_payments >= 0:
+            return False
+        if (
+            self.auction
+            and not self.auction.created_by.is_superuser
+            and not self.auction.created_by.userdata.square_enabled
+            and not self.auction.square_information
+        ):
+            return False
+        if not self.auction:
             return False
         return True
 
@@ -5235,6 +5497,10 @@ def get_default_paypal_enabled():
     return settings.PAYPAL_ENABLED_FOR_USERS
 
 
+def get_default_square_enabled():
+    return getattr(settings, "SQUARE_ENABLED_FOR_USERS", False)
+
+
 def get_default_is_trusted():
     return settings.USERS_ARE_TRUSTED_BY_DEFAULT
 
@@ -5317,6 +5583,7 @@ class UserData(models.Model):
     can_submit_standalone_lots = models.BooleanField(default=get_default_can_submit_lots)
     can_create_club_auctions = models.BooleanField(default=get_default_can_create_auctions)
     paypal_enabled = models.BooleanField(default=get_default_paypal_enabled)
+    square_enabled = models.BooleanField(default=get_default_square_enabled)
     is_trusted = models.BooleanField(default=get_default_is_trusted)
     is_trusted.help_text = "Trusted users can promote auctions, accept payments, and send invoice notification emails"
     dismissed_cookies_tos = models.BooleanField(default=False)
@@ -5393,6 +5660,7 @@ class UserData(models.Model):
     has_bid = models.BooleanField(default=False)
     has_used_proxy_bidding = models.BooleanField(default=False)
     never_show_paypal_connect = models.BooleanField(default=False)
+    never_show_square_connect = models.BooleanField(default=False)
 
     @property
     def last_auction_created(self):
@@ -5703,6 +5971,301 @@ class PayPalSeller(models.Model):
                 action=f"PayPal partner consent from {self.payer_email} has been revoked.  Relink your PayPal account to re-enable payments.",
                 user=None,
             )
+            auction.enable_online_payments = False
+            auction.save()
+        return super().delete()
+
+
+class SquareSeller(models.Model):
+    """Extension of user model to store Square info for sellers
+    Similar to PayPalSeller, stores Square merchant information and OAuth tokens
+    OAuth tokens are encrypted at rest for security using django-encrypted-model-fields
+    """
+
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    square_merchant_id = models.CharField(max_length=64, blank=True, null=True)
+    access_token = EncryptedCharField(max_length=500, blank=True, null=True)
+    refresh_token = EncryptedCharField(max_length=500, blank=True, null=True)
+    token_expires_at = models.DateTimeField(blank=True, null=True)
+    currency = models.CharField(max_length=10, default="USD")
+    payer_email = models.EmailField(blank=True, null=True)
+    connected_on = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        if self.currency != "USD":
+            result = f"{self.currency} to "
+        else:
+            result = ""
+        if self.payer_email:
+            result += self.payer_email
+        else:
+            result += f"{self.user.first_name} {self.user.last_name}'s Square account"
+        return result
+
+    def is_token_expired(self):
+        """Check if the access token is expired or will expire soon (within 1 hour)"""
+        if not self.token_expires_at:
+            return False
+        from datetime import timedelta
+
+        buffer_time = timedelta(hours=1)
+        return timezone.now() + buffer_time >= self.token_expires_at
+
+    def refresh_access_token(self):
+        """Refresh the Square access token using the refresh token
+        Returns True if successful, False otherwise
+        """
+        if not self.refresh_token:
+            logger.error("Cannot refresh Square token: no refresh_token available for user %s", self.user.pk)
+            return False
+
+        try:
+            from square import Square
+            from square.client import SquareEnvironment
+
+            # Determine environment
+            env = (
+                SquareEnvironment.SANDBOX if settings.SQUARE_ENVIRONMENT == "sandbox" else SquareEnvironment.PRODUCTION
+            )
+
+            # Create client without authentication
+            client = Square(environment=env)
+
+            # Request new access token using refresh token
+            result = client.o_auth.obtain_token(
+                client_id=settings.SQUARE_APPLICATION_ID,
+                client_secret=settings.SQUARE_CLIENT_SECRET,
+                grant_type="refresh_token",
+                refresh_token=self.refresh_token,
+            )
+
+            # Update tokens
+            self.access_token = result.access_token
+            # Square returns the same refresh_token in code flow, new one in PKCE flow
+            if hasattr(result, "refresh_token") and result.refresh_token:
+                self.refresh_token = result.refresh_token
+            if hasattr(result, "expires_at") and result.expires_at:
+                from datetime import datetime
+
+                try:
+                    self.token_expires_at = datetime.fromisoformat(result.expires_at.replace("Z", "+00:00"))
+                except (ValueError, AttributeError):
+                    if isinstance(result.expires_at, datetime):
+                        self.token_expires_at = result.expires_at
+
+            self.save()
+            logger.info("Successfully refreshed Square access token for user %s", self.user.pk)
+            return True
+
+        except Exception as e:
+            logger.exception("Error refreshing Square access token for user %s: %s", self.user.pk, e)
+            return False
+
+    def get_valid_access_token(self):
+        """Get a valid access token, refreshing if necessary
+        Returns the access token or None if unable to get a valid token
+        """
+        if self.is_token_expired():
+            logger.info("Square token expired for user %s, attempting refresh", self.user.pk)
+            if not self.refresh_access_token():
+                logger.error("Failed to refresh Square token for user %s", self.user.pk)
+                return None
+        return self.access_token
+
+    def get_square_client(self):
+        """Initialize and return Square SDK client using this seller's OAuth token
+        Returns Square client or None if token is invalid
+        """
+        access_token = self.get_valid_access_token()
+        if not access_token:
+            logger.error("No valid OAuth token for user %s", self.user.pk)
+            return None
+
+        try:
+            from square import Square
+            from square.client import SquareEnvironment
+
+            env = (
+                SquareEnvironment.SANDBOX if settings.SQUARE_ENVIRONMENT == "sandbox" else SquareEnvironment.PRODUCTION
+            )
+            return Square(token=access_token, environment=env)
+        except Exception as e:
+            logger.exception("Error initializing Square client for user %s: %s", self.user.pk, e)
+            return None
+
+    def get_location_id(self):
+        """Get the first active location ID for this merchant
+        Returns location_id string or None if no active location found
+        """
+        client = self.get_square_client()
+        if not client:
+            return None
+
+        try:
+            loc_resp = client.locations.list()
+            if getattr(loc_resp, "errors", None):
+                logger.error("Failed to fetch Square locations for user %s: %s", self.user.pk, loc_resp.errors)
+                return None
+
+            locations = getattr(loc_resp, "locations", []) or []
+            active_locations = [loc for loc in locations if getattr(loc, "status", None) == "ACTIVE"]
+
+            if not active_locations:
+                logger.error("No ACTIVE Square locations found for user %s", self.user.pk)
+                return None
+
+            location_id = getattr(active_locations[0], "id", None)
+            if not location_id:
+                logger.error("Could not determine location id for user %s", self.user.pk)
+                return None
+
+            return location_id
+        except Exception as e:
+            logger.exception("Error fetching Square location for user %s: %s", self.user.pk, e)
+            return None
+
+    def create_payment_link(self, invoice, request):
+        """Create a Square payment link for the given invoice
+        Args:
+            invoice: Invoice object to create payment for
+            request: HttpRequest object for building redirect URL
+        Returns:
+            tuple: (payment_url, error_message) - payment_url is None if error occurs
+        """
+        client = self.get_square_client()
+        if not client:
+            return None, "Failed to initialize Square client"
+
+        location_id = self.get_location_id()
+        if not location_id:
+            logger.error("No location ID available for user %s", self.user.pk)
+            return None, "Square location not configured"
+
+        try:
+            from decimal import Decimal
+
+            amount_decimal = Decimal("0.00") - Decimal(invoice.net_after_payments)
+            amount_cents = int(max(amount_decimal, Decimal("0.00")) * 100)
+        except Exception:
+            logger.exception("Failed to compute payment amount for invoice %s", invoice.pk)
+            return None, "Failed to calculate payment amount"
+
+        if amount_cents <= 0:
+            logger.error("Computed amount invalid for invoice %s: %s cents", invoice.pk, amount_cents)
+            return None, "Invalid payment amount"
+
+        try:
+            import uuid
+
+            from django.urls import reverse
+
+            payment_note = f"Bidder {invoice.auctiontos_user.bidder_number} in {invoice.auction.title}"[:500]
+
+            # Get and validate buyer email
+            buyer_email = getattr(getattr(invoice, "auctiontos_user", None), "email", None)
+
+            # Validate email domain - Square blocks certain domains like example.com
+            if buyer_email:
+                from django.conf import settings
+
+                email_domain = buyer_email.split("@")[-1].lower() if "@" in buyer_email else ""
+                blocked_domains = settings.SQUARE_BLOCKED_EMAIL_DOMAINS
+                if email_domain in blocked_domains:
+                    buyer_email = None  # Don't send blocked email to Square
+
+            link_resp = client.checkout.payment_links.create(
+                idempotency_key=str(uuid.uuid4()),
+                checkout_options={
+                    "redirect_url": request.build_absolute_uri(
+                        reverse("square_payment_success", kwargs={"uuid": invoice.no_login_link})
+                    ),
+                    "ask_for_shipping_address": False,
+                },
+                pre_populated_data={"buyer_email": buyer_email} if buyer_email else {},
+                order={
+                    "location_id": location_id,
+                    "reference_id": str(invoice.pk),
+                    "line_items": [
+                        {
+                            "name": payment_note,
+                            "quantity": "1",
+                            "base_price_money": {"amount": amount_cents, "currency": self.currency},
+                        }
+                    ],
+                },
+            )
+
+            payment_link_obj = getattr(link_resp, "payment_link", None)
+            payment_url = getattr(payment_link_obj, "url", None)
+            if not payment_url:
+                logger.error("Payment link response missing URL for invoice %s: %s", invoice.pk, link_resp)
+                return None, "Square did not return a payment link"
+
+            return payment_url, None
+
+        except Exception as e:
+            logger.exception("Error creating Square payment link for invoice %s", invoice.pk)
+            # Try to extract error details from Square API error
+            error_msg = "Failed to create Square payment link"
+            if hasattr(e, "body") and isinstance(e.body, dict):
+                errors = e.body.get("errors", [])
+                if errors and isinstance(errors, list) and len(errors) > 0:
+                    error_detail = errors[0].get("detail", "")
+                    error_code = errors[0].get("code", "")
+                    if error_code == "INVALID_EMAIL_ADDRESS":
+                        error_msg = "The email address on your account is not valid for Square payments. Please contact the auction organizer to update your email address."
+                    elif error_detail:
+                        error_msg = f"Square error: {error_detail}"
+            return None, error_msg
+
+    def process_refund(self, payment, refund_amount, reason):
+        """Process a Square refund
+        Args:
+            payment: InvoicePayment object with external_id for the payment
+            refund_amount: Decimal amount to refund
+            reason: String reason for the refund
+        Returns:
+            Error message string or None on success
+        """
+        client = self.get_square_client()
+        if not client:
+            return "Failed to initialize Square client"
+
+        try:
+            import uuid
+            from decimal import Decimal
+
+            # Convert amount to cents
+            refund_amount_cents = int(Decimal(str(refund_amount)) * 100)
+
+            client.refunds.refund_payment(
+                payment_id=payment.external_id,
+                idempotency_key=str(uuid.uuid4()),
+                amount_money={
+                    "amount": refund_amount_cents,
+                    "currency": payment.currency,
+                },
+                reason=reason,
+            )
+            # Webhook will handle creating the negative InvoicePayment record
+            return None
+
+        except Exception as e:
+            error_msg = str(e)
+            if hasattr(e, "body") and isinstance(e.body, dict):
+                error_msg = e.body.get("message", str(e))
+            logger.exception("Square refund failed for payment %s: %s", payment.external_id, error_msg)
+            return f"Square refund failed: {error_msg}"
+
+    def delete(self):
+        auctions = Auction.objects.filter(created_by=self.user, enable_square_payments=True)
+        for auction in auctions:
+            auction.create_history(
+                applies_to="INVOICES",
+                action=f"Square account from {self.payer_email or self.user} has been disconnected. Relink your Square account to re-enable payments.",
+                user=None,
+            )
+            auction.enable_square_payments = False
             auction.save()
         return super().delete()
 
