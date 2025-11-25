@@ -39,7 +39,7 @@ Unsubscribe: https://{{ domain }}/unsubscribe/{{ unsubscribe }}/""",
 
 <ul>
 <li>{% if not auction.promote_this_auction %}Your auction isn't visible to users unless they have a link to it.  {% endif %}Use this link to share your auction: <a href="https://{{ domain }}/?{{ auction.slug }}">https://{{ domain }}/?{{ auction.slug }}</a></li>
-{% if auction.multi_location %}<li>It looks like you've added more than one pickup location to your auction.  Here's some <a href='https://{{ domain }}/blog/multiple-location-auctions/'>more information about how multi-locations auctions work</a>.</li>{% endif %}
+{% if auction.multi_location %}<li>It looks like you've added more than one pickup location to your auction.  Here's some <a href="https://{{ domain }}/blog/multiple-location-auctions/">more information about how multi-locations auctions work</a>.</li>{% endif %}
 </ul>
 
 Just reply to this email if you have questions!<br><br>
