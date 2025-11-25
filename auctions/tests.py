@@ -5542,32 +5542,15 @@ class SquareWebhookSignatureValidationTests(StandardTestCase):
 
     def test_tampered_body_is_rejected(self):
         """Test that a valid signature for different body data is rejected"""
-        original_webhook_data = {
-            "merchant_id": "TEST_MERCHANT_ID",
-            "type": "oauth.authorization.revoked",
-            "event_id": "test-event-id",
-            "created_at": "2025-11-23T16:29:14.35551833Z",
-            "data": {
-                "type": "revocation",
-                "id": "original-id",
-                "object": {"revocation": {"revoked_at": "2025-11-23T16:29:12Z", "revoker_type": "MERCHANT"}},
-            },
-        }
+        import copy
 
-        tampered_webhook_data = {
-            "merchant_id": "DIFFERENT_MERCHANT",  # Attacker tries to change the merchant
-            "type": "oauth.authorization.revoked",
-            "event_id": "test-event-id",
-            "created_at": "2025-11-23T16:29:14.35551833Z",
-            "data": {
-                "type": "revocation",
-                "id": "tampered-id",
-                "object": {"revocation": {"revoked_at": "2025-11-23T16:29:12Z", "revoker_type": "MERCHANT"}},
-            },
-        }
+        # Create tampered data by modifying a copy of the original
+        tampered_webhook_data = copy.deepcopy(self.webhook_data)
+        tampered_webhook_data["merchant_id"] = "DIFFERENT_MERCHANT"  # Attacker tries to change the merchant
+        tampered_webhook_data["data"]["id"] = "tampered-id"
 
         url = reverse("square_webhook")
-        original_body = json.dumps(original_webhook_data)
+        original_body = json.dumps(self.webhook_data)
         tampered_body = json.dumps(tampered_webhook_data)
         full_url = "http://testserver" + url
 
