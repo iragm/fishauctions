@@ -48,6 +48,9 @@ END
 python manage.py migrate --no-input
 python manage.py collectstatic --no-input > /dev/null 2>&1
 
+# Setup Celery Beat periodic tasks in database (idempotent - safe to run multiple times)
+python manage.py setup_celery_beat > /dev/null 2>&1 || true
+
 if [ "${DEBUG}" = "True" ]; then
     echo Starting in development mode, cron jobs must be run manually
     #exec daphne -b 0.0.0.0 -p 8000 fishauctions.asgi:application

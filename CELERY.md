@@ -99,9 +99,6 @@ POST_OFFICE = {
 # Start all services including Celery
 docker compose up -d
 
-# Initial setup: Populate periodic tasks in the database
-docker exec -it django python manage.py setup_celery_beat
-
 # Check Celery worker logs
 docker logs celery_worker -f
 
@@ -109,7 +106,7 @@ docker logs celery_worker -f
 docker logs celery_beat -f
 ```
 
-**Important**: After the first deployment or when adding new tasks, you must run `docker exec -it django python manage.py setup_celery_beat` to populate the periodic tasks in the database. This creates the task entries that appear in Django admin.
+**Note**: Periodic tasks are automatically populated in the database on container startup via `entrypoint.sh`. You can also manually run `docker exec -it django python manage.py setup_celery_beat` to sync tasks if needed.
 
 ### Service Configuration
 
@@ -125,18 +122,19 @@ docker logs celery_beat -f
 
 ## Managing Periodic Tasks
 
-### Initial Setup
+### Automatic Setup
 
-After starting the services for the first time, you need to populate the periodic tasks in the database:
+Periodic tasks are automatically configured in the database on container startup. The `setup_celery_beat` management command runs automatically via `entrypoint.sh` after migrations.
 
+This management command reads the `beat_schedule` from `fishauctions/celery.py` and creates corresponding database entries for django-celery-beat. The command is idempotent (safe to run multiple times) and will:
+- Create new tasks that don't exist
+- Update existing tasks if their schedules have changed
+- Skip tasks that are already up to date
+
+You can also manually run the command if needed:
 ```bash
 docker exec -it django python manage.py setup_celery_beat
 ```
-
-This management command reads the `beat_schedule` from `fishauctions/celery.py` and creates corresponding database entries for django-celery-beat. You need to run this:
-- After first deployment
-- When adding new tasks to `fishauctions/celery.py`
-- When modifying task schedules in code (optional - you can also modify via admin)
 
 ### Via Django Admin
 
