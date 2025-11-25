@@ -1,9 +1,12 @@
 import datetime
+import hashlib
+import hmac
+import json
 from decimal import Decimal
 
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.test.client import Client
 from django.urls import reverse
 from django.utils import timezone
@@ -5414,9 +5417,6 @@ class SquareWebhookSignatureValidationTests(StandardTestCase):
 
     def setUp(self):
         super().setUp()
-        import hashlib
-        import hmac
-
         from .models import SquareSeller
 
         # Create Square seller for testing
@@ -5432,21 +5432,14 @@ class SquareWebhookSignatureValidationTests(StandardTestCase):
         # Test signature key
         self.signature_key = "test-signature-key-12345"
 
-        # Store hashlib and hmac for signature computation
-        self.hashlib = hashlib
-        self.hmac = hmac
-
     def compute_valid_signature(self, url, body):
         """Compute a valid HMAC-SHA256 signature for testing"""
         message = (url + body).encode("utf-8")
         key = self.signature_key.encode("utf-8")
-        return self.hmac.new(key, message, self.hashlib.sha256).hexdigest()
+        return hmac.new(key, message, hashlib.sha256).hexdigest()
 
     def test_forged_signature_is_rejected(self):
         """Test that requests with invalid/forged signatures are rejected when key is configured"""
-        from django.test import override_settings
-        from django.urls import reverse
-
         webhook_data = {
             "merchant_id": "TEST_MERCHANT_ID",
             "type": "oauth.authorization.revoked",
@@ -5477,9 +5470,6 @@ class SquareWebhookSignatureValidationTests(StandardTestCase):
 
     def test_missing_signature_header_is_rejected(self):
         """Test that requests without signature header are rejected when key is configured"""
-        from django.test import override_settings
-        from django.urls import reverse
-
         webhook_data = {
             "merchant_id": "TEST_MERCHANT_ID",
             "type": "oauth.authorization.revoked",
@@ -5509,11 +5499,6 @@ class SquareWebhookSignatureValidationTests(StandardTestCase):
 
     def test_valid_signature_is_accepted(self):
         """Test that requests with valid signatures are accepted when key is configured"""
-        import json
-
-        from django.test import override_settings
-        from django.urls import reverse
-
         webhook_data = {
             "merchant_id": "TEST_MERCHANT_ID",
             "type": "oauth.authorization.revoked",
@@ -5550,11 +5535,6 @@ class SquareWebhookSignatureValidationTests(StandardTestCase):
 
     def test_wrong_signature_key_is_rejected(self):
         """Test that signatures computed with a different key are rejected"""
-        import json
-
-        from django.test import override_settings
-        from django.urls import reverse
-
         webhook_data = {
             "merchant_id": "TEST_MERCHANT_ID",
             "type": "oauth.authorization.revoked",
@@ -5575,7 +5555,7 @@ class SquareWebhookSignatureValidationTests(StandardTestCase):
         wrong_key = "attacker-key-different"
         message = (full_url + body).encode("utf-8")
         key = wrong_key.encode("utf-8")
-        wrong_signature = self.hmac.new(key, message, self.hashlib.sha256).hexdigest()
+        wrong_signature = hmac.new(key, message, hashlib.sha256).hexdigest()
 
         # Test with correct signature key configured - wrong key signature should be rejected
         with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY=self.signature_key):
@@ -5592,11 +5572,6 @@ class SquareWebhookSignatureValidationTests(StandardTestCase):
 
     def test_tampered_body_is_rejected(self):
         """Test that a valid signature for different body data is rejected"""
-        import json
-
-        from django.test import override_settings
-        from django.urls import reverse
-
         original_webhook_data = {
             "merchant_id": "TEST_MERCHANT_ID",
             "type": "oauth.authorization.revoked",
