@@ -13,8 +13,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      - db
-      - redis
+      redis:
+        condition: service_started
     restart: always
 
   celery_worker:
