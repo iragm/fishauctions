@@ -9769,7 +9769,7 @@ class SquareWebhookView(SquareAPIMixin, View):
         """
         if not settings.SQUARE_WEBHOOK_SIGNATURE_KEY:
             logger.warning("SQUARE_WEBHOOK_SIGNATURE_KEY not configured - skipping signature verification")
-            if settings.debug:
+            if settings.DEBUG:
                 return True  # Allow webhook if signature key not configured
             else:
                 return False  # Reject webhook if signature key not configured in production
@@ -9797,6 +9797,12 @@ class SquareWebhookView(SquareAPIMixin, View):
             return False
 
     def post(self, request, *args, **kwargs):
+        # In production, require SQUARE_WEBHOOK_SIGNATURE_KEY if Square is configured
+        if not settings.DEBUG and not settings.SQUARE_WEBHOOK_SIGNATURE_KEY:
+            if settings.SQUARE_APPLICATION_ID or settings.SQUARE_CLIENT_SECRET:
+                msg = "SQUARE_WEBHOOK_SIGNATURE_KEY must be set in production when Square is configured"
+                raise ImproperlyConfigured(msg)
+
         # Read raw body
         try:
             raw_body = request.body.decode("utf-8")

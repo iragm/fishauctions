@@ -1,9 +1,12 @@
 import datetime
+import hashlib
+import hmac
+import json
 from decimal import Decimal
 
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.test.client import Client
 from django.urls import reverse
 from django.utils import timezone
@@ -5403,6 +5406,191 @@ class SquareOAuthRevocationTests(StandardTestCase):
             self.assertEqual(payment.payment_method, "Square")
             # Verify that the status field is not present (would raise AttributeError if accessed)
             self.assertFalse(hasattr(payment, "status") and payment.status)
+
+
+class SquareWebhookSignatureValidationTests(StandardTestCase):
+    """Tests for Square webhook signature validation
+
+    Confirms that SQUARE_WEBHOOK_SIGNATURE_KEY is actually respected
+    and that we don't validate forged requests.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from .models import SquareSeller
+
+        # Create Square seller for testing
+        self.square_seller = SquareSeller.objects.create(
+            user=self.admin_user,
+            square_merchant_id="TEST_MERCHANT_ID",
+            access_token="TEST_ACCESS_TOKEN",
+            refresh_token="TEST_REFRESH_TOKEN",
+            token_expires_at=timezone.now() + datetime.timedelta(days=30),
+            currency="USD",
+        )
+
+        # Test signature key
+        self.signature_key = "test-signature-key-12345"
+
+        # Standard webhook data used across tests
+        self.webhook_data = {
+            "merchant_id": "TEST_MERCHANT_ID",
+            "type": "oauth.authorization.revoked",
+            "event_id": "test-event-id",
+            "created_at": "2025-11-23T16:29:14.35551833Z",
+            "data": {
+                "type": "revocation",
+                "id": "test-revocation-id",
+                "object": {"revocation": {"revoked_at": "2025-11-23T16:29:12Z", "revoker_type": "MERCHANT"}},
+            },
+        }
+
+    def compute_signature(self, url, body, key=None):
+        """Compute an HMAC-SHA256 signature for testing
+
+        Args:
+            url: The notification URL
+            body: The request body
+            key: Optional signature key (defaults to self.signature_key)
+        """
+        if key is None:
+            key = self.signature_key
+        message = (url + body).encode("utf-8")
+        key_bytes = key.encode("utf-8")
+        return hmac.new(key_bytes, message, hashlib.sha256).hexdigest()
+
+    def test_forged_signature_is_rejected(self):
+        """Test that requests with invalid/forged signatures are rejected when key is configured"""
+        url = reverse("square_webhook")
+
+        # Test with signature key configured - forged signature should be rejected
+        with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY=self.signature_key):
+            # Send with a forged/invalid signature
+            response = self.client.post(
+                url,
+                data=self.webhook_data,
+                content_type="application/json",
+                HTTP_X_SQUARE_HMACSHA256_SIGNATURE="forged-invalid-signature",
+            )
+
+            # Should return 403 Forbidden
+            self.assertEqual(response.status_code, 403)
+            self.assertIn(b"invalid signature", response.content)
+
+    def test_missing_signature_header_is_rejected(self):
+        """Test that requests without signature header are rejected when key is configured"""
+        url = reverse("square_webhook")
+
+        # Test with signature key configured - missing signature should be rejected
+        with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY=self.signature_key):
+            # Send without signature header
+            response = self.client.post(
+                url,
+                data=self.webhook_data,
+                content_type="application/json",
+            )
+
+            # Should return 403 Forbidden
+            self.assertEqual(response.status_code, 403)
+            self.assertIn(b"missing signature", response.content)
+
+    def test_valid_signature_is_accepted(self):
+        """Test that requests with valid signatures are accepted when key is configured"""
+        url = reverse("square_webhook")
+        body = json.dumps(self.webhook_data)
+
+        # Build the full URL as the test client would see it
+        # The test client uses HTTP on localhost by default
+        full_url = "http://testserver" + url
+
+        # Compute the correct signature
+        valid_signature = self.compute_signature(full_url, body)
+
+        # Test with signature key configured - valid signature should be accepted
+        with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY=self.signature_key):
+            response = self.client.post(
+                url,
+                data=body,
+                content_type="application/json",
+                HTTP_X_SQUARE_HMACSHA256_SIGNATURE=valid_signature,
+            )
+
+            # Should return 200 OK
+            self.assertEqual(response.status_code, 200)
+
+    def test_wrong_signature_key_is_rejected(self):
+        """Test that signatures computed with a different key are rejected"""
+        url = reverse("square_webhook")
+        body = json.dumps(self.webhook_data)
+        full_url = "http://testserver" + url
+
+        # Compute signature with a DIFFERENT key (attacker's key)
+        wrong_signature = self.compute_signature(full_url, body, key="attacker-key-different")
+
+        # Test with correct signature key configured - wrong key signature should be rejected
+        with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY=self.signature_key):
+            response = self.client.post(
+                url,
+                data=body,
+                content_type="application/json",
+                HTTP_X_SQUARE_HMACSHA256_SIGNATURE=wrong_signature,
+            )
+
+            # Should return 403 Forbidden
+            self.assertEqual(response.status_code, 403)
+            self.assertIn(b"invalid signature", response.content)
+
+    def test_tampered_body_is_rejected(self):
+        """Test that a valid signature for different body data is rejected"""
+        import copy
+
+        # Create tampered data by modifying a copy of the original
+        tampered_webhook_data = copy.deepcopy(self.webhook_data)
+        tampered_webhook_data["merchant_id"] = "DIFFERENT_MERCHANT"  # Attacker tries to change the merchant
+        tampered_webhook_data["data"]["id"] = "tampered-id"
+
+        url = reverse("square_webhook")
+        original_body = json.dumps(self.webhook_data)
+        tampered_body = json.dumps(tampered_webhook_data)
+        full_url = "http://testserver" + url
+
+        # Compute valid signature for ORIGINAL body
+        valid_signature = self.compute_signature(full_url, original_body)
+
+        # Test: Send tampered body with signature for original body
+        with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY=self.signature_key):
+            response = self.client.post(
+                url,
+                data=tampered_body,
+                content_type="application/json",
+                HTTP_X_SQUARE_HMACSHA256_SIGNATURE=valid_signature,
+            )
+
+            # Should return 403 Forbidden because body doesn't match signature
+            self.assertEqual(response.status_code, 403)
+            self.assertIn(b"invalid signature", response.content)
+
+    def test_improperly_configured_in_production_without_webhook_key(self):
+        """Test that ImproperlyConfigured is raised in production when Square is configured but webhook key is missing"""
+        from django.core.exceptions import ImproperlyConfigured
+
+        url = reverse("square_webhook")
+
+        # Simulate production mode (DEBUG=False) with Square configured but no webhook signature key
+        with override_settings(
+            DEBUG=False,
+            SQUARE_APPLICATION_ID="test-app-id",
+            SQUARE_CLIENT_SECRET="test-client-secret",
+            SQUARE_WEBHOOK_SIGNATURE_KEY="",
+        ):
+            with self.assertRaises(ImproperlyConfigured) as context:
+                self.client.post(
+                    url,
+                    data=self.webhook_data,
+                    content_type="application/json",
+                )
+
+            self.assertIn("SQUARE_WEBHOOK_SIGNATURE_KEY must be set", str(context.exception))
 
 
 class CurrencyCustomizationTests(StandardTestCase):
