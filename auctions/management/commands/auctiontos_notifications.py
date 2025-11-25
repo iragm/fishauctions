@@ -93,7 +93,12 @@ class Command(BaseCommand):
             tos.save()
             if tos.unbanned_lot_count:
                 send_tos_notification("auction_print_reminder", tos)
-        in_person_auction_print_reminder = print_reminder_qs.filter(
+        # For in-person auctions, include manually added users who have added lots themselves
+        in_person_print_reminder_base_qs = AuctionTOS.objects.filter(user__isnull=False).exclude(
+            pickup_location__pickup_by_mail=True
+        )
+        in_person_print_reminder_qs = in_person_print_reminder_base_qs.filter(print_reminder_email_sent=False)
+        in_person_auction_print_reminder = in_person_print_reminder_qs.filter(
             auction__is_online=False,
             auction__date_start__gte=timezone.now() + datetime.timedelta(hours=24),
             auction__date_start__lte=timezone.now() + datetime.timedelta(hours=28),
@@ -101,7 +106,7 @@ class Command(BaseCommand):
         for tos in in_person_auction_print_reminder:
             tos.print_reminder_email_sent = True
             tos.save()
-            if tos.unbanned_lot_count:
+            if tos.self_submitted_unbanned_lot_count:
                 send_tos_notification("auction_print_reminder", tos)
 
         # for auctions that allow buy now, we need to send a reminder email to sellers to print their lot labels
