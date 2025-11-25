@@ -5432,15 +5432,8 @@ class SquareWebhookSignatureValidationTests(StandardTestCase):
         # Test signature key
         self.signature_key = "test-signature-key-12345"
 
-    def compute_valid_signature(self, url, body):
-        """Compute a valid HMAC-SHA256 signature for testing"""
-        message = (url + body).encode("utf-8")
-        key = self.signature_key.encode("utf-8")
-        return hmac.new(key, message, hashlib.sha256).hexdigest()
-
-    def test_forged_signature_is_rejected(self):
-        """Test that requests with invalid/forged signatures are rejected when key is configured"""
-        webhook_data = {
+        # Standard webhook data used across tests
+        self.webhook_data = {
             "merchant_id": "TEST_MERCHANT_ID",
             "type": "oauth.authorization.revoked",
             "event_id": "test-event-id",
@@ -5452,6 +5445,22 @@ class SquareWebhookSignatureValidationTests(StandardTestCase):
             },
         }
 
+    def compute_signature(self, url, body, key=None):
+        """Compute an HMAC-SHA256 signature for testing
+
+        Args:
+            url: The notification URL
+            body: The request body
+            key: Optional signature key (defaults to self.signature_key)
+        """
+        if key is None:
+            key = self.signature_key
+        message = (url + body).encode("utf-8")
+        key_bytes = key.encode("utf-8")
+        return hmac.new(key_bytes, message, hashlib.sha256).hexdigest()
+
+    def test_forged_signature_is_rejected(self):
+        """Test that requests with invalid/forged signatures are rejected when key is configured"""
         url = reverse("square_webhook")
 
         # Test with signature key configured - forged signature should be rejected
@@ -5459,7 +5468,7 @@ class SquareWebhookSignatureValidationTests(StandardTestCase):
             # Send with a forged/invalid signature
             response = self.client.post(
                 url,
-                data=webhook_data,
+                data=self.webhook_data,
                 content_type="application/json",
                 HTTP_X_SQUARE_HMACSHA256_SIGNATURE="forged-invalid-signature",
             )
@@ -5470,18 +5479,6 @@ class SquareWebhookSignatureValidationTests(StandardTestCase):
 
     def test_missing_signature_header_is_rejected(self):
         """Test that requests without signature header are rejected when key is configured"""
-        webhook_data = {
-            "merchant_id": "TEST_MERCHANT_ID",
-            "type": "oauth.authorization.revoked",
-            "event_id": "test-event-id",
-            "created_at": "2025-11-23T16:29:14.35551833Z",
-            "data": {
-                "type": "revocation",
-                "id": "test-revocation-id",
-                "object": {"revocation": {"revoked_at": "2025-11-23T16:29:12Z", "revoker_type": "MERCHANT"}},
-            },
-        }
-
         url = reverse("square_webhook")
 
         # Test with signature key configured - missing signature should be rejected
@@ -5489,7 +5486,7 @@ class SquareWebhookSignatureValidationTests(StandardTestCase):
             # Send without signature header
             response = self.client.post(
                 url,
-                data=webhook_data,
+                data=self.webhook_data,
                 content_type="application/json",
             )
 
@@ -5499,27 +5496,15 @@ class SquareWebhookSignatureValidationTests(StandardTestCase):
 
     def test_valid_signature_is_accepted(self):
         """Test that requests with valid signatures are accepted when key is configured"""
-        webhook_data = {
-            "merchant_id": "TEST_MERCHANT_ID",
-            "type": "oauth.authorization.revoked",
-            "event_id": "test-event-id",
-            "created_at": "2025-11-23T16:29:14.35551833Z",
-            "data": {
-                "type": "revocation",
-                "id": "test-revocation-id",
-                "object": {"revocation": {"revoked_at": "2025-11-23T16:29:12Z", "revoker_type": "MERCHANT"}},
-            },
-        }
-
         url = reverse("square_webhook")
-        body = json.dumps(webhook_data)
+        body = json.dumps(self.webhook_data)
 
         # Build the full URL as the test client would see it
         # The test client uses HTTP on localhost by default
         full_url = "http://testserver" + url
 
         # Compute the correct signature
-        valid_signature = self.compute_valid_signature(full_url, body)
+        valid_signature = self.compute_signature(full_url, body)
 
         # Test with signature key configured - valid signature should be accepted
         with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY=self.signature_key):
@@ -5535,27 +5520,12 @@ class SquareWebhookSignatureValidationTests(StandardTestCase):
 
     def test_wrong_signature_key_is_rejected(self):
         """Test that signatures computed with a different key are rejected"""
-        webhook_data = {
-            "merchant_id": "TEST_MERCHANT_ID",
-            "type": "oauth.authorization.revoked",
-            "event_id": "test-event-id",
-            "created_at": "2025-11-23T16:29:14.35551833Z",
-            "data": {
-                "type": "revocation",
-                "id": "test-revocation-id",
-                "object": {"revocation": {"revoked_at": "2025-11-23T16:29:12Z", "revoker_type": "MERCHANT"}},
-            },
-        }
-
         url = reverse("square_webhook")
-        body = json.dumps(webhook_data)
+        body = json.dumps(self.webhook_data)
         full_url = "http://testserver" + url
 
         # Compute signature with a DIFFERENT key (attacker's key)
-        wrong_key = "attacker-key-different"
-        message = (full_url + body).encode("utf-8")
-        key = wrong_key.encode("utf-8")
-        wrong_signature = hmac.new(key, message, hashlib.sha256).hexdigest()
+        wrong_signature = self.compute_signature(full_url, body, key="attacker-key-different")
 
         # Test with correct signature key configured - wrong key signature should be rejected
         with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY=self.signature_key):
@@ -5602,7 +5572,7 @@ class SquareWebhookSignatureValidationTests(StandardTestCase):
         full_url = "http://testserver" + url
 
         # Compute valid signature for ORIGINAL body
-        valid_signature = self.compute_valid_signature(full_url, original_body)
+        valid_signature = self.compute_signature(full_url, original_body)
 
         # Test: Send tampered body with signature for original body
         with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY=self.signature_key):
