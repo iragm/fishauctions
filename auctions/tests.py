@@ -3644,7 +3644,7 @@ class WebSocketConsumerTests(TransactionTestCase):
     - All operations have timeouts
     - Proper cleanup with try-finally blocks
     - Simplified message handling to avoid hanging
-    
+
     Note: Uses TransactionTestCase instead of TestCase to properly handle
     database transactions with async code and channels' database_sync_to_async
     """
@@ -3655,10 +3655,93 @@ class WebSocketConsumerTests(TransactionTestCase):
     RECEIVE_TIMEOUT = 3
 
     def setUp(self):
-        """Set up test users needed for websocket tests"""
-        self.user = User.objects.create_user(username="test_user", password="testpassword", email="test@example.com")
+        """Set up test data needed for websocket tests - mirrors StandardTestCase setup"""
+        time = timezone.now() - datetime.timedelta(days=2)
+        timeStart = timezone.now() - datetime.timedelta(days=3)
+        theFuture = timezone.now() + datetime.timedelta(days=3)
         self.admin_user = User.objects.create_user(
-            username="admin_user", password="testpassword", email="admin@example.com"
+            username="admin_user", password="testpassword", email="test@example.com"
+        )
+        self.user = User.objects.create_user(username="my_lot", password="testpassword", email="test@example.com")
+        self.user_with_no_lots = User.objects.create_user(
+            username="no_lots", password="testpassword", email="asdf@example.com"
+        )
+        self.user_who_does_not_join = User.objects.create_user(
+            username="no_joins", password="testpassword", email="zxcgv@example.com"
+        )
+        self.online_auction = Auction.objects.create(
+            created_by=self.user,
+            title="This auction is online",
+            is_online=True,
+            date_end=time,
+            date_start=timeStart,
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=25,
+        )
+        self.in_person_auction = Auction.objects.create(
+            created_by=self.user,
+            title="This auction is in-person",
+            is_online=False,
+            date_end=time,
+            date_start=timeStart,
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=25,
+            buy_now="allow",
+            reserve_price="allow",
+            use_seller_dash_lot_numbering=True,
+        )
+        self.location = PickupLocation.objects.create(
+            name="location", auction=self.online_auction, pickup_time=theFuture
+        )
+        self.in_person_location = PickupLocation.objects.create(
+            name="location", auction=self.in_person_auction, pickup_time=theFuture
+        )
+        self.userB = User.objects.create_user(username="no_tos", password="testpassword")
+        self.admin_online_tos = AuctionTOS.objects.create(
+            user=self.admin_user, auction=self.online_auction, pickup_location=self.location, is_admin=True
+        )
+        self.admin_in_person_tos = AuctionTOS.objects.create(
+            user=self.admin_user, auction=self.in_person_auction, pickup_location=self.in_person_location, is_admin=True
+        )
+        self.online_tos = AuctionTOS.objects.create(
+            user=self.user, auction=self.online_auction, pickup_location=self.location
+        )
+        self.in_person_tos = AuctionTOS.objects.create(
+            user=self.user, auction=self.in_person_auction, pickup_location=self.location
+        )
+        self.tosB = AuctionTOS.objects.create(
+            user=self.userB, auction=self.online_auction, pickup_location=self.location
+        )
+        self.tosC = AuctionTOS.objects.create(
+            user=self.user_with_no_lots, auction=self.online_auction, pickup_location=self.location
+        )
+        self.in_person_buyer = AuctionTOS.objects.create(
+            user=self.user_with_no_lots,
+            auction=self.in_person_auction,
+            pickup_location=self.in_person_location,
+            bidder_number="555",
+        )
+        self.lot = Lot.objects.create(
+            lot_name="A test lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            winning_price=10,
+            auctiontos_winner=self.tosB,
+            active=False,
+        )
+        self.lotB = Lot.objects.create(
+            lot_name="B test lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            winning_price=10,
+            auctiontos_winner=self.tosB,
+            active=False,
         )
 
     async def _create_active_lot_with_auction(self, seller_user, bidder_user=None):
