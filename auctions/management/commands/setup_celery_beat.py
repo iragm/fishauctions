@@ -91,7 +91,5 @@ class Command(BaseCommand):
         self.stdout.write(f"  Total: {len(beat_schedule)}")
         self.stdout.write("")
         self.stdout.write(
-            self.style.SUCCESS(
-                "Periodic tasks are now visible in Django Admin → Periodic Tasks → Periodic tasks"
-            )
+            self.style.SUCCESS("Periodic tasks are now visible in Django Admin → Periodic Tasks → Periodic tasks")
         )
