@@ -88,9 +88,30 @@ def on_save_auction(sender, instance, **kwargs):
             location.pickup_time = instance.date_start
             location.save()
 
+        # Update email due dates when auction dates change (only if not already sent)
+        if not instance.invoice_email_sent:
+            if instance.is_online and instance.date_end:
+                instance.invoice_email_due = instance.date_end + datetime.timedelta(hours=1)
+        if not instance.followup_email_sent:
+            if instance.is_online and instance.date_end:
+                instance.followup_email_due = instance.date_end + datetime.timedelta(hours=24)
+            elif not instance.is_online and instance.date_start:
+                instance.followup_email_due = instance.date_start + datetime.timedelta(hours=24)
+
     else:
         # logic for new auctions goes here
-        pass
+        # Set initial email due dates
+        instance.welcome_email_due = timezone.now() + datetime.timedelta(hours=24)
+        if instance.is_online:
+            if instance.date_end:
+                instance.invoice_email_due = instance.date_end + datetime.timedelta(hours=1)
+            if instance.date_end:
+                instance.followup_email_due = instance.date_end + datetime.timedelta(hours=24)
+        else:
+            # For in-person auctions, skip invoice email and set followup based on date_start
+            instance.invoice_email_sent = True  # Mark as sent so it won't be sent
+            if instance.date_start:
+                instance.followup_email_due = instance.date_start + datetime.timedelta(hours=24)
     if not instance.is_online:
         # for in-person auctions, we need to add a single pickup location
         # and create it if the user was dumb enough to delete it

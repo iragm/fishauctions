@@ -5640,3 +5640,83 @@ class CurrencyCustomizationTests(StandardTestCase):
         expected_currencies = ["USD", "CAD", "GBP", "EUR", "JPY", "AUD", "CHF", "CNY"]
         for currency in expected_currencies:
             self.assertIn(currency, currency_choices)
+
+
+class AuctionEmailFieldsTest(StandardTestCase):
+    """Tests for the new auction email tracking fields and signal handling."""
+
+    def test_new_online_auction_has_email_due_dates(self):
+        """Test that a new online auction has email due dates set correctly."""
+        user = User.objects.create_user(username="email_test_user", password="testpassword", email="email@example.com")
+        future_end = timezone.now() + datetime.timedelta(days=7)
+        future_start = timezone.now() + datetime.timedelta(hours=1)
+
+        auction = Auction.objects.create(
+            created_by=user,
+            title="Email Test Auction",
+            is_online=True,
+            date_start=future_start,
+            date_end=future_end,
+        )
+
+        # Welcome email should be due 24 hours after creation
+        self.assertIsNotNone(auction.welcome_email_due)
+        self.assertFalse(auction.welcome_email_sent)
+
+        # Invoice email should be due 1 hour after auction end (for online auctions)
+        self.assertIsNotNone(auction.invoice_email_due)
+        self.assertFalse(auction.invoice_email_sent)
+
+        # Follow-up email should be due 24 hours after auction end (for online auctions)
+        self.assertIsNotNone(auction.followup_email_due)
+        self.assertFalse(auction.followup_email_sent)
+
+    def test_new_inperson_auction_has_invoice_marked_sent(self):
+        """Test that a new in-person auction has invoice email marked as sent."""
+        user = User.objects.create_user(
+            username="inperson_test_user", password="testpassword", email="inperson@example.com"
+        )
+        future_start = timezone.now() + datetime.timedelta(hours=1)
+
+        auction = Auction.objects.create(
+            created_by=user,
+            title="In-Person Test Auction",
+            is_online=False,
+            date_start=future_start,
+        )
+
+        # Invoice email should be marked as sent for in-person auctions
+        self.assertTrue(auction.invoice_email_sent)
+
+        # Follow-up email should be due 24 hours after auction start (for in-person auctions)
+        self.assertIsNotNone(auction.followup_email_due)
+        self.assertFalse(auction.followup_email_sent)
+
+    def test_email_due_dates_updated_when_dates_change(self):
+        """Test that email due dates are updated when auction dates change."""
+        user = User.objects.create_user(username="date_change_user", password="testpassword", email="date@example.com")
+        future_end = timezone.now() + datetime.timedelta(days=7)
+        future_start = timezone.now() + datetime.timedelta(hours=1)
+
+        auction = Auction.objects.create(
+            created_by=user,
+            title="Date Change Test Auction",
+            is_online=True,
+            date_start=future_start,
+            date_end=future_end,
+        )
+
+        original_invoice_due = auction.invoice_email_due
+        original_followup_due = auction.followup_email_due
+
+        # Change the auction end date
+        new_end = timezone.now() + datetime.timedelta(days=14)
+        auction.date_end = new_end
+        auction.save()
+
+        # Refresh from database
+        auction.refresh_from_db()
+
+        # Invoice and follow-up due dates should be updated
+        self.assertNotEqual(auction.invoice_email_due, original_invoice_due)
+        self.assertNotEqual(auction.followup_email_due, original_followup_due)
