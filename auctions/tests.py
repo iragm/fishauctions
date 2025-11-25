@@ -5570,6 +5570,28 @@ class SquareWebhookSignatureValidationTests(StandardTestCase):
             self.assertEqual(response.status_code, 403)
             self.assertIn(b"invalid signature", response.content)
 
+    def test_improperly_configured_in_production_without_webhook_key(self):
+        """Test that ImproperlyConfigured is raised in production when Square is configured but webhook key is missing"""
+        from django.core.exceptions import ImproperlyConfigured
+
+        url = reverse("square_webhook")
+
+        # Simulate production mode (DEBUG=False) with Square configured but no webhook signature key
+        with override_settings(
+            DEBUG=False,
+            SQUARE_APPLICATION_ID="test-app-id",
+            SQUARE_CLIENT_SECRET="test-client-secret",
+            SQUARE_WEBHOOK_SIGNATURE_KEY="",
+        ):
+            with self.assertRaises(ImproperlyConfigured) as context:
+                self.client.post(
+                    url,
+                    data=self.webhook_data,
+                    content_type="application/json",
+                )
+
+            self.assertIn("SQUARE_WEBHOOK_SIGNATURE_KEY must be set", str(context.exception))
+
 
 class CurrencyCustomizationTests(StandardTestCase):
     """Tests for currency display customization"""
