@@ -99,7 +99,6 @@ RUN apt-get update && \
     build-essential \
     pkg-config \
     default-libmysqlclient-dev \
-    cron \
     nano \
     # python3-pip \
     # python3-cffi \
@@ -112,14 +111,6 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 RUN pip install pip-tools
-
-# cron setup
-COPY crontab /etc/cron.d/django-cron
-RUN chmod 0644 /etc/cron.d/django-cron
-RUN chmod gu+rw /var/run
-RUN chmod gu+s /usr/sbin/cron
-RUN crontab /etc/cron.d/django-cron
-RUN touch /var/log/cron.log
 
 COPY --from=builder /usr/src/app/wheels /wheels
 COPY --from=builder /usr/src/app/requirements.txt .
