@@ -77,4 +77,7 @@ django-weasyprint
 reportlab
 beautifulsoup4
 django-encrypted-model-fields
+celery
+django-celery-beat
+redis
 squareup
