@@ -12,7 +12,6 @@ https://docs.djangoproject.com/en/3.1/ref/settings/
 
 import datetime
 import os
-import sys
 from decimal import Decimal
 from pathlib import Path
 
