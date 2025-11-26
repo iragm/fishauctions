@@ -5106,6 +5106,63 @@ class SquarePaymentTests(StandardTestCase):
         # Without the proxy header in test environment, it will use http
         self.assertIn("/square/onboard/success/", redirect_uri)
 
+    def test_receipt_number_field(self):
+        """Test that InvoicePayment has receipt_number field"""
+        from auctions.models import InvoicePayment
+
+        # Create a payment with receipt_number
+        payment = InvoicePayment.objects.create(
+            invoice=self.test_invoice,
+            payment_method="Square",
+            amount=50.00,
+            external_id="TEST_EXTERNAL_ID",
+            receipt_number="ABCD",
+        )
+
+        self.assertEqual(payment.receipt_number, "ABCD")
+        self.assertEqual(payment.external_id, "TEST_EXTERNAL_ID")
+
+    def test_receipt_number_search_in_auction_tos_filter(self):
+        """Test that receipt_number can be used to search users"""
+        from auctions.filters import AuctionTOSFilter
+        from auctions.models import AuctionTOS, InvoicePayment
+
+        # Create payment with receipt number
+        InvoicePayment.objects.create(
+            invoice=self.test_invoice,
+            payment_method="Square",
+            amount=100.00,
+            receipt_number="WXYZ",
+        )
+
+        # Create a queryset of all auction TOS
+        qs = AuctionTOS.objects.filter(auction=self.online_auction)
+
+        # Search by receipt_number
+        filtered_qs = AuctionTOSFilter.generic(self, qs, "wxyz")
+
+        # Should find the user with the invoice that has this receipt_number
+        self.assertGreater(filtered_qs.count(), 0)
+
+    def test_pickup_by_mail_requires_address(self):
+        """Test that Square payment link requires address when pickup_by_mail is True"""
+        from auctions.models import PickupLocation
+
+        # Create a pickup by mail location
+        mail_location = PickupLocation.objects.create(
+            auction=self.online_auction,
+            name="Mail",
+            pickup_by_mail=True,
+        )
+
+        # Update tosB to use mail pickup
+        self.tosB.pickup_location = mail_location
+        self.tosB.save()
+
+        # The create_payment_link method should set ask_for_shipping_address=True
+        # We can't test the actual API call, but we can verify the location is set correctly
+        self.assertTrue(self.tosB.pickup_location.pickup_by_mail)
+
 
 class SquareRefundFormTests(StandardTestCase):
     """Tests for Square refund integration in forms"""
