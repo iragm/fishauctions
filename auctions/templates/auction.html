@@ -12,7 +12,7 @@ function copyLink() {
   copyText.select();
   copyText.setSelectionRange(0, 99999);
   document.execCommand("copy");
-  
+
   // Show feedback
   var feedback = document.getElementById("copyFeedback");
   if (feedback) {
@@ -143,7 +143,7 @@ function initMap() {
 <div id="fb-root"></div>
 
             {% include 'auction_ribbon.html' %}
-            
+
             {# Quick Actions Section - Organized and Clean #}
             <div class="card mb-4">
                 <div class="card-body">
@@ -165,12 +165,12 @@ function initMap() {
                             <a href='{% url "print_my_labels" slug=auction.slug %}' class="btn btn-secondary btn-sm w-100"><i class="bi bi-tags"></i> Print Labels</a>
                         </div>
                     </div>
-                    
+
                     {# Admin Actions - Collapsible Section #}
                     {% if view.is_auction_admin or request.user.is_superuser %}
                     <hr class="my-3">
                     <div class="d-grid">
-                        <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#adminActions" aria-expanded="false" aria-controls="adminActions" aria-label="Show or hide admin actions">
+                        <button class="btn btn-sm btn-outline-secondary text-light" type="button" data-bs-toggle="collapse" data-bs-target="#adminActions" aria-expanded="false" aria-controls="adminActions" aria-label="Show or hide admin actions">
                             <i class="bi bi-gear-fill"></i> Admin Actions <i class="bi bi-chevron-down"></i>
                         </button>
                     </div>
@@ -278,7 +278,7 @@ function initMap() {
                         {% else %}
                             <p class="mb-0"><a href="/login/?next={% firstof request.path '/' %}" class="btn btn-primary">Please login to join the auction</a></p>
                         {% endif %}
-                        
+
                         {# Single location details shown here #}
                         {% if not auction.multi_location %}
                         {% for location in pickup_locations %}
@@ -335,7 +335,7 @@ function initMap() {
                 </div>
             {% endif %}
             <div id="join-message" style="position:fixed; bottom:0; right:30%; visibility: hidden; opacity: 0;" data-toggle="tooltip" data-placement="top" title="Keep scrolling to join this auction"></div>
-            
+
             {# Multi-location Details with Horizontal Scrolling Tabs #}
             {% if auction.multi_location %}
             <div class="card mb-4">
@@ -348,9 +348,9 @@ function initMap() {
                         <ul class="nav nav-tabs flex-nowrap mb-3" role="tablist" style="flex-wrap: nowrap;">
                             {% for location in pickup_locations %}
                             <li class="nav-item" role="presentation">
-                                <a class="nav-link {% if hasChosenLocation == location.pk%}active{% endif %}" 
-                                   data-bs-toggle="tab" 
-                                   href="#location_{{location.pk}}{{location.short_name}}" 
+                                <a class="nav-link {% if hasChosenLocation == location.pk%}active{% endif %}"
+                                   data-bs-toggle="tab"
+                                   href="#location_{{location.pk}}{{location.short_name}}"
                                    role="tab"
                                    aria-controls="location_{{location.pk}}{{location.short_name}}"
                                    aria-selected="{% if hasChosenLocation == location.pk%}true{% else %}false{% endif %}">
@@ -360,32 +360,32 @@ function initMap() {
                             {% endfor %}
                         </ul>
                     </div>
-                    
+
                     <div id="locationTabContent" class="tab-content">
                         {% for location in pickup_locations %}
                         {# location content for multi-location auction ONLY here #}
-                        <div class="tab-pane fade {% if hasChosenLocation == location.pk%}active show{% endif %}" 
-                             id="location_{{location.pk}}{{location.short_name}}" 
+                        <div class="tab-pane fade {% if hasChosenLocation == location.pk%}active show{% endif %}"
+                             id="location_{{location.pk}}{{location.short_name}}"
                              role="tabpanel"
                              aria-labelledby="location-{{location.pk}}-tab">
-                            
+
                             {% if hasChosenLocation == location.pk%}
                             <div class="alert alert-success mb-3" role="alert">
                                 <i class="bi bi-check-circle-fill"></i> <strong>Your Confirmed Location</strong>
                             </div>
                             {% endif %}
-                            
+
                             {% if location.description %}
                                 <p>{{ location.description|linebreaksbr }}</p>
                             {% endif %}
-                            
+
                             {% if not location.pickup_by_mail %}
                                 {% if location.users_must_coordinate_pickup %}
                                     <p>You must schedule your pickup time in advance.</p>
                                 {% else %}
                                     <p><strong>{{ location.pickup_time }}</strong></p>
                                 {% endif %}
-                                
+
                                 <div class="btn-group mb-3 flex-wrap" role="group">
                                     {%if location.has_coordinates %}
                                     <a href="{{location.directions_link}}" class="btn btn-sm btn-primary"><i class="bi bi-geo-alt-fill"></i> Get directions</a>
@@ -411,7 +411,7 @@ function initMap() {
                                     <a href="mailto:?bcc={{location.email_list}}&subject={{auction}} - {{location.name}}" class="btn btn-sm btn-info"><i class="bi bi-envelope-at"></i> Email {{location.number_of_users}}</a>
                                     {% endif %}
                                 </div>
-                                
+
                                 {% if location.second_pickup_time %}
                                     <p>You must return on <strong>{{ location.second_pickup_time }}</strong> to pick up lots from other locations.</p>
                                     {% if hasChosenLocation == location.pk%}
@@ -428,7 +428,7 @@ function initMap() {
                                     {% endif %}
                                 {% endif %}
                             {% endif %}
-                            
+
                             {% if location.contact_person %}
                             {% if hasChosenLocation == location.pk or view.is_auction_admin %}
                             <div class="mt-3 p-3 border rounded">
