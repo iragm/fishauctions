@@ -58,7 +58,7 @@ jobs:
           docker exec -u root django pip install selenium
       - name: Run Selenium tests
         run: |
-          docker exec django python3 manage.py test auctions.tests_selenium --tag=selenium -v 2 || echo "Selenium tests completed (failures are non-blocking for now)"
+          docker exec django python3 manage.py test auctions.tests_selenium --tag=selenium -v 2
       - name: Show logs on failure
         if: failure()
         run: |
