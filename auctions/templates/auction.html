@@ -161,9 +161,11 @@ function initMap() {
                         <div class="col-12 col-md-auto">
                             <a href='{% url "my_auction_invoice" slug=auction.slug %}' class="btn btn-info btn-sm w-100"><i class="bi bi-bag"></i> My Invoice</a>
                         </div>
+                        {% if request.user.is_authenticated and user_has_lots %}
                         <div class="col-12 col-md-auto">
                             <a href='{% url "print_my_labels" slug=auction.slug %}' class="btn btn-secondary btn-sm w-100"><i class="bi bi-tags"></i> Print Labels</a>
                         </div>
+                        {% endif %}
                     </div>
 
                     {# Admin Actions - Collapsible Section #}
@@ -178,8 +180,42 @@ function initMap() {
                         <div class="row g-2">
                             {% if view.is_auction_admin %}
                             <div class="col-12 col-md-auto">
+                                <a href='{% url "auction_tos_list" slug=auction.slug %}' class="btn btn-primary btn-sm w-100"><i class="bi bi-people-fill"></i> Users</a>
+                            </div>
+                            <div class="col-12 col-md-auto">
+                                <a href="/auctions/{{auction.slug}}/lots" class="btn btn-primary btn-sm w-100"><i class="bi bi-calendar"></i> Lots</a>
+                            </div>
+                            {% if not auction.is_online %}
+                            <div class="col-12 col-md-auto">
+                                <a href="{{ auction.set_lot_winners_link }}" class="btn btn-primary btn-sm w-100"><i class="bi bi-calendar-check"></i> Set lot winners</a>
+                            </div>
+                            {% endif %}
+                            <div class="col-12 col-md-auto">
+                                <a href="/auctions/{{auction.slug}}/stats/" class="btn btn-primary btn-sm w-100"><i class="bi bi-graph-up"></i> Stats</a>
+                            </div>
+                            <div class="col-12 col-md-auto">
+                                <a href="{% url 'auction_history' slug=auction.slug %}" class="btn btn-primary btn-sm w-100"><i class="bi bi-clock-history"></i> Admin history</a>
+                            </div>
+                            <div class="col-12 col-md-auto">
                                 <a href='/auctions/{{auction.slug}}/edit' class="btn btn-warning btn-sm w-100"><i class="bi bi-gear-fill"></i> Edit Rules</a>
                             </div>
+                            <div class="col-12 col-md-auto">
+                                <a href="{{ auction.location_link }}" class="btn btn-primary btn-sm w-100"><i class="bi bi-geo-alt-fill"></i> Location{% if auction.location_qs|length > 1 %}s{% endif %}</a>
+                            </div>
+                            <div class="col-12 col-md-auto">
+                                <a href="/auctions/{{auction.slug}}/chat/" class="btn btn-primary btn-sm w-100"><i class="bi bi-chat-fill"></i> Chat messages</a>
+                            </div>
+                            <div class="col-12 col-md-auto">
+                                <a href="/auctions/new?copy={{auction.slug}}" class="btn btn-primary btn-sm w-100"><i class="bi bi-plus-circle"></i> Copy to new auction</a>
+                            </div>
+                            {% if not auction.is_online %}
+                            <div class="col-12 col-md-auto">
+                                <a href='{% url "auction_quick_checkout" slug=auction.slug %}' class="btn btn-primary btn-sm w-100"><i class="bi bi-bag-heart"></i> Quick checkout</a>
+                            </div>
+                            <div class="col-12 col-md-auto">
+                                <a href='{% url "auction_printing" slug=auction.slug %}' class="btn btn-primary btn-sm w-100"><i class="bi bi-tags"></i> Print labels</a>
+                            </div>
+                            {% endif %}
                             <div class="col-12 col-md-auto">
                                 <a href='{% url "all_my_users" %}' class="btn btn-primary btn-sm w-100" data-bs-toggle="tooltip" title="All contacts for all auctions where you're an admin"><i class="bi bi-person-fill-down"></i> Marketing List</a>
                             </div>
@@ -190,6 +226,9 @@ function initMap() {
                                 </div>
                             {% endfor %}
                             {% endif %}
+                            <div class="col-12 col-md-auto">
+                                <a href="/auctions/{{auction.slug}}/delete/" class="btn btn-danger btn-sm w-100"><i class="bi bi-x-circle"></i> Delete auction</a>
+                            </div>
                             {% endif %}
                             {% if request.user.is_superuser %}
                             <div class="col-12 col-md-auto">
