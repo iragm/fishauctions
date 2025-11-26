@@ -666,11 +666,13 @@ class Auction(models.Model):
     max_lots_per_user.help_text = "A user won't be able to add more than this many lots to this auction"
     allow_additional_lots_as_donation = models.BooleanField(default=True)
     allow_additional_lots_as_donation.help_text = "If you don't set max lots per user, this has no effect"
-    email_first_sent = models.BooleanField(default=False)
-    email_second_sent = models.BooleanField(default=False)
-    email_third_sent = models.BooleanField(default=False)
-    email_fourth_sent = models.BooleanField(default=False)
-    email_fifth_sent = models.BooleanField(default=False)
+    # New email tracking fields
+    welcome_email_sent = models.BooleanField(default=False)
+    welcome_email_due = models.DateTimeField(blank=True, null=True)
+    invoice_email_sent = models.BooleanField(default=False)
+    invoice_email_due = models.DateTimeField(blank=True, null=True)
+    followup_email_sent = models.BooleanField(default=False)
+    followup_email_due = models.DateTimeField(blank=True, null=True)
     reprint_reminder_sent = models.BooleanField(default=False)
     weekly_promo_emails_sent = models.PositiveIntegerField(default=0)
     weekly_promo_emails_sent.help_text = "Number of times this auction was included in weekly promotional emails"
