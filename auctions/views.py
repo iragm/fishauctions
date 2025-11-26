@@ -171,6 +171,7 @@ from .models import (
     nearby_auctions,
 )
 from .tables import AuctionHistoryHTMxTable, AuctionHTMxTable, AuctionTOSHTMxTable, LotHTMxTable, LotHTMxTableForUsers
+from .tasks import cancel_invoice_notification, schedule_invoice_notification
 
 # Distance conversion constant
 MILES_TO_KM = 1.60934
@@ -1263,13 +1264,14 @@ class InvoicePaid(LoginRequiredMixin, AuctionViewMixin, View):
         self.invoice.status = new_status
         # Set or clear invoice_notification_due based on status change
         if new_status in ("UNPAID", "PAID"):
-            # Set notification due in the future to allow for undo
-            self.invoice.invoice_notification_due = timezone.now() + timedelta(
-                seconds=INVOICE_NOTIFICATION_DELAY_SECONDS
-            )
+            # Schedule notification in the future to allow for undo
+            run_at = timezone.now() + timedelta(seconds=INVOICE_NOTIFICATION_DELAY_SECONDS)
+            self.invoice.invoice_notification_due = run_at
+            schedule_invoice_notification(self.invoice.pk, run_at)
         elif new_status == "DRAFT":
-            # Clear notification due when setting to open
+            # Cancel scheduled notification when setting to open
             self.invoice.invoice_notification_due = None
+            cancel_invoice_notification(self.invoice.pk)
         self.invoice.save()
         self.auction.create_history(
             applies_to="INVOICES",
@@ -6195,15 +6197,20 @@ class InvoiceBulkUpdateStatus(LoginRequiredMixin, TemplateView, FormMixin, Aucti
 
     def post(self, request, *args, **kwargs):
         invoices = self.get_queryset()
-        notification_due = None
+        run_at = None
         # Set or clear invoice_notification_due based on new status
         if self.new_invoice_status in ("UNPAID", "PAID"):
-            notification_due = timezone.now() + timedelta(seconds=INVOICE_NOTIFICATION_DELAY_SECONDS)
+            run_at = timezone.now() + timedelta(seconds=INVOICE_NOTIFICATION_DELAY_SECONDS)
         for invoice in invoices:
             invoice.status = self.new_invoice_status
-            invoice.invoice_notification_due = notification_due
+            invoice.invoice_notification_due = run_at
             invoice.recalculate
             invoice.save()
+            # Schedule or cancel notification for each invoice
+            if run_at:
+                schedule_invoice_notification(invoice.pk, run_at)
+            else:
+                cancel_invoice_notification(invoice.pk)
         action = f"Set {invoices.count()} invoices from {self.old_status_display} to {self.new_status_display}"
         self.auction.create_history(
             applies_to="INVOICES",

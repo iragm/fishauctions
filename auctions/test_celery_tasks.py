@@ -10,6 +10,7 @@ from unittest.mock import patch
 from django.contrib.auth.models import User
 from django.test import TestCase
 from django.utils import timezone
+from django_celery_beat.models import PeriodicTask
 
 from auctions import tasks
 from auctions.models import Auction, AuctionHistory, AuctionTOS, Invoice, PickupLocation
@@ -79,8 +80,8 @@ class CeleryTasksTestCase(TestCase):
         mock_call_command.assert_called_once_with("update_auction_stats")
 
 
-class ProcessInvoiceNotificationsTaskTestCase(TestCase):
-    """Test case for the process_invoice_notifications task."""
+class SendInvoiceNotificationTaskTestCase(TestCase):
+    """Test case for the send_invoice_notification task."""
 
     def setUp(self):
         """Set up test data."""
@@ -131,19 +132,18 @@ class ProcessInvoiceNotificationsTaskTestCase(TestCase):
         )
 
     @patch("auctions.tasks.mail.send")
-    def test_sends_email_for_due_invoice(self, mock_mail_send):
-        """Test that the task sends an email for invoices that are due."""
-        # Create an invoice with notification due in the past
+    def test_sends_email_for_invoice(self, mock_mail_send):
+        """Test that the task sends an email for an invoice."""
+        # Create an invoice
         invoice = Invoice.objects.create(
             auctiontos_user=self.tos_with_email,
             auction=self.auction,
             status="UNPAID",
-            invoice_notification_due=timezone.now() - datetime.timedelta(seconds=10),
             email_sent=False,
         )
 
         # Run the task
-        tasks.process_invoice_notifications()
+        tasks.send_invoice_notification(invoice.pk)
 
         # Check that email was sent
         mock_mail_send.assert_called_once()
@@ -161,44 +161,18 @@ class ProcessInvoiceNotificationsTaskTestCase(TestCase):
         assert "Invoice notification email sent" in history.action
 
     @patch("auctions.tasks.mail.send")
-    def test_does_not_send_email_for_future_notification(self, mock_mail_send):
-        """Test that the task does not send email for invoices with future notification due."""
-        # Create an invoice with notification due in the future
+    def test_does_not_send_email_twice(self, mock_mail_send):
+        """Test that the task does not send email for invoices already marked as sent."""
+        # Create an invoice already marked as sent
         invoice = Invoice.objects.create(
             auctiontos_user=self.tos_with_email,
             auction=self.auction,
             status="UNPAID",
-            invoice_notification_due=timezone.now() + datetime.timedelta(seconds=30),
-            email_sent=False,
-        )
-
-        # Run the task
-        tasks.process_invoice_notifications()
-
-        # Check that email was NOT sent
-        mock_mail_send.assert_not_called()
-
-        # Refresh invoice from database
-        invoice.refresh_from_db()
-
-        # Check that invoice was NOT marked as sent
-        assert invoice.email_sent is False
-        assert invoice.invoice_notification_due is not None
-
-    @patch("auctions.tasks.mail.send")
-    def test_does_not_send_email_twice(self, mock_mail_send):
-        """Test that the task does not send email for invoices already marked as sent."""
-        # Create an invoice already marked as sent
-        Invoice.objects.create(
-            auctiontos_user=self.tos_with_email,
-            auction=self.auction,
-            status="UNPAID",
-            invoice_notification_due=timezone.now() - datetime.timedelta(seconds=10),
             email_sent=True,  # Already sent
         )
 
         # Run the task
-        tasks.process_invoice_notifications()
+        tasks.send_invoice_notification(invoice.pk)
 
         # Check that email was NOT sent
         mock_mail_send.assert_not_called()
@@ -211,12 +185,11 @@ class ProcessInvoiceNotificationsTaskTestCase(TestCase):
             auctiontos_user=self.tos_without_email,
             auction=self.auction,
             status="UNPAID",
-            invoice_notification_due=timezone.now() - datetime.timedelta(seconds=10),
             email_sent=False,
         )
 
         # Run the task
-        tasks.process_invoice_notifications()
+        tasks.send_invoice_notification(invoice.pk)
 
         # Check that email was NOT sent
         mock_mail_send.assert_not_called()
@@ -240,12 +213,11 @@ class ProcessInvoiceNotificationsTaskTestCase(TestCase):
             auctiontos_user=self.tos_with_email,
             auction=self.auction,
             status="UNPAID",
-            invoice_notification_due=timezone.now() - datetime.timedelta(seconds=10),
             email_sent=False,
         )
 
         # Run the task
-        tasks.process_invoice_notifications()
+        tasks.send_invoice_notification(invoice.pk)
 
         # Check that email was NOT sent
         mock_mail_send.assert_not_called()
@@ -268,12 +240,11 @@ class ProcessInvoiceNotificationsTaskTestCase(TestCase):
             auctiontos_user=self.tos_with_email,
             auction=self.auction,
             status="UNPAID",
-            invoice_notification_due=timezone.now() - datetime.timedelta(seconds=10),
             email_sent=False,
         )
 
         # Run the task
-        tasks.process_invoice_notifications()
+        tasks.send_invoice_notification(invoice.pk)
 
         # Check that email was NOT sent
         mock_mail_send.assert_not_called()
@@ -287,17 +258,16 @@ class ProcessInvoiceNotificationsTaskTestCase(TestCase):
     @patch("auctions.tasks.mail.send")
     def test_does_not_send_email_for_draft_invoice(self, mock_mail_send):
         """Test that the task does not process draft invoices."""
-        # Create a draft invoice with notification due in the past
+        # Create a draft invoice
         invoice = Invoice.objects.create(
             auctiontos_user=self.tos_with_email,
             auction=self.auction,
             status="DRAFT",  # Draft status
-            invoice_notification_due=timezone.now() - datetime.timedelta(seconds=10),
             email_sent=False,
         )
 
         # Run the task
-        tasks.process_invoice_notifications()
+        tasks.send_invoice_notification(invoice.pk)
 
         # Check that email was NOT sent
         mock_mail_send.assert_not_called()
@@ -307,3 +277,88 @@ class ProcessInvoiceNotificationsTaskTestCase(TestCase):
 
         # Check that invoice was NOT marked as sent
         assert invoice.email_sent is False
+
+    @patch("auctions.tasks.mail.send")
+    def test_handles_deleted_invoice(self, mock_mail_send):
+        """Test that the task handles deleted invoices gracefully."""
+        # Run the task with a non-existent invoice ID
+        tasks.send_invoice_notification(99999)
+
+        # Check that email was NOT sent (and no error was raised)
+        mock_mail_send.assert_not_called()
+
+
+class ScheduleInvoiceNotificationTestCase(TestCase):
+    """Test case for schedule_invoice_notification and cancel_invoice_notification functions."""
+
+    def setUp(self):
+        """Set up test data."""
+        time = timezone.now() - datetime.timedelta(days=2)
+        timeStart = timezone.now() - datetime.timedelta(days=3)
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+
+        self.user = User.objects.create_user(username="test_user", password="testpassword", email="test@example.com")
+        self.auction = Auction.objects.create(
+            created_by=self.user,
+            title="Test Auction",
+            is_online=True,
+            date_end=time,
+            date_start=timeStart,
+        )
+        self.location = PickupLocation.objects.create(name="Test Location", auction=self.auction, pickup_time=theFuture)
+        self.tos = AuctionTOS.objects.create(
+            user=self.user,
+            auction=self.auction,
+            pickup_location=self.location,
+            email="test@example.com",
+        )
+        self.invoice = Invoice.objects.create(
+            auctiontos_user=self.tos,
+            auction=self.auction,
+            status="UNPAID",
+        )
+
+    def test_schedule_creates_periodic_task(self):
+        """Test that schedule_invoice_notification creates a PeriodicTask."""
+        run_at = timezone.now() + datetime.timedelta(seconds=15)
+
+        tasks.schedule_invoice_notification(self.invoice.pk, run_at)
+
+        # Check that the task was created
+        task_name = f"invoice_notification_{self.invoice.pk}"
+        task = PeriodicTask.objects.get(name=task_name)
+        assert task.task == "auctions.tasks.send_invoice_notification"
+        assert task.one_off is True
+        assert task.enabled is True
+
+    def test_schedule_updates_existing_task(self):
+        """Test that schedule_invoice_notification updates an existing task."""
+        run_at1 = timezone.now() + datetime.timedelta(seconds=15)
+        run_at2 = timezone.now() + datetime.timedelta(seconds=30)
+
+        # Schedule twice
+        tasks.schedule_invoice_notification(self.invoice.pk, run_at1)
+        tasks.schedule_invoice_notification(self.invoice.pk, run_at2)
+
+        # Check that only one task exists
+        task_name = f"invoice_notification_{self.invoice.pk}"
+        count = PeriodicTask.objects.filter(name=task_name).count()
+        assert count == 1
+
+    def test_cancel_deletes_periodic_task(self):
+        """Test that cancel_invoice_notification deletes a PeriodicTask."""
+        run_at = timezone.now() + datetime.timedelta(seconds=15)
+
+        # Schedule then cancel
+        tasks.schedule_invoice_notification(self.invoice.pk, run_at)
+        tasks.cancel_invoice_notification(self.invoice.pk)
+
+        # Check that the task was deleted
+        task_name = f"invoice_notification_{self.invoice.pk}"
+        count = PeriodicTask.objects.filter(name=task_name).count()
+        assert count == 0
+
+    def test_cancel_handles_nonexistent_task(self):
+        """Test that cancel_invoice_notification handles non-existent tasks gracefully."""
+        # Cancel without scheduling first (should not raise an error)
+        tasks.cancel_invoice_notification(99999)

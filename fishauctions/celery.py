@@ -40,11 +40,6 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.auctiontos_notifications",
         "schedule": 900.0,  # Run every 15 minutes
     },
-    # Process invoice notifications that are due - every 10 seconds
-    "process_invoice_notifications": {
-        "task": "auctions.tasks.process_invoice_notifications",
-        "schedule": 10.0,  # Run every 10 seconds to catch notifications after 15s delay
-    },
     # Send queued mail (post_office) - every 10 minutes (retry failed emails)
     "send_queued_mail": {
         "task": "post_office.tasks.send_queued_mail",
