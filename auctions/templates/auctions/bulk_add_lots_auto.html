@@ -27,12 +27,12 @@
             <div class="card-body">
               {% if not lot.can_be_edited %}
               <div class="alert alert-warning alert-sm mb-2">
-                <small><strong>🔒 Locked:</strong> {{ lot.cannot_be_edited_reason }}</small>
+                <small class="text-bright"><strong>🔒</strong> {{ lot.cannot_be_edited_reason }}</small>
               </div>
               {% endif %}
               <div class="row align-items-center">
                 <div class="col-12 col-md-auto mb-2 mb-md-0" style="min-width: 80px;">
-                  <span class="badge bg-success lot-number-badge">Lot #{{ lot.lot_number_display }}</span>
+                  <span class="badge bg-success text-dark lot-number-badge">Lot #{{ lot.lot_number_display }}</span>
                 </div>
                 <div class="col-12 col-md">
                   <div class="row g-2">
@@ -131,7 +131,7 @@
             <div class="card-body">
               <div class="row align-items-center">
                 <div class="col-12 col-md-auto mb-2 mb-md-0" style="min-width: 80px;">
-                  <span class="badge bg-secondary lot-number-badge">Not saved</span>
+                  <span class="badge bg-secondary text-dark lot-number-badge">Not saved</span>
                 </div>
                 <div class="col-12 col-md">
                   <div class="row g-2">
@@ -294,8 +294,8 @@ function performSave(lotRow) {
     // Show saving indicator
     if (!lotId) {
         badge.textContent = 'Saving...';
-        badge.classList.remove('d-none', 'bg-secondary', 'bg-danger');
-        badge.classList.add('bg-warning');
+        badge.classList.remove('d-none', 'bg-secondary', 'bg-danger', 'bg-success', 'bg-info');
+        badge.classList.add('bg-warning', 'text-dark');
     }
     
     // Collect form data
@@ -318,8 +318,8 @@ function performSave(lotRow) {
     // Don't save if lot name is empty
     if (!formData.lot_name || formData.lot_name.trim() === '') {
         badge.textContent = 'Not saved';
-        badge.classList.remove('bg-success', 'bg-warning', 'bg-danger');
-        badge.classList.add('bg-secondary');
+        badge.classList.remove('bg-success', 'bg-warning', 'bg-danger', 'bg-info');
+        badge.classList.add('bg-secondary', 'text-dark');
         clearValidationErrors(lotRow);
         return;
     }
@@ -344,8 +344,8 @@ function performSave(lotRow) {
             // Update badge with admin bypass feedback
             if (data.admin_bypassed) {
                 badge.textContent = `Lot #${data.lot_number_display} (Admin)`;
-                badge.classList.remove('bg-secondary', 'bg-warning', 'bg-danger');
-                badge.classList.add('bg-info');  // Use info color for admin bypass
+                badge.classList.remove('bg-secondary', 'bg-warning', 'bg-danger', 'bg-success');
+                badge.classList.add('bg-info', 'text-dark');  // Use info color for admin bypass
                 badge.title = 'Admin bypassed lot limit';
                 
                 // Show admin bypass warning
@@ -353,7 +353,7 @@ function performSave(lotRow) {
             } else {
                 badge.textContent = `Lot #${data.lot_number_display}`;
                 badge.classList.remove('bg-secondary', 'bg-warning', 'bg-danger', 'bg-info');
-                badge.classList.add('bg-success');
+                badge.classList.add('bg-success', 'text-dark');
                 badge.title = '';
                 
                 // Update admin bypass warning
@@ -368,8 +368,8 @@ function performSave(lotRow) {
             
             if (!lotId) {
                 badge.textContent = 'Not saved';
-                badge.classList.remove('bg-warning', 'bg-success');
-                badge.classList.add('bg-danger');
+                badge.classList.remove('bg-warning', 'bg-success', 'bg-info');
+                badge.classList.add('bg-danger', 'text-dark');
             }
         }
     })
@@ -377,8 +377,8 @@ function performSave(lotRow) {
         console.error('Error saving lot:', error);
         if (!lotId) {
             badge.textContent = 'Error';
-            badge.classList.remove('bg-warning', 'bg-success');
-            badge.classList.add('bg-danger');
+            badge.classList.remove('bg-warning', 'bg-success', 'bg-info');
+            badge.classList.add('bg-danger', 'text-dark');
         }
     });
 }
@@ -515,8 +515,8 @@ document.getElementById('add-row-btn').addEventListener('click', () => {
     newRow.dataset.lotId = '';
     const badge = newRow.querySelector('.lot-number-badge');
     badge.textContent = 'Not saved';
-    badge.classList.remove('bg-success', 'bg-warning', 'bg-danger');
-    badge.classList.add('bg-secondary');
+    badge.classList.remove('bg-success', 'bg-warning', 'bg-danger', 'bg-info');
+    badge.classList.add('bg-secondary', 'text-dark');
     
     const inputs = newRow.querySelectorAll('.lot-input');
     inputs.forEach(input => {
