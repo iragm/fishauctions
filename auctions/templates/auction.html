@@ -147,7 +147,6 @@ function initMap() {
             {# Quick Actions Section - Organized and Clean #}
             <div class="card mb-4">
                 <div class="card-body">
-                    <h5 class="card-title mb-3"><i class="bi bi-lightning-charge-fill"></i> Quick Actions</h5>
                     <div class="row g-2">
                         <div class="col-12 col-md-auto">
                             <a href='{{ auction.view_lot_link }}' class="btn btn-primary btn-sm w-100"><i class="bi bi-calendar"></i> View Lots</a>
@@ -212,18 +211,13 @@ function initMap() {
             </div>
             {% endif %}
 
-            {# Auction Rules - Collapsible for better mobile experience #}
+            {# Auction Rules - Not collapsible #}
             <div class="card mb-4">
                 <div class="card-header">
-                    <h5 class="mb-0">
-                        <button class="btn btn-link text-decoration-none w-100 text-start" type="button" data-bs-toggle="collapse" data-bs-target="#auctionRules" aria-expanded="true" aria-controls="auctionRules" aria-label="Show or hide auction rules and details">
-                            Auction Rules & Details
-                        </button>
-                    </h5>
+                    <h5 class="mb-0">Auction Rules & Details</h5>
                 </div>
-                <div id="auctionRules" class="collapse show">
-                    <div class="card-body">
-                        <ul class="list-unstyled">
+                <div class="card-body">
+                    <ul class="list-unstyled">
                             <li class="mb-2">This is an <strong>{{ auction.auction_type_as_str }}</strong></li>
                             {% if auction.is_online %}
                                 <li class="mb-2">You must place bids on this website</li>
@@ -257,7 +251,6 @@ function initMap() {
                         </ul>
                     </div>
                 </div>
-            </div>
 
             {# Map Display #}
             {% if not auction.no_location %}
@@ -361,7 +354,7 @@ function initMap() {
                                    role="tab"
                                    aria-controls="location_{{location.pk}}{{location.short_name}}"
                                    aria-selected="{% if hasChosenLocation == location.pk%}true{% else %}false{% endif %}">
-                                    {{ location.name }}
+                                    {% if location.pickup_by_mail %}Mail me my lots{% else %}{{ location.name }}{% endif %}
                                 </a>
                             </li>
                             {% endfor %}
@@ -412,8 +405,8 @@ function initMap() {
                                     {% if view.is_auction_admin %}
                                     <a href="/locations/edit/{{ location.pk }}/?next=/auctions/{{auction.slug}}" class="btn btn-sm btn-warning"><i class="bi bi-gear-fill"></i> Edit</a>
                                     {% if auction.all_location_count > 1 %}
-                                    <a href='{% url "location_incoming" pk=location.pk %}' class="btn btn-sm btn-primary"><i class="bi bi-box-arrow-in-down-right"></i> Incoming</a>
-                                    <a href='{% url "location_outgoing" pk=location.pk %}' class="btn btn-sm btn-primary"><i class="bi bi-box-arrow-down-right"></i> Outgoing</a>
+                                    <a href='{% url "location_incoming" pk=location.pk %}' class="btn btn-sm btn-primary"><i class="bi bi-box-arrow-in-down-right"></i> Incoming lot list</a>
+                                    <a href='{% url "location_outgoing" pk=location.pk %}' class="btn btn-sm btn-primary"><i class="bi bi-box-arrow-down-right"></i> Outgoing lot list</a>
                                     {% endif %}
                                     <a href="mailto:?bcc={{location.email_list}}&subject={{auction}} - {{location.name}}" class="btn btn-sm btn-info"><i class="bi bi-envelope-at"></i> Email {{location.number_of_users}}</a>
                                     {% endif %}
