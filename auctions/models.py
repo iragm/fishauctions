@@ -2729,6 +2729,11 @@ class AuctionTOS(models.Model):
         return self.unbanned_lot_qs.count()
 
     @property
+    def self_submitted_unbanned_lot_count(self):
+        """Count of unbanned lots that this user added themselves (not added by admin)"""
+        return self.unbanned_lot_qs.filter(added_by=self.user).count()
+
+    @property
     def print_labels_qs(self):
         """A set of rules to determine what we print"""
         lots = self.unbanned_lot_qs
