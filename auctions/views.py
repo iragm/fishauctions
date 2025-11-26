@@ -5129,9 +5129,11 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
         context["active_tab"] = "main"
         # Check if user has lots in this auction
         if self.request.user.is_authenticated:
-            context["user_has_lots"] = Lot.objects.exclude(is_deleted=True).filter(
-                auction=self.auction, auctiontos_seller__user=self.request.user
-            ).exists()
+            context["user_has_lots"] = (
+                Lot.objects.exclude(is_deleted=True)
+                .filter(auction=self.auction, auctiontos_seller__user=self.request.user)
+                .exists()
+            )
         else:
             context["user_has_lots"] = False
         if self.request.user.is_authenticated and self.request.user.pk == self.auction.created_by.pk:
