@@ -9763,8 +9763,8 @@ class SquareWebhookView(SquareAPIMixin, View):
         return super().dispatch(*args, **kwargs)
 
     def verify_signature(self, request, raw_body, signature):
-        """Verify Square webhook signature using HMAC-SHA256
-        Square signs webhooks with: HMAC-SHA256(signature_key, notification_url + request_body)
+        """Verify Square webhook signature using Square SDK
+        Square signs webhooks with: base64(HMAC-SHA256(signature_key, notification_url + request_body))
         Returns True if signature is valid, False otherwise
         """
         if not settings.SQUARE_WEBHOOK_SIGNATURE_KEY:
@@ -9775,8 +9775,7 @@ class SquareWebhookView(SquareAPIMixin, View):
                 return False  # Reject webhook if signature key not configured in production
 
         try:
-            import hashlib
-            import hmac
+            from square.utils.webhooks_helper import verify_signature as square_verify_signature
 
             # Prefer an explicit configured URL if provided (useful behind proxies)
             notification_url = getattr(settings, "SQUARE_WEBHOOK_PUBLIC_URL", "").strip()
@@ -9784,14 +9783,16 @@ class SquareWebhookView(SquareAPIMixin, View):
                 # Fallback: absolute URL of this request (no query string per Square docs)
                 notification_url = request.build_absolute_uri(request.path)
 
-            # Raw body as received
-            body_part = raw_body if isinstance(raw_body, str) else raw_body.decode("utf-8", "ignore")
+            # Ensure raw_body is a string as expected by Square SDK
+            body_str = raw_body if isinstance(raw_body, str) else raw_body.decode("utf-8")
 
-            message = (notification_url + body_part).encode("utf-8")
-            key = settings.SQUARE_WEBHOOK_SIGNATURE_KEY.encode("utf-8")
-
-            computed = hmac.new(key, message, hashlib.sha256).hexdigest()
-            return hmac.compare_digest(computed, signature)
+            # Use Square SDK's signature verification
+            return square_verify_signature(
+                request_body=body_str,
+                signature_header=signature,
+                signature_key=settings.SQUARE_WEBHOOK_SIGNATURE_KEY,
+                notification_url=notification_url,
+            )
         except Exception as e:
             logger.exception("Error verifying Square webhook signature: %s", e)
             return False
