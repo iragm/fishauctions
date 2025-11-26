@@ -18,7 +18,7 @@ def mark_existing_in_person_print_reminders_sent(apps, schema_editor):
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("auctions", "0211_update_email_templates_reply_to_note"),
+        ("auctions", "0212_invoicepayment_receipt_number"),
     ]
 
     operations = [
