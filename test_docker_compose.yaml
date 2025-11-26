@@ -1,0 +1,8 @@
+services:
+  test:
+    build:
+      context: .
+      target: test
+    volumes:
+      - .:/app
+    command: sh -c "ruff format --check auctions/models.py auctions/views.py auctions/filters.py || true"

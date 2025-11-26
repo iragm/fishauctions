@@ -263,6 +263,7 @@ class AuctionTOSFilter(django_filters.FilterSet):
             #   Q(address__icontains=value) |
             Q(bidder_number=value)
             | Q(user__username=value)
+            | Q(auctiontos__invoice__payments__receipt_number__iexact=value)
         )
         qs = qs.filter(Q(normal_filter | Q(qList)))
         return qs

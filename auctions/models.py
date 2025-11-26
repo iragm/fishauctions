@@ -5261,6 +5261,9 @@ class InvoicePayment(models.Model):
     currency = models.CharField(max_length=10, default="USD")
     # status = models.CharField(max_length=20, choices=PAYMENT_STATUS, default="COMPLETED", db_index=True)
     external_id = models.CharField(max_length=255, blank=True, null=True, help_text="Provider transaction id")
+    receipt_number = models.CharField(
+        max_length=10, blank=True, null=True, help_text="Short receipt number (4 chars for Square)", db_index=True
+    )
     payer_name = models.CharField(max_length=200, blank=True, null=True)
     payer_email = models.CharField(max_length=200, blank=True, null=True)
     payer_address = models.CharField(max_length=500, blank=True, null=True)
@@ -6173,15 +6176,44 @@ class SquareSeller(models.Model):
                 if email_domain in blocked_domains:
                     buyer_email = None  # Don't send blocked email to Square
 
+            # Check if pickup by mail - require shipping address
+            ask_for_shipping_address = False
+            if invoice.auctiontos_user and invoice.auctiontos_user.pickup_location:
+                if invoice.auctiontos_user.pickup_location.pickup_by_mail:
+                    ask_for_shipping_address = True
+
+            # Pre-populate buyer info from auctiontos
+            pre_populated_data = {}
+            if buyer_email:
+                pre_populated_data["buyer_email"] = buyer_email
+            if invoice.auctiontos_user:
+                # Add buyer name if available
+                if invoice.auctiontos_user.name:
+                    name_parts = invoice.auctiontos_user.name.split(None, 1)
+                    if len(name_parts) >= 1:
+                        pre_populated_data["buyer_name"] = {
+                            "given_name": name_parts[0][:50],
+                        }
+                        if len(name_parts) >= 2:
+                            pre_populated_data["buyer_name"]["family_name"] = name_parts[1][:50]
+                # Add phone number if available
+                if invoice.auctiontos_user.phone_number:
+                    pre_populated_data["buyer_phone_number"] = invoice.auctiontos_user.phone_number[:20]
+                # Add address if available
+                if invoice.auctiontos_user.address:
+                    pre_populated_data["buyer_address"] = {
+                        "address_line_1": invoice.auctiontos_user.address[:500],
+                    }
+
             link_resp = client.checkout.payment_links.create(
                 idempotency_key=str(uuid.uuid4()),
                 checkout_options={
                     "redirect_url": request.build_absolute_uri(
                         reverse("square_payment_success", kwargs={"uuid": invoice.no_login_link})
                     ),
-                    "ask_for_shipping_address": False,
+                    "ask_for_shipping_address": ask_for_shipping_address,
                 },
-                pre_populated_data={"buyer_email": buyer_email} if buyer_email else {},
+                pre_populated_data=pre_populated_data if pre_populated_data else {},
                 order={
                     "location_id": location_id,
                     "reference_id": str(invoice.pk),
