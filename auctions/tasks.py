@@ -6,7 +6,11 @@ Each task wraps a management command to maintain backward compatibility.
 """
 
 from celery import shared_task
+from django.contrib.sites.models import Site
 from django.core.management import call_command
+from django.db import transaction
+from django.utils import timezone
+from post_office import mail
 
 
 @shared_task(bind=True, ignore_result=True)
@@ -42,13 +46,80 @@ def auctiontos_notifications(self):
 
 
 @shared_task(bind=True, ignore_result=True)
-def email_invoice(self):
+def process_invoice_notifications(self):
     """
-    Email users about invoices.
+    Process invoice notifications that are due.
 
-    Previously run every 15 minutes via cron.
+    This task checks for invoices where:
+    - invoice_notification_due is in the past
+    - email_sent is False
+    - auction exists
+    - status is not DRAFT
+
+    For each qualifying invoice, it sends an email notification if:
+    - The auction creator is trusted
+    - The auction allows invoice ready notifications
+    - The user has an email address
+
+    The task uses select_for_update to prevent duplicate processing if
+    the task runs multiple times simultaneously.
     """
-    call_command("email_invoice")
+    from auctions.models import AuctionHistory, Invoice
+
+    now = timezone.now()
+
+    # Use select_for_update to prevent race conditions
+    with transaction.atomic():
+        invoices = (
+            Invoice.objects.select_for_update(skip_locked=True)
+            .filter(
+                invoice_notification_due__lte=now,
+                email_sent=False,
+                auction__isnull=False,
+            )
+            .exclude(status="DRAFT")
+        )
+
+        for invoice in invoices:
+            should_send_email = (
+                invoice.auction.created_by.userdata.is_trusted
+                and invoice.auction.email_users_when_invoices_ready
+                and invoice.auctiontos_user.email
+            )
+
+            if should_send_email:
+                email = invoice.auctiontos_user.email
+                subject = f"Your invoice for {invoice.label} is ready"
+                if invoice.status == "PAID":
+                    subject = f"Thanks for being part of {invoice.label}"
+                contact_email = invoice.auction.created_by.email
+                current_site = Site.objects.get_current()
+                mail.send(
+                    email,
+                    headers={"Reply-to": contact_email},
+                    template="invoice_ready",
+                    context={
+                        "subject": subject,
+                        "name": invoice.auctiontos_user.name,
+                        "domain": current_site.domain,
+                        "location": invoice.location,
+                        "invoice": invoice,
+                        "reply_to_email": contact_email,
+                    },
+                )
+                # Add history entry about the email being sent
+                AuctionHistory.objects.create(
+                    auction=invoice.auction,
+                    user=None,
+                    action=f"Invoice notification email sent to {invoice.auctiontos_user.name} ({email})",
+                    applies_to="INVOICES",
+                )
+
+            # Mark as sent regardless of whether we actually sent an email
+            # This prevents re-processing invoices that can't receive emails
+            invoice.email_sent = True
+            invoice.invoice_notification_due = None
+            invoice.save()
 
 
 @shared_task(bind=True, ignore_result=True)

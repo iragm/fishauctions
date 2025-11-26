@@ -40,7 +40,7 @@ Celery handles:
 | `endauctions` | Every minute | End lots and declare winners |
 | `sendnotifications` | Every 15 minutes | Send watched item notifications |
 | `auctiontos_notifications` | Every 15 minutes | Welcome and reminder emails |
-| `email_invoice` | Every 15 minutes | Invoice notification emails |
+| `process_invoice_notifications` | Every 10 seconds | Invoice notification emails (delayed 15s for undo) |
 | `send_queued_mail` | Every 10 minutes | Retry failed emails (post_office) |
 | `auction_emails` | Every 4 minutes | Drip marketing emails |
 | `email_unseen_chats` | Daily at 10:00 | Unread chat notifications |

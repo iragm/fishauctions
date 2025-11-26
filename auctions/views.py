@@ -1256,7 +1256,15 @@ class InvoicePaid(LoginRequiredMixin, AuctionViewMixin, View):
         return super().dispatch(request, *args, **kwargs)
 
     def post(self, request, *args, **kwargs):
-        self.invoice.status = kwargs["status"]
+        new_status = kwargs["status"]
+        self.invoice.status = new_status
+        # Set or clear invoice_notification_due based on status change
+        if new_status in ("UNPAID", "PAID"):
+            # Set notification due 15 seconds in the future to allow for undo
+            self.invoice.invoice_notification_due = timezone.now() + timedelta(seconds=15)
+        elif new_status == "DRAFT":
+            # Clear notification due when setting to open
+            self.invoice.invoice_notification_due = None
         self.invoice.save()
         self.auction.create_history(
             applies_to="INVOICES",
@@ -6182,8 +6190,13 @@ class InvoiceBulkUpdateStatus(LoginRequiredMixin, TemplateView, FormMixin, Aucti
 
     def post(self, request, *args, **kwargs):
         invoices = self.get_queryset()
+        notification_due = None
+        # Set or clear invoice_notification_due based on new status
+        if self.new_invoice_status in ("UNPAID", "PAID"):
+            notification_due = timezone.now() + timedelta(seconds=15)
         for invoice in invoices:
             invoice.status = self.new_invoice_status
+            invoice.invoice_notification_due = notification_due
             invoice.recalculate
             invoice.save()
         action = f"Set {invoices.count()} invoices from {self.old_status_display} to {self.new_status_display}"
