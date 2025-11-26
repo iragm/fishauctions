@@ -10,3 +10,17 @@ mediafiles/
 staticfiles/
 logs/
 tos.html
+auctions/static/js/vendor/Vosklet.wasm
+auctions/static/models/vosk/vosk-model-small-en-us-0.15/am/final.mdl
+auctions/static/models/vosk/vosk-model-small-en-us-0.15/conf/mfcc.conf
+auctions/static/models/vosk/vosk-model-small-en-us-0.15/conf/model.conf
+auctions/static/models/vosk/vosk-model-small-en-us-0.15/graph/disambig_tid.int
+auctions/static/models/vosk/vosk-model-small-en-us-0.15/graph/Gr.fst
+auctions/static/models/vosk/vosk-model-small-en-us-0.15/graph/HCLr.fst
+auctions/static/models/vosk/vosk-model-small-en-us-0.15/graph/phones/word_boundary.int
+auctions/static/models/vosk/vosk-model-small-en-us-0.15/ivector/final.dubm
+auctions/static/models/vosk/vosk-model-small-en-us-0.15/ivector/final.ie
+auctions/static/models/vosk/vosk-model-small-en-us-0.15/ivector/final.mat
+auctions/static/models/vosk/vosk-model-small-en-us-0.15/ivector/global_cmvn.stats
+auctions/static/models/vosk/vosk-model-small-en-us-0.15/ivector/online_cmvn.conf
+auctions/static/models/vosk/vosk-model-small-en-us-0.15/ivector/splice.conf
