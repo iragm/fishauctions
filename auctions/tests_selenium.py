@@ -18,7 +18,6 @@ Environment variables:
 
 import datetime
 import os
-import time
 import unittest
 
 from django.contrib.auth.models import User
@@ -201,8 +200,8 @@ class SeleniumTestCase(LiveServerTestCase):
         password_field.send_keys(password)
         password_field.send_keys(Keys.RETURN)
 
-        # Wait for redirect
-        time.sleep(1)
+        # Wait for redirect by checking URL no longer contains login
+        WebDriverWait(self.driver, 10).until(lambda d: "/accounts/login/" not in d.current_url)
 
     def wait_for_element(self, by, value, timeout=10):
         """Wait for an element to be present and return it."""
@@ -288,11 +287,12 @@ class AuthenticationTests(SeleniumTestCase):
         self.wait_for_element(By.NAME, "login")
 
         # Try to submit empty form
-        submit_button = self.driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
+        submit_button = self.wait_for_element_clickable(By.CSS_SELECTOR, "button[type='submit']")
         submit_button.click()
 
-        # Should still be on login page
-        time.sleep(1)
+        # Wait for form to process (either stays on page or shows error)
+        # Use explicit wait instead of sleep
+        WebDriverWait(self.driver, 5).until(lambda d: "/accounts/login/" in d.current_url)
         self.assertIn("/accounts/login/", self.driver.current_url)
 
 
@@ -334,7 +334,10 @@ class LotViewTests(SeleniumTestCase):
     def test_lot_page_shows_lot_name(self):
         """Test that the lot page displays the lot name."""
         self.driver.get(self.get_url(f"/lots/{self.lot.pk}/"))
-        time.sleep(1)
+        # Wait for the page body to be present with content
+        self.wait_for_element(By.TAG_NAME, "body")
+        # Wait for lot name to appear
+        self.wait_for_text(self.lot.lot_name)
         body_text = self.driver.find_element(By.TAG_NAME, "body").text
         self.assertIn(self.lot.lot_name, body_text)
 
@@ -347,7 +350,10 @@ class HTMxTests(SeleniumTestCase):
     def test_htmx_loaded(self):
         """Test that HTMx library is loaded on the page."""
         self.driver.get(self.get_url("/"))
-        time.sleep(1)
+        # Wait for page to fully load
+        self.wait_for_element(By.TAG_NAME, "body")
+        # Wait for document ready state
+        WebDriverWait(self.driver, 10).until(lambda d: d.execute_script("return document.readyState") == "complete")
 
         # Check if htmx is defined in the window object
         htmx_loaded = self.driver.execute_script("return typeof htmx !== 'undefined'")
