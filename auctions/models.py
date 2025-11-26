@@ -3653,21 +3653,18 @@ class Lot(models.Model):
     def refund(self, amount, user, message=None):
         """Call this to add a message when refunding a lot
         If square_refund_possible, automatically processes Square refund"""
-        square_refund_failed = False
-        
         if amount and amount != self.partial_refund_percent:
             # Check if we should process a Square refund automatically
             if self.square_refund_possible and not self.no_more_refunds_possible:
                 error = self.square_refund(amount)
                 if error:
-                    # Log the error and don't update partial_refund_percent
+                    # Log the error but continue with the refund record
                     import logging
 
                     logger = logging.getLogger(__name__)
                     logger.error("Square refund failed for lot %s: %s", self.pk, error)
                     if not message:
                         message = f"{user} has issued a {amount}% refund on this lot. Square refund failed: {error}"
-                    square_refund_failed = True
                 else:
                     if not message:
                         message = (
@@ -3678,11 +3675,8 @@ class Lot(models.Model):
                     message = f"{user} has issued a {amount}% refund on this lot."
 
             LotHistory.objects.create(lot=self, user=user, message=message, changed_price=True)
-        
-        # Only update partial_refund_percent if Square refund succeeded or wasn't attempted
-        if not square_refund_failed:
-            self.partial_refund_percent = amount
-            self.save()
+        self.partial_refund_percent = amount
+        self.save()
 
     @property
     def winner_invoice(self):
@@ -4968,7 +4962,7 @@ class Invoice(models.Model):
     @property
     def net_after_payments(self):
         """negative number means they owe the club payment"""
-        return self.rounded_net + self.total_payments
+        return self.net + self.total_payments
 
     @property
     def user_should_be_paid(self):
