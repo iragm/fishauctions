@@ -14,9 +14,25 @@ Tests now run against a MariaDB database instead of SQLite to better match the p
 
 2. **Database Permissions**: The MariaDB container is configured with initialization scripts in `db-init/` that automatically grant the necessary permissions for creating test databases.
 
-3. **Health Checks**: The database service includes a health check to ensure it's fully ready before tests run. This prevents connection errors during CI/CD or when starting fresh containers.
+3. **Health Checks**: The database service includes a health check that validates the actual Django user credentials work correctly.
 
 4. **No Production Impact**: The test database is completely separate from the production `auctions` database, so running tests never affects production data.
+
+## Upgrading Existing Development Systems
+
+If you're upgrading from a previous version and have an existing MariaDB volume, you may need to manually grant test database permissions:
+
+```bash
+# Option 1: Run the helper script
+./db-init/grant-permissions-existing-db.sh
+
+# Option 2: Grant permissions manually
+docker exec -it db mariadb -uroot -p${DATABASE_ROOT_PASSWORD} -e "
+GRANT CREATE, DROP ON *.* TO 'mysqluser'@'%';
+GRANT ALL PRIVILEGES ON \`test_%\`.* TO 'mysqluser'@'%';
+FLUSH PRIVILEGES;
+"
+```
 
 ## Running Tests
 
@@ -37,7 +53,7 @@ docker exec -it django python3 manage.py test --verbosity=2
 ## Requirements
 
 - The database container must be running and healthy (`docker compose up -d`)
-- The database user must have CREATE and test database privileges (automatically configured via `db-init/01-grant-test-permissions.sql`)
+- The database user must have CREATE and DROP privileges (automatically configured via `db-init/01-grant-test-permissions.sql`)
 
 ## Continuous Integration
 
