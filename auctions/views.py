@@ -7396,6 +7396,15 @@ class UserLocationUpdate(UpdateView, SuccessMessageMixin):
         user = User.objects.get(pk=self.get_object().user.pk)
         return {"first_name": user.first_name, "last_name": user.last_name}
 
+    def get_recent_auctiontos(self):
+        """Get AuctionTOS records created in the last 30 days that are not manually added"""
+        thirty_days_ago = timezone.now() - timedelta(days=30)
+        return AuctionTOS.objects.filter(
+            user=self.request.user,
+            manually_added=False,
+            createdon__gte=thirty_days_ago,
+        ).select_related("auction")
+
     def form_valid(self, form):
         userData = form.save(commit=False)
         user = User.objects.get(pk=self.get_object().user.pk)
@@ -7404,11 +7413,50 @@ class UserLocationUpdate(UpdateView, SuccessMessageMixin):
         user.save()
         userData.last_activity = timezone.now()
         userData.save()
+
+        # Update recent AuctionTOS records with new contact info
+        new_name = f"{user.first_name} {user.last_name}"
+        new_phone = userData.phone_number
+        new_address = userData.address
+
+        for tos in self.get_recent_auctiontos():
+            # Track what changed
+            changes = []
+            if tos.name != new_name:
+                changes.append(f"name from '{tos.name}' to '{new_name}'")
+                tos.name = new_name
+            if tos.phone_number != new_phone:
+                changes.append(f"phone from '{tos.phone_number}' to '{new_phone}'")
+                tos.phone_number = new_phone
+            if tos.address != new_address:
+                changes.append(f"address from '{tos.address}' to '{new_address}'")
+                tos.address = new_address
+
+            if changes:
+                tos.save()
+                # Create auction admin history
+                AuctionHistory.objects.create(
+                    auction=tos.auction,
+                    user=user,
+                    action=f"Updated contact info for {new_name}: " + ", ".join(changes),
+                    applies_to="USERS",
+                )
+
         return super().form_valid(form)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["active_tab"] = "contact"
+
+        # Add message about auctions that will be updated
+        recent_auctiontos = self.get_recent_auctiontos()
+        count = recent_auctiontos.count()
+        if count == 1:
+            tos = recent_auctiontos.first()
+            context["auctiontos_update_message"] = f"Updating your contact info will also update it in {tos.auction}"
+        elif count > 1:
+            context["auctiontos_update_message"] = f"Updating your contact info will also update it in {count} auctions"
+
         return context
 
 
