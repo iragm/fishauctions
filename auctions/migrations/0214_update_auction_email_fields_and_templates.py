@@ -106,7 +106,7 @@ def reverse_email_templates(apps, schema_editor):
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("auctions", "0211_update_email_templates_reply_to_note"),
+        ("auctions", "0213_mark_existing_in_person_print_reminders_sent"),
         ("post_office", "0011_models_help_text"),
     ]
 
