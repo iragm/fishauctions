@@ -137,8 +137,7 @@ class CeleryTasksTestCase(TestCase):
         # Call the scheduling function with no auctions
         tasks.schedule_next_auction_stats_update()
 
-        # Verify the task was scheduled with 1 hour fallback
+        # Verify the task was scheduled with fallback delay
         mock_task.apply_async.assert_called_once()
-        # The countdown should be 3600 seconds (1 hour)
         call_kwargs = mock_task.apply_async.call_args[1]
-        self.assertEqual(call_kwargs["countdown"], 3600)
+        self.assertEqual(call_kwargs["countdown"], tasks.STATS_UPDATE_FALLBACK_DELAY_SECONDS)

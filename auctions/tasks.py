@@ -8,6 +8,11 @@ Each task wraps a management command to maintain backward compatibility.
 from celery import shared_task
 from django.core.management import call_command
 
+# Constants for update_auction_stats scheduling
+STATS_UPDATE_LOCK_MINUTES = 5  # Minutes to lock auction before recalculation to prevent concurrent updates
+STATS_UPDATE_MAX_DELAY_SECONDS = 3600  # Maximum delay (1 hour) before checking for new auctions
+STATS_UPDATE_FALLBACK_DELAY_SECONDS = 3600  # Fallback delay when no auctions need updates
+
 
 @shared_task(bind=True, ignore_result=True)
 def endauctions(self):
@@ -117,7 +122,7 @@ def schedule_next_auction_stats_update():
 
     This function finds the earliest `next_update_due` timestamp among all auctions
     and schedules the update_auction_stats task to run at that time. If no auctions
-    need updates, it schedules a fallback check in 1 hour.
+    need updates, it schedules a fallback check.
     """
     from django.utils import timezone
 
@@ -133,11 +138,11 @@ def schedule_next_auction_stats_update():
     if next_auction and next_auction.next_update_due:
         # Calculate delay until the next update is due
         delay_seconds = max(0, (next_auction.next_update_due - now).total_seconds())
-        # Cap the delay at 1 hour to ensure we check periodically for new auctions
-        delay_seconds = min(delay_seconds, 3600)
+        # Cap the delay to ensure we check periodically for new auctions
+        delay_seconds = min(delay_seconds, STATS_UPDATE_MAX_DELAY_SECONDS)
     else:
-        # No auctions with scheduled updates, check again in 1 hour
-        delay_seconds = 3600
+        # No auctions with scheduled updates, check again later
+        delay_seconds = STATS_UPDATE_FALLBACK_DELAY_SECONDS
 
     # Schedule the task with countdown
     update_auction_stats.apply_async(countdown=delay_seconds)
@@ -181,7 +186,7 @@ def update_auction_stats(self):
             # Set next_update_due before recalculating to prevent concurrent recalculations
             # This ensures that if the recalculation takes longer than expected,
             # subsequent task runs won't try to recalculate the same auction again
-            auction.next_update_due = now + timezone.timedelta(minutes=5)
+            auction.next_update_due = now + timezone.timedelta(minutes=STATS_UPDATE_LOCK_MINUTES)
             auction.save(update_fields=["next_update_due"])
 
             auction.recalculate_stats()
