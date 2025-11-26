@@ -293,7 +293,7 @@ document.addEventListener("DOMContentLoaded", function() {
   {% endfor %}
   {% for payment in invoice.payments.all %}
     <tr>
-      <td>{{ payment.payment_method }}{% if payment.external_id %} ({{ payment.external_id }}){% endif %}</td>
+      <td>{{ payment.payment_method }}{% if payment.receipt_number %} (#{{ payment.receipt_number }}){% elif payment.external_id %} ({{ payment.external_id }}){% endif %}</td>
       <td>{{ invoice.currency_symbol }}{{ payment.amount|floatformat:2 }}</td>
     </tr>
   {% endfor %}

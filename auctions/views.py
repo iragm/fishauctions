@@ -9865,6 +9865,7 @@ class SquareWebhookView(SquareAPIMixin, View):
                         amount_money = payment.get("amount_money", {})
                         amount_value = Decimal(amount_money.get("amount", 0)) / 100
                         currency = amount_money.get("currency", "USD")
+                        receipt_number = payment.get("receipt_number", "")
 
                         payment_record, created = InvoicePayment.objects.get_or_create(
                             invoice=invoice,
@@ -9874,11 +9875,16 @@ class SquareWebhookView(SquareAPIMixin, View):
                                 "amount_available_to_refund": amount_value,
                                 "currency": currency,
                                 "payment_method": "Square",
+                                "receipt_number": receipt_number,
                             },
                         )
                         # If payment already existed, make sure amount_available_to_refund is set
-                        if not created and payment_record.amount_available_to_refund == Decimal("0.00"):
-                            payment_record.amount_available_to_refund = amount_value
+                        if not created:
+                            if payment_record.amount_available_to_refund == Decimal("0.00"):
+                                payment_record.amount_available_to_refund = amount_value
+                            # Update receipt_number if it wasn't set before
+                            if receipt_number and not payment_record.receipt_number:
+                                payment_record.receipt_number = receipt_number
                             payment_record.save()
                         action = f"Payment via Square for bidder {invoice.auctiontos_user.bidder_number} in the amount of {amount_value} {currency}"
                         invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
