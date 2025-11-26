@@ -175,6 +175,9 @@ from .tables import AuctionHistoryHTMxTable, AuctionHTMxTable, AuctionTOSHTMxTab
 # Distance conversion constant
 MILES_TO_KM = 1.60934
 
+# Invoice notification delay in seconds (allows for undo before email is sent)
+INVOICE_NOTIFICATION_DELAY_SECONDS = 15
+
 logger = logging.getLogger(__name__)
 
 
@@ -1260,8 +1263,10 @@ class InvoicePaid(LoginRequiredMixin, AuctionViewMixin, View):
         self.invoice.status = new_status
         # Set or clear invoice_notification_due based on status change
         if new_status in ("UNPAID", "PAID"):
-            # Set notification due 15 seconds in the future to allow for undo
-            self.invoice.invoice_notification_due = timezone.now() + timedelta(seconds=15)
+            # Set notification due in the future to allow for undo
+            self.invoice.invoice_notification_due = timezone.now() + timedelta(
+                seconds=INVOICE_NOTIFICATION_DELAY_SECONDS
+            )
         elif new_status == "DRAFT":
             # Clear notification due when setting to open
             self.invoice.invoice_notification_due = None
@@ -6193,7 +6198,7 @@ class InvoiceBulkUpdateStatus(LoginRequiredMixin, TemplateView, FormMixin, Aucti
         notification_due = None
         # Set or clear invoice_notification_due based on new status
         if self.new_invoice_status in ("UNPAID", "PAID"):
-            notification_due = timezone.now() + timedelta(seconds=15)
+            notification_due = timezone.now() + timedelta(seconds=INVOICE_NOTIFICATION_DELAY_SECONDS)
         for invoice in invoices:
             invoice.status = self.new_invoice_status
             invoice.invoice_notification_due = notification_due
