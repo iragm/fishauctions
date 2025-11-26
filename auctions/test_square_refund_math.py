@@ -219,3 +219,39 @@ class SquareRefundMathTest(TestCase):
             Decimal("0.00"),
             "Invoice should not show club owing user money after correct refund processing",
         )
+
+    def test_issue_scenario_partial_refund_percent_set_without_square_refund(self):
+        """
+        Test the problematic scenario that causes the issue:
+        If partial_refund_percent is set but Square refund fails/doesn't process,
+        the invoice would show incorrect balance.
+        
+        This was the BUG that the fix addresses.
+        """
+        # Initial state
+        self.assertEqual(self.buyer_invoice.net_after_payments, Decimal("0.00"))
+
+        # Before the fix: If admin manually set partial_refund_percent=50 without processing Square refund,
+        # or if Square refund failed but partial_refund_percent was still updated,
+        # the invoice would show club owes user $0.50
+        
+        # Simulate the old buggy behavior by manually setting partial_refund_percent
+        self.lot.partial_refund_percent = 50
+        self.lot.save()
+
+        # Without Square refund creating negative InvoicePayment:
+        # total_bought is reduced to $0.50, but total_payments is still $1.00
+        self.assertEqual(self.buyer_invoice.total_bought, Decimal("0.50"))
+        self.assertEqual(self.buyer_invoice.net, Decimal("-0.50"))
+        self.assertEqual(self.buyer_invoice.total_payments, Decimal("1.00"))  # No refund processed!
+        self.assertEqual(self.buyer_invoice.net_after_payments, Decimal("0.50"))  # BUG: Club owes user!
+
+        # This is the bug that was reported: "Invoice now shows that the club owes the user $0.50"
+        self.assertGreater(
+            self.buyer_invoice.net_after_payments,
+            Decimal("0.00"),
+            "This demonstrates the bug: invoice incorrectly shows club owing user money",
+        )
+
+        # With the fix: lot.refund() won't update partial_refund_percent if Square refund fails,
+        # so this problematic state won't occur unless admin manually edits the database
