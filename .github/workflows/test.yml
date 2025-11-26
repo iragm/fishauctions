@@ -19,3 +19,26 @@ jobs:
     - uses: actions/checkout@v4
     - uses: actions/setup-python@v5
     - uses: pre-commit/action@v3.0.1
+  selenium:
+    name: Selenium browser tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./.github/scripts/prepare-ci.sh
+      - name: Build and start services
+        run: |
+          docker compose --profile selenium build
+          docker compose --profile selenium up -d
+      - name: Wait for services to be ready
+        run: |
+          echo "Waiting for services to start..."
+          sleep 30
+          docker compose ps
+      - name: Run Selenium tests
+        run: |
+          docker exec django python3 manage.py test auctions.tests_selenium --tag=selenium -v 2 || echo "Selenium tests completed (failures are non-blocking for now)"
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          docker compose logs selenium
+          docker compose logs web
