@@ -1,3 +1,4 @@
+import base64
 import datetime
 import hashlib
 import hmac
@@ -5446,7 +5447,7 @@ class SquareWebhookSignatureValidationTests(StandardTestCase):
         }
 
     def compute_signature(self, url, body, key=None):
-        """Compute an HMAC-SHA256 signature for testing
+        """Compute an HMAC-SHA256 signature for testing using base64 encoding (as Square does)
 
         Args:
             url: The notification URL
@@ -5457,7 +5458,8 @@ class SquareWebhookSignatureValidationTests(StandardTestCase):
             key = self.signature_key
         message = (url + body).encode("utf-8")
         key_bytes = key.encode("utf-8")
-        return hmac.new(key_bytes, message, hashlib.sha256).hexdigest()
+        hash_bytes = hmac.new(key_bytes, message, hashlib.sha256).digest()
+        return base64.b64encode(hash_bytes).decode("utf-8")
 
     def test_forged_signature_is_rejected(self):
         """Test that requests with invalid/forged signatures are rejected when key is configured"""
