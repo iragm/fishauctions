@@ -6183,11 +6183,13 @@ class SquareSeller(models.Model):
                     ask_for_shipping_address = True
 
             # Pre-populate buyer info from auctiontos
+            # Note: These are hints for the Square checkout form and users can edit them.
+            # String truncation is used to meet Square API field length limits.
             pre_populated_data = {}
             if buyer_email:
                 pre_populated_data["buyer_email"] = buyer_email
             if invoice.auctiontos_user:
-                # Add buyer name if available
+                # Add buyer name if available (50 char limit per Square API)
                 if invoice.auctiontos_user.name:
                     name_parts = invoice.auctiontos_user.name.split(None, 1)
                     if name_parts:
@@ -6195,10 +6197,10 @@ class SquareSeller(models.Model):
                         if len(name_parts) >= 2:
                             buyer_name["family_name"] = name_parts[1][:50]
                         pre_populated_data["buyer_name"] = buyer_name
-                # Add phone number if available
+                # Add phone number if available (20 char limit per Square API)
                 if invoice.auctiontos_user.phone_number:
                     pre_populated_data["buyer_phone_number"] = invoice.auctiontos_user.phone_number[:20]
-                # Add address if available
+                # Add address if available (500 char limit per Square API)
                 if invoice.auctiontos_user.address:
                     pre_populated_data["buyer_address"] = {
                         "address_line_1": invoice.auctiontos_user.address[:500],
