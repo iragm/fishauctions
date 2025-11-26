@@ -12,7 +12,6 @@ https://docs.djangoproject.com/en/3.1/ref/settings/
 
 import datetime
 import os
-import sys
 from decimal import Decimal
 from pathlib import Path
 
@@ -280,33 +279,32 @@ WEBPUSH_SETTINGS = {
     "VAPID_ADMIN_EMAIL": os.environ.get("ADMIN_EMAIL", "admin@example.com"),
 }
 
-# Use sqlite for testing
-if "test" in sys.argv:
-    # if True: # for migrations
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.sqlite3",
-            "NAME": BASE_DIR / "db.sqlite3",
-        }
+# Use MariaDB for both dev and testing
+DATABASES = {
+    "default": {
+        "ENGINE": os.environ.get(
+            "DATABASE_ENGINE", "django.db.backends.mysql"
+        ),  # mysql_server_has_gone_away does not appear to resolve this issue
+        "NAME": os.environ.get("DATABASE_NAME", "auctions"),
+        "USER": os.environ.get("DATABASE_USER", "mysqluser"),
+        "PASSWORD": os.environ.get("DATABASE_PASSWORD", "unsecure"),
+        "HOST": os.environ.get("DATABASE_HOST", "db"),
+        "PORT": os.environ.get("DATABASE_PORT", "3306"),
+        "OPTIONS": {
+            "charset": "utf8mb4",
+            "init_command": "SET sql_mode='STRICT_TRANS_TABLES'",
+        },
+        "CONN_MAX_AGE": 0,  # don't reuse connections for ASGI
+        "CONN_HEALTH_CHECKS": True,
+        "TEST": {
+            "CHARSET": "utf8mb4",
+            "COLLATION": "utf8mb4_unicode_ci",
+        },
     }
-else:
-    DATABASES = {
-        "default": {
-            "ENGINE": os.environ.get(
-                "DATABASE_ENGINE", "django.db.backends.mysql"
-            ),  # mysql_server_has_gone_away does not appear to resolve this issue
-            "NAME": os.environ.get("DATABASE_NAME", "auctions"),
-            "USER": os.environ.get("DATABASE_USER", "mysqluser"),
-            "PASSWORD": os.environ.get("DATABASE_PASSWORD", "unsecure"),
-            "HOST": os.environ.get("DATABASE_HOST", "db"),
-            "PORT": os.environ.get("DATABASE_PORT", "3306"),
-            "OPTIONS": {
-                "charset": "utf8mb4",
-            },
-            "CONN_MAX_AGE": 0,  # don't reuse connections for ASGI
-            "CONN_HEALTH_CHECKS": True,
-        }
-    }
+}
+
+# Django's test runner automatically creates a separate test database (test_auctions)
+# and cleans it up after tests complete, so no special configuration needed for tests
 
 # Base URL to use when referring to full URLs within the Wagtail admin backend -
 # e.g. in notification emails. Don't include '/admin' or a trailing slash

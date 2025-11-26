@@ -11,8 +11,10 @@ services:
       - 8000
     env_file: .env
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
     restart: always
 
   celery_worker:
@@ -73,6 +75,13 @@ services:
       - ${DATABASE_PORT-3306}
     volumes:
       - mariadb_data:/var/lib/mysql
+      - ./db-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb --user=$${MYSQL_USER:-mysqluser} --password=$${MYSQL_PASSWORD:-unsecure} --execute='SELECT 1;' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
 
   redis:
     container_name: redis
