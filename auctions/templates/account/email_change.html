@@ -18,7 +18,7 @@
 {% if current_emailaddress %}
     <div class="mb-3">
         <label class="form-label">{% trans "Current email" %}:</label>
-        <input type="email" class="form-control" value="{{ current_emailaddress.email }}" disabled>
+        <input type="email" class="form-control text-light bg-dark" value="{{ current_emailaddress.email }}" disabled>
     </div>
 {% endif %}
 
@@ -31,7 +31,7 @@
                 {% trans "Changing to" %}:
             {% endif %}
         </label>
-        <input type="email" class="form-control" value="{{ new_emailaddress.email }}" disabled>
+        <input type="email" class="form-control text-light bg-dark" value="{{ new_emailaddress.email }}" disabled>
         <div class="form-text">
             {% trans "Your email address is still pending verification." %}
         </div>
