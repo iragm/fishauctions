@@ -189,26 +189,6 @@ function initMap() {
                             <div class="col-12 col-md-auto">
                                 <a href="{{ auction.set_lot_winners_link }}" class="btn btn-primary btn-sm w-100"><i class="bi bi-calendar-check"></i> Set lot winners</a>
                             </div>
-                            {% endif %}
-                            <div class="col-12 col-md-auto">
-                                <a href="/auctions/{{auction.slug}}/stats/" class="btn btn-primary btn-sm w-100"><i class="bi bi-graph-up"></i> Stats</a>
-                            </div>
-                            <div class="col-12 col-md-auto">
-                                <a href="{% url 'auction_history' slug=auction.slug %}" class="btn btn-primary btn-sm w-100"><i class="bi bi-clock-history"></i> Admin history</a>
-                            </div>
-                            <div class="col-12 col-md-auto">
-                                <a href='/auctions/{{auction.slug}}/edit' class="btn btn-warning btn-sm w-100"><i class="bi bi-gear-fill"></i> Edit Rules</a>
-                            </div>
-                            <div class="col-12 col-md-auto">
-                                <a href="{{ auction.location_link }}" class="btn btn-primary btn-sm w-100"><i class="bi bi-geo-alt-fill"></i> Location{% if auction.location_qs|length > 1 %}s{% endif %}</a>
-                            </div>
-                            <div class="col-12 col-md-auto">
-                                <a href="/auctions/{{auction.slug}}/chat/" class="btn btn-primary btn-sm w-100"><i class="bi bi-chat-fill"></i> Chat messages</a>
-                            </div>
-                            <div class="col-12 col-md-auto">
-                                <a href="/auctions/new?copy={{auction.slug}}" class="btn btn-primary btn-sm w-100"><i class="bi bi-plus-circle"></i> Copy to new auction</a>
-                            </div>
-                            {% if not auction.is_online %}
                             <div class="col-12 col-md-auto">
                                 <a href='{% url "auction_quick_checkout" slug=auction.slug %}' class="btn btn-primary btn-sm w-100"><i class="bi bi-bag-heart"></i> Quick checkout</a>
                             </div>
@@ -218,6 +198,24 @@ function initMap() {
                             {% endif %}
                             <div class="col-12 col-md-auto">
                                 <a href='{% url "all_my_users" %}' class="btn btn-primary btn-sm w-100" data-bs-toggle="tooltip" title="All contacts for all auctions where you're an admin"><i class="bi bi-person-fill-down"></i> Marketing List</a>
+                            </div>
+                            <div class="col-12 col-md-auto">
+                                <a href="/auctions/{{auction.slug}}/stats/" class="btn btn-primary btn-sm w-100"><i class="bi bi-graph-up"></i> Stats</a>
+                            </div>
+                            <div class="col-12 col-md-auto">
+                                <a href="{% url 'auction_history' slug=auction.slug %}" class="btn btn-primary btn-sm w-100"><i class="bi bi-clock-history"></i> Admin history</a>
+                            </div>
+                            <div class="col-12 col-md-auto">
+                                <a href='/auctions/{{auction.slug}}/edit' class="btn btn-primary btn-sm w-100"><i class="bi bi-gear-fill"></i> Edit Rules</a>
+                            </div>
+                            <div class="col-12 col-md-auto">
+                                <a href="{{ auction.location_link }}" class="btn btn-primary btn-sm w-100"><i class="bi bi-geo-alt-fill"></i> Location{% if auction.location_qs|length > 1 %}s{% endif %}</a>
+                            </div>
+                            <div class="col-12 col-md-auto">
+                                <a href="/auctions/{{auction.slug}}/chat/" class="btn btn-primary btn-sm w-100"><i class="bi bi-chat-fill"></i> Chat messages</a>
+                            </div>
+                            <div class="col-12 col-md-auto">
+                                <a href="/auctions/new?copy={{auction.slug}}" class="btn btn-primary btn-sm w-100"><i class="bi bi-plus-circle"></i> Copy to new auction</a>
                             </div>
                             {% if not auction.multi_location %}
                             {% for location in pickup_locations %}
