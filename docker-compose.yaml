@@ -77,7 +77,7 @@ services:
       - mariadb_data:/var/lib/mysql
       - ./db-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD", "mariadb", "--user=$${MYSQL_USER}", "--password=$${MYSQL_PASSWORD}", "--execute", "SELECT 1;"]
+      test: ["CMD-SHELL", "mariadb --user=$${MYSQL_USER:-mysqluser} --password=$${MYSQL_PASSWORD:-unsecure} --execute='SELECT 1;' || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 10
