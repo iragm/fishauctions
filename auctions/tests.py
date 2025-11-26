@@ -5138,8 +5138,11 @@ class SquarePaymentTests(StandardTestCase):
         # Create a queryset of all auction TOS
         qs = AuctionTOS.objects.filter(auction=self.online_auction)
 
+        # Create an instance of AuctionTOSFilter to use its generic method
+        filter_instance = AuctionTOSFilter()
+
         # Search by receipt_number
-        filtered_qs = AuctionTOSFilter.generic(self, qs, "wxyz")
+        filtered_qs = filter_instance.generic(qs, "wxyz")
 
         # Should find the user with the invoice that has this receipt_number
         self.assertGreater(filtered_qs.count(), 0)

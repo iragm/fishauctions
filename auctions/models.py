@@ -6190,12 +6190,11 @@ class SquareSeller(models.Model):
                 # Add buyer name if available
                 if invoice.auctiontos_user.name:
                     name_parts = invoice.auctiontos_user.name.split(None, 1)
-                    if len(name_parts) >= 1:
-                        pre_populated_data["buyer_name"] = {
-                            "given_name": name_parts[0][:50],
-                        }
+                    if name_parts:
+                        buyer_name = {"given_name": name_parts[0][:50]}
                         if len(name_parts) >= 2:
-                            pre_populated_data["buyer_name"]["family_name"] = name_parts[1][:50]
+                            buyer_name["family_name"] = name_parts[1][:50]
+                        pre_populated_data["buyer_name"] = buyer_name
                 # Add phone number if available
                 if invoice.auctiontos_user.phone_number:
                     pre_populated_data["buyer_phone_number"] = invoice.auctiontos_user.phone_number[:20]
