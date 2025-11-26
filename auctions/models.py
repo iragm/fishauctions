@@ -5159,15 +5159,15 @@ class Invoice(models.Model):
         """
         if not self.auction or not self.auction.invoice_rounding:
             return self.net_after_payments
-        
+
         # If there are refunds and the absolute amount is less than $1, round to $0
         if self.has_refunds and abs(self.net_after_payments) < 1:
             return Decimal("0.00")
-        
+
         # Otherwise apply standard rounding in customer's favor
         # Note: Python's round() uses banker's rounding (round half to even)
         rounded = round(self.net_after_payments)
-        
+
         if self.net_after_payments > 0:  # Club owes user (positive)
             # Round up in customer's favor (they get more)
             if self.net_after_payments > rounded:
@@ -5190,20 +5190,24 @@ class Invoice(models.Model):
         """
         if not self.auction or not self.auction.invoice_rounding:
             return None
-        
+
         # Only show adjustment when we have refunds and fractional amounts less than $1
         if self.has_refunds and abs(self.net_after_payments) < 1 and self.net_after_payments != 0:
             # The adjustment is the difference between exact and rounded
             return self.net_after_payments - self.rounded_net_after_payments
-        
+
         return None
 
     @property
     def invoice_summary_short(self):
         result = ""
         # Use rounded value for display when invoice_rounding is enabled
-        display_amount = self.rounded_net_after_payments if (self.auction and self.auction.invoice_rounding) else self.net_after_payments
-        
+        display_amount = (
+            self.rounded_net_after_payments
+            if (self.auction and self.auction.invoice_rounding)
+            else self.net_after_payments
+        )
+
         if display_amount > 0:
             result += "needs to be paid"
         else:
