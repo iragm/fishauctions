@@ -75,19 +75,22 @@ class CeleryTasksTestCase(TestCase):
         mock_call_command.assert_called_once_with("webpush_notifications_deduplicate")
 
     @patch("auctions.tasks.schedule_next_auction_stats_update")
-    @patch("auctions.tasks.async_to_sync")
-    @patch("auctions.tasks.get_channel_layer")
-    def test_update_auction_stats_task_with_auction(self, mock_channel, mock_async, mock_schedule):
+    @patch("channels.layers.get_channel_layer")
+    def test_update_auction_stats_task_with_auction(self, mock_channel, mock_schedule):
         """Test that update_auction_stats task processes an auction and schedules next run."""
+        import datetime
+
         from django.utils import timezone
 
         from auctions.models import Auction
 
-        # Create an auction that needs stats update
+        # Create an auction that needs stats update (providing required date_start field)
+        now = timezone.now()
         auction = Auction.objects.create(
             title="Test Auction",
             is_deleted=False,
-            next_update_due=timezone.now() - timezone.timedelta(minutes=10),
+            next_update_due=now - timezone.timedelta(minutes=10),
+            date_start=now - datetime.timedelta(days=1),
         )
 
         # Run the task
