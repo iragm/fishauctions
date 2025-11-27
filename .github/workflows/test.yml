@@ -11,7 +11,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: ./.github/scripts/prepare-ci.sh
-      - run: docker compose run --rm test --ci --verbose
+      - name: Build test container
+        run: docker compose --profile test build
+      - name: Start database and wait for health
+        run: |
+          docker compose up -d db
+          echo "Waiting for database to be healthy..."
+          for i in {1..30}; do
+            if docker inspect --format='{{.State.Health.Status}}' db 2>/dev/null | grep -q "healthy"; then
+              echo "Database is healthy!"
+              break
+            fi
+            echo "Waiting for database... ($i/30)"
+            sleep 3
+          done
+      - name: Run tests
+        run: docker compose run --rm test --ci --verbose
   pre-commit:
     name: pre-commit validation
     runs-on: ubuntu-latest
@@ -77,7 +92,6 @@ jobs:
         run: |
           docker exec -u root django pip install selenium
       - name: Run Selenium tests
-        continue-on-error: true
         run: |
           docker exec django python3 manage.py test auctions.tests_selenium --tag=selenium -v 2
       - name: Show logs on failure
