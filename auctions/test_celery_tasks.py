@@ -113,16 +113,20 @@ class CeleryTasksTestCase(TestCase):
     @patch("auctions.tasks.update_auction_stats")
     def test_schedule_next_auction_stats_update_with_auction(self, mock_task):
         """Test that schedule_next_auction_stats_update schedules the task correctly."""
+        import datetime
+
         from django.utils import timezone
 
         from auctions.models import Auction
 
-        # Create an auction with a future update due date
-        future_time = timezone.now() + timezone.timedelta(hours=2)
+        # Create an auction with a future update due date (providing required date_start field)
+        now = timezone.now()
+        future_time = now + timezone.timedelta(hours=2)
         Auction.objects.create(
             title="Test Auction",
             is_deleted=False,
             next_update_due=future_time,
+            date_start=now - datetime.timedelta(days=1),
         )
 
         # Call the scheduling function
