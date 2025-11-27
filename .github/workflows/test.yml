@@ -27,10 +27,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: ./.github/scripts/prepare-ci.sh
-      - name: Build and start services
+      - name: Build containers
         run: |
           docker compose --profile selenium build
+      - name: Start database first and wait for health
+        run: |
+          echo "Starting database container..."
+          docker compose up -d db
+          echo "Waiting for database to be healthy (up to 90 seconds)..."
+          for i in {1..18}; do
+            if docker inspect --format='{{.State.Health.Status}}' db 2>/dev/null | grep -q "healthy"; then
+              echo "Database is healthy!"
+              break
+            fi
+            echo "Waiting for database... ($i/18)"
+            sleep 5
+          done
+          # Show database status
+          docker inspect --format='{{.State.Health.Status}}' db || echo "Could not get db status"
+      - name: Start remaining services
+        run: |
+          echo "Starting all services including selenium profile..."
           docker compose --profile selenium up -d
+          echo "Waiting for services to initialize..."
+          sleep 10
       - name: Wait for services to be ready
         run: |
           echo "Waiting for services to start..."
@@ -62,5 +82,11 @@ jobs:
       - name: Show logs on failure
         if: failure()
         run: |
-          docker compose logs selenium
+          echo "=== Database logs ==="
+          docker compose logs db
+          echo "=== Web logs ==="
           docker compose logs web
+          echo "=== Selenium logs ==="
+          docker compose logs selenium
+          echo "=== Container status ==="
+          docker compose ps -a
