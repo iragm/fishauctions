@@ -6063,3 +6063,238 @@ class AuctionEmailFieldsTest(StandardTestCase):
         # Invoice and follow-up due dates should be updated
         self.assertNotEqual(auction.invoice_email_due, original_invoice_due)
         self.assertNotEqual(auction.followup_email_due, original_followup_due)
+
+
+class UserLocationUpdateTests(StandardTestCase):
+    """Tests for updating user contact info and syncing to recent AuctionTOS records."""
+
+    def setUp(self):
+        super().setUp()
+        # Create UserData for the user
+        self.user_data, _ = UserData.objects.get_or_create(
+            user=self.user,
+            defaults={
+                "phone_number": "555-1234",
+                "address": "123 Old Street",
+            },
+        )
+        self.user.first_name = "John"
+        self.user.last_name = "Doe"
+        self.user.save()
+
+        # Set contact info on the online_tos
+        self.online_tos.name = "John Doe"
+        self.online_tos.phone_number = "555-1234"
+        self.online_tos.address = "123 Old Street"
+        self.online_tos.save()
+
+        # Set contact info on the in_person_tos
+        self.in_person_tos.name = "John Doe"
+        self.in_person_tos.phone_number = "555-1234"
+        self.in_person_tos.address = "123 Old Street"
+        self.in_person_tos.save()
+
+    def test_recent_auctiontos_updated_on_contact_change(self):
+        """When a user updates their contact info, recent AuctionTOS records should be updated."""
+        self.client.login(username="my_lot", password="testpassword")
+
+        # Post updated contact info
+        response = self.client.post(
+            "/contact_info/",
+            {
+                "first_name": "Jane",
+                "last_name": "Smith",
+                "phone_number": "555-9999",
+                "address": "456 New Avenue",
+                "location": "",
+                "location_coordinates": "",
+                "club_affiliation": "",
+                "club": "",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        # Refresh the AuctionTOS records from the database
+        self.online_tos.refresh_from_db()
+        self.in_person_tos.refresh_from_db()
+
+        # Check that the AuctionTOS records were updated
+        self.assertEqual(self.online_tos.name, "Jane Smith")
+        self.assertEqual(self.online_tos.phone_number, "555-9999")
+        self.assertEqual(self.online_tos.address, "456 New Avenue")
+
+        self.assertEqual(self.in_person_tos.name, "Jane Smith")
+        self.assertEqual(self.in_person_tos.phone_number, "555-9999")
+        self.assertEqual(self.in_person_tos.address, "456 New Avenue")
+
+    def test_auction_history_created_on_contact_update(self):
+        """An AuctionHistory record should be created when contact info is updated."""
+        self.client.login(username="my_lot", password="testpassword")
+
+        # Clear existing history
+        AuctionHistory.objects.filter(auction=self.online_auction).delete()
+
+        # Post updated contact info
+        self.client.post(
+            "/contact_info/",
+            {
+                "first_name": "Jane",
+                "last_name": "Smith",
+                "phone_number": "555-9999",
+                "address": "456 New Avenue",
+                "location": "",
+                "location_coordinates": "",
+                "club_affiliation": "",
+                "club": "",
+            },
+        )
+
+        # Check that history was created
+        history = AuctionHistory.objects.filter(
+            auction=self.online_auction,
+            user=self.user,
+            applies_to="USERS",
+        )
+        self.assertTrue(history.exists())
+        self.assertIn("Updated contact info", history.first().action)
+
+    def test_old_auctiontos_not_updated(self):
+        """AuctionTOS records older than 30 days should not be updated."""
+        self.client.login(username="my_lot", password="testpassword")
+
+        # Make the online_tos older than 30 days
+        old_date = timezone.now() - datetime.timedelta(days=31)
+        AuctionTOS.objects.filter(pk=self.online_tos.pk).update(createdon=old_date)
+        self.online_tos.refresh_from_db()
+
+        # Post updated contact info
+        self.client.post(
+            "/contact_info/",
+            {
+                "first_name": "Jane",
+                "last_name": "Smith",
+                "phone_number": "555-9999",
+                "address": "456 New Avenue",
+                "location": "",
+                "location_coordinates": "",
+                "club_affiliation": "",
+                "club": "",
+            },
+        )
+
+        # Refresh from database
+        self.online_tos.refresh_from_db()
+        self.in_person_tos.refresh_from_db()
+
+        # Old TOS should not be updated
+        self.assertEqual(self.online_tos.name, "John Doe")
+        self.assertEqual(self.online_tos.phone_number, "555-1234")
+        self.assertEqual(self.online_tos.address, "123 Old Street")
+
+        # Recent TOS should be updated
+        self.assertEqual(self.in_person_tos.name, "Jane Smith")
+        self.assertEqual(self.in_person_tos.phone_number, "555-9999")
+        self.assertEqual(self.in_person_tos.address, "456 New Avenue")
+
+    def test_manually_added_auctiontos_not_updated(self):
+        """AuctionTOS records that were manually added should not be updated."""
+        self.client.login(username="my_lot", password="testpassword")
+
+        # Mark the online_tos as manually added
+        self.online_tos.manually_added = True
+        self.online_tos.save()
+
+        # Post updated contact info
+        self.client.post(
+            "/contact_info/",
+            {
+                "first_name": "Jane",
+                "last_name": "Smith",
+                "phone_number": "555-9999",
+                "address": "456 New Avenue",
+                "location": "",
+                "location_coordinates": "",
+                "club_affiliation": "",
+                "club": "",
+            },
+        )
+
+        # Refresh from database
+        self.online_tos.refresh_from_db()
+        self.in_person_tos.refresh_from_db()
+
+        # Manually added TOS should not be updated
+        self.assertEqual(self.online_tos.name, "John Doe")
+        self.assertEqual(self.online_tos.phone_number, "555-1234")
+        self.assertEqual(self.online_tos.address, "123 Old Street")
+
+        # Non-manually added TOS should be updated
+        self.assertEqual(self.in_person_tos.name, "Jane Smith")
+        self.assertEqual(self.in_person_tos.phone_number, "555-9999")
+        self.assertEqual(self.in_person_tos.address, "456 New Avenue")
+
+    def test_update_message_shown_for_single_auction(self):
+        """The form should show a message about updating a single auction."""
+        self.client.login(username="my_lot", password="testpassword")
+
+        # Make one TOS old and the other manually added
+        old_date = timezone.now() - datetime.timedelta(days=31)
+        AuctionTOS.objects.filter(pk=self.online_tos.pk).update(createdon=old_date)
+
+        response = self.client.get("/contact_info/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("auctiontos_update_message", response.context)
+        # When there's only one auction, it shows the auction name, not "1 auction"
+        self.assertIn(str(self.in_person_auction), response.context["auctiontos_update_message"])
+
+    def test_update_message_shown_for_multiple_auctions(self):
+        """The form should show a message about updating multiple auctions."""
+        self.client.login(username="my_lot", password="testpassword")
+
+        response = self.client.get("/contact_info/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("auctiontos_update_message", response.context)
+        self.assertIn("2 auctions", response.context["auctiontos_update_message"])
+
+    def test_no_update_message_when_no_recent_auctiontos(self):
+        """No message should be shown when there are no recent AuctionTOS records."""
+        self.client.login(username="my_lot", password="testpassword")
+
+        # Make all TOS old
+        old_date = timezone.now() - datetime.timedelta(days=31)
+        AuctionTOS.objects.filter(user=self.user).update(createdon=old_date)
+
+        response = self.client.get("/contact_info/")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("auctiontos_update_message", response.context)
+
+    def test_no_changes_if_info_same(self):
+        """If contact info hasn't changed, no history should be created."""
+        self.client.login(username="my_lot", password="testpassword")
+
+        # Clear existing history
+        AuctionHistory.objects.filter(auction=self.online_auction).delete()
+
+        # Post the same contact info
+        self.client.post(
+            "/contact_info/",
+            {
+                "first_name": "John",
+                "last_name": "Doe",
+                "phone_number": "555-1234",
+                "address": "123 Old Street",
+                "location": "",
+                "location_coordinates": "",
+                "club_affiliation": "",
+                "club": "",
+            },
+        )
+
+        # Check that no history was created for the auctions
+        history = AuctionHistory.objects.filter(
+            auction=self.online_auction,
+            applies_to="USERS",
+        )
+        self.assertEqual(history.count(), 0)
