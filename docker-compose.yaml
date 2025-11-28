@@ -82,9 +82,9 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "mariadb --user=$${MYSQL_USER:-mysqluser} --password=$${MYSQL_PASSWORD:-unsecure} --execute='SELECT 1;' || exit 1"]
       interval: 5s
-      timeout: 3s
-      retries: 10
-      start_period: 30s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
 
   redis:
     container_name: redis

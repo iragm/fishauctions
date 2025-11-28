@@ -16,15 +16,19 @@ jobs:
       - name: Start database and wait for health
         run: |
           docker compose up -d db
-          echo "Waiting for database to be healthy..."
-          for i in {1..30}; do
-            if docker inspect --format='{{.State.Health.Status}}' db 2>/dev/null | grep -q "healthy"; then
+          echo "Waiting for database to be healthy (up to 120 seconds)..."
+          for i in {1..40}; do
+            STATUS=$(docker inspect --format='{{.State.Health.Status}}' db 2>/dev/null || echo "not_found")
+            if [ "$STATUS" = "healthy" ]; then
               echo "Database is healthy!"
-              break
+              exit 0
             fi
-            echo "Waiting for database... ($i/30)"
+            echo "Database status: $STATUS (attempt $i/40)"
             sleep 3
           done
+          echo "ERROR: Database failed to become healthy"
+          docker compose logs db
+          exit 1
       - name: Run tests
         run: docker compose run --rm test --ci --verbose
   pre-commit:
@@ -49,17 +53,19 @@ jobs:
         run: |
           echo "Starting database container..."
           docker compose up -d db
-          echo "Waiting for database to be healthy (up to 90 seconds)..."
-          for i in {1..18}; do
-            if docker inspect --format='{{.State.Health.Status}}' db 2>/dev/null | grep -q "healthy"; then
+          echo "Waiting for database to be healthy (up to 120 seconds)..."
+          for i in {1..40}; do
+            STATUS=$(docker inspect --format='{{.State.Health.Status}}' db 2>/dev/null || echo "not_found")
+            if [ "$STATUS" = "healthy" ]; then
               echo "Database is healthy!"
-              break
+              exit 0
             fi
-            echo "Waiting for database... ($i/18)"
-            sleep 5
+            echo "Database status: $STATUS (attempt $i/40)"
+            sleep 3
           done
-          # Show database status
-          docker inspect --format='{{.State.Health.Status}}' db || echo "Could not get db status"
+          echo "ERROR: Database failed to become healthy"
+          docker compose logs db
+          exit 1
       - name: Start remaining services
         run: |
           echo "Starting all services including selenium profile..."
