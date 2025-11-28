@@ -2327,8 +2327,9 @@ class AuctionStats(LoginRequiredMixin, AuctionViewMixin, DetailView):
 
         if not auction.last_stats_update or auction.last_stats_update < twenty_minutes_ago:
             if not recalculation_pending:
-                # Schedule immediate recalculation by setting next_update_due to now
-                auction.next_update_due = now
+                # Schedule immediate recalculation by setting next_update_due to slightly in the past
+                # This ensures the task will pick it up immediately (avoids timing issues with next_update_due__lte=now)
+                auction.next_update_due = now - timezone.timedelta(seconds=1)
                 auction.save(update_fields=["next_update_due"])
                 # Trigger the self-scheduling Celery task to process this auction immediately
                 from auctions.tasks import update_auction_stats
