@@ -287,6 +287,48 @@ class SendInvoiceNotificationTaskTestCase(TestCase):
         # Check that email was NOT sent (and no error was raised)
         mock_mail_send.assert_not_called()
 
+    @patch("auctions.tasks.mail.send")
+    def test_cleans_up_periodic_task_after_sending(self, mock_mail_send):
+        """Test that the task cleans up its PeriodicTask entry after execution."""
+        # Create an invoice
+        invoice = Invoice.objects.create(
+            auctiontos_user=self.tos_with_email,
+            auction=self.auction,
+            status="UNPAID",
+            email_sent=False,
+        )
+
+        # Schedule the notification (creates a PeriodicTask)
+        run_at = timezone.now() + datetime.timedelta(seconds=15)
+        tasks.schedule_invoice_notification(invoice.pk, run_at)
+
+        # Verify the task exists
+        task_name = f"invoice_notification_{invoice.pk}"
+        assert PeriodicTask.objects.filter(name=task_name).exists()
+
+        # Run the task
+        tasks.send_invoice_notification(invoice.pk)
+
+        # Verify the PeriodicTask was cleaned up
+        assert not PeriodicTask.objects.filter(name=task_name).exists()
+
+    @patch("auctions.tasks.mail.send")
+    def test_cleans_up_periodic_task_for_deleted_invoice(self, mock_mail_send):
+        """Test that cleanup happens even when invoice is deleted."""
+        # Schedule a notification for a non-existent invoice
+        run_at = timezone.now() + datetime.timedelta(seconds=15)
+        tasks.schedule_invoice_notification(99999, run_at)
+
+        # Verify the task exists
+        task_name = "invoice_notification_99999"
+        assert PeriodicTask.objects.filter(name=task_name).exists()
+
+        # Run the task with the non-existent invoice ID
+        tasks.send_invoice_notification(99999)
+
+        # Verify the PeriodicTask was cleaned up
+        assert not PeriodicTask.objects.filter(name=task_name).exists()
+
 
 class ScheduleInvoiceNotificationTestCase(TestCase):
     """Test case for schedule_invoice_notification and cancel_invoice_notification functions."""

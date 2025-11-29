@@ -101,6 +101,7 @@ def send_invoice_notification(self, invoice_pk):
     - Send email if conditions are met (trusted user, has email, notifications enabled)
     - Mark the invoice as email_sent=True
     - Add history entry if email was sent
+    - Clean up the PeriodicTask entry after execution
 
     The task is idempotent - if called multiple times or after the notification
     is already sent, it will simply do nothing.
@@ -110,16 +111,19 @@ def send_invoice_notification(self, invoice_pk):
     try:
         invoice = Invoice.objects.get(pk=invoice_pk)
     except Invoice.DoesNotExist:
-        # Invoice was deleted, nothing to do
+        # Invoice was deleted, clean up and return
+        _cleanup_invoice_notification_task(invoice_pk)
         return
 
     # Check if notification is still needed
     if invoice.email_sent:
-        # Already sent, nothing to do
+        # Already sent, clean up and return
+        _cleanup_invoice_notification_task(invoice_pk)
         return
 
     if invoice.status == "DRAFT":
-        # Invoice was set back to open, don't send notification
+        # Invoice was set back to open, clean up and return
+        _cleanup_invoice_notification_task(invoice_pk)
         return
 
     if not invoice.auction:
@@ -127,6 +131,7 @@ def send_invoice_notification(self, invoice_pk):
         invoice.email_sent = True
         invoice.invoice_notification_due = None
         invoice.save()
+        _cleanup_invoice_notification_task(invoice_pk)
         return
 
     should_send_email = (
@@ -168,6 +173,19 @@ def send_invoice_notification(self, invoice_pk):
     invoice.email_sent = True
     invoice.invoice_notification_due = None
     invoice.save()
+
+    # Clean up the PeriodicTask entry now that we're done
+    _cleanup_invoice_notification_task(invoice_pk)
+
+
+def _cleanup_invoice_notification_task(invoice_pk):
+    """
+    Remove the PeriodicTask entry for an invoice notification.
+
+    This is called after the task runs to clean up the database.
+    """
+    task_name = get_invoice_notification_task_name(invoice_pk)
+    PeriodicTask.objects.filter(name=task_name).delete()
 
 
 @shared_task(bind=True, ignore_result=True)
