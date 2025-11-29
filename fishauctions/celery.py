@@ -80,6 +80,11 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.update_auction_stats",
         "schedule": 60.0,  # Run every minute
     },
+    # Clean up old invoice notification tasks - daily at 3:00 AM
+    "cleanup_old_invoice_notification_tasks": {
+        "task": "auctions.tasks.cleanup_old_invoice_notification_tasks",
+        "schedule": crontab(hour=3, minute=0),
+    },
 }
 
 

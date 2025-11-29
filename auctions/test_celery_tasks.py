@@ -404,3 +404,88 @@ class ScheduleInvoiceNotificationTestCase(TestCase):
         """Test that cancel_invoice_notification handles non-existent tasks gracefully."""
         # Cancel without scheduling first (should not raise an error)
         tasks.cancel_invoice_notification(99999)
+
+
+class CleanupOldInvoiceNotificationTasksTestCase(TestCase):
+    """Test case for the cleanup_old_invoice_notification_tasks task."""
+
+    def setUp(self):
+        """Set up test data."""
+        time = timezone.now() - datetime.timedelta(days=2)
+        timeStart = timezone.now() - datetime.timedelta(days=3)
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+
+        self.user = User.objects.create_user(username="test_user", password="testpassword", email="test@example.com")
+        self.auction = Auction.objects.create(
+            created_by=self.user,
+            title="Test Auction",
+            is_online=True,
+            date_end=time,
+            date_start=timeStart,
+        )
+        self.location = PickupLocation.objects.create(name="Test Location", auction=self.auction, pickup_time=theFuture)
+        self.tos = AuctionTOS.objects.create(
+            user=self.user,
+            auction=self.auction,
+            pickup_location=self.location,
+            email="test@example.com",
+        )
+        self.invoice = Invoice.objects.create(
+            auctiontos_user=self.tos,
+            auction=self.auction,
+            status="UNPAID",
+        )
+
+    def test_deletes_old_tasks(self):
+        """Test that old invoice notification tasks are deleted."""
+        # Schedule a task with a clocked time more than 24 hours ago
+        old_time = timezone.now() - datetime.timedelta(hours=25)
+        tasks.schedule_invoice_notification(self.invoice.pk, old_time)
+
+        # Verify the task exists
+        task_name = f"invoice_notification_{self.invoice.pk}"
+        assert PeriodicTask.objects.filter(name=task_name).exists()
+
+        # Run the cleanup task
+        tasks.cleanup_old_invoice_notification_tasks()
+
+        # Verify the task was deleted
+        assert not PeriodicTask.objects.filter(name=task_name).exists()
+
+    def test_keeps_recent_tasks(self):
+        """Test that recent invoice notification tasks are not deleted."""
+        # Schedule a task with a clocked time less than 24 hours ago
+        recent_time = timezone.now() - datetime.timedelta(hours=12)
+        tasks.schedule_invoice_notification(self.invoice.pk, recent_time)
+
+        # Verify the task exists
+        task_name = f"invoice_notification_{self.invoice.pk}"
+        assert PeriodicTask.objects.filter(name=task_name).exists()
+
+        # Run the cleanup task
+        tasks.cleanup_old_invoice_notification_tasks()
+
+        # Verify the task still exists
+        assert PeriodicTask.objects.filter(name=task_name).exists()
+
+        # Clean up
+        PeriodicTask.objects.filter(name=task_name).delete()
+
+    def test_keeps_future_tasks(self):
+        """Test that future invoice notification tasks are not deleted."""
+        # Schedule a task for the future
+        future_time = timezone.now() + datetime.timedelta(seconds=15)
+        tasks.schedule_invoice_notification(self.invoice.pk, future_time)
+
+        # Verify the task exists
+        task_name = f"invoice_notification_{self.invoice.pk}"
+        assert PeriodicTask.objects.filter(name=task_name).exists()
+
+        # Run the cleanup task
+        tasks.cleanup_old_invoice_notification_tasks()
+
+        # Verify the task still exists
+        assert PeriodicTask.objects.filter(name=task_name).exists()
+
+        # Clean up
+        PeriodicTask.objects.filter(name=task_name).delete()

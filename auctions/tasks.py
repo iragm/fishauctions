@@ -189,6 +189,30 @@ def _cleanup_invoice_notification_task(invoice_pk):
 
 
 @shared_task(bind=True, ignore_result=True)
+def cleanup_old_invoice_notification_tasks(self):
+    """
+    Clean up old invoice notification PeriodicTask entries from the database.
+
+    This task runs daily to remove any invoice_notification_* tasks that are
+    more than 24 hours old. These tasks should normally be cleaned up after
+    execution, but this provides a safety net for any orphaned entries.
+    """
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    cutoff_time = timezone.now() - timedelta(hours=24)
+
+    # Find and delete old invoice notification tasks
+    # The clocked schedule's clocked_time indicates when the task was scheduled to run
+    old_tasks = PeriodicTask.objects.filter(
+        name__startswith="invoice_notification_",
+        clocked__clocked_time__lt=cutoff_time,
+    )
+    old_tasks.delete()
+
+
+@shared_task(bind=True, ignore_result=True)
 def auction_emails(self):
     """
     Send auction-related drip marketing emails.
