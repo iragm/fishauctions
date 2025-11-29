@@ -20,6 +20,24 @@ class Command(BaseCommand):
         created_count = 0
         updated_count = 0
         skipped_count = 0
+        deleted_count = 0
+
+        # Get names of tasks that should exist
+        expected_task_names = set(beat_schedule.keys())
+
+        # Delete tasks that are no longer in the beat_schedule
+        existing_tasks = PeriodicTask.objects.filter(name__in=[
+            "endauctions", "sendnotifications", "auctiontos_notifications",
+            "email_invoice", "send_queued_mail", "auction_emails",
+            "email_unseen_chats", "weekly_promo", "set_user_location",
+            "remove_duplicate_views", "webpush_notifications_deduplicate",
+            "update_auction_stats",  # Old task that should be removed
+        ])
+        for task in existing_tasks:
+            if task.name not in expected_task_names:
+                self.stdout.write(self.style.ERROR(f"  ✗ Deleting removed task: {task.name}"))
+                task.delete()
+                deleted_count += 1
 
         for task_name, task_config in beat_schedule.items():
             task_path = task_config["task"]
@@ -88,7 +106,9 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(f"  Created: {created_count}"))
         self.stdout.write(self.style.WARNING(f"  Updated: {updated_count}"))
         self.stdout.write(f"  Skipped: {skipped_count}")
-        self.stdout.write(f"  Total: {len(beat_schedule)}")
+        if deleted_count > 0:
+            self.stdout.write(self.style.ERROR(f"  Deleted: {deleted_count}"))
+        self.stdout.write(f"  Total in schedule: {len(beat_schedule)}")
         self.stdout.write("")
         self.stdout.write(
             self.style.SUCCESS("Periodic tasks are now visible in Django Admin → Periodic Tasks → Periodic tasks")
