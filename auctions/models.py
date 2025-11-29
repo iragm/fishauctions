@@ -4723,6 +4723,10 @@ class Invoice(models.Model):
     opened = models.BooleanField(default=False)
     printed = models.BooleanField(default=False)
     email_sent = models.BooleanField(default=False)
+    invoice_notification_due = models.DateTimeField(null=True, blank=True)
+    invoice_notification_due.help_text = (
+        "When set, a celery task will send an invoice notification email after this time"
+    )
     no_login_link = models.CharField(
         max_length=255,
         default=uuid.uuid4,

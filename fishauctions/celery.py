@@ -40,11 +40,6 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.auctiontos_notifications",
         "schedule": 900.0,  # Run every 15 minutes
     },
-    # Email users about invoices - every 15 minutes
-    "email_invoice": {
-        "task": "auctions.tasks.email_invoice",
-        "schedule": 900.0,  # Run every 15 minutes
-    },
     # Send queued mail (post_office) - every 10 minutes (retry failed emails)
     "send_queued_mail": {
         "task": "post_office.tasks.send_queued_mail",

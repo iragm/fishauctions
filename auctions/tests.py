@@ -808,6 +808,80 @@ class InvoiceCreateViewTests(StandardTestCase):
         assert new_tos.invoice is None
 
 
+class InvoiceNotificationDueTests(StandardTestCase):
+    """Test invoice notification due logic in views"""
+
+    def test_invoice_status_to_ready_sets_notification_due(self):
+        """Test that setting invoice to UNPAID (ready) sets notification due"""
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+
+        # Ensure invoice starts without notification due
+        self.invoice.status = "DRAFT"
+        self.invoice.invoice_notification_due = None
+        self.invoice.save()
+
+        # Set invoice to ready
+        response = self.client.post(f"/api/payinvoice/{self.invoice.pk}/UNPAID")
+
+        assert response.status_code == 200
+
+        # Refresh from database
+        self.invoice.refresh_from_db()
+
+        # Check that notification_due was set
+        assert self.invoice.status == "UNPAID"
+        assert self.invoice.invoice_notification_due is not None
+        # Should be set to ~15 seconds in the future
+        assert self.invoice.invoice_notification_due > timezone.now()
+
+    def test_invoice_status_to_paid_sets_notification_due(self):
+        """Test that setting invoice to PAID sets notification due"""
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+
+        # Ensure invoice starts without notification due
+        self.invoice.status = "UNPAID"
+        self.invoice.invoice_notification_due = None
+        self.invoice.save()
+
+        # Set invoice to paid
+        response = self.client.post(f"/api/payinvoice/{self.invoice.pk}/PAID")
+
+        assert response.status_code == 200
+
+        # Refresh from database
+        self.invoice.refresh_from_db()
+
+        # Check that notification_due was set
+        assert self.invoice.status == "PAID"
+        assert self.invoice.invoice_notification_due is not None
+        # Should be set to ~15 seconds in the future
+        assert self.invoice.invoice_notification_due > timezone.now()
+
+    def test_invoice_status_to_open_clears_notification_due(self):
+        """Test that setting invoice to DRAFT (open) clears notification due"""
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+
+        # Start with invoice that has notification due set
+        self.invoice.status = "UNPAID"
+        self.invoice.invoice_notification_due = timezone.now()
+        self.invoice.save()
+
+        # Set invoice back to draft
+        response = self.client.post(f"/api/payinvoice/{self.invoice.pk}/DRAFT")
+
+        assert response.status_code == 200
+
+        # Refresh from database
+        self.invoice.refresh_from_db()
+
+        # Check that notification_due was cleared
+        assert self.invoice.status == "DRAFT"
+        assert self.invoice.invoice_notification_due is None
+
+
 class LotPricesTests(TestCase):
     def setUp(self):
         time = timezone.now() - datetime.timedelta(days=2)
