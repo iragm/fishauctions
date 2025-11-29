@@ -161,7 +161,6 @@ def update_auction_stats(self):
 
     from asgiref.sync import async_to_sync
     from channels.layers import get_channel_layer
-    from django.db.models import Q
     from django.utils import timezone
 
     from auctions.models import Auction
@@ -170,9 +169,10 @@ def update_auction_stats(self):
     now = timezone.now()
 
     # Process only one auction per run, ordered by most overdue first
+    # Only process auctions that have next_update_due set and are past due
     auction = (
         Auction.objects.filter(
-            Q(next_update_due__lte=now) | Q(next_update_due__isnull=True),
+            next_update_due__lte=now,
             is_deleted=False,
         )
         .order_by("next_update_due")
