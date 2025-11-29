@@ -4595,8 +4595,8 @@ class UpdateAuctionStatsCommandTestCase(StandardTestCase):
         original_due_2 = auction2.next_update_due
         original_due_3 = auction3.next_update_due
 
-        # Run the command once
-        call_command("update_auction_stats")
+        # Run the command once (using --sync to run synchronously for testing)
+        call_command("update_auction_stats", "--sync")
 
         # Refresh from database
         auction1.refresh_from_db()
@@ -4649,8 +4649,8 @@ class UpdateAuctionStatsCommandTestCase(StandardTestCase):
         older_auction.next_update_due = now - datetime.timedelta(hours=5)  # More overdue
         older_auction.save()
 
-        # Run the command
-        call_command("update_auction_stats")
+        # Run the command (using --sync to run synchronously for testing)
+        call_command("update_auction_stats", "--sync")
 
         # Refresh from database
         newer_auction.refresh_from_db()
@@ -4684,8 +4684,8 @@ class UpdateAuctionStatsCommandTestCase(StandardTestCase):
         future_auction.next_update_due = now + datetime.timedelta(hours=5)
         future_auction.save()
 
-        # Run the command - should not raise any errors
-        call_command("update_auction_stats")
+        # Run the command - should not raise any errors (using --sync to run synchronously for testing)
+        call_command("update_auction_stats", "--sync")
 
         # Refresh from database
         future_auction.refresh_from_db()

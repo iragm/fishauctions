@@ -74,8 +74,77 @@ class CeleryTasksTestCase(TestCase):
         tasks.webpush_notifications_deduplicate()
         mock_call_command.assert_called_once_with("webpush_notifications_deduplicate")
 
-    @patch("auctions.tasks.call_command")
-    def test_update_auction_stats_task(self, mock_call_command):
-        """Test that update_auction_stats task calls the management command."""
+    @patch("auctions.tasks.schedule_next_auction_stats_update")
+    @patch("channels.layers.get_channel_layer")
+    def test_update_auction_stats_task_with_auction(self, mock_channel, mock_schedule):
+        """Test that update_auction_stats task processes an auction and schedules next run."""
+        import datetime
+
+        from django.utils import timezone
+
+        from auctions.models import Auction
+
+        # Create an auction that needs stats update (providing required date_start field)
+        now = timezone.now()
+        auction = Auction.objects.create(
+            title="Test Auction",
+            is_deleted=False,
+            next_update_due=now - timezone.timedelta(minutes=10),
+            date_start=now - datetime.timedelta(days=1),
+        )
+
+        # Run the task
         tasks.update_auction_stats()
-        mock_call_command.assert_called_once_with("update_auction_stats")
+
+        # Verify the auction was processed (next_update_due should be updated)
+        auction.refresh_from_db()
+        self.assertIsNotNone(auction.next_update_due)
+        self.assertGreater(auction.next_update_due, timezone.now())
+
+        # Verify the task schedules itself
+        mock_schedule.assert_called_once()
+
+    @patch("auctions.tasks.schedule_next_auction_stats_update")
+    def test_update_auction_stats_task_no_auction(self, mock_schedule):
+        """Test that update_auction_stats task handles no auctions gracefully."""
+        # Run the task with no auctions needing update
+        tasks.update_auction_stats()
+
+        # Verify the task still schedules itself
+        mock_schedule.assert_called_once()
+
+    @patch("auctions.tasks.update_auction_stats")
+    def test_schedule_next_auction_stats_update_with_auction(self, mock_task):
+        """Test that schedule_next_auction_stats_update schedules the task correctly."""
+        import datetime
+
+        from django.utils import timezone
+
+        from auctions.models import Auction
+
+        # Create an auction with a future update due date (providing required date_start field)
+        now = timezone.now()
+        future_time = now + timezone.timedelta(hours=2)
+        Auction.objects.create(
+            title="Test Auction",
+            is_deleted=False,
+            next_update_due=future_time,
+            date_start=now - datetime.timedelta(days=1),
+        )
+
+        # Call the scheduling function
+        tasks.schedule_next_auction_stats_update()
+
+        # Verify the task was scheduled
+        mock_task.apply_async.assert_called_once()
+
+    @patch("auctions.tasks.update_auction_stats")
+    def test_schedule_next_auction_stats_update_no_auction(self, mock_task):
+        """Test that schedule_next_auction_stats_update schedules fallback when no auctions."""
+        # Call the scheduling function with no auctions
+        tasks.schedule_next_auction_stats_update()
+
+        # Verify the task was scheduled with fallback delay
+        mock_task.apply_async.assert_called_once()
+        call_kwargs = mock_task.apply_async.call_args[1]
+        self.assertEqual(call_kwargs["countdown"], tasks.STATS_UPDATE_FALLBACK_DELAY_SECONDS)

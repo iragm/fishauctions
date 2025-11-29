@@ -48,7 +48,17 @@ Celery handles:
 | `set_user_location` | Every 2 hours | Update user locations from IP |
 | `remove_duplicate_views` | Every 15 minutes | Clean duplicate page views |
 | `webpush_notifications_deduplicate` | Daily at 10:00 | Remove duplicate push subscriptions |
-| `update_auction_stats` | Every minute | Update cached auction statistics |
+| `update_auction_stats` | Self-scheduling | Update cached auction statistics |
+
+### Self-Scheduling Tasks
+
+The `update_auction_stats` task is self-scheduling rather than running on a fixed interval. It:
+1. Starts automatically when the Celery worker is ready
+2. Processes one auction whose `next_update_due` is past due
+3. Schedules itself to run again when the next auction's stats update is due
+4. Falls back to checking every hour if no auctions need updates
+
+This approach is more efficient than running every minute, as updates are only processed when actually needed.
 
 ## Docker Services
 
