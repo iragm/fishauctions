@@ -10,5 +10,9 @@ mediafiles/
 staticfiles/
 logs/
 tos.html
-auctions/static/models/
+auctions/static/models/vosk/vosk-model-small-en-us-0.15/am/
+auctions/static/models/vosk/vosk-model-small-en-us-0.15/conf/
+auctions/static/models/vosk/vosk-model-small-en-us-0.15/graph/
+auctions/static/models/vosk/vosk-model-small-en-us-0.15/ivector/
 auctions/static/js/vendor/Vosklet.wasm
+auctions/static/models/vosk/vosk-model-small-en-us-0.15.tar.gz
