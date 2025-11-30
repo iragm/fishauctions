@@ -54,6 +54,7 @@ from django.http import (
     Http404,
     HttpResponse,
     HttpResponseBadRequest,
+    HttpResponseForbidden,
     HttpResponseNotAllowed,
     HttpResponseRedirect,
     JsonResponse,
@@ -155,6 +156,7 @@ from .models import (
     PayPalSeller,
     PickupLocation,
     SearchHistory,
+    SquareSeller,
     UserBan,
     UserData,
     UserIgnoreCategory,
@@ -1379,7 +1381,7 @@ class MyWonLotCSV(LoginRequiredMixin, View):
                     lot.lot_number_display,
                     lot.lot_name,
                     lot.auction,
-                    f"${lot.winning_price}",
+                    f"{lot.currency_symbol}{lot.winning_price}",
                     "https://" + lot.full_lot_link,
                 ]
             )
@@ -2588,10 +2590,12 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 result = {
                     "banner": "error",
                     "last_sold_lot_number": lot.lot_number_display,
-                    "success_message": f"Lot {lot.lot_number_display} already sold for ${lot.winning_price} to {lot.auctiontos_winner.bidder_number}.  If this is not correct, you can undo this sale",
+                    "success_message": f"Lot {lot.lot_number_display} already sold for {lot.currency_symbol}{lot.winning_price} to {lot.auctiontos_winner.bidder_number}.  If this is not correct, you can undo this sale",
                 }
         if lot and (action == "validate" or not result["success_message"]) and lot.high_bidder:
-            result["online_high_bidder_message"] = f"Sell to {lot.high_bidder_for_admins} for ${lot.high_bid}"
+            result["online_high_bidder_message"] = (
+                f"Sell to {lot.high_bidder_for_admins} for {lot.currency_symbol}{lot.high_bid}"
+            )
             # js code is not in place for this, also remove code from view_lot_simple
         if lot and not lot_error:
             lot = "valid"
@@ -3267,6 +3271,287 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
             form=QuickAddLot,
         )
         return super().dispatch(request, *args, **kwargs)
+
+
+class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
+    """Import or update lots from a CSV file"""
+
+    def post(self, request, *args, **kwargs):
+        csv_file = request.FILES.get("csv_file", None)
+        if not csv_file:
+            messages.error(request, "No CSV file provided")
+            url = reverse("auction_lot_list", kwargs={"slug": self.auction.slug})
+            response = HttpResponse(status=200)
+            response["HX-Redirect"] = url
+            return response
+
+        try:
+            csv_file.seek(0)
+            csv_reader = csv.DictReader(TextIOWrapper(csv_file.file))
+            return self.process_csv_data(csv_reader)
+        except (UnicodeDecodeError, ValueError) as e:
+            messages.error(request, f"Unable to read file. Make sure this is a valid UTF-8 CSV file. Error was: {e}")
+            url = reverse("auction_lot_list", kwargs={"slug": self.auction.slug})
+            response = HttpResponse(status=200)
+            response["HX-Redirect"] = url
+            return response
+
+    def process_csv_data(self, csv_reader):
+        """Process CSV data and create/update lots"""
+
+        def extract_info(row, field_name_list, default_response=""):
+            """Extract value from row using case-insensitive field name matching"""
+            case_insensitive_row = {k.lower(): v for k, v in row.items()}
+            for name in field_name_list:
+                value = case_insensitive_row.get(name)
+                if value is not None:
+                    return value
+            return default_response
+
+        def columns_exist(field_names, columns):
+            """Returns True if any value in the list `columns` exists in the file"""
+            case_insensitive_row = {k.lower() for k in field_names}
+            for column in columns:
+                if column in case_insensitive_row:
+                    return True
+            return False
+
+        # Define field name variations for CSV columns
+        lot_number_fields = ["lot number", "lot_number", "lot #", "number"]
+        email_field_names = ["email", "e-mail", "email address", "e-mail address"]
+        name_field_names = ["name", "full name", "first name", "firstname", "bidder name"]
+        lot_name_fields = ["lot name", "lot_name", "item", "item name"]
+        description_fields = ["description", "desc", "details"]
+        quantity_fields = ["quantity", "qty", "amount"]
+        reserve_price_fields = ["reserve price", "reserve_price", "minimum bid", "min bid", "starting bid"]
+        buy_now_price_fields = ["buy now price", "buy_now_price", "buy now", "buynow"]
+        category_fields = ["category", "species category", "species_category"]
+        i_bred_this_fish_fields = ["breeder points", "i bred this fish", "i_bred_this_fish", "bred"]
+        donation_fields = ["donation", "donate"]
+
+        # Use auction's custom field names for matching
+        custom_checkbox_fields = ["custom checkbox", "custom_checkbox"]
+        if self.auction.use_custom_checkbox_field and self.auction.custom_checkbox_name:
+            custom_checkbox_fields.append(self.auction.custom_checkbox_name.lower())
+
+        custom_field_1_fields = ["custom field", "custom_field_1", "custom field 1"]
+        if self.auction.custom_field_1 != "disable" and self.auction.custom_field_1_name:
+            custom_field_1_fields.append(self.auction.custom_field_1_name.lower())
+
+        # Track results
+        lots_created = 0
+        lots_updated = 0
+        users_created = 0
+        errors = {
+            "missing_info": 0,
+            "closed_invoices": 0,
+            "no_lot_number_no_bidder": 0,
+        }
+
+        try:
+            for row in csv_reader:
+                # Extract core fields
+                lot_number = extract_info(row, lot_number_fields)
+                email = extract_info(row, email_field_names)
+                name = extract_info(row, name_field_names)
+
+                # Extract lot fields
+                lot_name = extract_info(row, lot_name_fields)
+                description = extract_info(row, description_fields)
+                quantity_str = extract_info(row, quantity_fields, "1")
+                reserve_price_str = extract_info(row, reserve_price_fields)
+                buy_now_price_str = extract_info(row, buy_now_price_fields)
+                category_name = extract_info(row, category_fields)
+                i_bred_this_fish_str = extract_info(row, i_bred_this_fish_fields)
+                donation_str = extract_info(row, donation_fields)
+                custom_checkbox_str = extract_info(row, custom_checkbox_fields)
+                custom_field_1 = extract_info(row, custom_field_1_fields)
+
+                # Convert boolean fields
+                def to_bool(value):
+                    if isinstance(value, str):
+                        return value.lower() in ["yes", "true", "1", "y", "t"]
+                    return bool(value)
+
+                i_bred_this_fish = to_bool(i_bred_this_fish_str)
+                donation = to_bool(donation_str)
+                custom_checkbox = to_bool(custom_checkbox_str)
+
+                # Convert numeric fields
+                try:
+                    quantity = int(quantity_str) if quantity_str else 1
+                except ValueError:
+                    quantity = 1
+
+                try:
+                    reserve_price = int(reserve_price_str) if reserve_price_str else None
+                except ValueError:
+                    reserve_price = None
+
+                try:
+                    buy_now_price = int(buy_now_price_str) if buy_now_price_str else None
+                except ValueError:
+                    buy_now_price = None
+
+                # Look up category
+                category = None
+                if category_name:
+                    category = Category.objects.filter(name__iexact=category_name).first()
+
+                # Step 1: If lot number exists, try to find and update the lot
+                lot = None
+                if lot_number:
+                    # Search by custom_lot_number first, then lot_number_int
+                    lot = (
+                        Lot.objects.exclude(is_deleted=True)
+                        .filter(auction=self.auction, custom_lot_number=lot_number)
+                        .first()
+                    )
+                    if not lot:
+                        # Try to parse as int for lot_number_int search, but don't error if it fails
+                        try:
+                            lot_number_int = int(lot_number)
+                            lot = (
+                                Lot.objects.exclude(is_deleted=True)
+                                .filter(auction=self.auction, lot_number_int=lot_number_int)
+                                .first()
+                            )
+                        except ValueError:
+                            # Lot number is not numeric, that's fine - it might be a custom lot number
+                            pass
+
+                    if lot:
+                        # Update existing lot (don't update winner, winning_price, partial_refund, banned)
+                        if lot_name:
+                            lot.lot_name = lot_name[:40]
+                        if description:
+                            lot.summernote_description = description
+                        if quantity:
+                            lot.quantity = quantity
+                        if reserve_price is not None:
+                            lot.reserve_price = reserve_price
+                        if buy_now_price is not None:
+                            lot.buy_now_price = buy_now_price
+                        if category:
+                            lot.species_category = category
+                        # Boolean fields always update
+                        lot.i_bred_this_fish = i_bred_this_fish
+                        lot.donation = donation
+                        lot.custom_checkbox = custom_checkbox
+                        if custom_field_1:
+                            lot.custom_field_1 = custom_field_1[:60]
+                        lot.save()
+                        lots_updated += 1
+                        continue
+
+                # Step 2: No existing lot found, try to create a new one
+                # Need both name and email to find/create user
+                if not name or not email:
+                    errors["no_lot_number_no_bidder"] += 1
+                    continue
+
+                # Step 3: Find or create AuctionTOS
+                tos = self.auction.find_user(name=name, email=email)
+                if not tos:
+                    # Create new AuctionTOS
+                    tos = AuctionTOS.objects.create(
+                        auction=self.auction,
+                        pickup_location=self.auction.location_qs.first(),
+                        manually_added=True,
+                        name=name[:181],
+                        email=email[:254],
+                    )
+                    users_created += 1
+                    # Update auction history
+                    self.auction.create_history(
+                        applies_to="USERS",
+                        action=f"Added user {name} via CSV import",
+                        user=self.request.user,
+                    )
+
+                # Step 4: Check invoice status
+                invoice = Invoice.objects.filter(auctiontos_user=tos, auction=self.auction).first()
+                if not invoice:
+                    invoice = Invoice.objects.create(auctiontos_user=tos, auction=self.auction)
+
+                if invoice.status != "DRAFT":
+                    errors["closed_invoices"] += 1
+                    continue
+
+                # Step 5: Create new lot
+                if not lot_name:
+                    errors["missing_info"] += 1
+                    continue
+
+                new_lot = Lot(
+                    lot_name=lot_name[:40],
+                    summernote_description=description if description else "",
+                    quantity=quantity,
+                    reserve_price=reserve_price if reserve_price is not None else self.auction.minimum_bid,
+                    buy_now_price=buy_now_price,
+                    i_bred_this_fish=i_bred_this_fish,
+                    donation=donation,
+                    custom_checkbox=custom_checkbox,
+                    custom_field_1=custom_field_1[:60] if custom_field_1 else "",
+                    auctiontos_seller=tos,
+                    auction=self.auction,
+                    added_by=self.request.user,
+                )
+                if tos.user:
+                    new_lot.user = tos.user
+                if category:
+                    new_lot.species_category = category
+                new_lot.save()
+                lots_created += 1
+
+            # Build success/error messages
+            msg_parts = []
+            if lots_created:
+                msg_parts.append(f"{lots_created} lot{'s' if lots_created != 1 else ''} created")
+            if lots_updated:
+                msg_parts.append(f"{lots_updated} lot{'s' if lots_updated != 1 else ''} updated")
+            if users_created:
+                msg_parts.append(f"{users_created} user{'s' if users_created != 1 else ''} added")
+
+            if msg_parts:
+                messages.success(self.request, ", ".join(msg_parts))
+
+            # Report errors separately for clarity
+            if errors["no_lot_number_no_bidder"]:
+                messages.warning(
+                    self.request,
+                    f"{errors['no_lot_number_no_bidder']} row(s) skipped: missing lot number and bidder information",
+                )
+            if errors["missing_info"]:
+                messages.warning(
+                    self.request, f"{errors['missing_info']} row(s) skipped: missing required lot information"
+                )
+            if errors["closed_invoices"]:
+                messages.warning(
+                    self.request,
+                    f"{errors['closed_invoices']} lot(s) not created: user's invoice is not open",
+                )
+
+            # Update auction history
+            if lots_created or lots_updated:
+                history_msg = f"CSV import: {lots_created} lots created, {lots_updated} lots updated"
+                if users_created:
+                    history_msg += f", {users_created} users added"
+                self.auction.create_history(applies_to="LOTS", action=history_msg, user=self.request.user)
+
+            url = reverse("auction_lot_list", kwargs={"slug": self.auction.slug})
+            response = HttpResponse(status=200)
+            response["HX-Redirect"] = url
+            return response
+
+        except (UnicodeDecodeError, ValueError) as e:
+            messages.error(
+                self.request, f"Unable to read file. Make sure this is a valid UTF-8 CSV file. Error was: {e}"
+            )
+            url = reverse("auction_lot_list", kwargs={"slug": self.auction.slug})
+            response = HttpResponse(status=200)
+            response["HX-Redirect"] = url
+            return response
 
 
 class ViewLot(DetailView):
@@ -4598,6 +4883,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "use_i_bred_this_fish_field",
                 "use_seller_dash_lot_numbering",
                 "enable_online_payments",
+                "enable_square_payments",
                 "alternative_split_label",
                 "google_drive_link",
             ]
@@ -4740,8 +5026,14 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                 if str(request.GET.get("enable_online_payments", "")).lower() in ("1", "true"):
                     self.auction.enable_online_payments = True
                     self.auction.save()
+                if str(request.GET.get("enable_square_payments", "")).lower() in ("1", "true"):
+                    self.auction.enable_square_payments = True
+                    self.auction.save()
                 if str(request.GET.get("dismissed_paypal_banner", "")).lower() in ("1", "true"):
                     self.auction.dismissed_paypal_banner = True
+                    self.auction.save()
+                if str(request.GET.get("dismissed_square_banner", "")).lower() in ("1", "true"):
+                    self.auction.dismissed_square_banner = True
                     self.auction.save()
                 if str(request.GET.get("never_show_paypal_connect", "")).lower() in ("1", "true"):
                     messages.info(
@@ -4749,6 +5041,13 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                         "You won't see the PayPal connection prompt again.  You can always enable PayPal under Preferences>More>Connect your PayPal account.",
                     )
                     request.user.userdata.never_show_paypal_connect = True
+                    request.user.userdata.save()
+                if str(request.GET.get("never_show_square_connect", "")).lower() in ("1", "true"):
+                    messages.info(
+                        request,
+                        "You won't see the Square connection prompt again.  You can always enable Square under Preferences>More>Connect your Square account.",
+                    )
+                    request.user.userdata.never_show_square_connect = True
                     request.user.userdata.save()
         return super().get(request, *args, **kwargs)
 
@@ -4828,6 +5127,15 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
             else:
                 existingTos = PickupLocation.objects.filter(auction=self.auction).first()
         context["active_tab"] = "main"
+        # Check if user has lots in this auction
+        if self.request.user.is_authenticated:
+            context["user_has_lots"] = (
+                Lot.objects.exclude(is_deleted=True)
+                .filter(auction=self.auction, auctiontos_seller__user=self.request.user)
+                .exists()
+            )
+        else:
+            context["user_has_lots"] = False
         if self.request.user.is_authenticated and self.request.user.pk == self.auction.created_by.pk:
             invalidPickups = self.auction.pickup_locations_before_end
             if invalidPickups:
@@ -5444,6 +5752,29 @@ class InvoiceNoLoginView(InvoiceView):
         invoice.auctiontos_user.email_address_status = "VALID"
         invoice.auctiontos_user.save()
         return super().dispatch(request, *args, **kwargs)
+
+
+class SquarePaymentSuccessView(InvoiceNoLoginView):
+    """
+    Success redirect for Square payment links.
+    Marks invoice as opened but does NOT verify email address.
+    This prevents incorrectly marking emails as valid when users scan QR codes.
+    """
+
+    def dispatch(self, request, *args, **kwargs):
+        self.uuid = kwargs.get("uuid", None)
+        invoice = self.get_object()
+        # Mark invoice as opened but don't verify email
+        invoice.opened = True
+        invoice.save()
+        # Skip the parent's dispatch which marks email as VALID
+        # Call grandparent (InvoiceView) dispatch instead
+        return InvoiceView.dispatch(self, request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["hide_payment_button"] = True
+        return context
 
 
 class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
@@ -6653,6 +6984,236 @@ class PayPalSellerDeleteView(LoginRequiredMixin, DeleteView):
         return reverse("paypal_seller")
 
 
+class SquareAPIMixin:
+    """Mixin for Square payment link creation
+    Delegates to SquareSeller model methods for Square API operations
+    All operations require OAuth - no platform credentials"""
+
+    def create_payment_link(self, invoice):
+        """Create a Square payment link using SquareSeller model methods
+        Returns tuple: (payment_url, error_message)
+        """
+        from auctions.models import SquareSeller
+
+        seller = SquareSeller.objects.filter(user=invoice.auction.created_by).first()
+        if not seller:
+            logger.error("No SquareSeller for user %s", invoice.auction.created_by.pk)
+            return None, "Seller has not connected their Square account"
+
+        return seller.create_payment_link(invoice, self.request)
+
+
+class SquareConnectView(LoginRequiredMixin, View):
+    """Start the Square OAuth process for a seller"""
+
+    def get(self, request):
+        # Build Square OAuth URL
+        # Use the user's unsubscribe_link as state parameter for security
+        state = request.user.userdata.unsubscribe_link
+
+        # Square OAuth authorization endpoint - use SQUARE_ENVIRONMENT setting
+        square_auth_url = (
+            "https://connect.squareupsandbox.com/oauth2/authorize"
+            if settings.SQUARE_ENVIRONMENT == "sandbox"
+            else "https://connect.squareup.com/oauth2/authorize"
+        )
+
+        # Build redirect URI - must match what's configured in Square app and what we send in token exchange
+        redirect_uri = request.build_absolute_uri("/square/onboard/success/")
+        # Build OAuth parameters
+        params = {
+            "client_id": settings.SQUARE_APPLICATION_ID,
+            "scope": "PAYMENTS_WRITE PAYMENTS_READ MERCHANT_PROFILE_READ ORDERS_READ ORDERS_WRITE",
+            "state": state,
+            # "session": "false",  # Don't require login if already logged in
+            "redirect_uri": redirect_uri,
+        }
+
+        # Build redirect URL
+        oauth_url = f"{square_auth_url}?{urlencode(params)}"
+        return redirect(oauth_url)
+
+
+class SquareCallbackView(LoginRequiredMixin, View):
+    """After OAuth, Square redirects here
+    Uses new Square SDK v42+ API"""
+
+    def get(self, request):
+        # Get authorization code and state from Square
+        code = request.GET.get("code")
+        state = request.GET.get("state")
+        error = request.GET.get("error")
+        error_description = request.GET.get("error_description")
+        if error:
+            messages.error(request, f"Square authorization failed: {error_description or error}")
+            return redirect("/square/")
+
+        if not code or not state:
+            messages.error(request, "Missing authorization code from Square")
+            return redirect("/square/")
+
+        # Verify state matches user's unsubscribe_link for security
+        if state != request.user.userdata.unsubscribe_link:
+            messages.error(request, "Invalid state parameter - please try again")
+            return redirect("/square/")
+
+        # Exchange authorization code for access token
+        try:
+            from square import Square
+            from square.client import SquareEnvironment
+
+            # Determine environment
+            env = (
+                SquareEnvironment.SANDBOX if settings.SQUARE_ENVIRONMENT == "sandbox" else SquareEnvironment.PRODUCTION
+            )
+            # For OAuth token exchange, we don't need a token
+            # Don't pass empty string as it causes "Illegal header value" error
+            client = Square(environment=env)
+
+            # Build redirect URI - must match what was sent in authorization request
+            redirect_uri = request.build_absolute_uri("/square/onboard/success/")
+
+            result = client.o_auth.obtain_token(
+                client_id=settings.SQUARE_APPLICATION_ID,
+                client_secret=settings.SQUARE_CLIENT_SECRET,
+                code=code,
+                grant_type="authorization_code",
+                redirect_uri=redirect_uri,
+            )
+            # Successful response
+            # New API returns response object directly (no is_error check needed, raises on error)
+            # Extract token info from response
+            access_token = result.access_token
+            refresh_token = result.refresh_token if hasattr(result, "refresh_token") else None
+            expires_at = result.expires_at if hasattr(result, "expires_at") else None
+            merchant_id = result.merchant_id if hasattr(result, "merchant_id") else None
+
+            if not access_token or not merchant_id:
+                logger.error("Square OAuth token exchange failed: Missing required fields in response")
+                messages.error(request, "Failed to connect Square account. Please try again.")
+                return redirect("/square/")
+
+            merchant_client = Square(
+                environment=env,
+                token=access_token,
+            )
+
+            list_resp = merchant_client.merchants.get("me")
+            email = getattr(list_resp, "owner_email", None)
+            currency = getattr(list_resp, "currency", "USD")
+
+            # Save or update SquareSeller
+            seller, created = SquareSeller.objects.get_or_create(user=request.user)
+            seller.square_merchant_id = merchant_id
+            seller.access_token = access_token
+            seller.refresh_token = refresh_token
+            if expires_at:
+                from datetime import datetime
+
+                # Handle ISO 8601 format
+                try:
+                    seller.token_expires_at = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+                except (ValueError, AttributeError):
+                    # If expires_at is already a datetime object
+                    if isinstance(expires_at, datetime):
+                        seller.token_expires_at = expires_at
+            seller.currency = currency
+            seller.payer_email = email
+            seller.save()
+
+            messages.success(
+                request,
+                "You're all set - Square account linked! Your users will see a Square button on invoices.",
+            )
+
+            # Redirect to last auction or home
+            if request.user.userdata.last_auction_created:
+                return redirect(
+                    request.user.userdata.last_auction_created.get_absolute_url() + "?enable_square_payments=True"
+                )
+            return redirect("/square/")
+
+        except Exception as e:
+            logger.exception("Error during Square OAuth: %s", e)
+            # Provide more specific error message if it's an API error
+            if hasattr(e, "body") and isinstance(e.body, dict):
+                error_msg = e.body.get("message", str(e))
+                error_type = e.body.get("type", "unknown")
+                logger.error("Square OAuth API Error: type=%s, message=%s", error_type, error_msg)
+                messages.error(
+                    request, f"Square OAuth failed: {error_msg}. Please check your Square application settings."
+                )
+            else:
+                messages.error(request, "An error occurred connecting your Square account. Please try again.")
+            return redirect("/square/")
+
+
+class CreateSquarePaymentLinkView(SquareAPIMixin, View):
+    """Create a Square payment link for an invoice"""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.invoice = get_object_or_404(Invoice, no_login_link=kwargs.pop("uuid"))
+        if not self.invoice.show_square_button:
+            messages.error(request, "Square payments are not available for this invoice")
+            return redirect(reverse("invoice_no_login", kwargs={"uuid": self.invoice.no_login_link}))
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        """Create the payment link"""
+        payment_url, error_message = self.create_payment_link(self.invoice)
+        if not payment_url:
+            messages.error(
+                request, error_message or "Failed to create Square payment link. Please try again or contact support."
+            )
+            return redirect(self.invoice.get_absolute_url())
+
+        # Add processing message and redirect to invoice to show status
+        messages.info(
+            request,
+            "You'll see the payment confirmation on your invoice.  Payment generally confirms within a few minutes.",
+        )
+        return redirect(payment_url)
+
+
+class SquareSuccessView(View):
+    """Handle redirect after Square payment"""
+
+    def get(self, request, *args, **kwargs):
+        # Square payment link can include order_id or reference_id in query params
+        # For now, show processing message and redirect to home
+        # The webhook will update the invoice status
+        messages.info(request, "Square payment processing... Your invoice will be updated shortly.")
+
+        # Try to get invoice reference if available
+        # Square may pass back custom data in query params depending on configuration
+        return redirect("/")
+
+
+class SquareInfoView(TemplateView):
+    template_name = "auctions/square_seller.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        if self.request.user.is_authenticated:
+            context["seller"] = SquareSeller.objects.filter(user=self.request.user).first()
+            context["auction"] = self.request.user.userdata.last_auction_created
+        else:
+            context["seller"] = None
+            context["auction"] = None
+        return context
+
+
+class SquareSellerDeleteView(LoginRequiredMixin, DeleteView):
+    template_name = "auctions/square_seller_confirm_delete.html"
+    model = SquareSeller
+
+    def get_object(self, queryset=None):
+        return get_object_or_404(SquareSeller, user=self.request.user)
+
+    def get_success_url(self):
+        return reverse("square_seller")
+
+
 class UserView(DetailView):
     """View information about a single user"""
 
@@ -6835,6 +7396,15 @@ class UserLocationUpdate(UpdateView, SuccessMessageMixin):
         user = User.objects.get(pk=self.get_object().user.pk)
         return {"first_name": user.first_name, "last_name": user.last_name}
 
+    def get_recent_auctiontos(self):
+        """Get AuctionTOS records created in the last 30 days that are not manually added"""
+        thirty_days_ago = timezone.now() - timedelta(days=30)
+        return AuctionTOS.objects.filter(
+            user=self.request.user,
+            manually_added=False,
+            createdon__gte=thirty_days_ago,
+        ).select_related("auction")
+
     def form_valid(self, form):
         userData = form.save(commit=False)
         user = User.objects.get(pk=self.get_object().user.pk)
@@ -6843,11 +7413,50 @@ class UserLocationUpdate(UpdateView, SuccessMessageMixin):
         user.save()
         userData.last_activity = timezone.now()
         userData.save()
+
+        # Update recent AuctionTOS records with new contact info
+        new_name = f"{user.first_name} {user.last_name}"
+        new_phone = userData.phone_number
+        new_address = userData.address
+
+        for tos in self.get_recent_auctiontos():
+            # Track what changed
+            changes = []
+            if tos.name != new_name:
+                changes.append(f"name from '{tos.name}' to '{new_name}'")
+                tos.name = new_name
+            if tos.phone_number != new_phone:
+                changes.append(f"phone from '{tos.phone_number}' to '{new_phone}'")
+                tos.phone_number = new_phone
+            if tos.address != new_address:
+                changes.append(f"address from '{tos.address}' to '{new_address}'")
+                tos.address = new_address
+
+            if changes:
+                tos.save()
+                # Create auction admin history
+                AuctionHistory.objects.create(
+                    auction=tos.auction,
+                    user=user,
+                    action=f"Updated contact info for {new_name}: " + ", ".join(changes),
+                    applies_to="USERS",
+                )
+
         return super().form_valid(form)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["active_tab"] = "contact"
+
+        # Add message about auctions that will be updated
+        recent_auctiontos = self.get_recent_auctiontos()
+        count = recent_auctiontos.count()
+        if count == 1:
+            tos = recent_auctiontos.first()
+            context["auctiontos_update_message"] = f"Updating your contact info will also update it in {tos.auction}"
+        elif count > 1:
+            context["auctiontos_update_message"] = f"Updating your contact info will also update it in {count} auctions"
+
         return context
 
 
@@ -7779,13 +8388,13 @@ class AuctionStatsLotSellPricesJSONView(AuctionStatsBarChartJSONView):
 
             labels = ["Not sold"]
             for i in range(0, max_price - 1, 2):
-                labels.append(f"${i + 1}-{i + 2}")
-            labels.append(f"${max_price}+")
+                labels.append(f"{self.auction.currency_symbol}{i + 1}-{i + 2}")
+            labels.append(f"{self.auction.currency_symbol}{max_price}+")
             return labels
         else:
             # No sold lots, use default
-            labels = [(f"${i + 1}-{i + 2}") for i in range(0, 37, 2)]
-            return ["Not sold"] + labels + ["$40+"]
+            labels = [(f"{self.auction.currency_symbol}{i + 1}-{i + 2}") for i in range(0, 37, 2)]
+            return ["Not sold"] + labels + [f"{self.auction.currency_symbol}40+"]
 
     def get_providers(self):
         providers = []
@@ -9201,6 +9810,208 @@ class PayPalWebhookView(PayPalAPIMixin, View):
         return JsonResponse({"status": "ok"})
 
 
+class SquareWebhookView(SquareAPIMixin, View):
+    """Handle Square webhook events for payment notifications
+    Implements webhook signature verification using HMAC-SHA256
+    """
+
+    @method_decorator(csrf_exempt)
+    def dispatch(self, *args, **kwargs):
+        return super().dispatch(*args, **kwargs)
+
+    def verify_signature(self, request, raw_body, signature):
+        """Verify Square webhook signature using Square SDK
+        Square signs webhooks with: base64(HMAC-SHA256(signature_key, notification_url + request_body))
+        Returns True if signature is valid, False otherwise
+        """
+        if not settings.SQUARE_WEBHOOK_SIGNATURE_KEY:
+            logger.warning("SQUARE_WEBHOOK_SIGNATURE_KEY not configured - skipping signature verification")
+            if settings.DEBUG:
+                return True  # Allow webhook if signature key not configured
+            else:
+                return False  # Reject webhook if signature key not configured in production
+
+        try:
+            from square.utils.webhooks_helper import verify_signature as square_verify_signature
+
+            # Prefer an explicit configured URL if provided (useful behind proxies)
+            notification_url = getattr(settings, "SQUARE_WEBHOOK_PUBLIC_URL", "").strip()
+            if not notification_url:
+                # Fallback: absolute URL of this request (no query string per Square docs)
+                notification_url = request.build_absolute_uri(request.path)
+
+            # Ensure raw_body is a string as expected by Square SDK
+            body_str = raw_body if isinstance(raw_body, str) else raw_body.decode("utf-8")
+
+            # Use Square SDK's signature verification
+            return square_verify_signature(
+                request_body=body_str,
+                signature_header=signature,
+                signature_key=settings.SQUARE_WEBHOOK_SIGNATURE_KEY,
+                notification_url=notification_url,
+            )
+        except Exception as e:
+            logger.exception("Error verifying Square webhook signature: %s", e)
+            return False
+
+    def post(self, request, *args, **kwargs):
+        # In production, require SQUARE_WEBHOOK_SIGNATURE_KEY if Square is configured
+        if not settings.DEBUG and not settings.SQUARE_WEBHOOK_SIGNATURE_KEY:
+            if settings.SQUARE_APPLICATION_ID or settings.SQUARE_CLIENT_SECRET:
+                msg = "SQUARE_WEBHOOK_SIGNATURE_KEY must be set in production when Square is configured"
+                raise ImproperlyConfigured(msg)
+
+        # Read raw body
+        try:
+            raw_body = request.body.decode("utf-8")
+            event = json.loads(raw_body)
+        except Exception as exc:
+            logger.exception("Invalid JSON in Square webhook: %s", exc)
+            return HttpResponseBadRequest("invalid json")
+
+        # Verify webhook signature if configured
+        if settings.SQUARE_WEBHOOK_SIGNATURE_KEY:
+            signature = request.headers.get("X-Square-Hmacsha256-Signature", "")
+            if not signature:
+                logger.error("Square webhook missing signature header")
+                return HttpResponseForbidden("missing signature")
+
+            if not self.verify_signature(request, raw_body, signature):
+                logger.error("Square webhook signature verification failed")
+                return HttpResponseForbidden("invalid signature")
+
+        event_type = event.get("type")
+        logger.info("Received Square webhook: %s", event_type)
+
+        if event_type == "payment.updated":
+            # Payment completed or updated
+            data = event.get("data", {})
+            payment_object = data.get("object", {})
+            payment = payment_object.get("payment", {})
+
+            payment_status = payment.get("status")
+            payment_id = payment.get("id")
+            order_id = payment.get("order_id")
+            reference_id = None
+            # Handle COMPLETED status - create payment record and mark invoice paid
+            if payment_status == "COMPLETED":
+                merchant_id = event.get("merchant_id", "")
+                seller = SquareSeller.objects.filter(square_merchant_id=merchant_id).first()
+                if not seller:
+                    logger.warning("Square webhook: SquareSeller not found for merchant_id: %s", merchant_id)
+                elif seller.square_merchant_id:
+                    client = seller.get_square_client()
+                    if client:
+                        try:
+                            order_response = client.orders.get(order_id=order_id)
+                            # Square SDK returns response objects with attributes
+                            if hasattr(order_response, "order") and order_response.order:
+                                reference_id = getattr(order_response.order, "reference_id", None)
+                            if not reference_id:
+                                logger.error("reference id not found for Square order %s", order_id)
+                                logger.error(order_response)
+                        except Exception as e:
+                            logger.exception("Error retrieving Square order %s: %s", order_id, e)
+                    else:
+                        logger.error("Could not get Square client for user %s", seller.user.pk)
+
+                # Only proceed if we have a reference_id to look up the invoice
+                if reference_id:
+                    invoice = Invoice.objects.filter(pk=reference_id).first()
+                    if invoice:
+                        amount_money = payment.get("amount_money", {})
+                        amount_value = Decimal(amount_money.get("amount", 0)) / 100
+                        currency = amount_money.get("currency", "USD")
+                        receipt_number = payment.get("receipt_number", "")
+
+                        payment_record, created = InvoicePayment.objects.get_or_create(
+                            invoice=invoice,
+                            external_id=payment_id,
+                            defaults={
+                                "amount": amount_value,
+                                "amount_available_to_refund": amount_value,
+                                "currency": currency,
+                                "payment_method": "Square",
+                                "receipt_number": receipt_number,
+                            },
+                        )
+                        # If payment already existed, make sure amount_available_to_refund is set
+                        if not created:
+                            if payment_record.amount_available_to_refund == Decimal("0.00"):
+                                payment_record.amount_available_to_refund = amount_value
+                            # Update receipt_number if it wasn't set before
+                            if receipt_number and not payment_record.receipt_number:
+                                payment_record.receipt_number = receipt_number
+                            payment_record.save()
+                        action = f"Payment via Square for bidder {invoice.auctiontos_user.bidder_number} in the amount of {amount_value} {currency}"
+                        invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
+                        if invoice.net_after_payments >= 0:
+                            invoice.status = "PAID"
+                            invoice.save()
+
+                            # Send websocket notification for payment completion
+                            channel_layer = channels.layers.get_channel_layer()
+                            # Send to invoice-specific group for invoice detail pages
+                            async_to_sync(channel_layer.group_send)(
+                                f"invoice_{invoice.pk}",
+                                {
+                                    "type": "invoice_status",
+                                    "message": "paid",
+                                },
+                            )
+                            # Send to auction group for quick checkout page
+                            async_to_sync(channel_layer.group_send)(
+                                f"auctions_{invoice.auction.pk}",
+                                {
+                                    "type": "invoice_paid",
+                                    "pk": invoice.pk,
+                                },
+                            )
+                        logger.info("Square payment completed for invoice %s", invoice.pk)
+                    else:
+                        logger.warning("Square webhook: Invoice not found for reference_id: %s", reference_id)
+
+        elif event_type == "refund.updated":
+            # Refund processed
+            data = event.get("data", {})
+            refund_object = data.get("object", {})
+            refund = refund_object.get("refund", {})
+            refund_id = refund.get("id", {})
+
+            if refund.get("status") == "COMPLETED":
+                payment_id = refund.get("payment_id")
+                # Find the original payment and mark refund
+                payment_record = InvoicePayment.objects.filter(external_id=payment_id).first()
+                if payment_record and refund_id:
+                    refund_amount = Decimal(refund.get("amount_money", {}).get("amount", 0)) / 100
+                    payment_record.amount_available_to_refund -= refund_amount
+                    payment_record.save()
+
+                    refund_payment, _ = InvoicePayment.objects.update_or_create(
+                        external_id=refund_id,
+                        defaults={
+                            "invoice": payment_record.invoice,
+                            "amount": -abs(refund_amount),  # Ensure negative for refund
+                            "currency": payment_record.currency,
+                            "payment_method": "Square Refund",
+                            "memo": refund.get("reason", "")[:500],
+                        },
+                    )
+                    payment_record.invoice.recalculate
+                    action = f"Refund via Square for bidder {payment_record.invoice.auctiontos_user.bidder_number} in the amount of {refund_amount} {payment_record.currency}"
+                    payment_record.invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
+                    logger.info("Square refund completed for payment %s", payment_id)
+
+        elif event_type == "oauth.authorization.revoked":
+            # Merchant revoked OAuth authorization - delete SquareSeller instance
+            merchant_id = event.get("merchant_id")
+            if merchant_id:
+                square_seller = SquareSeller.objects.filter(square_merchant_id=merchant_id).first()
+                if square_seller:
+                    square_seller.delete()
+        return HttpResponse(status=200)
+
+
 class QuickCheckout(AuctionViewMixin, TemplateView):
     """Enter a bidder number or name and mark their invoice as paid
     For https://github.com/iragm/fishauctions/issues/292"""
@@ -9213,7 +10024,7 @@ class QuickCheckout(AuctionViewMixin, TemplateView):
         return context
 
 
-class QuickCheckoutHTMX(AuctionViewMixin, PayPalAPIMixin, TemplateView):
+class QuickCheckoutHTMX(AuctionViewMixin, PayPalAPIMixin, SquareAPIMixin, TemplateView):
     """For use with HTMX calls on QuickCheckout"""
 
     template_name = "auctions/quick_checkout_htmx.html"
@@ -9232,7 +10043,18 @@ class QuickCheckoutHTMX(AuctionViewMixin, PayPalAPIMixin, TemplateView):
             if context["tos"]:
                 invoice = context["tos"].invoice
                 context["invoice"] = invoice
-            if invoice and invoice.show_payment_button and not invoice.reason_for_payment_not_available:
-                # generate a paypal order to be placed in a QR code for the user to scan
-                context["qr_code_link"] = self.create_order(invoice)
+            if invoice:
+                # Generate PayPal QR code if available
+                if invoice.show_paypal_button and not invoice.reason_for_payment_not_available:
+                    context["paypal_qr_code_link"] = self.create_order(invoice)
+                # Generate Square QR code if available
+                if invoice.show_square_button and not invoice.reason_for_payment_not_available:
+                    payment_url, error_message = self.create_payment_link(invoice)
+                    if payment_url:
+                        context["square_qr_code_link"] = payment_url
+                    elif error_message:
+                        # Log the error but don't show QR code
+                        logger.warning(
+                            "Square payment link creation failed for invoice %s: %s", invoice.pk, error_message
+                        )
         return context

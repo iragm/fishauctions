@@ -26,6 +26,13 @@
           </a>
         </li>
         {% endif %}
+        {% if request.user.userdata.square_enabled or request.user.squareseller %}
+        <li>
+          <a class="dropdown-item" href="{% url 'square_seller' %}">
+            <i class="bi bi-square"></i> Square account
+          </a>
+        </li>
+        {% endif %}
         <li><a class="dropdown-item" href="/account/"><i class="bi bi-person-fill"></i> My account</a></li>
       </ul>
   </li>

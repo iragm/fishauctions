@@ -1,5 +1,6 @@
 {% extends 'base.html' %}
 {% load crispy_forms_tags %}
+{% load currency_filters %}
 {% block title %} Problems with {{ tos.name }} {% endblock %}
 {% load static %}
 {% block extra_js %}
@@ -39,7 +40,7 @@ When issuing a refund, if the invoice is open, no further action is needed.  If 
         </td>
         <td>
           {% if lot.winning_price %}
-            ${{ lot.full_buyer_refund|floatformat:2 }}
+            {{ lot.currency_symbol }}{{ lot.full_buyer_refund|floatformat:2 }}
           {% else %}
             {% if lot.banned %}
               Removed
@@ -103,7 +104,7 @@ When issuing a refund, if the invoice is open, no further action is needed.  If 
             </a>
           </td>
           <td>
-            ${{ lot.your_cut|floatformat:2 }}
+            {{ lot.currency_symbol }}{{ lot.your_cut|floatformat:2 }}
           </td>
           <td>
             {% if lot.partial_refund_percent %}<small>({{ lot.partial_refund_percent }}% refund)</small>{% endif %}

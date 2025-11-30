@@ -11,7 +11,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: ./.github/scripts/prepare-ci.sh
-      - run: docker compose run --rm test --ci --verbose
+      - name: Build test container
+        run: docker compose --profile test build
+      - name: Start database and wait for health
+        run: |
+          docker compose up -d db
+          echo "Waiting for database to be healthy (up to 120 seconds)..."
+          for i in {1..40}; do
+            STATUS=$(docker inspect --format='{{.State.Health.Status}}' db 2>/dev/null || echo "not_found")
+            if [ "$STATUS" = "healthy" ]; then
+              echo "Database is healthy!"
+              exit 0
+            fi
+            echo "Database status: $STATUS (attempt $i/40)"
+            sleep 3
+          done
+          echo "ERROR: Database failed to become healthy"
+          docker compose logs db
+          exit 1
+      - name: Run tests
+        run: docker compose run --rm test --ci --verbose
   pre-commit:
     name: pre-commit validation
     runs-on: ubuntu-latest
@@ -19,3 +38,76 @@ jobs:
     - uses: actions/checkout@v4
     - uses: actions/setup-python@v5
     - uses: pre-commit/action@v3.0.1
+  selenium:
+    name: Selenium browser tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./.github/scripts/prepare-ci.sh
+      - name: Build containers
+        run: |
+          docker compose --profile selenium build
+      - name: Start database first and wait for health
+        run: |
+          echo "Starting database container..."
+          docker compose up -d db
+          echo "Waiting for database to be healthy (up to 120 seconds)..."
+          for i in {1..40}; do
+            STATUS=$(docker inspect --format='{{.State.Health.Status}}' db 2>/dev/null || echo "not_found")
+            if [ "$STATUS" = "healthy" ]; then
+              echo "Database is healthy!"
+              exit 0
+            fi
+            echo "Database status: $STATUS (attempt $i/40)"
+            sleep 3
+          done
+          echo "ERROR: Database failed to become healthy"
+          docker compose logs db
+          exit 1
+      - name: Start remaining services
+        run: |
+          echo "Starting all services including selenium profile..."
+          docker compose --profile selenium up -d
+          echo "Waiting for services to initialize..."
+          sleep 10
+      - name: Wait for services to be ready
+        run: |
+          echo "Waiting for services to start..."
+          # Wait for web service to be healthy (up to 120 seconds)
+          for i in {1..24}; do
+            if docker exec django python3 -c "import django; django.setup()" 2>/dev/null; then
+              echo "Django service is ready"
+              break
+            fi
+            echo "Waiting for Django... ($i/24)"
+            sleep 5
+          done
+          # Wait for Selenium to be ready (up to 60 seconds)
+          for i in {1..12}; do
+            if curl -sSf http://localhost:4444/wd/hub/status 2>/dev/null | grep -q '"ready":true'; then
+              echo "Selenium service is ready"
+              break
+            fi
+            echo "Waiting for Selenium... ($i/12)"
+            sleep 5
+          done
+          docker compose ps
+      - name: Install Selenium in Django container
+        run: |
+          docker exec -u root django pip install selenium
+      - name: Run Selenium tests
+        run: |
+          docker exec django python3 manage.py test auctions.tests_selenium --tag=selenium -v 2
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          echo "=== Database logs ==="
+          docker compose logs db
+          echo "=== Web logs ==="
+          docker compose logs web
+          echo "=== Selenium logs ==="
+          docker compose logs selenium
+          echo "=== Container status ==="
+          docker compose ps -a

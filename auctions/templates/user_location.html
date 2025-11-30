@@ -59,5 +59,10 @@
 {% block content %}
 {% include "preferences_ribbon.html" %}
         <br><a href='/blog/privacy/' target='_blank'>Who can see this information</a><br><br>
+            {% if auctiontos_update_message %}
+            <div class="alert alert-info" role="alert">
+                <i class="bi bi-info-circle me-1"></i>{{ auctiontos_update_message }}
+            </div>
+            {% endif %}
             {% crispy form form.helper %}
 {% endblock %}
