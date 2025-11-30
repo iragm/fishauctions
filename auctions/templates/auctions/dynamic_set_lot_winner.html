@@ -422,6 +422,94 @@ recognizer.addEventListener("result", ev => {
     }
   }
 
+
+  let webSpeechRecognizer = null;
+  let isWebSpeechListening = false;
+
+  function startWebSpeechRecognition() {
+    if (isWebSpeechListening) return;
+
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      $("#voice-status").text("Web Speech API not supported in this browser.");
+      return;
+    }
+
+    webSpeechRecognizer = new SR();
+    webSpeechRecognizer.lang = "en-US";
+    webSpeechRecognizer.continuous = true;
+    webSpeechRecognizer.interimResults = true;
+
+    webSpeechRecognizer.onstart = function () {
+      isWebSpeechListening = true;
+      $("#voice-btn").removeClass("btn-primary").addClass("btn-danger");
+      $("#voice-btn").html('<i class="bi bi-mic-fill"></i> Stop Listening');
+      $("#voice-status").text("Listening (Web Speech)...");
+    };
+
+    webSpeechRecognizer.onerror = function (ev) {
+      console.error("Web Speech error:", ev.error);
+      $("#voice-status").text("Voice error: " + ev.error);
+    };
+
+    webSpeechRecognizer.onend = function () {
+      isWebSpeechListening = false;
+      $("#voice-btn").removeClass("btn-danger").addClass("btn-primary");
+      $("#voice-btn").html('<i class="bi bi-mic"></i> Start Voice Control');
+      $("#voice-status").text("Voice control stopped");
+    };
+
+    webSpeechRecognizer.onresult = function (ev) {
+      // Iterate results to find final or best transcript
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const res = ev.results[i];
+        const transcript = res[0].transcript.trim();
+        if (!transcript) continue;
+
+        if (res.isFinal) {
+          $("#voice-status").text(transcript);
+          handleVoiceResult(transcript); // reuse existing handler
+        } else {
+          // Show partial result
+          $("#voice-status").text(transcript);
+        }
+      }
+    };
+
+    try {
+      webSpeechRecognizer.start();
+    } catch (err) {
+      console.error("Failed to start Web Speech:", err);
+      $("#voice-status").text("Failed to start voice recognition: " + (err && err.message));
+      isWebSpeechListening = false;
+    }
+  }
+
+  function stopWebSpeechRecognition() {
+    if (!isWebSpeechListening || !webSpeechRecognizer) return;
+    try {
+      webSpeechRecognizer.stop();
+    } catch (err) {
+      console.error("Error stopping Web Speech:", err);
+    } finally {
+      webSpeechRecognizer = null;
+      isWebSpeechListening = false;
+      $("#voice-btn").removeClass("btn-danger").addClass("btn-primary");
+      $("#voice-btn").html('<i class="bi bi-mic"></i> Start Voice Control');
+      $("#voice-status").text("Voice control stopped");
+    }
+  }
+
+  function toggleWebSpeechRecognition() {
+    if (isWebSpeechListening) {
+      stopWebSpeechRecognition();
+    } else {
+      startWebSpeechRecognition();
+    }
+  }
+
+
+
 $(document).ready(function() {
         var lotSearch;
         $("#lot").on('blur', function() {
@@ -482,7 +570,7 @@ $(document).ready(function() {
 
 <small>Use this page to mark lots as sold.  Press tab to move the to next field.  <a href='https://github.com/iragm/fishauctions/issues/223'>Leave feedback about this page here.</a></small><br>
 <button id="fullscreen-btn" class="btn btn-sm bg-primary d-none d-sm-inline-block"><i class="bi bi-fullscreen"></i> Go fullscreen</button>
-<button id="voice-btn" class="btn btn-sm btn-primary d-none d-sm-inline-block ms-2" onclick="toggleVoiceRecognition()"><i class="bi bi-mic"></i> Start Voice Control</button>
+<!-- <button id="voice-btn" class="btn btn-sm btn-primary d-none d-sm-inline-block ms-2" onclick="toggleWebSpeechRecognition()"><i class="bi bi-mic"></i> Start Voice Control</button> -->
 <small id="voice-status" class="ms-2 text-muted"></small>
 
 </span>
