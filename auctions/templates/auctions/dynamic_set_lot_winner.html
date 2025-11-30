@@ -208,7 +208,7 @@
   // Handle voice recognition results
   function handleVoiceResult(text) {
     text = text.toLowerCase().trim();
-    console.log('Voice recognized:', text);
+    //console.log('Voice recognized:', text);
 
     // Check for undo command
     if (/\bundo\b/.test(text)) {
@@ -292,104 +292,95 @@
       }
     }
   }
+async function startVoiceRecognition() {
+  if (isListening) return;
 
-  // Initialize voice recognition
-  async function startVoiceRecognition() {
-    if (isListening) return;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: false,
+      audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 }
+    });
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const micNode = ctx.createMediaStreamSource(stream);
+    const module = await loadVosklet();
+    const modelUrl = "{% static 'models/vosk/vosk-model-small-en-us-0.15/' %}";
+    const model = await module.createModel(modelUrl, "English", "vosk-model-small-en-us-0.15");
+    const recognizer = await module.createRecognizer(model, ctx.sampleRate);
+    recognizer.addEventListener("partialResult", ev => {
+        $("#voice-status").text(ev.detail.partial);
 
+      if (ev.detail && ev.detail.partial) {
+        $("#voice-status").text(ev.detail.partial);
+      }
+    });
+
+recognizer.addEventListener("result", ev => {
+    let detailObj;
     try {
-      $("#voice-status").text("Requesting microphone access...");
-      $("#voice-btn").prop("disabled", true);
-
-      // Check if Vosklet library is loaded
-      if (typeof loadVosklet === 'undefined') {
-        $("#voice-status").text("Voice recognition library not loaded yet. Please wait and try again.");
-        $("#voice-btn").prop("disabled", false);
-        return;
-      }
-
-      // Request microphone access with proper error handling
-      let stream;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: false,
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            channelCount: 1
-          }
-        });
-      } catch (micError) {
-        // Handle microphone permission denial or device errors
-        let errorMessage = "Microphone access denied. Please allow microphone access in your browser settings.";
-
-        if (micError.name === 'NotAllowedError' || micError.name === 'PermissionDeniedError') {
-          errorMessage = "Microphone access denied. Please allow microphone access and try again.";
-        } else if (micError.name === 'NotFoundError' || micError.name === 'DevicesNotFoundError') {
-          errorMessage = "No microphone found. Please connect a microphone and try again.";
-        } else if (micError.name === 'NotReadableError' || micError.name === 'TrackStartError') {
-          errorMessage = "Microphone is already in use by another application.";
-        } else if (micError.name === 'OverconstrainedError' || micError.name === 'ConstraintNotSatisfiedError') {
-          errorMessage = "Microphone doesn't meet the required specifications.";
-        } else if (micError.name === 'TypeError') {
-          errorMessage = "Browser doesn't support microphone access.";
-        }
-
-        console.error("Microphone access error:", micError);
-        $("#voice-status").text(errorMessage);
-        $("#voice-btn").prop("disabled", false);
-        return;
-      }
-
-      $("#voice-status").text("Initializing speech recognition...");
-
-      let ctx = new AudioContext({ sinkId: { type: "none" } });
-      let micNode = ctx.createMediaStreamSource(stream);
-
-      let module = await loadVosklet();
-      let modelUrl = "{% static 'models/vosk/vosk-model-small-en-us-0.15/' %}";
-      let model = await module.createModel(modelUrl, "English", "vosk-model-small-en-us-0.15");
-      let recognizer = await module.createRecognizer(model, ctx.sampleRate);
-
-      recognizer.addEventListener("result", ev => {
-        const text = ev.detail.text;
-        if (text) {
-          handleVoiceResult(text);
-        }
-      });
-
-      recognizer.addEventListener("partialResult", ev => {
-        const text = ev.detail.partial;
-        if (text) {
-          $("#voice-status").text("Listening: " + text);
-        }
-      });
-
-      let transferer = await module.createTransferer(ctx, 128 * 150);
-      transferer.port.onmessage = ev => recognizer.acceptWaveform(ev.data);
-      micNode.connect(transferer);
-
-      voiceRecognizer = { ctx, recognizer, transferer, micNode, stream };
-      isListening = true;
-      $("#voice-btn").removeClass("btn-primary").addClass("btn-danger");
-      $("#voice-btn").html('<i class="bi bi-mic-fill"></i> Stop Listening');
-      $("#voice-status").text("Listening...");
-      $("#voice-btn").prop("disabled", false);
-
+        detailObj = JSON.parse(ev.detail);
     } catch (err) {
-      console.error("Voice recognition error:", err);
-      let errorMessage = "Failed to start voice recognition: " + err.message;
-      if (err.message && err.message.includes("not found")) {
-        errorMessage = "Voice recognition model not found. Please ensure the Vosk model is installed.";
-      }
-      $("#voice-status").text(errorMessage);
-      $("#voice-btn").prop("disabled", false);
-
-      // Reset state
-      isListening = false;
-      voiceRecognizer = null;
+        console.error("[DEBUG] Failed to parse ev.detail:", err, ev.detail);
+        return;
     }
+    if (detailObj && detailObj.text && detailObj.text.trim() !== "") {
+        $("#voice-status").text(detailObj.text);
+        handleVoiceResult(detailObj.text);
+    }
+});
+
+
+    // Convert Float32 [-1..1] to Int16 PCM (optional, mostly for debugging)
+    function floatToInt16(float32) {
+      const out = new Int16Array(float32.length);
+      for (let i = 0; i < float32.length; i++) {
+        let s = Math.max(-1, Math.min(1, float32[i]));
+        out[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      return out;
+    }
+
+    const transferer = await module.createTransferer(ctx, 128 * 150);
+
+    // Gain factor to boost quiet audio
+    const GAIN = 5;
+
+    transferer.port.onmessage = ev => {
+      const data = ev.data;
+      if (!data) return;
+
+      if (data.constructor.name === "Float32Array") {
+        for (let i = 0; i < data.length; i++) data[i] *= GAIN;
+      }
+
+      const slice = data.subarray ? data.subarray(0,20) : data.slice(0,20);
+      // RMS/volume
+      // const rms = Math.sqrt(slice.reduce((sum,v)=>sum+v*v,0)/slice.length);
+      // console.log("[DEBUG] Audio chunk RMS:", rms);
+
+      // Feed Float32 directly to recognizer (Vosklet expects floats)
+      try {
+        const accepted = recognizer.acceptWaveform(data);
+        //console.log("[DEBUG] acceptWaveform returned:", accepted);
+      } catch (err) {
+        console.error("[DEBUG] acceptWaveform error:", err);
+      }
+    };
+
+    micNode.connect(transferer);
+
+    voiceRecognizer = { ctx, recognizer, transferer, micNode, stream };
+    isListening = true;
+    $("#voice-btn").removeClass("btn-primary").addClass("btn-danger");
+    $("#voice-btn").html('<i class="bi bi-mic-fill"></i> Stop Listening');
+    $("#voice-status").text("Listening...");
+    $("#voice-btn").prop("disabled", false);
+
+  } catch (err) {
+    $("#voice-status").text("Failed to start voice recognition: " + (err && err.message));
+    isListening = false;
+    voiceRecognizer = null;
   }
+}
 
   // Stop voice recognition
   function stopVoiceRecognition() {
