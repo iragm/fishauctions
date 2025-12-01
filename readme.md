@@ -39,6 +39,8 @@ docker compose up -d
 ```
 You should now be able to access a development site at 127.0.0.1 (Note: unlike most Django projects, you probably won't use port 8000)
 
+**Demo data**: In development mode (DEBUG=True), the system will automatically load demo data including 3 sample auctions, users, lots, and bids when starting with an empty database. This provides realistic examples to explore the application's features.
+
 One last thing to do is to create an admin.  Back in the shell, enter:
 ```
 docker exec -it django python3 manage.py shell -c "from django.contrib.auth import get_user_model; User=get_user_model(); u=User.objects.create_superuser('admin', 'admin@example.com', 'example'); u.emailaddress_set.create(email=u.email, verified=True, primary=True)"

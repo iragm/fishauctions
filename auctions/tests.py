@@ -6372,3 +6372,102 @@ class UserLocationUpdateTests(StandardTestCase):
             applies_to="USERS",
         )
         self.assertEqual(history.count(), 0)
+
+
+class LoadDemoDataTests(TestCase):
+    """Tests for the load_demo_data management command"""
+
+    @override_settings(DEBUG=True)
+    def test_load_demo_data_with_debug_true(self):
+        """Test that demo data loads successfully when DEBUG=True and no auctions exist"""
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        # Ensure no auctions exist
+        Auction.objects.all().delete()
+
+        # Call the command
+        out = StringIO()
+        call_command("load_demo_data", stdout=out)
+        output = out.getvalue()
+
+        # Check output messages
+        self.assertIn("Loading demo data because DEBUG=True", output)
+        self.assertIn("Demo data loaded successfully!", output)
+
+        # Verify demo data was created
+        self.assertTrue(Auction.objects.filter(title__contains="Demo").exists())
+        auctions = Auction.objects.filter(title__contains="Demo")
+        self.assertEqual(auctions.count(), 3)
+
+        # Verify auction types
+        self.assertTrue(auctions.filter(is_online=False).exists())  # In-person auction
+        self.assertTrue(auctions.filter(is_online=True).exists())  # Online auctions
+
+        # Verify pickup locations including mail shipping
+        mail_locations = PickupLocation.objects.filter(pickup_by_mail=True)
+        self.assertGreater(mail_locations.count(), 0)
+
+        # Verify users were created
+        self.assertTrue(User.objects.filter(username__contains="demo_").exists())
+
+        # Verify lots were created
+        self.assertTrue(Lot.objects.filter(lot_number__gte=90000).exists())
+
+        # Verify some lots have winners (ended auction)
+        lots_with_winners = Lot.objects.filter(lot_number__gte=90000, winner__isnull=False)
+        self.assertGreater(lots_with_winners.count(), 0)
+
+    @override_settings(DEBUG=True)
+    def test_load_demo_data_skips_when_auctions_exist(self):
+        """Test that demo data is not loaded when auctions already exist"""
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        # Create an auction to prevent demo data loading
+        existing_auction = Auction.objects.create(
+            title="Existing Auction",
+            created_by=None,
+            date_start=timezone.now(),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+
+        # Call the command
+        out = StringIO()
+        call_command("load_demo_data", stdout=out)
+        output = out.getvalue()
+
+        # Check output messages
+        self.assertIn("Skipping demo data load", output)
+        self.assertIn("auction(s) already exist", output)
+
+        # Verify no demo auctions were created
+        demo_auctions = Auction.objects.filter(title__contains="Demo")
+        self.assertEqual(demo_auctions.count(), 0)
+
+        # Verify original auction still exists
+        self.assertTrue(Auction.objects.filter(pk=existing_auction.pk).exists())
+
+    @override_settings(DEBUG=False)
+    def test_load_demo_data_skips_when_debug_false(self):
+        """Test that demo data is not loaded when DEBUG=False"""
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        # Ensure no auctions exist
+        Auction.objects.all().delete()
+
+        # Call the command
+        out = StringIO()
+        call_command("load_demo_data", stdout=out)
+        output = out.getvalue()
+
+        # Check output messages
+        self.assertIn("Skipping demo data load - DEBUG=False", output)
+        self.assertIn("production mode", output)
+
+        # Verify no auctions were created
+        self.assertEqual(Auction.objects.count(), 0)
