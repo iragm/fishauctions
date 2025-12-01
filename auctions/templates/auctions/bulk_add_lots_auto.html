@@ -27,7 +27,7 @@
             <div class="card-body">
               {% if not lot.can_be_edited %}
               <div class="alert alert-warning alert-sm mb-2">
-                <small class="text-bright"><strong>🔒</strong> {{ lot.cannot_be_edited_reason }}</small>
+                <small class="text-dark"><i class="bi bi-lock"></i> {{ lot.cannot_be_edited_reason }}</small>
               </div>
               {% endif %}
               <div class="row align-items-center">
@@ -39,79 +39,79 @@
                     <div class="col-12 col-md-6">
                       <label class="form-label small mb-1">Lot name <span class="text-danger">*</span></label>
                       <div class="input-wrapper">
-                        <input type="text" class="form-control form-control-sm lot-input" name="lot_name" 
+                        <input type="text" class="form-control form-control-sm lot-input" name="lot_name"
                                value="{{ lot.lot_name }}" maxlength="40" data-field="lot_name"
                                {% if not lot.can_be_edited %}disabled{% endif %}>
                       </div>
                       <div class="invalid-feedback"></div>
                     </div>
-                    
+
                     {% if use_custom_field_1 %}
                     <div class="col-12 col-md-6">
                       <label class="form-label small mb-1">{{ custom_field_1_name }} {% if custom_field_1_required %}<span class="text-danger">*</span>{% endif %}</label>
-                      <input type="text" class="form-control form-control-sm lot-input" name="custom_field_1" 
+                      <input type="text" class="form-control form-control-sm lot-input" name="custom_field_1"
                              value="{{ lot.custom_field_1 }}" maxlength="60" data-field="custom_field_1"
                              {% if not lot.can_be_edited %}disabled{% endif %}>
                       <div class="invalid-feedback"></div>
                     </div>
                     {% endif %}
-                    
+
                     {% if use_quantity %}
                     <div class="col-6 col-md-3">
                       <label class="form-label small mb-1">Quantity</label>
-                      <input type="number" class="form-control form-control-sm lot-input" name="quantity" 
+                      <input type="number" class="form-control form-control-sm lot-input" name="quantity"
                              value="{{ lot.quantity }}" min="1" data-field="quantity"
                              {% if not lot.can_be_edited %}disabled{% endif %}>
                       <div class="invalid-feedback"></div>
                     </div>
                     {% endif %}
-                    
+
                     {% if reserve_price_mode != 'disable' %}
                     <div class="col-6 col-md-3">
                       <label class="form-label small mb-1">Min bid {% if reserve_price_mode == 'required' %}<span class="text-danger">*</span>{% endif %}</label>
-                      <input type="number" class="form-control form-control-sm lot-input" name="reserve_price" 
+                      <input type="number" class="form-control form-control-sm lot-input" name="reserve_price"
                              value="{{ lot.reserve_price }}" min="1" max="2000" data-field="reserve_price"
                              {% if not lot.can_be_edited %}disabled{% endif %}>
                       <div class="invalid-feedback"></div>
                     </div>
                     {% endif %}
-                    
+
                     {% if buy_now_mode != 'disable' %}
                     <div class="col-6 col-md-3">
                       <label class="form-label small mb-1">Buy now {% if buy_now_mode == 'required' %}<span class="text-danger">*</span>{% endif %}</label>
-                      <input type="number" class="form-control form-control-sm lot-input" name="buy_now_price" 
+                      <input type="number" class="form-control form-control-sm lot-input" name="buy_now_price"
                              value="{{ lot.buy_now_price|default:'' }}" min="1" max="1000" data-field="buy_now_price"
                              {% if not lot.can_be_edited %}disabled{% endif %}>
                       <div class="invalid-feedback"></div>
                     </div>
                     {% endif %}
-                    
+
                     {% if use_donation %}
                     <div class="col-6 col-md-3">
                       <div class="form-check mt-4">
-                        <input type="checkbox" class="form-check-input lot-input" name="donation" 
+                        <input type="checkbox" class="form-check-input lot-input" name="donation"
                                {% if lot.donation %}checked{% endif %} data-field="donation"
                                {% if not lot.can_be_edited %}disabled{% endif %}>
                         <label class="form-check-label small">Donation</label>
                       </div>
                     </div>
                     {% endif %}
-                    
+
                     {% if use_i_bred_this_fish %}
                     <div class="col-6 col-md-3">
                       <div class="form-check mt-4">
-                        <input type="checkbox" class="form-check-input lot-input" name="i_bred_this_fish" 
+                        <input type="checkbox" class="form-check-input lot-input" name="i_bred_this_fish"
                                {% if lot.i_bred_this_fish %}checked{% endif %} data-field="i_bred_this_fish"
                                {% if not lot.can_be_edited %}disabled{% endif %}>
                         <label class="form-check-label small">Breeder points</label>
                       </div>
                     </div>
                     {% endif %}
-                    
+
                     {% if use_custom_checkbox %}
                     <div class="col-6 col-md-3">
                       <div class="form-check mt-4">
-                        <input type="checkbox" class="form-check-input lot-input" name="custom_checkbox" 
+                        <input type="checkbox" class="form-check-input lot-input" name="custom_checkbox"
                                {% if lot.custom_checkbox %}checked{% endif %} data-field="custom_checkbox"
                                {% if not lot.can_be_edited %}disabled{% endif %}>
                         <label class="form-check-label small">{{ custom_checkbox_name }}</label>
@@ -124,7 +124,7 @@
             </div>
           </div>
           {% endfor %}
-          
+
           <!-- Template for new lots -->
           {% for i in "x"|rjust:initial_rows %}
           <div class="lot-row card mb-3" data-lot-id="">
@@ -138,48 +138,48 @@
                     <div class="col-12 col-md-6">
                       <label class="form-label small mb-1">Lot name <span class="text-danger">*</span></label>
                       <div class="input-wrapper">
-                        <input type="text" class="form-control form-control-sm lot-input auto-image-check" name="lot_name" 
+                        <input type="text" class="form-control form-control-sm lot-input auto-image-check" name="lot_name"
                                placeholder="Enter lot name" maxlength="40" data-field="lot_name">
                       </div>
                       <div class="invalid-feedback"></div>
                     </div>
-                    
+
                     {% if use_custom_field_1 %}
                     <div class="col-12 col-md-6">
                       <label class="form-label small mb-1">{{ custom_field_1_name }} {% if custom_field_1_required %}<span class="text-danger">*</span>{% endif %}</label>
-                      <input type="text" class="form-control form-control-sm lot-input" name="custom_field_1" 
+                      <input type="text" class="form-control form-control-sm lot-input" name="custom_field_1"
                              placeholder="Enter {{ custom_field_1_name|lower }}" maxlength="60" data-field="custom_field_1">
                       <div class="invalid-feedback"></div>
                     </div>
                     {% endif %}
-                    
+
                     {% if use_quantity %}
                     <div class="col-6 col-md-3">
                       <label class="form-label small mb-1">Quantity</label>
-                      <input type="number" class="form-control form-control-sm lot-input" name="quantity" 
+                      <input type="number" class="form-control form-control-sm lot-input" name="quantity"
                              value="1" min="1" data-field="quantity">
                       <div class="invalid-feedback"></div>
                     </div>
                     {% endif %}
-                    
+
                     {% if reserve_price_mode != 'disable' %}
                     <div class="col-6 col-md-3">
                       <label class="form-label small mb-1">Min bid {% if reserve_price_mode == 'required' %}<span class="text-danger">*</span>{% endif %}</label>
-                      <input type="number" class="form-control form-control-sm lot-input" name="reserve_price" 
+                      <input type="number" class="form-control form-control-sm lot-input" name="reserve_price"
                              value="{{ minimum_bid }}" min="1" max="2000" data-field="reserve_price">
                       <div class="invalid-feedback"></div>
                     </div>
                     {% endif %}
-                    
+
                     {% if buy_now_mode != 'disable' %}
                     <div class="col-6 col-md-3">
                       <label class="form-label small mb-1">Buy now {% if buy_now_mode == 'required' %}<span class="text-danger">*</span>{% endif %}</label>
-                      <input type="number" class="form-control form-control-sm lot-input" name="buy_now_price" 
+                      <input type="number" class="form-control form-control-sm lot-input" name="buy_now_price"
                              placeholder="Optional" min="1" max="1000" data-field="buy_now_price">
                       <div class="invalid-feedback"></div>
                     </div>
                     {% endif %}
-                    
+
                     {% if use_donation %}
                     <div class="col-6 col-md-3">
                       <div class="form-check mt-4">
@@ -188,7 +188,7 @@
                       </div>
                     </div>
                     {% endif %}
-                    
+
                     {% if use_i_bred_this_fish %}
                     <div class="col-6 col-md-3">
                       <div class="form-check mt-4">
@@ -197,7 +197,7 @@
                       </div>
                     </div>
                     {% endif %}
-                    
+
                     {% if use_custom_checkbox %}
                     <div class="col-6 col-md-3">
                       <div class="form-check mt-4">
@@ -213,7 +213,7 @@
           </div>
           {% endfor %}
         </div>
-        
+
         <div class="mt-3 d-flex align-items-center gap-2">
           <button class="btn btn-secondary btn-sm" id="add-row-btn">
             <i class="bi bi-plus-circle"></i> Add another row
@@ -243,7 +243,7 @@
             {% endif %}
           </div>
           <div>
-            <a href="{% url 'print_labels_by_bidder_number' slug=auction.slug bidder_number=tos.bidder_number %}" 
+            <a href="{% url 'print_labels_by_bidder_number' slug=auction.slug bidder_number=tos.bidder_number %}"
                class="btn btn-info" target="_blank">
               <i class="bi bi-printer"></i> Print labels
             </a>
@@ -275,12 +275,12 @@ const SAVE_DELAY = 1000; // Save after 1 second of no typing
 function saveLot(lotRow) {
     const lotId = lotRow.dataset.lotId;
     const timeoutKey = lotRow.dataset.lotId || Math.random().toString();
-    
+
     // Clear existing timeout for this lot
     if (saveTimeouts[timeoutKey]) {
         clearTimeout(saveTimeouts[timeoutKey]);
     }
-    
+
     // Set new timeout
     saveTimeouts[timeoutKey] = setTimeout(() => {
         performSave(lotRow);
@@ -290,20 +290,20 @@ function saveLot(lotRow) {
 function performSave(lotRow) {
     const lotId = lotRow.dataset.lotId || null;
     const badge = lotRow.querySelector('.lot-number-badge');
-    
+
     // Show saving indicator
     if (!lotId) {
         badge.textContent = 'Saving...';
         badge.classList.remove('d-none', 'bg-secondary', 'bg-danger', 'bg-success', 'bg-info');
         badge.classList.add('bg-warning', 'text-dark');
     }
-    
+
     // Collect form data
     const formData = {
         lot_id: lotId,
         bidder_number: '{{ tos.bidder_number }}'  // Include bidder number for admin adding lots for users
     };
-    
+
     // Get all inputs in this row
     const inputs = lotRow.querySelectorAll('.lot-input');
     inputs.forEach(input => {
@@ -314,7 +314,7 @@ function performSave(lotRow) {
             formData[field] = input.value;
         }
     });
-    
+
     // Don't save if lot name is empty
     if (!formData.lot_name || formData.lot_name.trim() === '') {
         badge.textContent = 'Not saved';
@@ -323,7 +323,7 @@ function performSave(lotRow) {
         clearValidationErrors(lotRow);
         return;
     }
-    
+
     // Make AJAX request
     fetch("{% url 'save_lot_ajax' slug=auction.slug %}", {
         method: 'POST',
@@ -340,14 +340,14 @@ function performSave(lotRow) {
             if (data.is_new) {
                 lotRow.dataset.lotId = data.lot_id;
             }
-            
+
             // Update badge with admin bypass feedback
             if (data.admin_bypassed) {
                 badge.textContent = `Lot #${data.lot_number_display} (Admin)`;
                 badge.classList.remove('bg-secondary', 'bg-warning', 'bg-danger', 'bg-success');
                 badge.classList.add('bg-info', 'text-dark');  // Use info color for admin bypass
                 badge.title = 'Admin bypassed lot limit';
-                
+
                 // Show admin bypass warning
                 updateAdminBypassWarning();
             } else {
@@ -355,17 +355,17 @@ function performSave(lotRow) {
                 badge.classList.remove('bg-secondary', 'bg-warning', 'bg-danger', 'bg-info');
                 badge.classList.add('bg-success', 'text-dark');
                 badge.title = '';
-                
+
                 // Update admin bypass warning
                 updateAdminBypassWarning();
             }
-            
+
             // Clear any validation errors
             clearValidationErrors(lotRow);
         } else {
             // Show validation errors
             showValidationErrors(lotRow, data.errors);
-            
+
             if (!lotId) {
                 badge.textContent = 'Not saved';
                 badge.classList.remove('bg-warning', 'bg-success', 'bg-info');
@@ -398,13 +398,13 @@ function clearValidationErrors(lotRow) {
 function showValidationErrors(lotRow, errors) {
     // Clear existing errors first
     clearValidationErrors(lotRow);
-    
+
     // Show new errors
     Object.keys(errors).forEach(field => {
         const input = lotRow.querySelector(`[data-field="${field}"]`);
         if (input) {
             input.classList.add('is-invalid');
-            const feedback = input.parentElement.querySelector('.invalid-feedback') || 
+            const feedback = input.parentElement.querySelector('.invalid-feedback') ||
                            input.nextElementSibling;
             if (feedback && feedback.classList.contains('invalid-feedback')) {
                 feedback.textContent = errors[field];
@@ -412,12 +412,12 @@ function showValidationErrors(lotRow, errors) {
             }
         }
     });
-    
+
     // Handle general errors (lot limit reached) - show on lot_name or donation checkbox
     if (errors.general) {
         const lotNameInput = lotRow.querySelector('[data-field="lot_name"]');
         const donationCheckbox = lotRow.querySelector('[data-field="donation"]');
-        
+
         // If additional lots allowed as donation, mark donation checkbox invalid
         // Otherwise, mark lot name invalid
         if (donationCheckbox && errors.general.includes('maximum')) {
@@ -458,13 +458,13 @@ function showValidationErrors(lotRow, errors) {
 function updateAdminBypassWarning() {
     const warning = document.getElementById('admin-bypass-warning');
     if (!warning) return;
-    
+
     const maxLots = {{ max_lots_per_user|default:0 }};
     if (!maxLots) return;
-    
+
     // Count saved lots (excluding locked ones and unsaved ones)
     const savedLots = document.querySelectorAll('.lot-row[data-lot-id]').length;
-    
+
     // Show warning if we're beyond the limit
     if (savedLots > maxLots) {
         warning.style.display = 'inline';
@@ -479,19 +479,19 @@ function attachLotEventListeners(lotRow) {
     if (lotRow.dataset.locked === 'true') {
         return;
     }
-    
+
     const inputs = lotRow.querySelectorAll('.lot-input');
     inputs.forEach(input => {
         // Disable browser validation to prevent shake effect
         input.setAttribute('novalidate', 'true');
-        
+
         input.addEventListener('input', () => {
             saveLot(lotRow);
         });
         input.addEventListener('change', () => {
             saveLot(lotRow);
         });
-        
+
         // Prevent invalid event which can cause shake
         input.addEventListener('invalid', (e) => {
             e.preventDefault();
@@ -510,14 +510,14 @@ document.getElementById('add-row-btn').addEventListener('click', () => {
     const lotsContainer = document.getElementById('lots-container');
     const lastRow = lotsContainer.querySelector('.lot-row:last-child');
     const newRow = lastRow.cloneNode(true);
-    
+
     // Clear values
     newRow.dataset.lotId = '';
     const badge = newRow.querySelector('.lot-number-badge');
     badge.textContent = 'Not saved';
     badge.classList.remove('bg-success', 'bg-warning', 'bg-danger', 'bg-info');
     badge.classList.add('bg-secondary', 'text-dark');
-    
+
     const inputs = newRow.querySelectorAll('.lot-input');
     inputs.forEach(input => {
         if (input.type === 'checkbox') {
@@ -533,10 +533,10 @@ document.getElementById('add-row-btn').addEventListener('click', () => {
         }
         input.classList.remove('is-invalid');
     });
-    
+
     // Clear validation errors
     newRow.querySelectorAll('.invalid-feedback').forEach(fb => fb.textContent = '');
-    
+
     // Remove image icons
     newRow.querySelectorAll('.input-group-text').forEach(el => el.remove());
     newRow.querySelectorAll('.input-wrapper input').forEach(input => {
@@ -545,13 +545,13 @@ document.getElementById('add-row-btn').addEventListener('click', () => {
             parent.replaceWith(input);
         }
     });
-    
+
     lotsContainer.appendChild(newRow);
     attachLotEventListeners(newRow);
-    
+
     // Focus on the lot name input
     newRow.querySelector('[name="lot_name"]').focus();
-    
+
     // Scroll to the new row
     newRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
 });
@@ -562,7 +562,7 @@ $(document).on('blur', '.auto-image-check', function() {
     var $this = $(this);
     var value = $this.val();
     if (!value) return;
-    
+
     $.ajax({
         url: "{% url 'auto_image_available' slug=auction.slug %}",
         type: 'POST',
