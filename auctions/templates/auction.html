@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% load crispy_forms_tags %}
+{% load currency_filters %}
 {% block title %} {{ auction.title }} {% endblock %}
 {% load static %}
 {% block extra_js %}
@@ -11,7 +12,17 @@ function copyLink() {
   copyText.select();
   copyText.setSelectionRange(0, 99999);
   document.execCommand("copy");
-  document.getElementById("copyShareLink").className += " is-valid";
+
+  // Show feedback
+  var feedback = document.getElementById("copyFeedback");
+  if (feedback) {
+    feedback.classList.remove("d-none");
+    feedback.classList.add("d-block");
+    setTimeout(function() {
+      feedback.classList.remove("d-block");
+      feedback.classList.add("d-none");
+    }, 3000);
+  }
 }
 var read_start = new Date().getTime();
 $("#submit-id-submit").click(function(event){
@@ -132,138 +143,369 @@ function initMap() {
 <div id="fb-root"></div>
 
             {% include 'auction_ribbon.html' %}
-            <div><a href='{{ auction.view_lot_link }}' class="btn btn-primary btn-sm mr-1 mt-1"><i class="bi bi-calendar"></i> View lots</a>
-            {% if auction.is_online or not auction.allow_bulk_adding_lots %}<a href='{{auction.add_lot_link}}' class="btn btn-sm btn-info mr-1 mt-1"><i class="bi bi-calendar-plus"></i> Add a lot</a>{% else %}
-            <a href='{% url "bulk_add_lots_auto_for_myself" slug=auction.slug %}' class="btn btn-sm btn-info mr-1 mt-1"><i class="bi bi-calendar-plus"></i> Add lots</a>{% endif %}
-            <a href='{% url "print_my_labels" slug=auction.slug %}' class="btn btn-primary btn-sm mr-1 mt-1"><i class="bi bi-tags"></i> Print your lot labels</a>
-            <a href='{% url "my_auction_invoice" slug=auction.slug %}' class="btn btn-primary btn-sm mr-1 mt-1"><i class="bi bi-bag"></i> View your invoice</a>
-            {% if view.is_auction_admin %}<a href='/auctions/{{auction.slug}}/edit' class="text-dark btn btn-sm btn-warning mr-1 mt-1"><i class="bi bi-gear-fill"></i> Edit these rules</a>{% endif %}
-            {% if view.is_auction_admin %}<a href='{% url "all_my_users" %}' data-toggle="tooltip" title="All contacts for all auctions where you're an admin" class="btn btn-sm btn-primary mr-1 mt-1"><i class="bi bi-person-fill-down"></i> Download marketing list</a>
-            {% if not auction.multi_location %}
-            {% for location in pickup_locations %}
-            {% if view.is_auction_admin %}
-                <a href="mailto:?bcc={{location.email_list}}&subject={{auction}}" class="btn btn-sm mt-1 mr-1 btn-primary"><i class="bi bi-envelope-at"></i> Email {{location.number_of_users}} people</a>
-            {%endif%}
-            {% endfor %}
-            {% endif %}
-            {% endif %}
-            {% if request.user.is_superuser %}
-            <a href="/admin/auctions/auction/{{auction.pk}}/change/" class="btn btn-sm btn-danger mr-1 mt-1">Admin</a>
-            {% endif %}
-            </div>
-            {{ auction.summernote_description|safe }}
-            <h5>The following rules will be automatically enforced by this site:</h5>
-            <ul>
-                <li>This is an {{ auction.auction_type_as_str }}</li>
-                {% if auction.is_online %}
-                    <li>You must place bids on this website</li>
-                    <li>Bidding will be open from {{ auction.date_start }} to {{ auction.date_end}}</li>
-                    {% if not auction.sealed_bid %}<li>If last minute bids are placed on a lot, the <a href="/faq#how-exactly-do-dynamic-endings-work">end time for that lot will be extended</a>.  All lots will end by {{ auction.dynamic_end }}</li>{% endif %}
-                    {% if auction.lot_submission_start_date != auction.date_start %}<li>You can submit lots starting {{ auction.lot_submission_start_date }}</li>{% endif %}
-                    {% if auction.lot_submission_end_date != auction.date_end %}<li>You can submit lots until {{ auction.lot_submission_end_date }}</li>{% endif %}
-                {% else %}
-                    {% if auction.online_bidding != 'disable' and auction.date_online_bidding_starts and auction.date_online_bidding_ends %}
-                        <li>{% if auction.online_bidding == 'buy_now_only' %}Buying lots online{% else %}Online bidding{% endif %} is allowed starting {{ auction.date_online_bidding_starts }} {% if auction.date_online_bidding_ends != auction.date_start %} to {{ auction.date_online_bidding_ends }}{% endif %}</li>
-                    {% endif %}
-                    {% if auction.lot_submission_start_date != auction.date_start %}<li>You can submit lots starting {{ auction.lot_submission_start_date }}</li>{% endif %}
-                    {% if auction.lot_submission_end_date != auction.date_start %}<li>You can submit lots until {{ auction.lot_submission_end_date }}</li>{% endif %}
-                {% endif %}
-                {% if auction.sealed_bid %}<li>This is a sealed bid auction - you won't be able to see how much others have bid on a lot.</li>{% endif %}
-                {% if auction.max_lots_per_user %}<li>You can submit up to {{ auction.max_lots_per_user }} lots.{% if auction.allow_additional_lots_as_donation %} Additional lots accepted only as a donation.{% endif %}</li>{% endif %}
-                {% if auction.pre_register_lot_discount_percent %}
-                    {% if auction.winning_bid_percent_to_club and auction.lot_entry_fee %} <li>For lots you pre-register on {{ domain }}, you will be charged ${{ auction.lot_entry_fee }} plus {{ auction.template_pre_register_fee }}%  of the winning price per lot you sell</li>
-                    {% else %} {% if auction.winning_bid_percent_to_club %} <li>For lots you pre-register on {{ domain }}, you will be charged {{ auction.template_pre_register_fee }}% of the winning price per lot you sell</li> {% endif %}
-                    {% if auction.lot_entry_fee %} <li>For lots you pre-register on {{ domain }}, you will be charged a flat rate of ${{ auction.lot_entry_fee }}, minus {{ auction.pre_register_lot_discount_percent }}% per lot you sell</li> {% endif %}
-                    {% endif %}
-                {% endif %}
-                {% if auction.winning_bid_percent_to_club and auction.lot_entry_fee %} <li>{% if auction.pre_register_lot_discount_percent %}For lots registered by auction staff on site, you{% else %}You{% endif %} will be charged ${{ auction.lot_entry_fee }} plus {{ auction.winning_bid_percent_to_club }}%  of the winning price per lot you sell</li>
-                {% else %} {% if auction.winning_bid_percent_to_club %} <li>{% if auction.pre_register_lot_discount_percent %}For lots registered by auction staff on site, you{% else %}You{% endif %} will be charged {{ auction.winning_bid_percent_to_club }}% of the winning price per lot you sell</li> {% endif %}
-                {% if auction.lot_entry_fee %} <li>You will be charged a flat rate of ${{ auction.lot_entry_fee }} per lot you sell</li> {% endif %}
-                {% endif %}
-                {% if auction.unsold_lot_fee %}<li>If your lot does not sell, you will be charged ${{ auction.unsold_lot_fee }}</li>{% endif %}
-                {% if auction.force_donation_threshold %}<li>If your lot sells for ${{auction.force_donation_threshold}} or less, it will be considered a donation to the club</li>{% endif %}
-                {% if auction.minimum_bid > 2 %} <li>There will be a minimum bid of ${{auction.minimum_bid}} on all lots{% if auction.reserve_price != "disable" %}, and sellers can set their own minimum bids{% endif %}</li> {% endif %}
-                {% if auction.buy_now != 'disable' %} <li>Sellers can set a buy now price on their lots, which will allow a lot to be sold without bidding</li> {% endif %}
-            </ul>
 
-            {% if not auction.no_location %}
-            <br>
-                <div id="map_wrapper" style='height: 400px;'>
-                    <div id="map_canvas" class="mapping" style='width: 100%; height: 100%;'></div>
+            {# Quick Actions Section - Organized and Clean #}
+            <div class="card mb-4">
+                <div class="card-body">
+                    <div class="row g-2">
+                        <div class="col-12 col-md-auto">
+                            <a href='{{ auction.view_lot_link }}' class="btn btn-primary btn-sm w-100"><i class="bi bi-calendar"></i> View Lots</a>
+                        </div>
+                        <div class="col-12 col-md-auto">
+                            {% if auction.is_online or not auction.allow_bulk_adding_lots %}
+                            <a href='{{auction.add_lot_link}}' class="btn btn-success btn-sm w-100"><i class="bi bi-calendar-plus"></i> Add Lot</a>
+                            {% else %}
+                            <a href='{% url "bulk_add_lots_for_myself" slug=auction.slug %}' class="btn btn-success btn-sm w-100"><i class="bi bi-calendar-plus"></i> Add Lots</a>
+                            {% endif %}
+                        </div>
+                        <div class="col-12 col-md-auto">
+                            <a href='{% url "my_auction_invoice" slug=auction.slug %}' class="btn btn-info btn-sm w-100"><i class="bi bi-bag"></i> My Invoice</a>
+                        </div>
+                        {% if request.user.is_authenticated and user_has_lots %}
+                        <div class="col-12 col-md-auto">
+                            <a href='{% url "print_my_labels" slug=auction.slug %}' class="btn btn-secondary btn-sm w-100"><i class="bi bi-tags"></i> Print Labels</a>
+                        </div>
+                        {% endif %}
+                    </div>
+
+                    {# Admin Actions - Collapsible Section #}
+                    {% if view.is_auction_admin or request.user.is_superuser %}
+                    <hr class="my-3">
+                    <div class="d-grid">
+                        <button class="btn btn-sm btn-outline-secondary text-light" type="button" data-bs-toggle="collapse" data-bs-target="#adminActions" aria-expanded="false" aria-controls="adminActions" aria-label="Show or hide admin actions">
+                            <i class="bi bi-gear-fill"></i> Admin Actions <i class="bi bi-chevron-down"></i>
+                        </button>
+                    </div>
+                    <div class="collapse mt-2" id="adminActions">
+                        <div class="row g-2">
+                            {% if view.is_auction_admin %}
+                            <div class="col-12 col-md-auto">
+                                <a href='{% url "auction_tos_list" slug=auction.slug %}' class="btn btn-primary btn-sm w-100"><i class="bi bi-people-fill"></i> Users</a>
+                            </div>
+                            <div class="col-12 col-md-auto">
+                                <a href="/auctions/{{auction.slug}}/lots" class="btn btn-primary btn-sm w-100"><i class="bi bi-calendar"></i> Lots</a>
+                            </div>
+                            {% if not auction.is_online %}
+                            <div class="col-12 col-md-auto">
+                                <a href="{{ auction.set_lot_winners_link }}" class="btn btn-primary btn-sm w-100"><i class="bi bi-calendar-check"></i> Set lot winners</a>
+                            </div>
+                            <div class="col-12 col-md-auto">
+                                <a href='{% url "auction_quick_checkout" slug=auction.slug %}' class="btn btn-primary btn-sm w-100"><i class="bi bi-bag-heart"></i> Quick checkout</a>
+                            </div>
+                            <div class="col-12 col-md-auto">
+                                <a href='{% url "auction_printing" slug=auction.slug %}' class="btn btn-primary btn-sm w-100"><i class="bi bi-tags"></i> Print labels</a>
+                            </div>
+                            {% endif %}
+                            <div class="col-12 col-md-auto">
+                                <a href='{% url "all_my_users" %}' class="btn btn-primary btn-sm w-100" data-bs-toggle="tooltip" title="All contacts for all auctions where you're an admin"><i class="bi bi-person-fill-down"></i> Marketing List</a>
+                            </div>
+                            <div class="col-12 col-md-auto">
+                                <a href="/auctions/{{auction.slug}}/stats/" class="btn btn-primary btn-sm w-100"><i class="bi bi-graph-up"></i> Stats</a>
+                            </div>
+                            <div class="col-12 col-md-auto">
+                                <a href="{% url 'auction_history' slug=auction.slug %}" class="btn btn-primary btn-sm w-100"><i class="bi bi-clock-history"></i> Admin history</a>
+                            </div>
+                            <div class="col-12 col-md-auto">
+                                <a href='/auctions/{{auction.slug}}/edit' class="btn btn-primary btn-sm w-100"><i class="bi bi-gear-fill"></i> Edit Rules</a>
+                            </div>
+                            <div class="col-12 col-md-auto">
+                                <a href="{{ auction.location_link }}" class="btn btn-primary btn-sm w-100"><i class="bi bi-geo-alt-fill"></i> Location{% if auction.location_qs|length > 1 %}s{% endif %}</a>
+                            </div>
+                            <div class="col-12 col-md-auto">
+                                <a href="/auctions/{{auction.slug}}/chat/" class="btn btn-primary btn-sm w-100"><i class="bi bi-chat-fill"></i> Chat messages</a>
+                            </div>
+                            <div class="col-12 col-md-auto">
+                                <a href="/auctions/new?copy={{auction.slug}}" class="btn btn-primary btn-sm w-100"><i class="bi bi-plus-circle"></i> Copy to new auction</a>
+                            </div>
+                            {% if not auction.multi_location %}
+                            {% for location in pickup_locations %}
+                                <div class="col-12 col-md-auto">
+                                    <a href="mailto:?bcc={{location.email_list}}&subject={{auction}}" class="btn btn-primary btn-sm w-100"><i class="bi bi-envelope-at"></i> Email {{location.number_of_users}} Users</a>
+                                </div>
+                            {% endfor %}
+                            {% endif %}
+                            <div class="col-12 col-md-auto">
+                                <a href="/auctions/{{auction.slug}}/delete/" class="btn btn-danger btn-sm w-100"><i class="bi bi-x-circle"></i> Delete auction</a>
+                            </div>
+                            {% endif %}
+                            {% if request.user.is_superuser %}
+                            <div class="col-12 col-md-auto">
+                                <a href="/admin/auctions/auction/{{auction.pk}}/change/" class="btn btn-danger btn-sm w-100">Django Admin</a>
+                            </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endif %}
                 </div>
+            </div>
+
+            {# Auction Description #}
+            {% if auction.summernote_description %}
+            <div class="card mb-4">
+                <div class="card-body">
+                    {{ auction.summernote_description|safe }}
+                </div>
+            </div>
             {% endif %}
+
+            {# Auction Rules - Not collapsible #}
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0">Auction Rules & Details</h5>
+                </div>
+                <div class="card-body">
+                    <ul class="list-unstyled">
+                            <li class="mb-2">This is an <strong>{{ auction.auction_type_as_str }}</strong></li>
+                            {% if auction.is_online %}
+                                <li class="mb-2">You must place bids on this website</li>
+                                <li class="mb-2">Bidding will be open from <strong>{{ auction.date_start }}</strong> to <strong>{{ auction.date_end}}</strong></li>
+                                {% if not auction.sealed_bid %}<li class="mb-2">If last minute bids are placed on a lot, the <a href="/faq#how-exactly-do-dynamic-endings-work">end time for that lot will be extended</a>. All lots will end by {{ auction.dynamic_end }}</li>{% endif %}
+                                {% if auction.lot_submission_start_date != auction.date_start %}<li class="mb-2">You can submit lots starting {{ auction.lot_submission_start_date }}</li>{% endif %}
+                                {% if auction.lot_submission_end_date != auction.date_end %}<li class="mb-2">You can submit lots until {{ auction.lot_submission_end_date }}</li>{% endif %}
+                            {% else %}
+                                {% if auction.online_bidding != 'disable' and auction.date_online_bidding_starts and auction.date_online_bidding_ends %}
+                                    <li class="mb-2">{% if auction.online_bidding == 'buy_now_only' %}Buying lots online{% else %}Online bidding{% endif %} is allowed starting {{ auction.date_online_bidding_starts }} {% if auction.date_online_bidding_ends != auction.date_start %} to {{ auction.date_online_bidding_ends }}{% endif %}</li>
+                                {% endif %}
+                                {% if auction.lot_submission_start_date != auction.date_start %}<li class="mb-2">You can submit lots starting {{ auction.lot_submission_start_date }}</li>{% endif %}
+                                {% if auction.lot_submission_end_date != auction.date_start %}<li class="mb-2">You can submit lots until {{ auction.lot_submission_end_date }}</li>{% endif %}
+                            {% endif %}
+                            {% if auction.sealed_bid %}<li class="mb-2">This is a sealed bid auction - you won't be able to see how much others have bid on a lot.</li>{% endif %}
+                            {% if auction.max_lots_per_user %}<li class="mb-2">You can submit up to {{ auction.max_lots_per_user }} lots.{% if auction.allow_additional_lots_as_donation %} Additional lots accepted only as a donation.{% endif %}</li>{% endif %}
+                            {% if auction.pre_register_lot_discount_percent %}
+                                {% if auction.winning_bid_percent_to_club and auction.lot_entry_fee %} <li class="mb-2">For lots you pre-register on {{ domain }}, you will be charged {{ auction.currency_symbol }}{{ auction.lot_entry_fee }} plus {{ auction.template_pre_register_fee }}% of the winning price per lot you sell</li>
+                                {% else %} {% if auction.winning_bid_percent_to_club %} <li class="mb-2">For lots you pre-register on {{ domain }}, you will be charged {{ auction.template_pre_register_fee }}% of the winning price per lot you sell</li> {% endif %}
+                                {% if auction.lot_entry_fee %} <li class="mb-2">For lots you pre-register on {{ domain }}, you will be charged a flat rate of {{ auction.currency_symbol }}{{ auction.lot_entry_fee }}, minus {{ auction.pre_register_lot_discount_percent }}% per lot you sell</li> {% endif %}
+                                {% endif %}
+                            {% endif %}
+                            {% if auction.winning_bid_percent_to_club and auction.lot_entry_fee %} <li class="mb-2">{% if auction.pre_register_lot_discount_percent %}For lots registered by auction staff on site, you{% else %}You{% endif %} will be charged {{ auction.currency_symbol }}{{ auction.lot_entry_fee }} plus {{ auction.winning_bid_percent_to_club }}% of the winning price per lot you sell</li>
+                            {% else %} {% if auction.winning_bid_percent_to_club %} <li class="mb-2">{% if auction.pre_register_lot_discount_percent %}For lots registered by auction staff on site, you{% else %}You{% endif %} will be charged {{ auction.winning_bid_percent_to_club }}% of the winning price per lot you sell</li> {% endif %}
+                            {% if auction.lot_entry_fee %} <li class="mb-2">You will be charged a flat rate of {{ auction.currency_symbol }}{{ auction.lot_entry_fee }} per lot you sell</li> {% endif %}
+                            {% endif %}
+                            {% if auction.unsold_lot_fee %}<li class="mb-2">If your lot does not sell, you will be charged {{ auction.currency_symbol }}{{ auction.unsold_lot_fee }}</li>{% endif %}
+                            {% if auction.force_donation_threshold %}<li class="mb-2">If your lot sells for {{ auction.currency_symbol }}{{auction.force_donation_threshold}} or less, it will be considered a donation to the club</li>{% endif %}
+                            {% if auction.minimum_bid > 2 %} <li class="mb-2">There will be a minimum bid of {{ auction.currency_symbol }}{{auction.minimum_bid}} on all lots{% if auction.reserve_price != "disable" %}, and sellers can set their own minimum bids{% endif %}</li> {% endif %}
+                            {% if auction.buy_now != 'disable' %} <li class="mb-2">Sellers can set a buy now price on their lots, which will allow a lot to be sold without bidding</li> {% endif %}
+                        </ul>
+                    </div>
+                </div>
+
+            {# Map Display #}
+            {% if not auction.no_location %}
+            <div class="card mb-4">
+                <div class="card-body p-0">
+                    <div id="map_wrapper" style='height: 400px;'>
+                        <div id="map_canvas" class="mapping" style='width: 100%; height: 100%;'></div>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+
+            {# Join Auction Section - More Prominent #}
             {% if auction.all_location_count %}
             <a name="join"></a>
             {% if not ended %}
-                <div class="jumbotron">
-                {% if request.user.is_authenticated %}
-                        If you want to participate in this auction, you must confirm that you've read these rules
-                    {% crispy form form.helper %}
-                {% else %}
-                    <a href="/login/?next={% firstof request.path '/' %}">Please login to join the auction</a><br><br>
-                {% endif %}
-                {% if not auction.multi_location %}
-                {# this is for single location auctions only, still iterating because of how the context is set up #}
-                {% for location in pickup_locations %}
-                {% include 'location_fragment.html' %}
-                {% if view.is_auction_admin %}
-                        <a href="/locations/edit/{{ location.pk }}/?next=/auctions/{{auction.slug}}" class="btn btn-sm mt-2 ms-2 text-dark btn-warning"><i class="bi bi-gear-fill"></i> Edit pickup location</a>
-                {% endif %}
-                {% endfor %}
-                {% endif %}
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h5 class="mb-0"><i class="bi bi-box-arrow-in-right"></i> Join This Auction</h5>
+                    </div>
+                    <div class="card-body">
+                        {% if request.user.is_authenticated %}
+                            <p class="mb-3">To participate in this auction, please confirm that you've read the rules and select your pickup location.</p>
+                            {% crispy form form.helper %}
+                        {% else %}
+                            <p class="mb-0"><a href="/login/?next={% firstof request.path '/' %}" class="btn btn-primary">Please login to join the auction</a></p>
+                        {% endif %}
+
+                        {# Single location details shown here #}
+                        {% if not auction.multi_location %}
+                        {% for location in pickup_locations %}
+                        <hr class="my-3">
+                        <h6 class="mb-3">Pickup Location</h6>
+                        {% if location.description %}
+                            <p>{{ location.description|linebreaksbr }}</p>
+                        {% endif %}
+                        {% if not location.pickup_by_mail %}
+                            {% if location.users_must_coordinate_pickup %}
+                                <p>You must schedule your pickup time in advance.</p>
+                            {% else %}
+                                <p><strong>{{ location.pickup_time }}</strong></p>
+                            {% endif %}
+                            <div class="btn-group flex-wrap" role="group">
+                                {%if location.has_coordinates %}
+                                <a href="{{location.directions_link}}" class="btn btn-sm btn-primary"><i class="bi bi-geo-alt-fill"></i> Get directions</a>
+                                {% endif %}
+                                {% if hasChosenLocation == location.pk and not location.users_must_coordinate_pickup %}
+                                <div class="btn-group">
+                                    <button class="btn btn-sm btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                                        <i class="bi bi-calendar-day"></i> Add to calendar
+                                    </button>
+                                    <ul class="dropdown-menu">
+                                        <li><a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=google&location={{location.pk}}&second=False" target="_blank"><i class="bi bi-google"></i> Google Calendar</a></li>
+                                        <li><a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=ics&location={{location.pk}}&second=False"><i class="bi bi-apple"></i> Apple Calendar</a></li>
+                                        <li><a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=outlook&location={{location.pk}}&second=False" target="_blank"><i class="bi bi-windows"></i> Outlook</a></li>
+                                    </ul>
+                                </div>
+                                {% endif %}
+                                {% if view.is_auction_admin %}
+                                <a href="/locations/edit/{{ location.pk }}/?next=/auctions/{{auction.slug}}" class="btn btn-sm btn-warning"><i class="bi bi-gear-fill"></i> Edit</a>
+                                {% endif %}
+                            </div>
+                            {% if location.second_pickup_time %}
+                                <p class="mt-3">You must return on <strong>{{ location.second_pickup_time }}</strong> to pick up lots from other locations.</p>
+                                {% if hasChosenLocation == location.pk%}
+                                <div class="btn-group">
+                                    <button class="btn btn-sm btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                                        <i class="bi bi-calendar-day"></i> Add return pickup to calendar
+                                    </button>
+                                    <ul class="dropdown-menu">
+                                        <li><a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=google&location={{location.pk}}&second=True" target="_blank"><i class="bi bi-google"></i> Google Calendar</a></li>
+                                        <li><a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=ics&location={{location.pk}}&second=True"><i class="bi bi-apple"></i> Apple Calendar</a></li>
+                                        <li><a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=outlook&location={{location.pk}}&second=True" target="_blank"><i class="bi bi-windows"></i> Outlook</a></li>
+                                    </ul>
+                                </div>
+                                {% endif %}
+                            {% endif %}
+                        {% endif %}
+                        {% endfor %}
+                        {% endif %}
+                    </div>
                 </div>
             {% endif %}
             <div id="join-message" style="position:fixed; bottom:0; right:30%; visibility: hidden; opacity: 0;" data-toggle="tooltip" data-placement="top" title="Keep scrolling to join this auction"></div>
+
+            {# Multi-location Details with Horizontal Scrolling Tabs #}
             {% if auction.multi_location %}
-            <p>
-            <h4>Location details</h4>
-            <ul class="nav nav-tabs">
-                {% for location in pickup_locations %}
-                <li class="nav-item">
-                  <a class="nav-link {% if hasChosenLocation == location.pk%}active{% endif %}" data-bs-toggle="tab" href="#location_{{location.pk}}{{location.short_name}}">{{ location.name }}</a>
-                </li>
-                {% endfor %}
-            </ul>
-            <div id="locationTabContent" class="tab-content">
-                {% for location in pickup_locations %}
-                {# location content for multi-location auction ONLY here #}
-                <div class="tab-pane fade {% if hasChosenLocation == location.pk%}active show {% endif %}" id="location_{{location.pk}}{{location.short_name}}" role="tabpanel">
-                    {% if view.is_auction_admin %}
-                    <a href="/locations/edit/{{ location.pk }}/?next=/auctions/{{auction.slug}}" class="btn btn-sm mt-2 ms-2 text-dark btn-warning"><i class="bi bi-gear-fill"></i> Edit this location</a>
-                    {% if auction.all_location_count > 1 %}
-                    <a href='{% url "location_incoming" pk=location.pk %}' class="btn btn-sm mt-2 ms-2 btn-primary"><i class="bi bi-box-arrow-in-down-right"></i> Incoming lot list</a>
-                    <a href='{% url "location_outgoing" pk=location.pk %}' class="btn btn-sm mt-2 ms-2 btn-primary"><i class="bi bi-box-arrow-down-right"></i> Outgoing lot list</a>
-                    {% endif %}
-                    <a href="mailto:?bcc={{location.email_list}}&subject={{auction}} - {{location.name}}" class="btn btn-sm mt-2 ms-2 btn-primary"><i class="bi bi-envelope-at"></i> Email {{location.number_of_users}} people</a>
-                    <br>
-                    {% endif %}
-                    {% if hasChosenLocation == location.pk%}<span class="badge bg-success text-dark">Your confirmed location</span><br>{% endif %}
-                    {% include 'location_fragment.html' %}
-                    {% if location.contact_person %}
-                    {% if hasChosenLocation == location.pk or view.is_auction_admin %}Contact for this location: <b>{{location.contact_person.name | default:""}}</b><br>
-                        {{location.contact_person.email | default:"" | urlize}}<br>
-                        {{location.contact_person.phone_number | default:"" }}<br>
-                        {% endif %}
-                    {% endif %}
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-geo-alt-fill"></i> Pickup Locations</h5>
                 </div>
-                {% endfor %}
+                <div class="card-body">
+                    {# Horizontal scrolling tabs for mobile #}
+                    <div class="overflow-auto">
+                        <ul class="nav nav-tabs flex-nowrap mb-3" role="tablist" style="flex-wrap: nowrap;">
+                            {% for location in pickup_locations %}
+                            <li class="nav-item" role="presentation">
+                                <a class="nav-link {% if hasChosenLocation == location.pk%}active{% endif %}"
+                                   data-bs-toggle="tab"
+                                   href="#location_{{location.pk}}{{location.short_name}}"
+                                   role="tab"
+                                   aria-controls="location_{{location.pk}}{{location.short_name}}"
+                                   aria-selected="{% if hasChosenLocation == location.pk%}true{% else %}false{% endif %}">
+                                    {% if location.pickup_by_mail %}Mail me my lots{% else %}{{ location.name }}{% endif %}
+                                </a>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+
+                    <div id="locationTabContent" class="tab-content">
+                        {% for location in pickup_locations %}
+                        {# location content for multi-location auction ONLY here #}
+                        <div class="tab-pane fade {% if hasChosenLocation == location.pk%}active show{% endif %}"
+                             id="location_{{location.pk}}{{location.short_name}}"
+                             role="tabpanel"
+                             aria-labelledby="location-{{location.pk}}-tab">
+
+                            {% if hasChosenLocation == location.pk%}
+                            <div class="alert alert-success mb-3" role="alert">
+                                <i class="bi bi-check-circle-fill"></i> <strong>Your Confirmed Location</strong>
+                            </div>
+                            {% endif %}
+
+                            {% if location.description %}
+                                <p>{{ location.description|linebreaksbr }}</p>
+                            {% endif %}
+
+                            {% if not location.pickup_by_mail %}
+                                {% if location.users_must_coordinate_pickup %}
+                                    <p>You must schedule your pickup time in advance.</p>
+                                {% else %}
+                                    <p><strong>{{ location.pickup_time }}</strong></p>
+                                {% endif %}
+
+                                <div class="btn-group mb-3 flex-wrap" role="group">
+                                    {%if location.has_coordinates %}
+                                    <a href="{{location.directions_link}}" class="btn btn-sm btn-primary"><i class="bi bi-geo-alt-fill"></i> Get directions</a>
+                                    {% endif %}
+                                    {% if hasChosenLocation == location.pk and not location.users_must_coordinate_pickup %}
+                                    <div class="btn-group">
+                                        <button class="btn btn-sm btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                                            <i class="bi bi-calendar-day"></i> Add to calendar
+                                        </button>
+                                        <ul class="dropdown-menu">
+                                            <li><a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=google&location={{location.pk}}&second=False" target="_blank"><i class="bi bi-google"></i> Google Calendar</a></li>
+                                            <li><a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=ics&location={{location.pk}}&second=False"><i class="bi bi-apple"></i> Apple Calendar</a></li>
+                                            <li><a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=outlook&location={{location.pk}}&second=False" target="_blank"><i class="bi bi-windows"></i> Outlook</a></li>
+                                        </ul>
+                                    </div>
+                                    {% endif %}
+                                    {% if view.is_auction_admin %}
+                                    <a href="/locations/edit/{{ location.pk }}/?next=/auctions/{{auction.slug}}" class="btn btn-sm btn-warning"><i class="bi bi-gear-fill"></i> Edit</a>
+                                    {% if auction.all_location_count > 1 %}
+                                    <a href='{% url "location_incoming" pk=location.pk %}' class="btn btn-sm btn-primary"><i class="bi bi-box-arrow-in-down-right"></i> Incoming lot list</a>
+                                    <a href='{% url "location_outgoing" pk=location.pk %}' class="btn btn-sm btn-primary"><i class="bi bi-box-arrow-down-right"></i> Outgoing lot list</a>
+                                    {% endif %}
+                                    <a href="mailto:?bcc={{location.email_list}}&subject={{auction}} - {{location.name}}" class="btn btn-sm btn-info"><i class="bi bi-envelope-at"></i> Email {{location.number_of_users}}</a>
+                                    {% endif %}
+                                </div>
+
+                                {% if location.second_pickup_time %}
+                                    <p>You must return on <strong>{{ location.second_pickup_time }}</strong> to pick up lots from other locations.</p>
+                                    {% if hasChosenLocation == location.pk%}
+                                    <div class="btn-group">
+                                        <button class="btn btn-sm btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                                            <i class="bi bi-calendar-day"></i> Add return pickup to calendar
+                                        </button>
+                                        <ul class="dropdown-menu">
+                                            <li><a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=google&location={{location.pk}}&second=True" target="_blank"><i class="bi bi-google"></i> Google Calendar</a></li>
+                                            <li><a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=ics&location={{location.pk}}&second=True"><i class="bi bi-apple"></i> Apple Calendar</a></li>
+                                            <li><a class="dropdown-item" href="{% url 'add_to_calendar' %}?type=outlook&location={{location.pk}}&second=True" target="_blank"><i class="bi bi-windows"></i> Outlook</a></li>
+                                        </ul>
+                                    </div>
+                                    {% endif %}
+                                {% endif %}
+                            {% endif %}
+
+                            {% if location.contact_person %}
+                            {% if hasChosenLocation == location.pk or view.is_auction_admin %}
+                            <div class="mt-3 p-3 border rounded">
+                                <h6 class="mb-2"><i class="bi bi-person-circle"></i> Location Contact</h6>
+                                <p class="mb-1"><strong>{{location.contact_person.name | default:""}}</strong></p>
+                                <p class="mb-1">{{location.contact_person.email | default:"" | urlize}}</p>
+                                <p class="mb-0">{{location.contact_person.phone_number | default:"" }}</p>
+                            </div>
+                            {% endif %}
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
             </div>
             {%endif%} {# end auction.multi_location #}
             {% endif %} {# end auction.all_location_count #}
-        <br><span class='text-muted'><small>Please spread the word about this auction -- every like and share helps the club bring in new sellers and bidders!</small></span>
-        <div class="share-links" style='line-height: 11px;'>
-            <div class="input-group mb-3 mr-3 has-success" style="float:left !important;">
-                <input class="form-control form-control-sm" id='copyShareLink' style='max-width: 35%' type="text" value="https://{{ domain }}/?{{ auction.slug }}" readonly="">
-                <div class="input-group-append">
-                    <button class='btn btn-sm bg-primary' onclick="copyLink()"><i class="bi bi-copy"></i> Copy</button>
+
+        {# Share Section - Cleaner Design #}
+        <div class="card">
+            <div class="card-body">
+                <h6 class="card-title mb-3"><i class="bi bi-share-fill"></i> Share This Auction</h6>
+                <p class="text-muted small mb-3">Please spread the word about this auction — every like and share helps bring in new sellers and bidders!</p>
+                <div class="row g-2 align-items-center">
+                    <div class="col-12 col-md-6">
+                        <div class="input-group">
+                            <input class="form-control form-control-sm" id='copyShareLink' type="text" value="https://{{ domain }}/?{{ auction.slug }}" readonly>
+                            <button class='btn btn-sm btn-primary' onclick="copyLink()"><i class="bi bi-copy"></i> Copy</button>
+                        </div>
+                        <div class="valid-feedback d-none" id="copyFeedback">
+                            <i class="bi bi-check-circle-fill"></i> Copied! Thanks for spreading the word!
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-auto">
+                        <div class="btn-group" role="group">
+                            <a href="https://twitter.com/share?ref_src=twsrc%5Etfw" class="btn btn-sm btn-outline-info twitter-share-button" data-text="Check out the {{ auction.title }}" data-url="https://{{ domain }}/?{{ auction.slug }}" data-dnt="true" data-show-count="false"><i class="bi bi-twitter"></i> Tweet</a>
+                            <a target="_blank" href="https://www.facebook.com/sharer/sharer.php?u={{ domain|urlencode }}/?{{ auction.slug|urlencode }}&amp;src=sdkpreparse" class="btn btn-sm btn-outline-primary"><i class="bi bi-facebook"></i> Share</a>
+                        </div>
+                    </div>
                 </div>
-                <span class='input-group-append ml-1 mr-1'>
-                <a href="https://twitter.com/share?ref_src=twsrc%5Etfw" class="twitter-share-button" data-text="Check out the {{ auction.title }}" data-url="https://{{ domain }}/?{{ auction.slug }}" data-dnt="true" data-show-count="false">Tweet</a><script async src="https://platform.twitter.com/widgets.js" charset="utf-8"></script>
-                </span>
-                <span class='input-group-append mr-1'>
-                    <div class="fb-share-button" data-href="https://{{ domain }}/?{{ auction.slug }}" data-layout="button_count" data-size="small"><a target="_blank" href="https://www.facebook.com/sharer/sharer.php?u={{ domain|urlencode }}/?{{ auction.slug|urlencode }}&amp;src=sdkpreparse" class="fb-xfbml-parse-ignore">Share</a></div>
-                </span>
-                <div class="valid-feedback">Copied.  Thanks for spreading the word!</div>
             </div>
         </div>
 {% endblock %}

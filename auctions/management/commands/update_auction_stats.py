@@ -1,41 +1,30 @@
 import logging
 
-from asgiref.sync import async_to_sync
-from channels.layers import get_channel_layer
 from django.core.management.base import BaseCommand
-from django.db.models import Q
-from django.utils import timezone
-
-from auctions.models import Auction
 
 logger = logging.getLogger(__name__)
 
 
 class Command(BaseCommand):
-    help = "Update cached statistics for auctions whose next_update_due is past due"
+    help = "Trigger the auction stats update task. The task is self-scheduling and will continue to run automatically."
 
-    def handle(self, *args, **options):
-        now = timezone.now()
-        auctions = Auction.objects.filter(
-            Q(next_update_due__lte=now) | Q(next_update_due__isnull=True),
-            is_deleted=False,
+    def add_arguments(self, parser):
+        parser.add_argument(
+            "--sync",
+            action="store_true",
+            help="Run the task synchronously (directly) instead of via Celery",
         )
 
-        for auction in auctions:
-            try:
-                logger.info("Recalculating stats for auction: %s (%s)", auction.title, auction.slug)
-                auction.recalculate_stats()
+    def handle(self, *args, **options):
+        from auctions.tasks import schedule_auction_stats_update, update_auction_stats
 
-                auction_websocket = get_channel_layer()
-                async_to_sync(auction_websocket.group_send)(
-                    f"auctions_{auction.pk}",
-                    {
-                        "type": "stats_updated",
-                    },
-                )
-                logger.info("Successfully updated stats for auction: %s", auction.title)
-            except Exception as e:
-                logger.error("Failed to update stats for auction %s (%s): %s", auction.title, auction.slug, e)
-                logger.exception(e)
-                # Continue with other auctions even if one fails
-                continue
+        if options["sync"]:
+            # Run the task directly (useful for testing or when Celery is not available)
+            self.stdout.write("Running auction stats update synchronously...")
+            update_auction_stats()
+            self.stdout.write(self.style.SUCCESS("Auction stats update completed."))
+        else:
+            # Trigger the Celery task
+            self.stdout.write("Triggering auction stats update task...")
+            schedule_auction_stats_update()
+            self.stdout.write(self.style.SUCCESS("Auction stats update task has been scheduled."))

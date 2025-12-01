@@ -11,7 +11,36 @@ services:
       - 8000
     env_file: .env
     depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: always
+
+  celery_worker:
+    build: .
+    container_name: celery_worker
+    entrypoint: ["sh", "./celery_worker_entrypoint.sh"]
+    volumes:
+      - .:/home/app/web
+      - ./logs:/home/logs
+    env_file: .env
+    depends_on:
       - db
+      - redis
+    restart: always
+
+  celery_beat:
+    build: .
+    container_name: celery_beat
+    entrypoint: ["sh", "./celery_beat_entrypoint.sh"]
+    volumes:
+      - .:/home/app/web
+      - ./logs:/home/logs
+    env_file: .env
+    depends_on:
+      - db
+      - redis
     restart: always
 
   test:
@@ -24,6 +53,9 @@ services:
     entrypoint: [/bin/bash, /home/app/web/.github/scripts/test-and-lint.sh]
     env_file: .env
     profiles: [test]
+    depends_on:
+      db:
+        condition: service_healthy
 
   db:
     container_name: db
@@ -46,6 +78,13 @@ services:
       - ${DATABASE_PORT-3306}
     volumes:
       - mariadb_data:/var/lib/mysql
+      - ./db-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb --user=$${MYSQL_USER:-mysqluser} --password=$${MYSQL_PASSWORD:-unsecure} --execute='SELECT 1;' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
 
   redis:
     container_name: redis
@@ -86,6 +125,23 @@ services:
       - URL=${SITE_DOMAIN}
       - VALIDATION=http
       - EMAIL=${ADMIN_EMAIL}
+
+  selenium:
+    container_name: selenium
+    image: selenium/standalone-chrome:latest
+    shm_size: 2gb
+    expose:
+      - 4444
+    profiles: [selenium]
+    environment:
+      - SE_NODE_MAX_SESSIONS=4
+      - SE_NODE_SESSION_TIMEOUT=300
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sSL http://localhost:4444/wd/hub/status | grep -q '\"ready\":true'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
 volumes:
   redis_data:

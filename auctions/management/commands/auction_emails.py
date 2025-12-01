@@ -1,6 +1,6 @@
-import datetime
 import logging
 
+from django.conf import settings
 from django.contrib.sites.models import Site
 from django.core.management.base import BaseCommand
 from django.db.models import Q
@@ -13,90 +13,82 @@ logger = logging.getLogger(__name__)
 
 
 class Command(BaseCommand):
-    help = "Drip marketing style emails send to the creator of an auction.  No emails are sent for in-person auctions right now."
+    help = "Send reminder emails to auction creators: welcome, invoice, and follow-up emails."
 
     def handle(self, *args, **options):
-        auctions = Auction.objects.exclude(is_deleted=True)
-        auctions = auctions.exclude(is_online=False).filter(
-            Q(email_first_sent=False)
-            | Q(email_second_sent=False)
-            | Q(email_third_sent=False)
-            | Q(email_fourth_sent=False)
-            | Q(email_fifth_sent=False)
+        current_site = Site.objects.get_current()
+        now = timezone.now()
+
+        # Get auctions that have at least one email that needs to be sent
+        auctions = Auction.objects.exclude(is_deleted=True).filter(
+            Q(welcome_email_sent=False, welcome_email_due__lte=now)
+            | Q(invoice_email_sent=False, invoice_email_due__lte=now)
+            | Q(followup_email_sent=False, followup_email_due__lte=now)
         )
+
         for auction in auctions:
-            current_site = Site.objects.get_current()
             userData = auction.created_by.userdata
             if userData.has_unsubscribed:
-                # that's the end of that
-                auction.email_first_sent = True
-                auction.email_second_sent = True
-                auction.email_third_sent = True
-                auction.email_fourth_sent = True
-                auction.email_fifth_sent = True
+                # Mark all emails as sent for unsubscribed users
+                auction.welcome_email_sent = True
+                auction.invoice_email_sent = True
+                auction.followup_email_sent = True
                 auction.save()
-            else:
-                if not auction.email_first_sent:
-                    # first email is sent ~ an hour after the auction has started, regardless of how long it will run for
-                    if timezone.now() > auction.date_posted + datetime.timedelta(hours=1):
-                        mail.send(
-                            auction.created_by.email,
-                            template="auction_first",
-                            context={
-                                "auction": auction,
-                                "domain": current_site.domain,
-                                "unsubscribe": userData.unsubscribe_link,
-                            },
-                        )
-                        auction.email_first_sent = True
-                        auction.save()
-                if timezone.now() > auction.date_start:
-                    runtime = auction.date_end - auction.date_start
-                    percentComplete = timezone.now() - auction.date_start
-                    percentComplete = percentComplete.total_seconds() / runtime.total_seconds() * 100
-                    if percentComplete > 70:
-                        if not auction.email_second_sent:
-                            logger.info("sending auction_second to %s ", auction.created_by.email)
-                            mail.send(
-                                auction.created_by.email,
-                                template="auction_second",
-                                context={
-                                    "auction": auction,
-                                    "domain": current_site.domain,
-                                    "unsubscribe": userData.unsubscribe_link,
-                                },
-                            )
-                            auction.email_second_sent = True
-                            auction.save()
-                    if auction.invoiced and not auction.email_third_sent:
-                        mail.send(
-                            auction.created_by.email,
-                            template="auction_invoices",
-                            context={
-                                "auction": auction,
-                                "domain": current_site.domain,
-                                "unsubscribe": userData.unsubscribe_link,
-                            },
-                        )
-                        auction.email_third_sent = True
-                        auction.save()
-                    if percentComplete > 100:
-                        if not auction.email_fifth_sent:
-                            # no emails are sent on auction close.
-                            # It might make sense to send a follow-up ~10 months after the auction to encourage people to use the site again
-                            # but we don't do this right now
-                            auction.email_fifth_sent = True
-                            auction.save()
-                    if percentComplete > 120:
-                        if not auction.email_fourth_sent:
-                            mail.send(
-                                auction.created_by.email,
-                                template="auction_thanks",
-                                context={
-                                    "auction": auction,
-                                    "domain": current_site.domain,
-                                    "unsubscribe": userData.unsubscribe_link,
-                                },
-                            )
-                            auction.email_fourth_sent = True
-                            auction.save()
+                continue
+
+            # Welcome email: sent 24 hours after auction creation
+            if not auction.welcome_email_sent and auction.welcome_email_due and now >= auction.welcome_email_due:
+                # Determine subject based on admin checklist completion
+                if not (
+                    auction.admin_checklist_location_set
+                    and auction.admin_checklist_rules_updated
+                    and auction.admin_checklist_joined
+                ):
+                    subject = f"Don't forget to finish setting up {auction}!"
+                else:
+                    subject = f"Thanks for creating {auction}!"
+
+                mail.send(
+                    auction.created_by.email,
+                    template="auction_welcome",
+                    context={
+                        "auction": auction,
+                        "domain": current_site.domain,
+                        "unsubscribe": userData.unsubscribe_link,
+                        "subject": subject,
+                        "enable_help": settings.ENABLE_HELP,
+                    },
+                )
+                logger.info("Sent welcome email to %s for auction %s", auction.created_by.email, auction.slug)
+                auction.welcome_email_sent = True
+                auction.save()
+
+            # Invoice email: sent 1 hour after auction end (online auctions only)
+            if not auction.invoice_email_sent and auction.invoice_email_due and now >= auction.invoice_email_due:
+                mail.send(
+                    auction.created_by.email,
+                    template="auction_invoices",
+                    context={
+                        "auction": auction,
+                        "domain": current_site.domain,
+                        "unsubscribe": userData.unsubscribe_link,
+                    },
+                )
+                logger.info("Sent invoice email to %s for auction %s", auction.created_by.email, auction.slug)
+                auction.invoice_email_sent = True
+                auction.save()
+
+            # Follow-up/thanks email: sent 24 hours after auction end (online) or start (in-person)
+            if not auction.followup_email_sent and auction.followup_email_due and now >= auction.followup_email_due:
+                mail.send(
+                    auction.created_by.email,
+                    template="auction_thanks",
+                    context={
+                        "auction": auction,
+                        "domain": current_site.domain,
+                        "unsubscribe": userData.unsubscribe_link,
+                    },
+                )
+                logger.info("Sent follow-up email to %s for auction %s", auction.created_by.email, auction.slug)
+                auction.followup_email_sent = True
+                auction.save()

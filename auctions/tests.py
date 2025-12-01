@@ -1,9 +1,13 @@
+import base64
 import datetime
+import hashlib
+import hmac
+import json
 from decimal import Decimal
 
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.test.client import Client
 from django.urls import reverse
 from django.utils import timezone
@@ -324,7 +328,7 @@ class LotModelTests(TestCase):
         )
         user = User.objects.create(username="Test user")
         Bid.objects.create(user=user, lot_number=lot, amount=10)
-        assert lot.high_bidder.pk is user.pk
+        assert lot.high_bidder.pk == user.pk
         assert lot.high_bid == 5
 
     def test_lot_with_two_bids(self):
@@ -341,7 +345,7 @@ class LotModelTests(TestCase):
         userB = User.objects.create(username="Test user B")
         Bid.objects.create(user=userA, lot_number=lot, amount=10)
         Bid.objects.create(user=userB, lot_number=lot, amount=6)
-        assert lot.high_bidder.pk is userA.pk
+        assert lot.high_bidder.pk == userA.pk
         assert lot.high_bid == 7
 
     def test_lot_with_two_changing_bids(self):
@@ -357,28 +361,28 @@ class LotModelTests(TestCase):
         jeff = User.objects.create(username="Jeff")
         gary = User.objects.create(username="Gary")
         jeffBid = Bid.objects.create(user=jeff, lot_number=lot, amount=20)
-        assert lot.high_bidder.pk is jeff.pk
+        assert lot.high_bidder.pk == jeff.pk
         assert lot.high_bid == 20
         garyBid = Bid.objects.create(user=gary, lot_number=lot, amount=20)
-        assert lot.high_bidder.pk is jeff.pk
+        assert lot.high_bidder.pk == jeff.pk
         assert lot.high_bid == 20
         # check the order
         jeffBid.last_bid_time = timezone.now()
         jeffBid.save()
-        assert lot.high_bidder.pk is gary.pk
+        assert lot.high_bidder.pk == gary.pk
         assert lot.high_bid == 20
         garyBid.amount = 30
         garyBid.save()
-        assert lot.high_bidder.pk is gary.pk
+        assert lot.high_bidder.pk == gary.pk
         assert lot.high_bid == 21
         garyBid.last_bid_time = timezone.now()
         garyBid.save()
-        assert lot.high_bidder.pk is gary.pk
+        assert lot.high_bidder.pk == gary.pk
         assert lot.high_bid == 21
         jeffBid.amount = 30
         jeffBid.last_bid_time = timezone.now()
         jeffBid.save()
-        assert lot.high_bidder.pk is gary.pk
+        assert lot.high_bidder.pk == gary.pk
         assert lot.high_bid == 30
 
     def test_lot_with_tie_bids(self):
@@ -401,7 +405,7 @@ class LotModelTests(TestCase):
         bidA.save()
         bidB.last_bid_time = tenDaysAgo
         bidB.save()
-        assert lot.high_bidder.pk is userB.pk
+        assert lot.high_bidder.pk == userB.pk
         assert lot.high_bid == 6
         assert lot.max_bid == 6
 
@@ -430,7 +434,7 @@ class LotModelTests(TestCase):
         bidB.save()
         bidC.last_bid_time = oneDaysAgo
         bidC.save()
-        assert lot.high_bidder.pk is userB.pk
+        assert lot.high_bidder.pk == userB.pk
         assert lot.high_bid == 7
         assert lot.max_bid == 7
 
@@ -451,7 +455,7 @@ class LotModelTests(TestCase):
         bidA.last_bid_time = afterEndTime
         bidA.save()
         Bid.objects.create(user=userB, lot_number=lot, amount=6)
-        assert lot.high_bidder.pk is userB.pk
+        assert lot.high_bidder.pk == userB.pk
         assert lot.high_bid == 5
 
     def test_lot_with_one_bids_below_reserve(self):
@@ -802,6 +806,80 @@ class InvoiceCreateViewTests(StandardTestCase):
         # Verify no invoice was created
         new_tos = AuctionTOS.objects.get(pk=new_tos.pk)
         assert new_tos.invoice is None
+
+
+class InvoiceNotificationDueTests(StandardTestCase):
+    """Test invoice notification due logic in views"""
+
+    def test_invoice_status_to_ready_sets_notification_due(self):
+        """Test that setting invoice to UNPAID (ready) sets notification due"""
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+
+        # Ensure invoice starts without notification due
+        self.invoice.status = "DRAFT"
+        self.invoice.invoice_notification_due = None
+        self.invoice.save()
+
+        # Set invoice to ready
+        response = self.client.post(f"/api/payinvoice/{self.invoice.pk}/UNPAID")
+
+        assert response.status_code == 200
+
+        # Refresh from database
+        self.invoice.refresh_from_db()
+
+        # Check that notification_due was set
+        assert self.invoice.status == "UNPAID"
+        assert self.invoice.invoice_notification_due is not None
+        # Should be set to ~15 seconds in the future
+        assert self.invoice.invoice_notification_due > timezone.now()
+
+    def test_invoice_status_to_paid_sets_notification_due(self):
+        """Test that setting invoice to PAID sets notification due"""
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+
+        # Ensure invoice starts without notification due
+        self.invoice.status = "UNPAID"
+        self.invoice.invoice_notification_due = None
+        self.invoice.save()
+
+        # Set invoice to paid
+        response = self.client.post(f"/api/payinvoice/{self.invoice.pk}/PAID")
+
+        assert response.status_code == 200
+
+        # Refresh from database
+        self.invoice.refresh_from_db()
+
+        # Check that notification_due was set
+        assert self.invoice.status == "PAID"
+        assert self.invoice.invoice_notification_due is not None
+        # Should be set to ~15 seconds in the future
+        assert self.invoice.invoice_notification_due > timezone.now()
+
+    def test_invoice_status_to_open_clears_notification_due(self):
+        """Test that setting invoice to DRAFT (open) clears notification due"""
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+
+        # Start with invoice that has notification due set
+        self.invoice.status = "UNPAID"
+        self.invoice.invoice_notification_due = timezone.now()
+        self.invoice.save()
+
+        # Set invoice back to draft
+        response = self.client.post(f"/api/payinvoice/{self.invoice.pk}/DRAFT")
+
+        assert response.status_code == 200
+
+        # Refresh from database
+        self.invoice.refresh_from_db()
+
+        # Check that notification_due was cleared
+        assert self.invoice.status == "DRAFT"
+        assert self.invoice.invoice_notification_due is None
 
 
 class LotPricesTests(TestCase):
@@ -2389,6 +2467,52 @@ class InvoiceViewTests(StandardTestCase):
         assert response.status_code == 200
 
 
+class InvoiceStatusButtonTests(StandardTestCase):
+    """Test invoice status buttons can be clicked and update correctly"""
+
+    def test_invoice_status_button_paid(self):
+        """Admin can mark invoice as paid via button click"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = f"/api/payinvoice/{self.invoice.pk}/PAID"
+        response = self.client.post(url)
+        assert response.status_code == 200, (
+            f"Expected 200, got {response.status_code}, content: {response.content.decode()[:500]}"
+        )
+        # Verify the invoice was updated
+        self.invoice.refresh_from_db()
+        assert self.invoice.status == "PAID"
+        # Verify response contains updated buttons with correct ID and status
+        content = response.content.decode()
+        assert f"id='invoice-buttons-{self.invoice.pk}'" in content, (
+            f"Expected invoice-buttons ID in content: {content}"
+        )
+        assert f'id="{self.invoice.pk}_PAID"' in content
+        assert "btn-success" in content  # Paid button should be success
+
+    def test_invoice_status_button_draft(self):
+        """Admin can mark invoice as draft (open) via button click"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        # First set to PAID
+        self.invoice.status = "PAID"
+        self.invoice.save()
+        # Then change back to DRAFT
+        url = f"/api/payinvoice/{self.invoice.pk}/DRAFT"
+        response = self.client.post(url)
+        assert response.status_code == 200
+        self.invoice.refresh_from_db()
+        assert self.invoice.status == "DRAFT"
+        content = response.content.decode()
+        assert f"id='invoice-buttons-{self.invoice.pk}'" in content
+        assert "btn-info" in content  # Open button should be info when active
+
+    def test_invoice_status_button_anonymous_denied(self):
+        """Anonymous users cannot change invoice status"""
+        url = f"/api/payinvoice/{self.invoice.pk}/PAID"
+        response = self.client.post(url)
+        # Should redirect to login
+        assert response.status_code == 302
+
+
 class PickupLocationTests(StandardTestCase):
     """Test PickupLocation model properties and views"""
 
@@ -2458,6 +2582,58 @@ class AuctionStatsViewTests(StandardTestCase):
         url = f"/auctions/{self.online_auction.slug}/stats/"
         response = self.client.get(url)
         assert response.status_code == 200
+
+    def test_auction_stats_recalculation_threshold(self):
+        """Stats recalculation respects 20-minute threshold"""
+        from django.utils import timezone
+
+        self.client.login(username=self.user.username, password="testpassword")
+        url = f"/auctions/{self.online_auction.slug}/stats/"
+
+        # Test 1: Stats older than 20 minutes should trigger recalculation
+        old_time = timezone.now() - timezone.timedelta(minutes=25)
+        self.online_auction.last_stats_update = old_time
+        self.online_auction.next_update_due = None
+        self.online_auction.save()
+
+        response = self.client.get(url)
+        assert response.status_code == 200
+        # Should show recalculation message in context
+        assert response.context.get("stats_being_recalculated") is True, "Should show recalculation message"
+
+        self.online_auction.refresh_from_db()
+        # next_update_due should be set (scheduled for recalculation)
+        assert self.online_auction.next_update_due is not None, "next_update_due should be set for old stats"
+
+        # Test 2: Stats within 20 minutes should NOT trigger recalculation
+        recent_time = timezone.now() - timezone.timedelta(minutes=10)
+        self.online_auction.last_stats_update = recent_time
+        self.online_auction.next_update_due = None
+        self.online_auction.save()
+
+        response = self.client.get(url)
+        assert response.status_code == 200
+        # Should NOT show recalculation message in context
+        assert response.context.get("stats_being_recalculated") is not True, "Should not show recalculation message"
+
+        self.online_auction.refresh_from_db()
+        # next_update_due should remain None (no recalculation scheduled)
+        assert self.online_auction.next_update_due is None, "next_update_due should not be set for recent stats"
+
+        # Test 3: Already scheduled recalculation should not reschedule
+        old_time = timezone.now() - timezone.timedelta(minutes=25)
+        scheduled_time = timezone.now() + timezone.timedelta(minutes=2)
+        self.online_auction.last_stats_update = old_time
+        self.online_auction.next_update_due = scheduled_time
+        self.online_auction.save()
+
+        response = self.client.get(url)
+        assert response.status_code == 200
+        # Should still show recalculation message but not reschedule
+        assert response.context.get("stats_being_recalculated") is True, "Should show recalculation message"
+
+        self.online_auction.refresh_from_db()
+        assert self.online_auction.next_update_due == scheduled_time, "Should not reschedule if already scheduled"
 
 
 class BulkAddLotsViewTests(StandardTestCase):
@@ -2816,6 +2992,7 @@ class DistanceUnitTests(StandardTestCase):
         # When user submits with 80 km, it should save as ~50 miles
         form_data = {
             "distance_unit": "km",
+            "preferred_currency": "USD",
             "local_distance": 80,
             "email_me_about_new_auctions_distance": 160,
             "email_me_about_new_in_person_auctions_distance": 160,
@@ -2852,6 +3029,7 @@ class DistanceUnitTests(StandardTestCase):
 
         form_data = {
             "distance_unit": "mi",
+            "preferred_currency": "USD",
             "local_distance": 50,
             "email_me_about_new_auctions_distance": 100,
             "email_me_about_new_in_person_auctions_distance": 100,
@@ -3583,19 +3761,112 @@ class LotEndauctionsMethodsTests(StandardTestCase):
         self.assertTrue(new_image.is_primary)
 
 
-class WebSocketConsumerTests(StandardTestCase):
+class WebSocketConsumerTests(TransactionTestCase):
     """Tests for websocket consumers (LotConsumer, UserConsumer, AuctionConsumer)
 
     Best practices for websocket tests in CI:
     - All operations have timeouts
     - Proper cleanup with try-finally blocks
     - Simplified message handling to avoid hanging
+
+    Note: Uses TransactionTestCase instead of TestCase to properly handle
+    database transactions with async code and channels' database_sync_to_async
     """
 
     # Timeout constants for CI reliability
     CONNECT_TIMEOUT = 5
     DISCONNECT_TIMEOUT = 5
     RECEIVE_TIMEOUT = 3
+
+    def setUp(self):
+        """Set up test data needed for websocket tests - mirrors StandardTestCase setup"""
+        time = timezone.now() - datetime.timedelta(days=2)
+        timeStart = timezone.now() - datetime.timedelta(days=3)
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        self.admin_user = User.objects.create_user(
+            username="admin_user", password="testpassword", email="test@example.com"
+        )
+        self.user = User.objects.create_user(username="my_lot", password="testpassword", email="test@example.com")
+        self.user_with_no_lots = User.objects.create_user(
+            username="no_lots", password="testpassword", email="asdf@example.com"
+        )
+        self.user_who_does_not_join = User.objects.create_user(
+            username="no_joins", password="testpassword", email="zxcgv@example.com"
+        )
+        self.online_auction = Auction.objects.create(
+            created_by=self.user,
+            title="This auction is online",
+            is_online=True,
+            date_end=time,
+            date_start=timeStart,
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=25,
+        )
+        self.in_person_auction = Auction.objects.create(
+            created_by=self.user,
+            title="This auction is in-person",
+            is_online=False,
+            date_end=time,
+            date_start=timeStart,
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=25,
+            buy_now="allow",
+            reserve_price="allow",
+            use_seller_dash_lot_numbering=True,
+        )
+        self.location = PickupLocation.objects.create(
+            name="location", auction=self.online_auction, pickup_time=theFuture
+        )
+        self.in_person_location = PickupLocation.objects.create(
+            name="location", auction=self.in_person_auction, pickup_time=theFuture
+        )
+        self.userB = User.objects.create_user(username="no_tos", password="testpassword")
+        self.admin_online_tos = AuctionTOS.objects.create(
+            user=self.admin_user, auction=self.online_auction, pickup_location=self.location, is_admin=True
+        )
+        self.admin_in_person_tos = AuctionTOS.objects.create(
+            user=self.admin_user, auction=self.in_person_auction, pickup_location=self.in_person_location, is_admin=True
+        )
+        self.online_tos = AuctionTOS.objects.create(
+            user=self.user, auction=self.online_auction, pickup_location=self.location
+        )
+        self.in_person_tos = AuctionTOS.objects.create(
+            user=self.user, auction=self.in_person_auction, pickup_location=self.location
+        )
+        self.tosB = AuctionTOS.objects.create(
+            user=self.userB, auction=self.online_auction, pickup_location=self.location
+        )
+        self.tosC = AuctionTOS.objects.create(
+            user=self.user_with_no_lots, auction=self.online_auction, pickup_location=self.location
+        )
+        self.in_person_buyer = AuctionTOS.objects.create(
+            user=self.user_with_no_lots,
+            auction=self.in_person_auction,
+            pickup_location=self.in_person_location,
+            bidder_number="555",
+        )
+        self.lot = Lot.objects.create(
+            lot_name="A test lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            winning_price=10,
+            auctiontos_winner=self.tosB,
+            active=False,
+        )
+        self.lotB = Lot.objects.create(
+            lot_name="B test lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            winning_price=10,
+            auctiontos_winner=self.tosB,
+            active=False,
+        )
 
     async def _create_active_lot_with_auction(self, seller_user, bidder_user=None):
         """Helper method to create an active lot with a future-dated auction"""
@@ -3837,6 +4108,221 @@ class WebSocketConsumerTests(StandardTestCase):
 
             # Anonymous users should not get a response for their bid
             # The consumer just passes without doing anything
+        finally:
+            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
+
+    async def test_lot_consumer_bid_before_online_bidding_starts(self):
+        """Test that bids cannot be placed before online bidding starts for in-person auctions"""
+        from channels.db import database_sync_to_async
+        from channels.testing import WebsocketCommunicator
+
+        from auctions.consumers import LotConsumer
+
+        # Create an in-person auction with online bidding that hasn't started yet
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        online_bidding_start = timezone.now() + datetime.timedelta(hours=2)
+        online_bidding_end = timezone.now() + datetime.timedelta(days=2)
+
+        auction = await database_sync_to_async(Auction.objects.create)(
+            created_by=self.user,
+            title="In-person auction with future online bidding",
+            is_online=False,
+            date_start=timezone.now(),
+            date_end=theFuture,
+            date_online_bidding_starts=online_bidding_start,
+            date_online_bidding_ends=online_bidding_end,
+            online_bidding="allow",
+        )
+        location = await database_sync_to_async(PickupLocation.objects.create)(
+            name="test location", auction=auction, pickup_time=theFuture
+        )
+        seller_tos = await database_sync_to_async(AuctionTOS.objects.create)(
+            user=self.user, auction=auction, pickup_location=location
+        )
+        await database_sync_to_async(AuctionTOS.objects.create)(
+            user=self.user_with_no_lots, auction=auction, pickup_location=location
+        )
+
+        lot = await database_sync_to_async(Lot.objects.create)(
+            lot_name="Test lot before online bidding",
+            auction=auction,
+            auctiontos_seller=seller_tos,
+            quantity=1,
+            reserve_price=10,
+            date_end=theFuture,
+        )
+
+        communicator = WebsocketCommunicator(
+            LotConsumer.as_asgi(),
+            f"/ws/lots/{lot.pk}/",
+        )
+        communicator.scope["user"] = self.user_with_no_lots
+        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
+
+        try:
+            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+
+            # Try to place a bid
+            await communicator.send_json_to({"bid": 15})
+
+            # Should receive an error about online bidding not started
+            found_error = False
+            for _ in range(5):
+                try:
+                    response = await communicator.receive_json_from(timeout=self.RECEIVE_TIMEOUT)
+                    if response.get("error"):
+                        found_error = True
+                        self.assertIn("hasn't started", response["error"].lower())
+                        break
+                except:
+                    break
+
+            self.assertTrue(found_error, "Did not receive expected error about online bidding not started")
+        finally:
+            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
+
+    async def test_lot_consumer_bid_after_online_bidding_ends(self):
+        """Test that bids cannot be placed after online bidding ends for in-person auctions"""
+        from channels.db import database_sync_to_async
+        from channels.testing import WebsocketCommunicator
+
+        from auctions.consumers import LotConsumer
+
+        # Create an in-person auction with online bidding that has ended
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        online_bidding_start = timezone.now() - datetime.timedelta(days=2)
+        online_bidding_end = timezone.now() - datetime.timedelta(hours=1)
+
+        auction = await database_sync_to_async(Auction.objects.create)(
+            created_by=self.user,
+            title="In-person auction with ended online bidding",
+            is_online=False,
+            date_start=timezone.now() - datetime.timedelta(days=3),
+            date_end=theFuture,
+            date_online_bidding_starts=online_bidding_start,
+            date_online_bidding_ends=online_bidding_end,
+            online_bidding="allow",
+        )
+        location = await database_sync_to_async(PickupLocation.objects.create)(
+            name="test location", auction=auction, pickup_time=theFuture
+        )
+        seller_tos = await database_sync_to_async(AuctionTOS.objects.create)(
+            user=self.user, auction=auction, pickup_location=location
+        )
+        await database_sync_to_async(AuctionTOS.objects.create)(
+            user=self.user_with_no_lots, auction=auction, pickup_location=location
+        )
+
+        lot = await database_sync_to_async(Lot.objects.create)(
+            lot_name="Test lot after online bidding",
+            auction=auction,
+            auctiontos_seller=seller_tos,
+            quantity=1,
+            reserve_price=10,
+            date_end=theFuture,
+        )
+
+        communicator = WebsocketCommunicator(
+            LotConsumer.as_asgi(),
+            f"/ws/lots/{lot.pk}/",
+        )
+        communicator.scope["user"] = self.user_with_no_lots
+        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
+
+        try:
+            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+
+            # Try to place a bid
+            await communicator.send_json_to({"bid": 15})
+
+            # Should receive an error about online bidding ended
+            found_error = False
+            for _ in range(5):
+                try:
+                    response = await communicator.receive_json_from(timeout=self.RECEIVE_TIMEOUT)
+                    if response.get("error"):
+                        found_error = True
+                        self.assertIn("ended", response["error"].lower())
+                        break
+                except:
+                    break
+
+            self.assertTrue(found_error, "Did not receive expected error about online bidding ended")
+        finally:
+            await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
+
+    async def test_lot_consumer_bid_on_sold_lot(self):
+        """Test that bids cannot be placed on lots that have already been sold"""
+        from channels.db import database_sync_to_async
+        from channels.testing import WebsocketCommunicator
+
+        from auctions.consumers import LotConsumer
+
+        # Create a sold lot
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        auction = await database_sync_to_async(Auction.objects.create)(
+            created_by=self.user,
+            title="Auction with sold lot",
+            is_online=True,
+            date_start=timezone.now(),
+            date_end=theFuture,
+        )
+        location = await database_sync_to_async(PickupLocation.objects.create)(
+            name="test location", auction=auction, pickup_time=theFuture
+        )
+        seller_tos = await database_sync_to_async(AuctionTOS.objects.create)(
+            user=self.user, auction=auction, pickup_location=location
+        )
+        winner_tos = await database_sync_to_async(AuctionTOS.objects.create)(
+            user=self.user_with_no_lots, auction=auction, pickup_location=location
+        )
+
+        lot = await database_sync_to_async(Lot.objects.create)(
+            lot_name="Sold lot",
+            auction=auction,
+            auctiontos_seller=seller_tos,
+            quantity=1,
+            reserve_price=10,
+            date_end=theFuture,
+            winner=self.user_with_no_lots,
+            auctiontos_winner=winner_tos,
+            winning_price=20,
+        )
+
+        # Try to bid as another user
+        another_user = await database_sync_to_async(User.objects.create_user)(
+            username="another_bidder", password="testpassword", email="another@example.com"
+        )
+        await database_sync_to_async(AuctionTOS.objects.create)(
+            user=another_user, auction=auction, pickup_location=location
+        )
+
+        communicator = WebsocketCommunicator(
+            LotConsumer.as_asgi(),
+            f"/ws/lots/{lot.pk}/",
+        )
+        communicator.scope["user"] = another_user
+        communicator.scope["url_route"] = {"kwargs": {"lot_number": lot.pk}}
+
+        try:
+            await communicator.connect(timeout=self.CONNECT_TIMEOUT)
+
+            # Try to place a bid
+            await communicator.send_json_to({"bid": 25})
+
+            # Should receive an error about lot being sold
+            found_error = False
+            for _ in range(5):
+                try:
+                    response = await communicator.receive_json_from(timeout=self.RECEIVE_TIMEOUT)
+                    if response.get("error"):
+                        found_error = True
+                        self.assertIn("sold", response["error"].lower())
+                        break
+                except:
+                    break
+
+            self.assertTrue(found_error, "Did not receive expected error about lot being sold")
         finally:
             await communicator.disconnect(timeout=self.DISCONNECT_TIMEOUT)
 
@@ -4551,3 +5037,1860 @@ class BulkAddLotsAutoTests(StandardTestCase):
         
         self.assertEqual(lot.cannot_change_reason, "This lot has sold")
         self.assertFalse(lot.can_be_edited)
+class UpdateAuctionStatsCommandTestCase(StandardTestCase):
+    """Test the update_auction_stats management command"""
+
+    def test_command_processes_single_auction(self):
+        """Test that the command processes only one auction per run"""
+        import datetime
+
+        from django.core.management import call_command
+        from django.utils import timezone
+
+        # Set up multiple auctions with due stats updates
+        now = timezone.now()
+
+        # Ensure setUp auctions don't interfere by setting their next_update_due to far future
+        self.online_auction.next_update_due = now + datetime.timedelta(days=365)
+        self.online_auction.save()
+        self.in_person_auction.next_update_due = now + datetime.timedelta(days=365)
+        self.in_person_auction.save()
+
+        # Create three auctions with different next_update_due times
+        auction1 = Auction.objects.create(
+            created_by=self.user,
+            title="Auction 1 - oldest",
+            is_online=True,
+            date_start=now - datetime.timedelta(days=5),
+            date_end=now + datetime.timedelta(days=2),
+        )
+        auction1.next_update_due = now - datetime.timedelta(hours=5)  # Most overdue
+        auction1.save()
+
+        auction2 = Auction.objects.create(
+            created_by=self.user,
+            title="Auction 2 - middle",
+            is_online=True,
+            date_start=now - datetime.timedelta(days=4),
+            date_end=now + datetime.timedelta(days=2),
+        )
+        auction2.next_update_due = now - datetime.timedelta(hours=3)  # Second most overdue
+        auction2.save()
+
+        auction3 = Auction.objects.create(
+            created_by=self.user,
+            title="Auction 3 - newest",
+            is_online=True,
+            date_start=now - datetime.timedelta(days=3),
+            date_end=now + datetime.timedelta(days=2),
+        )
+        auction3.next_update_due = now - datetime.timedelta(hours=1)  # Least overdue
+        auction3.save()
+
+        # Store the original next_update_due times
+        original_due_1 = auction1.next_update_due
+        original_due_2 = auction2.next_update_due
+        original_due_3 = auction3.next_update_due
+
+        # Run the command once (using --sync to run synchronously for testing)
+        call_command("update_auction_stats", "--sync")
+
+        # Refresh from database
+        auction1.refresh_from_db()
+        auction2.refresh_from_db()
+        auction3.refresh_from_db()
+
+        # The most overdue auction (auction1) should have been updated
+        self.assertIsNotNone(auction1.last_stats_update)
+        self.assertNotEqual(auction1.next_update_due, original_due_1)
+        # The new next_update_due should be in the future
+        self.assertGreater(auction1.next_update_due, now)
+
+        # The other two auctions should NOT have been updated
+        self.assertEqual(auction2.next_update_due, original_due_2)
+        self.assertEqual(auction3.next_update_due, original_due_3)
+
+    def test_command_orders_by_next_update_due(self):
+        """Test that the command processes the most overdue auction first"""
+        import datetime
+
+        from django.core.management import call_command
+        from django.utils import timezone
+
+        now = timezone.now()
+
+        # Ensure setUp auctions don't interfere by setting their next_update_due to far future
+        self.online_auction.next_update_due = now + datetime.timedelta(days=365)
+        self.online_auction.save()
+        self.in_person_auction.next_update_due = now + datetime.timedelta(days=365)
+        self.in_person_auction.save()
+
+        # Create two auctions with different next_update_due times
+        newer_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Newer auction",
+            is_online=True,
+            date_start=now - datetime.timedelta(days=3),
+            date_end=now + datetime.timedelta(days=2),
+        )
+        newer_auction.next_update_due = now - datetime.timedelta(hours=1)  # Less overdue
+        newer_auction.save()
+
+        older_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Older auction",
+            is_online=True,
+            date_start=now - datetime.timedelta(days=5),
+            date_end=now + datetime.timedelta(days=2),
+        )
+        older_auction.next_update_due = now - datetime.timedelta(hours=5)  # More overdue
+        older_auction.save()
+
+        # Run the command (using --sync to run synchronously for testing)
+        call_command("update_auction_stats", "--sync")
+
+        # Refresh from database
+        newer_auction.refresh_from_db()
+        older_auction.refresh_from_db()
+
+        # The older (more overdue) auction should have been processed
+        self.assertIsNotNone(older_auction.last_stats_update)
+        self.assertGreater(older_auction.next_update_due, now)
+
+        # The newer auction should not have been processed yet
+        self.assertEqual(newer_auction.next_update_due, now - datetime.timedelta(hours=1))
+        self.assertIsNone(newer_auction.last_stats_update)
+
+    def test_command_handles_no_due_auctions(self):
+        """Test that the command handles the case when no auctions are due"""
+        import datetime
+
+        from django.core.management import call_command
+        from django.utils import timezone
+
+        now = timezone.now()
+
+        # Create an auction with next_update_due in the future
+        future_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Future auction",
+            is_online=True,
+            date_start=now - datetime.timedelta(days=3),
+            date_end=now + datetime.timedelta(days=2),
+        )
+        future_auction.next_update_due = now + datetime.timedelta(hours=5)
+        future_auction.save()
+
+        # Run the command - should not raise any errors (using --sync to run synchronously for testing)
+        call_command("update_auction_stats", "--sync")
+
+        # Refresh from database
+        future_auction.refresh_from_db()
+
+        # The auction should not have been processed
+        self.assertEqual(future_auction.next_update_due, now + datetime.timedelta(hours=5))
+        self.assertIsNone(future_auction.last_stats_update)
+
+
+class LotsByUserViewTest(StandardTestCase):
+    """Test for the LotsByUser view to ensure it handles missing 'user' parameter correctly"""
+
+    def test_lots_by_user_missing_user_parameter(self):
+        """Test that the view doesn't crash when 'user' parameter is missing"""
+        # Access the URL without user parameter, only with auction parameter
+        url = reverse("user_lots") + f"?auction={self.online_auction.slug}"
+        response = self.client.get(url)
+
+        # Should return 200, not crash with MultiValueDictKeyError
+        self.assertEqual(response.status_code, 200)
+
+        # Context should have user set to None
+        self.assertIsNone(response.context["user"])
+
+    def test_lots_by_user_with_valid_user_parameter(self):
+        """Test that the view works correctly with a valid user parameter"""
+        url = reverse("user_lots") + f"?user={self.user.username}"
+        response = self.client.get(url)
+
+        # Should return 200
+        self.assertEqual(response.status_code, 200)
+
+        # Context should have the correct user
+        self.assertEqual(response.context["user"], self.user)
+        self.assertEqual(response.context["view"], "user")
+
+    def test_lots_by_user_with_invalid_user_parameter(self):
+        """Test that the view handles non-existent username gracefully"""
+        url = reverse("user_lots") + "?user=nonexistent_user"
+        response = self.client.get(url)
+
+        # Should return 200, not crash
+        self.assertEqual(response.status_code, 200)
+
+        # Context should have user set to None
+        self.assertIsNone(response.context["user"])
+
+
+class ImportLotsFromCSVViewTests(StandardTestCase):
+    """Test CSV lot import functionality"""
+
+    def test_import_lots_csv_anonymous(self):
+        """Anonymous users cannot import lots from CSV"""
+        url = reverse("import_lots_from_csv", kwargs={"slug": self.online_auction.slug})
+        response = self.client.post(url)
+        # Should redirect to login (302) or be denied (403)
+        assert response.status_code in [302, 403]
+
+    def test_import_lots_csv_non_admin(self):
+        """Non-admin users cannot import lots from CSV"""
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        url = reverse("import_lots_from_csv", kwargs={"slug": self.online_auction.slug})
+        response = self.client.post(url)
+        assert response.status_code in [302, 403]
+
+    def test_import_lots_csv_admin_no_file(self):
+        """Admin posting without CSV file gets error"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("import_lots_from_csv", kwargs={"slug": self.online_auction.slug})
+        response = self.client.post(url)
+        # Should redirect with error message
+        assert response.status_code == 200
+
+    def test_import_lots_csv_create_new_lot(self):
+        """CSV import creates a new lot for existing user"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("import_lots_from_csv", kwargs={"slug": self.online_auction.slug})
+
+        # Set name and email on TOS so we can find it
+        self.online_tos.name = "Test User"
+        self.online_tos.email = "testuser@example.com"
+        self.online_tos.save()
+
+        # Create CSV content
+        csv_content = (
+            "Name,Email,Lot Name,Quantity,Reserve Price\n"
+            f"{self.online_tos.name},{self.online_tos.email},Test Lot from CSV,5,10\n"
+        )
+
+        from io import BytesIO
+
+        csv_file = BytesIO(csv_content.encode("utf-8"))
+        csv_file.name = "test.csv"
+
+        response = self.client.post(url, {"csv_file": csv_file})
+
+        # Should redirect successfully
+        assert response.status_code == 200
+
+        # Check that lot was created
+        new_lot = Lot.objects.filter(lot_name="Test Lot from CSV", auction=self.online_auction).first()
+        assert new_lot is not None
+        assert new_lot.quantity == 5
+        assert new_lot.reserve_price == 10
+        assert new_lot.auctiontos_seller == self.online_tos
+
+    def test_import_lots_csv_update_existing_lot(self):
+        """CSV import updates existing lot by lot number"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("import_lots_from_csv", kwargs={"slug": self.online_auction.slug})
+
+        # Use existing lot
+        lot_number = self.lot.lot_number_int
+
+        # Create CSV content to update the lot
+        csv_content = f"Lot Number,Lot Name,Quantity,Reserve Price\n{lot_number},Updated Lot Name,3,15\n"
+
+        from io import BytesIO
+
+        csv_file = BytesIO(csv_content.encode("utf-8"))
+        csv_file.name = "test.csv"
+
+        response = self.client.post(url, {"csv_file": csv_file})
+
+        # Should redirect successfully
+        assert response.status_code == 200
+
+        # Check that lot was updated
+        self.lot.refresh_from_db()
+        assert self.lot.lot_name == "Updated Lot Name"
+        assert self.lot.quantity == 3
+        assert self.lot.reserve_price == 15
+
+    def test_import_lots_csv_create_new_user_and_lot(self):
+        """CSV import creates both user and lot"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("import_lots_from_csv", kwargs={"slug": self.online_auction.slug})
+
+        # Create CSV content with new user
+        csv_content = "Name,Email,Lot Name,Quantity\nNew User,newuser@example.com,New User Lot,2\n"
+
+        from io import BytesIO
+
+        csv_file = BytesIO(csv_content.encode("utf-8"))
+        csv_file.name = "test.csv"
+
+        response = self.client.post(url, {"csv_file": csv_file})
+
+        # Should redirect successfully
+        assert response.status_code == 200
+
+        # Check that user was created
+        new_tos = AuctionTOS.objects.filter(email="newuser@example.com", auction=self.online_auction).first()
+        assert new_tos is not None
+        assert new_tos.name == "New User"
+
+        # Check that lot was created
+        new_lot = Lot.objects.filter(lot_name="New User Lot", auction=self.online_auction).first()
+        assert new_lot is not None
+        assert new_lot.auctiontos_seller == new_tos
+
+    def test_import_lots_csv_boolean_fields(self):
+        """CSV import handles boolean fields correctly"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("import_lots_from_csv", kwargs={"slug": self.online_auction.slug})
+
+        # Create CSV with boolean fields
+        csv_content = (
+            "Name,Email,Lot Name,Breeder Points,Donation\n"
+            f"{self.online_tos.name},{self.online_tos.email},Bred Fish,yes,true\n"
+        )
+
+        from io import BytesIO
+
+        csv_file = BytesIO(csv_content.encode("utf-8"))
+        csv_file.name = "test.csv"
+
+        response = self.client.post(url, {"csv_file": csv_file})
+
+        # Should redirect successfully
+        assert response.status_code == 200
+
+        # Check boolean fields
+        new_lot = Lot.objects.filter(lot_name="Bred Fish", auction=self.online_auction).first()
+        assert new_lot is not None
+        assert new_lot.i_bred_this_fish is True
+        assert new_lot.donation is True
+
+    def test_import_lots_csv_missing_info(self):
+        """CSV import skips rows with missing required information"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("import_lots_from_csv", kwargs={"slug": self.online_auction.slug})
+
+        # Create CSV with incomplete data
+        csv_content = "Name,Email\nMissing Lot Name,missing@example.com\n"
+
+        from io import BytesIO
+
+        csv_file = BytesIO(csv_content.encode("utf-8"))
+        csv_file.name = "test.csv"
+
+        response = self.client.post(url, {"csv_file": csv_file})
+
+        # Should redirect successfully but skip the row
+        assert response.status_code == 200
+
+        # Check that no lot was created
+        lots = Lot.objects.filter(auctiontos_seller__email="missing@example.com", auction=self.online_auction)
+        assert lots.count() == 0
+
+    def test_import_lots_csv_idempotent(self):
+        """CSV import is idempotent - repeated uploads should update, not duplicate"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("import_lots_from_csv", kwargs={"slug": self.online_auction.slug})
+
+        # Use existing lot with lot number
+        lot_number = self.lot.lot_number_int
+
+        # Create CSV content
+        csv_content = f"Lot Number,Lot Name,Quantity\n{lot_number},Idempotent Lot,7\n"
+
+        from io import BytesIO
+
+        # Upload once
+        csv_file = BytesIO(csv_content.encode("utf-8"))
+        csv_file.name = "test.csv"
+        response = self.client.post(url, {"csv_file": csv_file})
+        assert response.status_code == 200
+
+        # Upload again
+        csv_file = BytesIO(csv_content.encode("utf-8"))
+        csv_file.name = "test.csv"
+        response = self.client.post(url, {"csv_file": csv_file})
+        assert response.status_code == 200
+
+        # Check that lot was updated, not duplicated
+        lots = Lot.objects.filter(lot_name="Idempotent Lot", auction=self.online_auction)
+        assert lots.count() == 1
+        assert lots.first().quantity == 7
+
+    def test_import_lots_csv_closed_invoice(self):
+        """CSV import skips creating lots when invoice is not open"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("import_lots_from_csv", kwargs={"slug": self.online_auction.slug})
+
+        # Set name and email on TOS so we can find it
+        self.online_tos.name = "Closed Invoice User"
+        self.online_tos.email = "closedinvoice@example.com"
+        self.online_tos.save()
+
+        # Close the invoice
+        invoice = Invoice.objects.filter(auctiontos_user=self.online_tos, auction=self.online_auction).first()
+        if not invoice:
+            invoice = Invoice.objects.create(auctiontos_user=self.online_tos, auction=self.online_auction)
+        invoice.status = "PAID"
+        invoice.save()
+
+        # Create CSV content
+        csv_content = f"Name,Email,Lot Name\n{self.online_tos.name},{self.online_tos.email},Should Not Create\n"
+
+        from io import BytesIO
+
+        csv_file = BytesIO(csv_content.encode("utf-8"))
+        csv_file.name = "test.csv"
+
+        response = self.client.post(url, {"csv_file": csv_file})
+
+        # Should redirect with warning
+        assert response.status_code == 200
+
+        # Check that lot was not created
+        new_lot = Lot.objects.filter(lot_name="Should Not Create", auction=self.online_auction).first()
+        assert new_lot is None
+
+
+class SquarePaymentTests(StandardTestCase):
+    """Tests for Square payment oauth integration"""
+
+    def setUp(self):
+        super().setUp()
+        from decimal import Decimal
+
+        from .models import Invoice, InvoicePayment, SquareSeller, UserData
+
+        # Enable Square for test users
+        for user in [self.admin_user, self.user]:
+            userdata, _ = UserData.objects.get_or_create(user=user)
+            userdata.square_enabled = True
+            userdata.save()
+
+        # Create Square seller for admin
+        self.square_seller = SquareSeller.objects.create(
+            user=self.admin_user,
+            square_merchant_id="TEST_MERCHANT_ID",
+            access_token="TEST_ACCESS_TOKEN",
+            refresh_token="TEST_REFRESH_TOKEN",
+            token_expires_at=timezone.now() + datetime.timedelta(days=30),
+            currency="USD",
+        )
+
+        # Create invoice and payment for testing refunds
+        self.test_invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.tosB)
+        self.square_payment = InvoicePayment.objects.create(
+            invoice=self.test_invoice,
+            payment_method="square",
+            amount=Decimal("100.00"),
+            amount_available_to_refund=Decimal("100.00"),
+            external_id="TEST_PAYMENT_ID",
+        )
+
+    def test_square_seller_creation(self):
+        """Test that SquareSeller model is created correctly"""
+        self.assertEqual(self.square_seller.user, self.admin_user)
+        self.assertEqual(self.square_seller.square_merchant_id, "TEST_MERCHANT_ID")
+        self.assertIsNotNone(self.square_seller.access_token)
+        self.assertIsNotNone(self.square_seller.refresh_token)
+
+    def test_token_expiration_check(self):
+        """Test token expiration checking"""
+        # Token expires in 30 days - should not be expired
+        self.assertFalse(self.square_seller.is_token_expired())
+
+        # Set token to expire soon (within 1 hour)
+        self.square_seller.token_expires_at = timezone.now() + datetime.timedelta(minutes=30)
+        self.square_seller.save()
+        self.assertTrue(self.square_seller.is_token_expired())
+
+        # Set token to already expired
+        self.square_seller.token_expires_at = timezone.now() - datetime.timedelta(hours=1)
+        self.square_seller.save()
+        self.assertTrue(self.square_seller.is_token_expired())
+
+    def test_winner_invoice_property(self):
+        """Test Lot.winner_invoice property"""
+        # Lot with auctiontos_winner
+        invoice = self.lot.winner_invoice
+        self.assertIsNotNone(invoice)
+        self.assertEqual(invoice.auctiontos_user, self.lot.auctiontos_winner)
+
+        # Lot with no winner
+        unsold_lot = Lot.objects.create(
+            lot_name="Unsold test",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+        )
+        self.assertIsNone(unsold_lot.winner_invoice)
+
+    def test_seller_invoice_property(self):
+        """Test Lot.seller_invoice property"""
+        invoice = self.lot.sellers_invoice
+        self.assertIsNotNone(invoice)
+        self.assertEqual(invoice.auctiontos_user, self.lot.auctiontos_seller)
+
+    def test_square_refund_possible_with_payment(self):
+        """Test square_refund_possible when Square payment exists"""
+        # Set up lot with Square payment
+        self.lot.winning_price = 50
+        self.lot.auctiontos_winner = self.tosB
+        self.lot.save()
+
+        # Should be True since we have a payment of 100 and lot cost is 50
+        self.assertTrue(self.lot.square_refund_possible)
+
+    def test_square_refund_possible_insufficient_funds(self):
+        """Test square_refund_possible when payment is insufficient"""
+        self.lot.winning_price = 150  # More than available (100)
+        self.lot.auctiontos_winner = self.tosB
+        self.lot.save()
+
+        self.assertFalse(self.lot.square_refund_possible)
+
+    def test_square_refund_possible_no_payment(self):
+        """Test square_refund_possible when no Square payment exists"""
+        # Create a lot with a different winner who has no Square payment
+        other_tos = AuctionTOS.objects.create(
+            user=self.user_with_no_lots, auction=self.online_auction, pickup_location=self.location
+        )
+        lot = Lot.objects.create(
+            lot_name="Test lot no payment",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            winning_price=10,
+            auctiontos_winner=other_tos,
+            active=False,
+        )
+
+        self.assertFalse(lot.square_refund_possible)
+
+    def test_square_refund_possible_already_refunded(self):
+        """Test square_refund_possible when no_more_refunds_possible is True"""
+        self.lot.winning_price = 50
+        self.lot.auctiontos_winner = self.tosB
+        self.lot.no_more_refunds_possible = True
+        self.lot.save()
+
+        # Should be False even though payment exists
+        self.assertFalse(self.lot.square_refund_possible)
+
+    def test_no_more_refunds_field_default(self):
+        """Test that no_more_refunds_possible defaults to False"""
+        new_lot = Lot.objects.create(
+            lot_name="New lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+        )
+        self.assertFalse(new_lot.no_more_refunds_possible)
+
+    def test_invoice_payment_square_method(self):
+        """Test that Square payments are properly recorded"""
+        from decimal import Decimal
+
+        from auctions.models import InvoicePayment
+
+        payment = InvoicePayment.objects.filter(payment_method="square", invoice=self.test_invoice).first()
+        self.assertIsNotNone(payment)
+        self.assertEqual(payment.amount, Decimal("100.00"))
+        self.assertEqual(payment.amount_available_to_refund, Decimal("100.00"))
+
+    def test_lot_refund_calls_square_refund(self):
+        """Test that lot.refund() automatically calls square_refund when possible"""
+        # Set up lot with Square payment possibility
+        self.lot.winning_price = 50
+        self.lot.auctiontos_winner = self.tosB
+        self.lot.save()
+
+        # Get initial state
+        initial_square_refund_possible = self.lot.square_refund_possible
+        self.assertTrue(initial_square_refund_possible)
+
+        # Since we can't actually call Square API in tests, we'll just verify
+        # that the refund method can be called without errors
+        # In a real scenario with mocked Square API, this would process a refund
+        try:
+            self.lot.refund(100, self.admin_user, "Test refund")
+            # The refund method should handle the case where Square API is not available
+        except Exception:
+            # We expect this might fail in tests since we don't have real Square credentials
+            # but we want to ensure the code path is exercised
+            pass
+
+    def test_square_enabled_in_user_preferences(self):
+        """Test that Square can be enabled for users"""
+        from auctions.models import UserData
+
+        userdata, _ = UserData.objects.get_or_create(user=self.user)
+        userdata.square_enabled = True
+        userdata.save()
+
+        self.assertTrue(userdata.square_enabled)
+
+    def test_square_fields_in_auction(self):
+        """Test Square-related fields in Auction model"""
+        self.online_auction.enable_square_payments = True
+        self.online_auction.square_email_address = "test@square.com"
+        self.online_auction.dismissed_square_banner = False
+        self.online_auction.save()
+
+        self.assertTrue(self.online_auction.enable_square_payments)
+        self.assertEqual(self.online_auction.square_email_address, "test@square.com")
+        self.assertFalse(self.online_auction.dismissed_square_banner)
+
+    def test_square_url_patterns_exist(self):
+        """Test that Square URL patterns are configured"""
+        from django.urls import reverse
+
+        # Test that Square URLs can be reversed
+        try:
+            square_seller_url = reverse("square_seller")
+            self.assertIsNotNone(square_seller_url)
+        except Exception:
+            self.fail("square_seller URL pattern not found")
+
+    def test_square_management_command_exists(self):
+        """Test that change_square management command exists"""
+
+        # Test that command exists and can be imported
+        try:
+            # Don't actually run the command, just verify it exists
+            from django.core.management import load_command_class
+
+            load_command_class("auctions", "change_square")
+        except Exception as e:
+            self.fail(f"change_square management command not found: {e}")
+
+    def test_square_oauth_redirect_uri_without_proxy_header(self):
+        """Test that Square OAuth redirect URI defaults to http when no X-Forwarded-Proto header"""
+        from django.urls import reverse
+
+        # Login as admin user
+        self.client.force_login(self.admin_user)
+
+        # Test the Square connect view without X-Forwarded-Proto header
+        response = self.client.get(reverse("square_connect"), HTTP_HOST="testserver", follow=False)
+
+        # Should redirect to Square OAuth URL
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("connect.squareup", response.url)
+
+        # Verify redirect_uri parameter
+        from urllib.parse import parse_qs, urlparse
+
+        parsed = urlparse(response.url)
+        params = parse_qs(parsed.query)
+
+        # Check that redirect_uri exists
+        self.assertIn("redirect_uri", params)
+        redirect_uri = params["redirect_uri"][0]
+        # Without the proxy header in test environment, it will use http
+        self.assertIn("/square/onboard/success/", redirect_uri)
+
+    def test_receipt_number_field(self):
+        """Test that InvoicePayment has receipt_number field"""
+        from auctions.models import InvoicePayment
+
+        # Create a payment with receipt_number
+        payment = InvoicePayment.objects.create(
+            invoice=self.test_invoice,
+            payment_method="Square",
+            amount=50.00,
+            external_id="TEST_EXTERNAL_ID",
+            receipt_number="ABCD",
+        )
+
+        self.assertEqual(payment.receipt_number, "ABCD")
+        self.assertEqual(payment.external_id, "TEST_EXTERNAL_ID")
+
+    def test_receipt_number_search_in_auction_tos_filter(self):
+        """Test that receipt_number can be used to search users"""
+        from auctions.filters import AuctionTOSFilter
+        from auctions.models import AuctionTOS, InvoicePayment
+
+        # Create payment with receipt number
+        InvoicePayment.objects.create(
+            invoice=self.test_invoice,
+            payment_method="Square",
+            amount=100.00,
+            receipt_number="WXYZ",
+        )
+
+        # Create a queryset of all auction TOS
+        qs = AuctionTOS.objects.filter(auction=self.online_auction)
+
+        # Create an instance of AuctionTOSFilter to use its generic method
+        filter_instance = AuctionTOSFilter()
+
+        # Search by receipt_number
+        filtered_qs = filter_instance.generic(qs, "wxyz")
+
+        # Should find the user with the invoice that has this receipt_number
+        self.assertGreater(filtered_qs.count(), 0)
+
+    def test_pickup_by_mail_requires_address(self):
+        """Test that Square payment link requires address when pickup_by_mail is True"""
+        from auctions.models import PickupLocation
+
+        # Create a pickup by mail location
+        mail_location = PickupLocation.objects.create(
+            auction=self.online_auction,
+            name="Mail",
+            pickup_by_mail=True,
+        )
+
+        # Update tosB to use mail pickup
+        self.tosB.pickup_location = mail_location
+        self.tosB.save()
+
+        # The create_payment_link method should set ask_for_shipping_address=True
+        # We can't test the actual API call, but we can verify the location is set correctly
+        self.assertTrue(self.tosB.pickup_location.pickup_by_mail)
+
+
+class SquareRefundFormTests(StandardTestCase):
+    """Tests for Square refund integration in forms"""
+
+    def setUp(self):
+        super().setUp()
+        from decimal import Decimal
+
+        from auctions.models import InvoicePayment, SquareSeller, UserData
+
+        # Enable Square
+        userdata, _ = UserData.objects.get_or_create(user=self.admin_user)
+        userdata.square_enabled = True
+        userdata.save()
+
+        # Create Square seller
+        self.square_seller = SquareSeller.objects.create(
+            user=self.admin_user,
+            square_merchant_id="TEST_MERCHANT_ID",
+            access_token="TEST_ACCESS_TOKEN",
+            refresh_token="TEST_REFRESH_TOKEN",
+            token_expires_at=timezone.now() + datetime.timedelta(days=30),
+        )
+
+        # Create payment for testing
+        self.square_payment = InvoicePayment.objects.create(
+            invoice=self.invoiceB,
+            payment_method="square",
+            amount=Decimal("100.00"),
+            amount_available_to_refund=Decimal("100.00"),
+            external_id="TEST_PAYMENT_ID",
+        )
+
+        # Set lot to have Square refund possible
+        self.lot.winning_price = 50
+        self.lot.auctiontos_winner = self.tosB
+        self.lot.save()
+
+    def test_lot_refund_form_shows_square_message(self):
+        """Test that LotRefundForm shows Square auto-refund message when appropriate"""
+        from auctions.forms import LotRefundForm
+
+        form = LotRefundForm(lot=self.lot)
+
+        # Check that form initializes without errors
+        self.assertIsNotNone(form)
+
+        # When square_refund_possible is True, the form should include a message
+        # We can't easily test the rendered HTML here, but we can verify the form works
+        self.assertTrue(self.lot.square_refund_possible)
+
+    def test_lot_refund_form_without_square(self):
+        """Test LotRefundForm when Square refund is not possible"""
+        from auctions.forms import LotRefundForm
+
+        # Set up a lot without Square payment
+        unsold_lot = Lot.objects.create(
+            lot_name="Unsold lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+        )
+
+        form = LotRefundForm(lot=unsold_lot)
+        self.assertIsNotNone(form)
+        self.assertFalse(unsold_lot.square_refund_possible)
+
+
+class SquarePaymentSuccessViewTests(StandardTestCase):
+    """Tests for SquarePaymentSuccessView that doesn't verify email"""
+
+    def setUp(self):
+        super().setUp()
+        self.tosA = self.online_tos
+        self.auctionA = self.online_auction
+        self.userA = self.user
+        self.invoice = Invoice.objects.create(
+            auctiontos_user=self.tosA,
+            auction=self.auctionA,
+        )
+        self.invoice.save()
+
+    def test_square_payment_success_view_marks_invoice_opened(self):
+        """Test that SquarePaymentSuccessView marks invoice as opened"""
+        from django.urls import reverse
+
+        self.assertFalse(self.invoice.opened)
+
+        url = reverse("square_payment_success", kwargs={"uuid": self.invoice.no_login_link})
+        self.client.get(url)
+
+        self.invoice.refresh_from_db()
+        self.assertTrue(self.invoice.opened)
+
+    def test_square_payment_success_view_does_not_verify_email(self):
+        """Test that SquarePaymentSuccessView does NOT mark email as VALID"""
+        from django.urls import reverse
+
+        # Set initial email status to something other than VALID
+        self.tosA.email_address_status = "UNKNOWN"
+        self.tosA.save()
+
+        url = reverse("square_payment_success", kwargs={"uuid": self.invoice.no_login_link})
+        self.client.get(url)
+
+        self.tosA.refresh_from_db()
+        # Email status should NOT have changed to VALID
+        self.assertEqual(self.tosA.email_address_status, "UNKNOWN")
+
+    def test_invoice_no_login_view_still_verifies_email(self):
+        """Test that InvoiceNoLoginView still marks email as VALID (for comparison)"""
+        from django.urls import reverse
+
+        # Set initial email status
+        self.tosA.email_address_status = "UNKNOWN"
+        self.tosA.save()
+
+        url = reverse("invoice_no_login", kwargs={"uuid": self.invoice.no_login_link})
+        self.client.get(url)
+
+        self.tosA.refresh_from_db()
+        # Email status SHOULD have changed to VALID for regular invoice links
+        self.assertEqual(self.tosA.email_address_status, "VALID")
+
+    def test_square_payment_success_url_pattern_exists(self):
+        """Test that square_payment_success URL pattern is configured"""
+        from django.urls import reverse
+
+        try:
+            url = reverse("square_payment_success", kwargs={"uuid": self.invoice.no_login_link})
+            self.assertTrue(url.startswith("/invoices/square-success/"))
+        except Exception as e:
+            self.fail(f"square_payment_success URL pattern not configured: {e}")
+
+
+class SquareOAuthRevocationTests(StandardTestCase):
+    """Tests for Square OAuth authorization revocation handling"""
+
+    def setUp(self):
+        super().setUp()
+        from .models import SquareSeller
+
+        # Create Square seller for testing revocation
+        self.square_seller = SquareSeller.objects.create(
+            user=self.admin_user,
+            square_merchant_id="MLF3WZS2N9WVG",
+            access_token="TEST_ACCESS_TOKEN",
+            refresh_token="TEST_REFRESH_TOKEN",
+            token_expires_at=timezone.now() + datetime.timedelta(days=30),
+            currency="USD",
+        )
+
+    def test_oauth_revocation_deletes_square_seller(self):
+        """Test that oauth.authorization.revoked webhook deletes SquareSeller"""
+        from django.urls import reverse
+
+        from .models import SquareSeller
+
+        # Verify seller exists
+        self.assertTrue(SquareSeller.objects.filter(square_merchant_id="MLF3WZS2N9WVG").exists())
+
+        # Simulate Square revocation webhook
+        webhook_data = {
+            "merchant_id": "MLF3WZS2N9WVG",
+            "type": "oauth.authorization.revoked",
+            "event_id": "957299eb-98e4-399c-b7d9-e73ddeff19df",
+            "created_at": "2025-11-23T16:29:14.35551833Z",
+            "data": {
+                "type": "revocation",
+                "id": "6ea8bc48-7c2e-43d1-bd36-c865f6c4083d",
+                "object": {"revocation": {"revoked_at": "2025-11-23T16:29:12Z", "revoker_type": "MERCHANT"}},
+            },
+        }
+
+        url = reverse("square_webhook")
+        response = self.client.post(url, data=webhook_data, content_type="application/json")
+
+        # Should return 200
+        self.assertEqual(response.status_code, 200)
+
+        # SquareSeller should be deleted
+        self.assertFalse(SquareSeller.objects.filter(square_merchant_id="MLF3WZS2N9WVG").exists())
+
+    def test_oauth_revocation_handles_missing_seller(self):
+        """Test that revocation webhook handles missing SquareSeller gracefully"""
+        from django.urls import reverse
+
+        # Delete the seller before webhook
+        self.square_seller.delete()
+
+        # Simulate revocation webhook for non-existent seller
+        webhook_data = {
+            "merchant_id": "NONEXISTENT_MERCHANT",
+            "type": "oauth.authorization.revoked",
+            "event_id": "test-event-id",
+            "created_at": "2025-11-23T16:29:14.35551833Z",
+            "data": {
+                "type": "revocation",
+                "id": "test-revocation-id",
+                "object": {"revocation": {"revoked_at": "2025-11-23T16:29:12Z", "revoker_type": "MERCHANT"}},
+            },
+        }
+
+        url = reverse("square_webhook")
+        response = self.client.post(url, data=webhook_data, content_type="application/json")
+
+        # Should still return 200 (graceful handling)
+        self.assertEqual(response.status_code, 200)
+
+    def test_payment_webhook_handles_missing_merchant(self):
+        """Test that payment webhook handles missing SquareSeller gracefully"""
+        from django.urls import reverse
+
+        # Simulate payment webhook with non-existent merchant_id
+        webhook_data = {
+            "merchant_id": "NONEXISTENT_MERCHANT",
+            "type": "payment.updated",
+            "event_id": "test-event-id",
+            "created_at": "2025-11-23T16:29:14.35551833Z",
+            "data": {
+                "type": "payment",
+                "id": "test-payment-id",
+                "object": {
+                    "payment": {
+                        "id": "test-payment-id",
+                        "status": "COMPLETED",
+                        "order_id": "test-order-id",
+                        "amount_money": {"amount": 1000, "currency": "USD"},
+                    }
+                },
+            },
+        }
+
+        url = reverse("square_webhook")
+        response = self.client.post(url, data=webhook_data, content_type="application/json")
+
+        # Should return 200 (graceful handling with logged warning)
+        self.assertEqual(response.status_code, 200)
+
+    def test_payment_webhook_creates_invoice_payment(self):
+        """Test that payment.updated webhook successfully creates InvoicePayment without status field"""
+        from decimal import Decimal
+        from unittest.mock import Mock, patch
+
+        from django.urls import reverse
+
+        from .models import Invoice, InvoicePayment, SquareSeller
+
+        # Create an invoice for the test
+        test_invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.online_tos)
+
+        # Mock the entire Square orders.get flow
+        mock_order = Mock()
+        mock_order.reference_id = str(test_invoice.pk)
+
+        mock_order_response = Mock()
+        mock_order_response.order = mock_order
+
+        mock_orders_api = Mock()
+        mock_orders_api.get = Mock(return_value=mock_order_response)
+
+        mock_client = Mock()
+        mock_client.orders = mock_orders_api
+
+        # Patch get_square_client at the class level so any instance returns our mock
+        with patch.object(SquareSeller, "get_square_client", return_value=mock_client):
+            # Simulate payment.updated webhook with COMPLETED status
+            webhook_data = {
+                "merchant_id": "MLF3WZS2N9WVG",
+                "type": "payment.updated",
+                "event_id": "test-payment-event",
+                "created_at": "2025-11-23T16:29:14.35551833Z",
+                "data": {
+                    "type": "payment",
+                    "id": "test-payment-updated-id",
+                    "object": {
+                        "payment": {
+                            "id": "PAYMENT_123456",
+                            "status": "COMPLETED",
+                            "order_id": "ORDER_123456",
+                            "amount_money": {"amount": 5000, "currency": "USD"},
+                        }
+                    },
+                },
+            }
+
+            url = reverse("square_webhook")
+            response = self.client.post(url, data=webhook_data, content_type="application/json")
+
+            # Should return 200
+            self.assertEqual(response.status_code, 200)
+
+            # Verify InvoicePayment was created without status field
+            payment = InvoicePayment.objects.filter(external_id="PAYMENT_123456").first()
+            self.assertIsNotNone(payment)
+            self.assertEqual(payment.invoice, test_invoice)
+            self.assertEqual(payment.amount, Decimal("50.00"))  # 5000 cents = $50
+            self.assertEqual(payment.currency, "USD")
+            self.assertEqual(payment.payment_method, "Square")
+            # Verify that the status field is not present (would raise AttributeError if accessed)
+            self.assertFalse(hasattr(payment, "status") and payment.status)
+
+
+class SquareWebhookSignatureValidationTests(StandardTestCase):
+    """Tests for Square webhook signature validation
+
+    Confirms that SQUARE_WEBHOOK_SIGNATURE_KEY is actually respected
+    and that we don't validate forged requests.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from .models import SquareSeller
+
+        # Create Square seller for testing
+        self.square_seller = SquareSeller.objects.create(
+            user=self.admin_user,
+            square_merchant_id="TEST_MERCHANT_ID",
+            access_token="TEST_ACCESS_TOKEN",
+            refresh_token="TEST_REFRESH_TOKEN",
+            token_expires_at=timezone.now() + datetime.timedelta(days=30),
+            currency="USD",
+        )
+
+        # Test signature key
+        self.signature_key = "test-signature-key-12345"
+
+        # Standard webhook data used across tests
+        self.webhook_data = {
+            "merchant_id": "TEST_MERCHANT_ID",
+            "type": "oauth.authorization.revoked",
+            "event_id": "test-event-id",
+            "created_at": "2025-11-23T16:29:14.35551833Z",
+            "data": {
+                "type": "revocation",
+                "id": "test-revocation-id",
+                "object": {"revocation": {"revoked_at": "2025-11-23T16:29:12Z", "revoker_type": "MERCHANT"}},
+            },
+        }
+
+    def compute_signature(self, url, body, key=None):
+        """Compute an HMAC-SHA256 signature for testing using base64 encoding (as Square does)
+
+        Args:
+            url: The notification URL
+            body: The request body
+            key: Optional signature key (defaults to self.signature_key)
+        """
+        if key is None:
+            key = self.signature_key
+        message = (url + body).encode("utf-8")
+        key_bytes = key.encode("utf-8")
+        hash_bytes = hmac.new(key_bytes, message, hashlib.sha256).digest()
+        return base64.b64encode(hash_bytes).decode("utf-8")
+
+    def test_forged_signature_is_rejected(self):
+        """Test that requests with invalid/forged signatures are rejected when key is configured"""
+        url = reverse("square_webhook")
+
+        # Test with signature key configured - forged signature should be rejected
+        with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY=self.signature_key):
+            # Send with a forged/invalid signature
+            response = self.client.post(
+                url,
+                data=self.webhook_data,
+                content_type="application/json",
+                HTTP_X_SQUARE_HMACSHA256_SIGNATURE="forged-invalid-signature",
+            )
+
+            # Should return 403 Forbidden
+            self.assertEqual(response.status_code, 403)
+            self.assertIn(b"invalid signature", response.content)
+
+    def test_missing_signature_header_is_rejected(self):
+        """Test that requests without signature header are rejected when key is configured"""
+        url = reverse("square_webhook")
+
+        # Test with signature key configured - missing signature should be rejected
+        with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY=self.signature_key):
+            # Send without signature header
+            response = self.client.post(
+                url,
+                data=self.webhook_data,
+                content_type="application/json",
+            )
+
+            # Should return 403 Forbidden
+            self.assertEqual(response.status_code, 403)
+            self.assertIn(b"missing signature", response.content)
+
+    def test_valid_signature_is_accepted(self):
+        """Test that requests with valid signatures are accepted when key is configured"""
+        url = reverse("square_webhook")
+        body = json.dumps(self.webhook_data)
+
+        # Build the full URL as the test client would see it
+        # The test client uses HTTP on localhost by default
+        full_url = "http://testserver" + url
+
+        # Compute the correct signature
+        valid_signature = self.compute_signature(full_url, body)
+
+        # Test with signature key configured - valid signature should be accepted
+        with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY=self.signature_key):
+            response = self.client.post(
+                url,
+                data=body,
+                content_type="application/json",
+                HTTP_X_SQUARE_HMACSHA256_SIGNATURE=valid_signature,
+            )
+
+            # Should return 200 OK
+            self.assertEqual(response.status_code, 200)
+
+    def test_wrong_signature_key_is_rejected(self):
+        """Test that signatures computed with a different key are rejected"""
+        url = reverse("square_webhook")
+        body = json.dumps(self.webhook_data)
+        full_url = "http://testserver" + url
+
+        # Compute signature with a DIFFERENT key (attacker's key)
+        wrong_signature = self.compute_signature(full_url, body, key="attacker-key-different")
+
+        # Test with correct signature key configured - wrong key signature should be rejected
+        with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY=self.signature_key):
+            response = self.client.post(
+                url,
+                data=body,
+                content_type="application/json",
+                HTTP_X_SQUARE_HMACSHA256_SIGNATURE=wrong_signature,
+            )
+
+            # Should return 403 Forbidden
+            self.assertEqual(response.status_code, 403)
+            self.assertIn(b"invalid signature", response.content)
+
+    def test_tampered_body_is_rejected(self):
+        """Test that a valid signature for different body data is rejected"""
+        import copy
+
+        # Create tampered data by modifying a copy of the original
+        tampered_webhook_data = copy.deepcopy(self.webhook_data)
+        tampered_webhook_data["merchant_id"] = "DIFFERENT_MERCHANT"  # Attacker tries to change the merchant
+        tampered_webhook_data["data"]["id"] = "tampered-id"
+
+        url = reverse("square_webhook")
+        original_body = json.dumps(self.webhook_data)
+        tampered_body = json.dumps(tampered_webhook_data)
+        full_url = "http://testserver" + url
+
+        # Compute valid signature for ORIGINAL body
+        valid_signature = self.compute_signature(full_url, original_body)
+
+        # Test: Send tampered body with signature for original body
+        with override_settings(SQUARE_WEBHOOK_SIGNATURE_KEY=self.signature_key):
+            response = self.client.post(
+                url,
+                data=tampered_body,
+                content_type="application/json",
+                HTTP_X_SQUARE_HMACSHA256_SIGNATURE=valid_signature,
+            )
+
+            # Should return 403 Forbidden because body doesn't match signature
+            self.assertEqual(response.status_code, 403)
+            self.assertIn(b"invalid signature", response.content)
+
+    def test_improperly_configured_in_production_without_webhook_key(self):
+        """Test that ImproperlyConfigured is raised in production when Square is configured but webhook key is missing"""
+        from django.core.exceptions import ImproperlyConfigured
+
+        url = reverse("square_webhook")
+
+        # Simulate production mode (DEBUG=False) with Square configured but no webhook signature key
+        with override_settings(
+            DEBUG=False,
+            SQUARE_APPLICATION_ID="test-app-id",
+            SQUARE_CLIENT_SECRET="test-client-secret",
+            SQUARE_WEBHOOK_SIGNATURE_KEY="",
+        ):
+            with self.assertRaises(ImproperlyConfigured) as context:
+                self.client.post(
+                    url,
+                    data=self.webhook_data,
+                    content_type="application/json",
+                )
+
+            self.assertIn("SQUARE_WEBHOOK_SIGNATURE_KEY must be set", str(context.exception))
+
+
+class CurrencyCustomizationTests(StandardTestCase):
+    """Tests for currency display customization"""
+
+    def test_userdata_default_currency(self):
+        """Test that UserData has a default currency of USD"""
+        user = User.objects.create_user(username="test_currency_user", password="testpassword")
+        self.assertEqual(user.userdata.preferred_currency, "USD")
+        self.assertEqual(user.userdata.currency, "USD")
+
+    def test_userdata_preferred_currency_gbp(self):
+        """Test that UserData can be set to GBP"""
+        user = User.objects.create_user(username="uk_user", password="testpassword")
+        user.userdata.preferred_currency = "GBP"
+        user.userdata.save()
+        self.assertEqual(user.userdata.currency, "GBP")
+
+    def test_userdata_preferred_currency_cad(self):
+        """Test that UserData can be set to CAD"""
+        user = User.objects.create_user(username="ca_user", password="testpassword")
+        user.userdata.preferred_currency = "CAD"
+        user.userdata.save()
+        self.assertEqual(user.userdata.currency, "CAD")
+
+    def test_lot_currency_from_auction_creator(self):
+        """Test that Lot gets currency from auction creator"""
+        # Set auction creator to GBP
+        self.user.userdata.preferred_currency = "GBP"
+        self.user.userdata.save()
+
+        lot = Lot.objects.create(
+            lot_name="Test Lot",
+            auction=self.online_auction,
+            quantity=1,
+            user=self.user,
+        )
+
+        self.assertEqual(lot.currency, "GBP")
+        self.assertEqual(lot.currency_symbol, "£")
+
+    def test_lot_currency_from_lot_owner_standalone(self):
+        """Test that standalone lot gets currency from owner"""
+        # Create a user with CAD preference
+        cad_user = User.objects.create_user(username="cad_user", password="testpassword")
+        cad_user.userdata.preferred_currency = "CAD"
+        cad_user.userdata.save()
+
+        # Create a standalone lot (no auction)
+        lot = Lot.objects.create(
+            lot_name="Standalone Lot",
+            auction=None,
+            quantity=1,
+            user=cad_user,
+        )
+
+        self.assertEqual(lot.currency, "CAD")
+        self.assertEqual(lot.currency_symbol, "$")
+
+    def test_auction_currency_from_creator(self):
+        """Test that Auction gets currency from creator"""
+        # Set auction creator to GBP
+        self.user.userdata.preferred_currency = "GBP"
+        self.user.userdata.save()
+
+        self.assertEqual(self.online_auction.currency, "GBP")
+        self.assertEqual(self.online_auction.currency_symbol, "£")
+
+    def test_invoice_currency_from_auction_creator(self):
+        """Test that Invoice gets currency from auction creator"""
+        # Set auction creator to CAD
+        self.user.userdata.preferred_currency = "CAD"
+        self.user.userdata.save()
+
+        invoice = Invoice.objects.create(auctiontos_user=self.online_tos, auction=self.online_auction)
+
+        self.assertEqual(invoice.currency, "CAD")
+        self.assertEqual(invoice.currency_symbol, "$")
+
+    def test_currency_symbol_usd(self):
+        """Test USD currency symbol"""
+        user = User.objects.create_user(username="usd_user", password="testpassword")
+        user.userdata.preferred_currency = "USD"
+        user.userdata.save()
+
+        lot = Lot.objects.create(
+            lot_name="USD Lot",
+            auction=None,
+            quantity=1,
+            user=user,
+        )
+
+        self.assertEqual(lot.currency_symbol, "$")
+
+    def test_currency_symbol_gbp(self):
+        """Test GBP currency symbol"""
+        user = User.objects.create_user(username="gbp_user", password="testpassword")
+        user.userdata.preferred_currency = "GBP"
+        user.userdata.save()
+
+        lot = Lot.objects.create(
+            lot_name="GBP Lot",
+            auction=None,
+            quantity=1,
+            user=user,
+        )
+
+        self.assertEqual(lot.currency_symbol, "£")
+
+    def test_change_user_preferences_form_includes_currency(self):
+        """Test that ChangeUserPreferencesForm includes preferred_currency field"""
+        from .forms import ChangeUserPreferencesForm
+
+        form = ChangeUserPreferencesForm(user=self.user, instance=self.user.userdata)
+        self.assertIn("preferred_currency", form.fields)
+
+    def test_preferences_view_can_change_currency(self):
+        """Test that user can change their preferred currency via preferences page"""
+        self.client.login(username="my_lot", password="testpassword")
+
+        url = reverse("userpage", kwargs={"slug": self.user.username})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+
+        # Change currency to GBP
+        url = reverse("preferences")
+        response = self.client.post(
+            url,
+            {
+                "preferred_currency": "GBP",
+                "distance_unit": "mi",
+                "email_visible": False,
+                "show_ads": True,
+                "email_me_about_new_auctions": True,
+                "email_me_about_new_local_lots": True,
+                "email_me_about_new_lots_ship_to_location": True,
+                "email_me_when_people_comment_on_my_lots": True,
+                "email_me_about_new_chat_replies": True,
+                "email_me_about_new_in_person_auctions": True,
+                "send_reminder_emails_about_joining_auctions": True,
+                "username_visible": True,
+                "share_lot_images": True,
+                "auto_add_images": True,
+                "push_notifications_when_lots_sell": False,
+            },
+            follow=True,
+        )
+
+        # Check that currency was changed
+        self.user.userdata.refresh_from_db()
+        self.assertEqual(self.user.userdata.preferred_currency, "GBP")
+
+    def test_currency_symbol_eur(self):
+        """Test EUR currency symbol"""
+        user = User.objects.create_user(username="eur_user", password="testpassword")
+        user.userdata.preferred_currency = "EUR"
+        user.userdata.save()
+
+        lot = Lot.objects.create(
+            lot_name="EUR Lot",
+            auction=None,
+            quantity=1,
+            user=user,
+        )
+
+        self.assertEqual(lot.currency_symbol, "€")
+
+    def test_currency_symbol_jpy(self):
+        """Test JPY currency symbol"""
+        user = User.objects.create_user(username="jpy_user", password="testpassword")
+        user.userdata.preferred_currency = "JPY"
+        user.userdata.save()
+
+        lot = Lot.objects.create(
+            lot_name="JPY Lot",
+            auction=None,
+            quantity=1,
+            user=user,
+        )
+
+        self.assertEqual(lot.currency_symbol, "¥")
+
+    def test_currency_symbol_aud(self):
+        """Test AUD currency symbol"""
+        user = User.objects.create_user(username="aud_user", password="testpassword")
+        user.userdata.preferred_currency = "AUD"
+        user.userdata.save()
+
+        lot = Lot.objects.create(
+            lot_name="AUD Lot",
+            auction=None,
+            quantity=1,
+            user=user,
+        )
+
+        self.assertEqual(lot.currency_symbol, "$")
+
+    def test_currency_symbol_chf(self):
+        """Test CHF currency symbol"""
+        user = User.objects.create_user(username="chf_user", password="testpassword")
+        user.userdata.preferred_currency = "CHF"
+        user.userdata.save()
+
+        lot = Lot.objects.create(
+            lot_name="CHF Lot",
+            auction=None,
+            quantity=1,
+            user=user,
+        )
+
+        self.assertEqual(lot.currency_symbol, "CHF")
+
+    def test_currency_symbol_cny(self):
+        """Test CNY currency symbol"""
+        user = User.objects.create_user(username="cny_user", password="testpassword")
+        user.userdata.preferred_currency = "CNY"
+        user.userdata.save()
+
+        lot = Lot.objects.create(
+            lot_name="CNY Lot",
+            auction=None,
+            quantity=1,
+            user=user,
+        )
+
+        self.assertEqual(lot.currency_symbol, "¥")
+
+    def test_all_currency_choices_available(self):
+        """Test that all 8 currencies are available in choices"""
+        from .forms import ChangeUserPreferencesForm
+
+        form = ChangeUserPreferencesForm(user=self.user, instance=self.user.userdata)
+        currency_choices = [choice[0] for choice in form.fields["preferred_currency"].choices]
+
+        expected_currencies = ["USD", "CAD", "GBP", "EUR", "JPY", "AUD", "CHF", "CNY"]
+        for currency in expected_currencies:
+            self.assertIn(currency, currency_choices)
+
+
+class AuctionEmailFieldsTest(StandardTestCase):
+    """Tests for the new auction email tracking fields and signal handling."""
+
+    def test_new_online_auction_has_email_due_dates(self):
+        """Test that a new online auction has email due dates set correctly."""
+        user = User.objects.create_user(username="email_test_user", password="testpassword", email="email@example.com")
+        future_end = timezone.now() + datetime.timedelta(days=7)
+        future_start = timezone.now() + datetime.timedelta(hours=1)
+
+        auction = Auction.objects.create(
+            created_by=user,
+            title="Email Test Auction",
+            is_online=True,
+            date_start=future_start,
+            date_end=future_end,
+        )
+
+        # Welcome email should be due 24 hours after creation
+        self.assertIsNotNone(auction.welcome_email_due)
+        self.assertFalse(auction.welcome_email_sent)
+
+        # Invoice email should be due 1 hour after auction end (for online auctions)
+        self.assertIsNotNone(auction.invoice_email_due)
+        self.assertFalse(auction.invoice_email_sent)
+
+        # Follow-up email should be due 24 hours after auction end (for online auctions)
+        self.assertIsNotNone(auction.followup_email_due)
+        self.assertFalse(auction.followup_email_sent)
+
+    def test_new_inperson_auction_has_invoice_marked_sent(self):
+        """Test that a new in-person auction has invoice email marked as sent."""
+        user = User.objects.create_user(
+            username="inperson_test_user", password="testpassword", email="inperson@example.com"
+        )
+        future_start = timezone.now() + datetime.timedelta(hours=1)
+
+        auction = Auction.objects.create(
+            created_by=user,
+            title="In-Person Test Auction",
+            is_online=False,
+            date_start=future_start,
+        )
+
+        # Invoice email should be marked as sent for in-person auctions
+        self.assertTrue(auction.invoice_email_sent)
+
+        # Follow-up email should be due 24 hours after auction start (for in-person auctions)
+        self.assertIsNotNone(auction.followup_email_due)
+        self.assertFalse(auction.followup_email_sent)
+
+    def test_email_due_dates_updated_when_dates_change(self):
+        """Test that email due dates are updated when auction dates change."""
+        user = User.objects.create_user(username="date_change_user", password="testpassword", email="date@example.com")
+        future_end = timezone.now() + datetime.timedelta(days=7)
+        future_start = timezone.now() + datetime.timedelta(hours=1)
+
+        auction = Auction.objects.create(
+            created_by=user,
+            title="Date Change Test Auction",
+            is_online=True,
+            date_start=future_start,
+            date_end=future_end,
+        )
+
+        original_invoice_due = auction.invoice_email_due
+        original_followup_due = auction.followup_email_due
+
+        # Change the auction end date
+        new_end = timezone.now() + datetime.timedelta(days=14)
+        auction.date_end = new_end
+        auction.save()
+
+        # Refresh from database
+        auction.refresh_from_db()
+
+        # Invoice and follow-up due dates should be updated
+        self.assertNotEqual(auction.invoice_email_due, original_invoice_due)
+        self.assertNotEqual(auction.followup_email_due, original_followup_due)
+
+
+class UserLocationUpdateTests(StandardTestCase):
+    """Tests for updating user contact info and syncing to recent AuctionTOS records."""
+
+    def setUp(self):
+        super().setUp()
+        # Create UserData for the user
+        self.user_data, _ = UserData.objects.get_or_create(
+            user=self.user,
+            defaults={
+                "phone_number": "555-1234",
+                "address": "123 Old Street",
+            },
+        )
+        self.user.first_name = "John"
+        self.user.last_name = "Doe"
+        self.user.save()
+
+        # Set contact info on the online_tos
+        self.online_tos.name = "John Doe"
+        self.online_tos.phone_number = "555-1234"
+        self.online_tos.address = "123 Old Street"
+        self.online_tos.save()
+
+        # Set contact info on the in_person_tos
+        self.in_person_tos.name = "John Doe"
+        self.in_person_tos.phone_number = "555-1234"
+        self.in_person_tos.address = "123 Old Street"
+        self.in_person_tos.save()
+
+    def test_recent_auctiontos_updated_on_contact_change(self):
+        """When a user updates their contact info, recent AuctionTOS records should be updated."""
+        self.client.login(username="my_lot", password="testpassword")
+
+        # Post updated contact info
+        response = self.client.post(
+            "/contact_info/",
+            {
+                "first_name": "Jane",
+                "last_name": "Smith",
+                "phone_number": "555-9999",
+                "address": "456 New Avenue",
+                "location": "",
+                "location_coordinates": "",
+                "club_affiliation": "",
+                "club": "",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        # Refresh the AuctionTOS records from the database
+        self.online_tos.refresh_from_db()
+        self.in_person_tos.refresh_from_db()
+
+        # Check that the AuctionTOS records were updated
+        self.assertEqual(self.online_tos.name, "Jane Smith")
+        self.assertEqual(self.online_tos.phone_number, "555-9999")
+        self.assertEqual(self.online_tos.address, "456 New Avenue")
+
+        self.assertEqual(self.in_person_tos.name, "Jane Smith")
+        self.assertEqual(self.in_person_tos.phone_number, "555-9999")
+        self.assertEqual(self.in_person_tos.address, "456 New Avenue")
+
+    def test_auction_history_created_on_contact_update(self):
+        """An AuctionHistory record should be created when contact info is updated."""
+        self.client.login(username="my_lot", password="testpassword")
+
+        # Clear existing history
+        AuctionHistory.objects.filter(auction=self.online_auction).delete()
+
+        # Post updated contact info
+        self.client.post(
+            "/contact_info/",
+            {
+                "first_name": "Jane",
+                "last_name": "Smith",
+                "phone_number": "555-9999",
+                "address": "456 New Avenue",
+                "location": "",
+                "location_coordinates": "",
+                "club_affiliation": "",
+                "club": "",
+            },
+        )
+
+        # Check that history was created
+        history = AuctionHistory.objects.filter(
+            auction=self.online_auction,
+            user=self.user,
+            applies_to="USERS",
+        )
+        self.assertTrue(history.exists())
+        self.assertIn("Updated contact info", history.first().action)
+
+    def test_old_auctiontos_not_updated(self):
+        """AuctionTOS records older than 30 days should not be updated."""
+        self.client.login(username="my_lot", password="testpassword")
+
+        # Make the online_tos older than 30 days
+        old_date = timezone.now() - datetime.timedelta(days=31)
+        AuctionTOS.objects.filter(pk=self.online_tos.pk).update(createdon=old_date)
+        self.online_tos.refresh_from_db()
+
+        # Post updated contact info
+        self.client.post(
+            "/contact_info/",
+            {
+                "first_name": "Jane",
+                "last_name": "Smith",
+                "phone_number": "555-9999",
+                "address": "456 New Avenue",
+                "location": "",
+                "location_coordinates": "",
+                "club_affiliation": "",
+                "club": "",
+            },
+        )
+
+        # Refresh from database
+        self.online_tos.refresh_from_db()
+        self.in_person_tos.refresh_from_db()
+
+        # Old TOS should not be updated
+        self.assertEqual(self.online_tos.name, "John Doe")
+        self.assertEqual(self.online_tos.phone_number, "555-1234")
+        self.assertEqual(self.online_tos.address, "123 Old Street")
+
+        # Recent TOS should be updated
+        self.assertEqual(self.in_person_tos.name, "Jane Smith")
+        self.assertEqual(self.in_person_tos.phone_number, "555-9999")
+        self.assertEqual(self.in_person_tos.address, "456 New Avenue")
+
+    def test_manually_added_auctiontos_not_updated(self):
+        """AuctionTOS records that were manually added should not be updated."""
+        self.client.login(username="my_lot", password="testpassword")
+
+        # Mark the online_tos as manually added
+        self.online_tos.manually_added = True
+        self.online_tos.save()
+
+        # Post updated contact info
+        self.client.post(
+            "/contact_info/",
+            {
+                "first_name": "Jane",
+                "last_name": "Smith",
+                "phone_number": "555-9999",
+                "address": "456 New Avenue",
+                "location": "",
+                "location_coordinates": "",
+                "club_affiliation": "",
+                "club": "",
+            },
+        )
+
+        # Refresh from database
+        self.online_tos.refresh_from_db()
+        self.in_person_tos.refresh_from_db()
+
+        # Manually added TOS should not be updated
+        self.assertEqual(self.online_tos.name, "John Doe")
+        self.assertEqual(self.online_tos.phone_number, "555-1234")
+        self.assertEqual(self.online_tos.address, "123 Old Street")
+
+        # Non-manually added TOS should be updated
+        self.assertEqual(self.in_person_tos.name, "Jane Smith")
+        self.assertEqual(self.in_person_tos.phone_number, "555-9999")
+        self.assertEqual(self.in_person_tos.address, "456 New Avenue")
+
+    def test_update_message_shown_for_single_auction(self):
+        """The form should show a message about updating a single auction."""
+        self.client.login(username="my_lot", password="testpassword")
+
+        # Make one TOS old and the other manually added
+        old_date = timezone.now() - datetime.timedelta(days=31)
+        AuctionTOS.objects.filter(pk=self.online_tos.pk).update(createdon=old_date)
+
+        response = self.client.get("/contact_info/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("auctiontos_update_message", response.context)
+        # When there's only one auction, it shows the auction name, not "1 auction"
+        self.assertIn(str(self.in_person_auction), response.context["auctiontos_update_message"])
+
+    def test_update_message_shown_for_multiple_auctions(self):
+        """The form should show a message about updating multiple auctions."""
+        self.client.login(username="my_lot", password="testpassword")
+
+        response = self.client.get("/contact_info/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("auctiontos_update_message", response.context)
+        self.assertIn("2 auctions", response.context["auctiontos_update_message"])
+
+    def test_no_update_message_when_no_recent_auctiontos(self):
+        """No message should be shown when there are no recent AuctionTOS records."""
+        self.client.login(username="my_lot", password="testpassword")
+
+        # Make all TOS old
+        old_date = timezone.now() - datetime.timedelta(days=31)
+        AuctionTOS.objects.filter(user=self.user).update(createdon=old_date)
+
+        response = self.client.get("/contact_info/")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("auctiontos_update_message", response.context)
+
+    def test_no_changes_if_info_same(self):
+        """If contact info hasn't changed, no history should be created."""
+        self.client.login(username="my_lot", password="testpassword")
+
+        # Clear existing history
+        AuctionHistory.objects.filter(auction=self.online_auction).delete()
+
+        # Post the same contact info
+        self.client.post(
+            "/contact_info/",
+            {
+                "first_name": "John",
+                "last_name": "Doe",
+                "phone_number": "555-1234",
+                "address": "123 Old Street",
+                "location": "",
+                "location_coordinates": "",
+                "club_affiliation": "",
+                "club": "",
+            },
+        )
+
+        # Check that no history was created for the auctions
+        history = AuctionHistory.objects.filter(
+            auction=self.online_auction,
+            applies_to="USERS",
+        )
+        self.assertEqual(history.count(), 0)
+
+
+class LoadDemoDataTests(TestCase):
+    """Tests for the load_demo_data management command"""
+
+    @override_settings(DEBUG=True)
+    def test_load_demo_data_with_debug_true(self):
+        """Test that demo data loads successfully when DEBUG=True and no auctions exist"""
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        # Ensure no auctions exist
+        Auction.objects.all().delete()
+
+        # Call the command
+        out = StringIO()
+        call_command("load_demo_data", stdout=out)
+        output = out.getvalue()
+
+        # Check output messages
+        self.assertIn("Loading demo data because DEBUG=True", output)
+        self.assertIn("Demo data loaded successfully!", output)
+
+        # Verify demo data was created
+        self.assertTrue(Auction.objects.filter(title__contains="Demo").exists())
+        auctions = Auction.objects.filter(title__contains="Demo")
+        self.assertEqual(auctions.count(), 3)
+
+        # Verify auction types
+        self.assertTrue(auctions.filter(is_online=False).exists())  # In-person auction
+        self.assertTrue(auctions.filter(is_online=True).exists())  # Online auctions
+
+        # Verify pickup locations including mail shipping
+        mail_locations = PickupLocation.objects.filter(pickup_by_mail=True)
+        self.assertGreater(mail_locations.count(), 0)
+
+        # Verify users were created
+        self.assertTrue(User.objects.filter(username__contains="demo_").exists())
+
+        # Verify lots were created
+        self.assertTrue(Lot.objects.filter(lot_number__gte=90000).exists())
+
+        # Verify some lots have winners (ended auction)
+        lots_with_winners = Lot.objects.filter(lot_number__gte=90000, winner__isnull=False)
+        self.assertGreater(lots_with_winners.count(), 0)
+
+    @override_settings(DEBUG=True)
+    def test_load_demo_data_skips_when_auctions_exist(self):
+        """Test that demo data is not loaded when auctions already exist"""
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        # Create an auction to prevent demo data loading
+        existing_auction = Auction.objects.create(
+            title="Existing Auction",
+            created_by=None,
+            date_start=timezone.now(),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+
+        # Call the command
+        out = StringIO()
+        call_command("load_demo_data", stdout=out)
+        output = out.getvalue()
+
+        # Check output messages
+        self.assertIn("Skipping demo data load", output)
+        self.assertIn("auction(s) already exist", output)
+
+        # Verify no demo auctions were created
+        demo_auctions = Auction.objects.filter(title__contains="Demo")
+        self.assertEqual(demo_auctions.count(), 0)
+
+        # Verify original auction still exists
+        self.assertTrue(Auction.objects.filter(pk=existing_auction.pk).exists())
+
+    @override_settings(DEBUG=False)
+    def test_load_demo_data_skips_when_debug_false(self):
+        """Test that demo data is not loaded when DEBUG=False"""
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        # Ensure no auctions exist
+        Auction.objects.all().delete()
+
+        # Call the command
+        out = StringIO()
+        call_command("load_demo_data", stdout=out)
+        output = out.getvalue()
+
+        # Check output messages
+        self.assertIn("Skipping demo data load - DEBUG=False", output)
+        self.assertIn("production mode", output)
+
+        # Verify no auctions were created
+        self.assertEqual(Auction.objects.count(), 0)

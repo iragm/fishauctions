@@ -24,6 +24,7 @@ from django_recaptcha.fields import ReCaptchaField
 from django_recaptcha.widgets import ReCaptchaV2Invisible
 from django_summernote.widgets import SummernoteWidget
 
+from .helper_functions import get_currency_symbol
 from .models import (
     Auction,
     AuctionTOS,
@@ -35,6 +36,7 @@ from .models import (
     LotImage,
     PayPalSeller,
     PickupLocation,
+    SquareSeller,
     UserBan,
     UserData,
     UserLabelPrefs,
@@ -402,6 +404,8 @@ class WinnerLot(forms.Form):
     def __init__(self, auction, *args, **kwargs):
         self.auction_pk = auction.pk
         super().__init__(*args, **kwargs)
+        # Get currency symbol from auction creator
+        currency_symbol = auction.currency_symbol if auction else "$"
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_class = "form"
@@ -412,7 +416,7 @@ class WinnerLot(forms.Form):
             "auction",
             "lot",
             "winner",
-            PrependedAppendedText("winning_price", "$", ".00"),
+            PrependedAppendedText("winning_price", currency_symbol, ".00"),
             # Div(
             #     Div('lot',css_class='col-md-5',),
             #     Div('winner',css_class='col-md-3',),
@@ -453,6 +457,8 @@ class WinnerLotSimpleImages(WinnerLotSimple):
 
     def __init__(self, auction, *args, **kwargs):
         super().__init__(auction, *args, **kwargs)
+        # Get currency symbol from auction creator
+        currency_symbol = auction.currency_symbol if auction else "$"
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_class = "form"
@@ -474,7 +480,7 @@ class WinnerLotSimpleImages(WinnerLotSimple):
             Div(
                 Div("lot", css_class="col-md-3"),
                 Div(
-                    PrependedAppendedText("winning_price", "$", ".00"),
+                    PrependedAppendedText("winning_price", currency_symbol, ".00"),
                     css_class="col-md-4",
                 ),
                 Div("winner", css_class="col-md-3"),
@@ -1290,6 +1296,12 @@ class LotRefundForm(forms.ModelForm):
             self.fields["partial_refund_percent"].widget = HiddenInput()
         else:
             self.fields["banned"].widget = HiddenInput()
+
+        # Add Square refund info message if applicable
+        square_refund_msg = ""
+        if self.lot.square_refund_possible and not self.lot.no_more_refunds_possible:
+            square_refund_msg = '<div class="alert alert-info mt-3"><i class="bi bi-square"></i> <strong>Square refund will be automatically issued</strong> when you save this form.</div>'
+
         save_button_html = f'<button hx-post="{reverse("lot_refund", kwargs={"pk": self.lot.pk})}" hx-target="#modals-here" type="submit" class="btn bg-success float-right ms-2">Save</button>'
         self.helper = FormHelper()
         self.helper.form_method = "post"
@@ -1306,6 +1318,7 @@ class LotRefundForm(forms.ModelForm):
                 ),
                 css_class="col-md-12",
             ),
+            HTML(square_refund_msg) if square_refund_msg else Div(),
             Div(
                 Div(
                     "banned",
@@ -1729,6 +1742,7 @@ class AuctionEditForm(forms.ModelForm):
             "use_reference_link",
             "use_description",
             "enable_online_payments",
+            "enable_square_payments",
         ]
         widgets = {
             "date_start": DateTimePickerInput(),
@@ -1764,6 +1778,15 @@ class AuctionEditForm(forms.ModelForm):
                 # show payments option
                 pass
                 self.fields["enable_online_payments"].widget = forms.HiddenInput()
+
+        square_seller = SquareSeller.objects.filter(user=self.instance.created_by).first()
+        if square_seller:
+            self.fields["enable_square_payments"].help_text += f"<br>Payments sent to {square_seller}"
+        else:
+            # Square requires OAuth - no fallback for superusers
+            # Hide the field if seller hasn't linked their Square account
+            if not self.instance.created_by.userdata.square_enabled:
+                self.fields["enable_square_payments"].widget = forms.HiddenInput()
         # self.fields['notes'].help_text = "Foo"
         if self.instance.is_online:
             self.fields[
@@ -1797,6 +1820,18 @@ class AuctionEditForm(forms.ModelForm):
         self.fields["user_cut"].initial = 100 - self.instance.winning_bid_percent_to_club
         self.fields["club_member_cut"].initial = 100 - self.instance.winning_bid_percent_to_club_for_club_members
 
+        # Get currency symbol from the auction creator (when editing) or current user (when creating)
+        if self.instance and self.instance.pk and self.instance.created_by:
+            # Editing an existing auction - use the auction creator's currency
+            currency = self.instance.created_by.userdata.currency
+        elif self.user and hasattr(self.user, "userdata"):
+            # Creating a new auction - use the current user's currency
+            currency = self.user.userdata.currency
+        else:
+            # Fallback to USD
+            currency = "USD"
+        currency_symbol = get_currency_symbol(currency)
+
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_id = "auction-form"
@@ -1829,13 +1864,13 @@ class AuctionEditForm(forms.ModelForm):
             Div(
                 PrependedAppendedText(
                     "unsold_lot_fee",
-                    "$",
+                    currency_symbol,
                     ".00",
                     wrapper_class="col-lg-3",
                 ),
                 PrependedAppendedText(
                     "lot_entry_fee",
-                    "$",
+                    currency_symbol,
                     ".00",
                     wrapper_class="col-lg-3",
                 ),
@@ -1853,7 +1888,7 @@ class AuctionEditForm(forms.ModelForm):
                 ),
                 PrependedAppendedText(
                     "force_donation_threshold",
-                    "$",
+                    currency_symbol,
                     ".00",
                     wrapper_class="col-lg-3",
                 ),
@@ -1877,7 +1912,7 @@ class AuctionEditForm(forms.ModelForm):
                 ),
                 PrependedAppendedText(
                     "lot_entry_fee_for_club_members",
-                    "$",
+                    currency_symbol,
                     ".00",
                     wrapper_class="col-lg-3",
                 ),
@@ -2013,7 +2048,11 @@ class AuctionEditForm(forms.ModelForm):
                 ),
                 Div(
                     "enable_online_payments",
-                    css_class="col-md-6",
+                    css_class="col-md-3",
+                ),
+                Div(
+                    "enable_square_payments",
+                    css_class="col-md-3",
                 ),
                 Div(
                     "invoice_payment_instructions",
@@ -2759,6 +2798,7 @@ class ChangeUserPreferencesForm(forms.ModelForm):
             "email_visible",
             "show_ads",
             "distance_unit",
+            "preferred_currency",
             "email_me_about_new_auctions",
             "email_me_about_new_auctions_distance",
             "email_me_about_new_local_lots",
@@ -2833,6 +2873,10 @@ class ChangeUserPreferencesForm(forms.ModelForm):
                 ),
                 Div(
                     "distance_unit",
+                    css_class="col-md-4",
+                ),
+                Div(
+                    "preferred_currency",
                     css_class="col-md-4",
                 ),
                 css_class="row",

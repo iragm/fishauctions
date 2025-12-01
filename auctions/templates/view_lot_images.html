@@ -2,6 +2,7 @@
 {% block title %}{{ lot.lot_name }}{% if lot.ended %} (Ended){% endif %}{% endblock %}
 {% load static %}
 {% load webpush_notifications %}
+{% load currency_filters %}
 {% block extra_head %}
     {% webpush_header %}
 {% endblock %}
@@ -181,7 +182,7 @@ function deactivate_lot() {
                                         </li>
                                     {% endfor %}
                                 </ul>
-                        {% endif %}
+                            {% endif %}
                         </div>
                         </div>
                     {% endif %}
@@ -313,7 +314,7 @@ function deactivate_lot() {
                                 </span></b></td>
                                 <td>
                                 {% if lot.sold %}
-                                    $<span id="price">{{lot.winning_price}}</span> <span id="high_bidder_name">{% if lot.winner %}
+                                    {{ lot.currency_symbol }}<span id="price">{{lot.winning_price}}</span> <span id="high_bidder_name">{% if lot.winner %}
                                         {% if lot.winner.userdata.username_visible %}
                                             <a href="{% url 'userpage' slug=lot.winner %}">{{ lot.winner }}</a>
                                         {% else %}
@@ -331,7 +332,7 @@ function deactivate_lot() {
                                         {% else %}
                                             {% if lot.high_bidder %}
                                             <span>
-                                                $<span id="price">{{ lot.high_bid }}</span>
+                                                {{ lot.currency_symbol }}<span id="price">{{ lot.high_bid }}</span>
                                                 {% if lot.high_bidder.pk == request.user.id %}
                                                 <span id="high_bidder_name"> - you're winning!</span>
                                                 {% else %}
@@ -339,7 +340,7 @@ function deactivate_lot() {
                                                 {% endif %}
                                                 <span id="your_bid">
                                                     {% if viewer_bid %}
-                                                    Your max bid is $<span id='your_bid_price'>{{ viewer_bid }}</span>
+                                                    Your max bid is {{ lot.currency_symbol }}<span id='your_bid_price'>{{ viewer_bid }}</span>
                                                     {% if lot.bids_can_be_removed and lot.auction.allow_deleting_bids %}
                                                         <a href="{% url 'delete_bid' pk=viewer_bid_pk %}" class='btn btn-danger btn-sm'>Remove your bid</a>
                                                     {% endif %}
@@ -347,7 +348,7 @@ function deactivate_lot() {
                                                 {% if is_auction_admin %}{{ lot.auction_show_high_bidder_template }}{% endif %}
                                             </span>
                                             {% else %}
-                                                $<span id="price">{{ lot.reserve_price }} {% if lot.buy_now_price and not lot.bidding_error %}<button type="button" class='btn btn-sm btn-success text-black' id="buy-now">Buy now: ${{lot.buy_now_price}}</button>{% endif %}</span> <span id="high_bidder_name"></span><span id="your_bid"></span>
+                                                {{ lot.currency_symbol }}<span id="price">{{ lot.reserve_price }} {% if lot.buy_now_price and not lot.bidding_error %}<button type="button" class='btn btn-sm btn-success text-black' id="buy-now">Buy now: {{ lot.currency_symbol }}{{lot.buy_now_price}}</button>{% endif %}</span> <span id="high_bidder_name"></span><span id="your_bid"></span>
                                             {% endif %}
                                         {% endif %}
                                     {% endif %}
@@ -451,7 +452,7 @@ function deactivate_lot() {
                         <div class="col-auto">
                             <div class="input-group">
                                 <div class="input-group-prepend">
-                                    <span class="input-group-text">$</span>
+                                    <span class="input-group-text">{{ lot.currency_symbol }}</span>
                                 </div>
                                 <input type="number" id='bid_amount' min="1" value="{{ amount }}" class="form-control" aria-label="Amount (to the nearest dollar)">
                                 <div class="input-group-append">
@@ -709,7 +710,7 @@ function deactivate_lot() {
                 high_bidder_pk = data.high_bidder_pk;
             }
             if (data.info == "CHAT") {
-                addChat(data.pk, data.username, data.message);
+                addChat(data.pk, data.username, data.message, data.timestamp);
             } else {
                 if (data.date_end) {
                     var date_end = new Date(data.date_end);
@@ -723,7 +724,7 @@ function deactivate_lot() {
                     messageClass = "info";
                 } else {
                     // non-info, non-error messages are public and added to the chat
-                    addChat(-1, "System", data.message);
+                    addChat(-1, "System", data.message, null);
                 }
                 if (data.info == "LOT_END_WINNER") {
                     $('#price_label').html("Winner:");
@@ -737,15 +738,25 @@ function deactivate_lot() {
                 });
             }
         };
-        function addChat(pk, username, message) {
+        function addChat(pk, username, message, timestamp) {
             message = message.replace(/</g, "&lt;").replace(/>/g, "&gt;");
             var urlRegex = /(?:(?:https?|ftp|file):\/\/|www\.|ftp\.|auction\.)(?:\([-A-Z0-9+&@#\/%=~_|$?!:,.]*\)|[-A-Z0-9+&@#\/%=~_|$?!:,.])*(?:\([-A-Z0-9+&@#\/%=~_|$?!:,.]*\)|[A-Z0-9+&@#\/%=~_|$])/igm
             message =  message.replace(urlRegex, function(url) {
                 return '<a style="color: #555; font-weight: bold;" href="' + url + '">' + url + '</a>';
             })
+
+            // Format timestamp for display
+            var timestampHtml = '';
+            if (timestamp) {
+                var date = new Date(timestamp);
+                var timeString = date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+                var fullDateTime = date.toLocaleString('en-US', { dateStyle: 'short', timeStyle: 'short' });
+                timestampHtml = '<small class="text-muted" style="margin-left: 8px;" title="' + fullDateTime + '">' + timeString + '</small>';
+            }
+
             var lastChat = $(".message").last();
             if (lastChat.hasClass("user_" + pk)) {
-                lastChat.append("<br>" + message);
+                lastChat.append("<br><span title='" + fullDateTime + "'>" + message + "</span>");
             } else {
                 var cssStyle = "";
                 if (pk == -1) {
@@ -759,7 +770,7 @@ function deactivate_lot() {
                                     <div class="chat-body">\
                                         <div class="chat-content">\
                                             <small><span class="chat-username">' + username + '</span></small>\
-                                            <span class="message user_' + pk + ' ">'+ message+ '</span>\
+                                            <span title="' + fullDateTime + '" class="message user_' + pk + ' ">'+ message + '</span>\
                                         </div>\
                                     </div>\
                                 </div>';

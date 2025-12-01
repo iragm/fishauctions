@@ -24,4 +24,9 @@ auctions/static/models/vosk/vosk-model-small-en-us-0.15/ivector/final.mat
 auctions/static/models/vosk/vosk-model-small-en-us-0.15/ivector/global_cmvn.stats
 auctions/static/models/vosk/vosk-model-small-en-us-0.15/ivector/online_cmvn.conf
 auctions/static/models/vosk/vosk-model-small-en-us-0.15/ivector/splice.conf
+auctions/static/models/vosk/vosk-model-small-en-us-0.15/am/
+auctions/static/models/vosk/vosk-model-small-en-us-0.15/conf/
+auctions/static/models/vosk/vosk-model-small-en-us-0.15/graph/
+auctions/static/models/vosk/vosk-model-small-en-us-0.15/ivector/
+auctions/static/js/vendor/Vosklet.wasm
 auctions/static/models/vosk/vosk-model-small-en-us-0.15.tar.gz

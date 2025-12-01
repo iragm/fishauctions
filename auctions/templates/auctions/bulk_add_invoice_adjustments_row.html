@@ -1,6 +1,7 @@
 {% load crispy_forms_tags %}
 {% load crispy_forms_utils %}
 {% load crispy_forms_field %}
+{% load currency_filters %}
 
 {% specialspaceless %}
 
@@ -51,7 +52,7 @@
                     {% elif field.name == 'amount' %}
                         <td>
                             <div class="input-group input-group-sm">
-                                <span class="input-group-text">$</span>
+                                <span class="input-group-text">{{ invoice.currency_symbol }}</span>
                                 {% crispy_field field 'class' 'text-end' %}
                                 <span class="input-group-text">.00</span>
                             </div>
@@ -74,7 +75,7 @@
                         {% elif field.name == 'amount' %}
                             <td>
                                 <div class="input-group input-group-sm">
-                                    <span class="input-group-text">$</span>
+                                    <span class="input-group-text">{{ invoice.currency_symbol }}</span>
                                     {% crispy_field field 'class' 'text-end' %}
                                     <span class="input-group-text">.00</span>
                                 </div>

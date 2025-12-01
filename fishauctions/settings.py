@@ -12,7 +12,6 @@ https://docs.djangoproject.com/en/3.1/ref/settings/
 
 import datetime
 import os
-import sys
 from decimal import Decimal
 from pathlib import Path
 
@@ -186,11 +185,13 @@ INSTALLED_APPS = [
     "chartjs",
     "django_ses",
     "webpush",
+    "django_celery_beat",
 ]
 ASGI_APPLICATION = "fishauctions.asgi.application"
 MIDDLEWARE = [
     # "debug_toolbar.middleware.DebugToolbarMiddleware", # see line 170 above
     "django.middleware.security.SecurityMiddleware",
+    "auctions.middleware.CrossOriginIsolationMiddleware",  # Required for WebAssembly/Vosklet
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -279,33 +280,32 @@ WEBPUSH_SETTINGS = {
     "VAPID_ADMIN_EMAIL": os.environ.get("ADMIN_EMAIL", "admin@example.com"),
 }
 
-# Use sqlite for testing
-if "test" in sys.argv:
-    # if True: # for migrations
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.sqlite3",
-            "NAME": BASE_DIR / "db.sqlite3",
-        }
+# Use MariaDB for both dev and testing
+DATABASES = {
+    "default": {
+        "ENGINE": os.environ.get(
+            "DATABASE_ENGINE", "django.db.backends.mysql"
+        ),  # mysql_server_has_gone_away does not appear to resolve this issue
+        "NAME": os.environ.get("DATABASE_NAME", "auctions"),
+        "USER": os.environ.get("DATABASE_USER", "mysqluser"),
+        "PASSWORD": os.environ.get("DATABASE_PASSWORD", "unsecure"),
+        "HOST": os.environ.get("DATABASE_HOST", "db"),
+        "PORT": os.environ.get("DATABASE_PORT", "3306"),
+        "OPTIONS": {
+            "charset": "utf8mb4",
+            "init_command": "SET sql_mode='STRICT_TRANS_TABLES'",
+        },
+        "CONN_MAX_AGE": 0,  # don't reuse connections for ASGI
+        "CONN_HEALTH_CHECKS": True,
+        "TEST": {
+            "CHARSET": "utf8mb4",
+            "COLLATION": "utf8mb4_unicode_ci",
+        },
     }
-else:
-    DATABASES = {
-        "default": {
-            "ENGINE": os.environ.get(
-                "DATABASE_ENGINE", "django.db.backends.mysql"
-            ),  # mysql_server_has_gone_away does not appear to resolve this issue
-            "NAME": os.environ.get("DATABASE_NAME", "auctions"),
-            "USER": os.environ.get("DATABASE_USER", "mysqluser"),
-            "PASSWORD": os.environ.get("DATABASE_PASSWORD", "unsecure"),
-            "HOST": os.environ.get("DATABASE_HOST", "db"),
-            "PORT": os.environ.get("DATABASE_PORT", "3306"),
-            "OPTIONS": {
-                "charset": "utf8mb4",
-            },
-            "CONN_MAX_AGE": 0,  # don't reuse connections for ASGI
-            "CONN_HEALTH_CHECKS": True,
-        }
-    }
+}
+
+# Django's test runner automatically creates a separate test database (test_auctions)
+# and cleans it up after tests complete, so no special configuration needed for tests
 
 # Base URL to use when referring to full URLs within the Wagtail admin backend -
 # e.g. in notification emails. Don't include '/admin' or a trailing slash
@@ -345,6 +345,7 @@ POST_OFFICE = {
     "BACKENDS": {
         "default": os.environ.get("POST_OFFICE_EMAIL_BACKEND", "django_ses.SESBackend"),
     },
+    "CELERY_ENABLED": True,  # Enable Celery for immediate email delivery
 }
 # django-ses configuration
 AWS_SES_AUTO_THROTTLE = 0.5
@@ -396,6 +397,11 @@ THUMBNAIL_ALIASES = {
 THUMBNAIL_DEFAULT_STORAGE_ALIAS = "default"
 
 SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
+
+# Trust X-Forwarded-Proto header from nginx proxy for HTTPS detection
+# This is required for request.build_absolute_uri() to generate https:// URLs
+# when behind a reverse proxy
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 SOCIALACCOUNT_PROVIDERS = {
     "google": {
@@ -476,6 +482,7 @@ if os.environ.get("ALLOW_USERS_TO_CREATE_LOTS", "True") == "False":
 else:
     ALLOW_USERS_TO_CREATE_LOTS = True
 PAYPAL_ENABLED_FOR_USERS = os.environ.get("PAYPAL_ENABLED_FOR_USERS", "False") == "True"
+SQUARE_ENABLED_FOR_USERS = os.environ.get("SQUARE_ENABLED_FOR_USERS", "False") == "True"
 if os.environ.get("USERS_ARE_TRUSTED_BY_DEFAULT", "True") == "False":
     USERS_ARE_TRUSTED_BY_DEFAULT = False
 else:
@@ -681,3 +688,69 @@ PAYPAL_SECRET = os.environ.get("PAYPAL_SECRET", "")
 PARTNER_MERCHANT_ID = os.environ.get("PARTNER_MERCHANT_ID", "")
 PAYPAL_BN_CODE = os.environ.get("PAYPAL_BN_CODE", "")
 PAYPAL_PLATFORM_FEE = Decimal(str(os.environ.get("PAYPAL_PLATFORM_FEE", "0") or "0"))
+
+# Celery Configuration
+# https://docs.celeryproject.org/en/stable/django/first-steps-with-django.html
+
+# Celery Broker URL using Redis
+CELERY_BROKER_URL = (
+    "redis://:" + os.environ.get("REDIS_PASSWORD", "unsecure") + "@" + os.environ.get("REDIS_HOST", "redis") + ":6379/1"
+)
+
+# Celery Result Backend using Redis
+CELERY_RESULT_BACKEND = (
+    "redis://:" + os.environ.get("REDIS_PASSWORD", "unsecure") + "@" + os.environ.get("REDIS_HOST", "redis") + ":6379/2"
+)
+
+# Celery Settings
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_ENABLE_UTC = True
+
+# Celery Beat Scheduler (for periodic tasks)
+CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+
+# Task time limits (in seconds)
+CELERY_TASK_SOFT_TIME_LIMIT = 300  # 5 minutes
+CELERY_TASK_TIME_LIMIT = 600  # 10 minutes
+
+# Worker settings
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_WORKER_MAX_TASKS_PER_CHILD = 1000
+# Square settings - OAuth only, no platform credentials
+SQUARE_ENVIRONMENT = os.environ.get("SQUARE_ENVIRONMENT", "sandbox" if DEBUG else "production")
+SQUARE_APPLICATION_ID = os.environ.get("SQUARE_APPLICATION_ID", "")
+SQUARE_CLIENT_SECRET = os.environ.get("SQUARE_CLIENT_SECRET", "")  # For OAuth token exchange
+# Webhook signature key for verifying Square webhook notifications
+SQUARE_WEBHOOK_SIGNATURE_KEY = os.environ.get("SQUARE_WEBHOOK_SIGNATURE_KEY", "")
+# Email domains blocked by Square payment links (comma-separated)
+_blocked_domains_raw = os.environ.get(
+    "SQUARE_BLOCKED_EMAIL_DOMAINS", "example.com,example.org,example.net,test.com,invalid.com"
+)
+SQUARE_BLOCKED_EMAIL_DOMAINS = []
+for domain in _blocked_domains_raw.split(","):
+    stripped = domain.strip().lower()
+    if stripped:
+        SQUARE_BLOCKED_EMAIL_DOMAINS.append(stripped)
+
+# Field encryption key for django-encrypted-model-fields
+# This should be a Fernet key - generate with: from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())
+# FIELD_ENCRYPTION_KEY is required for encrypted model fields (SquareSeller OAuth tokens)
+_encryption_key = os.environ.get("FIELD_ENCRYPTION_KEY", "")
+if not _encryption_key:
+    from cryptography.fernet import Fernet
+    from django.core.exceptions import ImproperlyConfigured
+
+    # Generate a key and show the user how to add it to .env
+    generated_key = Fernet.generate_key().decode()
+    env_line = f"FIELD_ENCRYPTION_KEY={generated_key}"
+    print("\n" + "=" * 80)  # noqa: T201
+    print("FIELD_ENCRYPTION_KEY is required but not set!")  # noqa: T201
+    print("Add this line to your .env file:")  # noqa: T201
+    print(f"\n{env_line}\n")  # noqa: T201
+    print("=" * 80 + "\n")  # noqa: T201
+    msg = f"FIELD_ENCRYPTION_KEY environment variable is required. Add this to your .env file: {env_line}"
+    raise ImproperlyConfigured(msg)
+FIELD_ENCRYPTION_KEY = _encryption_key

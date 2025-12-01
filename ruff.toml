@@ -8,6 +8,7 @@ ignore = [
     "E501",
     "E722",
     "PT009",
+    "PT027",
 ]
 extend-select = [
     "A",    # flake8-builtins
