@@ -3360,7 +3360,7 @@ class BulkAddLotsAuto(LoginRequiredMixin, AuctionViewMixin, TemplateView):
             raise Http404
         bidder_number = kwargs.pop("bidder_number", None)
         self.tos = None
-        
+
         # Security: Only admins can access the bidder_number URL
         if bidder_number:
             # Check admin status first
@@ -3371,10 +3371,10 @@ class BulkAddLotsAuto(LoginRequiredMixin, AuctionViewMixin, TemplateView):
             if not self.tos:
                 messages.error(request, "User not found in this auction")
                 return redirect(f"/auctions/{self.auction.slug}/users/")
-        
+
         if self.is_auction_admin:
             self.is_admin = True
-            
+
         if not self.tos:
             # if you don't got permission to edit this auction, you can only add lots for yourself
             self.tos = (
@@ -3414,28 +3414,19 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
             data = json.loads(request.body)
             lot_id = data.get("lot_id")
             bidder_number = data.get("bidder_number")
-            
+
             # Determine which TOS we're adding lots for
             self.tos = None
             self.is_admin = self.is_auction_admin
-            
+
             if bidder_number:
                 # Someone is trying to add lots for a specific user
                 # Only admins can do this
                 if not self.is_admin:
-                    return JsonResponse({
-                        "success": False,
-                        "error": "Only auction admins can add lots for other users"
-                    })
-                self.tos = AuctionTOS.objects.filter(
-                    bidder_number=bidder_number,
-                    auction=self.auction
-                ).first()
+                    return JsonResponse({"success": False, "error": "Only auction admins can add lots for other users"})
+                self.tos = AuctionTOS.objects.filter(bidder_number=bidder_number, auction=self.auction).first()
                 if not self.tos:
-                    return JsonResponse({
-                        "success": False,
-                        "error": "User not found in this auction"
-                    })
+                    return JsonResponse({"success": False, "error": "User not found in this auction"})
             else:
                 # Adding lots for yourself
                 self.tos = (
@@ -3444,17 +3435,13 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                     .first()
                 )
                 if not self.tos:
-                    return JsonResponse({
-                        "success": False,
-                        "error": "You must join this auction before adding lots"
-                    })
-            
+                    return JsonResponse({"success": False, "error": "You must join this auction before adding lots"})
+
             # Check if user has permission to add lots
             if not self.tos.selling_allowed and not self.is_admin:
-                return JsonResponse({
-                    "success": False,
-                    "error": "You don't have permission to add lots to this auction"
-                })
+                return JsonResponse(
+                    {"success": False, "error": "You don't have permission to add lots to this auction"}
+                )
 
             # Create or get existing lot
             if lot_id:
@@ -3462,13 +3449,12 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                 if not lot:
                     return JsonResponse({"success": False, "error": "Lot not found"})
                 is_new = False
-                
+
                 # Check if lot can be edited
                 if not lot.can_be_edited and not self.is_admin:
-                    return JsonResponse({
-                        "success": False,
-                        "error": lot.cannot_be_edited_reason or "This lot cannot be edited"
-                    })
+                    return JsonResponse(
+                        {"success": False, "error": lot.cannot_be_edited_reason or "This lot cannot be edited"}
+                    )
             else:
                 lot = Lot(
                     auction=self.auction,
@@ -3477,7 +3463,7 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                     added_by=request.user,
                 )
                 is_new = True
-            
+
             admin_bypassed = False  # Track if admin bypassed lot limit
 
             # Check lot limits
@@ -3486,7 +3472,7 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                 # Admins can bypass limits for both their own lots and other users' lots
                 bypass_limit = self.is_admin
                 limit_exceeded = current_count >= self.auction.max_lots_per_user
-                
+
                 if limit_exceeded and not bypass_limit:
                     # Check if donation lots are allowed beyond the limit
                     donation = data.get("donation", False)
@@ -3499,7 +3485,7 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                                 },
                             }
                         )
-                
+
                 # Track if admin bypassed the limit for visual feedback
                 admin_bypassed = bypass_limit and limit_exceeded
 
@@ -3666,6 +3652,8 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
             return JsonResponse({"success": False, "errors": {"general": "Lot submission has ended"}})
 
         return super().dispatch(request, *args, **kwargs)
+
+
 class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
     """Import or update lots from a CSV file"""
 
