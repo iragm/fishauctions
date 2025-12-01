@@ -19,9 +19,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         # Only run in DEBUG mode
         if not settings.DEBUG:
-            self.stdout.write(
-                self.style.WARNING("Skipping demo data load - DEBUG=False (production mode)")
-            )
+            self.stdout.write(self.style.WARNING("Skipping demo data load - DEBUG=False (production mode)"))
             return
 
         # Check if any auctions already exist

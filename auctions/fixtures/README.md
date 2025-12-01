@@ -43,7 +43,7 @@ The fixture contains hardcoded dates throughout. The "Demo Online Auction - Acti
 
 Edit `demo_data.json` directly. The file is standard Django fixture JSON format.
 
-**Important**: 
+**Important**:
 - Use PKs in the 9000+ range to avoid conflicts with real data
 - Maintain referential integrity (e.g., lots must reference valid auctions, users, etc.)
 - Use ISO 8601 date format: `YYYY-MM-DDTHH:MM:SSZ`
@@ -90,7 +90,7 @@ docker exec -it django python3 manage.py load_demo_data
 The fixture creates these demo users:
 - `demo_admin` - Admin user with full permissions
 - `demo_seller1` - Seller with club member status
-- `demo_seller2` - Seller without club member status  
+- `demo_seller2` - Seller without club member status
 - `demo_bidder1` - Bidder only (no selling permission in some auctions)
 
 **Note**: All demo users have the same password hash (not a real password). These are for demonstration only and should not be used in production.

@@ -6471,4 +6471,3 @@ class LoadDemoDataTests(TestCase):
 
         # Verify no auctions were created
         self.assertEqual(Auction.objects.count(), 0)
-
