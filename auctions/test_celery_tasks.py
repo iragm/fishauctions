@@ -73,11 +73,58 @@ class CeleryTasksTestCase(TestCase):
         tasks.webpush_notifications_deduplicate()
         mock_call_command.assert_called_once_with("webpush_notifications_deduplicate")
 
-    @patch("auctions.tasks.call_command")
-    def test_update_auction_stats_task(self, mock_call_command):
-        """Test that update_auction_stats task calls the management command."""
+    @patch("auctions.tasks.schedule_auction_stats_update")
+    @patch("channels.layers.get_channel_layer")
+    def test_update_auction_stats_task_with_auction(self, mock_channel, mock_schedule):
+        """Test that update_auction_stats task processes an auction and schedules next run."""
+        import datetime
+
+        from django.utils import timezone
+
+        from auctions.models import Auction
+
+        # Create an auction that needs stats update (providing required date_start field)
+        now = timezone.now()
+        auction = Auction.objects.create(
+            title="Test Auction",
+            is_deleted=False,
+            next_update_due=now - timezone.timedelta(minutes=10),
+            date_start=now - datetime.timedelta(days=1),
+        )
+
+        # Run the task
         tasks.update_auction_stats()
-        mock_call_command.assert_called_once_with("update_auction_stats")
+
+        # Verify the auction was processed (next_update_due should be updated)
+        auction.refresh_from_db()
+        self.assertIsNotNone(auction.next_update_due)
+        self.assertGreater(auction.next_update_due, timezone.now())
+
+        # Verify the task schedules itself
+        mock_schedule.assert_called_once()
+
+    @patch("auctions.tasks.schedule_auction_stats_update")
+    def test_update_auction_stats_task_no_auction(self, mock_schedule):
+        """Test that update_auction_stats task handles no auctions gracefully."""
+        # Run the task with no auctions needing update
+        tasks.update_auction_stats()
+
+        # Verify the task still schedules itself
+        mock_schedule.assert_called_once()
+
+    def test_schedule_auction_stats_update_creates_task(self):
+        """Test that schedule_auction_stats_update creates a PeriodicTask."""
+        from django_celery_beat.models import PeriodicTask
+
+        # Call the scheduling function
+        tasks.schedule_auction_stats_update()
+
+        # Verify the task was created
+        task = PeriodicTask.objects.filter(name=tasks.AUCTION_STATS_TASK_NAME).first()
+        self.assertIsNotNone(task)
+        self.assertTrue(task.one_off)
+        self.assertTrue(task.enabled)
+        self.assertEqual(task.task, "auctions.tasks.update_auction_stats")
 
 
 class SendInvoiceNotificationTaskTestCase(TestCase):

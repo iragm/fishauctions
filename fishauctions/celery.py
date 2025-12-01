@@ -8,6 +8,10 @@ import os
 
 from celery import Celery
 from celery.schedules import crontab
+from celery.signals import worker_ready
+
+# Constants
+WORKER_READY_TASK_DELAY_SECONDS = 5  # Delay before starting self-scheduling tasks after worker is ready
 
 # Set the default Django settings module for the 'celery' program.
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "fishauctions.settings")
@@ -75,17 +79,33 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.webpush_notifications_deduplicate",
         "schedule": crontab(hour=10, minute=0),
     },
-    # Update cached auction statistics - every minute
-    "update_auction_stats": {
-        "task": "auctions.tasks.update_auction_stats",
-        "schedule": 60.0,  # Run every minute
-    },
     # Clean up old invoice notification tasks - daily at 3:00 AM
     "cleanup_old_invoice_notification_tasks": {
         "task": "auctions.tasks.cleanup_old_invoice_notification_tasks",
         "schedule": crontab(hour=3, minute=0),
     },
+    # Note: update_auction_stats is NOT in beat_schedule as it's self-scheduling.
+    # It starts on worker_ready and schedules itself based on when the next
+    # auction's stats are due for update.
 }
+
+
+@worker_ready.connect
+def start_auction_stats_task(sender, **kwargs):
+    """
+    Start the self-scheduling auction stats update task when the worker is ready.
+
+    This ensures the task begins running after the worker starts up, and then
+    it will continue to schedule itself based on when the next auction update is due.
+    """
+    # Schedule the task to run shortly after worker is fully ready
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from auctions.tasks import schedule_auction_stats_update
+
+    schedule_auction_stats_update(timezone.now() + timedelta(seconds=WORKER_READY_TASK_DELAY_SECONDS))
 
 
 @app.task(bind=True, ignore_result=True)

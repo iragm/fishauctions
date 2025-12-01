@@ -832,7 +832,7 @@ class Auction(models.Model):
     cached_stats.help_text = "Cached auction statistics data to avoid recalculating on every page load"
     last_stats_update = models.DateTimeField(blank=True, null=True)
     last_stats_update.help_text = "Timestamp of when auction statistics were last calculated"
-    next_update_due = models.DateTimeField(blank=True, null=True)
+    next_update_due = models.DateTimeField(blank=True, null=True, default=timezone.now)
     next_update_due.help_text = "Timestamp for when the next statistics update should be run"
 
     @property
@@ -2441,7 +2441,7 @@ class Auction(models.Model):
 
             # Auctions > 90 days in the past aren't recalculated at all
             if days_since_start > 90:
-                self.next_update_due = now + timezone.timedelta(hours=4380000)
+                self.next_update_due = None
             # Active auctions (started within 7 days ago or start within 7 days) - every 4 hours
             elif -7 <= days_until_start <= 7:
                 self.next_update_due = now + timezone.timedelta(hours=4)

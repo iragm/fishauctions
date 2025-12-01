@@ -6,12 +6,19 @@ Each task wraps a management command to maintain backward compatibility.
 """
 
 import json
+import logging
 
 from celery import shared_task
 from django.contrib.sites.models import Site
 from django.core.management import call_command
 from django_celery_beat.models import ClockedSchedule, PeriodicTask
 from post_office import mail
+
+# Constants for update_auction_stats scheduling
+STATS_UPDATE_LOCK_MINUTES = 5  # Minutes to lock auction before recalculation to prevent concurrent updates
+STATS_UPDATE_MAX_DELAY_SECONDS = 3600  # Maximum delay (1 hour) before checking for new auctions
+STATS_UPDATE_FALLBACK_DELAY_SECONDS = 3600  # Fallback delay when no auctions need updates
+AUCTION_STATS_TASK_NAME = "auction_stats_update"  # Name for the one-off scheduled task
 
 
 @shared_task(bind=True, ignore_result=True)
@@ -272,11 +279,104 @@ def webpush_notifications_deduplicate(self):
     call_command("webpush_notifications_deduplicate")
 
 
+def schedule_auction_stats_update(run_at=None):
+    """
+    Schedule a one-off task to update auction stats.
+
+    Uses django-celery-beat's ClockedSchedule and PeriodicTask to schedule
+    a task to run at a specific time. If a task already exists, it will be
+    updated with the new scheduled time.
+
+    Args:
+        run_at: datetime when the update should run. If None, runs immediately.
+    """
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    if run_at is None:
+        run_at = timezone.now()
+
+    # Cap the delay to ensure we check periodically for new auctions
+    max_run_at = timezone.now() + timedelta(seconds=STATS_UPDATE_MAX_DELAY_SECONDS)
+    if run_at > max_run_at:
+        run_at = max_run_at
+
+    schedule, _ = ClockedSchedule.objects.get_or_create(clocked_time=run_at)
+
+    PeriodicTask.objects.update_or_create(
+        name=AUCTION_STATS_TASK_NAME,
+        defaults={
+            "task": "auctions.tasks.update_auction_stats",
+            "clocked": schedule,
+            "one_off": True,
+            "enabled": True,
+        },
+    )
+
+
 @shared_task(bind=True, ignore_result=True)
 def update_auction_stats(self):
     """
     Update cached auction statistics for auctions whose next_update_due is past due.
 
-    Previously run every minute via cron.
+    This task is self-scheduling: it processes one auction, then schedules itself
+    to run again when the next auction's stats are due, rather than running on a
+    fixed periodic interval.
     """
-    call_command("update_auction_stats")
+    from datetime import timedelta
+
+    from asgiref.sync import async_to_sync
+    from channels.layers import get_channel_layer
+    from django.utils import timezone
+
+    from auctions.models import Auction
+
+    logger = logging.getLogger(__name__)
+    now = timezone.now()
+
+    # Process only one auction per run, ordered by most overdue first
+    # Only process auctions that have next_update_due set and are past due
+    auction = (
+        Auction.objects.filter(
+            next_update_due__lte=now,
+            is_deleted=False,
+        )
+        .order_by("next_update_due")
+        .first()
+    )
+
+    if auction:
+        try:
+            logger.info("Recalculating stats for auction: %s (%s)", auction.title, auction.slug)
+
+            # Set next_update_due before recalculating to prevent concurrent recalculations
+            # This ensures that if the recalculation takes longer than expected,
+            # subsequent task runs won't try to recalculate the same auction again
+            auction.next_update_due = now + timedelta(minutes=STATS_UPDATE_LOCK_MINUTES)
+            auction.save(update_fields=["next_update_due"])
+
+            auction.recalculate_stats()
+
+            auction_websocket = get_channel_layer()
+            async_to_sync(auction_websocket.group_send)(
+                f"auctions_{auction.pk}",
+                {
+                    "type": "stats_updated",
+                },
+            )
+            logger.info("Successfully updated stats for auction: %s", auction.title)
+        except Exception as e:
+            logger.error("Failed to update stats for auction %s (%s): %s", auction.title, auction.slug, e)
+            logger.exception(e)
+
+    # Schedule the next run based on when the next auction update is due
+    next_auction = (
+        Auction.objects.filter(is_deleted=False, next_update_due__isnull=False).order_by("next_update_due").first()
+    )
+
+    if next_auction and next_auction.next_update_due:
+        schedule_auction_stats_update(next_auction.next_update_due)
+    else:
+        # No auctions with scheduled updates, check again later
+        schedule_auction_stats_update(now + timedelta(seconds=STATS_UPDATE_FALLBACK_DELAY_SECONDS))
