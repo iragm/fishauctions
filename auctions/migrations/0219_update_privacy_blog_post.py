@@ -81,7 +81,7 @@ def reverse_func(apps, schema_editor):
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("auctions", "0215_alter_auction_email_defaults"),
+        ("auctions", "0218_set_next_update_due_default"),
     ]
 
     operations = [
