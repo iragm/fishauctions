@@ -3570,6 +3570,7 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                     "lot_id": lot.lot_number,
                     "lot_number_display": lot.lot_number_display,
                     "lot_link": lot.lot_link,
+                    "lot_pk": lot.pk,
                     "is_new": is_new,
                     "admin_bypassed": admin_bypassed,
                 }

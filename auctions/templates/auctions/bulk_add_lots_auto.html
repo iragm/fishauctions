@@ -44,9 +44,9 @@
                         <i class="bi bi-three-dots"></i>
                       </button>
                       <ul class="dropdown-menu dropdown-menu-end">
-                        <li><a class="dropdown-item dropdown-item-sm" href="{% url 'lot_detail' slug=auction.slug lot_number=lot.lot_number %}" target="_blank"><i class="bi bi-eye"></i> View lot</a></li>
-                        <li><a class="dropdown-item dropdown-item-sm action-editor" href="{% url 'edit_lot' slug=auction.slug lot_number=lot.lot_number %}"><i class="bi bi-pencil"></i> Full editor</a></li>
-                        <li><a class="dropdown-item dropdown-item-sm action-image" href="{% url 'add_image_to_lot' slug=auction.slug lot_number=lot.lot_number %}?next={% url 'bulk_add_lots_auto_for_myself' slug=auction.slug bidder_number=tos.bidder_number %}"><i class="bi bi-image"></i> Add image</a></li>
+                        <li><a class="dropdown-item dropdown-item-sm" href="{{ lot.lot_link }}" target="_blank"><i class="bi bi-eye"></i> View lot</a></li>
+                        <li><a class="dropdown-item dropdown-item-sm action-editor" href="{% url 'edit_lot' pk=lot.pk %}"><i class="bi bi-pencil"></i> Full editor</a></li>
+                        <li><a class="dropdown-item dropdown-item-sm action-image" href="{% url 'add_image' lot=lot.pk %}?next={% if is_admin %}{% url 'bulk_add_lots_auto' slug=auction.slug bidder_number=tos.bidder_number %}{% else %}{% url 'bulk_add_lots_auto_for_myself' slug=auction.slug %}{% endif %}"><i class="bi bi-image"></i> Add image</a></li>
                       </ul>
                     </div>
                   </div>
@@ -403,16 +403,21 @@ function performSave(lotRow) {
             }
 
             // Show and update actions menu
-            if (actionsMenu && data.lot_id && data.lot_number_display) {
-                const viewLink = actionsMenu.querySelector('.action-view');
-                const editorLink = actionsMenu.querySelector('.action-editor');
-                const imageLink = actionsMenu.querySelector('.action-image');
+            if (actionsMenu && data.lot_id && data.lot_number_display && data.lot_link) {
+                const dropdownItems = actionsMenu.querySelectorAll('.dropdown-item');
                 
-                if (viewLink) viewLink.href = data.lot_link || '#';
-                if (editorLink) editorLink.href = `{% url 'edit_lot' slug=auction.slug lot_number=0 %}`.replace('/0/', `/${data.lot_number_display}/`);
-                if (imageLink) {
+                // Update view lot link (first item)
+                if (dropdownItems[0]) dropdownItems[0].href = data.lot_link;
+                
+                // Update edit lot link (second item) - uses pk
+                if (dropdownItems[1] && data.lot_pk) {
+                    dropdownItems[1].href = `/lots/edit/${data.lot_pk}/`;
+                }
+                
+                // Update add image link (third item) - uses pk with next parameter
+                if (dropdownItems[2] && data.lot_pk) {
                     const nextUrl = encodeURIComponent(window.location.href);
-                    imageLink.href = `{% url 'add_image_to_lot' slug=auction.slug lot_number=0 %}`.replace('/0/', `/${data.lot_number_display}/`) + `?next=${nextUrl}`;
+                    dropdownItems[2].href = `/images/add_image/${data.lot_pk}/?next=${nextUrl}`;
                 }
                 
                 actionsMenu.style.display = 'block';
