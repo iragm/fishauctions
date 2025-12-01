@@ -107,7 +107,7 @@ All demo data uses PKs starting at 9000 to avoid conflicts:
 
 2. **Demo Online Auction - Active Now!** (pk=9002)
    - Start: Nov 25, 2024
-   - End: Dec 25, 2025 (future date)
+   - End: Dec 25, 2025 (future date - **NOTE: Update periodically to keep this auction "active"**)
    - Type: Online with multiple pickup locations
    - Has 5 active lots, 1 sold via buy now
    - Includes mail shipping option
@@ -117,6 +117,8 @@ All demo data uses PKs starting at 9000 to avoid conflicts:
    - Type: Online with multiple locations
    - Has 5 ended lots with winners
    - Shows completed auction state
+
+**Important**: The "active" auction has a hardcoded end date of Dec 25, 2025. When this date passes, the auction will no longer appear as active. Update the `date_end` field in the fixture to a future date to keep this auction active for demonstration purposes.
 
 ### Pickup Locations
 

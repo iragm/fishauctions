@@ -74,4 +74,11 @@ class Command(BaseCommand):
             self.stdout.write("=" * 80)
             self.stdout.write(self.style.ERROR(f"Error loading demo data: {e}"))
             self.stdout.write("=" * 80)
+            self.stdout.write("")
+            self.stdout.write("Possible causes:")
+            self.stdout.write("  - Fixture file not found (check auctions/fixtures/demo_data.json exists)")
+            self.stdout.write("  - Invalid JSON in fixture file")
+            self.stdout.write("  - Database constraint violations")
+            self.stdout.write("  - Missing required model fields")
+            self.stdout.write("")
             raise
