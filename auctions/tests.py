@@ -4680,7 +4680,7 @@ class BulkAddLotsAutoTests(StandardTestCase):
         )
         data = response.json()
         self.assertFalse(data["success"])
-        self.assertIn("admin", data["errors"]["general"].lower())
+        self.assertIn("admin", data["error"].lower())
 
     def test_save_lot_ajax_admin_can_add_for_others(self):
         """Test that admins can add lots for other users"""
@@ -4889,7 +4889,7 @@ class BulkAddLotsAutoTests(StandardTestCase):
         )
         data = response.json()
         self.assertFalse(data["success"])
-        self.assertIn("not found", data["errors"]["general"].lower())
+        self.assertIn("not found", data["error"].lower())
 
     def test_lot_locked_when_has_bids(self):
         """Test that lots with bids cannot be edited"""
@@ -4912,7 +4912,7 @@ class BulkAddLotsAutoTests(StandardTestCase):
         )
         data = response.json()
         self.assertFalse(data["success"])
-        error_msg = data["errors"]["general"].lower()
+        error_msg = data["error"].lower()
         self.assertTrue("bids" in error_msg or "cannot be edited" in error_msg)
 
     def test_lot_locked_when_sold(self):
@@ -4937,7 +4937,7 @@ class BulkAddLotsAutoTests(StandardTestCase):
         )
         data = response.json()
         self.assertFalse(data["success"])
-        error_msg = data["errors"]["general"].lower()
+        error_msg = data["error"].lower()
         self.assertTrue("sold" in error_msg or "cannot be edited" in error_msg)
 
     def test_admin_can_edit_locked_lot(self):
