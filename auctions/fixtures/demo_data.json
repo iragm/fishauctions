@@ -427,7 +427,8 @@
       "email": "demo_admin@example.com",
       "phone_number": "5550100",
       "manually_added": false,
-      "is_club_member": true
+      "is_club_member": true,
+      "createdon": "2024-06-01T10:00:00Z"
     }
   },
   {
@@ -445,7 +446,8 @@
       "email": "seller1@example.com",
       "phone_number": "5550101",
       "manually_added": false,
-      "is_club_member": true
+      "is_club_member": true,
+      "createdon": "2024-06-01T10:00:00Z"
     }
   },
   {
@@ -463,7 +465,8 @@
       "email": "bidder1@example.com",
       "phone_number": "5550102",
       "manually_added": false,
-      "is_club_member": false
+      "is_club_member": false,
+      "createdon": "2024-06-01T10:00:00Z"
     }
   },
   {
@@ -481,7 +484,8 @@
       "email": "demo_admin@example.com",
       "phone_number": "5550100",
       "manually_added": false,
-      "is_club_member": true
+      "is_club_member": true,
+      "createdon": "2024-11-20T12:00:00Z"
     }
   },
   {
@@ -499,7 +503,8 @@
       "email": "seller1@example.com",
       "phone_number": "5550101",
       "manually_added": false,
-      "is_club_member": true
+      "is_club_member": true,
+      "createdon": "2024-11-20T12:00:00Z"
     }
   },
   {
@@ -517,7 +522,8 @@
       "email": "bidder1@example.com",
       "phone_number": "5550102",
       "manually_added": false,
-      "is_club_member": false
+      "is_club_member": false,
+      "createdon": "2024-11-20T12:00:00Z"
     }
   },
   {
@@ -535,7 +541,8 @@
       "email": "seller2@example.com",
       "phone_number": "5550103",
       "manually_added": false,
-      "is_club_member": false
+      "is_club_member": false,
+      "createdon": "2024-11-20T12:00:00Z"
     }
   },
   {
@@ -553,7 +560,8 @@
       "email": "demo_admin@example.com",
       "phone_number": "5550100",
       "manually_added": false,
-      "is_club_member": true
+      "is_club_member": true,
+      "createdon": "2024-08-15T14:00:00Z"
     }
   },
   {
@@ -571,7 +579,8 @@
       "email": "seller1@example.com",
       "phone_number": "5550101",
       "manually_added": false,
-      "is_club_member": true
+      "is_club_member": true,
+      "createdon": "2024-08-15T14:00:00Z"
     }
   },
   {
@@ -589,7 +598,8 @@
       "email": "bidder1@example.com",
       "phone_number": "5550102",
       "manually_added": false,
-      "is_club_member": false
+      "is_club_member": false,
+      "createdon": "2024-08-15T14:00:00Z"
     }
   },
   {
@@ -607,7 +617,8 @@
       "email": "seller2@example.com",
       "phone_number": "5550103",
       "manually_added": false,
-      "is_club_member": false
+      "is_club_member": false,
+      "createdon": "2024-08-15T14:00:00Z"
     }
   },
   {
