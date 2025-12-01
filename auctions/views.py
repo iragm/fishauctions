@@ -3378,7 +3378,7 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                 if not self.is_admin:
                     return JsonResponse({
                         "success": False,
-                        "errors": {"general": "Only auction admins can add lots for other users"}
+                        "error": "Only auction admins can add lots for other users"
                     })
                 self.tos = AuctionTOS.objects.filter(
                     bidder_number=bidder_number,
@@ -3387,7 +3387,7 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                 if not self.tos:
                     return JsonResponse({
                         "success": False,
-                        "errors": {"general": "User not found in this auction"}
+                        "error": "User not found in this auction"
                     })
             else:
                 # Adding lots for yourself
@@ -3399,28 +3399,28 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                 if not self.tos:
                     return JsonResponse({
                         "success": False,
-                        "errors": {"general": "You must join this auction before adding lots"}
+                        "error": "You must join this auction before adding lots"
                     })
             
             # Check if user has permission to add lots
             if not self.tos.selling_allowed and not self.is_admin:
                 return JsonResponse({
                     "success": False,
-                    "errors": {"general": "You don't have permission to add lots to this auction"}
+                    "error": "You don't have permission to add lots to this auction"
                 })
 
             # Create or get existing lot
             if lot_id:
                 lot = Lot.objects.filter(lot_number=lot_id, auction=self.auction, auctiontos_seller=self.tos).first()
                 if not lot:
-                    return JsonResponse({"success": False, "errors": {"general": "Lot not found"}})
+                    return JsonResponse({"success": False, "error": "Lot not found"})
                 is_new = False
                 
                 # Check if lot can be edited
                 if not lot.can_be_edited and not self.is_admin:
                     return JsonResponse({
                         "success": False,
-                        "errors": {"general": lot.cannot_be_edited_reason or "This lot cannot be edited"}
+                        "error": lot.cannot_be_edited_reason or "This lot cannot be edited"
                     })
             else:
                 lot = Lot(
@@ -3569,15 +3569,16 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                     "success": True,
                     "lot_id": lot.lot_number,
                     "lot_number_display": lot.lot_number_display,
+                    "lot_link": lot.lot_link,
                     "is_new": is_new,
                     "admin_bypassed": admin_bypassed,
                 }
             )
 
         except json.JSONDecodeError:
-            return JsonResponse({"success": False, "errors": {"general": "Invalid JSON data"}})
+            return JsonResponse({"success": False, "error": "Invalid JSON data"})
         except Exception as e:
-            return JsonResponse({"success": False, "errors": {"general": str(e)}})
+            return JsonResponse({"success": False, "error": str(e)})
 
     def dispatch(self, request, *args, **kwargs):
         self.auction = get_object_or_404(Auction, slug=kwargs.pop("slug"), is_deleted=False)
