@@ -29,6 +29,16 @@ This is idempotent - running it multiple times is safe. It will skip loading if 
 
 ## Updating the Demo Data
 
+### Important Note About Dates
+
+The fixture contains hardcoded dates throughout. The "Demo Online Auction - Active Now!" (pk=9002) has its end date set to December 25, 2025. When this date passes, you'll need to update multiple date fields to keep the auction active:
+
+- `auctions.auction` pk=9002: `date_start`, `date_end`, `lot_submission_start_date`, `lot_submission_end_date`, `date_online_bidding_starts`, `date_online_bidding_ends`
+- `auctions.pickuplocation` pks 9002-9004: `pickup_time`, `second_pickup_time`
+- `auctions.lot` pks 90004-90008: `date_end`
+
+**Quick fix**: Search for "2025-12-" in the fixture and update all occurrences to a future date.
+
 ### Method 1: Manual Editing
 
 Edit `demo_data.json` directly. The file is standard Django fixture JSON format.
