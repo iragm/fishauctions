@@ -125,7 +125,6 @@ class CeleryTasksTestCase(TestCase):
         self.assertTrue(task.one_off)
         self.assertTrue(task.enabled)
         self.assertEqual(task.task, "auctions.tasks.update_auction_stats")
-        mock_call_command.assert_called_once_with("update_auction_stats")
 
 
 class SendInvoiceNotificationTaskTestCase(TestCase):

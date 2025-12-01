@@ -832,7 +832,7 @@ class Auction(models.Model):
     cached_stats.help_text = "Cached auction statistics data to avoid recalculating on every page load"
     last_stats_update = models.DateTimeField(blank=True, null=True)
     last_stats_update.help_text = "Timestamp of when auction statistics were last calculated"
-    next_update_due = models.DateTimeField(blank=True, null=True)
+    next_update_due = models.DateTimeField(blank=True, null=True, default=timezone.now)
     next_update_due.help_text = "Timestamp for when the next statistics update should be run"
 
     @property
