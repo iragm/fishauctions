@@ -644,7 +644,8 @@
       "winner": null,
       "auctiontos_winner": null,
       "donation": false,
-      "date_posted": "2024-06-05T09:00:00Z"
+      "date_posted": "2024-06-05T09:00:00Z",
+      "date_of_last_user_edit": "2024-06-05T09:00:00Z"
     }
   },
   {
@@ -670,7 +671,8 @@
       "winner": null,
       "auctiontos_winner": null,
       "donation": false,
-      "date_posted": "2024-06-05T09:00:00Z"
+      "date_posted": "2024-06-05T09:00:00Z",
+      "date_of_last_user_edit": "2024-06-05T09:00:00Z"
     }
   },
   {
@@ -696,7 +698,8 @@
       "winner": null,
       "auctiontos_winner": null,
       "donation": true,
-      "date_posted": "2024-06-05T09:00:00Z"
+      "date_posted": "2024-06-05T09:00:00Z",
+      "date_of_last_user_edit": "2024-06-05T09:00:00Z"
     }
   },
   {
@@ -722,7 +725,8 @@
       "winner": null,
       "auctiontos_winner": null,
       "donation": false,
-      "date_posted": "2024-11-22T10:00:00Z"
+      "date_posted": "2024-11-22T10:00:00Z",
+      "date_of_last_user_edit": "2024-11-22T10:00:00Z"
     }
   },
   {
@@ -748,7 +752,8 @@
       "winner": null,
       "auctiontos_winner": null,
       "donation": false,
-      "date_posted": "2024-11-22T10:00:00Z"
+      "date_posted": "2024-11-22T10:00:00Z",
+      "date_of_last_user_edit": "2024-11-22T10:00:00Z"
     }
   },
   {
@@ -774,7 +779,8 @@
       "winner": null,
       "auctiontos_winner": null,
       "donation": false,
-      "date_posted": "2024-11-22T10:00:00Z"
+      "date_posted": "2024-11-22T10:00:00Z",
+      "date_of_last_user_edit": "2024-11-22T10:00:00Z"
     }
   },
   {
@@ -800,7 +806,8 @@
       "winner": null,
       "auctiontos_winner": null,
       "donation": false,
-      "date_posted": "2024-11-22T10:00:00Z"
+      "date_posted": "2024-11-22T10:00:00Z",
+      "date_of_last_user_edit": "2024-11-22T10:00:00Z"
     }
   },
   {
@@ -826,7 +833,8 @@
       "winner": 9003,
       "auctiontos_winner": 9006,
       "donation": false,
-      "date_posted": "2024-11-22T10:00:00Z"
+      "date_posted": "2024-11-22T10:00:00Z",
+      "date_of_last_user_edit": "2024-11-22T10:00:00Z"
     }
   },
   {
@@ -852,7 +860,8 @@
       "winner": 9003,
       "auctiontos_winner": 9010,
       "donation": false,
-      "date_posted": "2024-08-20T11:00:00Z"
+      "date_posted": "2024-08-20T11:00:00Z",
+      "date_of_last_user_edit": "2024-08-20T11:00:00Z"
     }
   },
   {
@@ -878,7 +887,8 @@
       "winner": null,
       "auctiontos_winner": null,
       "donation": false,
-      "date_posted": "2024-08-20T11:00:00Z"
+      "date_posted": "2024-08-20T11:00:00Z",
+      "date_of_last_user_edit": "2024-08-20T11:00:00Z"
     }
   },
   {
@@ -904,7 +914,8 @@
       "winner": 9001,
       "auctiontos_winner": 9008,
       "donation": false,
-      "date_posted": "2024-08-20T11:00:00Z"
+      "date_posted": "2024-08-20T11:00:00Z",
+      "date_of_last_user_edit": "2024-08-20T11:00:00Z"
     }
   },
   {
@@ -930,7 +941,8 @@
       "winner": 9004,
       "auctiontos_winner": 9011,
       "donation": false,
-      "date_posted": "2024-08-20T11:00:00Z"
+      "date_posted": "2024-08-20T11:00:00Z",
+      "date_of_last_user_edit": "2024-08-20T11:00:00Z"
     }
   },
   {
@@ -956,7 +968,8 @@
       "winner": 9002,
       "auctiontos_winner": 9009,
       "donation": true,
-      "date_posted": "2024-08-20T11:00:00Z"
+      "date_posted": "2024-08-20T11:00:00Z",
+      "date_of_last_user_edit": "2024-08-20T11:00:00Z"
     }
   },
   {
