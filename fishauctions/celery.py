@@ -98,12 +98,12 @@ def start_auction_stats_task(sender, **kwargs):
     This ensures the task begins running after the worker starts up, and then
     it will continue to schedule itself based on when the next auction update is due.
     """
-    from auctions.tasks import schedule_auction_stats_update
-
     # Schedule the task to run shortly after worker is fully ready
     from datetime import timedelta
 
     from django.utils import timezone
+
+    from auctions.tasks import schedule_auction_stats_update
 
     schedule_auction_stats_update(timezone.now() + timedelta(seconds=WORKER_READY_TASK_DELAY_SECONDS))
 

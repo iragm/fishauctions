@@ -26,13 +26,22 @@ class Command(BaseCommand):
         expected_task_names = set(beat_schedule.keys())
 
         # Delete tasks that are no longer in the beat_schedule
-        existing_tasks = PeriodicTask.objects.filter(name__in=[
-            "endauctions", "sendnotifications", "auctiontos_notifications",
-            "email_invoice", "send_queued_mail", "auction_emails",
-            "email_unseen_chats", "weekly_promo", "set_user_location",
-            "remove_duplicate_views", "webpush_notifications_deduplicate",
-            "update_auction_stats",  # Old task that should be removed
-        ])
+        existing_tasks = PeriodicTask.objects.filter(
+            name__in=[
+                "endauctions",
+                "sendnotifications",
+                "auctiontos_notifications",
+                "email_invoice",
+                "send_queued_mail",
+                "auction_emails",
+                "email_unseen_chats",
+                "weekly_promo",
+                "set_user_location",
+                "remove_duplicate_views",
+                "webpush_notifications_deduplicate",
+                "update_auction_stats",  # Old task that should be removed
+            ]
+        )
         for task in existing_tasks:
             if task.name not in expected_task_names:
                 self.stdout.write(self.style.ERROR(f"  ✗ Deleting removed task: {task.name}"))
