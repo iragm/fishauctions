@@ -51,6 +51,9 @@ python manage.py collectstatic --no-input > /dev/null 2>&1
 # Setup Celery Beat periodic tasks in database (idempotent - safe to run multiple times)
 python manage.py setup_celery_beat > /dev/null 2>&1 || true
 
+# Load demo data if in DEBUG mode and database is empty (idempotent - safe to run multiple times)
+python manage.py load_demo_data
+
 if [ "${DEBUG}" = "True" ]; then
     echo Starting fishauctions in development mode
     exec uvicorn fishauctions.asgi:application --host 0.0.0.0 --port 8000 --reload --reload-include '*.py' --reload-include '*.html' --reload-include '*.js'
