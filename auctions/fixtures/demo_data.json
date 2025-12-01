@@ -161,9 +161,9 @@
       "pre_register_lot_entry_fee_discount": 1,
       "date_posted": "2024-11-01T00:00:00Z",
       "date_start": "2024-11-25T00:00:00Z",
-      "date_end": "2025-12-25T23:59:00Z",
+      "date_end": "2050-12-25T23:59:00Z",
       "lot_submission_start_date": "2024-11-15T00:00:00Z",
-      "lot_submission_end_date": "2025-12-20T23:59:00Z",
+      "lot_submission_end_date": "2050-12-20T23:59:00Z",
       "created_by": 9001,
       "location": "Multi-Location Online Auction",
       "summernote_description": "<p><strong>Welcome to our Multi-Location Online Auction!</strong></p><p>This auction features pickup at multiple locations or shipping by mail.</p><p><strong>Auction Rules:</strong></p><ul><li>Bidding closes on December 25th at 11:59 PM</li><li>All lots have a 5-minute soft close</li><li>Choose your preferred pickup location when joining</li><li>Payment due within 7 days of auction end</li><li>We accept PayPal, Venmo, and cash at pickup</li></ul><p><strong>Pickup Options:</strong></p><ul><li>Location A: Springfield Aquarium Store</li><li>Location B: Riverside Community Center</li><li>Mail Shipping: Available for most items (+shipping cost)</li></ul>",
@@ -290,8 +290,8 @@
       "pickup_location_contact_name": "Store Manager",
       "pickup_location_contact_phone": "555-0101",
       "pickup_location_contact_email": "store@example.com",
-      "pickup_time": "2025-12-27T14:00:00Z",
-      "second_pickup_time": "2025-12-28T14:00:00Z",
+      "pickup_time": "2050-12-27T14:00:00Z",
+      "second_pickup_time": "2050-12-28T15:00:00Z",
       "latitude": 39.7817,
       "longitude": -89.6501,
       "address": "456 Aquarium Way, Springfield, IL",
@@ -313,8 +313,8 @@
       "pickup_location_contact_name": "Jane Seller",
       "pickup_location_contact_phone": "555-0102",
       "pickup_location_contact_email": "seller1@example.com",
-      "pickup_time": "2025-12-27T15:00:00Z",
-      "second_pickup_time": "2025-12-28T15:00:00Z",
+      "pickup_time": "2050-12-27T14:00:00Z",
+      "second_pickup_time": "2050-12-28T15:00:00Z",
       "latitude": 39.8,
       "longitude": -89.7,
       "address": "789 River Rd, Riverside, IL",
@@ -336,7 +336,7 @@
       "pickup_location_contact_name": "Shipping Coordinator",
       "pickup_location_contact_phone": "555-0103",
       "pickup_location_contact_email": "shipping@example.com",
-      "pickup_time": "2025-12-27T00:00:00Z",
+      "pickup_time": "2050-12-27T14:00:00Z",
       "latitude": 0,
       "longitude": 0,
       "address": "",
@@ -643,7 +643,8 @@
       "winning_price": null,
       "winner": null,
       "auctiontos_winner": null,
-      "donation": false
+      "donation": false,
+      "date_posted": "2024-06-05T09:00:00Z"
     }
   },
   {
@@ -668,7 +669,8 @@
       "winning_price": null,
       "winner": null,
       "auctiontos_winner": null,
-      "donation": false
+      "donation": false,
+      "date_posted": "2024-06-05T09:00:00Z"
     }
   },
   {
@@ -693,7 +695,8 @@
       "winning_price": null,
       "winner": null,
       "auctiontos_winner": null,
-      "donation": true
+      "donation": true,
+      "date_posted": "2024-06-05T09:00:00Z"
     }
   },
   {
@@ -714,11 +717,12 @@
       "user": 9002,
       "auctiontos_seller": 9005,
       "auction": 9002,
-      "date_end": "2025-12-25T23:59:00Z",
+      "date_end": "2050-12-25T23:59:00Z",
       "winning_price": null,
       "winner": null,
       "auctiontos_winner": null,
-      "donation": false
+      "donation": false,
+      "date_posted": "2024-11-22T10:00:00Z"
     }
   },
   {
@@ -739,11 +743,12 @@
       "user": 9002,
       "auctiontos_seller": 9005,
       "auction": 9002,
-      "date_end": "2025-12-25T23:59:00Z",
+      "date_end": "2050-12-25T23:59:00Z",
       "winning_price": null,
       "winner": null,
       "auctiontos_winner": null,
-      "donation": false
+      "donation": false,
+      "date_posted": "2024-11-22T10:00:00Z"
     }
   },
   {
@@ -764,11 +769,12 @@
       "user": 9004,
       "auctiontos_seller": 9007,
       "auction": 9002,
-      "date_end": "2025-12-25T23:59:00Z",
+      "date_end": "2050-12-25T23:59:00Z",
       "winning_price": null,
       "winner": null,
       "auctiontos_winner": null,
-      "donation": false
+      "donation": false,
+      "date_posted": "2024-11-22T10:00:00Z"
     }
   },
   {
@@ -789,11 +795,12 @@
       "user": 9001,
       "auctiontos_seller": 9004,
       "auction": 9002,
-      "date_end": "2025-12-25T23:59:00Z",
+      "date_end": "2050-12-25T23:59:00Z",
       "winning_price": null,
       "winner": null,
       "auctiontos_winner": null,
-      "donation": false
+      "donation": false,
+      "date_posted": "2024-11-22T10:00:00Z"
     }
   },
   {
@@ -814,11 +821,12 @@
       "user": 9002,
       "auctiontos_seller": 9005,
       "auction": 9002,
-      "date_end": "2025-12-25T23:59:00Z",
+      "date_end": "2050-12-25T23:59:00Z",
       "winning_price": 15,
       "winner": 9003,
       "auctiontos_winner": 9006,
-      "donation": false
+      "donation": false,
+      "date_posted": "2024-11-22T10:00:00Z"
     }
   },
   {
@@ -843,7 +851,8 @@
       "winning_price": 35,
       "winner": 9003,
       "auctiontos_winner": 9010,
-      "donation": false
+      "donation": false,
+      "date_posted": "2024-08-20T11:00:00Z"
     }
   },
   {
@@ -868,7 +877,8 @@
       "winning_price": null,
       "winner": null,
       "auctiontos_winner": null,
-      "donation": false
+      "donation": false,
+      "date_posted": "2024-08-20T11:00:00Z"
     }
   },
   {
@@ -893,7 +903,8 @@
       "winning_price": 18,
       "winner": 9001,
       "auctiontos_winner": 9008,
-      "donation": false
+      "donation": false,
+      "date_posted": "2024-08-20T11:00:00Z"
     }
   },
   {
@@ -918,7 +929,8 @@
       "winning_price": 8,
       "winner": 9004,
       "auctiontos_winner": 9011,
-      "donation": false
+      "donation": false,
+      "date_posted": "2024-08-20T11:00:00Z"
     }
   },
   {
@@ -943,7 +955,8 @@
       "winning_price": 12,
       "winner": 9002,
       "auctiontos_winner": 9009,
-      "donation": true
+      "donation": true,
+      "date_posted": "2024-08-20T11:00:00Z"
     }
   },
   {
@@ -955,7 +968,8 @@
       "amount": 15,
       "last_bid_time": "2024-12-01T10:00:00Z",
       "was_high_bid": true,
-      "is_deleted": false
+      "is_deleted": false,
+      "bid_time": "2024-12-01T10:00:00Z"
     }
   },
   {
@@ -967,7 +981,8 @@
       "amount": 30,
       "last_bid_time": "2024-09-30T20:00:00Z",
       "was_high_bid": false,
-      "is_deleted": false
+      "is_deleted": false,
+      "bid_time": "2024-09-30T20:00:00Z"
     }
   },
   {
@@ -979,7 +994,8 @@
       "amount": 35,
       "last_bid_time": "2024-09-30T22:00:00Z",
       "was_high_bid": true,
-      "is_deleted": false
+      "is_deleted": false,
+      "bid_time": "2024-09-30T22:00:00Z"
     }
   },
   {
@@ -991,7 +1007,8 @@
       "amount": 15,
       "last_bid_time": "2024-09-30T18:00:00Z",
       "was_high_bid": false,
-      "is_deleted": false
+      "is_deleted": false,
+      "bid_time": "2024-09-30T18:00:00Z"
     }
   },
   {
@@ -1003,7 +1020,8 @@
       "amount": 18,
       "last_bid_time": "2024-09-30T21:00:00Z",
       "was_high_bid": true,
-      "is_deleted": false
+      "is_deleted": false,
+      "bid_time": "2024-09-30T21:00:00Z"
     }
   },
   {
@@ -1015,7 +1033,8 @@
       "amount": 6,
       "last_bid_time": "2024-09-30T19:00:00Z",
       "was_high_bid": false,
-      "is_deleted": false
+      "is_deleted": false,
+      "bid_time": "2024-09-30T19:00:00Z"
     }
   },
   {
@@ -1027,7 +1046,8 @@
       "amount": 8,
       "last_bid_time": "2024-09-30T22:30:00Z",
       "was_high_bid": true,
-      "is_deleted": false
+      "is_deleted": false,
+      "bid_time": "2024-09-30T22:30:00Z"
     }
   },
   {
@@ -1039,7 +1059,8 @@
       "amount": 5,
       "last_bid_time": "2024-09-30T17:00:00Z",
       "was_high_bid": false,
-      "is_deleted": false
+      "is_deleted": false,
+      "bid_time": "2024-09-30T17:00:00Z"
     }
   },
   {
@@ -1051,7 +1072,8 @@
       "amount": 12,
       "last_bid_time": "2024-09-30T23:00:00Z",
       "was_high_bid": true,
-      "is_deleted": false
+      "is_deleted": false,
+      "bid_time": "2024-09-30T23:00:00Z"
     }
   }
 ]
