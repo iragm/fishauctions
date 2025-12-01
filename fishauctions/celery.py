@@ -84,11 +84,6 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.cleanup_old_invoice_notification_tasks",
         "schedule": crontab(hour=3, minute=0),
     },
-    # Clean up old auction stats tasks - daily at 3:30 AM
-    "cleanup_old_auction_stats_tasks": {
-        "task": "auctions.tasks.cleanup_old_auction_stats_tasks",
-        "schedule": crontab(hour=3, minute=30),
-    },
     # Note: update_auction_stats is NOT in beat_schedule as it's self-scheduling.
     # It starts on worker_ready and schedules itself based on when the next
     # auction's stats are due for update.

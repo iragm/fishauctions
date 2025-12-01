@@ -120,27 +120,3 @@ class CeleryTasksTestCase(TestCase):
         self.assertTrue(task.one_off)
         self.assertTrue(task.enabled)
         self.assertEqual(task.task, "auctions.tasks.update_auction_stats")
-
-    def test_cleanup_old_auction_stats_tasks(self):
-        """Test that cleanup_old_auction_stats_tasks removes old tasks."""
-        from datetime import timedelta
-
-        from django.utils import timezone
-        from django_celery_beat.models import ClockedSchedule, PeriodicTask
-
-        # Create an old task (more than 24 hours ago)
-        old_time = timezone.now() - timedelta(hours=48)
-        schedule = ClockedSchedule.objects.create(clocked_time=old_time)
-        PeriodicTask.objects.create(
-            name=tasks.AUCTION_STATS_TASK_NAME,
-            task="auctions.tasks.update_auction_stats",
-            clocked=schedule,
-            one_off=True,
-        )
-
-        # Run the cleanup task
-        tasks.cleanup_old_auction_stats_tasks()
-
-        # Verify the old task was deleted
-        task = PeriodicTask.objects.filter(name=tasks.AUCTION_STATS_TASK_NAME).first()
-        self.assertIsNone(task)

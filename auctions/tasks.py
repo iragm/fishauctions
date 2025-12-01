@@ -315,15 +315,6 @@ def schedule_auction_stats_update(run_at=None):
     )
 
 
-def _cleanup_auction_stats_task():
-    """
-    Remove the PeriodicTask entry for auction stats update.
-
-    This is called after the task runs to clean up the database.
-    """
-    PeriodicTask.objects.filter(name=AUCTION_STATS_TASK_NAME).delete()
-
-
 @shared_task(bind=True, ignore_result=True)
 def update_auction_stats(self):
     """
@@ -343,9 +334,6 @@ def update_auction_stats(self):
 
     logger = logging.getLogger(__name__)
     now = timezone.now()
-
-    # Clean up the old task entry (we'll schedule a new one at the end)
-    _cleanup_auction_stats_task()
 
     # Process only one auction per run, ordered by most overdue first
     # Only process auctions that have next_update_due set and are past due
@@ -392,26 +380,3 @@ def update_auction_stats(self):
     else:
         # No auctions with scheduled updates, check again later
         schedule_auction_stats_update(now + timedelta(seconds=STATS_UPDATE_FALLBACK_DELAY_SECONDS))
-
-
-@shared_task(bind=True, ignore_result=True)
-def cleanup_old_auction_stats_tasks(self):
-    """
-    Clean up old auction stats PeriodicTask entries from the database.
-
-    This task runs daily to remove any auction_stats_update tasks that are
-    more than 24 hours old. These tasks should normally be cleaned up after
-    execution, but this provides a safety net for any orphaned entries.
-    """
-    from datetime import timedelta
-
-    from django.utils import timezone
-
-    cutoff_time = timezone.now() - timedelta(hours=24)
-
-    # Find and delete old auction stats tasks
-    old_tasks = PeriodicTask.objects.filter(
-        name=AUCTION_STATS_TASK_NAME,
-        clocked__clocked_time__lt=cutoff_time,
-    )
-    old_tasks.delete()

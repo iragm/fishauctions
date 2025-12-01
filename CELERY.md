@@ -50,7 +50,6 @@ Celery handles:
 | `webpush_notifications_deduplicate` | Daily at 10:00 | Remove duplicate push subscriptions |
 | `update_auction_stats` | Self-scheduling | Update cached auction statistics |
 | `cleanup_old_invoice_notification_tasks` | Daily at 3:00 AM | Clean up old invoice notification tasks |
-| `cleanup_old_auction_stats_tasks` | Daily at 3:30 AM | Clean up old auction stats tasks |
 
 ### Self-Scheduling Tasks
 
@@ -59,17 +58,14 @@ django-celery-beat's `ClockedSchedule` and `PeriodicTask` to schedule one-off ta
 
 1. Starts automatically when the Celery worker is ready
 2. Processes one auction whose `next_update_due` is past due
-3. Creates a new one-off task to run when the next auction's stats update is due
+3. Updates the existing one-off task to run when the next auction's stats update is due
 4. Falls back to checking every hour if no auctions need updates
 5. Can be triggered immediately from the AuctionStats view when a user views stats that need recalculation
 
 This approach is more efficient than running every minute, as updates are only processed when actually needed.
 
-### Task Cleanup
-
-One-off tasks (like `update_auction_stats` and invoice notifications) are cleaned up automatically:
-- Each task cleans up its PeriodicTask entry after execution
-- Daily cleanup tasks (`cleanup_old_*_tasks`) run as a safety net to remove any orphaned entries older than 24 hours
+Since there's only ever one auction stats task scheduled at a time (it updates itself for the next run),
+no cleanup task is needed.
 
 ## Docker Services
 

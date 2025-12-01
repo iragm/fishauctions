@@ -2318,6 +2318,13 @@ class AuctionStats(LoginRequiredMixin, AuctionViewMixin, DetailView):
         now = timezone.now()
         twenty_minutes_ago = now - timezone.timedelta(minutes=20)
 
+        # Don't recalculate stats for auctions older than 90 days
+        auction_too_old = False
+        if auction.date_start:
+            days_since_start = (now - auction.date_start).days
+            if days_since_start > 90:
+                auction_too_old = True
+
         # Check if recalculation is already scheduled (next_update_due is recent/in near future)
         recalculation_pending = (
             auction.next_update_due
@@ -2325,7 +2332,7 @@ class AuctionStats(LoginRequiredMixin, AuctionViewMixin, DetailView):
             and auction.next_update_due <= now + timezone.timedelta(hours=1)
         )
 
-        if not auction.last_stats_update or auction.last_stats_update < twenty_minutes_ago:
+        if not auction_too_old and (not auction.last_stats_update or auction.last_stats_update < twenty_minutes_ago):
             if not recalculation_pending:
                 # Schedule immediate recalculation by setting next_update_due to slightly in the past
                 # This ensures the task will pick it up immediately (avoids timing issues with next_update_due__lte=now)

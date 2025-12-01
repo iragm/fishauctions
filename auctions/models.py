@@ -2441,7 +2441,7 @@ class Auction(models.Model):
 
             # Auctions > 90 days in the past aren't recalculated at all
             if days_since_start > 90:
-                self.next_update_due = now + timezone.timedelta(hours=4380000)
+                self.next_update_due = None
             # Active auctions (started within 7 days ago or start within 7 days) - every 4 hours
             elif -7 <= days_until_start <= 7:
                 self.next_update_due = now + timezone.timedelta(hours=4)
