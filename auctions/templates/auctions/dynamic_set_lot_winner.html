@@ -1,9 +1,34 @@
 {% extends "base.html" %}
 {% load i18n %}
+{% load static %}
 {% load currency_filters %}
 {% block title %}Set winners for {{ auction }}{% endblock %}
 
+{# Disable analytics and ads for this page to enable cross-origin isolation for SharedArrayBuffer #}
+{% block analytics %}
+{# Analytics disabled for voice recognition cross-origin isolation #}
+{% endblock %}
+
+{% block ads %}
+{# Ads disabled for voice recognition cross-origin isolation #}
+{% endblock %}
+
+{# Override CDN resources with self-hosted versions for cross-origin isolation #}
+{% block core_css %}
+<link rel="stylesheet" href="{% static 'css/vendor/bootstrap.min.css' %}">
+<link rel="stylesheet" href="{% static 'css/vendor/bootstrap-icons.min.css' %}">
+{% endblock %}
+
+{% block core_js %}
+{# Self-hosted jQuery, Bootstrap for cross-origin isolation #}
+{# jQuery must be self-hosted to enable cross-origin isolation - will be added to download script #}
+<script type="text/javascript" src="{% static 'js/vendor/jquery.min.js' %}"></script>
+<script src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
+{% endblock %}
+
 {% block extra_js %}
+{# Use self-hosted Vosklet instead of CDN for cross-origin isolation #}
+<script src="{% static 'js/vendor/Vosklet.js' %}" async defer></script>
 <script>
   let tooltipTimeout;
   function initializeTooltipWithTimeout() {
@@ -146,6 +171,346 @@
   function getLotPicture() {
     htmx.ajax('get','/api/{{ auction.slug }}/lots/' + encodeURIComponent($("#lot").val()), {target: '#result'});
   }
+
+  // Voice recognition functionality
+  let voiceRecognizer = null;
+  let isListening = false;
+  let pendingLot = null;
+  let pendingPrice = null;
+  let pendingWinner = null;
+  let isSoldCommandGiven = false;
+
+  // Convert spoken numbers to digits
+  function parseSpokenNumber(text) {
+    const numberWords = {
+      'zero': '0', 'one': '1', 'two': '2', 'three': '3', 'four': '4',
+      'five': '5', 'six': '6', 'seven': '7', 'eight': '8', 'nine': '9',
+      'ten': '10', 'eleven': '11', 'twelve': '12', 'thirteen': '13',
+      'fourteen': '14', 'fifteen': '15', 'sixteen': '16', 'seventeen': '17',
+      'eighteen': '18', 'nineteen': '19', 'twenty': '20', 'thirty': '30',
+      'forty': '40', 'fifty': '50', 'sixty': '60', 'seventy': '70',
+      'eighty': '80', 'ninety': '90', 'hundred': '100', 'thousand': '1000'
+    };
+
+    let result = '';
+    let words = text.toLowerCase().split(/[\s-]+/);
+
+    for (let word of words) {
+      if (numberWords[word] !== undefined) {
+        result += numberWords[word];
+      } else if (/^\d+$/.test(word)) {
+        result += word;
+      }
+    }
+
+    return result || null;
+  }
+
+  // Handle voice recognition results
+  function handleVoiceResult(text) {
+    text = text.toLowerCase().trim();
+    //console.log('Voice recognized:', text);
+
+    // Check for undo command
+    if (/\bundo\b/.test(text)) {
+      console.log('Undo command detected');
+      if (!$("#undo_button").hasClass('d-none')) {
+        undoSellLot();
+      }
+      return;
+    }
+
+    // Check for sold command
+    if (/\bsold\b/.test(text)) {
+      console.log('Sold command detected');
+      isSoldCommandGiven = true;
+      // Try to auto-submit if all fields are filled
+      tryAutoSubmit();
+      return;
+    }
+
+    // Check for lot number
+    let lotMatch = text.match(/\blot\s+(?:number\s+)?(\d+|(?:[\w-]+\s*)+?)(?:\s|$)/i);
+    if (lotMatch) {
+      let lotNumber = parseSpokenNumber(lotMatch[1]);
+      if (lotNumber) {
+        console.log('Lot number detected:', lotNumber);
+        $("#lot").val(lotNumber);
+        $("#lot").trigger('blur');
+        pendingLot = lotNumber;
+        tryAutoSubmit();
+        return;
+      }
+    }
+
+    // Check for price (dollar/dollars)
+    let priceMatch = text.match(/(\d+|(?:[\w-]+\s*)+?)\s+dollars?/i);
+    if (priceMatch) {
+      let price = parseSpokenNumber(priceMatch[1]);
+      if (price) {
+        console.log('Price detected:', price);
+        $("#price").val(price);
+        $("#price").trigger('blur');
+        pendingPrice = price;
+        tryAutoSubmit();
+        return;
+      }
+    }
+
+    // Check for bidder number
+    let bidderMatch = text.match(/\bbidder\s+(\d+|[a-z]|(?:[\w-]+\s*)+?)(?:\s|$)/i);
+    if (bidderMatch) {
+      let bidderNum = bidderMatch[1].trim();
+      // Try to parse as number first
+      let parsedBidder = parseSpokenNumber(bidderNum);
+      if (!parsedBidder) {
+        // If not a number, might be a letter or word - use as is
+        parsedBidder = bidderNum.toUpperCase().charAt(0);
+      }
+      console.log('Bidder detected:', parsedBidder);
+      $("#winner").val(parsedBidder);
+      $("#winner").trigger('blur');
+      pendingWinner = parsedBidder;
+      tryAutoSubmit();
+      return;
+    }
+  }
+
+  // Try to auto-submit if sold command was given and all fields are filled
+  function tryAutoSubmit() {
+    if (isSoldCommandGiven) {
+      let lot = $("#lot").val();
+      let price = $("#price").val();
+      let winner = $("#winner").val();
+
+      if (lot && price && winner) {
+        console.log('Auto-submitting form...');
+        sendFormData('save');
+        isSoldCommandGiven = false;
+        pendingLot = null;
+        pendingPrice = null;
+        pendingWinner = null;
+      }
+    }
+  }
+async function startVoiceRecognition() {
+  if (isListening) return;
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: false,
+      audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 }
+    });
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const micNode = ctx.createMediaStreamSource(stream);
+    const module = await loadVosklet();
+    const modelUrl = "{% static 'models/vosk/vosk-model-small-en-us-0.15/' %}";
+    const model = await module.createModel(modelUrl, "English", "vosk-model-small-en-us-0.15");
+    const recognizer = await module.createRecognizer(model, ctx.sampleRate);
+    recognizer.addEventListener("partialResult", ev => {
+        $("#voice-status").text(ev.detail.partial);
+
+      if (ev.detail && ev.detail.partial) {
+        $("#voice-status").text(ev.detail.partial);
+      }
+    });
+
+recognizer.addEventListener("result", ev => {
+    let detailObj;
+    try {
+        detailObj = JSON.parse(ev.detail);
+    } catch (err) {
+        console.error("[DEBUG] Failed to parse ev.detail:", err, ev.detail);
+        return;
+    }
+    if (detailObj && detailObj.text && detailObj.text.trim() !== "") {
+        $("#voice-status").text(detailObj.text);
+        handleVoiceResult(detailObj.text);
+    }
+});
+
+
+    // Convert Float32 [-1..1] to Int16 PCM (optional, mostly for debugging)
+    function floatToInt16(float32) {
+      const out = new Int16Array(float32.length);
+      for (let i = 0; i < float32.length; i++) {
+        let s = Math.max(-1, Math.min(1, float32[i]));
+        out[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      return out;
+    }
+
+    const transferer = await module.createTransferer(ctx, 128 * 150);
+
+    // Gain factor to boost quiet audio
+    const GAIN = 5;
+
+    transferer.port.onmessage = ev => {
+      const data = ev.data;
+      if (!data) return;
+
+      if (data.constructor.name === "Float32Array") {
+        for (let i = 0; i < data.length; i++) data[i] *= GAIN;
+      }
+
+      const slice = data.subarray ? data.subarray(0,20) : data.slice(0,20);
+      // RMS/volume
+      // const rms = Math.sqrt(slice.reduce((sum,v)=>sum+v*v,0)/slice.length);
+      // console.log("[DEBUG] Audio chunk RMS:", rms);
+
+      // Feed Float32 directly to recognizer (Vosklet expects floats)
+      try {
+        const accepted = recognizer.acceptWaveform(data);
+        //console.log("[DEBUG] acceptWaveform returned:", accepted);
+      } catch (err) {
+        console.error("[DEBUG] acceptWaveform error:", err);
+      }
+    };
+
+    micNode.connect(transferer);
+
+    voiceRecognizer = { ctx, recognizer, transferer, micNode, stream };
+    isListening = true;
+    $("#voice-btn").removeClass("btn-primary").addClass("btn-danger");
+    $("#voice-btn").html('<i class="bi bi-mic-fill"></i> Stop Listening');
+    $("#voice-status").text("Listening...");
+    $("#voice-btn").prop("disabled", false);
+
+  } catch (err) {
+    $("#voice-status").text("Failed to start voice recognition: " + (err && err.message));
+    isListening = false;
+    voiceRecognizer = null;
+  }
+}
+
+  // Stop voice recognition
+  function stopVoiceRecognition() {
+    if (!isListening || !voiceRecognizer) return;
+
+    try {
+      // Stop all media stream tracks
+      if (voiceRecognizer.stream) {
+        voiceRecognizer.stream.getTracks().forEach(track => track.stop());
+      }
+
+      // Close audio context
+      if (voiceRecognizer.ctx) {
+        voiceRecognizer.ctx.close();
+      }
+
+      voiceRecognizer = null;
+      isListening = false;
+      $("#voice-btn").removeClass("btn-danger").addClass("btn-primary");
+      $("#voice-btn").html('<i class="bi bi-mic"></i> Start Voice Control');
+      $("#voice-status").text("Voice control stopped");
+    } catch (err) {
+      console.error("Error stopping voice recognition:", err);
+      // Reset state anyway
+      voiceRecognizer = null;
+      isListening = false;
+      $("#voice-btn").removeClass("btn-danger").addClass("btn-primary");
+      $("#voice-btn").html('<i class="bi bi-mic"></i> Start Voice Control');
+      $("#voice-status").text("Voice control stopped");
+    }
+  }
+
+  // Toggle voice recognition
+  function toggleVoiceRecognition() {
+    if (isListening) {
+      stopVoiceRecognition();
+    } else {
+      startVoiceRecognition();
+    }
+  }
+
+
+  let webSpeechRecognizer = null;
+  let isWebSpeechListening = false;
+
+  function startWebSpeechRecognition() {
+    if (isWebSpeechListening) return;
+
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      $("#voice-status").text("Web Speech API not supported in this browser.");
+      return;
+    }
+
+    webSpeechRecognizer = new SR();
+    webSpeechRecognizer.lang = "en-US";
+    webSpeechRecognizer.continuous = true;
+    webSpeechRecognizer.interimResults = true;
+
+    webSpeechRecognizer.onstart = function () {
+      isWebSpeechListening = true;
+      $("#voice-btn").removeClass("btn-primary").addClass("btn-danger");
+      $("#voice-btn").html('<i class="bi bi-mic-fill"></i> Stop Listening');
+      $("#voice-status").text("Listening (Web Speech)...");
+    };
+
+    webSpeechRecognizer.onerror = function (ev) {
+      console.error("Web Speech error:", ev.error);
+      $("#voice-status").text("Voice error: " + ev.error);
+    };
+
+    webSpeechRecognizer.onend = function () {
+      isWebSpeechListening = false;
+      $("#voice-btn").removeClass("btn-danger").addClass("btn-primary");
+      $("#voice-btn").html('<i class="bi bi-mic"></i> Start Voice Control');
+      $("#voice-status").text("Voice control stopped");
+    };
+
+    webSpeechRecognizer.onresult = function (ev) {
+      // Iterate results to find final or best transcript
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const res = ev.results[i];
+        const transcript = res[0].transcript.trim();
+        if (!transcript) continue;
+
+        if (res.isFinal) {
+          $("#voice-status").text(transcript);
+          handleVoiceResult(transcript); // reuse existing handler
+        } else {
+          // Show partial result
+          $("#voice-status").text(transcript);
+        }
+      }
+    };
+
+    try {
+      webSpeechRecognizer.start();
+    } catch (err) {
+      console.error("Failed to start Web Speech:", err);
+      $("#voice-status").text("Failed to start voice recognition: " + (err && err.message));
+      isWebSpeechListening = false;
+    }
+  }
+
+  function stopWebSpeechRecognition() {
+    if (!isWebSpeechListening || !webSpeechRecognizer) return;
+    try {
+      webSpeechRecognizer.stop();
+    } catch (err) {
+      console.error("Error stopping Web Speech:", err);
+    } finally {
+      webSpeechRecognizer = null;
+      isWebSpeechListening = false;
+      $("#voice-btn").removeClass("btn-danger").addClass("btn-primary");
+      $("#voice-btn").html('<i class="bi bi-mic"></i> Start Voice Control');
+      $("#voice-status").text("Voice control stopped");
+    }
+  }
+
+  function toggleWebSpeechRecognition() {
+    if (isWebSpeechListening) {
+      stopWebSpeechRecognition();
+    } else {
+      startWebSpeechRecognition();
+    }
+  }
+
+
+
 $(document).ready(function() {
         var lotSearch;
         $("#lot").on('blur', function() {
@@ -206,6 +571,8 @@ $(document).ready(function() {
 
 <small>Use this page to mark lots as sold.  Press tab to move the to next field.  <a href='https://github.com/iragm/fishauctions/issues/223'>Leave feedback about this page here.</a></small><br>
 <button id="fullscreen-btn" class="btn btn-sm bg-primary d-none d-sm-inline-block"><i class="bi bi-fullscreen"></i> Go fullscreen</button>
+<!-- <button id="voice-btn" class="btn btn-sm btn-primary d-none d-sm-inline-block ms-2" onclick="toggleWebSpeechRecognition()"><i class="bi bi-mic"></i> Start Voice Control</button> -->
+<small id="voice-status" class="ms-2 text-muted"></small>
 
 </span>
 {% endblock %}
