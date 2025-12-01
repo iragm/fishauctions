@@ -405,21 +405,21 @@ function performSave(lotRow) {
             // Show and update actions menu
             if (actionsMenu && data.lot_id && data.lot_number_display && data.lot_link) {
                 const dropdownItems = actionsMenu.querySelectorAll('.dropdown-item');
-                
+
                 // Update view lot link (first item)
                 if (dropdownItems[0]) dropdownItems[0].href = data.lot_link;
-                
+
                 // Update edit lot link (second item) - uses pk
                 if (dropdownItems[1] && data.lot_pk) {
                     dropdownItems[1].href = `/lots/edit/${data.lot_pk}/`;
                 }
-                
+
                 // Update add image link (third item) - uses pk with next parameter
                 if (dropdownItems[2] && data.lot_pk) {
                     const nextUrl = encodeURIComponent(window.location.href);
                     dropdownItems[2].href = `/images/add_image/${data.lot_pk}/?next=${nextUrl}`;
                 }
-                
+
                 actionsMenu.style.display = 'block';
             }
 
@@ -449,14 +449,14 @@ function performSave(lotRow) {
     })
     .catch(error => {
         console.error('Error saving lot:', error);
-        
+
         // Show error in banner
         if (errorBanner) {
             const errorMessage = errorBanner.querySelector('.error-message');
             if (errorMessage) errorMessage.textContent = 'Failed to save lot. Please try again.';
             errorBanner.style.display = 'block';
         }
-        
+
         if (!lotId) {
             badge.textContent = 'Error';
             badge.classList.remove('bg-warning', 'bg-success', 'bg-info');
