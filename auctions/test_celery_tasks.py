@@ -33,12 +33,6 @@ class CeleryTasksTestCase(TestCase):
         mock_call_command.assert_called_once_with("auctiontos_notifications")
 
     @patch("auctions.tasks.call_command")
-    def test_email_invoice_task(self, mock_call_command):
-        """Test that email_invoice task calls the management command."""
-        tasks.email_invoice()
-        mock_call_command.assert_called_once_with("email_invoice")
-
-    @patch("auctions.tasks.call_command")
     def test_auction_emails_task(self, mock_call_command):
         """Test that auction_emails task calls the management command."""
         tasks.auction_emails()
@@ -74,7 +68,7 @@ class CeleryTasksTestCase(TestCase):
         tasks.webpush_notifications_deduplicate()
         mock_call_command.assert_called_once_with("webpush_notifications_deduplicate")
 
-    @patch("auctions.tasks.schedule_next_auction_stats_update")
+    @patch("auctions.tasks.schedule_auction_stats_update")
     @patch("channels.layers.get_channel_layer")
     def test_update_auction_stats_task_with_auction(self, mock_channel, mock_schedule):
         """Test that update_auction_stats task processes an auction and schedules next run."""
@@ -104,7 +98,7 @@ class CeleryTasksTestCase(TestCase):
         # Verify the task schedules itself
         mock_schedule.assert_called_once()
 
-    @patch("auctions.tasks.schedule_next_auction_stats_update")
+    @patch("auctions.tasks.schedule_auction_stats_update")
     def test_update_auction_stats_task_no_auction(self, mock_schedule):
         """Test that update_auction_stats task handles no auctions gracefully."""
         # Run the task with no auctions needing update
@@ -113,38 +107,40 @@ class CeleryTasksTestCase(TestCase):
         # Verify the task still schedules itself
         mock_schedule.assert_called_once()
 
-    @patch("auctions.tasks.update_auction_stats")
-    def test_schedule_next_auction_stats_update_with_auction(self, mock_task):
-        """Test that schedule_next_auction_stats_update schedules the task correctly."""
-        import datetime
-
-        from django.utils import timezone
-
-        from auctions.models import Auction
-
-        # Create an auction with a future update due date (providing required date_start field)
-        now = timezone.now()
-        future_time = now + timezone.timedelta(hours=2)
-        Auction.objects.create(
-            title="Test Auction",
-            is_deleted=False,
-            next_update_due=future_time,
-            date_start=now - datetime.timedelta(days=1),
-        )
+    def test_schedule_auction_stats_update_creates_task(self):
+        """Test that schedule_auction_stats_update creates a PeriodicTask."""
+        from django_celery_beat.models import PeriodicTask
 
         # Call the scheduling function
-        tasks.schedule_next_auction_stats_update()
+        tasks.schedule_auction_stats_update()
 
-        # Verify the task was scheduled
-        mock_task.apply_async.assert_called_once()
+        # Verify the task was created
+        task = PeriodicTask.objects.filter(name=tasks.AUCTION_STATS_TASK_NAME).first()
+        self.assertIsNotNone(task)
+        self.assertTrue(task.one_off)
+        self.assertTrue(task.enabled)
+        self.assertEqual(task.task, "auctions.tasks.update_auction_stats")
 
-    @patch("auctions.tasks.update_auction_stats")
-    def test_schedule_next_auction_stats_update_no_auction(self, mock_task):
-        """Test that schedule_next_auction_stats_update schedules fallback when no auctions."""
-        # Call the scheduling function with no auctions
-        tasks.schedule_next_auction_stats_update()
+    def test_cleanup_old_auction_stats_tasks(self):
+        """Test that cleanup_old_auction_stats_tasks removes old tasks."""
+        from datetime import timedelta
 
-        # Verify the task was scheduled with fallback delay
-        mock_task.apply_async.assert_called_once()
-        call_kwargs = mock_task.apply_async.call_args[1]
-        self.assertEqual(call_kwargs["countdown"], tasks.STATS_UPDATE_FALLBACK_DELAY_SECONDS)
+        from django.utils import timezone
+        from django_celery_beat.models import ClockedSchedule, PeriodicTask
+
+        # Create an old task (more than 24 hours ago)
+        old_time = timezone.now() - timedelta(hours=48)
+        schedule = ClockedSchedule.objects.create(clocked_time=old_time)
+        PeriodicTask.objects.create(
+            name=tasks.AUCTION_STATS_TASK_NAME,
+            task="auctions.tasks.update_auction_stats",
+            clocked=schedule,
+            one_off=True,
+        )
+
+        # Run the cleanup task
+        tasks.cleanup_old_auction_stats_tasks()
+
+        # Verify the old task was deleted
+        task = PeriodicTask.objects.filter(name=tasks.AUCTION_STATS_TASK_NAME).first()
+        self.assertIsNone(task)

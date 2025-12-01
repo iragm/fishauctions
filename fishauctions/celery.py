@@ -44,11 +44,6 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.auctiontos_notifications",
         "schedule": 900.0,  # Run every 15 minutes
     },
-    # Email users about invoices - every 15 minutes
-    "email_invoice": {
-        "task": "auctions.tasks.email_invoice",
-        "schedule": 900.0,  # Run every 15 minutes
-    },
     # Send queued mail (post_office) - every 10 minutes (retry failed emails)
     "send_queued_mail": {
         "task": "post_office.tasks.send_queued_mail",
@@ -84,6 +79,16 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.webpush_notifications_deduplicate",
         "schedule": crontab(hour=10, minute=0),
     },
+    # Clean up old invoice notification tasks - daily at 3:00 AM
+    "cleanup_old_invoice_notification_tasks": {
+        "task": "auctions.tasks.cleanup_old_invoice_notification_tasks",
+        "schedule": crontab(hour=3, minute=0),
+    },
+    # Clean up old auction stats tasks - daily at 3:30 AM
+    "cleanup_old_auction_stats_tasks": {
+        "task": "auctions.tasks.cleanup_old_auction_stats_tasks",
+        "schedule": crontab(hour=3, minute=30),
+    },
     # Note: update_auction_stats is NOT in beat_schedule as it's self-scheduling.
     # It starts on worker_ready and schedules itself based on when the next
     # auction's stats are due for update.
@@ -98,10 +103,14 @@ def start_auction_stats_task(sender, **kwargs):
     This ensures the task begins running after the worker starts up, and then
     it will continue to schedule itself based on when the next auction update is due.
     """
-    from auctions.tasks import update_auction_stats
+    from auctions.tasks import schedule_auction_stats_update
 
     # Schedule the task to run shortly after worker is fully ready
-    update_auction_stats.apply_async(countdown=WORKER_READY_TASK_DELAY_SECONDS)
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    schedule_auction_stats_update(timezone.now() + timedelta(seconds=WORKER_READY_TASK_DELAY_SECONDS))
 
 
 @app.task(bind=True, ignore_result=True)

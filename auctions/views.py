@@ -2332,9 +2332,9 @@ class AuctionStats(LoginRequiredMixin, AuctionViewMixin, DetailView):
                 auction.next_update_due = now - timezone.timedelta(seconds=1)
                 auction.save(update_fields=["next_update_due"])
                 # Trigger the self-scheduling Celery task to process this auction immediately
-                from auctions.tasks import update_auction_stats
+                from auctions.tasks import schedule_auction_stats_update
 
-                update_auction_stats.delay()
+                schedule_auction_stats_update()
                 context["stats_being_recalculated"] = True
             else:
                 # Recalculation already scheduled

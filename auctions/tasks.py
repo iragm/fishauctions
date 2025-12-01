@@ -5,13 +5,20 @@ This module contains all Celery tasks that were previously run as cron jobs.
 Each task wraps a management command to maintain backward compatibility.
 """
 
+import json
+import logging
+
 from celery import shared_task
+from django.contrib.sites.models import Site
 from django.core.management import call_command
+from django_celery_beat.models import ClockedSchedule, PeriodicTask
+from post_office import mail
 
 # Constants for update_auction_stats scheduling
 STATS_UPDATE_LOCK_MINUTES = 5  # Minutes to lock auction before recalculation to prevent concurrent updates
 STATS_UPDATE_MAX_DELAY_SECONDS = 3600  # Maximum delay (1 hour) before checking for new auctions
 STATS_UPDATE_FALLBACK_DELAY_SECONDS = 3600  # Fallback delay when no auctions need updates
+AUCTION_STATS_TASK_NAME = "auction_stats_update"  # Name for the one-off scheduled task
 
 
 @shared_task(bind=True, ignore_result=True)
@@ -46,14 +53,170 @@ def auctiontos_notifications(self):
     call_command("auctiontos_notifications")
 
 
-@shared_task(bind=True, ignore_result=True)
-def email_invoice(self):
-    """
-    Email users about invoices.
+def get_invoice_notification_task_name(invoice_pk):
+    """Generate a unique task name for an invoice notification."""
+    return f"invoice_notification_{invoice_pk}"
 
-    Previously run every 15 minutes via cron.
+
+def schedule_invoice_notification(invoice_pk, run_at):
     """
-    call_command("email_invoice")
+    Schedule a one-off task to send an invoice notification.
+
+    Uses django-celery-beat's ClockedSchedule and PeriodicTask to schedule
+    a task to run at a specific time. If a task already exists for this
+    invoice, it will be updated with the new scheduled time.
+
+    Args:
+        invoice_pk: The primary key of the invoice
+        run_at: datetime when the notification should be sent
+    """
+    schedule, _ = ClockedSchedule.objects.get_or_create(clocked_time=run_at)
+
+    task_name = get_invoice_notification_task_name(invoice_pk)
+
+    PeriodicTask.objects.update_or_create(
+        name=task_name,
+        defaults={
+            "task": "auctions.tasks.send_invoice_notification",
+            "clocked": schedule,
+            "one_off": True,
+            "enabled": True,
+            "kwargs": json.dumps({"invoice_pk": invoice_pk}),
+        },
+    )
+
+
+def cancel_invoice_notification(invoice_pk):
+    """
+    Cancel a scheduled invoice notification task.
+
+    Args:
+        invoice_pk: The primary key of the invoice
+    """
+    task_name = get_invoice_notification_task_name(invoice_pk)
+    PeriodicTask.objects.filter(name=task_name).delete()
+
+
+@shared_task(bind=True, ignore_result=True)
+def send_invoice_notification(self, invoice_pk):
+    """
+    Send an invoice notification for a specific invoice.
+
+    This task is scheduled as a one-off task when an invoice status changes
+    to "ready" or "paid". It will:
+    - Check if the invoice still needs notification (not already sent, not draft)
+    - Send email if conditions are met (trusted user, has email, notifications enabled)
+    - Mark the invoice as email_sent=True
+    - Add history entry if email was sent
+    - Clean up the PeriodicTask entry after execution
+
+    The task is idempotent - if called multiple times or after the notification
+    is already sent, it will simply do nothing.
+    """
+    from auctions.models import AuctionHistory, Invoice
+
+    try:
+        invoice = Invoice.objects.get(pk=invoice_pk)
+    except Invoice.DoesNotExist:
+        # Invoice was deleted, clean up and return
+        _cleanup_invoice_notification_task(invoice_pk)
+        return
+
+    # Check if notification is still needed
+    if invoice.email_sent:
+        # Already sent, clean up and return
+        _cleanup_invoice_notification_task(invoice_pk)
+        return
+
+    if invoice.status == "DRAFT":
+        # Invoice was set back to open, clean up and return
+        _cleanup_invoice_notification_task(invoice_pk)
+        return
+
+    if not invoice.auction:
+        # No auction associated, mark as sent to prevent reprocessing
+        invoice.email_sent = True
+        invoice.invoice_notification_due = None
+        invoice.save()
+        _cleanup_invoice_notification_task(invoice_pk)
+        return
+
+    should_send_email = (
+        invoice.auction.created_by.userdata.is_trusted
+        and invoice.auction.email_users_when_invoices_ready
+        and invoice.auctiontos_user.email
+    )
+
+    if should_send_email:
+        email = invoice.auctiontos_user.email
+        subject = f"Your invoice for {invoice.label} is ready"
+        if invoice.status == "PAID":
+            subject = f"Thanks for being part of {invoice.label}"
+        contact_email = invoice.auction.created_by.email
+        current_site = Site.objects.get_current()
+        mail.send(
+            email,
+            headers={"Reply-to": contact_email},
+            template="invoice_ready",
+            context={
+                "subject": subject,
+                "name": invoice.auctiontos_user.name,
+                "domain": current_site.domain,
+                "location": invoice.location,
+                "invoice": invoice,
+                "reply_to_email": contact_email,
+            },
+        )
+        # Add history entry about the email being sent
+        AuctionHistory.objects.create(
+            auction=invoice.auction,
+            user=None,
+            action=f"Invoice notification email sent to {invoice.auctiontos_user.name} ({email})",
+            applies_to="INVOICES",
+        )
+
+    # Mark as sent regardless of whether we actually sent an email
+    # This prevents re-processing invoices that can't receive emails
+    invoice.email_sent = True
+    invoice.invoice_notification_due = None
+    invoice.save()
+
+    # Clean up the PeriodicTask entry now that we're done
+    _cleanup_invoice_notification_task(invoice_pk)
+
+
+def _cleanup_invoice_notification_task(invoice_pk):
+    """
+    Remove the PeriodicTask entry for an invoice notification.
+
+    This is called after the task runs to clean up the database.
+    """
+    task_name = get_invoice_notification_task_name(invoice_pk)
+    PeriodicTask.objects.filter(name=task_name).delete()
+
+
+@shared_task(bind=True, ignore_result=True)
+def cleanup_old_invoice_notification_tasks(self):
+    """
+    Clean up old invoice notification PeriodicTask entries from the database.
+
+    This task runs daily to remove any invoice_notification_* tasks that are
+    more than 24 hours old. These tasks should normally be cleaned up after
+    execution, but this provides a safety net for any orphaned entries.
+    """
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    cutoff_time = timezone.now() - timedelta(hours=24)
+
+    # Find and delete old invoice notification tasks
+    # The clocked schedule's clocked_time indicates when the task was scheduled to run
+    old_tasks = PeriodicTask.objects.filter(
+        name__startswith="invoice_notification_",
+        clocked__clocked_time__lt=cutoff_time,
+    )
+    old_tasks.delete()
 
 
 @shared_task(bind=True, ignore_result=True)
@@ -116,36 +279,49 @@ def webpush_notifications_deduplicate(self):
     call_command("webpush_notifications_deduplicate")
 
 
-def schedule_next_auction_stats_update():
+def schedule_auction_stats_update(run_at=None):
     """
-    Schedule the next auction stats update based on when the next auction update is due.
+    Schedule a one-off task to update auction stats.
 
-    This function finds the earliest `next_update_due` timestamp among all auctions
-    and schedules the update_auction_stats task to run at that time. If no auctions
-    need updates, it schedules a fallback check.
+    Uses django-celery-beat's ClockedSchedule and PeriodicTask to schedule
+    a task to run at a specific time. If a task already exists, it will be
+    updated with the new scheduled time.
+
+    Args:
+        run_at: datetime when the update should run. If None, runs immediately.
     """
+    from datetime import timedelta
+
     from django.utils import timezone
 
-    from auctions.models import Auction
+    if run_at is None:
+        run_at = timezone.now()
 
-    now = timezone.now()
+    # Cap the delay to ensure we check periodically for new auctions
+    max_run_at = timezone.now() + timedelta(seconds=STATS_UPDATE_MAX_DELAY_SECONDS)
+    if run_at > max_run_at:
+        run_at = max_run_at
 
-    # Find the next auction that needs updating
-    next_auction = (
-        Auction.objects.filter(is_deleted=False, next_update_due__isnull=False).order_by("next_update_due").first()
+    schedule, _ = ClockedSchedule.objects.get_or_create(clocked_time=run_at)
+
+    PeriodicTask.objects.update_or_create(
+        name=AUCTION_STATS_TASK_NAME,
+        defaults={
+            "task": "auctions.tasks.update_auction_stats",
+            "clocked": schedule,
+            "one_off": True,
+            "enabled": True,
+        },
     )
 
-    if next_auction and next_auction.next_update_due:
-        # Calculate delay until the next update is due
-        delay_seconds = max(0, (next_auction.next_update_due - now).total_seconds())
-        # Cap the delay to ensure we check periodically for new auctions
-        delay_seconds = min(delay_seconds, STATS_UPDATE_MAX_DELAY_SECONDS)
-    else:
-        # No auctions with scheduled updates, check again later
-        delay_seconds = STATS_UPDATE_FALLBACK_DELAY_SECONDS
 
-    # Schedule the task with countdown
-    update_auction_stats.apply_async(countdown=delay_seconds)
+def _cleanup_auction_stats_task():
+    """
+    Remove the PeriodicTask entry for auction stats update.
+
+    This is called after the task runs to clean up the database.
+    """
+    PeriodicTask.objects.filter(name=AUCTION_STATS_TASK_NAME).delete()
 
 
 @shared_task(bind=True, ignore_result=True)
@@ -157,7 +333,7 @@ def update_auction_stats(self):
     to run again when the next auction's stats are due, rather than running on a
     fixed periodic interval.
     """
-    import logging
+    from datetime import timedelta
 
     from asgiref.sync import async_to_sync
     from channels.layers import get_channel_layer
@@ -167,6 +343,9 @@ def update_auction_stats(self):
 
     logger = logging.getLogger(__name__)
     now = timezone.now()
+
+    # Clean up the old task entry (we'll schedule a new one at the end)
+    _cleanup_auction_stats_task()
 
     # Process only one auction per run, ordered by most overdue first
     # Only process auctions that have next_update_due set and are past due
@@ -186,7 +365,7 @@ def update_auction_stats(self):
             # Set next_update_due before recalculating to prevent concurrent recalculations
             # This ensures that if the recalculation takes longer than expected,
             # subsequent task runs won't try to recalculate the same auction again
-            auction.next_update_due = now + timezone.timedelta(minutes=STATS_UPDATE_LOCK_MINUTES)
+            auction.next_update_due = now + timedelta(minutes=STATS_UPDATE_LOCK_MINUTES)
             auction.save(update_fields=["next_update_due"])
 
             auction.recalculate_stats()
@@ -204,4 +383,35 @@ def update_auction_stats(self):
             logger.exception(e)
 
     # Schedule the next run based on when the next auction update is due
-    schedule_next_auction_stats_update()
+    next_auction = (
+        Auction.objects.filter(is_deleted=False, next_update_due__isnull=False).order_by("next_update_due").first()
+    )
+
+    if next_auction and next_auction.next_update_due:
+        schedule_auction_stats_update(next_auction.next_update_due)
+    else:
+        # No auctions with scheduled updates, check again later
+        schedule_auction_stats_update(now + timedelta(seconds=STATS_UPDATE_FALLBACK_DELAY_SECONDS))
+
+
+@shared_task(bind=True, ignore_result=True)
+def cleanup_old_auction_stats_tasks(self):
+    """
+    Clean up old auction stats PeriodicTask entries from the database.
+
+    This task runs daily to remove any auction_stats_update tasks that are
+    more than 24 hours old. These tasks should normally be cleaned up after
+    execution, but this provides a safety net for any orphaned entries.
+    """
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    cutoff_time = timezone.now() - timedelta(hours=24)
+
+    # Find and delete old auction stats tasks
+    old_tasks = PeriodicTask.objects.filter(
+        name=AUCTION_STATS_TASK_NAME,
+        clocked__clocked_time__lt=cutoff_time,
+    )
+    old_tasks.delete()

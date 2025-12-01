@@ -16,7 +16,7 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        from auctions.tasks import schedule_next_auction_stats_update, update_auction_stats
+        from auctions.tasks import schedule_auction_stats_update, update_auction_stats
 
         if options["sync"]:
             # Run the task directly (useful for testing or when Celery is not available)
@@ -26,5 +26,5 @@ class Command(BaseCommand):
         else:
             # Trigger the Celery task
             self.stdout.write("Triggering auction stats update task...")
-            schedule_next_auction_stats_update()
+            schedule_auction_stats_update()
             self.stdout.write(self.style.SUCCESS("Auction stats update task has been scheduled."))
