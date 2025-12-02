@@ -4475,7 +4475,7 @@ class LotCreateView(LotValidation, CreateView):
         
         # Check if user needs to see the modal about joining an auction
         userData = self.request.user.userdata
-        can_sell_independently = self.request.user.userdata.can_sell_lots
+        can_sell_independently = settings.ALLOW_USERS_TO_CREATE_LOTS
         
         # Get available auctions for this user
         available_auctions = (
