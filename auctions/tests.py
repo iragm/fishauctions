@@ -2303,6 +2303,24 @@ class AuctionViewPermissionTests(StandardTestCase):
         assert response.status_code == 200
         self.assertContains(response, self.online_auction.title)
 
+    def test_bulk_add_button_points_to_auto_url(self):
+        """Test that the bulk add lots button uses the auto bulk add URL"""
+        # Set up in-person auction to allow bulk adding
+        self.in_person_auction.allow_bulk_adding_lots = True
+        self.in_person_auction.save()
+
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get(self.in_person_auction.get_absolute_url())
+        assert response.status_code == 200
+
+        # Check that the response contains the auto bulk add URL
+        auto_bulk_add_url = reverse("bulk_add_lots_auto_for_myself", kwargs={"slug": self.in_person_auction.slug})
+        self.assertContains(response, auto_bulk_add_url)
+
+        # Make sure it doesn't contain the old bulk add URL
+        old_bulk_add_url = reverse("bulk_add_lots_for_myself", kwargs={"slug": self.in_person_auction.slug})
+        self.assertNotContains(response, old_bulk_add_url)
+
 
 class AuctionEditViewTests(StandardTestCase):
     """Test auction edit view with different user types"""
@@ -6870,3 +6888,23 @@ class LoadDemoDataTests(TestCase):
 
         # Verify no auctions were created
         self.assertEqual(Auction.objects.count(), 0)
+
+
+class AdminReadonlyFieldsTests(StandardTestCase):
+    """Test that admin readonly fields are properly configured"""
+
+    def test_auction_admin_readonly_fields(self):
+        """Test that AuctionAdmin has created_by as readonly"""
+        from auctions.admin import AuctionAdmin
+
+        admin_instance = AuctionAdmin(Auction, None)
+        self.assertIn("created_by", admin_instance.readonly_fields)
+
+    def test_auctiontos_admin_readonly_fields(self):
+        """Test that AuctionTOSAdmin has user, auction, and pickup_location as readonly"""
+        from auctions.admin import AuctionTOSAdmin
+
+        admin_instance = AuctionTOSAdmin(AuctionTOS, None)
+        self.assertIn("user", admin_instance.readonly_fields)
+        self.assertIn("auction", admin_instance.readonly_fields)
+        self.assertIn("pickup_location", admin_instance.readonly_fields)
