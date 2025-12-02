@@ -187,6 +187,11 @@ class AuctionTOSInline(admin.TabularInline):
     search_fields = ()
     extra = 0
 
+    def get_queryset(self, request):
+        """Optimize queryset to avoid N+1 queries"""
+        qs = super().get_queryset(request)
+        return qs.select_related('user', 'auction', 'pickup_location')
+
 
 class PickupLocationAdmin(admin.ModelAdmin):
     model = PickupLocation

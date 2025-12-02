@@ -5740,6 +5740,18 @@ class UserData(models.Model):
     def last_auction_created(self):
         return Auction.objects.filter(created_by=self.user).order_by("-date_posted").first()
 
+    @property
+    def available_auctions_to_submit_lots(self):
+        """Returns auctions that this user can submit lots to"""
+        from django.utils import timezone
+        return (
+            Auction.objects.exclude(is_deleted=True)
+            .filter(lot_submission_end_date__gte=timezone.now())
+            .filter(lot_submission_start_date__lte=timezone.now())
+            .filter(auctiontos__user=self.user, auctiontos__selling_allowed=True)
+            .order_by("date_end")
+        )
+
     def __str__(self):
         return f"{self.user.username}'s data"
 

@@ -4475,16 +4475,10 @@ class LotCreateView(LotValidation, CreateView):
         
         # Check if user needs to see the modal about joining an auction
         userData = self.request.user.userdata
-        can_sell_independently = settings.ALLOW_USERS_TO_CREATE_LOTS
+        can_sell_independently = userData.can_submit_standalone_lots
         
         # Get available auctions for this user
-        available_auctions = (
-            Auction.objects.exclude(is_deleted=True)
-            .filter(lot_submission_end_date__gte=timezone.now())
-            .filter(lot_submission_start_date__lte=timezone.now())
-            .filter(auctiontos__user=self.request.user, auctiontos__selling_allowed=True)
-            .order_by("date_end")
-        )
+        available_auctions = userData.available_auctions_to_submit_lots
         
         # Show modal if user can't sell independently and has no available auctions
         context["show_no_auction_modal"] = not can_sell_independently and not available_auctions.exists()
@@ -4507,7 +4501,7 @@ class LotCreateView(LotValidation, CreateView):
             invoice = Invoice.objects.filter(auctiontos_user=lot.auctiontos_seller, auction=lot.auction).first()
             if not invoice:
                 invoice = Invoice.objects.create(auctiontos_user=lot.auctiontos_seller, auction=lot.auction)
-            invoice.recalculate()
+            invoice.recalculate
         result = super().form_valid(form, **kwargs)
         # Create history after lot is saved and has a lot_number_display
         if lot.auction and lot.auctiontos_seller:
