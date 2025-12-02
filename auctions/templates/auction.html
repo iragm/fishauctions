@@ -155,7 +155,7 @@ function initMap() {
                             {% if auction.is_online or not auction.allow_bulk_adding_lots %}
                             <a href='{{auction.add_lot_link}}' class="btn btn-success btn-sm w-100"><i class="bi bi-calendar-plus"></i> Add Lot</a>
                             {% else %}
-                            <a href='{% url "bulk_add_lots_for_myself" slug=auction.slug %}' class="btn btn-success btn-sm w-100"><i class="bi bi-calendar-plus"></i> Add Lots</a>
+                            <a href='{% url "bulk_add_lots_auto_for_myself" slug=auction.slug %}' class="btn btn-success btn-sm w-100"><i class="bi bi-calendar-plus"></i> Add Lots</a>
                             {% endif %}
                         </div>
                         <div class="col-12 col-md-auto">

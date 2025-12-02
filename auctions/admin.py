@@ -360,6 +360,7 @@ class AuctionAdmin(admin.ModelAdmin):
         "created_by__first_name",
         "created_by__last_name",
     )
+    readonly_fields = ("created_by",)
     inlines = [
         PickupLocationInline,
     ]
@@ -666,6 +667,11 @@ class AuctionTOSAdmin(admin.ModelAdmin):
         "user__email",
         "user__username",
         "bidder_number",
+    )
+    readonly_fields = (
+        "user",
+        "auction",
+        "pickup_location",
     )
 
 
