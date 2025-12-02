@@ -5187,7 +5187,7 @@ class AuctionConfirmView(LoginRequiredMixin, TemplateView):
             auction_creation_allowed = True
         if not auction_creation_allowed:
             # If user can't create auctions, redirect them directly to selling
-            return redirect("/selling/")
+            return redirect("selling")
         return super().dispatch(request, *args, **kwargs)
 
 
