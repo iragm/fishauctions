@@ -4507,7 +4507,7 @@ class LotCreateView(LotValidation, CreateView):
             invoice = Invoice.objects.filter(auctiontos_user=lot.auctiontos_seller, auction=lot.auction).first()
             if not invoice:
                 invoice = Invoice.objects.create(auctiontos_user=lot.auctiontos_seller, auction=lot.auction)
-            invoice.recalculate
+            invoice.recalculate()
         result = super().form_valid(form, **kwargs)
         # Create history after lot is saved and has a lot_number_display
         if lot.auction and lot.auctiontos_seller:
