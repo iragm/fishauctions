@@ -3354,10 +3354,7 @@ class BulkAddLotsAuto(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         return context
 
     def dispatch(self, request, *args, **kwargs):
-        self.auction = get_object_or_404(Auction, slug=kwargs.pop("slug"), is_deleted=False)
-        self.is_admin = False
-        if not self.auction:
-            raise Http404
+        self.get_auction(kwargs.pop("slug", ""))
         bidder_number = kwargs.pop("bidder_number", None)
         self.tos = None
 
@@ -3372,8 +3369,7 @@ class BulkAddLotsAuto(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 messages.error(request, "User not found in this auction")
                 return redirect(f"/auctions/{self.auction.slug}/users/")
 
-        if self.is_auction_admin:
-            self.is_admin = True
+        self.is_admin = self.is_auction_admin
 
         if not self.tos:
             # if you don't got permission to edit this auction, you can only add lots for yourself
@@ -3591,6 +3587,26 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
             # Save the lot
             lot.save()
 
+            # Create auction history entry
+            if is_new:
+                # New lot created
+                AuctionHistory.objects.create(
+                    auction=self.auction,
+                    user=request.user,
+                    action=f"created lot #{lot.lot_number_display}: {lot.lot_name}",
+                    applies_to="LOTS",
+                )
+            else:
+                # Check if lot is more than 20 minutes old
+                lot_age = timezone.now() - lot.date_posted
+                if lot_age.total_seconds() > 1200:  # 20 minutes in seconds
+                    AuctionHistory.objects.create(
+                        auction=self.auction,
+                        user=request.user,
+                        action=f"edited lot #{lot.lot_number_display}: {lot.lot_name}",
+                        applies_to="LOTS",
+                    )
+
             # Update invoice
             invoice = Invoice.objects.filter(auctiontos_user=self.tos, auction=self.auction).first()
             if not invoice:
@@ -3615,10 +3631,7 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
             return JsonResponse({"success": False, "error": str(e)})
 
     def dispatch(self, request, *args, **kwargs):
-        self.auction = get_object_or_404(Auction, slug=kwargs.pop("slug"), is_deleted=False)
-        self.is_admin = False
-        if not self.auction:
-            raise Http404
+        self.get_auction(kwargs.pop("slug", ""))
 
         # Get bidder_number from POST data if present (for admin adding lots for specific user)
         bidder_number = None
@@ -3639,8 +3652,7 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                 .first()
             )
 
-        if self.is_auction_admin:
-            self.is_admin = True
+        self.is_admin = self.is_auction_admin
 
         if not self.tos:
             return JsonResponse({"success": False, "errors": {"general": "You must join this auction first"}})
