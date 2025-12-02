@@ -454,7 +454,6 @@ class LotAdmin(admin.ModelAdmin):
         "promote_this_lot",
         "promotion_budget",
         "promotion_weight",
-        "added_by",
     )
     readonly_fields = (
         "user",
@@ -463,6 +462,7 @@ class LotAdmin(admin.ModelAdmin):
         "winner",
         "auction",
         "reference_link",
+        "added_by",
         "buyer_invoice",
         "seller_invoice",
     )

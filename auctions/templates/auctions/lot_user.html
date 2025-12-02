@@ -30,7 +30,7 @@ $.ajax({
     <a href="{% url 'new_lot' %}" class="btn btn-sm ms-2 mt-2 mb-2 btn-info"><i class="bi bi-calendar-plus"></i> Create new lot</a>
     {% if userdata.last_auction_used %}
     {% if not userdata.last_auction_used.is_online and userdata.last_auction_used.allow_bulk_adding_lots %}
-      <a href="{% url 'bulk_add_lots_for_myself' slug=userdata.last_auction_used.slug %}" class="btn btn-sm ms-2 mt-2 mb-2 btn-info"><i class="bi bi-calendar-plus"></i> Bulk add lots to {{userdata.last_auction_used}}</a>
+      <a href="{% url 'bulk_add_lots_auto_for_myself' slug=userdata.last_auction_used.slug %}" class="btn btn-sm ms-2 mt-2 mb-2 btn-info"><i class="bi bi-calendar-plus"></i> Bulk add lots to {{userdata.last_auction_used}}</a>
     {% endif %}
     <a href="{% url 'my_auction_invoice' slug=userdata.last_auction_used.slug %}" class="btn btn-sm ms-2 mt-2 mb-2 btn-primary"><i class="bi bi-bag"></i> Invoice for {{userdata.last_auction_used}}</a>
     <a href="{% url 'print_my_labels' slug=userdata.last_auction_used.slug %}" class="btn btn-sm ms-2 mt-2 mb-2 btn-primary"><i class="bi bi-tags"></i> Print labels for {{userdata.last_auction_used}}</a>

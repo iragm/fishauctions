@@ -4614,6 +4614,405 @@ class HasEverGrantedPermissionTests(StandardTestCase):
         self.assertFalse(tos.has_ever_granted_permission)
 
 
+class BulkAddLotsAutoTests(StandardTestCase):
+    """Tests for the new auto-save bulk add lots functionality"""
+
+    def setUp(self):
+        super().setUp()
+        # Set up auction with lot limits
+        self.in_person_auction.max_lots_per_user = 3
+        self.in_person_auction.allow_additional_lots_as_donation = True
+        self.in_person_auction.allow_bulk_adding_lots = True
+        self.in_person_auction.lot_submission_end_date = timezone.now() + datetime.timedelta(days=7)
+        self.in_person_auction.save()
+
+    def test_bulk_add_lots_view_access(self):
+        """Test that users can access bulk add lots page"""
+        # Login as regular user
+        self.client.login(username="my_lot", password="testpassword")
+        response = self.client.get(
+            reverse("bulk_add_lots_auto_for_myself", kwargs={"slug": self.in_person_auction.slug})
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def test_bulk_add_lots_admin_access(self):
+        """Test that admins can access bulk add for other users"""
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+        response = self.client.get(
+            reverse(
+                "bulk_add_lots_auto",
+                kwargs={"slug": self.in_person_auction.slug, "bidder_number": self.in_person_buyer.bidder_number},
+            )
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def test_bulk_add_lots_non_admin_cannot_access_bidder_url(self):
+        """Test that non-admin users cannot access the bidder_number URL"""
+        # Login as regular user (not auction creator)
+        self.client.login(username="no_lots", password="testpassword")
+
+        # Try to access bulk add for a specific bidder number
+        response = self.client.get(
+            reverse(
+                "bulk_add_lots_auto",
+                kwargs={"slug": self.in_person_auction.slug, "bidder_number": self.in_person_buyer.bidder_number},
+            ),
+            follow=True,  # Follow redirects
+        )
+
+        # Should be redirected (not allowed)
+        self.assertEqual(response.status_code, 200)
+        # Check for error message
+        messages = list(response.context["messages"])
+        self.assertTrue(any("admin" in str(m).lower() for m in messages))
+
+    def test_save_lot_ajax_security(self):
+        """Test that non-admin users cannot add lots for others"""
+        # Login as regular user (not auction creator)
+        self.client.login(username="no_lots", password="testpassword")
+
+        # Try to add lot for another user
+        response = self.client.post(
+            reverse("save_lot_ajax", kwargs={"slug": self.in_person_auction.slug}),
+            data='{"lot_name": "Test Lot", "bidder_number": "555"}',
+            content_type="application/json",
+        )
+        data = response.json()
+        self.assertFalse(data["success"])
+        self.assertIn("admin", data["error"].lower())
+
+    def test_save_lot_ajax_admin_can_add_for_others(self):
+        """Test that admins can add lots for other users"""
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+
+        # Add lot for another user
+        response = self.client.post(
+            reverse("save_lot_ajax", kwargs={"slug": self.in_person_auction.slug}),
+            data='{"lot_name": "Test Lot", "reserve_price": 5, "bidder_number": "555"}',
+            content_type="application/json",
+        )
+        data = response.json()
+        self.assertTrue(data["success"])
+        self.assertIsNotNone(data["lot_id"])
+
+        # Verify lot was created for correct user
+        lot = Lot.objects.get(lot_number=data["lot_id"])
+        self.assertEqual(lot.auctiontos_seller, self.in_person_buyer)
+
+    def test_lot_limit_enforcement(self):
+        """Test that lot limits are enforced for non-admin users"""
+        # Login as regular user (not auction creator)
+        self.client.login(username="no_lots", password="testpassword")
+
+        # Create 3 lots (the limit)
+        for i in range(3):
+            response = self.client.post(
+                reverse("save_lot_ajax", kwargs={"slug": self.in_person_auction.slug}),
+                data=f'{{"lot_name": "Test Lot {i}", "reserve_price": 5}}',
+                content_type="application/json",
+            )
+            data = response.json()
+            self.assertTrue(data["success"])
+
+        # Try to add 4th lot (should fail)
+        response = self.client.post(
+            reverse("save_lot_ajax", kwargs={"slug": self.in_person_auction.slug}),
+            data='{"lot_name": "Test Lot 4", "reserve_price": 5}',
+            content_type="application/json",
+        )
+        data = response.json()
+        self.assertFalse(data["success"])
+        self.assertIn("maximum", data["errors"]["general"].lower())
+
+    def test_donation_lot_beyond_limit(self):
+        """Test that donation lots can be added beyond limit when allowed"""
+        # Login as regular user (not auction creator)
+        self.client.login(username="no_lots", password="testpassword")
+
+        # Create 3 lots (the limit)
+        for i in range(3):
+            response = self.client.post(
+                reverse("save_lot_ajax", kwargs={"slug": self.in_person_auction.slug}),
+                data=f'{{"lot_name": "Test Lot {i}", "reserve_price": 5}}',
+                content_type="application/json",
+            )
+            self.assertTrue(response.json()["success"])
+
+        # Try to add 4th lot as donation (should succeed)
+        response = self.client.post(
+            reverse("save_lot_ajax", kwargs={"slug": self.in_person_auction.slug}),
+            data='{"lot_name": "Donation Lot", "reserve_price": 5, "donation": true}',
+            content_type="application/json",
+        )
+        data = response.json()
+        self.assertTrue(data["success"])
+
+    def test_admin_bypass_lot_limit(self):
+        """Test that admins can bypass lot limits"""
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+
+        # Create 4 lots (beyond limit)
+        for i in range(4):
+            response = self.client.post(
+                reverse("save_lot_ajax", kwargs={"slug": self.in_person_auction.slug}),
+                data=f'{{"lot_name": "Test Lot {i}", "reserve_price": 5}}',
+                content_type="application/json",
+            )
+            data = response.json()
+            self.assertTrue(data["success"])
+            if i >= 3:  # Beyond limit
+                self.assertTrue(data.get("admin_bypassed"))
+
+    def test_locked_lot_cannot_be_edited(self):
+        """Test that lots cannot be edited after submission deadline"""
+        # Create a lot for tosC (user_with_no_lots)
+        lot = Lot.objects.create(
+            lot_name="Test Lot", auction=self.in_person_auction, auctiontos_seller=self.tosC, reserve_price=5
+        )
+
+        # End lot submission
+        self.in_person_auction.lot_submission_end_date = timezone.now() - datetime.timedelta(days=1)
+        self.in_person_auction.save()
+
+        # Login as regular user (owner, not auction creator)
+        self.client.login(username="no_lots", password="testpassword")
+
+        # Try to edit the lot
+        response = self.client.post(
+            reverse("save_lot_ajax", kwargs={"slug": self.in_person_auction.slug}),
+            data=f'{{"lot_id": {lot.lot_number}, "lot_name": "Updated Name", "reserve_price": 10}}',
+            content_type="application/json",
+        )
+        data = response.json()
+        self.assertFalse(data["success"])
+        # Check that error message relates to lot submission deadline
+        error_msg = data["errors"]["general"].lower()
+        self.assertTrue("cannot be edited" in error_msg or "submission" in error_msg)
+
+    def test_custom_fields_saved(self):
+        """Test that custom fields are properly saved"""
+        # Set up custom fields
+        self.in_person_auction.custom_field_1 = "required"
+        self.in_person_auction.custom_field_1_name = "Species"
+        self.in_person_auction.use_custom_checkbox_field = True
+        self.in_person_auction.custom_checkbox_name = "Wild Caught"
+        self.in_person_auction.use_quantity_field = True
+        self.in_person_auction.use_donation_field = True
+        self.in_person_auction.use_i_bred_this_fish_field = True
+        self.in_person_auction.save()
+
+        # Login as regular user
+        self.client.login(username="my_lot", password="testpassword")
+
+        # Create lot with all custom fields
+        response = self.client.post(
+            reverse("save_lot_ajax", kwargs={"slug": self.in_person_auction.slug}),
+            data='{"lot_name": "Test Lot", "reserve_price": 5, "custom_field_1": "Betta", "custom_checkbox": true, "quantity": 2, "donation": true, "i_bred_this_fish": true}',
+            content_type="application/json",
+        )
+        data = response.json()
+        self.assertTrue(data["success"])
+
+        # Verify all fields saved
+        lot = Lot.objects.get(lot_number=data["lot_id"])
+        self.assertEqual(lot.custom_field_1, "Betta")
+        self.assertTrue(lot.custom_checkbox)
+        self.assertEqual(lot.quantity, 2)
+        self.assertTrue(lot.donation)
+        self.assertTrue(lot.i_bred_this_fish)
+
+    def test_required_field_validation(self):
+        """Test that required fields are validated"""
+        # Set up required custom field
+        self.in_person_auction.custom_field_1 = "required"
+        self.in_person_auction.custom_field_1_name = "Species"
+        self.in_person_auction.save()
+
+        # Login as regular user
+        self.client.login(username="my_lot", password="testpassword")
+
+        # Try to create lot without required field
+        response = self.client.post(
+            reverse("save_lot_ajax", kwargs={"slug": self.in_person_auction.slug}),
+            data='{"lot_name": "Test Lot", "reserve_price": 5}',
+            content_type="application/json",
+        )
+        data = response.json()
+        self.assertFalse(data["success"])
+        self.assertIn("custom_field_1", data["errors"])
+
+    def test_lot_update_existing(self):
+        """Test that existing lots can be updated"""
+        # Create a lot
+        lot = Lot.objects.create(
+            lot_name="Original Name",
+            auction=self.in_person_auction,
+            auctiontos_seller=self.in_person_tos,
+            reserve_price=5,
+        )
+
+        # Login as user (owner)
+        self.client.login(username="my_lot", password="testpassword")
+
+        # Update the lot
+        response = self.client.post(
+            reverse("save_lot_ajax", kwargs={"slug": self.in_person_auction.slug}),
+            data=f'{{"lot_id": {lot.lot_number}, "lot_name": "Updated Name", "reserve_price": 10}}',
+            content_type="application/json",
+        )
+        data = response.json()
+        self.assertTrue(data["success"])
+
+        # Verify update
+        lot.refresh_from_db()
+        self.assertEqual(lot.lot_name, "Updated Name")
+        self.assertEqual(lot.reserve_price, 10)
+
+    def test_lot_not_found_for_different_user(self):
+        """Test that users cannot edit other users' lots"""
+        # Create a lot for user_with_no_lots
+        lot = Lot.objects.create(
+            lot_name="Other User's Lot", auction=self.in_person_auction, auctiontos_seller=self.tosC, reserve_price=5
+        )
+
+        # Login as different user
+        self.client.login(username="my_lot", password="testpassword")
+
+        # Try to edit the lot
+        response = self.client.post(
+            reverse("save_lot_ajax", kwargs={"slug": self.in_person_auction.slug}),
+            data=f'{{"lot_id": {lot.lot_number}, "lot_name": "Hacked Name", "reserve_price": 100}}',
+            content_type="application/json",
+        )
+        data = response.json()
+        self.assertFalse(data["success"])
+        self.assertIn("not found", data["error"].lower())
+
+    def test_lot_locked_when_has_bids(self):
+        """Test that lots with bids cannot be edited"""
+        # Create a lot - use in_person_buyer TOS for in_person_auction
+        lot = Lot.objects.create(
+            lot_name="Test Lot", auction=self.in_person_auction, auctiontos_seller=self.in_person_buyer, reserve_price=5
+        )
+
+        # Add a bid to the lot
+        Bid.objects.create(lot_number=lot, user=self.userB, bid_time=timezone.now(), amount=10)
+
+        # Login as lot owner
+        self.client.login(username="no_lots", password="testpassword")
+
+        # Try to edit the lot
+        response = self.client.post(
+            reverse("save_lot_ajax", kwargs={"slug": self.in_person_auction.slug}),
+            data=f'{{"lot_id": {lot.lot_number}, "lot_name": "Updated Name", "reserve_price": 10}}',
+            content_type="application/json",
+        )
+        data = response.json()
+        self.assertFalse(data["success"])
+        error_msg = data["error"].lower()
+        self.assertTrue("bids" in error_msg or "cannot be edited" in error_msg)
+
+    def test_lot_locked_when_sold(self):
+        """Test that sold lots cannot be edited"""
+        # Create a sold lot - use in_person_buyer TOS for in_person_auction
+        lot = Lot.objects.create(
+            lot_name="Test Lot",
+            auction=self.in_person_auction,
+            auctiontos_seller=self.in_person_buyer,
+            reserve_price=5,
+            auctiontos_winner=self.tosB,  # Has been sold
+        )
+
+        # Login as lot owner
+        self.client.login(username="no_lots", password="testpassword")
+
+        # Try to edit the lot
+        response = self.client.post(
+            reverse("save_lot_ajax", kwargs={"slug": self.in_person_auction.slug}),
+            data=f'{{"lot_id": {lot.lot_number}, "lot_name": "Updated Name", "reserve_price": 10}}',
+            content_type="application/json",
+        )
+        data = response.json()
+        self.assertFalse(data["success"])
+        error_msg = data["error"].lower()
+        self.assertTrue("sold" in error_msg or "cannot be edited" in error_msg)
+
+    def test_admin_can_edit_locked_lot(self):
+        """Test that admins can edit locked lots"""
+        # Create a lot and end lot submission
+        lot = Lot.objects.create(
+            lot_name="Test Lot", auction=self.in_person_auction, auctiontos_seller=self.in_person_buyer, reserve_price=5
+        )
+
+        # End lot submission
+        self.in_person_auction.lot_submission_end_date = timezone.now() - datetime.timedelta(days=1)
+        self.in_person_auction.save()
+
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+
+        # Admin should be able to edit
+        response = self.client.post(
+            reverse("save_lot_ajax", kwargs={"slug": self.in_person_auction.slug}),
+            data=f'{{"lot_id": {lot.lot_number}, "lot_name": "Admin Updated", "reserve_price": 10, "bidder_number": "{self.in_person_buyer.bidder_number}"}}',
+            content_type="application/json",
+        )
+        data = response.json()
+        self.assertTrue(data["success"])
+
+        # Verify update
+        lot.refresh_from_db()
+        self.assertEqual(lot.lot_name, "Admin Updated")
+
+    def test_can_be_edited_property(self):
+        """Test the can_be_edited property of Lot model"""
+        # Create a basic lot
+        lot = Lot.objects.create(
+            lot_name="Test Lot", auction=self.in_person_auction, auctiontos_seller=self.in_person_tos, reserve_price=5
+        )
+
+        # With open submission, lot should be editable
+        self.assertTrue(lot.can_be_edited)
+        self.assertFalse(lot.cannot_be_edited_reason)
+
+        # End lot submission
+        self.in_person_auction.lot_submission_end_date = timezone.now() - datetime.timedelta(days=1)
+        self.in_person_auction.save()
+
+        # Now lot should not be editable
+        lot.refresh_from_db()
+        self.assertFalse(lot.can_be_edited)
+        self.assertEqual(lot.cannot_be_edited_reason, "Lot submission is over for this auction")
+
+    def test_cannot_change_reason_with_high_bidder(self):
+        """Test cannot_change_reason when lot has a high bidder"""
+        lot = Lot.objects.create(
+            lot_name="Test Lot", auction=self.in_person_auction, auctiontos_seller=self.in_person_tos, reserve_price=5
+        )
+
+        # Add a bid to the lot
+        Bid.objects.create(lot_number=lot, user=self.userB, bid_time=timezone.now(), amount=10)
+
+        self.assertEqual(lot.cannot_change_reason, "There are already bids placed on this lot")
+        self.assertFalse(lot.can_be_edited)
+
+    def test_cannot_change_reason_with_winner(self):
+        """Test cannot_change_reason when lot has a winner"""
+        lot = Lot.objects.create(
+            lot_name="Test Lot",
+            auction=self.in_person_auction,
+            auctiontos_seller=self.in_person_tos,
+            reserve_price=5,
+            auctiontos_winner=self.tosB,
+        )
+
+        self.assertEqual(lot.cannot_change_reason, "This lot has sold")
+        self.assertFalse(lot.can_be_edited)
+
+
 class UpdateAuctionStatsCommandTestCase(StandardTestCase):
     """Test the update_auction_stats management command"""
 
