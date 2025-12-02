@@ -256,4 +256,31 @@ $(document).ready(function() {
         </div>
     </div>
 </div>
+
+<!-- Modal for users who need to join an auction -->
+{% if show_no_auction_modal %}
+<div class="modal fade" id="noAuctionModal" tabindex="-1" aria-labelledby="noAuctionModalLabel" aria-hidden="true" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="noAuctionModalLabel">Join an Auction</h5>
+            </div>
+            <div class="modal-body">
+                <p>You need to join an auction before you can create lots.</p>
+                {% if lot_submission_ended_message %}
+                <p class="text-muted">{{ lot_submission_ended_message }}</p>
+                {% endif %}
+            </div>
+            <div class="modal-footer">
+                <a href="/auctions/" class="btn btn-primary">Go to auctions list</a>
+            </div>
+        </div>
+    </div>
+</div>
+<script type="text/javascript">
+    $(document).ready(function() {
+        $('#noAuctionModal').modal('show');
+    });
+</script>
+{% endif %}
 {% endblock %}

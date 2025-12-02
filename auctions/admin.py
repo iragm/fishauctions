@@ -363,6 +363,7 @@ class AuctionAdmin(admin.ModelAdmin):
     readonly_fields = ("created_by",)
     inlines = [
         PickupLocationInline,
+        AuctionTOSInline,
     ]
 
     actions = ["export_user_emails"]
