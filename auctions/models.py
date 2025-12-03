@@ -5744,6 +5744,7 @@ class UserData(models.Model):
     def available_auctions_to_submit_lots(self):
         """Returns auctions that this user can submit lots to"""
         from django.utils import timezone
+
         return (
             Auction.objects.exclude(is_deleted=True)
             .filter(lot_submission_end_date__gte=timezone.now())

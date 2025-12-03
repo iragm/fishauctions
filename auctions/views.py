@@ -4472,26 +4472,28 @@ class LotCreateView(LotValidation, CreateView):
         context = super().get_context_data(**kwargs)
         context["title"] = "New lot"
         context["new"] = True
-        
+
         # Check if user needs to see the modal about joining an auction
         userData = self.request.user.userdata
         can_sell_independently = userData.can_submit_standalone_lots
-        
+
         # Get available auctions for this user
         available_auctions = userData.available_auctions_to_submit_lots
-        
+
         # Show modal if user can't sell independently and has no available auctions
         context["show_no_auction_modal"] = not can_sell_independently and not available_auctions.exists()
         context["last_auction_name"] = None
         context["lot_submission_ended_message"] = None
-        
+
         # If they have a last used auction, check if lot submission has ended
         if userData.last_auction_used and context["show_no_auction_modal"]:
             last_auction = userData.last_auction_used
             context["last_auction_name"] = last_auction.title
             if last_auction.lot_submission_end_date and last_auction.lot_submission_end_date < timezone.now():
-                context["lot_submission_ended_message"] = f"Lot submission has ended for the {last_auction.title} auction"
-        
+                context["lot_submission_ended_message"] = (
+                    f"Lot submission has ended for the {last_auction.title} auction"
+                )
+
         return context
 
     def form_valid(self, form, **kwargs):
