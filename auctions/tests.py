@@ -6910,7 +6910,7 @@ class AdminReadonlyFieldsTests(StandardTestCase):
         self.assertIn("pickup_location", admin_instance.readonly_fields)
 
 
-class HelperFunctionsTestCase(TestCase):
+class HelperFunctionsTestCase(StandardTestCase):
     """Test cases for helper_functions.py"""
 
     def test_get_currency_symbol_all_supported_currencies(self):
