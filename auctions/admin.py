@@ -182,10 +182,16 @@ class AuctionTOSInline(admin.TabularInline):
         "pickup_location",
         "user",
         "auction",
+        "possible_duplicate",
     )
     list_filter = ()
     search_fields = ()
     extra = 0
+
+    def get_queryset(self, request):
+        """Optimize queryset to avoid N+1 queries"""
+        qs = super().get_queryset(request)
+        return qs.select_related("user", "auction", "pickup_location")
 
 
 class PickupLocationAdmin(admin.ModelAdmin):
@@ -340,11 +346,24 @@ class PickupLocationInline(admin.TabularInline):
     model = PickupLocation
     list_display = (
         "name",
-        "user",
-        "auction",
         "description",
         "pickup_time",
         "second_pickup_time",
+    )
+    readonly_fields = [
+        "auction",
+        "contact_person",
+    ]
+    exclude = (
+        "pickup_location_contact_name",
+        "pickup_location_contact_phone",
+        "pickup_location_contact_email",
+        "latitude",
+        "longitude",
+        "address",
+        "location_coordinates",
+        "is_default",
+        "user",
     )
     list_filter = ()
     search_fields = ()
@@ -363,6 +382,7 @@ class AuctionAdmin(admin.ModelAdmin):
     readonly_fields = ("created_by",)
     inlines = [
         PickupLocationInline,
+        AuctionTOSInline,
     ]
 
     actions = ["export_user_emails"]

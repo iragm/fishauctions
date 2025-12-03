@@ -169,8 +169,9 @@ urlpatterns = [
     path("images/<int:pk>/edit", views.ImageUpdateView.as_view(), name="edit_image"),
     path("auctions/", views.AllAuctions.as_view(), name="auctions"),
     path("auctions/all/", views.AllAuctions.as_view()),
+    path("auctions/confirm/", login_required(views.AuctionConfirmView.as_view()), name="auction_confirm"),
     # path('auctions/new/', views.createAuction, name='createAuction'),
-    path("auctions/new/", login_required(views.AuctionCreateView.as_view())),
+    path("auctions/new/", login_required(views.AuctionCreateView.as_view()), name="create_auction"),
     path("auctions/<slug:slug>/edit/", views.AuctionUpdate.as_view(), name="edit_auction"),
     path("auctions/<slug:slug>/invoices/", login_required(views.AuctionUsers.as_view())),
     path(

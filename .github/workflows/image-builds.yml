@@ -13,7 +13,7 @@ jobs:
 
       - run: ./.github/scripts/prepare-ci.sh
       - run: docker compose build
-      - run: docker compose up --detach --wait --wait-timeout 60
+      - run: docker compose up --detach --wait --wait-timeout 120
 
       - run: docker compose exec web python3 manage.py test
 

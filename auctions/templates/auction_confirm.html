@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}What would you like to do?{% endblock %}
+{% block extra_js %}<script type='text/javascript'>pageView();</script>{% endblock %}
+{% block content %}
+<div class="container mt-5">
+    <div class="row justify-content-center">
+        <div class="col-md-8 text-center">
+            <h3 class="mb-4">What would you like to do?</h3>
+            <div class="row mt-5">
+                <div class="col-md-6 mb-3">
+                    <a href="{% url 'create_auction' %}" class="btn btn-info btn-lg w-100 py-4">
+                        <i class="bi bi-calendar-event"></i><br>
+                        <span class="mt-2 d-block">Create a club auction</span>
+                    </a>
+                    <small class="text-muted d-block mt-2">Create an auction that other people can add lots to</small>
+                </div>
+                <div class="col-md-6 mb-3">
+                    <a href="{% url 'selling' %}" class="btn btn-info btn-lg w-100 py-4">
+                        <i class="bi bi-tag"></i><br>
+                        <span class="mt-2 d-block">Sell an item</span>
+                    </a>
+                    <small class="text-muted d-block mt-2">Create a single lot to sell</small>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

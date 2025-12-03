@@ -2203,13 +2203,7 @@ class CreateLotForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         # self.fields["description"].widget.attrs = {"rows": 3}
         # self.fields['species_category'].required = True
-        self.fields["auction"].queryset = (
-            Auction.objects.exclude(is_deleted=True)
-            .filter(lot_submission_end_date__gte=timezone.now())
-            .filter(lot_submission_start_date__lte=timezone.now())
-            .filter(auctiontos__user=self.user, auctiontos__selling_allowed=True)
-            .order_by("date_end")
-        )
+        self.fields["auction"].queryset = self.user.userdata.available_auctions_to_submit_lots
         if self.auction:
             if self.fields["auction"].queryset.filter(pk=self.auction.pk).exists():
                 self.fields["auction"].queryset = Auction.objects.exclude(is_deleted=True).filter(pk=self.auction.pk)
