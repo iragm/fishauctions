@@ -341,6 +341,9 @@ class PageViewTrackingTests(SeleniumTestCase):
         """Test that the pageView JavaScript function is defined on pages."""
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
+        # Wait a bit for scripts to execute
+        import time
+        time.sleep(1)
         # Execute JS to check if pageView function exists
         result = self.driver.execute_script("return typeof pageView === 'function'")
         self.assertTrue(result, "pageView function should be defined")
@@ -349,6 +352,9 @@ class PageViewTrackingTests(SeleniumTestCase):
         """Test that src and uid URL parameters are removed from the URL."""
         self.driver.get(self.get_url("/?src=test&uid=123"))
         self.wait_for_page_load()
+        # Wait for URL cleanup script to run
+        import time
+        time.sleep(1)
         # Check that URL params are cleaned up
         current_url = self.driver.current_url
         self.assertNotIn("src=", current_url, "src parameter should be removed")
@@ -358,6 +364,9 @@ class PageViewTrackingTests(SeleniumTestCase):
         """Test that the sendPageView JavaScript function is defined."""
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
+        # Wait a bit for scripts to execute
+        import time
+        time.sleep(1)
         # Execute JS to check if sendPageView function exists
         result = self.driver.execute_script("return typeof sendPageView === 'function'")
         self.assertTrue(result, "sendPageView function should be defined")
@@ -372,7 +381,11 @@ class JavaScriptBasicFunctionalityTests(SeleniumTestCase):
         """Test that jQuery is loaded and available."""
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
-        # Check if jQuery is loaded
+        # Wait for jQuery to load from CDN
+        from selenium.webdriver.support.ui import WebDriverWait
+        WebDriverWait(self.driver, 15).until(
+            lambda d: d.execute_script("return typeof jQuery !== 'undefined'")
+        )
         result = self.driver.execute_script("return typeof jQuery !== 'undefined'")
         self.assertTrue(result, "jQuery should be loaded")
 
@@ -380,7 +393,11 @@ class JavaScriptBasicFunctionalityTests(SeleniumTestCase):
         """Test that Bootstrap JavaScript is loaded."""
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
-        # Check if Bootstrap is loaded
+        # Wait for Bootstrap to load from CDN
+        from selenium.webdriver.support.ui import WebDriverWait
+        WebDriverWait(self.driver, 15).until(
+            lambda d: d.execute_script("return typeof bootstrap !== 'undefined'")
+        )
         result = self.driver.execute_script("return typeof bootstrap !== 'undefined'")
         self.assertTrue(result, "Bootstrap should be loaded")
 
@@ -388,7 +405,11 @@ class JavaScriptBasicFunctionalityTests(SeleniumTestCase):
         """Test that HTMx library is loaded."""
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
-        # Check if htmx is loaded
+        # Wait for htmx to load
+        from selenium.webdriver.support.ui import WebDriverWait
+        WebDriverWait(self.driver, 15).until(
+            lambda d: d.execute_script("return typeof htmx !== 'undefined'")
+        )
         result = self.driver.execute_script("return typeof htmx !== 'undefined'")
         self.assertTrue(result, "HTMx should be loaded")
 
@@ -396,6 +417,11 @@ class JavaScriptBasicFunctionalityTests(SeleniumTestCase):
         """Test that Bootstrap tooltips are initialized."""
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
+        # Wait for both jQuery and Bootstrap to load
+        from selenium.webdriver.support.ui import WebDriverWait
+        WebDriverWait(self.driver, 15).until(
+            lambda d: d.execute_script("return typeof jQuery !== 'undefined' && typeof bootstrap !== 'undefined'")
+        )
         # Tooltips should be initialized via jQuery(document).ready
         # Check that the Bootstrap tooltip function exists
         result = self.driver.execute_script(
@@ -413,9 +439,12 @@ class CookieAndStorageTests(SeleniumTestCase):
         """Test that TOS banner can be dismissed via cookie (base.html - agreeTos)."""
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
-        # Check if agreeTos function exists
-        result = self.driver.execute_script("return typeof agreeTos === 'function'")
-        self.assertTrue(result, "agreeTos function should be defined")
+        # agreeTos function only exists if hide_tos_banner is False (banner is shown)
+        # Check if the function exists OR if the banner is hidden (cookie already set)
+        result = self.driver.execute_script(
+            "return typeof agreeTos === 'function' || document.cookie.includes('hide_tos_banner=true')"
+        )
+        self.assertTrue(result, "agreeTos function should be defined or TOS banner already hidden")
 
     def test_timezone_detection(self):
         """Test that timezone detection JavaScript runs (base.html)."""
@@ -490,6 +519,11 @@ class AjaxFunctionalityTests(SeleniumTestCase):
         """Test that AJAX requests can be made via jQuery."""
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
+        # Wait for jQuery to load from CDN
+        from selenium.webdriver.support.ui import WebDriverWait
+        WebDriverWait(self.driver, 15).until(
+            lambda d: d.execute_script("return typeof jQuery !== 'undefined'")
+        )
         # Check if jQuery.ajax exists (use jQuery instead of $ to avoid alias issues)
         result = self.driver.execute_script("return typeof jQuery !== 'undefined' && typeof jQuery.ajax === 'function'")
         self.assertTrue(result, "jQuery.ajax should be available")
@@ -596,6 +630,11 @@ class FormValidationTests(SeleniumTestCase):
         """Test that Bootstrap validation classes can be applied."""
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
+        # Wait for jQuery to load from CDN
+        from selenium.webdriver.support.ui import WebDriverWait
+        WebDriverWait(self.driver, 15).until(
+            lambda d: d.execute_script("return typeof jQuery !== 'undefined'")
+        )
         # Check that jQuery can add validation classes
         result = self.driver.execute_script(
             "return typeof jQuery !== 'undefined' && typeof jQuery('input').addClass === 'function'"
@@ -624,6 +663,11 @@ class ModalInteractionTests(SeleniumTestCase):
         """Test that Bootstrap modal functionality is available."""
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
+        # Wait for Bootstrap to load from CDN
+        from selenium.webdriver.support.ui import WebDriverWait
+        WebDriverWait(self.driver, 15).until(
+            lambda d: d.execute_script("return typeof bootstrap !== 'undefined'")
+        )
         # Check if Bootstrap modal is available
         result = self.driver.execute_script(
             "return typeof bootstrap !== 'undefined' && typeof bootstrap.Modal !== 'undefined'"
@@ -634,6 +678,11 @@ class ModalInteractionTests(SeleniumTestCase):
         """Test that modal show/hide functions exist."""
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
+        # Wait for both jQuery and Bootstrap to load
+        from selenium.webdriver.support.ui import WebDriverWait
+        WebDriverWait(self.driver, 15).until(
+            lambda d: d.execute_script("return typeof jQuery !== 'undefined' && typeof bootstrap !== 'undefined'")
+        )
         # Check that jQuery modal functions exist
         result = self.driver.execute_script(
             "return typeof jQuery !== 'undefined' && typeof jQuery('.modal').modal === 'function'"
