@@ -396,10 +396,10 @@ class JavaScriptBasicFunctionalityTests(SeleniumTestCase):
         """Test that Bootstrap tooltips are initialized."""
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
-        # Tooltips should be initialized via $(document).ready
+        # Tooltips should be initialized via jQuery(document).ready
         # Check that the Bootstrap tooltip function exists
         result = self.driver.execute_script(
-            "return typeof $('[data-toggle=\"tooltip\"]').tooltip === 'function'"
+            "return typeof jQuery !== 'undefined' && typeof jQuery('[data-toggle=\"tooltip\"]').tooltip === 'function'"
         )
         self.assertTrue(result, "Bootstrap tooltip function should exist")
 
@@ -490,8 +490,8 @@ class AjaxFunctionalityTests(SeleniumTestCase):
         """Test that AJAX requests can be made via jQuery."""
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
-        # Check if jQuery.ajax exists
-        result = self.driver.execute_script("return typeof $.ajax === 'function'")
+        # Check if jQuery.ajax exists (use jQuery instead of $ to avoid alias issues)
+        result = self.driver.execute_script("return typeof jQuery !== 'undefined' && typeof jQuery.ajax === 'function'")
         self.assertTrue(result, "jQuery.ajax should be available")
 
     def test_csrf_token_in_page(self):
@@ -598,7 +598,7 @@ class FormValidationTests(SeleniumTestCase):
         self.wait_for_page_load()
         # Check that jQuery can add validation classes
         result = self.driver.execute_script(
-            "return typeof $('input').addClass === 'function'"
+            "return typeof jQuery !== 'undefined' && typeof jQuery('input').addClass === 'function'"
         )
         self.assertTrue(result, "jQuery addClass should be available for validation")
 
@@ -608,7 +608,7 @@ class FormValidationTests(SeleniumTestCase):
         self.wait_for_page_load()
         # Test that we can programmatically add validation classes
         self.driver.execute_script(
-            "if ($('input').length > 0) { $('input').first().addClass('is-invalid'); }"
+            "if (typeof jQuery !== 'undefined' && jQuery('input').length > 0) { jQuery('input').first().addClass('is-invalid'); }"
         )
         # Just verify no errors occurred
         js_errors = self.driver.execute_script("return window.jsErrors || []")
@@ -636,7 +636,7 @@ class ModalInteractionTests(SeleniumTestCase):
         self.wait_for_page_load()
         # Check that jQuery modal functions exist
         result = self.driver.execute_script(
-            "return typeof $('.modal').modal === 'function'"
+            "return typeof jQuery !== 'undefined' && typeof jQuery('.modal').modal === 'function'"
         )
         self.assertTrue(result, "Bootstrap modal jQuery plugin should be available")
 
