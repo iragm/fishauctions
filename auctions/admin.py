@@ -182,6 +182,7 @@ class AuctionTOSInline(admin.TabularInline):
         "pickup_location",
         "user",
         "auction",
+        "possible_duplicate",
     )
     list_filter = ()
     search_fields = ()
@@ -345,11 +346,24 @@ class PickupLocationInline(admin.TabularInline):
     model = PickupLocation
     list_display = (
         "name",
-        "user",
-        "auction",
         "description",
         "pickup_time",
         "second_pickup_time",
+    )
+    readonly_fields = [
+        "auction",
+        "contact_person",
+    ]
+    exclude = (
+        "pickup_location_contact_name",
+        "pickup_location_contact_phone",
+        "pickup_location_contact_email",
+        "latitude",
+        "longitude",
+        "address",
+        "location_coordinates",
+        "is_default",
+        "user",
     )
     list_filter = ()
     search_fields = ()
