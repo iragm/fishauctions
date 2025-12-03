@@ -8039,9 +8039,13 @@ class ModelMethodsTestCase(StandardTestCase):
 
     def test_auction_find_user_by_email(self):
         """Test Auction.find_user can find users by email"""
+        # Set email on AuctionTOS (find_user searches AuctionTOS.email, not User.email)
+        self.admin_online_tos.email = "test@example.com"
+        self.admin_online_tos.save()
+        
         result = self.online_auction.find_user(email="test@example.com")
 
-        # Should find the admin_user
+        # Should find the AuctionTOS with this email
         self.assertIsNotNone(result)
         self.assertEqual(result.email, "test@example.com")
 
@@ -8065,6 +8069,10 @@ class ModelMethodsTestCase(StandardTestCase):
 
     def test_auction_find_user_exclude_pk(self):
         """Test Auction.find_user can exclude specific PKs"""
+        # Set email on AuctionTOS
+        self.admin_online_tos.email = "test@example.com"
+        self.admin_online_tos.save()
+        
         result = self.online_auction.find_user(email="test@example.com", exclude_pk=self.admin_online_tos.pk)
 
         # Should not find the excluded user (but there might be other users with same email)
