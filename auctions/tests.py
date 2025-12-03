@@ -8106,7 +8106,9 @@ class ModelMethodsTestCase(StandardTestCase):
         )
 
         # Merge view2 into view1
-        view1.merge_and_delete_duplicate
+        # Note: merge_and_delete_duplicate is a property with side effects (a code smell)
+        # Accessing it triggers the merge operation
+        _ = view1.merge_and_delete_duplicate  # noqa: F841
 
         # view1 should have extended time range and combined total_time
         view1.refresh_from_db()
