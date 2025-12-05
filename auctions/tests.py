@@ -13,6 +13,7 @@ from django.test.client import Client
 from django.urls import reverse
 from django.utils import timezone
 
+from .forms import AuctionEditForm
 from .models import (
     Auction,
     AuctionHistory,
@@ -23,6 +24,7 @@ from .models import (
     InvoiceAdjustment,
     Lot,
     LotHistory,
+    PayPalSeller,
     PickupLocation,
     UserData,
     UserLabelPrefs,
@@ -2358,9 +2360,6 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
 
     def test_enable_online_payments_field_hidden_without_paypal(self):
         """Field should be hidden when user doesn't have PayPal connected"""
-        from auctions.forms import AuctionEditForm
-        from auctions.models import PayPalSeller
-
         # Ensure no PayPal seller exists for this user
         PayPalSeller.objects.filter(user=self.user).delete()
 
@@ -2370,9 +2369,6 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
 
     def test_enable_online_payments_field_visible_with_paypal(self):
         """Field should be visible when user has PayPal connected"""
-        from auctions.forms import AuctionEditForm
-        from auctions.models import PayPalSeller
-
         # Create a PayPal seller for this user
         PayPalSeller.objects.create(user=self.user, paypal_merchant_id="test_merchant_id")
 
@@ -2383,9 +2379,6 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
     @override_settings(PAYPAL_CLIENT_ID="test_client_id", PAYPAL_SECRET="test_secret")
     def test_enable_online_payments_field_visible_for_superuser_without_paypal(self):
         """Field should be visible for superuser even without PayPal connected (site-wide fallback)"""
-        from auctions.forms import AuctionEditForm
-        from auctions.models import PayPalSeller
-
         # Create superuser
         superuser = User.objects.create_superuser(username="superuser", password="testpassword", email="super@example.com")
         # Create auction by superuser
