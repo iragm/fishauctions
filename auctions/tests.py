@@ -5,6 +5,7 @@ import hmac
 import json
 from decimal import Decimal
 
+from django import forms
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, TransactionTestCase, override_settings
@@ -12,6 +13,7 @@ from django.test.client import Client
 from django.urls import reverse
 from django.utils import timezone
 
+from .forms import AuctionEditForm
 from .models import (
     Auction,
     AuctionHistory,
@@ -22,6 +24,7 @@ from .models import (
     InvoiceAdjustment,
     Lot,
     LotHistory,
+    PayPalSeller,
     PickupLocation,
     UserData,
     UserLabelPrefs,
@@ -2350,6 +2353,51 @@ class AuctionEditViewTests(StandardTestCase):
         self.client.login(username=self.user.username, password="testpassword")
         response = self.client.get(self.online_auction.get_edit_url())
         assert response.status_code == 200
+
+
+class PayPalFormFieldVisibilityTests(StandardTestCase):
+    """Test that PayPal payment field is only shown when user has PayPal connected"""
+
+    def test_enable_online_payments_field_hidden_without_paypal(self):
+        """Field should be hidden when user doesn't have PayPal connected"""
+        # Ensure no PayPal seller exists for this user
+        PayPalSeller.objects.filter(user=self.user).delete()
+
+        form = AuctionEditForm(instance=self.online_auction)
+        # Field should be hidden (widget is HiddenInput)
+        assert isinstance(form.fields["enable_online_payments"].widget, forms.HiddenInput)
+
+    def test_enable_online_payments_field_visible_with_paypal(self):
+        """Field should be visible when user has PayPal connected"""
+        # Create a PayPal seller for this user
+        PayPalSeller.objects.create(user=self.user, paypal_merchant_id="test_merchant_id")
+
+        form = AuctionEditForm(instance=self.online_auction)
+        # Field should NOT be hidden
+        assert not isinstance(form.fields["enable_online_payments"].widget, forms.HiddenInput)
+
+    @override_settings(PAYPAL_CLIENT_ID="test_client_id", PAYPAL_SECRET="test_secret")
+    def test_enable_online_payments_field_visible_for_superuser_without_paypal(self):
+        """Field should be visible for superuser even without PayPal connected (site-wide fallback)"""
+        # Create superuser
+        superuser = User.objects.create_superuser(
+            username="superuser", password="testpassword", email="super@example.com"
+        )
+        # Create auction by superuser
+        superuser_auction = Auction.objects.create(
+            created_by=superuser,
+            title="Superuser auction",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=2),
+            date_start=timezone.now() - datetime.timedelta(days=1),
+        )
+
+        # Ensure no PayPal seller exists for superuser
+        PayPalSeller.objects.filter(user=superuser).delete()
+
+        form = AuctionEditForm(instance=superuser_auction)
+        # Field should NOT be hidden for superuser (site-wide PayPal fallback)
+        assert not isinstance(form.fields["enable_online_payments"].widget, forms.HiddenInput)
 
 
 class LotListViewTests(StandardTestCase):
