@@ -2380,7 +2380,9 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
     def test_enable_online_payments_field_visible_for_superuser_without_paypal(self):
         """Field should be visible for superuser even without PayPal connected (site-wide fallback)"""
         # Create superuser
-        superuser = User.objects.create_superuser(username="superuser", password="testpassword", email="super@example.com")
+        superuser = User.objects.create_superuser(
+            username="superuser", password="testpassword", email="super@example.com"
+        )
         # Create auction by superuser
         superuser_auction = Auction.objects.create(
             created_by=superuser,
