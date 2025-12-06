@@ -80,9 +80,9 @@ services:
       - mariadb_data:/var/lib/mysql
       - ./db-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "mariadb -u${MYSQL_USER-mysqluser} -p${MYSQL_PASSWORD-unsecure} -e 'SELECT 1' ${MYSQL_DATABASE-auctions} > /dev/null 2>&1"]
+      test: ["CMD-SHELL", "mariadb-admin ping -h localhost --silent"]
       interval: 5s
-      timeout: 10s
+      timeout: 5s
       retries: 60
       start_period: 120s
 
