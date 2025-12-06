@@ -2363,7 +2363,9 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
         # Ensure no PayPal seller exists for this user
         PayPalSeller.objects.filter(user=self.user).delete()
 
-        form = AuctionEditForm(instance=self.online_auction)
+        form = AuctionEditForm(
+            instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
+        )
         # Field should be hidden (widget is HiddenInput)
         assert isinstance(form.fields["enable_online_payments"].widget, forms.HiddenInput)
 
@@ -2372,7 +2374,9 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
         # Create a PayPal seller for this user
         PayPalSeller.objects.create(user=self.user, paypal_merchant_id="test_merchant_id")
 
-        form = AuctionEditForm(instance=self.online_auction)
+        form = AuctionEditForm(
+            instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
+        )
         # Field should NOT be hidden
         assert not isinstance(form.fields["enable_online_payments"].widget, forms.HiddenInput)
 
@@ -2395,7 +2399,9 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
         # Ensure no PayPal seller exists for superuser
         PayPalSeller.objects.filter(user=superuser).delete()
 
-        form = AuctionEditForm(instance=superuser_auction)
+        form = AuctionEditForm(
+            instance=superuser_auction, user=superuser_auction.created_by, cloned_from=None, user_timezone="UTC"
+        )
         # Field should NOT be hidden for superuser (site-wide PayPal fallback)
         assert not isinstance(form.fields["enable_online_payments"].widget, forms.HiddenInput)
 
