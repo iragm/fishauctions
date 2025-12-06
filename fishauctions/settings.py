@@ -33,6 +33,9 @@ if os.environ.get("DEBUG", "1") == "False":
 else:
     DEBUG = True
 
+# Make undefined template variables visible in production to catch errors early
+TEMPLATE_STRING_IF_INVALID = "INVALID_TEMPLATE_VARIABLE_%s" if not DEBUG else ""
+
 ALLOWED_HOSTS = [
     "localhost",
     "web",
@@ -223,7 +226,7 @@ TEMPLATES = [
                 "auctions.context_processors.site_config",
                 "auctions.context_processors.add_tz",
             ],
-            "string_if_invalid": "INVALID_TEMPLATE_VARIABLE_%s" if not DEBUG else "",
+            "string_if_invalid": TEMPLATE_STRING_IF_INVALID,
         },
     },
 ]
