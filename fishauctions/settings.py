@@ -33,8 +33,8 @@ if os.environ.get("DEBUG", "1") == "False":
 else:
     DEBUG = True
 
-# Make undefined template variables visible in production to catch errors early
-TEMPLATE_STRING_IF_INVALID = "" if DEBUG else "INVALID_TEMPLATE_VARIABLE_%s"
+# Template string for undefined variables - empty string means silently ignore them
+TEMPLATE_STRING_IF_INVALID = ""
 
 ALLOWED_HOSTS = [
     "localhost",
