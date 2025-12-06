@@ -3422,13 +3422,14 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
             self.is_admin = self.is_auction_admin
 
             if bidder_number:
-                # Someone is trying to add lots for a specific user
-                # Only admins can do this
-                if not self.is_admin:
-                    return JsonResponse({"success": False, "error": "Only auction admins can add lots for other users"})
                 self.tos = AuctionTOS.objects.filter(bidder_number=bidder_number, auction=self.auction).first()
                 if not self.tos:
                     return JsonResponse({"success": False, "error": "User not found in this auction"})
+                # Someone is trying to add lots for a specific user
+                # Only admins can do this
+                if not self.is_admin and self.tos.bidder_number != bidder_number:
+                    return JsonResponse({"success": False, "error": "Only auction admins can add lots for other users"})
+
             else:
                 # Adding lots for yourself
                 self.tos = (
