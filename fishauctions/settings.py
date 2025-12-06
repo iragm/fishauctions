@@ -223,6 +223,7 @@ TEMPLATES = [
                 "auctions.context_processors.site_config",
                 "auctions.context_processors.add_tz",
             ],
+            "string_if_invalid": "INVALID_TEMPLATE_VARIABLE_%s" if not DEBUG else "",
         },
     },
 ]

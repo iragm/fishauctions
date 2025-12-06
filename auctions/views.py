@@ -2978,7 +2978,7 @@ class BulkAddUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView, ContextMi
         # return redirect(reverse("bulk_add_users", kwargs={"slug": self.auction.slug}))
 
     def post(self, request, *args, **kwargs):
-        csv_file = request.FILES.get("csv_file", None)
+        csv_file = request.FILES.get("csv_file", None) or request.FILES.get("csv_file_quick", None)
         if csv_file:
             return self.handle_csv_file(csv_file)
         self.instantiate_formset()
