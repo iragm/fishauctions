@@ -3883,11 +3883,9 @@ class Lot(models.Model):
             return False
         if self.auctiontos_seller:
             return False
-        try:
-            AuctionTOS.objects.get(user=self.user, auction=self.auction)
+        if AuctionTOS.objects.filter(user=self.user, auction=self.auction).exists():
             return False
-        except:
-            return f"/auctions/{self.auction.slug}"
+        return f"/auctions/{self.auction.slug}"
 
     @property
     def winner_location(self):
@@ -3896,10 +3894,9 @@ class Lot(models.Model):
             return str(self.auctiontos_winner.pickup_location)
         except:
             pass
-        try:
-            return str(AuctionTOS.objects.get(user=self.winner, auction=self.auction).pickup_location)
-        except:
-            pass
+        tos = AuctionTOS.objects.filter(user=self.winner, auction=self.auction).first()
+        if tos:
+            return str(tos.pickup_location)
         return ""
 
     @property
@@ -3909,10 +3906,9 @@ class Lot(models.Model):
             return self.auctiontos_seller.pickup_location
         except:
             pass
-        try:
-            return AuctionTOS.objects.get(user=self.user, auction=self.auction).pickup_location
-        except:
-            pass
+        tos = AuctionTOS.objects.filter(user=self.user, auction=self.auction).first()
+        if tos:
+            return tos.pickup_location
         return None
 
     @property
