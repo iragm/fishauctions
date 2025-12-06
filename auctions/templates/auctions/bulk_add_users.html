@@ -22,7 +22,7 @@
 
 
 <br><small>Use this form to quickly add users to your auction</small>
-  {{ link_formset.management_form }}
+  {{ formset.management_form }}
   <form id="form-container" method="POST" action="{% url 'bulk_add_users' slug=auction.slug %}">
     {% crispy formset helper %}
     <button class='btn bg-info' id="add-form" type="button">Add row</button><input type="submit" class='btn btn-success float-right ms-2' id='save' value="Add users to {{ auction }}">
