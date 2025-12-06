@@ -341,10 +341,11 @@ function performSave(lotRow) {
 
     // Collect form data
     const formData = {
-        lot_id: lotId{% if is_admin %},
-        bidder_number: '{{ tos.bidder_number }}'  // Include bidder number for admin adding lots for users
-{% endif %}
+        lot_id: lotId
     };
+    {% if is_admin %}
+    formData.bidder_number = '{{ tos.bidder_number }}';  // Include bidder number for admin adding lots for users
+    {% endif %}
 
     // Get all inputs in this row
     const inputs = lotRow.querySelectorAll('.lot-input');
