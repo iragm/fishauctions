@@ -34,7 +34,7 @@ else:
     DEBUG = True
 
 # Make undefined template variables visible in production to catch errors early
-TEMPLATE_STRING_IF_INVALID = "INVALID_TEMPLATE_VARIABLE_%s" if not DEBUG else ""
+TEMPLATE_STRING_IF_INVALID = "" if DEBUG else "INVALID_TEMPLATE_VARIABLE_%s"
 
 ALLOWED_HOSTS = [
     "localhost",
