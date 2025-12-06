@@ -448,12 +448,9 @@ class LotListView(AjaxListView):
                 context["no_filters"] = True
         if context["auction"]:
             if self.request.user.is_authenticated:
-                try:
-                    context["auction_tos"] = AuctionTOS.objects.get(
-                        auction=context["auction"].pk, user=self.request.user.pk
-                    )
-                except AuctionTOS.DoesNotExist:
-                    pass
+                context["auction_tos"] = AuctionTOS.objects.filter(
+                    auction=context["auction"].pk, user=self.request.user.pk
+                ).first()
             #     # this message gets added to every scroll event.  Also, it's just noise
             #     messages.error(self.request, f"Please <a href='/auctions/{context['auction'].slug}/'>read the auction's rules and confirm your pickup location</a> to bid")
         else:
@@ -5544,12 +5541,12 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
         i_agree = False
 
         if self.request.user.is_authenticated:
-            try:
-                tos = AuctionTOS.objects.get(user=self.request.user, auction=self.auction)
+            tos = AuctionTOS.objects.filter(user=self.request.user, auction=self.auction).first()
+            if tos:
                 existingTos = tos.pickup_location
                 i_agree = True
                 context["hasChosenLocation"] = existingTos.pk if existingTos else False
-            except AuctionTOS.DoesNotExist:
+            else:
                 context["hasChosenLocation"] = False
                 if self.auction.multi_location:
                     i_agree = True
@@ -5762,14 +5759,11 @@ class ToDefaultLandingPage(View):
                     )
                     return redirect("/lots/")
                 else:
-                    try:
-                        # in progress online auctions get routed
-                        AuctionTOS.objects.get(user=request.user, auction=auction, auction__is_online=True)
+                    # in progress online auctions get routed
+                    if AuctionTOS.objects.filter(user=request.user, auction=auction, auction__is_online=True).first():
                         # only show the banner if the TOS is signed
                         # messages.add_message(request, messages.INFO, f'{auction} is the last auction you joined.  <a href="/lots/">View all lots instead</a>')
                         routeByLastAuction = True
-                    except AuctionTOS.DoesNotExist:
-                        pass
             except (TypeError, AttributeError, Auction.DoesNotExist):
                 # probably no userdata or userdata.auction is None
                 auction = None
