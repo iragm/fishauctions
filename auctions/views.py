@@ -5760,7 +5760,7 @@ class ToDefaultLandingPage(View):
                     return redirect("/lots/")
                 else:
                     # in progress online auctions get routed
-                    if AuctionTOS.objects.filter(user=request.user, auction=auction, auction__is_online=True).first():
+                    if AuctionTOS.objects.filter(user=request.user, auction=auction, auction__is_online=True).exists():
                         # only show the banner if the TOS is signed
                         # messages.add_message(request, messages.INFO, f'{auction} is the last auction you joined.  <a href="/lots/">View all lots instead</a>')
                         routeByLastAuction = True

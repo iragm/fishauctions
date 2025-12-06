@@ -3883,7 +3883,7 @@ class Lot(models.Model):
             return False
         if self.auctiontos_seller:
             return False
-        if AuctionTOS.objects.filter(user=self.user, auction=self.auction).first():
+        if AuctionTOS.objects.filter(user=self.user, auction=self.auction).exists():
             return False
         return f"/auctions/{self.auction.slug}"
 
