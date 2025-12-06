@@ -2984,7 +2984,7 @@ class BulkAddUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView, ContextMi
             csv_file = request.FILES.get(field_name)
             if csv_file:
                 break
-        
+
         if csv_file:
             return self.handle_csv_file(csv_file)
         self.instantiate_formset()
