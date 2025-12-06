@@ -16,14 +16,14 @@ jobs:
       - name: Start database and wait for health
         run: |
           docker compose up -d db
-          echo "Waiting for database to be healthy (up to 180 seconds)..."
-          for i in {1..60}; do
+          echo "Waiting for database to be healthy (up to 240 seconds)..."
+          for i in {1..80}; do
             STATUS=$(docker inspect --format='{{.State.Health.Status}}' db 2>/dev/null || echo "not_found")
             if [ "$STATUS" = "healthy" ]; then
               echo "Database is healthy!"
               exit 0
             fi
-            echo "Database status: $STATUS (attempt $i/60)"
+            echo "Database status: $STATUS (attempt $i/80)"
             sleep 3
           done
           echo "ERROR: Database failed to become healthy"
@@ -53,14 +53,14 @@ jobs:
         run: |
           echo "Starting database container..."
           docker compose up -d db
-          echo "Waiting for database to be healthy (up to 180 seconds)..."
-          for i in {1..60}; do
+          echo "Waiting for database to be healthy (up to 240 seconds)..."
+          for i in {1..80}; do
             STATUS=$(docker inspect --format='{{.State.Health.Status}}' db 2>/dev/null || echo "not_found")
             if [ "$STATUS" = "healthy" ]; then
               echo "Database is healthy!"
               exit 0
             fi
-            echo "Database status: $STATUS (attempt $i/60)"
+            echo "Database status: $STATUS (attempt $i/80)"
             sleep 3
           done
           echo "ERROR: Database failed to become healthy"
