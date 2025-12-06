@@ -2764,12 +2764,12 @@ class BulkAddUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView, ContextMi
             return False
 
         email_field_names = ["email", "e-mail", "email address", "e-mail address"]
-        bidder_number_fields = ["bidder number", "bidder"]
+        bidder_number_fields = ["bidder number", "bidder", "membernumber", "tempguestnumber"]
         name_field_names = ["name", "full name", "first name", "firstname"]
         address_field_names = ["address", "mailing address"]
         phone_field_names = ["phone", "phone number", "telephone", "telephone number"]
         is_club_member_fields = ["member", "club member", self.auction.alternative_split_label.lower()]
-        is_bidding_allowed_field_names = ["allow bidding", "bidding", "bidding allowed"]
+        is_bidding_allowed_field_names = ["allow bidding", "bidding", "bidding allowed", "allowedtobid"]
         memo_field_names = ["memo", "note", "notes"]
         is_admin_field_names = ["admin", "staff", "is_admin", "is_staff"]
         # we are not reading in location here, do we care??
