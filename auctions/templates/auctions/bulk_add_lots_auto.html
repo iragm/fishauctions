@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% load static %}
-{% block title %}Add lots for {{ tos.name }}{% endblock %}
+{% block title %}{% if is_admin %}Add lots for {{ tos.name }}{% else %}Add lots to {{ auction }}{% endif %}{% endblock %}
 
 {% block content %}
   {% include 'auction_ribbon.html' %}
