@@ -83,8 +83,8 @@ services:
       test: ["CMD-SHELL", "mariadb-admin ping -h localhost --silent"]
       interval: 5s
       timeout: 5s
-      retries: 30
-      start_period: 60s
+      retries: 60
+      start_period: 120s
 
   redis:
     container_name: redis
