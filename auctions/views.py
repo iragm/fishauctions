@@ -1702,7 +1702,7 @@ class AuctionInvoicesPayPalCSV(LoginRequiredMixin, AuctionViewMixin, View):
         chunkSize = 150  # attention: this is also set in models.auction.paypal_invoice_chunks
         no_email_count = 0
         for invoice in self.auction.paypal_invoices:
-            invoice.recalculate
+            invoice.recalculate()
             # we loop through everything regardless of which chunk
             if not invoice.user_should_be_paid:
                 count += 1
@@ -3205,7 +3205,7 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 invoice = Invoice.objects.filter(auctiontos_user=self.tos, auction=self.auction).first()
                 if not invoice:
                     invoice = Invoice.objects.create(auctiontos_user=self.tos, auction=self.auction)
-                invoice.recalculate
+                invoice.recalculate()
             # when saving labels, it doesn't take you off from the page you're on
             # So we need to go somewhere, and then say "download labels"
             if "print" in str(self.request.GET.get("type", "")):
@@ -3614,7 +3614,7 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
             invoice = Invoice.objects.filter(auctiontos_user=self.tos, auction=self.auction).first()
             if not invoice:
                 invoice = Invoice.objects.create(auctiontos_user=self.tos, auction=self.auction)
-            invoice.recalculate
+            invoice.recalculate()
 
             return JsonResponse(
                 {
@@ -4401,7 +4401,7 @@ class LotValidation(LoginRequiredMixin):
                 invoice = Invoice.objects.filter(auctiontos_user=auctiontos, auction=lot.auction).first()
                 if not invoice:
                     invoice = Invoice.objects.create(auctiontos_user=auctiontos, auction=lot.auction)
-                invoice.recalculate
+                invoice.recalculate()
         else:
             # this lot is NOT part of an auction
             try:
@@ -4511,7 +4511,7 @@ class LotCreateView(LotValidation, CreateView):
             invoice = Invoice.objects.filter(auctiontos_user=lot.auctiontos_seller, auction=lot.auction).first()
             if not invoice:
                 invoice = Invoice.objects.create(auctiontos_user=lot.auctiontos_seller, auction=lot.auction)
-            invoice.recalculate
+            invoice.recalculate()
         result = super().form_valid(form, **kwargs)
         # Create history after lot is saved and has a lot_number_display
         if lot.auction and lot.auctiontos_seller:
@@ -4900,7 +4900,7 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
                     ).first()
                     if not invoice:
                         invoice = Invoice.objects.create(auctiontos_user=new_auctiontos, auction=new_auctiontos.auction)
-                    invoice.recalculate
+                    invoice.recalculate()
                     for lot in sold_lots:
                         lot.auctiontos_seller = new_auctiontos
                         lot.save()
@@ -4908,7 +4908,7 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
                         lot.auctiontos_winner = new_auctiontos
                         lot.save()
                         lot.add_winner_message(request.user, new_auctiontos, lot.winning_price)
-                    invoice.recalculate
+                    invoice.recalculate()
             # not needed if we have models.CASCADE on Invoice
             # invoices = Invoice.objects.filter(auctiontos_user=self.auctiontos)
             # for invoice in invoices:
@@ -6020,7 +6020,7 @@ class InvoiceCreateView(LoginRequiredMixin, View, AuctionViewMixin):
 
         # Create new invoice
         invoice = Invoice.objects.create(auctiontos_user=auctiontos, auction=auctiontos.auction)
-        invoice.recalculate
+        invoice.recalculate()
 
         messages.success(request, f"Invoice created for {auctiontos.name}")
         return redirect(invoice.get_absolute_url())
@@ -6167,7 +6167,7 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
         context["helper"] = helper
         # recaluclating slows things down,
         # I am not sure if it's a good idea to have it here or not
-        self.object.recalculate
+        self.object.recalculate()
         return self.render_to_response(context)
 
 
@@ -6629,7 +6629,7 @@ class InvoiceBulkUpdateStatus(LoginRequiredMixin, TemplateView, FormMixin, Aucti
         for invoice in invoices:
             invoice.status = self.new_invoice_status
             invoice.invoice_notification_due = run_at
-            invoice.recalculate
+            invoice.recalculate()
             invoice.save()
             # Schedule or cancel notification for each invoice
             if run_at:
@@ -6737,9 +6737,9 @@ class LotRefundDialog(LoginRequiredMixin, DetailView, FormMixin, AuctionViewMixi
             banned = form.cleaned_data["banned"]
             self.lot.remove(banned, request.user)
             if self.seller_invoice:
-                self.seller_invoice.recalculate
+                self.seller_invoice.recalculate()
             if self.winner_invoice:
-                self.winner_invoice.recalculate
+                self.winner_invoice.recalculate()
             return HttpResponse("<script>location.reload();</script>", status=200)
         else:
             return self.form_invalid(form)
@@ -7139,7 +7139,7 @@ class PayPalAPIMixin:
                 "amount_available_to_refund": amt,
             },
         )
-        invoice.recalculate
+        invoice.recalculate()
         if created:
             action = f"Payment received via PayPal for {invoice.auctiontos_user.name} ${payment.amount} ({payment.external_id})"
             invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
@@ -7260,7 +7260,7 @@ class PayPalAPIMixin:
             },
         )
 
-        invoice.recalculate
+        invoice.recalculate()
         action = f"Refund received via PayPal {refund_id} for capture {capture_id}: {refund_amt_signed} {currency}. Note: {note_to_payer}"
         invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
         return invoice, refund_payment
@@ -10447,7 +10447,7 @@ class SquareWebhookView(SquareAPIMixin, View):
                             "memo": refund.get("reason", "")[:500],
                         },
                     )
-                    payment_record.invoice.recalculate
+                    payment_record.invoice.recalculate()
                     action = f"Refund via Square for bidder {payment_record.invoice.auctiontos_user.bidder_number} in the amount of {refund_amount} {payment_record.currency}"
                     payment_record.invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
                     logger.info("Square refund completed for payment %s", payment_id)

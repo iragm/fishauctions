@@ -1384,7 +1384,7 @@ class Auction(models.Model):
         """Force update of all invoice totals in this auction"""
         invoices = Invoice.objects.filter(auction=self.pk)
         for invoice in invoices:
-            invoice.recalculate
+            invoice.recalculate()
             invoice.save()
 
     @property
@@ -3510,7 +3510,7 @@ class Lot(models.Model):
         invoice = Invoice.objects.filter(auctiontos_user=tos, auction=self.auction).first()
         if not invoice:
             invoice = Invoice.objects.create(auctiontos_user=tos, auction=self.auction)
-        invoice.recalculate
+        invoice.recalculate()
         self.send_websocket_message(
             {
                 "type": "chat_message",
@@ -4643,12 +4643,12 @@ class Lot(models.Model):
             invoice = Invoice.objects.filter(auctiontos_user=self.auctiontos_winner, auction=self.auction).first()
             if not invoice:
                 invoice = Invoice.objects.create(auctiontos_user=self.auctiontos_winner, auction=self.auction)
-            invoice.recalculate
+            invoice.recalculate()
         if self.auction and self.auctiontos_seller:
             invoice = Invoice.objects.filter(auctiontos_user=self.auctiontos_seller, auction=self.auction).first()
             if not invoice:
                 invoice = Invoice.objects.create(auctiontos_user=self.auctiontos_seller, auction=self.auction)
-            invoice.recalculate
+            invoice.recalculate()
 
     @property
     def category(self):
@@ -4913,9 +4913,13 @@ class Invoice(models.Model):
     def changed_adjustments(self):
         return self.adjustments.exclude(amount=0)
 
-    @property
     def recalculate(self):
-        """Store the current net in the calculated_total field.  Call this every time you add or remove a lot from this invoice"""
+        """Store the current net in the calculated_total field.
+        
+        Call this method every time you add or remove a lot from this invoice.
+        This method should be called explicitly, not accessed as a property,
+        as it has side effects (modifies and saves database records).
+        """
         self.calculated_total = self.rounded_net
         self.save()
 
