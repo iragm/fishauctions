@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% load static %}
-{% block title %}Add lots for {{ tos.name }}{% endblock %}
+{% block title %}{% if is_admin %}Add lots for {{ tos.name }}{% else %}Add lots to {{ auction }}{% endif %}{% endblock %}
 
 {% block content %}
   {% include 'auction_ribbon.html' %}
@@ -342,7 +342,9 @@ function performSave(lotRow) {
     // Collect form data
     const formData = {
         lot_id: lotId,
-        bidder_number: '{{ tos.bidder_number }}'  // Include bidder number for admin adding lots for users
+        {% if is_admin %}
+        bidder_number: '{{ tos.bidder_number }}',
+        {% endif %}
     };
 
     // Get all inputs in this row

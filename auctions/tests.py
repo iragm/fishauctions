@@ -5,6 +5,7 @@ import hmac
 import json
 from decimal import Decimal
 
+from django import forms
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, TransactionTestCase, override_settings
@@ -12,6 +13,7 @@ from django.test.client import Client
 from django.urls import reverse
 from django.utils import timezone
 
+from .forms import AuctionEditForm
 from .models import (
     Auction,
     AuctionHistory,
@@ -22,6 +24,7 @@ from .models import (
     InvoiceAdjustment,
     Lot,
     LotHistory,
+    PayPalSeller,
     PickupLocation,
     UserData,
     UserLabelPrefs,
@@ -2350,6 +2353,57 @@ class AuctionEditViewTests(StandardTestCase):
         self.client.login(username=self.user.username, password="testpassword")
         response = self.client.get(self.online_auction.get_edit_url())
         assert response.status_code == 200
+
+
+class PayPalFormFieldVisibilityTests(StandardTestCase):
+    """Test that PayPal payment field is only shown when user has PayPal connected"""
+
+    def test_enable_online_payments_field_hidden_without_paypal(self):
+        """Field should be hidden when user doesn't have PayPal connected"""
+        # Ensure no PayPal seller exists for this user
+        PayPalSeller.objects.filter(user=self.user).delete()
+
+        form = AuctionEditForm(
+            instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
+        )
+        # Field should be hidden (widget is HiddenInput)
+        assert isinstance(form.fields["enable_online_payments"].widget, forms.HiddenInput)
+
+    def test_enable_online_payments_field_visible_with_paypal(self):
+        """Field should be visible when user has PayPal connected"""
+        # Create a PayPal seller for this user
+        PayPalSeller.objects.create(user=self.user, paypal_merchant_id="test_merchant_id")
+
+        form = AuctionEditForm(
+            instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
+        )
+        # Field should NOT be hidden
+        assert not isinstance(form.fields["enable_online_payments"].widget, forms.HiddenInput)
+
+    @override_settings(PAYPAL_CLIENT_ID="test_client_id", PAYPAL_SECRET="test_secret")
+    def test_enable_online_payments_field_visible_for_superuser_without_paypal(self):
+        """Field should be visible for superuser even without PayPal connected (site-wide fallback)"""
+        # Create superuser
+        superuser = User.objects.create_superuser(
+            username="superuser", password="testpassword", email="super@example.com"
+        )
+        # Create auction by superuser
+        superuser_auction = Auction.objects.create(
+            created_by=superuser,
+            title="Superuser auction",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=2),
+            date_start=timezone.now() - datetime.timedelta(days=1),
+        )
+
+        # Ensure no PayPal seller exists for superuser
+        PayPalSeller.objects.filter(user=superuser).delete()
+
+        form = AuctionEditForm(
+            instance=superuser_auction, user=superuser_auction.created_by, cloned_from=None, user_timezone="UTC"
+        )
+        # Field should NOT be hidden for superuser (site-wide PayPal fallback)
+        assert not isinstance(form.fields["enable_online_payments"].widget, forms.HiddenInput)
 
 
 class LotListViewTests(StandardTestCase):
@@ -4719,6 +4773,25 @@ class BulkAddLotsAutoTests(StandardTestCase):
         lot = Lot.objects.get(lot_number=data["lot_id"])
         self.assertEqual(lot.auctiontos_seller, self.in_person_buyer)
 
+    def test_save_lot_ajax_user_can_add_for_themselves(self):
+        """Test that regular users can add lots for themselves without bidder_number"""
+        # Login as regular user (not auction creator)
+        self.client.login(username="no_lots", password="testpassword")
+
+        # Add lot for themselves (no bidder_number)
+        response = self.client.post(
+            reverse("save_lot_ajax", kwargs={"slug": self.in_person_auction.slug}),
+            data='{"lot_name": "My Own Lot", "reserve_price": 5}',
+            content_type="application/json",
+        )
+        data = response.json()
+        self.assertTrue(data["success"], f"Failed to add lot for self: {data.get('error', 'Unknown error')}")
+        self.assertIsNotNone(data["lot_id"])
+
+        # Verify lot was created for the correct user (in_person_buyer)
+        lot = Lot.objects.get(lot_number=data["lot_id"])
+        self.assertEqual(lot.auctiontos_seller, self.in_person_buyer)
+
     def test_lot_limit_enforcement(self):
         """Test that lot limits are enforced for non-admin users"""
         # Login as regular user (not auction creator)
@@ -4807,7 +4880,7 @@ class BulkAddLotsAutoTests(StandardTestCase):
         data = response.json()
         self.assertFalse(data["success"])
         # Check that error message relates to lot submission deadline
-        error_msg = data["errors"]["general"].lower()
+        error_msg = data["error"].lower()
         self.assertTrue("cannot be edited" in error_msg or "submission" in error_msg)
 
     def test_custom_fields_saved(self):
@@ -8212,55 +8285,80 @@ class SignalLogicTestCase(StandardTestCase):
         # Dates should be swapped
         self.assertLess(auction.date_online_bidding_starts, auction.date_online_bidding_ends)
 
+class DuplicateAuctionTOSTests(StandardTestCase):
+    """Test that duplicate AuctionTOS records don't cause MultipleObjectsReturned errors"""
 
-# NOTES ON POTENTIALLY BRITTLE BEHAVIOR FOUND DURING CODE REVIEW:
-#
-# 1. models.py - nearby_auctions() function (lines 81-86):
-#    The elif block at lines 85-86 appears unreachable:
-#      if user:
-#          if user.is_authenticated and not include_already_joined:
-#              locations = locations.exclude(auction__auctiontos__user=user)
-#          locations = locations.exclude(auction__auctionignore__user=user)
-#      elif user and not include_already_joined:  # <-- This condition cannot be True if line 81 was False
-#          locations = locations.exclude(auction__auctiontos__user=user)
-#    This may be dead code or a logic error. The condition should probably be:
-#      elif not user.is_authenticated and not include_already_joined:
-#
-# 2. models.py - Auction.delete() method (line 953-955):
-#    Performs soft delete by setting is_deleted=True. However, this doesn't prevent
-#    related objects (lots, bids, etc.) from appearing in queries unless they explicitly
-#    filter out deleted auctions. Consider adding CASCADE behavior or more comprehensive
-#    archival logic.
-#
-# 3. helper_functions.py - bin_data() function (lines 69-71):
-#    When start_bin equals end_bin, bin_size becomes 0, which could cause division by zero
-#    issues at line 86. The current test verifies it doesn't crash, but the behavior
-#    might not be intuitive (all values fall into high overflow).
-#
-# 4. forms.py - clean_summernote() function (line 57):
-#    Uses a complex regex that preserves br tags but may have edge cases with
-#    self-closing vs non-self-closing br tags (br vs br/). The regex (?!<br\s*/?>)<.*?>
-#    should handle both, but this is worth monitoring.
-#
-# 5. signals.py - on_save_auction() (lines 76-89):
-#    When updating an auction's end date, the signal updates lot end dates for active lots
-#    without winners. However, this only happens if the auction end is at least 60 minutes
-#    in the future. This 60-minute buffer could cause confusion if admins try to extend
-#    an auction that's about to end - their changes won't propagate to lots.
-#
-# 6. models.py - distance_to() function (lines 244-246):
-#    SQL injection protection is done via string checking for quotes. While this works,
-#    it relies on string conversion which could have edge cases with unusual numeric types.
-#    The test confirms it catches obvious attempts, but parameterized queries would be safer.
-#
-# 7. models.py - add_price_info() calculation (lines 103-191):
-#    This is a complex nested Django ORM expression with many Case/When statements.
-#    The logic for calculating seller cuts, club cuts, and fees has many branches depending
-#    on club membership, donation status, refunds, etc. Any change to fee structure could
-#    easily introduce bugs. The tests cover main cases but edge cases with multiple
-#    conditions interacting may not be fully covered.
-#
-# 8. context_processors.py - add_location() (lines 50-80):
-#    Saves user data (IP, location, timezone) on every request for authenticated users.
-#    This could cause database write contention on high-traffic sites. Consider using
-#    a cache or only updating when values change.
+    def test_duplicate_auction_tos_in_auction_detail_view(self):
+        """Test that the auction detail view can handle duplicate AuctionTOS records"""
+        # Create a duplicate AuctionTOS for the same user and auction
+        AuctionTOS.objects.create(
+            user=self.admin_user, auction=self.online_auction, pickup_location=self.location, is_admin=False
+        )
+        # Verify we now have 2 AuctionTOS records for this user/auction combination
+        tos_count = AuctionTOS.objects.filter(user=self.admin_user, auction=self.online_auction).count()
+        self.assertEqual(tos_count, 2)
+
+        # This should not raise MultipleObjectsReturned error
+        self.client.login(username="admin_user", password="testpassword")
+        response = self.client.get(reverse("auction_main", kwargs={"slug": self.online_auction.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_duplicate_auction_tos_in_lot_list_view(self):
+        """Test that the lot list view can handle duplicate AuctionTOS records"""
+        # Create a duplicate AuctionTOS for the same user and auction
+        AuctionTOS.objects.create(
+            user=self.admin_user, auction=self.online_auction, pickup_location=self.location, is_admin=False
+        )
+
+        # This should not raise MultipleObjectsReturned error
+        self.client.login(username="admin_user", password="testpassword")
+        response = self.client.get(reverse("auction_lot_list", kwargs={"slug": self.online_auction.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_duplicate_auction_tos_in_lot_model_properties(self):
+        """Test that Lot model properties can handle duplicate AuctionTOS records"""
+        # Create a lot
+        lot = Lot.objects.create(
+            auction=self.online_auction,
+            auctiontos_seller=self.admin_online_tos,
+            lot_number=1,
+            lot_name="Test Lot",
+            quantity=1,
+            reserve_price=10,
+        )
+
+        # Create a duplicate AuctionTOS for the same user and auction
+        AuctionTOS.objects.create(
+            user=self.admin_user, auction=self.online_auction, pickup_location=self.location, is_admin=False
+        )
+
+        # These properties should not raise MultipleObjectsReturned error
+        tos_needed = lot.tos_needed
+        location_as_object = lot.location_as_object
+
+        # The properties should work correctly
+        self.assertFalse(tos_needed)
+        self.assertEqual(location_as_object, self.location)
+
+    def test_duplicate_auction_tos_winner_location(self):
+        """Test that winner_location property can handle duplicate AuctionTOS records"""
+        # Create a lot with a winner
+        lot = Lot.objects.create(
+            auction=self.online_auction,
+            auctiontos_seller=self.admin_online_tos,
+            lot_number=1,
+            lot_name="Test Lot",
+            quantity=1,
+            reserve_price=10,
+            winner=self.user,
+        )
+
+        # Create TOS for the winner
+        AuctionTOS.objects.create(user=self.user, auction=self.online_auction, pickup_location=self.location)
+
+        # Create a duplicate AuctionTOS for the winner
+        AuctionTOS.objects.create(user=self.user, auction=self.online_auction, pickup_location=self.location)
+
+        # This should not raise MultipleObjectsReturned error
+        winner_location = lot.winner_location
+        self.assertEqual(winner_location, str(self.location))

@@ -1775,8 +1775,10 @@ class AuctionEditForm(forms.ModelForm):
             self.fields["enable_online_payments"].help_text += f"<br>Payments sent to {paypal_seller}"
         else:
             if self.instance.created_by.is_superuser and settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET:
-                # show payments option
+                # show payments option for superusers with site-wide PayPal configured
                 pass
+            else:
+                # Hide the field if user doesn't have PayPal connected and isn't a superuser
                 self.fields["enable_online_payments"].widget = forms.HiddenInput()
 
         square_seller = SquareSeller.objects.filter(user=self.instance.created_by).first()

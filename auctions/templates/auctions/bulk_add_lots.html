@@ -12,7 +12,7 @@
   {% endif %}
   </p>
 
-  {{ link_formset.management_form }}
+  {{ formset.management_form }}
   <form id="form-container" method="POST" action="{% url 'bulk_add_lots' slug=auction.slug bidder_number=tos.bidder_number%}">
     {% crispy formset helper %}
     <button class='btn btn-info' id="add-form" type="button">Add row</button>

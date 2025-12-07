@@ -205,7 +205,7 @@ document.addEventListener("DOMContentLoaded", function() {
     {%endif%}
     <span id="adjustments_area">
     <br><br><h5>Adjustments</h5>
-    {{ link_formset.management_form }}
+    {{ formset.management_form }}
     <form id="form-container" method="POST" action="{% url 'invoice_by_pk' pk=invoice.pk%}">
       {% crispy formset helper %}
       <button class='btn bg-info' id="add-form" type="button">Add row</button>

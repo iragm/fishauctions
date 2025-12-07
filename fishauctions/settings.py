@@ -33,6 +33,9 @@ if os.environ.get("DEBUG", "1") == "False":
 else:
     DEBUG = True
 
+# Template string for undefined variables - empty string means silently ignore them
+TEMPLATE_STRING_IF_INVALID = ""
+
 ALLOWED_HOSTS = [
     "localhost",
     "web",
@@ -223,6 +226,7 @@ TEMPLATES = [
                 "auctions.context_processors.site_config",
                 "auctions.context_processors.add_tz",
             ],
+            "string_if_invalid": TEMPLATE_STRING_IF_INVALID,
         },
     },
 ]

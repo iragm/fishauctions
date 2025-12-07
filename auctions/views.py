@@ -448,12 +448,9 @@ class LotListView(AjaxListView):
                 context["no_filters"] = True
         if context["auction"]:
             if self.request.user.is_authenticated:
-                try:
-                    context["auction_tos"] = AuctionTOS.objects.get(
-                        auction=context["auction"].pk, user=self.request.user.pk
-                    )
-                except AuctionTOS.DoesNotExist:
-                    pass
+                context["auction_tos"] = AuctionTOS.objects.filter(
+                    auction=context["auction"].pk, user=self.request.user.pk
+                ).first()
             #     # this message gets added to every scroll event.  Also, it's just noise
             #     messages.error(self.request, f"Please <a href='/auctions/{context['auction'].slug}/'>read the auction's rules and confirm your pickup location</a> to bid")
         else:
@@ -2764,12 +2761,12 @@ class BulkAddUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView, ContextMi
             return False
 
         email_field_names = ["email", "e-mail", "email address", "e-mail address"]
-        bidder_number_fields = ["bidder number", "bidder"]
+        bidder_number_fields = ["bidder number", "bidder", "membernumber", "tempguestnumber"]
         name_field_names = ["name", "full name", "first name", "firstname"]
         address_field_names = ["address", "mailing address"]
         phone_field_names = ["phone", "phone number", "telephone", "telephone number"]
         is_club_member_fields = ["member", "club member", self.auction.alternative_split_label.lower()]
-        is_bidding_allowed_field_names = ["allow bidding", "bidding", "bidding allowed"]
+        is_bidding_allowed_field_names = ["allow bidding", "bidding", "bidding allowed", "allowedtobid"]
         memo_field_names = ["memo", "note", "notes"]
         is_admin_field_names = ["admin", "staff", "is_admin", "is_staff"]
         # we are not reading in location here, do we care??
@@ -2978,7 +2975,13 @@ class BulkAddUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView, ContextMi
         # return redirect(reverse("bulk_add_users", kwargs={"slug": self.auction.slug}))
 
     def post(self, request, *args, **kwargs):
-        csv_file = request.FILES.get("csv_file", None)
+        # Check for CSV file with multiple possible field names
+        csv_file = None
+        for field_name in ["csv_file", "csv_file_quick"]:
+            csv_file = request.FILES.get(field_name)
+            if csv_file:
+                break
+
         if csv_file:
             return self.handle_csv_file(csv_file)
         self.instantiate_formset()
@@ -3642,9 +3645,16 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
             except (json.JSONDecodeError, AttributeError):
                 pass
 
+        # Security check: Only admins can specify a bidder_number
+        self.is_admin = self.is_auction_admin
+        if bidder_number and not self.is_admin:
+            return JsonResponse({"success": False, "error": "Only auction admins can add lots for other users"})
+
         # Get the TOS - either for specified bidder or for current user
         if bidder_number:
             self.tos = AuctionTOS.objects.filter(bidder_number=bidder_number, auction=self.auction).first()
+            if not self.tos:
+                return JsonResponse({"success": False, "error": "User not found in this auction"})
         else:
             self.tos = (
                 AuctionTOS.objects.filter(auction=self.auction)
@@ -3652,16 +3662,14 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                 .first()
             )
 
-        self.is_admin = self.is_auction_admin
-
         if not self.tos:
-            return JsonResponse({"success": False, "errors": {"general": "You must join this auction first"}})
+            return JsonResponse({"success": False, "error": "You must join this auction first"})
 
         if not self.tos.selling_allowed and not self.is_admin:
-            return JsonResponse({"success": False, "errors": {"general": "You don't have permission to add lots"}})
+            return JsonResponse({"success": False, "error": "You don't have permission to add lots"})
 
         if not self.is_admin and not self.auction.can_submit_lots:
-            return JsonResponse({"success": False, "errors": {"general": "Lot submission has ended"}})
+            return JsonResponse({"success": False, "error": "Lot submission has ended"})
 
         return super().dispatch(request, *args, **kwargs)
 
@@ -5544,12 +5552,12 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
         i_agree = False
 
         if self.request.user.is_authenticated:
-            try:
-                tos = AuctionTOS.objects.get(user=self.request.user, auction=self.auction)
+            tos = AuctionTOS.objects.filter(user=self.request.user, auction=self.auction).first()
+            if tos:
                 existingTos = tos.pickup_location
                 i_agree = True
                 context["hasChosenLocation"] = existingTos.pk if existingTos else False
-            except AuctionTOS.DoesNotExist:
+            else:
                 context["hasChosenLocation"] = False
                 if self.auction.multi_location:
                     i_agree = True
@@ -5762,14 +5770,11 @@ class ToDefaultLandingPage(View):
                     )
                     return redirect("/lots/")
                 else:
-                    try:
-                        # in progress online auctions get routed
-                        AuctionTOS.objects.get(user=request.user, auction=auction, auction__is_online=True)
+                    # in progress online auctions get routed
+                    if AuctionTOS.objects.filter(user=request.user, auction=auction, auction__is_online=True).exists():
                         # only show the banner if the TOS is signed
                         # messages.add_message(request, messages.INFO, f'{auction} is the last auction you joined.  <a href="/lots/">View all lots instead</a>')
                         routeByLastAuction = True
-                    except AuctionTOS.DoesNotExist:
-                        pass
             except (TypeError, AttributeError, Auction.DoesNotExist):
                 # probably no userdata or userdata.auction is None
                 auction = None
