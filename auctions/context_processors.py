@@ -74,13 +74,17 @@ def add_location(request):
         needs_save = False
         if latitude_cookie and longitude_cookie:
             # Only update if values have changed
-            if (
-                str(request.user.userdata.latitude) != latitude_cookie
-                or str(request.user.userdata.longitude) != longitude_cookie
-            ):
-                request.user.userdata.latitude = latitude_cookie
-                request.user.userdata.longitude = longitude_cookie
-                needs_save = True
+            # Convert cookie strings to float for comparison to handle precision
+            try:
+                lat_float = float(latitude_cookie)
+                lon_float = float(longitude_cookie)
+                if request.user.userdata.latitude != lat_float or request.user.userdata.longitude != lon_float:
+                    request.user.userdata.latitude = lat_float
+                    request.user.userdata.longitude = lon_float
+                    needs_save = True
+            except (ValueError, TypeError):
+                # Invalid cookie values, skip update
+                pass
         timezone_cookie = request.COOKIES.get("user_timezone")
         if timezone_cookie and request.user.userdata.timezone != timezone_cookie:
             request.user.userdata.timezone = timezone_cookie
