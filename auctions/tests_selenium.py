@@ -478,4 +478,3 @@ class FormValidationTests(SeleniumTestCase):
         # Verify no errors occurred
         js_errors = self.driver.execute_script("return window.collectedErrors || []")
         self.assertEqual(len(js_errors), 0, f"No errors when applying validation classes. Errors: {js_errors}")
-
