@@ -20,6 +20,7 @@ server. This means they test the actual deployed application state, not test dat
 """
 
 import os
+import time
 import unittest
 
 from django.test import TestCase, tag
@@ -342,16 +343,17 @@ class CookieAndStorageTests(SeleniumTestCase):
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
         # The agreeTos function only exists if hide_tos_banner is False (banner is shown)
-        # The banner might already be hidden by a cookie, so we just verify the page loads
-        # and either the function exists OR the cookie is already set
-        import time
-
-        time.sleep(1)
-        result = self.driver.execute_script(
-            "return typeof agreeTos === 'function' || document.cookie.indexOf('hide_tos_banner') >= 0 || true"
+        # The banner might already be hidden by a cookie, so we check both conditions
+        # Wait until either agreeTos function exists or the cookie is set
+        WebDriverWait(self.driver, 5).until(
+            lambda d: d.execute_script(
+                "return typeof agreeTos === 'function' || document.cookie.indexOf('hide_tos_banner') >= 0"
+            )
         )
-        # This test just verifies the page loads correctly - the function is conditional
-        self.assertTrue(result, "TOS banner handling should work")
+        result = self.driver.execute_script(
+            "return typeof agreeTos === 'function' || document.cookie.indexOf('hide_tos_banner') >= 0"
+        )
+        self.assertTrue(result, "agreeTos function should be defined or TOS banner already hidden")
 
     def test_timezone_detection(self):
         """Test that timezone detection JavaScript runs (base.html)."""
@@ -382,29 +384,14 @@ class GeolocationTests(SeleniumTestCase):
 class MessageCounterTests(SeleniumTestCase):
     """Tests for message counter update functionality (base.html)."""
 
-    def test_update_message_counter_function_exists(self):
-        """Test that updateMessageCounter function is defined for authenticated users."""
+    def test_page_loads_without_js_errors(self):
+        """Test that the page loads without JavaScript errors."""
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
-        # Note: This function only exists for authenticated users
-        # For unauthenticated users, the function won't be defined
-        # Just verify the page loads without JS errors
-        js_errors = self.driver.execute_script("return window.jsErrors || []")
-        self.assertEqual(len(js_errors), 0, "No JavaScript errors should occur")
-
-
-@unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
-@tag("selenium")
-class CopyLinkTests(SeleniumTestCase):
-    """Tests for copy link functionality (auction.html - copyLink)."""
-
-    def test_document_execcommand_available(self):
-        """Test that document.execCommand is available for copy operations."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # Check if execCommand is available (though deprecated, still used in code)
-        result = self.driver.execute_script("return typeof document.execCommand === 'function'")
-        self.assertTrue(result, "document.execCommand should be available")
+        # Check browser logs for JavaScript errors
+        logs = self.driver.get_log('browser')
+        severe_errors = [entry for entry in logs if entry.get('level') == 'SEVERE']
+        self.assertEqual(len(severe_errors), 0, f"JavaScript errors found: {severe_errors}")
 
 
 @unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
@@ -412,14 +399,16 @@ class CopyLinkTests(SeleniumTestCase):
 class AjaxFunctionalityTests(SeleniumTestCase):
     """Tests for AJAX-based JavaScript functionality."""
 
-    def test_csrf_token_in_page(self):
+    def test_csrf_token_available(self):
         """Test that CSRF token is available for AJAX requests."""
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
-        # Check if csrf_token is in the page (used for AJAX requests)
-        # It should be in meta tags or script tags
-        body = self.driver.find_element(By.TAG_NAME, "body")
-        self.assertIsNotNone(body, "Page should have body with CSRF token available")
+        # Check if CSRF token is in a meta tag (common pattern)
+        csrf_meta = self.driver.execute_script(
+            "return document.querySelector('meta[name=\"csrf-token\"]') !== null || "
+            "document.querySelector('[name=\"csrfmiddlewaretoken\"]') !== null"
+        )
+        self.assertTrue(csrf_meta, "CSRF token should be available in page")
 
 
 @unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
@@ -427,72 +416,14 @@ class AjaxFunctionalityTests(SeleniumTestCase):
 class HTMxInteractionTests(SeleniumTestCase):
     """Tests for HTMx interaction JavaScript functionality."""
 
-    def test_htmx_attributes_in_dom(self):
-        """Test that HTMx attributes can be processed in the DOM."""
+    def test_htmx_library_loaded(self):
+        """Test that the HTMx library is loaded and its process function is available."""
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
         # HTMx should be able to process hx-* attributes
         # Just verify HTMx is initialized
-        result = self.driver.execute_script("return typeof htmx.process === 'function'")
-        self.assertTrue(result, "HTMx process function should be available")
-
-
-@unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
-@tag("selenium")
-class PrintRedirectTests(SeleniumTestCase):
-    """Tests for print redirect JavaScript functionality (base.html)."""
-
-    def test_print_redirect_script_exists(self):
-        """Test that print redirect script is present on pages."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # Check that URLSearchParams is available (used for print redirect)
-        result = self.driver.execute_script("return typeof URLSearchParams === 'function'")
-        self.assertTrue(result, "URLSearchParams should be available for print redirect")
-
-
-@unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
-@tag("selenium")
-class ChartJsTests(SeleniumTestCase):
-    """Tests for Chart.js integration (used in dashboard_traffic.html and user.html)."""
-
-    def test_chartjs_library_loads_when_needed(self):
-        """Test that Chart.js can be loaded on pages that use it."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # Chart.js is loaded conditionally, so just verify page loads
-        body = self.driver.find_element(By.TAG_NAME, "body")
-        self.assertIsNotNone(body, "Page should load successfully")
-
-
-@unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
-@tag("selenium")
-class Select2Tests(SeleniumTestCase):
-    """Tests for Select2 integration (used in ignore_categories.html)."""
-
-    def test_select2_initialization(self):
-        """Test that Select2 can be initialized on select elements."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # Select2 is loaded via CDN in specific templates
-        # Just verify no JS errors on main page
-        js_errors = self.driver.execute_script("return window.jsErrors || []")
-        self.assertEqual(len(js_errors), 0, "No JavaScript errors should occur")
-
-
-@unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
-@tag("selenium")
-class GoogleMapsTests(SeleniumTestCase):
-    """Tests for Google Maps integration (auction.html - initMap)."""
-
-    def test_google_maps_callback_can_be_defined(self):
-        """Test that Google Maps callback function can be defined."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # Google Maps is loaded with async callback in specific templates
-        # Just verify page loads without errors
-        body = self.driver.find_element(By.TAG_NAME, "body")
-        self.assertIsNotNone(body, "Page with potential Maps integration should load")
+        result = self.driver.execute_script("return typeof htmx !== 'undefined' && typeof htmx.process === 'function'")
+        self.assertTrue(result, "HTMx library should be loaded with process function")
 
 
 @unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
@@ -500,322 +431,30 @@ class GoogleMapsTests(SeleniumTestCase):
 class FormValidationTests(SeleniumTestCase):
     """Tests for form validation JavaScript functionality."""
 
-    def test_is_invalid_class_application(self):
-        """Test that is-invalid class can be applied to form elements."""
+    def test_validation_class_application(self):
+        """Test that validation classes can be applied to form elements."""
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
+        # Inject error collection before running test actions
+        self.driver.execute_script(
+            """
+            window.collectedErrors = [];
+            window.onerror = function(message, source, lineno, colno, error) {
+                window.collectedErrors.push({
+                    message: message,
+                    source: source,
+                    lineno: lineno,
+                    colno: colno,
+                    error: error ? error.toString() : null
+                });
+            };
+            """
+        )
         # Test that we can programmatically add validation classes
         self.driver.execute_script(
             "if (typeof jQuery !== 'undefined' && jQuery('input').length > 0) { jQuery('input').first().addClass('is-invalid'); }"
         )
-        # Just verify no errors occurred
-        js_errors = self.driver.execute_script("return window.jsErrors || []")
-        self.assertEqual(len(js_errors), 0, "No errors when applying validation classes")
+        # Verify no errors occurred
+        js_errors = self.driver.execute_script("return window.collectedErrors || []")
+        self.assertEqual(len(js_errors), 0, f"No errors when applying validation classes. Errors: {js_errors}")
 
-
-@unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
-@tag("selenium")
-class WebSocketTests(SeleniumTestCase):
-    """Tests for WebSocket functionality (used in view_lot_images.html)."""
-
-    def test_websocket_api_available(self):
-        """Test that WebSocket API is available in the browser."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # Check if WebSocket is available
-        result = self.driver.execute_script("return typeof WebSocket !== 'undefined'")
-        self.assertTrue(result, "WebSocket API should be available")
-
-    def test_websocket_protocol_detection(self):
-        """Test that WebSocket protocol (ws/wss) can be determined from page protocol."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # Check that window.location.protocol is available
-        result = self.driver.execute_script("return typeof window.location.protocol")
-        self.assertEqual(result, "string", "window.location.protocol should be available")
-
-
-@unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
-@tag("selenium")
-class DateTimeManipulationTests(SeleniumTestCase):
-    """Tests for Date/Time manipulation JavaScript functionality."""
-
-    def test_date_object_available(self):
-        """Test that JavaScript Date object is available."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # Check if Date constructor is available
-        result = self.driver.execute_script("return typeof Date === 'function'")
-        self.assertTrue(result, "Date object should be available")
-
-    def test_date_locale_string_formatting(self):
-        """Test that toLocaleString is available for date formatting."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # Check if toLocaleString works
-        result = self.driver.execute_script("return typeof new Date().toLocaleString === 'function'")
-        self.assertTrue(result, "Date toLocaleString should be available")
-
-    def test_date_parsing_from_string(self):
-        """Test that dates can be parsed from strings."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # Test date parsing
-        result = self.driver.execute_script("var d = new Date('2024-01-01'); return !isNaN(d.getTime())")
-        self.assertTrue(result, "Date parsing should work")
-
-
-@unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
-@tag("selenium")
-class StringManipulationTests(SeleniumTestCase):
-    """Tests for string manipulation JavaScript functionality."""
-
-    def test_string_replace_for_urls(self):
-        """Test string replace functionality for URL manipulation."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # Test string replace (used in chat for URL detection)
-        result = self.driver.execute_script("return 'test'.replace('e', 'a') === 'tast'")
-        self.assertTrue(result, "String replace should work")
-
-    def test_regex_for_url_detection(self):
-        """Test regex functionality for URL detection in chat."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # Test regex (used in chat for URL linkification)
-        result = self.driver.execute_script("var regex = /http/i; return regex.test('http://example.com')")
-        self.assertTrue(result, "Regex should work for URL detection")
-
-
-@unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
-@tag("selenium")
-class ScrollAndViewportTests(SeleniumTestCase):
-    """Tests for scroll and viewport detection JavaScript."""
-
-    def test_scroll_functionality(self):
-        """Test that scroll operations work."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # Test scroll
-        self.driver.execute_script("window.scrollTo(0, 100)")
-        scroll_pos = self.driver.execute_script("return window.pageYOffset || window.scrollY")
-        # Some pages might not have enough content to scroll
-        self.assertIsNotNone(scroll_pos, "Scroll position should be readable")
-
-    def test_element_in_viewport_detection(self):
-        """Test element viewport detection (used in auction.html)."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # Test that offset properties are available
-        result = self.driver.execute_script("var el = document.body; return typeof el.offsetTop === 'number'")
-        self.assertTrue(result, "Element offset properties should be available")
-
-
-@unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
-@tag("selenium")
-class KeyboardEventTests(SeleniumTestCase):
-    """Tests for keyboard event handling JavaScript."""
-
-    def test_keycode_detection(self):
-        """Test that keyboard event keyCodes can be detected."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # Test that keyboard events can be created
-        result = self.driver.execute_script(
-            "var evt = new KeyboardEvent('keyup', {keyCode: 13}); return evt.keyCode === 13"
-        )
-        self.assertTrue(result, "Keyboard event keyCode should be detectable")
-
-    def test_onkeyup_event_handler(self):
-        """Test that onkeyup event handlers can be assigned."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # Test that onkeyup can be set
-        result = self.driver.execute_script("return typeof document.body.onkeyup !== 'undefined'")
-        self.assertTrue(result, "onkeyup event handler should be assignable")
-
-
-@unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
-@tag("selenium")
-class DOMManipulationTests(SeleniumTestCase):
-    """Tests for DOM manipulation JavaScript functionality."""
-
-    def test_element_creation(self):
-        """Test that elements can be created dynamically."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # Test createElement
-        result = self.driver.execute_script("var a = document.createElement('a'); return a.tagName === 'A'")
-        self.assertTrue(result, "Elements should be creatable")
-
-    def test_element_class_manipulation(self):
-        """Test that element classes can be added/removed."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # Test classList
-        result = self.driver.execute_script("return typeof document.body.classList !== 'undefined'")
-        self.assertTrue(result, "classList should be available")
-
-    def test_element_content_manipulation(self):
-        """Test that element content can be changed."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # Test innerHTML and textContent
-        result = self.driver.execute_script(
-            "document.body.setAttribute('data-test', 'value'); "
-            "return document.body.getAttribute('data-test') === 'value'"
-        )
-        self.assertTrue(result, "Element attributes should be manipulable")
-
-
-@unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
-@tag("selenium")
-class TimerTests(SeleniumTestCase):
-    """Tests for timer-based JavaScript functionality."""
-
-    def test_settimeout_available(self):
-        """Test that setTimeout is available."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        result = self.driver.execute_script("return typeof setTimeout === 'function'")
-        self.assertTrue(result, "setTimeout should be available")
-
-    def test_setinterval_available(self):
-        """Test that setInterval is available (used for message counter)."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        result = self.driver.execute_script("return typeof setInterval === 'function'")
-        self.assertTrue(result, "setInterval should be available")
-
-    def test_cleartimeout_available(self):
-        """Test that clearTimeout is available."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        result = self.driver.execute_script("return typeof clearTimeout === 'function'")
-        self.assertTrue(result, "clearTimeout should be available")
-
-
-@unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
-@tag("selenium")
-class JSONHandlingTests(SeleniumTestCase):
-    """Tests for JSON handling in JavaScript (used for WebSocket messages)."""
-
-    def test_json_stringify_available(self):
-        """Test that JSON.stringify is available for WebSocket messages."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        result = self.driver.execute_script("return typeof JSON.stringify === 'function'")
-        self.assertTrue(result, "JSON.stringify should be available")
-
-    def test_json_parse_available(self):
-        """Test that JSON.parse is available for WebSocket messages."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        result = self.driver.execute_script("return typeof JSON.parse === 'function'")
-        self.assertTrue(result, "JSON.parse should be available")
-
-    def test_json_roundtrip(self):
-        """Test that JSON can be stringified and parsed."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        result = self.driver.execute_script(
-            "var obj = {test: 'value'}; "
-            "var str = JSON.stringify(obj); "
-            "var parsed = JSON.parse(str); "
-            "return parsed.test === 'value'"
-        )
-        self.assertTrue(result, "JSON roundtrip should work")
-
-
-@unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
-@tag("selenium")
-class FocusAndBlurTests(SeleniumTestCase):
-    """Tests for focus and blur event handling."""
-
-    def test_focus_detection(self):
-        """Test that document.hasFocus() works (used in pageView tracking)."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        result = self.driver.execute_script("return typeof document.hasFocus === 'function'")
-        self.assertTrue(result, "document.hasFocus should be available")
-
-    def test_element_focus_method(self):
-        """Test that element.focus() method works."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # Create an input and try to focus it
-        result = self.driver.execute_script(
-            "var input = document.createElement('input'); "
-            "document.body.appendChild(input); "
-            "return typeof input.focus === 'function'"
-        )
-        self.assertTrue(result, "Element focus method should be available")
-
-    def test_blur_event_handler(self):
-        """Test that blur event handlers can be attached."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        result = self.driver.execute_script("return typeof document.body.onblur !== 'undefined'")
-        self.assertTrue(result, "onblur event handler should be available")
-
-
-@unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
-@tag("selenium")
-class HistoryAPITests(SeleniumTestCase):
-    """Tests for HTML5 History API (used for URL rewriting)."""
-
-    def test_history_pushstate_available(self):
-        """Test that history.pushState is available (used for URL rewriting)."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        result = self.driver.execute_script("return typeof history.pushState === 'function'")
-        self.assertTrue(result, "history.pushState should be available")
-
-    def test_history_replacestate_available(self):
-        """Test that history.replaceState is available (used in pageView tracking)."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        result = self.driver.execute_script("return typeof history.replaceState === 'function'")
-        self.assertTrue(result, "history.replaceState should be available")
-
-
-@unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
-@tag("selenium")
-class MutationObserverTests(SeleniumTestCase):
-    """Tests for MutationObserver API (used for push notification button detection)."""
-
-    def test_mutationobserver_available(self):
-        """Test that MutationObserver API is available."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        result = self.driver.execute_script("return typeof MutationObserver !== 'undefined'")
-        self.assertTrue(result, "MutationObserver should be available")
-
-    def test_mutationobserver_creation(self):
-        """Test that MutationObserver can be created."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        result = self.driver.execute_script(
-            "var observer = new MutationObserver(function(){}); return typeof observer.observe === 'function'"
-        )
-        self.assertTrue(result, "MutationObserver should be creatable")
-
-
-@unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
-@tag("selenium")
-class NotificationAPITests(SeleniumTestCase):
-    """Tests for Notification API (used for push notifications)."""
-
-    def test_notification_api_available(self):
-        """Test that Notification API is available in the browser."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        result = self.driver.execute_script("return typeof Notification !== 'undefined'")
-        self.assertTrue(result, "Notification API should be available")
-
-    def test_notification_permission_property(self):
-        """Test that Notification.permission property is available."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        result = self.driver.execute_script("return typeof Notification.permission === 'string'")
-        self.assertTrue(result, "Notification.permission should be available")
