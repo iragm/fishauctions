@@ -569,6 +569,78 @@ class VendorLibraryTests(SeleniumTestCase):
 class Select2LibraryTests(SeleniumTestCase):
     """Tests for Select2 library functionality."""
 
+    def setUp(self):
+        """Create a test user for authentication tests."""
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        # Create a test user that will exist in the live database
+        self.test_username = f"selenium_test_user_{int(time.time())}"
+        self.test_password = "selenium_test_pass_123"
+        self.test_user = User.objects.create_user(
+            username=self.test_username,
+            password=self.test_password,
+            email=f"{self.test_username}@example.com"
+        )
+
+    def tearDown(self):
+        """Clean up test user."""
+        if hasattr(self, 'test_user'):
+            self.test_user.delete()
+
+    def login_user(self, username, password):
+        """Helper method to log in a user via the web interface."""
+        self.driver.get(self.get_url("/accounts/login/"))
+        self.wait_for_page_load()
+        
+        # Wait for and fill in the login form
+        username_field = self.wait_for_element(By.NAME, "login")
+        password_field = self.driver.find_element(By.NAME, "password")
+        
+        username_field.clear()
+        username_field.send_keys(username)
+        password_field.clear()
+        password_field.send_keys(password)
+        
+        # Submit the form
+        submit_button = self.driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
+        submit_button.click()
+        
+        # Wait for redirect after login
+        time.sleep(2)
+        self.wait_for_page_load()
+
+    def test_select2_works_on_ignore_categories(self):
+        """Test that Select2 actually works on the ignore categories page with authentication."""
+        # Log in as test user
+        self.login_user(self.test_username, self.test_password)
+        
+        # Navigate to ignore_categories page
+        self.driver.get(self.get_url("/ignore/"))
+        self.wait_for_page_load()
+        
+        # Verify we're on the correct page
+        self.assertIn("ignore", self.driver.current_url.lower())
+        
+        # Check that Select2 is loaded
+        select2_loaded = self.driver.execute_script("return typeof jQuery.fn.select2 !== 'undefined'")
+        self.assertTrue(select2_loaded, "Select2 library not loaded on ignore_categories page")
+        
+        # Check that the select element exists
+        select_element = self.driver.find_element(By.ID, "category-selection")
+        self.assertIsNotNone(select_element, "Category selection element not found")
+        
+        # Verify Select2 was initialized on the element
+        select2_initialized = self.driver.execute_script(
+            "return $('#category-selection').hasClass('select2-hidden-accessible')"
+        )
+        self.assertTrue(select2_initialized, "Select2 not initialized on category-selection element")
+        
+        # Check that Select2 dropdown container was created
+        select2_container_exists = self.driver.execute_script(
+            "return $('.select2-container').length > 0"
+        )
+        self.assertTrue(select2_container_exists, "Select2 container not created")
+
     def test_select2_library_file_exists(self):
         """Test that Select2 library file is available for loading."""
         # Select2 is used on ignore_categories and auction_stats pages which require authentication
@@ -580,16 +652,6 @@ class Select2LibraryTests(SeleniumTestCase):
         self.assertTrue(jquery_loaded, "jQuery not loaded (required for Select2)")
         # Verify the Select2 file can be loaded by checking the static file is accessible
         # We can't test if it's actually loaded without authentication, but we can verify jQuery exists
-        body = self.driver.find_element(By.TAG_NAME, "body")
-        self.assertIsNotNone(body, "Page body not found")
-
-    def test_select2_pages_require_authentication(self):
-        """Test that pages using Select2 (ignore_categories, auction_stats) require authentication."""
-        # Attempt to access ignore_categories without authentication
-        self.driver.get(self.get_url("/ignore/"))
-        self.wait_for_page_load()
-        # Should redirect to login or show the page doesn't exist/requires auth
-        # Just verify the page loaded (will redirect to login)
         body = self.driver.find_element(By.TAG_NAME, "body")
         self.assertIsNotNone(body, "Page body not found")
 
