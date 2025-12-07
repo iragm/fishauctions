@@ -19,9 +19,7 @@ All third-party JavaScript and CSS libraries are now self-hosted in the `auction
 Located in `auctions/static/js/vendor/`:
 
 - **jQuery 3.5.1** (`jquery.min.js`) - Used for DOM manipulation and AJAX requests
-- **jQuery 3.6.1** (`jquery-3.6.1.min.js`) - Newer version for specific components
 - **Bootstrap 5.3.3** (`bootstrap.bundle.min.js`) - Includes Popper.js for tooltips/popovers
-- **Bootstrap 4.5.2** (`bootstrap-4.5.2.min.js`) - Legacy version for print.html
 - **Select2 4.0.13** (`select2.min.js`) - Enhanced select boxes
 - **Chart.js 2.9.3** (`Chart.min.js`) - Data visualization and charting
 - **Vosklet** (`Vosklet.js`) - Voice recognition library
@@ -33,7 +31,7 @@ Located in `auctions/static/css/vendor/`:
 - **Bootstrap Darkly 5.3.3** (`bootstrap.min.css`) - Bootswatch dark theme
 - **Bootstrap Icons 1.11.3** (`bootstrap-icons.min.css`) - Icon font
 - **Select2 4.0.13** (`select2.min.css`) - Select2 styling
-- **Select2 Bootstrap Theme** (`select2-bootstrap.min.css`) - Bootstrap integration for Select2
+- **Select2 Bootstrap Theme** (`select2-bootstrap.min.css`) - Bootstrap integration for Select2 (minimal fallback, run download script to get full theme)
 
 ### Fonts
 
