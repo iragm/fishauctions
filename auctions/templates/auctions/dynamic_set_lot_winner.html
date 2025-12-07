@@ -230,7 +230,7 @@
     }
 
     // Check for lot number
-    let lotMatch = text.match(/\blot\s+(?:number\s+)?(\d+|(?:[A-Za-z]+(?:-[A-Za-z]+)*\s*)+)(?:\s|$)/i);
+    let lotMatch = text.match(/\blot\s+(?:number\s+)?(\d+|[A-Za-z]+(?:-[A-Za-z]+)*(?:\s+[A-Za-z]+(?:-[A-Za-z]+)*)*)(?:\s|$)/i);
     if (lotMatch) {
       let lotNumber = parseSpokenNumber(lotMatch[1]);
       if (lotNumber) {
