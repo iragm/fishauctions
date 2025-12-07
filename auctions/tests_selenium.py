@@ -542,8 +542,7 @@ class VendorLibraryTests(SeleniumTestCase):
         )
         # At least one of these should be true (either icons present or font loaded)
         self.assertTrue(
-            has_icons or font_loaded,
-            "Bootstrap Icons not properly loaded (no icons found and font not loaded)"
+            has_icons or font_loaded, "Bootstrap Icons not properly loaded (no icons found and font not loaded)"
         )
 
     def test_jquery_ajax_functionality(self):
@@ -577,6 +576,7 @@ class Select2LibraryTests(SeleniumTestCase):
         self.wait_for_page_load()
         # Load a page that uses Select2 if possible, or just check the library is defined
         select2_available = self.driver.execute_script("return typeof jQuery.fn.select2 !== 'undefined'")
+        self.assertTrue(select2_available, "Select2 not loaded")
         # Select2 may not be loaded on all pages, so we just verify jQuery is available
         # The actual Select2 pages require authentication
         jquery_loaded = self.driver.execute_script("return typeof jQuery !== 'undefined'")
@@ -628,17 +628,15 @@ class VendorLibraryIntegrationTests(SeleniumTestCase):
         severe_errors = [log for log in logs if log["level"] == "SEVERE"]
         # Filter out non-critical errors (like favicon 404s)
         js_errors = [
-            err for err in severe_errors
-            if "vendor" in err.get("message", "").lower() or
-               "jquery" in err.get("message", "").lower() or
-               "bootstrap" in err.get("message", "").lower() or
-               "select2" in err.get("message", "").lower() or
-               "chart" in err.get("message", "").lower()
+            err
+            for err in severe_errors
+            if "vendor" in err.get("message", "").lower()
+            or "jquery" in err.get("message", "").lower()
+            or "bootstrap" in err.get("message", "").lower()
+            or "select2" in err.get("message", "").lower()
+            or "chart" in err.get("message", "").lower()
         ]
-        self.assertEqual(
-            len(js_errors), 0,
-            f"JavaScript errors found related to vendor libraries: {js_errors}"
-        )
+        self.assertEqual(len(js_errors), 0, f"JavaScript errors found related to vendor libraries: {js_errors}")
 
     def test_no_javascript_errors_on_lots(self):
         """Test that there are no JavaScript errors on the lots page."""
@@ -647,15 +645,13 @@ class VendorLibraryIntegrationTests(SeleniumTestCase):
         logs = self.driver.get_log("browser")
         severe_errors = [log for log in logs if log["level"] == "SEVERE"]
         js_errors = [
-            err for err in severe_errors
-            if "vendor" in err.get("message", "").lower() or
-               "jquery" in err.get("message", "").lower() or
-               "bootstrap" in err.get("message", "").lower()
+            err
+            for err in severe_errors
+            if "vendor" in err.get("message", "").lower()
+            or "jquery" in err.get("message", "").lower()
+            or "bootstrap" in err.get("message", "").lower()
         ]
-        self.assertEqual(
-            len(js_errors), 0,
-            f"JavaScript errors found related to vendor libraries: {js_errors}"
-        )
+        self.assertEqual(len(js_errors), 0, f"JavaScript errors found related to vendor libraries: {js_errors}")
 
     def test_no_javascript_errors_on_auctions(self):
         """Test that there are no JavaScript errors on the auctions page."""
@@ -664,15 +660,13 @@ class VendorLibraryIntegrationTests(SeleniumTestCase):
         logs = self.driver.get_log("browser")
         severe_errors = [log for log in logs if log["level"] == "SEVERE"]
         js_errors = [
-            err for err in severe_errors
-            if "vendor" in err.get("message", "").lower() or
-               "jquery" in err.get("message", "").lower() or
-               "bootstrap" in err.get("message", "").lower()
+            err
+            for err in severe_errors
+            if "vendor" in err.get("message", "").lower()
+            or "jquery" in err.get("message", "").lower()
+            or "bootstrap" in err.get("message", "").lower()
         ]
-        self.assertEqual(
-            len(js_errors), 0,
-            f"JavaScript errors found related to vendor libraries: {js_errors}"
-        )
+        self.assertEqual(len(js_errors), 0, f"JavaScript errors found related to vendor libraries: {js_errors}")
 
     def test_bootstrap_components_interactive(self):
         """Test that Bootstrap interactive components work."""
@@ -709,13 +703,9 @@ class VendorLibraryIntegrationTests(SeleniumTestCase):
         # Check for 404 errors in browser logs
         logs = self.driver.get_log("browser")
         vendor_404s = [
-            log for log in logs
-            if "404" in log.get("message", "") and "vendor" in log.get("message", "").lower()
+            log for log in logs if "404" in log.get("message", "") and "vendor" in log.get("message", "").lower()
         ]
-        self.assertEqual(
-            len(vendor_404s), 0,
-            f"404 errors found for vendor files: {vendor_404s}"
-        )
+        self.assertEqual(len(vendor_404s), 0, f"404 errors found for vendor files: {vendor_404s}")
 
     def test_jquery_dom_ready(self):
         """Test that jQuery document ready functions work."""
