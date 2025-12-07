@@ -7979,7 +7979,7 @@ class ModelMethodsTestCase(StandardTestCase):
         # Set email on AuctionTOS (find_user searches AuctionTOS.email, not User.email)
         self.admin_online_tos.email = "test@example.com"
         self.admin_online_tos.save()
-        
+
         result = self.online_auction.find_user(email="test@example.com")
 
         # Should find the AuctionTOS with this email
@@ -8009,7 +8009,7 @@ class ModelMethodsTestCase(StandardTestCase):
         # Set email on AuctionTOS
         self.admin_online_tos.email = "test@example.com"
         self.admin_online_tos.save()
-        
+
         result = self.online_auction.find_user(email="test@example.com", exclude_pk=self.admin_online_tos.pk)
 
         # Should not find the excluded user (but there might be other users with same email)
