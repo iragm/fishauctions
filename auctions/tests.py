@@ -503,18 +503,24 @@ class LotModelConcurrencyTests(TransactionTestCase):
                     quantity=1,
                     reserve_price=5,
                 )
-                return lot.lot_number_int
+                return (True, lot.lot_number_int)
             except Exception as e:
-                return f"Error: {e}"
+                return (False, str(e))
 
         # Create multiple lots concurrently
         lot_numbers = []
+        errors = []
         with ThreadPoolExecutor(max_workers=5) as executor:
             futures = [executor.submit(create_lot, f"Concurrent Lot {i}") for i in range(10)]
             for future in futures:
-                result = future.result()
-                if not isinstance(result, str):  # Not an error
+                success, result = future.result()
+                if success:
                     lot_numbers.append(result)
+                else:
+                    errors.append(result)
+
+        # Fail if any errors occurred
+        self.assertEqual(len(errors), 0, f"Errors occurred during concurrent creation: {errors}")
 
         # Verify all lot numbers are unique
         self.assertEqual(len(lot_numbers), len(set(lot_numbers)), f"Duplicate lot numbers found: {lot_numbers}")
@@ -563,18 +569,24 @@ class LotModelConcurrencyTests(TransactionTestCase):
                     quantity=1,
                     reserve_price=5,
                 )
-                return lot.custom_lot_number
+                return (True, lot.custom_lot_number)
             except Exception as e:
-                return f"Error: {e}"
+                return (False, str(e))
 
         # Create multiple lots concurrently
         lot_numbers = []
+        errors = []
         with ThreadPoolExecutor(max_workers=5) as executor:
             futures = [executor.submit(create_lot, f"Concurrent Lot {i}") for i in range(10)]
             for future in futures:
-                result = future.result()
-                if not isinstance(result, str):  # Not an error
+                success, result = future.result()
+                if success:
                     lot_numbers.append(result)
+                else:
+                    errors.append(result)
+
+        # Fail if any errors occurred
+        self.assertEqual(len(errors), 0, f"Errors occurred during concurrent creation: {errors}")
 
         # Verify all lot numbers are unique
         self.assertEqual(len(lot_numbers), len(set(lot_numbers)), f"Duplicate custom lot numbers found: {lot_numbers}")
@@ -612,9 +624,10 @@ class LotModelConcurrencyTests(TransactionTestCase):
             quantity=1,
             reserve_price=5,
         )
-        # Force the same lot_number_int
+        # Force the same lot_number_int to simulate a duplicate that slipped through
         lot2.lot_number_int = lot1.lot_number_int
-        # Use _do_save to bypass the locking mechanism for testing
+        # Use _do_save to bypass the locking mechanism for testing the duplicate detection logic
+        # This is intentional to test the post-save duplicate check that catches edge cases
         lot2._do_save()
 
         # Refresh from database
@@ -672,9 +685,10 @@ class LotModelConcurrencyTests(TransactionTestCase):
             quantity=1,
             reserve_price=5,
         )
-        # Force the same custom_lot_number
+        # Force the same custom_lot_number to simulate a duplicate that slipped through
         lot2.custom_lot_number = lot1.custom_lot_number
-        # Use _do_save to bypass the locking mechanism for testing
+        # Use _do_save to bypass the locking mechanism for testing the duplicate detection logic
+        # This is intentional to test the post-save duplicate check that catches edge cases
         lot2._do_save()
 
         # Refresh from database

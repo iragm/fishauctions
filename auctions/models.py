@@ -3475,7 +3475,9 @@ class Lot(models.Model):
         # This handles both lot_number_int and custom_lot_number (seller_dash_lot_numbering)
         # reported in a large auction where two lots had the same number but I have not been able to reproduce it
         # https://github.com/iragm/fishauctions/issues/420
-        if self.auction and self.pk:  # Only check after first save (when pk exists)
+        # Note: Only check after first save (when pk exists). Race conditions during initial save
+        # are prevented by the SELECT FOR UPDATE locking in the save() method above.
+        if self.auction and self.pk:
             # Check for duplicates based on lot_number_display
             if self.auction.use_seller_dash_lot_numbering and self.custom_lot_number:
                 # Check for duplicate custom_lot_number in seller_dash_lot_numbering mode
@@ -3491,12 +3493,17 @@ class Lot(models.Model):
                     # Generate a new custom_lot_number for this (newest) lot
                     if self.auctiontos_seller:
                         custom_lot_number = 1
-                        other_lots = Lot.objects.filter(
-                            auction=self.auction,
-                            auctiontos_seller=self.auctiontos_seller,
-                        ).exclude(pk=self.pk)
-                        for lot in other_lots:
-                            match = re.findall(r"\d+", f"{lot.custom_lot_number}")
+                        # Only fetch custom_lot_number field for performance
+                        other_lot_numbers = (
+                            Lot.objects.filter(
+                                auction=self.auction,
+                                auctiontos_seller=self.auctiontos_seller,
+                            )
+                            .exclude(pk=self.pk)
+                            .values_list("custom_lot_number", flat=True)
+                        )
+                        for lot_number in other_lot_numbers:
+                            match = re.findall(r"\d+", f"{lot_number}")
                             if match:
                                 match = int(match[-1])
                                 if match >= custom_lot_number:
