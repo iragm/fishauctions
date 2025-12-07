@@ -230,7 +230,7 @@
     }
 
     // Check for lot number
-    let lotMatch = text.match(/\blot\s+(?:number\s+)?(\d+|(?:\w+(?:-\w+)*\s*)+)(?:\s|$)/i);
+    let lotMatch = text.match(/\blot\s+(?:number\s+)?(\d+|(?:[A-Za-z]+(?:-[A-Za-z]+)*\s*)+)(?:\s|$)/i);
     if (lotMatch) {
       let lotNumber = parseSpokenNumber(lotMatch[1]);
       if (lotNumber) {
@@ -244,7 +244,7 @@
     }
 
     // Check for price (dollar/dollars)
-    let priceMatch = text.match(/(\d+|(?:\w+(?:-\w+)*\s*)+)\s+dollars?/i);
+    let priceMatch = text.match(/(\d+|(?:[A-Za-z]+(?:-[A-Za-z]+)*\s*)+)\s+dollars?/i);
     if (priceMatch) {
       let price = parseSpokenNumber(priceMatch[1]);
       if (price) {
@@ -258,7 +258,7 @@
     }
 
     // Check for bidder number
-    let bidderMatch = text.match(/\bbidder\s+(\d+|[a-z]|(?:\w+(?:-\w+)*\s*)+)(?:\s|$)/i);
+    let bidderMatch = text.match(/\bbidder\s+(\d+|[A-Za-z]+(?:-[A-Za-z]+)*)(?:\s|$)/i);
     if (bidderMatch) {
       let bidderNum = bidderMatch[1].trim();
       // Try to parse as number first
