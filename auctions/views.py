@@ -3663,13 +3663,13 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
             )
 
         if not self.tos:
-            return JsonResponse({"success": False, "errors": {"general": "You must join this auction first"}})
+            return JsonResponse({"success": False, "error": "You must join this auction first"})
 
         if not self.tos.selling_allowed and not self.is_admin:
-            return JsonResponse({"success": False, "errors": {"general": "You don't have permission to add lots"}})
+            return JsonResponse({"success": False, "error": "You don't have permission to add lots"})
 
         if not self.is_admin and not self.auction.can_submit_lots:
-            return JsonResponse({"success": False, "errors": {"general": "Lot submission has ended"}})
+            return JsonResponse({"success": False, "error": "Lot submission has ended"})
 
         return super().dispatch(request, *args, **kwargs)
 

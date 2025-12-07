@@ -4880,7 +4880,7 @@ class BulkAddLotsAutoTests(StandardTestCase):
         data = response.json()
         self.assertFalse(data["success"])
         # Check that error message relates to lot submission deadline
-        error_msg = data["errors"]["general"].lower()
+        error_msg = data["error"].lower()
         self.assertTrue("cannot be edited" in error_msg or "submission" in error_msg)
 
     def test_custom_fields_saved(self):
