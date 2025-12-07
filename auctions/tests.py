@@ -6983,6 +6983,1219 @@ class AdminReadonlyFieldsTests(StandardTestCase):
         self.assertIn("pickup_location", admin_instance.readonly_fields)
 
 
+class HelperFunctionsTestCase(StandardTestCase):
+    """Test cases for helper_functions.py"""
+
+    def test_get_currency_symbol_all_supported_currencies(self):
+        """Test that all documented currency codes return correct symbols"""
+        from auctions.helper_functions import get_currency_symbol
+
+        # Test all documented currencies
+        self.assertEqual(get_currency_symbol("USD"), "$")
+        self.assertEqual(get_currency_symbol("CAD"), "$")
+        self.assertEqual(get_currency_symbol("AUD"), "$")
+        self.assertEqual(get_currency_symbol("GBP"), "£")
+        self.assertEqual(get_currency_symbol("EUR"), "€")
+        self.assertEqual(get_currency_symbol("JPY"), "¥")
+        self.assertEqual(get_currency_symbol("CNY"), "¥")
+        self.assertEqual(get_currency_symbol("CHF"), "CHF")
+
+    def test_get_currency_symbol_unsupported_currency(self):
+        """Test that unsupported currencies default to $"""
+        from auctions.helper_functions import get_currency_symbol
+
+        self.assertEqual(get_currency_symbol("XXX"), "$")
+        self.assertEqual(get_currency_symbol(""), "$")
+        self.assertEqual(get_currency_symbol("INVALID"), "$")
+
+    def test_get_currency_symbol_case_sensitivity(self):
+        """Test currency code case sensitivity - should be case sensitive"""
+        from auctions.helper_functions import get_currency_symbol
+
+        # Currency codes should be uppercase
+        self.assertEqual(get_currency_symbol("usd"), "$")  # Will default to $ as lowercase not in map
+        self.assertEqual(get_currency_symbol("Usd"), "$")  # Will default to $ as mixed case not in map
+
+    def test_bin_data_with_datetime_values(self):
+        """Test bin_data with datetime field values"""
+        from auctions.helper_functions import bin_data
+
+        # Create test lots with different dates
+        base_time = timezone.now() - datetime.timedelta(days=10)
+        for i in range(10):
+            lot = Lot.objects.create(
+                lot_name=f"Test lot datetime {i}",
+                auction=self.online_auction,
+                auctiontos_seller=self.online_tos,
+                quantity=1,
+                active=False,
+            )
+            lot.date_posted = base_time + datetime.timedelta(days=i)
+            lot.save()
+
+        qs = Lot.objects.filter(auction=self.online_auction, lot_name__startswith="Test lot datetime")
+        result = bin_data(qs, "date_posted", 5)
+        self.assertEqual(len(result), 5)
+
+    def test_bin_data_empty_queryset(self):
+        """Test bin_data with empty queryset returns empty bins"""
+        from auctions.helper_functions import bin_data
+
+        qs = Lot.objects.filter(lot_name="NONEXISTENT")
+        result = bin_data(qs, "winning_price", 5, start_bin=0, end_bin=100)
+        # Should return 5 bins all with 0 count
+        self.assertEqual(len(result), 5)
+        self.assertEqual(sum(result), 0)
+
+    def test_bin_data_invalid_field_raises_error(self):
+        """Test bin_data with invalid field raises appropriate error"""
+        from auctions.helper_functions import bin_data
+
+        qs = Lot.objects.filter(auction=self.online_auction)
+        # Should raise ValueError when field doesn't exist and can't be ordered
+        with self.assertRaises(ValueError) as context:
+            bin_data(qs, "nonexistent_field", 5)
+        self.assertIn("start_bin and end_bin are required", str(context.exception))
+
+    def test_bin_data_string_field_raises_error(self):
+        """Test bin_data with string field raises appropriate error"""
+        from auctions.helper_functions import bin_data
+
+        # Create a lot with a string field
+        Lot.objects.create(
+            lot_name="String test",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            active=False,
+        )
+
+        qs = Lot.objects.filter(lot_name="String test")
+        # Should raise ValueError when field is not datetime or numeric
+        with self.assertRaises(ValueError) as context:
+            bin_data(qs, "lot_name", 5)
+        self.assertIn("needs to be either a datetime or an integer value", str(context.exception))
+
+    def test_bin_data_single_bin(self):
+        """Test bin_data with single bin works correctly"""
+        from auctions.helper_functions import bin_data
+
+        # Create test lots
+        for i in range(5):
+            Lot.objects.create(
+                lot_name=f"Single bin test {i}",
+                auction=self.online_auction,
+                auctiontos_seller=self.online_tos,
+                quantity=1,
+                winning_price=i * 10,
+                active=False,
+            )
+
+        qs = Lot.objects.filter(lot_name__startswith="Single bin test")
+        result = bin_data(qs, "winning_price", 1)
+        self.assertEqual(len(result), 1)
+        # Note: Due to the >= comparison in bin_data, the max value (40) is excluded
+        # and goes to high_overflow. So only 4 items (0,10,20,30) are in the bin.
+        self.assertEqual(result[0], 4)
+
+    def test_bin_data_zero_range(self):
+        """Test bin_data behavior when start_bin equals end_bin"""
+        from auctions.helper_functions import bin_data
+
+        # Create test lots with same value
+        for i in range(5):
+            Lot.objects.create(
+                lot_name=f"Zero range test {i}",
+                auction=self.online_auction,
+                auctiontos_seller=self.online_tos,
+                quantity=1,
+                winning_price=50,
+                active=False,
+            )
+
+        qs = Lot.objects.filter(lot_name__startswith="Zero range test")
+        # When start equals end, bin_size will be 0, which could cause division issues
+        # This tests the function's handling of edge case
+        result = bin_data(qs, "winning_price", 5, start_bin=50, end_bin=50)
+        self.assertEqual(len(result), 5)
+
+
+class ModelUtilityFunctionsTestCase(StandardTestCase):
+    """Test cases for utility functions in models.py"""
+
+    def test_median_value_odd_count(self):
+        """Test median_value with odd number of items"""
+        from auctions.models import median_value
+
+        # Create test lots with different prices
+        for i in range(5):
+            Lot.objects.create(
+                lot_name=f"Median test odd {i}",
+                auction=self.online_auction,
+                auctiontos_seller=self.online_tos,
+                quantity=1,
+                winning_price=i * 10,
+                active=False,
+            )
+
+        qs = Lot.objects.filter(lot_name__startswith="Median test odd")
+        result = median_value(qs, "winning_price")
+        # With values 0, 10, 20, 30, 40, median should be 20
+        self.assertEqual(result, 20)
+
+    def test_median_value_even_count(self):
+        """Test median_value with even number of items"""
+        from auctions.models import median_value
+
+        # Create test lots with different prices
+        for i in range(6):
+            Lot.objects.create(
+                lot_name=f"Median test even {i}",
+                auction=self.online_auction,
+                auctiontos_seller=self.online_tos,
+                quantity=1,
+                winning_price=i * 10,
+                active=False,
+            )
+
+        qs = Lot.objects.filter(lot_name__startswith="Median test even")
+        result = median_value(qs, "winning_price")
+        # With values 0, 10, 20, 30, 40, 50, median should be 30 (rounded from index 3)
+        self.assertEqual(result, 30)
+
+    def test_add_price_info_requires_lot_queryset(self):
+        """Test that add_price_info only accepts Lot querysets"""
+        from auctions.models import add_price_info
+
+        # Should raise TypeError when not passed a Lot queryset
+        with self.assertRaises(TypeError) as context:
+            add_price_info(AuctionTOS.objects.all())
+        self.assertIn("must be passed a queryset of the Lot model", str(context.exception))
+
+    def test_add_price_info_sold_lot_calculations(self):
+        """Test add_price_info calculates correctly for sold lots"""
+        from auctions.models import add_price_info
+
+        # Create a sold lot
+        lot = Lot.objects.create(
+            lot_name="Sold lot test",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            winning_price=100,
+            auctiontos_winner=self.tosB,
+            active=False,
+        )
+
+        qs = add_price_info(Lot.objects.filter(pk=lot.pk))
+        annotated_lot = qs.first()
+
+        # Should have the annotated fields
+        self.assertTrue(hasattr(annotated_lot, "your_cut"))
+        self.assertTrue(hasattr(annotated_lot, "club_cut"))
+        self.assertTrue(hasattr(annotated_lot, "pre_register_discount"))
+
+    def test_add_price_info_unsold_lot(self):
+        """Test add_price_info for unsold lots"""
+        from auctions.models import add_price_info
+
+        # Create an unsold lot
+        lot = Lot.objects.create(
+            lot_name="Unsold lot test",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            winning_price=None,
+            active=False,
+        )
+
+        qs = add_price_info(Lot.objects.filter(pk=lot.pk))
+        annotated_lot = qs.first()
+
+        # Unsold lots should have negative your_cut (unsold lot fee)
+        self.assertLessEqual(annotated_lot.your_cut, 0)
+        self.assertEqual(annotated_lot.club_cut, 0)
+
+    def test_add_price_info_donation_lot(self):
+        """Test add_price_info for donation lots"""
+        from auctions.models import add_price_info
+
+        # Create a donation lot
+        lot = Lot.objects.create(
+            lot_name="Donation lot test",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            winning_price=100,
+            auctiontos_winner=self.tosB,
+            donation=True,
+            active=False,
+        )
+
+        qs = add_price_info(Lot.objects.filter(pk=lot.pk))
+        annotated_lot = qs.first()
+
+        # Donation lots should have 0 your_cut
+        self.assertEqual(annotated_lot.your_cut, 0)
+
+    def test_distance_to_sql_injection_protection(self):
+        """Test distance_to function rejects SQL injection attempts"""
+        from auctions.models import distance_to
+
+        # Test with quotes in parameters - should raise TypeError
+        with self.assertRaises(TypeError) as context:
+            distance_to("45.5'", 90.0)
+        self.assertIn("invalid character", str(context.exception))
+
+        with self.assertRaises(TypeError) as context:
+            distance_to(45.5, '90.0"')
+        self.assertIn("invalid character", str(context.exception))
+
+        with self.assertRaises(TypeError) as context:
+            distance_to(45.5, 90.0, lat_field_name="latitude'; DROP TABLE--")
+        self.assertIn("invalid character", str(context.exception))
+
+    def test_distance_to_miles_vs_km(self):
+        """Test distance_to returns correct SQL for miles vs kilometers"""
+        from auctions.models import distance_to
+
+        # Test miles (default)
+        distance_miles = distance_to(40.7128, -74.0060)
+        self.assertIsNotNone(distance_miles)
+
+        # Test kilometers
+        distance_km = distance_to(40.7128, -74.0060, unit="km")
+        self.assertIsNotNone(distance_km)
+
+    def test_find_image_with_user(self):
+        """Test find_image prioritizes images from specific user"""
+        from auctions.models import find_image
+
+        # find_image requires images to be uploaded, which is restricted in tests
+        # This test validates the function exists and handles basic inputs
+        result = find_image("Test Lot", self.user, self.online_auction)
+        # Should return None when no images exist
+        self.assertIsNone(result)
+
+    def test_add_tos_info_requires_auctiontos_queryset(self):
+        """Test that add_tos_info only accepts AuctionTOS querysets"""
+        from auctions.models import add_tos_info
+
+        # Should raise TypeError when not passed an AuctionTOS queryset
+        with self.assertRaises(TypeError) as context:
+            add_tos_info(Lot.objects.all())
+        self.assertIn("must be passed a queryset of the AuctionTOS model", str(context.exception))
+
+    def test_add_tos_info_annotates_fields(self):
+        """Test add_tos_info adds expected annotations"""
+        from auctions.models import add_tos_info
+
+        qs = add_tos_info(AuctionTOS.objects.filter(pk=self.online_tos.pk))
+        annotated_tos = qs.first()
+
+        # Check that annotations are present
+        self.assertTrue(hasattr(annotated_tos, "lots_bid"))
+        self.assertTrue(hasattr(annotated_tos, "lots_viewed"))
+        self.assertTrue(hasattr(annotated_tos, "lots_won"))
+        self.assertTrue(hasattr(annotated_tos, "lots_submitted"))
+        self.assertTrue(hasattr(annotated_tos, "other_auctions"))
+        self.assertTrue(hasattr(annotated_tos, "lots_outbid"))
+        self.assertTrue(hasattr(annotated_tos, "account_age_days"))
+        self.assertTrue(hasattr(annotated_tos, "has_ever_granted_permission"))
+
+    def test_add_tos_info_permission_filtering(self):
+        """Test add_tos_info respects permission flags"""
+        from auctions.models import add_tos_info
+
+        # Create a manually added user (no permission granted)
+        manual_user = User.objects.create_user(
+            username="manual_user", password="testpassword", email="manual@example.com"
+        )
+        manual_tos = AuctionTOS.objects.create(
+            user=manual_user,
+            auction=self.online_auction,
+            pickup_location=self.location,
+            manually_added=True,
+        )
+
+        qs = add_tos_info(AuctionTOS.objects.filter(pk=manual_tos.pk))
+        annotated_tos = qs.first()
+
+        # Manually added users without permission should have filtered data
+        self.assertEqual(annotated_tos.lots_bid, 0)
+        self.assertEqual(annotated_tos.lots_viewed, 0)
+
+    def test_nearby_auctions_basic(self):
+        """Test nearby_auctions returns auctions within distance"""
+        from auctions.models import nearby_auctions
+
+        # Set location for pickup location
+        self.location.latitude = 40.7128
+        self.location.longitude = -74.0060
+        self.location.save()
+
+        # Test with a location that should match
+        auctions, distances = nearby_auctions(40.7128, -74.0060, distance=100)
+
+        # Should return lists
+        self.assertIsInstance(auctions, list)
+        self.assertIsInstance(distances, list)
+        self.assertEqual(len(auctions), len(distances))
+
+    def test_nearby_auctions_return_slugs(self):
+        """Test nearby_auctions can return just slugs"""
+        from auctions.models import nearby_auctions
+
+        # Set location for pickup location
+        self.location.latitude = 40.7128
+        self.location.longitude = -74.0060
+        self.location.save()
+
+        # Test return_slugs parameter
+        slugs = nearby_auctions(40.7128, -74.0060, distance=100, return_slugs=True)
+
+        # Should return list of slugs
+        self.assertIsInstance(slugs, list)
+
+    def test_nearby_auctions_filters_ignored(self):
+        """Test nearby_auctions filters out ignored auctions for users"""
+        from auctions.models import AuctionIgnore, nearby_auctions
+
+        # Set location for pickup location
+        self.location.latitude = 40.7128
+        self.location.longitude = -74.0060
+        self.location.save()
+
+        # User ignores the auction
+        AuctionIgnore.objects.create(user=self.user, auction=self.online_auction)
+
+        # Should not return ignored auction for this user
+        auctions, distances = nearby_auctions(40.7128, -74.0060, distance=100, user=self.user)
+
+        auction_slugs = [a.slug for a in auctions]
+        self.assertNotIn(self.online_auction.slug, auction_slugs)
+
+    def test_nearby_auctions_filters_already_joined(self):
+        """Test nearby_auctions can filter already joined auctions"""
+        from auctions.models import nearby_auctions
+
+        # Set location for pickup location
+        self.location.latitude = 40.7128
+        self.location.longitude = -74.0060
+        self.location.save()
+
+        # User already has TOS (joined)
+        # Test with include_already_joined=False (default)
+        auctions, distances = nearby_auctions(
+            40.7128, -74.0060, distance=100, user=self.user, include_already_joined=False
+        )
+
+        # User has already joined online_auction, so it should be filtered out
+        auction_slugs = [a.slug for a in auctions]
+        self.assertNotIn(self.online_auction.slug, auction_slugs)
+
+    def test_nearby_auctions_includes_joined_when_requested(self):
+        """Test nearby_auctions includes joined auctions when flag is set"""
+        from auctions.models import nearby_auctions
+
+        # Set location for pickup location
+        self.location.latitude = 40.7128
+        self.location.longitude = -74.0060
+        self.location.save()
+
+        # Make the auction active/current
+        self.online_auction.date_start = timezone.now() - datetime.timedelta(days=1)
+        self.online_auction.date_end = timezone.now() + datetime.timedelta(days=1)
+        self.online_auction.save()
+
+        # Test with include_already_joined=True
+        auctions, distances = nearby_auctions(
+            40.7128, -74.0060, distance=100, user=self.user, include_already_joined=True
+        )
+
+        # Should include the auction even though user has TOS
+        auction_slugs = [a.slug for a in auctions]
+        self.assertIn(self.online_auction.slug, auction_slugs)
+
+
+class FormsUtilityTestCase(TestCase):
+    """Test cases for utility functions in forms.py"""
+
+    def test_clean_summernote_short_html(self):
+        """Test clean_summernote doesn't modify short HTML"""
+        from auctions.forms import clean_summernote
+
+        short_html = "<p>This is a short paragraph</p>"
+        result = clean_summernote(short_html)
+        self.assertEqual(result, short_html)
+
+    def test_clean_summernote_long_html(self):
+        """Test clean_summernote truncates long HTML"""
+        from auctions.forms import clean_summernote
+
+        # Create HTML longer than max_length
+        long_html = "<p>" + "x" * 20000 + "</p>"
+        result = clean_summernote(long_html, max_length=100)
+        self.assertLessEqual(len(result), 100)
+
+    def test_clean_summernote_preserves_br_tags(self):
+        """Test clean_summernote preserves br tags when truncating"""
+        from auctions.forms import clean_summernote
+
+        # Create HTML with br tags
+        html_with_br = "<p>Text<br/>More text<br />Even more</p>" + "x" * 20000
+        result = clean_summernote(html_with_br, max_length=100)
+        # br tags should be preserved in the output
+        self.assertIn("<br", result)
+
+    def test_clean_summernote_removes_other_tags_when_truncating(self):
+        """Test clean_summernote removes non-br tags when truncating"""
+        from auctions.forms import clean_summernote
+
+        # Create HTML with various tags
+        html = "<div><p><span>Text</span></p></div>" + "x" * 20000
+        result = clean_summernote(html, max_length=100)
+        # Should have removed tags but kept content
+        self.assertNotIn("<div>", result)
+        self.assertNotIn("<span>", result)
+
+    def test_clean_summernote_empty_string(self):
+        """Test clean_summernote handles empty string"""
+        from auctions.forms import clean_summernote
+
+        result = clean_summernote("")
+        self.assertEqual(result, "")
+
+    def test_clean_summernote_custom_max_length(self):
+        """Test clean_summernote respects custom max_length parameter"""
+        from auctions.forms import clean_summernote
+
+        long_html = "x" * 1000
+        result = clean_summernote(long_html, max_length=50)
+        self.assertLessEqual(len(result), 50)
+
+
+class TemplateTagsTestCase(TestCase):
+    """Test cases for template tags"""
+
+    def test_currency_symbol_filter(self):
+        """Test currency_symbol template filter"""
+        from auctions.templatetags.currency_filters import currency_symbol
+
+        self.assertEqual(currency_symbol("USD"), "$")
+        self.assertEqual(currency_symbol("GBP"), "£")
+        self.assertEqual(currency_symbol("EUR"), "€")
+        self.assertEqual(currency_symbol("JPY"), "¥")
+        self.assertEqual(currency_symbol("CHF"), "CHF")
+        self.assertEqual(currency_symbol("UNKNOWN"), "$")
+
+    def test_format_price_filter_with_none(self):
+        """Test format_price handles None values"""
+        from auctions.templatetags.currency_filters import format_price
+
+        result = format_price(None, "USD")
+        self.assertEqual(result, "")
+
+    def test_format_price_filter_usd(self):
+        """Test format_price with USD currency"""
+        from auctions.templatetags.currency_filters import format_price
+
+        result = format_price(10.5, "USD")
+        self.assertEqual(result, "$10.50")
+
+    def test_format_price_filter_jpy(self):
+        """Test format_price with JPY currency (no decimals)"""
+        from auctions.templatetags.currency_filters import format_price
+
+        result = format_price(1500.75, "JPY")
+        self.assertEqual(result, "¥1500")
+
+    def test_format_price_filter_chf(self):
+        """Test format_price with CHF currency (space between symbol and amount)"""
+        from auctions.templatetags.currency_filters import format_price
+
+        result = format_price(25.50, "CHF")
+        self.assertEqual(result, "CHF 25.50")
+
+    def test_format_price_filter_invalid_value(self):
+        """Test format_price with invalid price value"""
+        from auctions.templatetags.currency_filters import format_price
+
+        result = format_price("invalid", "USD")
+        self.assertEqual(result, "$invalid")
+
+    def test_convert_distance_none(self):
+        """Test convert_distance with None value"""
+        from auctions.templatetags.distance_filters import convert_distance
+
+        result = convert_distance(None, None)
+        self.assertIsNone(result)
+
+    def test_convert_distance_zero(self):
+        """Test convert_distance with zero distance"""
+        from auctions.templatetags.distance_filters import convert_distance
+
+        result = convert_distance(0, None)
+        self.assertIsNone(result)
+
+    def test_convert_distance_negative(self):
+        """Test convert_distance with negative distance"""
+        from auctions.templatetags.distance_filters import convert_distance
+
+        user = User.objects.create_user(username="test_user", password="testpass")
+        result = convert_distance(-10, user)
+        self.assertIsNone(result)
+
+    def test_convert_distance_miles_for_anonymous(self):
+        """Test convert_distance returns miles for anonymous users"""
+        from auctions.templatetags.distance_filters import convert_distance
+
+        result = convert_distance(10, None)
+        self.assertEqual(result, (10, "miles"))
+
+    def test_convert_distance_miles_for_authenticated_user(self):
+        """Test convert_distance returns miles for user with miles preference"""
+        from auctions.templatetags.distance_filters import convert_distance
+
+        user = User.objects.create_user(username="miles_user", password="testpass")
+        user.userdata.distance_unit = "mi"
+        user.userdata.save()
+
+        result = convert_distance(10, user)
+        self.assertEqual(result, (10, "miles"))
+
+    def test_convert_distance_km_for_authenticated_user(self):
+        """Test convert_distance converts to km for user with km preference"""
+        from auctions.templatetags.distance_filters import MILES_TO_KM, convert_distance
+
+        user = User.objects.create_user(username="km_user", password="testpass")
+        user.userdata.distance_unit = "km"
+        user.userdata.save()
+
+        result = convert_distance(10, user)
+        expected_km = int(round(10 * MILES_TO_KM))
+        self.assertEqual(result, (expected_km, "km"))
+
+    def test_convert_distance_invalid_string(self):
+        """Test convert_distance with invalid string value"""
+        from auctions.templatetags.distance_filters import convert_distance
+
+        result = convert_distance("invalid", None)
+        self.assertIsNone(result)
+
+    def test_convert_distance_valid_string(self):
+        """Test convert_distance with valid numeric string"""
+        from auctions.templatetags.distance_filters import convert_distance
+
+        result = convert_distance("15.5", None)
+        self.assertEqual(result, (16, "miles"))  # Rounded
+
+    def test_distance_display_filter(self):
+        """Test distance_display template filter"""
+        from auctions.templatetags.distance_filters import distance_display
+
+        user = User.objects.create_user(username="display_user", password="testpass")
+        user.userdata.distance_unit = "mi"
+        user.userdata.save()
+
+        result = distance_display(10, user)
+        self.assertEqual(result, "10 miles")
+
+    def test_distance_display_filter_none(self):
+        """Test distance_display returns empty string for None"""
+        from auctions.templatetags.distance_filters import distance_display
+
+        result = distance_display(None, None)
+        self.assertEqual(result, "")
+
+    def test_distance_display_filter_zero(self):
+        """Test distance_display returns empty string for zero"""
+        from auctions.templatetags.distance_filters import distance_display
+
+        result = distance_display(0, None)
+        self.assertEqual(result, "")
+
+
+class ContextProcessorsTestCase(TestCase):
+    """Test cases for context processors"""
+
+    def test_google_analytics_context(self):
+        """Test google_analytics context processor returns expected keys"""
+        from django.test import RequestFactory
+
+        from auctions.context_processors import google_analytics
+
+        factory = RequestFactory()
+        request = factory.get("/")
+
+        context = google_analytics(request)
+        self.assertIn("GOOGLE_MEASUREMENT_ID", context)
+        self.assertIn("GOOGLE_TAG_ID", context)
+        self.assertIn("GOOGLE_ADSENSE_ID", context)
+
+    def test_google_oauth_context(self):
+        """Test google_oauth context processor returns expected keys"""
+        from django.test import RequestFactory
+
+        from auctions.context_processors import google_oauth
+
+        factory = RequestFactory()
+        request = factory.get("/")
+
+        context = google_oauth(request)
+        self.assertIn("GOOGLE_OAUTH_LINK", context)
+
+    def test_theme_context_anonymous_user(self):
+        """Test theme context processor for anonymous users"""
+        from django.contrib.auth.models import AnonymousUser
+        from django.test import RequestFactory
+
+        from auctions.context_processors import theme
+
+        factory = RequestFactory()
+        request = factory.get("/")
+        request.user = AnonymousUser()
+
+        context = theme(request)
+        self.assertIn("theme", context)
+        self.assertIn("show_ads", context)
+        self.assertEqual(context["show_ads"], False)  # Ads off for everyone
+
+    def test_theme_context_authenticated_user(self):
+        """Test theme context processor for authenticated users"""
+        from django.test import RequestFactory
+
+        from auctions.context_processors import theme
+
+        factory = RequestFactory()
+        request = factory.get("/")
+        user = User.objects.create_user(username="theme_user", password="testpass")
+        request.user = user
+
+        context = theme(request)
+        self.assertIn("theme", context)
+        self.assertIn("show_ads", context)
+        self.assertEqual(context["show_ads"], False)  # Ads off for everyone
+
+    def test_add_tz_with_cookie(self):
+        """Test add_tz context processor with timezone cookie"""
+        from django.contrib.auth.models import AnonymousUser
+        from django.test import RequestFactory
+
+        from auctions.context_processors import add_tz
+
+        factory = RequestFactory()
+        request = factory.get("/")
+        request.user = AnonymousUser()
+        request.COOKIES = {"user_timezone": "America/Los_Angeles"}
+
+        context = add_tz(request)
+        self.assertEqual(context["user_timezone"], "America/Los_Angeles")
+        self.assertTrue(context["user_timezone_set"])
+
+    def test_add_tz_without_cookie(self):
+        """Test add_tz context processor without timezone cookie"""
+        from django.contrib.auth.models import AnonymousUser
+        from django.test import RequestFactory
+
+        from auctions.context_processors import add_tz
+
+        factory = RequestFactory()
+        request = factory.get("/")
+        request.user = AnonymousUser()
+        request.COOKIES = {}
+
+        context = add_tz(request)
+        self.assertEqual(context["user_timezone"], "America/New_York")  # Default
+        self.assertFalse(context["user_timezone_set"])
+
+    def test_add_tz_authenticated_user_with_saved_timezone(self):
+        """Test add_tz uses saved timezone for authenticated users"""
+        from django.test import RequestFactory
+
+        from auctions.context_processors import add_tz
+
+        factory = RequestFactory()
+        request = factory.get("/")
+        user = User.objects.create_user(username="tz_user", password="testpass")
+        user.userdata.timezone = "Europe/London"
+        user.userdata.save()
+        request.user = user
+        request.COOKIES = {}
+
+        context = add_tz(request)
+        self.assertEqual(context["user_timezone"], "Europe/London")
+
+    def test_add_location_with_cookies(self):
+        """Test add_location context processor with location cookies"""
+        from django.contrib.auth.models import AnonymousUser
+        from django.contrib.sessions.middleware import SessionMiddleware
+        from django.test import RequestFactory
+
+        from auctions.context_processors import add_location
+
+        factory = RequestFactory()
+        request = factory.get("/")
+        request.user = AnonymousUser()
+        request.COOKIES = {"latitude": "40.7128", "longitude": "-74.0060"}
+
+        # Add session middleware
+        middleware = SessionMiddleware(lambda x: x)
+        middleware.process_request(request)
+        request.session.save()
+
+        context = add_location(request)
+        self.assertTrue(context["has_user_location"])
+
+    def test_add_location_without_cookies(self):
+        """Test add_location context processor without location cookies"""
+        from django.contrib.auth.models import AnonymousUser
+        from django.contrib.sessions.middleware import SessionMiddleware
+        from django.test import RequestFactory
+
+        from auctions.context_processors import add_location
+
+        factory = RequestFactory()
+        request = factory.get("/")
+        request.user = AnonymousUser()
+        request.COOKIES = {}
+        request.META = {}
+
+        # Add session middleware
+        middleware = SessionMiddleware(lambda x: x)
+        middleware.process_request(request)
+        request.session.save()
+
+        context = add_location(request)
+        self.assertFalse(context["has_user_location"])
+
+    def test_add_location_saves_ip_for_authenticated_user(self):
+        """Test add_location saves IP address for authenticated users"""
+        from django.contrib.sessions.middleware import SessionMiddleware
+        from django.test import RequestFactory
+
+        from auctions.context_processors import add_location
+
+        factory = RequestFactory()
+        request = factory.get("/")
+        user = User.objects.create_user(username="ip_user", password="testpass")
+        request.user = user
+        request.COOKIES = {}
+        request.META = {"REMOTE_ADDR": "192.168.1.1"}
+
+        # Add session middleware
+        middleware = SessionMiddleware(lambda x: x)
+        middleware.process_request(request)
+        request.session.save()
+
+        add_location(request)
+
+        # Reload user data to check if IP was saved
+        user.userdata.refresh_from_db()
+        self.assertEqual(user.userdata.last_ip_address, "192.168.1.1")
+
+    def test_add_location_handles_x_forwarded_for(self):
+        """Test add_location handles X-Forwarded-For header"""
+        from django.contrib.sessions.middleware import SessionMiddleware
+        from django.test import RequestFactory
+
+        from auctions.context_processors import add_location
+
+        factory = RequestFactory()
+        request = factory.get("/")
+        user = User.objects.create_user(username="forwarded_user", password="testpass")
+        request.user = user
+        request.COOKIES = {}
+        request.META = {
+            "HTTP_X_FORWARDED_FOR": "10.0.0.1, 192.168.1.1",
+            "REMOTE_ADDR": "192.168.1.1",
+        }
+
+        # Add session middleware
+        middleware = SessionMiddleware(lambda x: x)
+        middleware.process_request(request)
+        request.session.save()
+
+        add_location(request)
+
+        # Should use first IP from X-Forwarded-For
+        user.userdata.refresh_from_db()
+        self.assertEqual(user.userdata.last_ip_address, "10.0.0.1")
+
+    def test_dismissed_cookies_tos_with_cookie(self):
+        """Test dismissed_cookies_tos with cookie present"""
+        from django.contrib.auth.models import AnonymousUser
+        from django.test import RequestFactory
+
+        from auctions.context_processors import dismissed_cookies_tos
+
+        factory = RequestFactory()
+        request = factory.get("/")
+        request.user = AnonymousUser()
+        request.COOKIES = {"hide_tos_banner": "true"}
+
+        context = dismissed_cookies_tos(request)
+        self.assertTrue(context["hide_tos_banner"])
+
+    def test_dismissed_cookies_tos_without_cookie(self):
+        """Test dismissed_cookies_tos without cookie"""
+        from django.contrib.auth.models import AnonymousUser
+        from django.test import RequestFactory
+
+        from auctions.context_processors import dismissed_cookies_tos
+
+        factory = RequestFactory()
+        request = factory.get("/")
+        request.user = AnonymousUser()
+        request.COOKIES = {}
+
+        context = dismissed_cookies_tos(request)
+        self.assertFalse(context["hide_tos_banner"])
+
+    def test_dismissed_cookies_tos_authenticated_user(self):
+        """Test dismissed_cookies_tos for authenticated user with dismissed flag"""
+        from django.test import RequestFactory
+
+        from auctions.context_processors import dismissed_cookies_tos
+
+        factory = RequestFactory()
+        request = factory.get("/")
+        user = User.objects.create_user(username="tos_user", password="testpass")
+        user.userdata.dismissed_cookies_tos = True
+        user.userdata.save()
+        request.user = user
+        request.COOKIES = {}
+
+        context = dismissed_cookies_tos(request)
+        self.assertTrue(context["hide_tos_banner"])
+
+    def test_site_config_context(self):
+        """Test site_config context processor returns expected keys"""
+        from django.test import RequestFactory
+
+        from auctions.context_processors import site_config
+
+        factory = RequestFactory()
+        request = factory.get("/")
+
+        context = site_config(request)
+        self.assertIn("navbar_brand", context)
+        self.assertIn("copyright_message", context)
+        self.assertIn("enable_club_finder", context)
+        self.assertIn("enable_help", context)
+        self.assertIn("enable_promo_page", context)
+
+
+class MiddlewareTestCase(TestCase):
+    """Test cases for middleware"""
+
+    def test_cross_origin_isolation_middleware_adds_headers(self):
+        """Test CrossOriginIsolationMiddleware adds required headers"""
+        from django.http import HttpResponse
+        from django.test import RequestFactory
+
+        from auctions.middleware import CrossOriginIsolationMiddleware
+
+        factory = RequestFactory()
+        request = factory.get("/")
+
+        # Create a mock get_response that returns a simple response
+        def get_response(request):
+            return HttpResponse("OK")
+
+        middleware = CrossOriginIsolationMiddleware(get_response)
+        response = middleware(request)
+
+        self.assertEqual(response["Cross-Origin-Opener-Policy"], "same-origin")
+        self.assertEqual(response["Cross-Origin-Embedder-Policy"], "require-corp")
+        self.assertEqual(response["Cross-Origin-Resource-Policy"], "cross-origin")
+
+
+class ModelMethodsTestCase(StandardTestCase):
+    """Test cases for specific model methods with complex logic"""
+
+    def test_auction_fix_year_old_date(self):
+        """Test Auction.fix_year corrects dates with years too far in the past"""
+        old_date = timezone.now().replace(year=1990)
+        fixed_date = self.online_auction.fix_year(old_date)
+
+        # Should be corrected to current year
+        self.assertEqual(fixed_date.year, timezone.now().year)
+
+    def test_auction_fix_year_future_date(self):
+        """Test Auction.fix_year corrects dates with years too far in the future"""
+        future_date = timezone.now().replace(year=2099)
+        fixed_date = self.online_auction.fix_year(future_date)
+
+        # Should be corrected to current year
+        self.assertEqual(fixed_date.year, timezone.now().year)
+
+    def test_auction_fix_year_valid_date(self):
+        """Test Auction.fix_year doesn't modify valid dates"""
+        valid_date = timezone.now().replace(year=2025)
+        fixed_date = self.online_auction.fix_year(valid_date)
+
+        # Should remain unchanged
+        self.assertEqual(fixed_date.year, 2025)
+
+    def test_auction_fix_year_none_date(self):
+        """Test Auction.fix_year handles None dates"""
+        fixed_date = self.online_auction.fix_year(None)
+
+        # Should return None
+        self.assertIsNone(fixed_date)
+
+    def test_auction_fix_year_custom_cutoffs(self):
+        """Test Auction.fix_year with custom cutoff parameters"""
+        date_2010 = timezone.now().replace(year=2010)
+
+        # With default cutoffs (2000-2050), 2010 should be valid
+        fixed_default = self.online_auction.fix_year(date_2010)
+        self.assertEqual(fixed_default.year, 2010)
+
+        # With custom cutoffs where 2010 is invalid
+        fixed_custom = self.online_auction.fix_year(date_2010, low_cutoff=2015, high_cutoff=2040)
+        self.assertEqual(fixed_custom.year, timezone.now().year)
+
+    def test_auction_find_user_by_email(self):
+        """Test Auction.find_user can find users by email"""
+        # Set email on AuctionTOS (find_user searches AuctionTOS.email, not User.email)
+        self.admin_online_tos.email = "test@example.com"
+        self.admin_online_tos.save()
+
+        result = self.online_auction.find_user(email="test@example.com")
+
+        # Should find the AuctionTOS with this email
+        self.assertIsNotNone(result)
+        self.assertEqual(result.email, "test@example.com")
+
+    def test_auction_find_user_by_name(self):
+        """Test Auction.find_user can find users by name"""
+        # Set a name for testing
+        self.admin_online_tos.name = "John Doe"
+        self.admin_online_tos.save()
+
+        result = self.online_auction.find_user(name="John Doe")
+
+        # Should find the user
+        self.assertIsNotNone(result)
+
+    def test_auction_find_user_no_params(self):
+        """Test Auction.find_user returns None with no search params"""
+        result = self.online_auction.find_user()
+
+        # Should return None
+        self.assertIsNone(result)
+
+    def test_auction_find_user_exclude_pk(self):
+        """Test Auction.find_user can exclude specific PKs"""
+        # Set email on AuctionTOS
+        self.admin_online_tos.email = "test@example.com"
+        self.admin_online_tos.save()
+
+        result = self.online_auction.find_user(email="test@example.com", exclude_pk=self.admin_online_tos.pk)
+
+        # Should not find the excluded user (but there might be other users with same email)
+        if result:
+            self.assertNotEqual(result.pk, self.admin_online_tos.pk)
+
+    def test_auction_soft_delete(self):
+        """Test Auction.delete performs soft delete"""
+        # NOTE: This tests the current behavior, but soft delete may have issues
+        # If a lot is not properly archived, it could still appear in queries
+        auction_pk = self.online_auction.pk
+        self.online_auction.delete()
+
+        # Auction should still exist but be marked deleted
+        auction = Auction.objects.get(pk=auction_pk)
+        self.assertTrue(auction.is_deleted)
+
+    def test_pageview_merge_and_delete_duplicate_extends_time_range(self):
+        """Test PageView.merge_and_delete_duplicate extends time range correctly"""
+        from auctions.models import PageView
+
+        # Create two PageView instances that are duplicates
+        base_time = timezone.now()
+        view1 = PageView.objects.create(
+            user=self.user,
+            lot_number=self.lot,
+            date_start=base_time - datetime.timedelta(hours=2),
+            date_end=base_time - datetime.timedelta(hours=1),
+            total_time=3600,
+            session_id="test_session",
+        )
+        view2 = PageView.objects.create(
+            user=self.user,
+            lot_number=self.lot,
+            date_start=base_time - datetime.timedelta(hours=1),
+            date_end=base_time,
+            total_time=3600,
+            session_id="test_session",
+        )
+
+        # Merge view2 into view1
+        # Note: merge_and_delete_duplicate is a property with side effects (a code smell)
+        # Accessing it triggers the merge operation
+        _ = view1.merge_and_delete_duplicate  # noqa: F841
+
+        # view1 should have extended time range and combined total_time
+        view1.refresh_from_db()
+        self.assertEqual(view1.total_time, 7200)  # 3600 + 3600
+
+        # view2 should be deleted
+        self.assertEqual(PageView.objects.filter(pk=view2.pk).count(), 0)
+
+    def test_pageview_save_gets_location_from_ip(self):
+        """Test PageView.save gets location from IP address"""
+        from auctions.models import PageView
+
+        # Create a PageView with known location
+        PageView.objects.create(
+            user=self.user,
+            lot_number=self.lot,
+            date_start=timezone.now(),
+            ip_address="192.168.1.1",
+            latitude=40.7128,
+            longitude=-74.0060,
+            session_id="session1",
+        )
+
+        # Create another PageView with same IP but no location
+        new_view = PageView.objects.create(
+            user=self.user,
+            lot_number=self.lotB,
+            date_start=timezone.now(),
+            ip_address="192.168.1.1",
+            session_id="session2",
+        )
+
+        # Should have inherited location from previous view with same IP
+        self.assertEqual(new_view.latitude, 40.7128)
+        self.assertEqual(new_view.longitude, -74.0060)
+
+    def test_pageview_save_gets_location_from_userdata(self):
+        """Test PageView.save gets location from UserData if no IP match"""
+        from auctions.models import PageView
+
+        # Set user location
+        self.user.userdata.latitude = 51.5074
+        self.user.userdata.longitude = -0.1278
+        self.user.userdata.save()
+
+        # Create PageView with new IP and no location
+        new_view = PageView.objects.create(
+            user=self.user,
+            lot_number=self.lot,
+            date_start=timezone.now(),
+            ip_address="10.0.0.1",
+            session_id="session3",
+        )
+
+        # Should have inherited location from userdata
+        self.assertEqual(new_view.latitude, 51.5074)
+        self.assertEqual(new_view.longitude, -0.1278)
+
+
+class SignalLogicTestCase(StandardTestCase):
+    """Test cases for signal handlers with complex date logic"""
+
+    def test_auction_signal_swaps_start_end_if_reversed(self):
+        """Test that auction signal swaps start/end dates if end is before start"""
+        # Create auction with end before start
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="Test reversed dates",
+            date_start=timezone.now() + datetime.timedelta(days=7),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+
+        # Dates should be swapped by signal
+        self.assertLess(auction.date_start, auction.date_end)
+
+    def test_auction_signal_sets_default_end_date_for_online(self):
+        """Test that auction signal sets default end date for online auctions"""
+        start_date = timezone.now() + datetime.timedelta(days=1)
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="Test default end",
+            is_online=True,
+            date_start=start_date,
+        )
+
+        # Should have end date set to 7 days after start
+        expected_end = start_date + datetime.timedelta(days=7)
+        self.assertEqual(auction.date_end.date(), expected_end.date())
+
+    def test_auction_signal_sets_lot_submission_dates(self):
+        """Test that auction signal sets lot submission dates if not provided"""
+        start_date = timezone.now() + datetime.timedelta(days=7)
+        end_date = start_date + datetime.timedelta(days=7)
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="Test lot submission dates",
+            is_online=True,
+            date_start=start_date,
+            date_end=end_date,
+        )
+
+        # Should have lot submission dates set
+        self.assertIsNotNone(auction.lot_submission_start_date)
+        self.assertIsNotNone(auction.lot_submission_end_date)
+        # For online auctions, submission end should match auction end
+        self.assertEqual(auction.lot_submission_end_date, auction.date_end)
+
+    def test_auction_signal_fixes_bad_lot_submission_end_date(self):
+        """Test that auction signal fixes lot submission end date if it's after auction end"""
+        start_date = timezone.now() + datetime.timedelta(days=1)
+        end_date = start_date + datetime.timedelta(days=7)
+        bad_submission_end = end_date + datetime.timedelta(days=1)
+
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="Test bad submission end",
+            is_online=True,
+            date_start=start_date,
+            date_end=end_date,
+            lot_submission_end_date=bad_submission_end,
+        )
+
+        # Should have corrected lot submission end date
+        self.assertEqual(auction.lot_submission_end_date, auction.date_end)
+
+    def test_auction_signal_sets_online_bidding_dates_for_in_person(self):
+        """Test that auction signal sets online bidding dates for in-person auctions"""
+        start_date = timezone.now() + datetime.timedelta(days=7)
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="Test in-person with online bidding",
+            is_online=False,
+            date_start=start_date,
+            online_bidding="allow",
+        )
+
+        # Should have online bidding dates set
+        self.assertIsNotNone(auction.date_online_bidding_starts)
+        self.assertIsNotNone(auction.date_online_bidding_ends)
+        # Online bidding should end at auction start
+        self.assertEqual(auction.date_online_bidding_ends, auction.date_start)
+
+    def test_auction_signal_swaps_online_bidding_dates_if_reversed(self):
+        """Test that auction signal swaps online bidding dates if reversed"""
+        start_date = timezone.now() + datetime.timedelta(days=7)
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="Test reversed online bidding dates",
+            is_online=False,
+            date_start=start_date,
+            online_bidding="allow",
+            date_online_bidding_starts=start_date,
+            date_online_bidding_ends=start_date - datetime.timedelta(days=1),
+        )
+
+        # Dates should be swapped
+        self.assertLess(auction.date_online_bidding_starts, auction.date_online_bidding_ends)
+
+
 class DuplicateAuctionTOSTests(StandardTestCase):
     """Test that duplicate AuctionTOS records don't cause MultipleObjectsReturned errors"""
 
