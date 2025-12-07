@@ -64,18 +64,29 @@ def add_location(request):
             ip = x_forwarded_for.split(",")[0]
         else:
             ip = request.META.get("REMOTE_ADDR")
-        request.user.userdata.last_ip_address = ip
-        request.user.userdata.save()
+        # Only save if IP address has changed
+        if request.user.userdata.last_ip_address != ip:
+            request.user.userdata.last_ip_address = ip
+            request.user.userdata.save()
     if request.user.is_authenticated:
         # if cookie exists, save into userdata
         # we don't set the cookie from userdata, it only goes the other way
+        needs_save = False
         if latitude_cookie and longitude_cookie:
-            request.user.userdata.latitude = latitude_cookie
-            request.user.userdata.longitude = longitude_cookie
-            request.user.userdata.save()
+            # Only update if values have changed
+            if (
+                str(request.user.userdata.latitude) != latitude_cookie
+                or str(request.user.userdata.longitude) != longitude_cookie
+            ):
+                request.user.userdata.latitude = latitude_cookie
+                request.user.userdata.longitude = longitude_cookie
+                needs_save = True
         timezone_cookie = request.COOKIES.get("user_timezone")
-        if timezone_cookie:
+        if timezone_cookie and request.user.userdata.timezone != timezone_cookie:
             request.user.userdata.timezone = timezone_cookie
+            needs_save = True
+        # Save only once if any changes were made
+        if needs_save:
             request.user.userdata.save()
     return {"has_user_location": has_user_location}
 

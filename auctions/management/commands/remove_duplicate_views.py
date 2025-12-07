@@ -9,6 +9,6 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         views = PageView.objects.filter(duplicate_check_completed=False)
         for view in views:
-            view.merge_and_delete_duplicate
+            view.merge_and_delete_duplicate()
             view.duplicate_check_completed = True
             view.save()

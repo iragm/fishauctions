@@ -65,10 +65,19 @@ def bin_data(
         start_bin = value
     if end_bin is None:
         end_bin = getattr(queryset.last(), field_name)
+    
+    # Check for zero range to avoid division by zero
     if working_with_date:
         bin_size = (end_bin - start_bin).total_seconds() / number_of_bins
+        if bin_size == 0:
+            msg = f"start_bin and end_bin are equal ({start_bin}), resulting in zero bin size. Cannot divide data into bins."
+            raise ValueError(msg)
     else:
         bin_size = (end_bin - start_bin) / number_of_bins
+        if bin_size == 0:
+            msg = f"start_bin and end_bin are equal ({start_bin}), resulting in zero bin size. Cannot divide data into bins."
+            raise ValueError(msg)
+    
     bin_counts = Counter()
     low_overflow_count = 0
     high_overflow_count = 0
