@@ -343,6 +343,7 @@ class PageViewTrackingTests(SeleniumTestCase):
         self.wait_for_page_load()
         # Wait a bit for scripts to execute
         import time
+
         time.sleep(1)
         # Execute JS to check if pageView function exists
         result = self.driver.execute_script("return typeof pageView === 'function'")
@@ -354,6 +355,7 @@ class PageViewTrackingTests(SeleniumTestCase):
         self.wait_for_page_load()
         # Wait for URL cleanup script to run
         import time
+
         time.sleep(1)
         # Check that URL params are cleaned up
         current_url = self.driver.current_url
@@ -366,6 +368,7 @@ class PageViewTrackingTests(SeleniumTestCase):
         self.wait_for_page_load()
         # Wait a bit for scripts to execute
         import time
+
         time.sleep(1)
         # Execute JS to check if sendPageView function exists
         result = self.driver.execute_script("return typeof sendPageView === 'function'")
@@ -383,6 +386,7 @@ class JavaScriptBasicFunctionalityTests(SeleniumTestCase):
         self.wait_for_page_load()
         # jQuery is loaded from CDN, give it time but don't fail if it's slow
         import time
+
         time.sleep(2)
         # Check if jQuery is loaded
         result = self.driver.execute_script("return typeof jQuery !== 'undefined'")
@@ -394,6 +398,7 @@ class JavaScriptBasicFunctionalityTests(SeleniumTestCase):
         self.wait_for_page_load()
         # Bootstrap is loaded from CDN, give it time but don't fail if it's slow
         import time
+
         time.sleep(2)
         # Check if Bootstrap is loaded
         result = self.driver.execute_script("return typeof bootstrap !== 'undefined'")
@@ -405,6 +410,7 @@ class JavaScriptBasicFunctionalityTests(SeleniumTestCase):
         self.wait_for_page_load()
         # HTMx is loaded from static files, give it time
         import time
+
         time.sleep(2)
         # Check if htmx is loaded
         result = self.driver.execute_script("return typeof htmx !== 'undefined'")
@@ -416,6 +422,7 @@ class JavaScriptBasicFunctionalityTests(SeleniumTestCase):
         self.wait_for_page_load()
         # Wait for libraries to load
         import time
+
         time.sleep(2)
         # Check that jQuery and tooltip function exist if both libraries are loaded
         result = self.driver.execute_script(
@@ -437,6 +444,7 @@ class CookieAndStorageTests(SeleniumTestCase):
         # The banner might already be hidden by a cookie, so we just verify the page loads
         # and either the function exists OR the cookie is already set
         import time
+
         time.sleep(1)
         result = self.driver.execute_script(
             "return typeof agreeTos === 'function' || document.cookie.indexOf('hide_tos_banner') >= 0 || true"
@@ -449,9 +457,7 @@ class CookieAndStorageTests(SeleniumTestCase):
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
         # Check that timezone detection code runs
-        result = self.driver.execute_script(
-            "return Intl.DateTimeFormat().resolvedOptions().timeZone"
-        )
+        result = self.driver.execute_script("return Intl.DateTimeFormat().resolvedOptions().timeZone")
         self.assertIsNotNone(result, "Timezone should be detectable")
         self.assertTrue(len(result) > 0, "Timezone should not be empty")
 
@@ -467,6 +473,7 @@ class GeolocationTests(SeleniumTestCase):
         self.wait_for_page_load()
         # setLocation is always defined in base.html, give it a moment to load
         import time
+
         time.sleep(1)
         # Check if setLocation function exists
         result = self.driver.execute_script("return typeof setLocation === 'function'")
@@ -522,6 +529,7 @@ class AjaxFunctionalityTests(SeleniumTestCase):
         self.wait_for_page_load()
         # jQuery is loaded from CDN, give it time but don't timeout
         import time
+
         time.sleep(2)
         # Check if jQuery.ajax exists (use jQuery instead of $ to avoid alias issues)
         result = self.driver.execute_script("return typeof jQuery !== 'undefined' && typeof jQuery.ajax === 'function'")
@@ -547,9 +555,7 @@ class HTMxInteractionTests(SeleniumTestCase):
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
         # Check that HTMx event listener is set up for CSRF
-        result = self.driver.execute_script(
-            "return typeof htmx !== 'undefined' && typeof htmx.config !== 'undefined'"
-        )
+        result = self.driver.execute_script("return typeof htmx !== 'undefined' && typeof htmx.config !== 'undefined'")
         self.assertTrue(result, "HTMx should be loaded and configured")
 
     def test_htmx_attributes_in_dom(self):
@@ -631,6 +637,7 @@ class FormValidationTests(SeleniumTestCase):
         self.wait_for_page_load()
         # jQuery is loaded from CDN, give it time but don't timeout
         import time
+
         time.sleep(2)
         # Check that jQuery can add validation classes
         result = self.driver.execute_script(
@@ -662,6 +669,7 @@ class ModalInteractionTests(SeleniumTestCase):
         self.wait_for_page_load()
         # Bootstrap is loaded from CDN, give it time but don't timeout
         import time
+
         time.sleep(2)
         # Check if Bootstrap modal is available
         result = self.driver.execute_script(
@@ -675,6 +683,7 @@ class ModalInteractionTests(SeleniumTestCase):
         self.wait_for_page_load()
         # Wait for both jQuery and Bootstrap to load
         import time
+
         time.sleep(2)
         # Check that jQuery modal functions exist
         result = self.driver.execute_script(
@@ -723,9 +732,7 @@ class DateTimeManipulationTests(SeleniumTestCase):
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
         # Check if toLocaleString works
-        result = self.driver.execute_script(
-            "return typeof new Date().toLocaleString === 'function'"
-        )
+        result = self.driver.execute_script("return typeof new Date().toLocaleString === 'function'")
         self.assertTrue(result, "Date toLocaleString should be available")
 
     def test_date_parsing_from_string(self):
@@ -733,9 +740,7 @@ class DateTimeManipulationTests(SeleniumTestCase):
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
         # Test date parsing
-        result = self.driver.execute_script(
-            "var d = new Date('2024-01-01'); return !isNaN(d.getTime())"
-        )
+        result = self.driver.execute_script("var d = new Date('2024-01-01'); return !isNaN(d.getTime())")
         self.assertTrue(result, "Date parsing should work")
 
 
@@ -749,9 +754,7 @@ class StringManipulationTests(SeleniumTestCase):
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
         # Test string replace (used in chat for URL detection)
-        result = self.driver.execute_script(
-            "return 'test'.replace('e', 'a') === 'tast'"
-        )
+        result = self.driver.execute_script("return 'test'.replace('e', 'a') === 'tast'")
         self.assertTrue(result, "String replace should work")
 
     def test_regex_for_url_detection(self):
@@ -759,9 +762,7 @@ class StringManipulationTests(SeleniumTestCase):
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
         # Test regex (used in chat for URL linkification)
-        result = self.driver.execute_script(
-            "var regex = /http/i; return regex.test('http://example.com')"
-        )
+        result = self.driver.execute_script("var regex = /http/i; return regex.test('http://example.com')")
         self.assertTrue(result, "Regex should work for URL detection")
 
 
@@ -785,9 +786,7 @@ class ScrollAndViewportTests(SeleniumTestCase):
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
         # Test that offset properties are available
-        result = self.driver.execute_script(
-            "var el = document.body; return typeof el.offsetTop === 'number'"
-        )
+        result = self.driver.execute_script("var el = document.body; return typeof el.offsetTop === 'number'")
         self.assertTrue(result, "Element offset properties should be available")
 
 
@@ -811,9 +810,7 @@ class KeyboardEventTests(SeleniumTestCase):
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
         # Test that onkeyup can be set
-        result = self.driver.execute_script(
-            "return typeof document.body.onkeyup !== 'undefined'"
-        )
+        result = self.driver.execute_script("return typeof document.body.onkeyup !== 'undefined'")
         self.assertTrue(result, "onkeyup event handler should be assignable")
 
 
@@ -827,9 +824,7 @@ class DOMManipulationTests(SeleniumTestCase):
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
         # Test createElement
-        result = self.driver.execute_script(
-            "var a = document.createElement('a'); return a.tagName === 'A'"
-        )
+        result = self.driver.execute_script("var a = document.createElement('a'); return a.tagName === 'A'")
         self.assertTrue(result, "Elements should be creatable")
 
     def test_element_class_manipulation(self):
@@ -837,9 +832,7 @@ class DOMManipulationTests(SeleniumTestCase):
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
         # Test classList
-        result = self.driver.execute_script(
-            "return typeof document.body.classList !== 'undefined'"
-        )
+        result = self.driver.execute_script("return typeof document.body.classList !== 'undefined'")
         self.assertTrue(result, "classList should be available")
 
     def test_element_content_manipulation(self):
@@ -890,9 +883,7 @@ class JSONHandlingTests(SeleniumTestCase):
         """Test that JSON.stringify is available for WebSocket messages."""
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
-        result = self.driver.execute_script(
-            "return typeof JSON.stringify === 'function'"
-        )
+        result = self.driver.execute_script("return typeof JSON.stringify === 'function'")
         self.assertTrue(result, "JSON.stringify should be available")
 
     def test_json_parse_available(self):
@@ -943,9 +934,7 @@ class FocusAndBlurTests(SeleniumTestCase):
         """Test that blur event handlers can be attached."""
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
-        result = self.driver.execute_script(
-            "return typeof document.body.onblur !== 'undefined'"
-        )
+        result = self.driver.execute_script("return typeof document.body.onblur !== 'undefined'")
         self.assertTrue(result, "onblur event handler should be available")
 
 
@@ -965,9 +954,7 @@ class HistoryAPITests(SeleniumTestCase):
         """Test that history.replaceState is available (used in pageView tracking)."""
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
-        result = self.driver.execute_script(
-            "return typeof history.replaceState === 'function'"
-        )
+        result = self.driver.execute_script("return typeof history.replaceState === 'function'")
         self.assertTrue(result, "history.replaceState should be available")
 
 
@@ -988,8 +975,7 @@ class MutationObserverTests(SeleniumTestCase):
         self.driver.get(self.get_url("/"))
         self.wait_for_page_load()
         result = self.driver.execute_script(
-            "var observer = new MutationObserver(function(){}); "
-            "return typeof observer.observe === 'function'"
+            "var observer = new MutationObserver(function(){}); return typeof observer.observe === 'function'"
         )
         self.assertTrue(result, "MutationObserver should be creatable")
 
