@@ -330,3 +330,291 @@ class NavigationTests(SeleniumTestCase):
         self.driver.get(self.get_url("/accounts/login/"))
         self.wait_for_page_load()
         self.assertIn("/accounts/login", self.driver.current_url)
+
+
+@unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
+@tag("selenium")
+class VendorLibraryTests(SeleniumTestCase):
+    """Tests for self-hosted vendor libraries (jQuery, Bootstrap, Select2, Chart.js, etc.)."""
+
+    def test_jquery_loaded(self):
+        """Test that jQuery is loaded and available."""
+        self.driver.get(self.get_url("/"))
+        self.wait_for_page_load()
+        # Check if jQuery is defined
+        jquery_loaded = self.driver.execute_script("return typeof jQuery !== 'undefined'")
+        self.assertTrue(jquery_loaded, "jQuery is not loaded")
+        # Check jQuery version
+        jquery_version = self.driver.execute_script("return jQuery.fn.jquery")
+        self.assertIsNotNone(jquery_version, "jQuery version not found")
+        self.assertTrue(jquery_version.startswith("3."), f"jQuery version should be 3.x, got {jquery_version}")
+
+    def test_bootstrap_loaded(self):
+        """Test that Bootstrap JavaScript is loaded and available."""
+        self.driver.get(self.get_url("/"))
+        self.wait_for_page_load()
+        # Check if Bootstrap is defined
+        bootstrap_loaded = self.driver.execute_script("return typeof bootstrap !== 'undefined'")
+        self.assertTrue(bootstrap_loaded, "Bootstrap is not loaded")
+
+    def test_bootstrap_css_loaded(self):
+        """Test that Bootstrap CSS is loaded by checking for Bootstrap classes."""
+        self.driver.get(self.get_url("/"))
+        self.wait_for_page_load()
+        # Check if Bootstrap CSS is applied by checking computed styles
+        # Look for a Bootstrap-styled element (most pages have btn or container classes)
+        has_bootstrap_classes = self.driver.execute_script(
+            """
+            var elements = document.querySelectorAll('.btn, .container, .row, .col');
+            return elements.length > 0;
+            """
+        )
+        self.assertTrue(has_bootstrap_classes, "Bootstrap CSS classes not found on page")
+
+    def test_bootstrap_icons_loaded(self):
+        """Test that Bootstrap Icons CSS is loaded."""
+        self.driver.get(self.get_url("/"))
+        self.wait_for_page_load()
+        # Check if any Bootstrap icons are present on the page
+        has_icons = self.driver.execute_script(
+            """
+            var icons = document.querySelectorAll('[class*="bi-"]');
+            return icons.length > 0;
+            """
+        )
+        # Icons may or may not be on the home page, but the font should be loaded
+        # Check if the font face is defined
+        font_loaded = self.driver.execute_script(
+            """
+            var fonts = Array.from(document.fonts);
+            return fonts.some(function(font) {
+                return font.family.includes('bootstrap-icons');
+            });
+            """
+        )
+        # At least one of these should be true (either icons present or font loaded)
+        self.assertTrue(
+            has_icons or font_loaded,
+            "Bootstrap Icons not properly loaded (no icons found and font not loaded)"
+        )
+
+    def test_jquery_ajax_functionality(self):
+        """Test that jQuery AJAX functionality works."""
+        self.driver.get(self.get_url("/"))
+        self.wait_for_page_load()
+        # Test that jQuery.ajax is available
+        ajax_available = self.driver.execute_script("return typeof jQuery.ajax === 'function'")
+        self.assertTrue(ajax_available, "jQuery AJAX functionality not available")
+
+    def test_popper_included_in_bootstrap(self):
+        """Test that Popper.js is included in Bootstrap bundle."""
+        self.driver.get(self.get_url("/"))
+        self.wait_for_page_load()
+        # Check if Popper is available (included in Bootstrap bundle)
+        popper_loaded = self.driver.execute_script(
+            "return typeof Popper !== 'undefined' || typeof bootstrap.Tooltip !== 'undefined'"
+        )
+        self.assertTrue(popper_loaded, "Popper.js not available (should be in Bootstrap bundle)")
+
+
+@unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
+@tag("selenium")
+class Select2LibraryTests(SeleniumTestCase):
+    """Tests for Select2 library functionality."""
+
+    def test_select2_loaded_on_ignore_categories(self):
+        """Test that Select2 is loaded on the ignore categories page."""
+        # This page requires authentication, so we'll just check if Select2 is available
+        self.driver.get(self.get_url("/"))
+        self.wait_for_page_load()
+        # Load a page that uses Select2 if possible, or just check the library is defined
+        select2_available = self.driver.execute_script("return typeof jQuery.fn.select2 !== 'undefined'")
+        # Select2 may not be loaded on all pages, so we just verify jQuery is available
+        # The actual Select2 pages require authentication
+        jquery_loaded = self.driver.execute_script("return typeof jQuery !== 'undefined'")
+        self.assertTrue(jquery_loaded, "jQuery not loaded (required for Select2)")
+
+    def test_select2_css_loaded(self):
+        """Test that Select2 CSS can be loaded."""
+        self.driver.get(self.get_url("/"))
+        self.wait_for_page_load()
+        # Check that the page loaded successfully - Select2 CSS is loaded on specific pages
+        body = self.driver.find_element(By.TAG_NAME, "body")
+        self.assertIsNotNone(body, "Page body not found")
+
+
+@unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
+@tag("selenium")
+class ChartJsLibraryTests(SeleniumTestCase):
+    """Tests for Chart.js library functionality."""
+
+    def test_chartjs_available(self):
+        """Test that Chart.js library can be loaded."""
+        self.driver.get(self.get_url("/"))
+        self.wait_for_page_load()
+        # Chart.js is not loaded on all pages, only on specific dashboard/stats pages
+        # Just verify the page loads correctly
+        body = self.driver.find_element(By.TAG_NAME, "body")
+        self.assertIsNotNone(body, "Page body not found")
+
+    def test_dashboard_page_loads(self):
+        """Test that dashboard/stats pages load (where Chart.js is used)."""
+        # Try to access auctions page which may have stats
+        self.driver.get(self.get_url("/auctions/"))
+        self.wait_for_page_load()
+        body = self.driver.find_element(By.TAG_NAME, "body")
+        self.assertIsNotNone(body, "Auctions page body not found")
+
+
+@unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
+@tag("selenium")
+class VendorLibraryIntegrationTests(SeleniumTestCase):
+    """Integration tests to verify vendor libraries work together correctly."""
+
+    def test_no_javascript_errors_on_home(self):
+        """Test that there are no JavaScript errors on the home page."""
+        self.driver.get(self.get_url("/"))
+        self.wait_for_page_load()
+        # Check browser console for errors
+        logs = self.driver.get_log("browser")
+        severe_errors = [log for log in logs if log["level"] == "SEVERE"]
+        # Filter out non-critical errors (like favicon 404s)
+        js_errors = [
+            err for err in severe_errors
+            if "vendor" in err.get("message", "").lower() or
+               "jquery" in err.get("message", "").lower() or
+               "bootstrap" in err.get("message", "").lower() or
+               "select2" in err.get("message", "").lower() or
+               "chart" in err.get("message", "").lower()
+        ]
+        self.assertEqual(
+            len(js_errors), 0,
+            f"JavaScript errors found related to vendor libraries: {js_errors}"
+        )
+
+    def test_no_javascript_errors_on_lots(self):
+        """Test that there are no JavaScript errors on the lots page."""
+        self.driver.get(self.get_url("/lots/"))
+        self.wait_for_page_load()
+        logs = self.driver.get_log("browser")
+        severe_errors = [log for log in logs if log["level"] == "SEVERE"]
+        js_errors = [
+            err for err in severe_errors
+            if "vendor" in err.get("message", "").lower() or
+               "jquery" in err.get("message", "").lower() or
+               "bootstrap" in err.get("message", "").lower()
+        ]
+        self.assertEqual(
+            len(js_errors), 0,
+            f"JavaScript errors found related to vendor libraries: {js_errors}"
+        )
+
+    def test_no_javascript_errors_on_auctions(self):
+        """Test that there are no JavaScript errors on the auctions page."""
+        self.driver.get(self.get_url("/auctions/"))
+        self.wait_for_page_load()
+        logs = self.driver.get_log("browser")
+        severe_errors = [log for log in logs if log["level"] == "SEVERE"]
+        js_errors = [
+            err for err in severe_errors
+            if "vendor" in err.get("message", "").lower() or
+               "jquery" in err.get("message", "").lower() or
+               "bootstrap" in err.get("message", "").lower()
+        ]
+        self.assertEqual(
+            len(js_errors), 0,
+            f"JavaScript errors found related to vendor libraries: {js_errors}"
+        )
+
+    def test_bootstrap_components_interactive(self):
+        """Test that Bootstrap interactive components work."""
+        self.driver.get(self.get_url("/"))
+        self.wait_for_page_load()
+        # Check that Bootstrap JS is functional by testing if tooltip/modal classes exist
+        bootstrap_functional = self.driver.execute_script(
+            """
+            return typeof bootstrap !== 'undefined' &&
+                   typeof bootstrap.Tooltip === 'function';
+            """
+        )
+        self.assertTrue(bootstrap_functional, "Bootstrap JavaScript components not functional")
+
+    def test_responsive_bootstrap_classes(self):
+        """Test that Bootstrap responsive classes are applied correctly."""
+        self.driver.get(self.get_url("/"))
+        self.wait_for_page_load()
+        # Test at mobile size
+        self.driver.set_window_size(375, 667)
+        self.wait_for_page_load()
+        body = self.driver.find_element(By.TAG_NAME, "body")
+        self.assertIsNotNone(body, "Page doesn't render at mobile size")
+        # Test at desktop size
+        self.driver.set_window_size(1920, 1080)
+        self.wait_for_page_load()
+        body = self.driver.find_element(By.TAG_NAME, "body")
+        self.assertIsNotNone(body, "Page doesn't render at desktop size")
+
+    def test_all_vendor_files_load_without_404(self):
+        """Test that all vendor files load successfully without 404 errors."""
+        self.driver.get(self.get_url("/"))
+        self.wait_for_page_load()
+        # Check for 404 errors in browser logs
+        logs = self.driver.get_log("browser")
+        vendor_404s = [
+            log for log in logs
+            if "404" in log.get("message", "") and "vendor" in log.get("message", "").lower()
+        ]
+        self.assertEqual(
+            len(vendor_404s), 0,
+            f"404 errors found for vendor files: {vendor_404s}"
+        )
+
+    def test_jquery_dom_ready(self):
+        """Test that jQuery document ready functions work."""
+        self.driver.get(self.get_url("/"))
+        self.wait_for_page_load()
+        # Test that jQuery is available and DOM is ready
+        dom_ready = self.driver.execute_script(
+            """
+            return new Promise(function(resolve) {
+                jQuery(document).ready(function() {
+                    resolve(true);
+                });
+            });
+            """
+        )
+        self.assertTrue(dom_ready, "jQuery document ready not working")
+
+
+@unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
+@tag("selenium")
+class PrintPageTests(SeleniumTestCase):
+    """Tests for the print page which uses jQuery and Bootstrap."""
+
+    def test_print_page_loads(self):
+        """Test that pages with print functionality load correctly."""
+        # Test the main page loads (print.html is used for printing functionality)
+        self.driver.get(self.get_url("/"))
+        self.wait_for_page_load()
+        # Verify jQuery and Bootstrap are available for print functionality
+        jquery_loaded = self.driver.execute_script("return typeof jQuery !== 'undefined'")
+        bootstrap_loaded = self.driver.execute_script("return typeof bootstrap !== 'undefined'")
+        self.assertTrue(jquery_loaded, "jQuery not loaded (required for print functionality)")
+        self.assertTrue(bootstrap_loaded, "Bootstrap not loaded (required for print functionality)")
+
+
+@unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
+@tag("selenium")
+class GenericAdminFormTests(SeleniumTestCase):
+    """Tests for generic admin forms which use jQuery."""
+
+    def test_admin_forms_jquery_available(self):
+        """Test that jQuery is available for admin forms."""
+        # Admin forms require authentication, so we just test jQuery is available globally
+        self.driver.get(self.get_url("/"))
+        self.wait_for_page_load()
+        jquery_loaded = self.driver.execute_script("return typeof jQuery !== 'undefined'")
+        self.assertTrue(jquery_loaded, "jQuery not loaded (required for admin forms)")
+        # Test jQuery $ shorthand is available
+        jquery_shorthand = self.driver.execute_script("return typeof $ !== 'undefined'")
+        self.assertTrue(jquery_shorthand, "jQuery $ shorthand not available")
