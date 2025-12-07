@@ -4773,6 +4773,25 @@ class BulkAddLotsAutoTests(StandardTestCase):
         lot = Lot.objects.get(lot_number=data["lot_id"])
         self.assertEqual(lot.auctiontos_seller, self.in_person_buyer)
 
+    def test_save_lot_ajax_user_can_add_for_themselves(self):
+        """Test that regular users can add lots for themselves without bidder_number"""
+        # Login as regular user (not auction creator)
+        self.client.login(username="no_lots", password="testpassword")
+
+        # Add lot for themselves (no bidder_number)
+        response = self.client.post(
+            reverse("save_lot_ajax", kwargs={"slug": self.in_person_auction.slug}),
+            data='{"lot_name": "My Own Lot", "reserve_price": 5}',
+            content_type="application/json",
+        )
+        data = response.json()
+        self.assertTrue(data["success"], f"Failed to add lot for self: {data.get('error', 'Unknown error')}")
+        self.assertIsNotNone(data["lot_id"])
+
+        # Verify lot was created for the correct user (in_person_buyer)
+        lot = Lot.objects.get(lot_number=data["lot_id"])
+        self.assertEqual(lot.auctiontos_seller, self.in_person_buyer)
+
     def test_lot_limit_enforcement(self):
         """Test that lot limits are enforced for non-admin users"""
         # Login as regular user (not auction creator)
