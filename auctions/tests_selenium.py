@@ -96,6 +96,7 @@ class SeleniumTestCase(TestCase):
         super().setUpClass()
         # Run collectstatic to ensure vendor files are available
         # This is necessary for vendor library tests to work
+        # Note: --clear flag removed to avoid permission errors in test environment
         from django.core.management import call_command
         import io
         import sys
@@ -103,7 +104,7 @@ class SeleniumTestCase(TestCase):
         stdout_backup = sys.stdout
         sys.stdout = io.StringIO()
         try:
-            call_command('collectstatic', '--no-input', '--clear', verbosity=0)
+            call_command('collectstatic', '--no-input', verbosity=0)
         finally:
             sys.stdout = stdout_backup
         
