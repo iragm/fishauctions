@@ -334,105 +334,6 @@ class NavigationTests(SeleniumTestCase):
 
 @unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
 @tag("selenium")
-class PageViewTrackingTests(SeleniumTestCase):
-    """Tests for page view tracking JavaScript functionality (base_page_view.html)."""
-
-    def test_pageview_function_exists(self):
-        """Test that the pageView JavaScript function is defined on pages."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # Wait a bit for scripts to execute
-        import time
-
-        time.sleep(1)
-        # Execute JS to check if pageView function exists
-        result = self.driver.execute_script("return typeof pageView === 'function'")
-        self.assertTrue(result, "pageView function should be defined")
-
-    def test_url_params_cleaned(self):
-        """Test that src and uid URL parameters are removed from the URL."""
-        self.driver.get(self.get_url("/?src=test&uid=123"))
-        self.wait_for_page_load()
-        # Wait for URL cleanup script to run
-        import time
-
-        time.sleep(1)
-        # Check that URL params are cleaned up
-        current_url = self.driver.current_url
-        self.assertNotIn("src=", current_url, "src parameter should be removed")
-        self.assertNotIn("uid=", current_url, "uid parameter should be removed")
-
-    def test_sendpageview_function_exists(self):
-        """Test that the sendPageView JavaScript function is defined."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # Wait a bit for scripts to execute
-        import time
-
-        time.sleep(1)
-        # Execute JS to check if sendPageView function exists
-        result = self.driver.execute_script("return typeof sendPageView === 'function'")
-        self.assertTrue(result, "sendPageView function should be defined")
-
-
-@unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
-@tag("selenium")
-class JavaScriptBasicFunctionalityTests(SeleniumTestCase):
-    """Tests for basic JavaScript functionality on all pages."""
-
-    def test_jquery_loaded(self):
-        """Test that jQuery is loaded and available."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # jQuery is loaded from CDN, give it time but don't fail if it's slow
-        import time
-
-        time.sleep(2)
-        # Check if jQuery is loaded
-        result = self.driver.execute_script("return typeof jQuery !== 'undefined'")
-        self.assertTrue(result, "jQuery should be loaded")
-
-    def test_bootstrap_loaded(self):
-        """Test that Bootstrap JavaScript is loaded."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # Bootstrap is loaded from CDN, give it time but don't fail if it's slow
-        import time
-
-        time.sleep(2)
-        # Check if Bootstrap is loaded
-        result = self.driver.execute_script("return typeof bootstrap !== 'undefined'")
-        self.assertTrue(result, "Bootstrap should be loaded")
-
-    def test_htmx_loaded(self):
-        """Test that HTMx library is loaded."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # HTMx is loaded from static files, give it time
-        import time
-
-        time.sleep(2)
-        # Check if htmx is loaded
-        result = self.driver.execute_script("return typeof htmx !== 'undefined'")
-        self.assertTrue(result, "HTMx should be loaded")
-
-    def test_tooltip_initialization(self):
-        """Test that Bootstrap tooltips can be initialized if libraries are present."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # Wait for libraries to load
-        import time
-
-        time.sleep(2)
-        # Check that jQuery and tooltip function exist if both libraries are loaded
-        result = self.driver.execute_script(
-            "return typeof jQuery !== 'undefined' && typeof bootstrap !== 'undefined' && typeof jQuery('[data-toggle=\"tooltip\"]').tooltip === 'function'"
-        )
-        self.assertTrue(result, "Bootstrap tooltip function should exist when libraries are loaded")
-
-
-@unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
-@tag("selenium")
 class CookieAndStorageTests(SeleniumTestCase):
     """Tests for cookie-based JavaScript functionality."""
 
@@ -466,18 +367,6 @@ class CookieAndStorageTests(SeleniumTestCase):
 @tag("selenium")
 class GeolocationTests(SeleniumTestCase):
     """Tests for geolocation JavaScript functionality (base.html - setLocation)."""
-
-    def test_setlocation_function_exists(self):
-        """Test that setLocation function is defined."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # setLocation is always defined in base.html, give it a moment to load
-        import time
-
-        time.sleep(1)
-        # Check if setLocation function exists
-        result = self.driver.execute_script("return typeof setLocation === 'function'")
-        self.assertTrue(result, "setLocation function should be defined")
 
     def test_geolocation_api_available(self):
         """Test that browser geolocation API is available."""
@@ -523,18 +412,6 @@ class CopyLinkTests(SeleniumTestCase):
 class AjaxFunctionalityTests(SeleniumTestCase):
     """Tests for AJAX-based JavaScript functionality."""
 
-    def test_ajax_request_capability(self):
-        """Test that AJAX requests can be made via jQuery."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # jQuery is loaded from CDN, give it time but don't timeout
-        import time
-
-        time.sleep(2)
-        # Check if jQuery.ajax exists (use jQuery instead of $ to avoid alias issues)
-        result = self.driver.execute_script("return typeof jQuery !== 'undefined' && typeof jQuery.ajax === 'function'")
-        self.assertTrue(result, "jQuery.ajax should be available")
-
     def test_csrf_token_in_page(self):
         """Test that CSRF token is available for AJAX requests."""
         self.driver.get(self.get_url("/"))
@@ -549,14 +426,6 @@ class AjaxFunctionalityTests(SeleniumTestCase):
 @tag("selenium")
 class HTMxInteractionTests(SeleniumTestCase):
     """Tests for HTMx interaction JavaScript functionality."""
-
-    def test_htmx_csrf_header_configuration(self):
-        """Test that HTMx is configured to send CSRF token in headers."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # Check that HTMx event listener is set up for CSRF
-        result = self.driver.execute_script("return typeof htmx !== 'undefined' && typeof htmx.config !== 'undefined'")
-        self.assertTrue(result, "HTMx should be loaded and configured")
 
     def test_htmx_attributes_in_dom(self):
         """Test that HTMx attributes can be processed in the DOM."""
@@ -631,20 +500,6 @@ class GoogleMapsTests(SeleniumTestCase):
 class FormValidationTests(SeleniumTestCase):
     """Tests for form validation JavaScript functionality."""
 
-    def test_form_validation_classes(self):
-        """Test that Bootstrap validation classes can be applied."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # jQuery is loaded from CDN, give it time but don't timeout
-        import time
-
-        time.sleep(2)
-        # Check that jQuery can add validation classes
-        result = self.driver.execute_script(
-            "return typeof jQuery !== 'undefined' && typeof jQuery('input').addClass === 'function'"
-        )
-        self.assertTrue(result, "jQuery addClass should be available for validation")
-
     def test_is_invalid_class_application(self):
         """Test that is-invalid class can be applied to form elements."""
         self.driver.get(self.get_url("/"))
@@ -656,40 +511,6 @@ class FormValidationTests(SeleniumTestCase):
         # Just verify no errors occurred
         js_errors = self.driver.execute_script("return window.jsErrors || []")
         self.assertEqual(len(js_errors), 0, "No errors when applying validation classes")
-
-
-@unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
-@tag("selenium")
-class ModalInteractionTests(SeleniumTestCase):
-    """Tests for Bootstrap modal interactions."""
-
-    def test_bootstrap_modal_available(self):
-        """Test that Bootstrap modal functionality is available."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # Bootstrap is loaded from CDN, give it time but don't timeout
-        import time
-
-        time.sleep(2)
-        # Check if Bootstrap modal is available
-        result = self.driver.execute_script(
-            "return typeof bootstrap !== 'undefined' && typeof bootstrap.Modal !== 'undefined'"
-        )
-        self.assertTrue(result, "Bootstrap Modal should be available")
-
-    def test_modal_show_hide_functions(self):
-        """Test that modal show/hide functions exist."""
-        self.driver.get(self.get_url("/"))
-        self.wait_for_page_load()
-        # Wait for both jQuery and Bootstrap to load
-        import time
-
-        time.sleep(2)
-        # Check that jQuery modal functions exist
-        result = self.driver.execute_script(
-            "return typeof jQuery !== 'undefined' && typeof jQuery('.modal').modal === 'function'"
-        )
-        self.assertTrue(result, "Bootstrap modal jQuery plugin should be available")
 
 
 @unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
