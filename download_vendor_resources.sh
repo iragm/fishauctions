@@ -1,10 +1,11 @@
 #!/bin/bash
-# Download script for self-hosted resources required for voice recognition
-# This enables cross-origin isolation for SharedArrayBuffer support
+# Download script for self-hosted vendor resources (JavaScript libraries, CSS frameworks, etc.)
+# This script downloads all external dependencies to enable self-hosting and avoid CDN dependencies
+# Run this script when setting up the project or to update vendor libraries to their latest versions
 
 set -e  # Exit on error
 
-echo "Downloading self-hosted resources for voice recognition..."
+echo "Downloading self-hosted vendor resources..."
 echo "======================================================================"
 
 # Navigate to project root
