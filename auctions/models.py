@@ -950,12 +950,12 @@ class Auction(models.Model):
 
     def delete(self, *args, **kwargs):
         """Perform a soft delete by setting is_deleted=True.
-        
+
         Note: This is a soft delete implementation that marks the auction as deleted
         without removing it from the database. Related objects (lots, bids, etc.) will
         still exist and may appear in queries unless they explicitly filter out deleted
         auctions using: .exclude(auction__is_deleted=True)
-        
+
         This allows for data retention and potential recovery while hiding the auction
         from normal user operations.
         """
@@ -5480,7 +5480,7 @@ class PageView(models.Model):
 
     def merge_and_delete_duplicate(self):
         """Merge duplicate PageView records and delete the duplicate.
-        
+
         This method should be called explicitly, not accessed as a property,
         as it has side effects (modifies and deletes database records).
         """
