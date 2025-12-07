@@ -470,7 +470,7 @@ function createScatterChart(canvasId, mainData, compareData, mainTitle, compareT
                         $('#compare-auction').on('change', function() {
                             const slug = $(this).val();
                             if (slug) {
-                                window.location.href = '?compare=' + slug;
+                                window.location.href = '?compare=' + encodeURIComponent(slug);
                             } else {
                                 window.location.href = window.location.pathname;
                             }
