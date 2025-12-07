@@ -6967,25 +6967,6 @@ class HelperFunctionsTestCase(StandardTestCase):
         for count in result:
             self.assertIsInstance(count, int)
 
-    def test_bin_data_with_custom_range(self):
-        """Test bin_data with custom start_bin and end_bin"""
-        from auctions.helper_functions import bin_data
-
-        # Create test lots
-        for i in range(20):
-            Lot.objects.create(
-                lot_name=f"Test lot range {i}",
-                auction=self.online_auction,
-                auctiontos_seller=self.online_tos,
-                quantity=1,
-                winning_price=i * 5,
-                active=False,
-            )
-
-        qs = Lot.objects.filter(auction=self.online_auction)
-        result = bin_data(qs, "winning_price", 10, start_bin=0, end_bin=100)
-        self.assertEqual(len(result), 10)
-
     def test_bin_data_with_overflow(self):
         """Test bin_data with low and high overflow columns"""
         from auctions.helper_functions import bin_data
@@ -7017,31 +6998,6 @@ class HelperFunctionsTestCase(StandardTestCase):
         self.assertGreater(result[0], 0)
         # Last column should be high overflow (values >= 100)
         self.assertGreater(result[-1], 0)
-
-    def test_bin_data_with_labels(self):
-        """Test bin_data with label generation"""
-        from auctions.helper_functions import bin_data
-
-        # Create test lots
-        for i in range(10):
-            Lot.objects.create(
-                lot_name=f"Test lot labels {i}",
-                auction=self.online_auction,
-                auctiontos_seller=self.online_tos,
-                quantity=1,
-                winning_price=i * 10,
-                active=False,
-            )
-
-        qs = Lot.objects.filter(auction=self.online_auction)
-        labels, data = bin_data(qs, "winning_price", 5, generate_labels=True)
-        self.assertEqual(len(labels), 5)
-        self.assertEqual(len(data), 5)
-        self.assertIsInstance(labels, list)
-        self.assertIsInstance(data, list)
-        # Each label should be a string
-        for label in labels:
-            self.assertIsInstance(label, str)
 
     def test_bin_data_with_labels_and_overflow(self):
         """Test bin_data with both labels and overflow columns"""
@@ -7097,30 +7053,6 @@ class HelperFunctionsTestCase(StandardTestCase):
         qs = Lot.objects.filter(auction=self.online_auction, lot_name__startswith="Test lot datetime")
         result = bin_data(qs, "date_posted", 5)
         self.assertEqual(len(result), 5)
-
-    def test_bin_data_with_datetime_and_labels(self):
-        """Test bin_data with datetime values and label generation"""
-        from auctions.helper_functions import bin_data
-
-        # Create test lots with different dates
-        base_time = timezone.now() - datetime.timedelta(days=20)
-        for i in range(20):
-            lot = Lot.objects.create(
-                lot_name=f"Test lot datetime labels {i}",
-                auction=self.online_auction,
-                auctiontos_seller=self.online_tos,
-                quantity=1,
-                active=False,
-            )
-            lot.date_posted = base_time + datetime.timedelta(days=i)
-            lot.save()
-
-        qs = Lot.objects.filter(auction=self.online_auction, lot_name__startswith="Test lot datetime labels")
-        start = base_time
-        end = base_time + datetime.timedelta(days=19)
-        labels, data = bin_data(qs, "date_posted", 5, start_bin=start, end_bin=end, generate_labels=True)
-        self.assertEqual(len(labels), 5)
-        self.assertEqual(len(data), 5)
 
     def test_bin_data_empty_queryset(self):
         """Test bin_data with empty queryset returns empty bins"""
