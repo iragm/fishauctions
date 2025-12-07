@@ -576,10 +576,19 @@ class Select2LibraryTests(SeleniumTestCase):
         # Create a test user that will exist in the live database
         self.test_username = f"selenium_test_user_{int(time.time())}"
         self.test_password = "selenium_test_pass_123"
+        self.test_email = f"{self.test_username}@example.com"
         self.test_user = User.objects.create_user(
             username=self.test_username,
             password=self.test_password,
-            email=f"{self.test_username}@example.com"
+            email=self.test_email
+        )
+        # Create verified email address for the user (required for login)
+        from allauth.account.models import EmailAddress
+        EmailAddress.objects.create(
+            user=self.test_user,
+            email=self.test_email,
+            verified=True,
+            primary=True
         )
 
     def tearDown(self):
@@ -592,9 +601,21 @@ class Select2LibraryTests(SeleniumTestCase):
         self.driver.get(self.get_url("/accounts/login/"))
         self.wait_for_page_load()
         
-        # Wait for and fill in the login form
-        username_field = self.wait_for_element(By.NAME, "login")
-        password_field = self.driver.find_element(By.NAME, "password")
+        # Wait for the login form to be visible
+        try:
+            # Try to find the username field with increased timeout
+            username_field = self.wait_for_element(By.NAME, "login", timeout=15)
+            password_field = self.wait_for_element(By.NAME, "password", timeout=15)
+        except Exception as e:
+            # If fields not found, print page source for debugging
+            print(f"Login form fields not found. Current URL: {self.driver.current_url}")
+            print(f"Error: {e}")
+            # Try to find any input fields to see what's on the page
+            inputs = self.driver.find_elements(By.TAG_NAME, "input")
+            print(f"Found {len(inputs)} input fields on page")
+            for inp in inputs[:5]:  # Print first 5
+                print(f"  - type={inp.get_attribute('type')}, name={inp.get_attribute('name')}, id={inp.get_attribute('id')}")
+            raise
         
         username_field.clear()
         username_field.send_keys(username)
@@ -602,11 +623,11 @@ class Select2LibraryTests(SeleniumTestCase):
         password_field.send_keys(password)
         
         # Submit the form
-        submit_button = self.driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
+        submit_button = self.wait_for_element(By.CSS_SELECTOR, "button[type='submit']", timeout=15)
         submit_button.click()
         
         # Wait for redirect after login
-        time.sleep(2)
+        time.sleep(3)
         self.wait_for_page_load()
 
     def test_select2_works_on_ignore_categories(self):
