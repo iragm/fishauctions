@@ -7114,10 +7114,10 @@ class HelperFunctionsTestCase(StandardTestCase):
             )
 
         qs = Lot.objects.filter(lot_name__startswith="Zero range test")
-        # When start equals end, bin_size will be 0, which could cause division issues
-        # This tests the function's handling of edge case
-        result = bin_data(qs, "winning_price", 5, start_bin=50, end_bin=50)
-        self.assertEqual(len(result), 5)
+        # When start equals end, bin_size will be 0, which should now raise ValueError
+        with self.assertRaises(ValueError) as context:
+            bin_data(qs, "winning_price", 5, start_bin=50, end_bin=50)
+        self.assertIn("zero bin size", str(context.exception))
 
 
 class ModelUtilityFunctionsTestCase(StandardTestCase):
@@ -8034,9 +8034,8 @@ class ModelMethodsTestCase(StandardTestCase):
         )
 
         # Merge view2 into view1
-        # Note: merge_and_delete_duplicate is a property with side effects (a code smell)
-        # Accessing it triggers the merge operation
-        _ = view1.merge_and_delete_duplicate  # noqa: F841
+        # Call as method now (no longer a property)
+        view1.merge_and_delete_duplicate()
 
         # view1 should have extended time range and combined total_time
         view1.refresh_from_db()

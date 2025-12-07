@@ -82,8 +82,6 @@ def nearby_auctions(
         if user.is_authenticated and not include_already_joined:
             locations = locations.exclude(auction__auctiontos__user=user)
         locations = locations.exclude(auction__auctionignore__user=user)
-    elif user and not include_already_joined:
-        locations = locations.exclude(auction__auctiontos__user=user)
     for location in locations:
         if location.auction.slug not in slugs:
             auctions.append(location.auction)
@@ -951,6 +949,16 @@ class Auction(models.Model):
         return get_currency_symbol(self.currency)
 
     def delete(self, *args, **kwargs):
+        """Perform a soft delete by setting is_deleted=True.
+
+        Note: This is a soft delete implementation that marks the auction as deleted
+        without removing it from the database. Related objects (lots, bids, etc.) will
+        still exist and may appear in queries unless they explicitly filter out deleted
+        auctions using: .exclude(auction__is_deleted=True)
+
+        This allows for data retention and potential recovery while hiding the auction
+        from normal user operations.
+        """
         self.is_deleted = True
         self.save()
 
@@ -1376,7 +1384,7 @@ class Auction(models.Model):
         """Force update of all invoice totals in this auction"""
         invoices = Invoice.objects.filter(auction=self.pk)
         for invoice in invoices:
-            invoice.recalculate
+            invoice.recalculate()
             invoice.save()
 
     @property
@@ -3502,7 +3510,7 @@ class Lot(models.Model):
         invoice = Invoice.objects.filter(auctiontos_user=tos, auction=self.auction).first()
         if not invoice:
             invoice = Invoice.objects.create(auctiontos_user=tos, auction=self.auction)
-        invoice.recalculate
+        invoice.recalculate()
         self.send_websocket_message(
             {
                 "type": "chat_message",
@@ -4635,12 +4643,12 @@ class Lot(models.Model):
             invoice = Invoice.objects.filter(auctiontos_user=self.auctiontos_winner, auction=self.auction).first()
             if not invoice:
                 invoice = Invoice.objects.create(auctiontos_user=self.auctiontos_winner, auction=self.auction)
-            invoice.recalculate
+            invoice.recalculate()
         if self.auction and self.auctiontos_seller:
             invoice = Invoice.objects.filter(auctiontos_user=self.auctiontos_seller, auction=self.auction).first()
             if not invoice:
                 invoice = Invoice.objects.create(auctiontos_user=self.auctiontos_seller, auction=self.auction)
-            invoice.recalculate
+            invoice.recalculate()
 
     @property
     def category(self):
@@ -4905,9 +4913,13 @@ class Invoice(models.Model):
     def changed_adjustments(self):
         return self.adjustments.exclude(amount=0)
 
-    @property
     def recalculate(self):
-        """Store the current net in the calculated_total field.  Call this every time you add or remove a lot from this invoice"""
+        """Store the current net in the calculated_total field.
+
+        Call this method every time you add or remove a lot from this invoice.
+        This method should be called explicitly, not accessed as a property,
+        as it has side effects (modifies and saves database records).
+        """
         self.calculated_total = self.rounded_net
         self.save()
 
@@ -5470,8 +5482,12 @@ class PageView(models.Model):
     def duplicate_count(self):
         return self.duplicates.count()
 
-    @property
     def merge_and_delete_duplicate(self):
+        """Merge duplicate PageView records and delete the duplicate.
+
+        This method should be called explicitly, not accessed as a property,
+        as it has side effects (modifies and deletes database records).
+        """
         if self.duplicate_count:
             dup = self.duplicates.first()
             if self.date_start > dup.date_start:

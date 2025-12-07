@@ -56,7 +56,10 @@ def add_location(request):
     longitude_cookie = request.COOKIES.get("longitude")
     if latitude_cookie and longitude_cookie:
         has_user_location = True
-    elif request.user.is_authenticated:
+
+    # Batch all user data updates into a single save operation
+    needs_save = False
+    if request.user.is_authenticated:
         # UserData is auto-created when user is saved
         # No cookies?  No worries - we'll get the IP address and get the location from that later - see set_user_location.py
         x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
@@ -64,19 +67,36 @@ def add_location(request):
             ip = x_forwarded_for.split(",")[0]
         else:
             ip = request.META.get("REMOTE_ADDR")
-        request.user.userdata.last_ip_address = ip
-        request.user.userdata.save()
-    if request.user.is_authenticated:
+        # Only update if IP address has changed
+        if request.user.userdata.last_ip_address != ip:
+            request.user.userdata.last_ip_address = ip
+            needs_save = True
+
         # if cookie exists, save into userdata
         # we don't set the cookie from userdata, it only goes the other way
         if latitude_cookie and longitude_cookie:
-            request.user.userdata.latitude = latitude_cookie
-            request.user.userdata.longitude = longitude_cookie
-            request.user.userdata.save()
+            # Only update if values have changed
+            # Convert cookie strings to float for comparison to handle precision
+            try:
+                lat_float = float(latitude_cookie)
+                lon_float = float(longitude_cookie)
+                if request.user.userdata.latitude != lat_float or request.user.userdata.longitude != lon_float:
+                    request.user.userdata.latitude = lat_float
+                    request.user.userdata.longitude = lon_float
+                    needs_save = True
+            except (ValueError, TypeError):
+                # Invalid cookie values, skip update
+                pass
+
         timezone_cookie = request.COOKIES.get("user_timezone")
-        if timezone_cookie:
+        if timezone_cookie and request.user.userdata.timezone != timezone_cookie:
             request.user.userdata.timezone = timezone_cookie
+            needs_save = True
+
+        # Save only once if any changes were made
+        if needs_save:
             request.user.userdata.save()
+
     return {"has_user_location": has_user_location}
 
 
