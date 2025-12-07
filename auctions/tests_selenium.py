@@ -346,7 +346,7 @@ class CookieAndStorageTests(SeleniumTestCase):
         # The banner might already be hidden by a cookie
         # Check if either the function exists OR the cookie is set OR neither (page just loaded)
         result = self.driver.execute_script(
-            "return typeof agreeTos === 'function' || document.cookie.indexOf('hide_tos_banner') >= 0 || true"
+            "return typeof agreeTos === 'function' || document.cookie.indexOf('hide_tos_banner') >= 0"
         )
         # This test verifies the page loads without JavaScript errors related to TOS banner
         self.assertTrue(result, "Page should load successfully")
