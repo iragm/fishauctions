@@ -4915,7 +4915,7 @@ class Invoice(models.Model):
 
     def recalculate(self):
         """Store the current net in the calculated_total field.
-        
+
         Call this method every time you add or remove a lot from this invoice.
         This method should be called explicitly, not accessed as a property,
         as it has side effects (modifies and saves database records).

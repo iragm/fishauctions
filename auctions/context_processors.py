@@ -56,7 +56,7 @@ def add_location(request):
     longitude_cookie = request.COOKIES.get("longitude")
     if latitude_cookie and longitude_cookie:
         has_user_location = True
-    
+
     # Batch all user data updates into a single save operation
     needs_save = False
     if request.user.is_authenticated:
@@ -71,7 +71,7 @@ def add_location(request):
         if request.user.userdata.last_ip_address != ip:
             request.user.userdata.last_ip_address = ip
             needs_save = True
-        
+
         # if cookie exists, save into userdata
         # we don't set the cookie from userdata, it only goes the other way
         if latitude_cookie and longitude_cookie:
@@ -87,16 +87,16 @@ def add_location(request):
             except (ValueError, TypeError):
                 # Invalid cookie values, skip update
                 pass
-        
+
         timezone_cookie = request.COOKIES.get("user_timezone")
         if timezone_cookie and request.user.userdata.timezone != timezone_cookie:
             request.user.userdata.timezone = timezone_cookie
             needs_save = True
-        
+
         # Save only once if any changes were made
         if needs_save:
             request.user.userdata.save()
-    
+
     return {"has_user_location": has_user_location}
 
 
