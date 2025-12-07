@@ -3595,7 +3595,7 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                 # Lock the auction to prevent concurrent lot number assignment
                 # This ensures only one lot can be assigned a number at a time for this auction
                 if is_new:
-                    Auction.objects.select_for_update().filter(pk=self.auction.pk).exists()
+                    Auction.objects.select_for_update().get(pk=self.auction.pk)
 
                 lot.save()
 

@@ -3401,12 +3401,12 @@ class Lot(models.Model):
                 self.lot_number_int = (max_number or (minimum_lot_number - 1)) + 1
 
                 # Continue with the rest of the save logic
-                self._do_save(args, kwargs)
+                self._do_save(*args, **kwargs)
         else:
             # No lot number needed, proceed normally
-            self._do_save(args, kwargs)
+            self._do_save(*args, **kwargs)
 
-    def _do_save(self, args, kwargs):
+    def _do_save(self, *args, **kwargs):
         """Internal method to complete the save operation"""
         # custom lot number set for old auctions: bidder_number-lot_number format
         if not self.custom_lot_number and self.auction and self.auction.use_seller_dash_lot_numbering:
