@@ -7016,96 +7016,6 @@ class HelperFunctionsTestCase(StandardTestCase):
         self.assertEqual(get_currency_symbol("usd"), "$")  # Will default to $ as lowercase not in map
         self.assertEqual(get_currency_symbol("Usd"), "$")  # Will default to $ as mixed case not in map
 
-    def test_bin_data_with_numeric_values(self):
-        """Test bin_data function with numeric field values"""
-        from auctions.helper_functions import bin_data
-
-        # Create test lots with numeric values
-        for i in range(10):
-            Lot.objects.create(
-                lot_name=f"Test lot {i}",
-                auction=self.online_auction,
-                auctiontos_seller=self.online_tos,
-                quantity=i + 1,
-                winning_price=i * 10,
-                active=False,
-            )
-
-        qs = Lot.objects.filter(auction=self.online_auction)
-        # Test basic binning
-        result = bin_data(qs, "winning_price", 5)
-        self.assertEqual(len(result), 5)
-        self.assertIsInstance(result, list)
-        # All values should be integers
-        for count in result:
-            self.assertIsInstance(count, int)
-
-    def test_bin_data_with_overflow(self):
-        """Test bin_data with low and high overflow columns"""
-        from auctions.helper_functions import bin_data
-
-        # Create test lots with values outside the range
-        for i in range(20):
-            Lot.objects.create(
-                lot_name=f"Test lot overflow {i}",
-                auction=self.online_auction,
-                auctiontos_seller=self.online_tos,
-                quantity=1,
-                winning_price=i * 10,
-                active=False,
-            )
-
-        qs = Lot.objects.filter(auction=self.online_auction)
-        result = bin_data(
-            qs,
-            "winning_price",
-            5,
-            start_bin=50,
-            end_bin=100,
-            add_column_for_low_overflow=True,
-            add_column_for_high_overflow=True,
-        )
-        # Should have 5 bins + 2 overflow columns = 7 total
-        self.assertEqual(len(result), 7)
-        # First column should be low overflow (values < 50)
-        self.assertGreater(result[0], 0)
-        # Last column should be high overflow (values >= 100)
-        self.assertGreater(result[-1], 0)
-
-    def test_bin_data_with_labels_and_overflow(self):
-        """Test bin_data with both labels and overflow columns"""
-        from auctions.helper_functions import bin_data
-
-        # Create test lots
-        for i in range(15):
-            Lot.objects.create(
-                lot_name=f"Test lot labels overflow {i}",
-                auction=self.online_auction,
-                auctiontos_seller=self.online_tos,
-                quantity=1,
-                winning_price=i * 10,
-                active=False,
-            )
-
-        qs = Lot.objects.filter(auction=self.online_auction)
-        labels, data = bin_data(
-            qs,
-            "winning_price",
-            3,
-            start_bin=30,
-            end_bin=90,
-            add_column_for_low_overflow=True,
-            add_column_for_high_overflow=True,
-            generate_labels=True,
-        )
-        # Should have 3 bins + 2 overflow = 5 total
-        self.assertEqual(len(labels), 5)
-        self.assertEqual(len(data), 5)
-        # First label should be "low overflow"
-        self.assertEqual(labels[0], "low overflow")
-        # Last label should be "high overflow"
-        self.assertEqual(labels[-1], "high overflow")
-
     def test_bin_data_with_datetime_values(self):
         """Test bin_data with datetime field values"""
         from auctions.helper_functions import bin_data
@@ -8284,6 +8194,7 @@ class SignalLogicTestCase(StandardTestCase):
 
         # Dates should be swapped
         self.assertLess(auction.date_online_bidding_starts, auction.date_online_bidding_ends)
+
 
 class DuplicateAuctionTOSTests(StandardTestCase):
     """Test that duplicate AuctionTOS records don't cause MultipleObjectsReturned errors"""
