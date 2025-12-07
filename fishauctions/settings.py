@@ -39,6 +39,7 @@ TEMPLATE_STRING_IF_INVALID = ""
 ALLOWED_HOSTS = [
     "localhost",
     "web",
+    "nginx",  # Allow Selenium tests to connect via nginx service name
     "127.0.0.1",
     "0.0.0.0",
     os.environ.get("SITE_DOMAIN", ""),
