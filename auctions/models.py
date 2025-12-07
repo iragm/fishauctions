@@ -3379,15 +3379,35 @@ class Lot(models.Model):
     admin_validated = models.BooleanField(default=False)
 
     def save(self, *args, **kwargs):
+        from django.db import transaction
+
         # for old and new auctions, generate a lot number int
-        if self.lot_number_int is None and self.auction:
-            minimum_lot_number = 1
-            # Get the current maximum lot_number_int for the auction
-            # This is deliberately not excluding deleted and removed lots -- don't use auction.lots_qs here
-            max_number = Lot.objects.filter(auction=self.auction).aggregate(Max("lot_number_int"))[
-                "lot_number_int__max"
-            ]
-            self.lot_number_int = (max_number or (minimum_lot_number - 1)) + 1
+        # Use database-level locking to prevent race conditions when assigning lot numbers
+        needs_lot_number = self.lot_number_int is None and self.auction
+
+        if needs_lot_number:
+            # We need to wrap the entire save in a transaction with locking
+            with transaction.atomic():
+                # Lock the auction row using SELECT FOR UPDATE
+                # This will block other transactions trying to lock the same row until this transaction completes
+                Auction.objects.select_for_update().get(pk=self.auction.pk)
+
+                # Now safely get the max lot_number_int while holding the lock
+                minimum_lot_number = 1
+                # This is deliberately not excluding deleted and removed lots -- don't use auction.lots_qs here
+                max_number = Lot.objects.filter(auction=self.auction).aggregate(Max("lot_number_int"))[
+                    "lot_number_int__max"
+                ]
+                self.lot_number_int = (max_number or (minimum_lot_number - 1)) + 1
+
+                # Continue with the rest of the save logic
+                self._do_save(args, kwargs)
+        else:
+            # No lot number needed, proceed normally
+            self._do_save(args, kwargs)
+
+    def _do_save(self, args, kwargs):
+        """Internal method to complete the save operation"""
         # custom lot number set for old auctions: bidder_number-lot_number format
         if not self.custom_lot_number and self.auction and self.auction.use_seller_dash_lot_numbering:
             if self.auctiontos_seller:

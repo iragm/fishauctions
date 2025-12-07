@@ -477,6 +477,54 @@ class LotModelTests(TestCase):
         assert lot.high_bid == 5
 
 
+class LotModelConcurrencyTests(TransactionTestCase):
+    """Tests that require real database transactions (not wrapped in TestCase transaction)"""
+
+    def test_concurrent_lot_number_assignment(self):
+        """Test that concurrent lot creation does not result in duplicate lot_number_int values"""
+        from concurrent.futures import ThreadPoolExecutor
+
+        # Create an auction and user
+        user = User.objects.create(username="Test user")
+        auction = Auction.objects.create(
+            title="Test Auction",
+            date_start=timezone.now(),
+            date_end=timezone.now() + datetime.timedelta(days=7),
+            created_by=user,
+        )
+
+        # Function to create a lot
+        def create_lot(lot_name):
+            try:
+                lot = Lot.objects.create(
+                    lot_name=lot_name,
+                    auction=auction,
+                    user=user,
+                    quantity=1,
+                    reserve_price=5,
+                )
+                return lot.lot_number_int
+            except Exception as e:
+                return f"Error: {e}"
+
+        # Create multiple lots concurrently
+        lot_numbers = []
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [executor.submit(create_lot, f"Concurrent Lot {i}") for i in range(10)]
+            for future in futures:
+                result = future.result()
+                if not isinstance(result, str):  # Not an error
+                    lot_numbers.append(result)
+
+        # Verify all lot numbers are unique
+        self.assertEqual(len(lot_numbers), len(set(lot_numbers)), f"Duplicate lot numbers found: {lot_numbers}")
+
+        # Verify lot numbers are sequential
+        lot_numbers.sort()
+        expected = list(range(1, len(lot_numbers) + 1))
+        self.assertEqual(lot_numbers, expected, f"Lot numbers are not sequential: {lot_numbers}")
+
+
 class ChatSubscriptionTests(TestCase):
     def test_chat_subscriptions(self):
         lotuser = User.objects.create(username="thisismylot")

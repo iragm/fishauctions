@@ -3587,8 +3587,17 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
             if errors:
                 return JsonResponse({"success": False, "errors": errors})
 
-            # Save the lot
-            lot.save()
+            # Save the lot with database-level locking to prevent race conditions
+            # Lock on the auction row to serialize lot number assignment across concurrent requests
+            from django.db import transaction
+
+            with transaction.atomic():
+                # Lock the auction to prevent concurrent lot number assignment
+                # This ensures only one lot can be assigned a number at a time for this auction
+                if is_new:
+                    Auction.objects.select_for_update().filter(pk=self.auction.pk).exists()
+
+                lot.save()
 
             # Create auction history entry
             if is_new:
