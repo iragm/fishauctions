@@ -3645,9 +3645,16 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
             except (json.JSONDecodeError, AttributeError):
                 pass
 
+        # Security check: Only admins can specify a bidder_number
+        self.is_admin = self.is_auction_admin
+        if bidder_number and not self.is_admin:
+            return JsonResponse({"success": False, "error": "Only auction admins can add lots for other users"})
+
         # Get the TOS - either for specified bidder or for current user
         if bidder_number:
             self.tos = AuctionTOS.objects.filter(bidder_number=bidder_number, auction=self.auction).first()
+            if not self.tos:
+                return JsonResponse({"success": False, "error": "User not found in this auction"})
         else:
             self.tos = (
                 AuctionTOS.objects.filter(auction=self.auction)
@@ -3655,16 +3662,14 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                 .first()
             )
 
-        self.is_admin = self.is_auction_admin
-
         if not self.tos:
-            return JsonResponse({"success": False, "errors": {"general": "You must join this auction first"}})
+            return JsonResponse({"success": False, "error": "You must join this auction first"})
 
         if not self.tos.selling_allowed and not self.is_admin:
-            return JsonResponse({"success": False, "errors": {"general": "You don't have permission to add lots"}})
+            return JsonResponse({"success": False, "error": "You don't have permission to add lots"})
 
         if not self.is_admin and not self.auction.can_submit_lots:
-            return JsonResponse({"success": False, "errors": {"general": "Lot submission has ended"}})
+            return JsonResponse({"success": False, "error": "Lot submission has ended"})
 
         return super().dispatch(request, *args, **kwargs)
 
