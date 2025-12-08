@@ -401,7 +401,6 @@ function performSave(lotRow) {
             // Update lot ID if new
             if (data.is_new) {
                 // Remove the temporary key and use the real lot_id
-                delete savingInProgress[rowKey];
                 lotRow.dataset.lotId = data.lot_id;
                 // Clean up temp ID
                 delete lotRow.dataset.tempId;
