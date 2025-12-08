@@ -1693,18 +1693,27 @@ class DynamicSetLotWinnerViewTestCase(StandardTestCase):
         assert data.get("price") != "valid"
         assert data.get("winner") != "valid"
 
-        Lot.objects.create(
+        # Test that duplicate lot numbers are automatically fixed
+        # Create a lot with the same custom_lot_number as in_person_lot
+        new_lot = Lot.objects.create(
             lot_name="dupe",
             auction=self.in_person_auction,
             auctiontos_seller=self.admin_in_person_tos,
             quantity=1,
             custom_lot_number="101-1",
         )
-        response = self.client.post(
-            self.get_url(), data={"lot": "101-1", "price": "10", "winner": "555", "action": "validate"}
+        # After creating a duplicate, the duplicate detection should have automatically
+        # changed the new lot's number, so there should only be one lot with "101-1"
+        new_lot.refresh_from_db()  # Refresh to get the updated custom_lot_number
+        lots_with_101_1 = Lot.objects.filter(auction=self.in_person_auction, custom_lot_number="101-1")
+        # Verify duplicate was auto-fixed by checking only one lot has "101-1"
+        assert lots_with_101_1.count() == 1, (
+            f"Duplicate detection should have changed the duplicate lot's number. New lot number: {new_lot.custom_lot_number}"
         )
-        data = response.json()
-        assert "Multiple" in data.get("lot")
+        # Verify the new lot got a different number
+        assert new_lot.custom_lot_number != "101-1", (
+            f"New lot should have been assigned a different number, got: {new_lot.custom_lot_number}"
+        )
 
 
 class AlternativeSplitLabelTests(StandardTestCase):
