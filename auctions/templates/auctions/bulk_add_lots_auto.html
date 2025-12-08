@@ -412,7 +412,7 @@ function performSave(lotRow) {
 
             // Update badge with admin bypass feedback
             if (data.admin_bypassed_lot_limit) {
-                badge.textContent = `Lot #${data.lot_number_display} (Admin)`;
+                badge.textContent = `Lot #${data.lot_number_display}`;
                 badge.classList.remove('bg-secondary', 'bg-warning', 'bg-danger', 'bg-success');
                 badge.classList.add('bg-info', 'text-dark');  // Use info color for admin bypass
                 badge.title = 'Admin bypassed lot limit';
@@ -420,7 +420,7 @@ function performSave(lotRow) {
                 // Show admin bypass warning
                 updateAdminBypassWarning();
             } else if (data.admin_bypassed_selling_allowed) {
-                badge.textContent = `Lot #${data.lot_number_display} (Admin)`;
+                badge.textContent = `Lot #${data.lot_number_display}`;
                 badge.classList.remove('bg-secondary', 'bg-warning', 'bg-danger', 'bg-success');
                 badge.classList.add('bg-info', 'text-dark');  // Use info color for admin bypass
                 badge.title = 'Admin bypassed selling restriction';
