@@ -3659,18 +3659,20 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
             self.tos = AuctionTOS.objects.filter(bidder_number=bidder_number, auction=self.auction).first()
             if not self.tos:
                 return JsonResponse({"success": False, "error": "User not found in this auction"})
+            # When admin is adding lots for another user, respect that user's selling_allowed
+            if not self.tos.selling_allowed:
+                return JsonResponse({"success": False, "error": "You don't have permission to add lots"})
         else:
             self.tos = (
                 AuctionTOS.objects.filter(auction=self.auction)
                 .filter(Q(email=request.user.email) | Q(user=request.user))
                 .first()
             )
-
-        if not self.tos:
-            return JsonResponse({"success": False, "error": "You must join this auction first"})
-
-        if not self.tos.selling_allowed and not self.is_admin:
-            return JsonResponse({"success": False, "error": "You don't have permission to add lots"})
+            if not self.tos:
+                return JsonResponse({"success": False, "error": "You must join this auction first"})
+            # Check if user has permission to add lots (admins can bypass their own restriction)
+            if not self.tos.selling_allowed and not self.is_admin:
+                return JsonResponse({"success": False, "error": "You don't have permission to add lots"})
 
         if not self.is_admin and not self.auction.can_submit_lots:
             return JsonResponse({"success": False, "error": "Lot submission has ended"})
