@@ -5408,6 +5408,48 @@ class BulkAddLotsAutoTests(StandardTestCase):
         self.assertEqual(lot.cannot_change_reason, "This lot has sold")
         self.assertFalse(lot.can_be_edited)
 
+    def test_admin_cannot_add_lots_for_user_with_selling_not_allowed(self):
+        """Test that admins cannot add lots for users whose selling_allowed is False"""
+        # Set in_person_buyer's selling_allowed to False
+        self.in_person_buyer.selling_allowed = False
+        self.in_person_buyer.save()
+
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+
+        # Try to add lot for user with selling_allowed=False
+        response = self.client.post(
+            reverse("save_lot_ajax", kwargs={"slug": self.in_person_auction.slug}),
+            data='{"lot_name": "Test Lot", "reserve_price": 5, "bidder_number": "555"}',
+            content_type="application/json",
+        )
+        data = response.json()
+        self.assertFalse(data["success"])
+        self.assertIn("permission", data["error"].lower())
+
+    def test_admin_can_add_lots_for_themselves_when_their_selling_not_allowed(self):
+        """Test that admins can bypass their own selling_allowed restriction"""
+        # Set admin's selling_allowed to False
+        self.admin_in_person_tos.selling_allowed = False
+        self.admin_in_person_tos.save()
+
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+
+        # Admin should be able to add lot for themselves (no bidder_number)
+        response = self.client.post(
+            reverse("save_lot_ajax", kwargs={"slug": self.in_person_auction.slug}),
+            data='{"lot_name": "Admin Test Lot", "reserve_price": 5}',
+            content_type="application/json",
+        )
+        data = response.json()
+        self.assertTrue(data["success"], f"Admin should bypass their own selling_allowed: {data.get('error', '')}")
+        self.assertIsNotNone(data["lot_id"])
+
+        # Verify lot was created for admin
+        lot = Lot.objects.get(lot_number=data["lot_id"])
+        self.assertEqual(lot.auctiontos_seller, self.admin_in_person_tos)
+
 
 class UpdateAuctionStatsCommandTestCase(StandardTestCase):
     """Test the update_auction_stats management command"""
