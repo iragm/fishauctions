@@ -3381,29 +3381,36 @@ class Lot(models.Model):
     def save(self, *args, **kwargs):
         from django.db import transaction
 
-        # for old and new auctions, generate a lot number int
+        # for old and new auctions, generate a lot number int or custom_lot_number
         # Use database-level locking to prevent race conditions when assigning lot numbers
-        needs_lot_number = self.lot_number_int is None and self.auction
+        needs_lock = self.auction and (
+            (self.lot_number_int is None)  # Standard mode needs lot_number_int
+            or (
+                not self.custom_lot_number and self.auction.use_seller_dash_lot_numbering
+            )  # Seller dash mode needs custom_lot_number
+        )
 
-        if needs_lot_number:
+        if needs_lock:
             # We need to wrap the entire save in a transaction with locking
             with transaction.atomic():
                 # Lock the auction row using SELECT FOR UPDATE
                 # This will block other transactions trying to lock the same row until this transaction completes
                 Auction.objects.select_for_update().get(pk=self.auction.pk)
 
-                # Now safely get the max lot_number_int while holding the lock
-                minimum_lot_number = 1
-                # This is deliberately not excluding deleted and removed lots -- don't use auction.lots_qs here
-                max_number = Lot.objects.filter(auction=self.auction).aggregate(Max("lot_number_int"))[
-                    "lot_number_int__max"
-                ]
-                self.lot_number_int = (max_number or (minimum_lot_number - 1)) + 1
+                # Assign lot_number_int if needed
+                if self.lot_number_int is None:
+                    # Now safely get the max lot_number_int while holding the lock
+                    minimum_lot_number = 1
+                    # This is deliberately not excluding deleted and removed lots -- don't use auction.lots_qs here
+                    max_number = Lot.objects.filter(auction=self.auction).aggregate(Max("lot_number_int"))[
+                        "lot_number_int__max"
+                    ]
+                    self.lot_number_int = (max_number or (minimum_lot_number - 1)) + 1
 
                 # Continue with the rest of the save logic
                 self._do_save(*args, **kwargs)
         else:
-            # No lot number needed, proceed normally
+            # No lock needed, proceed normally
             self._do_save(*args, **kwargs)
 
     def _do_save(self, *args, **kwargs):

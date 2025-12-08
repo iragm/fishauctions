@@ -338,7 +338,6 @@ function performSave(lotRow) {
 
     // If a save is already in progress for this row, skip this save
     if (savingInProgress[rowKey]) {
-        console.log('Save already in progress for this lot, skipping duplicate save');
         return;
     }
 
