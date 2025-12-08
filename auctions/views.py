@@ -3426,11 +3426,6 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                 self.tos = AuctionTOS.objects.filter(bidder_number=bidder_number, auction=self.auction).first()
                 if not self.tos:
                     return JsonResponse({"success": False, "error": "User not found in this auction"})
-                # When admin is adding lots for another user, respect that user's selling_allowed
-                if not self.tos.selling_allowed:
-                    return JsonResponse(
-                        {"success": False, "error": "This user does not have permission to sell lots in this auction"}
-                    )
             else:
                 # Adding lots for yourself
                 self.tos = (
@@ -3440,11 +3435,12 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                 )
                 if not self.tos:
                     return JsonResponse({"success": False, "error": "You must join this auction before adding lots"})
-                # Check if user has permission to add lots (admins can bypass their own restriction)
-                if not self.tos.selling_allowed and not self.is_admin:
-                    return JsonResponse(
-                        {"success": False, "error": "You don't have permission to add lots to this auction"}
-                    )
+
+            # Check if user has permission to add lots
+            if not self.tos.selling_allowed and not self.is_admin:
+                return JsonResponse(
+                    {"success": False, "error": "You don't have permission to add lots to this auction"}
+                )
 
             # Create or get existing lot
             if lot_id:
@@ -3467,7 +3463,12 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                 )
                 is_new = True
 
-            admin_bypassed = False  # Track if admin bypassed lot limit
+            admin_bypassed_lot_limit = False  # Track if admin bypassed lot limit
+            admin_bypassed_selling_allowed = False  # Track if admin bypassed selling_allowed
+
+            # Check if admin is bypassing selling_allowed restriction
+            if self.is_admin and not self.tos.selling_allowed:
+                admin_bypassed_selling_allowed = True
 
             # Check lot limits
             if is_new and self.auction.max_lots_per_user:
@@ -3490,7 +3491,7 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                         )
 
                 # Track if admin bypassed the limit for visual feedback
-                admin_bypassed = bypass_limit and limit_exceeded
+                admin_bypassed_lot_limit = bypass_limit and limit_exceeded
 
             # Validate and save fields
             errors = {}
@@ -3628,7 +3629,8 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                     "lot_link": lot.lot_link,
                     "lot_pk": lot.pk,
                     "is_new": is_new,
-                    "admin_bypassed": admin_bypassed,
+                    "admin_bypassed_lot_limit": admin_bypassed_lot_limit,
+                    "admin_bypassed_selling_allowed": admin_bypassed_selling_allowed,
                 }
             )
 
@@ -3659,22 +3661,18 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
             self.tos = AuctionTOS.objects.filter(bidder_number=bidder_number, auction=self.auction).first()
             if not self.tos:
                 return JsonResponse({"success": False, "error": "User not found in this auction"})
-            # When admin is adding lots for another user, respect that user's selling_allowed
-            if not self.tos.selling_allowed:
-                return JsonResponse(
-                    {"success": False, "error": "This user does not have permission to sell lots in this auction"}
-                )
         else:
             self.tos = (
                 AuctionTOS.objects.filter(auction=self.auction)
                 .filter(Q(email=request.user.email) | Q(user=request.user))
                 .first()
             )
-            if not self.tos:
-                return JsonResponse({"success": False, "error": "You must join this auction first"})
-            # Check if user has permission to add lots (admins can bypass their own restriction)
-            if not self.tos.selling_allowed and not self.is_admin:
-                return JsonResponse({"success": False, "error": "You don't have permission to add lots"})
+
+        if not self.tos:
+            return JsonResponse({"success": False, "error": "You must join this auction first"})
+
+        if not self.tos.selling_allowed and not self.is_admin:
+            return JsonResponse({"success": False, "error": "You don't have permission to add lots"})
 
         if not self.is_admin and not self.auction.can_submit_lots:
             return JsonResponse({"success": False, "error": "Lot submission has ended"})

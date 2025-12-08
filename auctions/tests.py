@@ -5160,7 +5160,7 @@ class BulkAddLotsAutoTests(StandardTestCase):
             data = response.json()
             self.assertTrue(data["success"])
             if i >= 3:  # Beyond limit
-                self.assertTrue(data.get("admin_bypassed"))
+                self.assertTrue(data.get("admin_bypassed_lot_limit"))
 
     def test_locked_lot_cannot_be_edited(self):
         """Test that lots cannot be edited after submission deadline"""
@@ -5408,8 +5408,8 @@ class BulkAddLotsAutoTests(StandardTestCase):
         self.assertEqual(lot.cannot_change_reason, "This lot has sold")
         self.assertFalse(lot.can_be_edited)
 
-    def test_admin_cannot_add_lots_for_user_with_selling_not_allowed(self):
-        """Test that admins cannot add lots for users whose selling_allowed is False"""
+    def test_admin_can_add_lots_for_user_with_selling_not_allowed(self):
+        """Test that admins can add lots for users whose selling_allowed is False, with a warning flag"""
         # Set in_person_buyer's selling_allowed to False
         self.in_person_buyer.selling_allowed = False
         self.in_person_buyer.save()
@@ -5417,15 +5417,36 @@ class BulkAddLotsAutoTests(StandardTestCase):
         # Login as admin
         self.client.login(username="admin_user", password="testpassword")
 
-        # Try to add lot for user with selling_allowed=False
+        # Admin should be able to add lot for user with selling_allowed=False
         response = self.client.post(
             reverse("save_lot_ajax", kwargs={"slug": self.in_person_auction.slug}),
             data='{"lot_name": "Test Lot", "reserve_price": 5, "bidder_number": "555"}',
             content_type="application/json",
         )
         data = response.json()
+        self.assertTrue(data["success"], f"Admin should be able to add lots for user: {data.get('error', '')}")
+        self.assertIsNotNone(data["lot_id"])
+        # Verify that admin_bypassed_selling_allowed flag is set
+        self.assertTrue(data.get("admin_bypassed_selling_allowed", False))
+
+    def test_non_admin_cannot_add_lots_when_selling_not_allowed(self):
+        """Test that non-admin users cannot add lots when their selling_allowed is False"""
+        # Set in_person_buyer's selling_allowed to False
+        self.in_person_buyer.selling_allowed = False
+        self.in_person_buyer.save()
+
+        # Login as non-admin user (in_person_buyer)
+        self.client.login(username="no_lots", password="testpassword")
+
+        # Try to add lot for themselves (should fail)
+        response = self.client.post(
+            reverse("save_lot_ajax", kwargs={"slug": self.in_person_auction.slug}),
+            data='{"lot_name": "Test Lot", "reserve_price": 5}',
+            content_type="application/json",
+        )
+        data = response.json()
         self.assertFalse(data["success"])
-        self.assertIn("user does not have permission", data["error"].lower())
+        self.assertIn("permission", data["error"].lower())
 
     def test_admin_can_add_lots_for_themselves_when_their_selling_not_allowed(self):
         """Test that admins can bypass their own selling_allowed restriction"""
@@ -5445,6 +5466,8 @@ class BulkAddLotsAutoTests(StandardTestCase):
         data = response.json()
         self.assertTrue(data["success"], f"Admin should bypass their own selling_allowed: {data.get('error', '')}")
         self.assertIsNotNone(data["lot_id"])
+        # Verify that admin_bypassed_selling_allowed flag is set
+        self.assertTrue(data.get("admin_bypassed_selling_allowed", False))
 
         # Verify lot was created for admin
         lot = Lot.objects.get(lot_number=data["lot_id"])
