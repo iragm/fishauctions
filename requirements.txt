@@ -51,9 +51,9 @@ bleach[css]==6.3.0
     #   django-markdownfield
     #   django-post-office
     #   django-summernote
-boto3==1.42.0
+boto3==1.42.4
     # via django-ses
-botocore==1.41.6
+botocore==1.42.4
     # via
     #   boto3
     #   s3transfer
@@ -129,7 +129,7 @@ defusedxml==0.7.1
     # via
     #   -r requirements.in
     #   python3-openid
-django==5.2.8
+django==5.2.9
     # via
     #   -r requirements.in
     #   channels
@@ -200,7 +200,7 @@ django-summernote==0.8.20.0
     # via -r requirements.in
 django-tables2==2.8.0
     # via -r requirements.in
-django-timezone-field==7.1
+django-timezone-field==7.2.1
     # via django-celery-beat
 django-weasyprint==2.4.0
     # via -r requirements.in
@@ -325,7 +325,7 @@ pydantic-core==2.41.5
     # via
     #   pydantic
     #   squareup
-pydyf==0.11.0
+pydyf==0.12.1
     # via weasyprint
 pyhamcrest==2.1.0
     # via -r requirements.in
@@ -412,7 +412,7 @@ twisted[tls]==25.5.0
     # via
     #   -r requirements.in
     #   daphne
-txaio==25.9.2
+txaio==25.12.1
     # via
     #   -r requirements.in
     #   autobahn
@@ -446,7 +446,7 @@ ua-parser-builtins==0.18.0.post1
     # via ua-parser
 ujson==5.11.0
     # via autobahn
-urllib3==2.5.0
+urllib3==2.6.0
     # via
     #   -r requirements.in
     #   botocore
