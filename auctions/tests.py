@@ -5425,7 +5425,7 @@ class BulkAddLotsAutoTests(StandardTestCase):
         )
         data = response.json()
         self.assertFalse(data["success"])
-        self.assertIn("permission", data["error"].lower())
+        self.assertIn("user does not have permission", data["error"].lower())
 
     def test_admin_can_add_lots_for_themselves_when_their_selling_not_allowed(self):
         """Test that admins can bypass their own selling_allowed restriction"""

@@ -3429,7 +3429,7 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                 # When admin is adding lots for another user, respect that user's selling_allowed
                 if not self.tos.selling_allowed:
                     return JsonResponse(
-                        {"success": False, "error": "You don't have permission to add lots to this auction"}
+                        {"success": False, "error": "This user does not have permission to sell lots in this auction"}
                     )
             else:
                 # Adding lots for yourself
@@ -3661,7 +3661,9 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                 return JsonResponse({"success": False, "error": "User not found in this auction"})
             # When admin is adding lots for another user, respect that user's selling_allowed
             if not self.tos.selling_allowed:
-                return JsonResponse({"success": False, "error": "You don't have permission to add lots"})
+                return JsonResponse(
+                    {"success": False, "error": "This user does not have permission to sell lots in this auction"}
+                )
         else:
             self.tos = (
                 AuctionTOS.objects.filter(auction=self.auction)
