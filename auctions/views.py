@@ -3463,7 +3463,12 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                 )
                 is_new = True
 
-            admin_bypassed = False  # Track if admin bypassed lot limit
+            admin_bypassed_lot_limit = False  # Track if admin bypassed lot limit
+            admin_bypassed_selling_allowed = False  # Track if admin bypassed selling_allowed
+
+            # Check if admin is bypassing selling_allowed restriction
+            if self.is_admin and not self.tos.selling_allowed:
+                admin_bypassed_selling_allowed = True
 
             # Check lot limits
             if is_new and self.auction.max_lots_per_user:
@@ -3486,7 +3491,7 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                         )
 
                 # Track if admin bypassed the limit for visual feedback
-                admin_bypassed = bypass_limit and limit_exceeded
+                admin_bypassed_lot_limit = bypass_limit and limit_exceeded
 
             # Validate and save fields
             errors = {}
@@ -3624,7 +3629,8 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                     "lot_link": lot.lot_link,
                     "lot_pk": lot.pk,
                     "is_new": is_new,
-                    "admin_bypassed": admin_bypassed,
+                    "admin_bypassed_lot_limit": admin_bypassed_lot_limit,
+                    "admin_bypassed_selling_allowed": admin_bypassed_selling_allowed,
                 }
             )
 

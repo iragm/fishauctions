@@ -257,6 +257,11 @@
               <i class="bi bi-exclamation-triangle-fill"></i> Admin: Bypassing {{ max_lots_per_user }} lot limit
             </small>
           {% endif %}
+          {% if is_admin %}
+            <small class="text-warning" id="admin-bypass-selling-warning" style="display: none;">
+              <i class="bi bi-exclamation-triangle-fill"></i> Admin: User does not have selling permission
+            </small>
+          {% endif %}
         </div>
       </div>
     </div>
@@ -406,22 +411,31 @@ function performSave(lotRow) {
             }
 
             // Update badge with admin bypass feedback
-            if (data.admin_bypassed) {
-                badge.textContent = `Lot #${data.lot_number_display} (Admin)`;
+            if (data.admin_bypassed_lot_limit) {
+                badge.textContent = `Lot #${data.lot_number_display}`;
                 badge.classList.remove('bg-secondary', 'bg-warning', 'bg-danger', 'bg-success');
                 badge.classList.add('bg-info', 'text-dark');  // Use info color for admin bypass
                 badge.title = 'Admin bypassed lot limit';
 
                 // Show admin bypass warning
                 updateAdminBypassWarning();
+            } else if (data.admin_bypassed_selling_allowed) {
+                badge.textContent = `Lot #${data.lot_number_display}`;
+                badge.classList.remove('bg-secondary', 'bg-warning', 'bg-danger', 'bg-success');
+                badge.classList.add('bg-info', 'text-dark');  // Use info color for admin bypass
+                badge.title = 'Admin bypassed selling restriction';
+
+                // Show admin bypass warning for selling_allowed
+                updateAdminBypassSellingWarning();
             } else {
                 badge.textContent = `Lot #${data.lot_number_display}`;
                 badge.classList.remove('bg-secondary', 'bg-warning', 'bg-danger', 'bg-info');
                 badge.classList.add('bg-success', 'text-dark');
                 badge.title = '';
 
-                // Update admin bypass warning
+                // Update admin bypass warnings
                 updateAdminBypassWarning();
+                updateAdminBypassSellingWarning();
             }
 
             // Show and update actions menu
@@ -586,6 +600,22 @@ function updateAdminBypassWarning() {
     }
 }
 
+// Function to update admin bypass selling warning
+function updateAdminBypassSellingWarning() {
+    const warning = document.getElementById('admin-bypass-selling-warning');
+    if (!warning) return;
+
+    // Check if any saved lot has the selling_allowed bypass
+    const hasBypass = Array.from(document.querySelectorAll('.lot-row[data-lot-id] .lot-number-badge'))
+        .some(badge => badge.title === 'Admin bypassed selling restriction');
+
+    if (hasBypass) {
+        warning.style.display = 'inline';
+    } else {
+        warning.style.display = 'none';
+    }
+}
+
 // Add event listeners to all lot inputs
 function attachLotEventListeners(lotRow) {
     // Skip locked lots
@@ -615,8 +645,9 @@ function attachLotEventListeners(lotRow) {
 // Initialize existing lots
 document.querySelectorAll('.lot-row').forEach(attachLotEventListeners);
 
-// Initialize admin bypass warning
+// Initialize admin bypass warnings
 updateAdminBypassWarning();
+updateAdminBypassSellingWarning();
 
 // Add row button
 document.getElementById('add-row-btn').addEventListener('click', () => {
