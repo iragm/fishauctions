@@ -3379,15 +3379,42 @@ class Lot(models.Model):
     admin_validated = models.BooleanField(default=False)
 
     def save(self, *args, **kwargs):
-        # for old and new auctions, generate a lot number int
-        if self.lot_number_int is None and self.auction:
-            minimum_lot_number = 1
-            # Get the current maximum lot_number_int for the auction
-            # This is deliberately not excluding deleted and removed lots -- don't use auction.lots_qs here
-            max_number = Lot.objects.filter(auction=self.auction).aggregate(Max("lot_number_int"))[
-                "lot_number_int__max"
-            ]
-            self.lot_number_int = (max_number or (minimum_lot_number - 1)) + 1
+        from django.db import transaction
+
+        # for old and new auctions, generate a lot number int or custom_lot_number
+        # Use database-level locking to prevent race conditions when assigning lot numbers
+        needs_lock = self.auction and (
+            (self.lot_number_int is None)  # Standard mode needs lot_number_int
+            or (
+                not self.custom_lot_number and self.auction.use_seller_dash_lot_numbering
+            )  # Seller dash mode needs custom_lot_number
+        )
+
+        if needs_lock:
+            # We need to wrap the entire save in a transaction with locking
+            with transaction.atomic():
+                # Lock the auction row using SELECT FOR UPDATE
+                # This will block other transactions trying to lock the same row until this transaction completes
+                Auction.objects.select_for_update().get(pk=self.auction.pk)
+
+                # Assign lot_number_int if needed
+                if self.lot_number_int is None:
+                    # Now safely get the max lot_number_int while holding the lock
+                    minimum_lot_number = 1
+                    # This is deliberately not excluding deleted and removed lots -- don't use auction.lots_qs here
+                    max_number = Lot.objects.filter(auction=self.auction).aggregate(Max("lot_number_int"))[
+                        "lot_number_int__max"
+                    ]
+                    self.lot_number_int = (max_number or (minimum_lot_number - 1)) + 1
+
+                # Continue with the rest of the save logic
+                self._do_save(*args, **kwargs)
+        else:
+            # No lock needed, proceed normally
+            self._do_save(*args, **kwargs)
+
+    def _do_save(self, *args, **kwargs):
+        """Internal method to complete the save operation"""
         # custom lot number set for old auctions: bidder_number-lot_number format
         if not self.custom_lot_number and self.auction and self.auction.use_seller_dash_lot_numbering:
             if self.auctiontos_seller:
@@ -3451,27 +3478,78 @@ class Lot(models.Model):
                     "unsubscribed": not self.user.userdata.email_me_when_people_comment_on_my_lots,
                 },
             )
-        # make sure lot_number_int is unique within the auction
+        # make sure lot_number_display is unique within the auction
+        # This handles both lot_number_int and custom_lot_number (seller_dash_lot_numbering)
         # reported in a large auction where two lots had the same number but I have not been able to reproduce it
         # https://github.com/iragm/fishauctions/issues/420
-        if self.lot_number_int and self.auction and not self.auction.use_seller_dash_lot_numbering:
-            duplicate_lot_number_check = (
-                Lot.objects.filter(
-                    auction=self.auction,
-                    lot_number_int=self.lot_number_int,
+        # Note: Only check after first save (when pk exists). Race conditions during initial save
+        # are prevented by the SELECT FOR UPDATE locking in the save() method above.
+        if self.auction and self.pk:
+            # Check for duplicates based on lot_number_display
+            if self.auction.use_seller_dash_lot_numbering and self.custom_lot_number:
+                # Check for duplicate custom_lot_number in seller_dash_lot_numbering mode
+                duplicate_lot = (
+                    Lot.objects.filter(
+                        auction=self.auction,
+                        custom_lot_number=self.custom_lot_number,
+                    )
+                    .exclude(pk=self.pk)
+                    .first()
                 )
-                .exclude(pk=self.pk)
-                .first()
-            )
-            if duplicate_lot_number_check:
-                duplicate_lot_number_check.lot_number_int = None
-                duplicate_lot_number_check.label_printed = False
-                duplicate_lot_number_check.save()
-                self.auction.create_history(
-                    "LOTS",
-                    f"Duplicate lot number detected, changing lot number {self.lot_number_int} to {duplicate_lot_number_check.lot_number_int}",
-                    user=None,
+                if duplicate_lot:
+                    # Generate a new custom_lot_number for this (newest) lot
+                    if self.auctiontos_seller:
+                        custom_lot_number = 1
+                        # Only fetch custom_lot_number field for performance
+                        other_lot_numbers = (
+                            Lot.objects.filter(
+                                auction=self.auction,
+                                auctiontos_seller=self.auctiontos_seller,
+                            )
+                            .exclude(pk=self.pk)
+                            .values_list("custom_lot_number", flat=True)
+                        )
+                        for lot_number in other_lot_numbers:
+                            match = re.findall(r"\d+", f"{lot_number}")
+                            if match:
+                                match = int(match[-1])
+                                if match >= custom_lot_number:
+                                    custom_lot_number = match + 1
+                        self.custom_lot_number = f"{self.auctiontos_seller.bidder_number}-{custom_lot_number}"[:9]
+                        self.label_printed = False
+                        # Update in database without triggering full save logic
+                        Lot.objects.filter(pk=self.pk).update(
+                            custom_lot_number=self.custom_lot_number, label_printed=False
+                        )
+                        self.auction.create_history(
+                            "LOTS",
+                            f"Duplicate lot number detected, changed to {self.lot_number_display}",
+                            user=None,
+                        )
+            elif self.lot_number_int and not self.auction.use_seller_dash_lot_numbering:
+                # Check for duplicate lot_number_int in standard mode
+                duplicate_lot = (
+                    Lot.objects.filter(
+                        auction=self.auction,
+                        lot_number_int=self.lot_number_int,
+                    )
+                    .exclude(pk=self.pk)
+                    .first()
                 )
+                if duplicate_lot:
+                    # Generate a new lot_number_int for this (newest) lot
+                    max_number = Lot.objects.filter(auction=self.auction).aggregate(Max("lot_number_int"))[
+                        "lot_number_int__max"
+                    ]
+                    self.lot_number_int = (max_number or 0) + 1
+                    self.label_printed = False
+                    # Update in database without triggering full save logic
+                    Lot.objects.filter(pk=self.pk).update(lot_number_int=self.lot_number_int, label_printed=False)
+                    self.auction.create_history(
+                        "LOTS",
+                        f"Duplicate lot number detected, changed to {self.lot_number_display}",
+                        user=None,
+                    )
 
     def __str__(self):
         return "" + str(self.lot_number_display) + " - " + self.lot_name

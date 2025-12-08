@@ -303,6 +303,7 @@
 </style>
 <script>
 let saveTimeouts = {};
+let savingInProgress = {}; // Track which rows are currently saving
 const SAVE_DELAY = 1000; // Save after 1 second of no typing
 
 // Debounced save function
@@ -326,6 +327,19 @@ function performSave(lotRow) {
     const badge = lotRow.querySelector('.lot-number-badge');
     const actionsMenu = lotRow.querySelector('.actions-menu');
     const errorBanner = lotRow.querySelector('.error-banner');
+
+    // Prevent concurrent saves for the same row to avoid duplicate lot creation
+    // This addresses the race condition where multiple save requests are triggered
+    // before the first one completes and sets the lot_id (e.g., rapid typing)
+    const rowKey = lotId || lotRow.dataset.tempId || `temp-${Math.random().toString(36).slice(2, 11)}`;
+    if (!lotRow.dataset.tempId && !lotId) {
+        lotRow.dataset.tempId = rowKey; // Assign a temporary ID for unsaved lots
+    }
+
+    // If a save is already in progress for this row, skip this save
+    if (savingInProgress[rowKey]) {
+        return;
+    }
 
     // Hide error banner
     if (errorBanner) {
@@ -368,6 +382,9 @@ function performSave(lotRow) {
         return;
     }
 
+    // Mark this row as having a save in progress
+    savingInProgress[rowKey] = true;
+
     // Make AJAX request
     fetch("{% url 'save_lot_ajax' slug=auction.slug %}", {
         method: 'POST',
@@ -382,7 +399,10 @@ function performSave(lotRow) {
         if (data.success) {
             // Update lot ID if new
             if (data.is_new) {
+                // Remove the temporary key and use the real lot_id
                 lotRow.dataset.lotId = data.lot_id;
+                // Clean up temp ID
+                delete lotRow.dataset.tempId;
             }
 
             // Update badge with admin bypass feedback
@@ -465,6 +485,14 @@ function performSave(lotRow) {
             badge.classList.add('bg-danger', 'text-dark');
         }
         if (actionsMenu) actionsMenu.style.display = 'none';
+    })
+    .finally(() => {
+        // Always clear the saving flag when request completes (success or error)
+        delete savingInProgress[rowKey];
+        // Also clear using lot_id if it exists
+        if (lotRow.dataset.lotId) {
+            delete savingInProgress[lotRow.dataset.lotId];
+        }
     });
 }
 

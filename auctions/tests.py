@@ -477,6 +477,302 @@ class LotModelTests(TestCase):
         assert lot.high_bid == 5
 
 
+class LotModelConcurrencyTests(TransactionTestCase):
+    """Tests that require real database transactions (not wrapped in TestCase transaction)"""
+
+    def test_concurrent_lot_number_assignment(self):
+        """Test that concurrent lot creation does not result in duplicate lot_number_int values"""
+        from concurrent.futures import ThreadPoolExecutor
+
+        # Create an auction and user
+        user = User.objects.create(username="Test user")
+        auction = Auction.objects.create(
+            title="Test Auction",
+            date_start=timezone.now(),
+            date_end=timezone.now() + datetime.timedelta(days=7),
+            created_by=user,
+        )
+
+        # Function to create a lot
+        def create_lot(lot_name):
+            try:
+                lot = Lot.objects.create(
+                    lot_name=lot_name,
+                    auction=auction,
+                    user=user,
+                    quantity=1,
+                    reserve_price=5,
+                )
+                return (True, lot.lot_number_int)
+            except Exception as e:
+                return (False, str(e))
+
+        # Create multiple lots concurrently
+        lot_numbers = []
+        errors = []
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [executor.submit(create_lot, f"Concurrent Lot {i}") for i in range(10)]
+            for future in futures:
+                success, result = future.result()
+                if success:
+                    lot_numbers.append(result)
+                else:
+                    errors.append(result)
+
+        # Fail if any errors occurred
+        self.assertEqual(len(errors), 0, f"Errors occurred during concurrent creation: {errors}")
+
+        # Verify all lot numbers are unique
+        self.assertEqual(len(lot_numbers), len(set(lot_numbers)), f"Duplicate lot numbers found: {lot_numbers}")
+
+        # Verify lot numbers are sequential
+        lot_numbers.sort()
+        expected = list(range(1, len(lot_numbers) + 1))
+        self.assertEqual(lot_numbers, expected, f"Lot numbers are not sequential: {lot_numbers}")
+
+    def test_concurrent_lot_number_assignment_with_seller_dash(self):
+        """Test that concurrent lot creation with seller_dash_lot_numbering doesn't create duplicates"""
+        from concurrent.futures import ThreadPoolExecutor
+
+        # Create an auction with seller_dash_lot_numbering enabled
+        user = User.objects.create(username="Test user")
+        auction = Auction.objects.create(
+            title="Test Auction with Seller Dash",
+            date_start=timezone.now(),
+            date_end=timezone.now() + datetime.timedelta(days=7),
+            created_by=user,
+            use_seller_dash_lot_numbering=True,
+        )
+
+        # Create a seller with TOS
+        from auctions.models import AuctionTOS, PickupLocation
+
+        location = PickupLocation.objects.create(
+            name="Test Location",
+            user=user,
+        )
+        tos = AuctionTOS.objects.create(
+            user=user,
+            auction=auction,
+            pickup_location=location,
+            bidder_number="KM-8",
+        )
+
+        # Function to create a lot
+        def create_lot(lot_name):
+            try:
+                lot = Lot.objects.create(
+                    lot_name=lot_name,
+                    auction=auction,
+                    user=user,
+                    auctiontos_seller=tos,
+                    quantity=1,
+                    reserve_price=5,
+                )
+                return (True, lot.custom_lot_number)
+            except Exception as e:
+                return (False, str(e))
+
+        # Create multiple lots concurrently
+        lot_numbers = []
+        errors = []
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [executor.submit(create_lot, f"Concurrent Lot {i}") for i in range(10)]
+            for future in futures:
+                success, result = future.result()
+                if success:
+                    lot_numbers.append(result)
+                else:
+                    errors.append(result)
+
+        # Fail if any errors occurred
+        self.assertEqual(len(errors), 0, f"Errors occurred during concurrent creation: {errors}")
+
+        # Verify all lot numbers are unique
+        self.assertEqual(len(lot_numbers), len(set(lot_numbers)), f"Duplicate custom lot numbers found: {lot_numbers}")
+
+        # Verify lot numbers follow KM-8-N format
+        for lot_number in lot_numbers:
+            self.assertTrue(lot_number.startswith("KM-8-"), f"Lot number {lot_number} doesn't start with KM-8-")
+
+    def test_duplicate_lot_number_int_generates_new_number(self):
+        """Test that if a duplicate lot_number_int is detected, a new number is generated for the newest lot"""
+        # Create an auction and user
+        user = User.objects.create(username="Test user")
+        auction = Auction.objects.create(
+            title="Test Auction",
+            date_start=timezone.now(),
+            date_end=timezone.now() + datetime.timedelta(days=7),
+            created_by=user,
+        )
+
+        # Create first lot
+        lot1 = Lot.objects.create(
+            lot_name="First Lot",
+            auction=auction,
+            user=user,
+            quantity=1,
+            reserve_price=5,
+        )
+        original_lot1_number = lot1.lot_number_int
+
+        # Manually create a second lot with the same lot_number_int (simulating race condition)
+        lot2 = Lot(
+            lot_name="Second Lot",
+            auction=auction,
+            user=user,
+            quantity=1,
+            reserve_price=5,
+        )
+        # Force the same lot_number_int to simulate a duplicate that slipped through
+        lot2.lot_number_int = lot1.lot_number_int
+        # Use _do_save to bypass the locking mechanism for testing the duplicate detection logic
+        # This is intentional to test the post-save duplicate check that catches edge cases
+        lot2._do_save()
+
+        # Refresh from database
+        lot1.refresh_from_db()
+        lot2.refresh_from_db()
+
+        # Verify that lot1 kept its original number and lot2 got a new number
+        self.assertEqual(lot1.lot_number_int, original_lot1_number)
+        self.assertNotEqual(lot2.lot_number_int, lot1.lot_number_int)
+        self.assertGreater(lot2.lot_number_int, lot1.lot_number_int)
+
+    def test_duplicate_custom_lot_number_generates_new_number(self):
+        """Test that if a duplicate custom_lot_number is detected, a new number is generated for the newest lot"""
+        from auctions.models import AuctionTOS, PickupLocation
+
+        # Create an auction with seller_dash_lot_numbering enabled
+        user = User.objects.create(username="Test user")
+        auction = Auction.objects.create(
+            title="Test Auction with Seller Dash",
+            date_start=timezone.now(),
+            date_end=timezone.now() + datetime.timedelta(days=7),
+            created_by=user,
+            use_seller_dash_lot_numbering=True,
+        )
+
+        # Create a seller with TOS
+        location = PickupLocation.objects.create(
+            name="Test Location",
+            user=user,
+        )
+        tos = AuctionTOS.objects.create(
+            user=user,
+            auction=auction,
+            pickup_location=location,
+            bidder_number="KM-8",
+        )
+
+        # Create first lot
+        lot1 = Lot.objects.create(
+            lot_name="First Lot",
+            auction=auction,
+            user=user,
+            auctiontos_seller=tos,
+            quantity=1,
+            reserve_price=5,
+        )
+        original_lot1_number = lot1.custom_lot_number
+
+        # Manually create a second lot with the same custom_lot_number
+        lot2 = Lot(
+            lot_name="Second Lot",
+            auction=auction,
+            user=user,
+            auctiontos_seller=tos,
+            quantity=1,
+            reserve_price=5,
+        )
+        # Force the same custom_lot_number to simulate a duplicate that slipped through
+        lot2.custom_lot_number = lot1.custom_lot_number
+        # Use _do_save to bypass the locking mechanism for testing the duplicate detection logic
+        # This is intentional to test the post-save duplicate check that catches edge cases
+        lot2._do_save()
+
+        # Refresh from database
+        lot1.refresh_from_db()
+        lot2.refresh_from_db()
+
+        # Verify that lot1 kept its original number and lot2 got a new number
+        self.assertEqual(lot1.custom_lot_number, original_lot1_number)
+        self.assertNotEqual(lot2.custom_lot_number, lot1.custom_lot_number)
+
+    def test_seller_dash_lot_numbering_format(self):
+        """Test that seller_dash_lot_numbering creates lots with bidder_number-N format"""
+        from auctions.models import AuctionTOS, PickupLocation
+
+        # Create an auction with seller_dash_lot_numbering enabled
+        user = User.objects.create(username="Test user")
+        auction = Auction.objects.create(
+            title="Test Auction with Seller Dash",
+            date_start=timezone.now(),
+            date_end=timezone.now() + datetime.timedelta(days=7),
+            created_by=user,
+            use_seller_dash_lot_numbering=True,
+        )
+
+        # Create sellers with different bidder numbers
+        location = PickupLocation.objects.create(
+            name="Test Location",
+            user=user,
+        )
+
+        seller1 = AuctionTOS.objects.create(
+            user=user,
+            auction=auction,
+            pickup_location=location,
+            bidder_number="KM-8",
+        )
+
+        user2 = User.objects.create(username="Test user 2")
+        seller2 = AuctionTOS.objects.create(
+            user=user2,
+            auction=auction,
+            pickup_location=location,
+            bidder_number="AB-12",
+        )
+
+        # Create lots for seller1
+        lot1 = Lot.objects.create(
+            lot_name="Seller 1 Lot 1",
+            auction=auction,
+            user=user,
+            auctiontos_seller=seller1,
+            quantity=1,
+            reserve_price=5,
+        )
+        lot2 = Lot.objects.create(
+            lot_name="Seller 1 Lot 2",
+            auction=auction,
+            user=user,
+            auctiontos_seller=seller1,
+            quantity=1,
+            reserve_price=5,
+        )
+
+        # Create lots for seller2
+        lot3 = Lot.objects.create(
+            lot_name="Seller 2 Lot 1",
+            auction=auction,
+            user=user2,
+            auctiontos_seller=seller2,
+            quantity=1,
+            reserve_price=5,
+        )
+
+        # Verify format
+        self.assertEqual(lot1.custom_lot_number, "KM-8-1")
+        self.assertEqual(lot2.custom_lot_number, "KM-8-2")
+        self.assertEqual(lot3.custom_lot_number, "AB-12-1")
+
+        # Verify lot_number_display uses custom_lot_number
+        self.assertEqual(lot1.lot_number_display, "KM-8-1")
+        self.assertEqual(lot2.lot_number_display, "KM-8-2")
+        self.assertEqual(lot3.lot_number_display, "AB-12-1")
+
+
 class ChatSubscriptionTests(TestCase):
     def test_chat_subscriptions(self):
         lotuser = User.objects.create(username="thisismylot")
@@ -1397,18 +1693,27 @@ class DynamicSetLotWinnerViewTestCase(StandardTestCase):
         assert data.get("price") != "valid"
         assert data.get("winner") != "valid"
 
-        Lot.objects.create(
+        # Test that duplicate lot numbers are automatically fixed
+        # Create a lot with the same custom_lot_number as in_person_lot
+        new_lot = Lot.objects.create(
             lot_name="dupe",
             auction=self.in_person_auction,
             auctiontos_seller=self.admin_in_person_tos,
             quantity=1,
             custom_lot_number="101-1",
         )
-        response = self.client.post(
-            self.get_url(), data={"lot": "101-1", "price": "10", "winner": "555", "action": "validate"}
+        # After creating a duplicate, the duplicate detection should have automatically
+        # changed the new lot's number, so there should only be one lot with "101-1"
+        new_lot.refresh_from_db()  # Refresh to get the updated custom_lot_number
+        lots_with_101_1 = Lot.objects.filter(auction=self.in_person_auction, custom_lot_number="101-1")
+        # Verify duplicate was auto-fixed by checking only one lot has "101-1"
+        assert lots_with_101_1.count() == 1, (
+            f"Duplicate detection should have changed the duplicate lot's number. New lot number: {new_lot.custom_lot_number}"
         )
-        data = response.json()
-        assert "Multiple" in data.get("lot")
+        # Verify the new lot got a different number
+        assert new_lot.custom_lot_number != "101-1", (
+            f"New lot should have been assigned a different number, got: {new_lot.custom_lot_number}"
+        )
 
 
 class AlternativeSplitLabelTests(StandardTestCase):

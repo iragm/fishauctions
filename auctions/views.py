@@ -3587,7 +3587,7 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
             if errors:
                 return JsonResponse({"success": False, "errors": errors})
 
-            # Save the lot
+            # Save the lot - locking is handled in Lot.save() for both standard and seller_dash modes
             lot.save()
 
             # Create auction history entry
