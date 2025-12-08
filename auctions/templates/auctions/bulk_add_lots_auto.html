@@ -331,7 +331,7 @@ function performSave(lotRow) {
     // Prevent concurrent saves for the same row to avoid duplicate lot creation
     // This addresses the race condition where multiple save requests are triggered
     // before the first one completes and sets the lot_id (e.g., rapid typing)
-    const rowKey = lotId || lotRow.dataset.tempId || `temp-${Math.random().toString(36).substr(2, 9)}`;
+    const rowKey = lotId || lotRow.dataset.tempId || `temp-${Math.random().toString(36).slice(2, 11)}`;
     if (!lotRow.dataset.tempId && !lotId) {
         lotRow.dataset.tempId = rowKey; // Assign a temporary ID for unsaved lots
     }
