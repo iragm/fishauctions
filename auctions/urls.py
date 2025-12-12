@@ -161,7 +161,7 @@ urlpatterns = [
         name="create_square_payment_link",
     ),
     path(
-        "auctions/<slug:slug>/quick-add-images/<slug:bidder_number>",
+        "auctions/<slug:slug>/quick-add-images/<path:bidder_number>",
         login_required(views.QuickBulkAddImages.as_view()),
         name="bulk_add_image",
     ),
@@ -195,12 +195,12 @@ urlpatterns = [
         name="my_labels_by_username",
     ),
     path(
-        "auctions/<slug:slug>/print/bidder/<str:bidder_number>/",
+        "auctions/<slug:slug>/print/bidder/<path:bidder_number>/",
         login_required(views.LotLabelView.as_view()),
         name="print_labels_by_bidder_number",
     ),
     path(
-        "auctions/<slug:slug>/print/bidder/<str:bidder_number>/unprinted/",
+        "auctions/<slug:slug>/print/bidder/<path:bidder_number>/unprinted/",
         login_required(views.UnprintedLotLabelsView.as_view()),
         name="print_unprinted_labels_by_bidder_number",
     ),
@@ -230,7 +230,7 @@ urlpatterns = [
         name="sync_google_drive",
     ),
     path(
-        "auctions/<slug:slug>/users/<str:bidder_number>/",
+        "auctions/<slug:slug>/users/<path:bidder_number>/",
         login_required(views.BulkAddLots.as_view()),
         name="bulk_add_lots",
     ),
@@ -240,7 +240,7 @@ urlpatterns = [
         name="bulk_add_lots_for_myself",
     ),
     path(
-        "auctions/<slug:slug>/users/<str:bidder_number>/bulk-add-auto/",
+        "auctions/<slug:slug>/users/<path:bidder_number>/bulk-add-auto/",
         login_required(views.BulkAddLotsAuto.as_view()),
         name="bulk_add_lots_auto",
     ),

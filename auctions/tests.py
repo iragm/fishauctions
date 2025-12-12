@@ -8733,3 +8733,58 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
         self.client.force_login(self.admin_user)
         response = self.client.get(dialog_url)
         self.assertEqual(response.status_code, 200)
+
+    def test_other_bidder_number_urls(self):
+        """Test that other URL patterns also work with special characters in bidder_number"""
+        special_bidder_number = "user/123"
+        special_tos = AuctionTOS.objects.create(
+            user=self.user,
+            auction=self.online_auction,
+            pickup_location=self.location,
+            bidder_number=special_bidder_number,
+            name="User 123",
+        )
+
+        # Test bulk_add_image URL
+        bulk_image_url = reverse(
+            "bulk_add_image",
+            kwargs={
+                "slug": self.online_auction.slug,
+                "bidder_number": special_tos.bidder_number,
+            },
+        )
+        self.assertIsNotNone(bulk_image_url)
+        self.assertIn("user/123", bulk_image_url)
+
+        # Test print_labels_by_bidder_number URL
+        print_labels_url = reverse(
+            "print_labels_by_bidder_number",
+            kwargs={
+                "slug": self.online_auction.slug,
+                "bidder_number": special_tos.bidder_number,
+            },
+        )
+        self.assertIsNotNone(print_labels_url)
+        self.assertIn("user/123", print_labels_url)
+
+        # Test bulk_add_lots URL
+        bulk_add_url = reverse(
+            "bulk_add_lots",
+            kwargs={
+                "slug": self.online_auction.slug,
+                "bidder_number": special_tos.bidder_number,
+            },
+        )
+        self.assertIsNotNone(bulk_add_url)
+        self.assertIn("user/123", bulk_add_url)
+
+        # Test bulk_add_lots_auto URL
+        bulk_add_auto_url = reverse(
+            "bulk_add_lots_auto",
+            kwargs={
+                "slug": self.online_auction.slug,
+                "bidder_number": special_tos.bidder_number,
+            },
+        )
+        self.assertIsNotNone(bulk_add_auto_url)
+        self.assertIn("user/123", bulk_add_auto_url)
