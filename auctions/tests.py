@@ -8681,7 +8681,8 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
 
     def test_bidder_number_with_url_like_content(self):
         """Test with bidder_number that looks like a URL (the actual error case from the issue)"""
-        # The actual error case: bidder_number = 'https://atlfishclub./'
+        # The actual error case: bidder_number = 'https://atlfishclub./' (22 chars)
+        # We use a shorter version since bidder_number has max_length=20
         url_like_bidder = "https://site./"
         url_tos = AuctionTOS.objects.create(
             user=self.user_with_no_lots,
