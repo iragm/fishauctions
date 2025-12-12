@@ -8816,3 +8816,30 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
         self.assertTrue(history_entries.exists())
         self.assertTrue(any("test/123/abc" in entry.action for entry in history_entries))
         self.assertTrue(any("test123abc" in entry.action for entry in history_entries))
+
+    def test_bidder_number_slash_removal_prevents_duplicates(self):
+        """Test that slash removal prevents creating duplicate bidder_numbers"""
+        # Create a TOS with bidder_number "user123"
+        existing_tos = AuctionTOS.objects.create(
+            user=self.user,
+            auction=self.online_auction,
+            pickup_location=self.location,
+            bidder_number="user123",
+            name="Existing User",
+        )
+
+        # Try to create another TOS with bidder_number "user/123" which would become "user123" after cleaning
+        new_tos = AuctionTOS.objects.create(
+            user=self.user_with_no_lots,
+            auction=self.online_auction,
+            pickup_location=self.location,
+            bidder_number="user/123",
+            name="New User",
+        )
+
+        # The new TOS should have a modified bidder_number to avoid duplicate
+        self.assertNotEqual(new_tos.bidder_number, existing_tos.bidder_number)
+        self.assertNotIn("/", new_tos.bidder_number)
+        # Should have a suffix added
+        self.assertTrue(new_tos.bidder_number.startswith("user123"))
+        self.assertIn("1", new_tos.bidder_number)  # Should be "user1231" or similar

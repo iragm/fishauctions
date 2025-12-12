@@ -3014,6 +3014,24 @@ class AuctionTOS(models.Model):
         if self.bidder_number and "/" in self.bidder_number:
             original_bidder_number = self.bidder_number
             self.bidder_number = self.bidder_number.replace("/", "")
+
+            # Check if the cleaned bidder_number would create a duplicate
+            # Exclude self from the check (if updating existing record)
+            existing_tos = AuctionTOS.objects.filter(bidder_number=self.bidder_number, auction=self.auction)
+            if self.pk:
+                existing_tos = existing_tos.exclude(pk=self.pk)
+
+            if existing_tos.exists():
+                # If there would be a conflict, append a suffix to make it unique
+                suffix = 1
+                base_bidder_number = self.bidder_number
+                while existing_tos.exists() and suffix < 100:
+                    self.bidder_number = f"{base_bidder_number}{suffix}"
+                    existing_tos = AuctionTOS.objects.filter(bidder_number=self.bidder_number, auction=self.auction)
+                    if self.pk:
+                        existing_tos = existing_tos.exclude(pk=self.pk)
+                    suffix += 1
+
             # Create auction history entry after save
             needs_history = True
         else:
