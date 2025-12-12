@@ -8657,6 +8657,7 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
             auction=self.online_auction,
             pickup_location=self.location,
             bidder_number=special_bidder_number,
+            name="Test Slash User",
         )
 
         # Test that the reverse URL generation works with the path converter
@@ -8677,7 +8678,7 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
         self.client.force_login(self.admin_user)
         response = self.client.get(problems_url)
         self.assertEqual(response.status_code, 200)
-        self.assertIn(special_tos.name, response.content.decode())
+        self.assertIn("Test Slash User", response.content.decode())
 
     def test_bidder_number_with_url_like_content(self):
         """Test with bidder_number that looks like a URL (the actual error case from the issue)"""
