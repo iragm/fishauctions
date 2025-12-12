@@ -3010,7 +3010,24 @@ class AuctionTOS(models.Model):
             if existing_instance:
                 self.email_address_status = existing_instance.email_address_status
 
+        # Check for and remove forward slashes in bidder_number
+        if self.bidder_number and "/" in self.bidder_number:
+            original_bidder_number = self.bidder_number
+            self.bidder_number = self.bidder_number.replace("/", "")
+            # Create auction history entry after save
+            needs_history = True
+        else:
+            needs_history = False
+
         super().save(*args, **kwargs)
+
+        # Create history entry after save (needs pk to exist)
+        if needs_history:
+            self.auction.create_history(
+                applies_to="USERS",
+                action=f"Removed '/' character from bidder number for {self.name}. Changed from '{original_bidder_number}' to '{self.bidder_number}'. The '/' character is not allowed in bidder numbers.",
+                user=None,  # System change
+            )
 
         duplicate_instance = self.auction.find_user(name=self.name, email=self.email, exclude_pk=self.pk)
         if duplicate_instance:

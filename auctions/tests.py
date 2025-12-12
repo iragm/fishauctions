@@ -8648,20 +8648,19 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
     """Test that bidder_number with special characters (like slashes) work with path converter"""
 
     def test_bidder_number_with_special_characters(self):
-        """Test that reverse() works correctly with bidder_number containing special characters like slashes"""
-        # Create an AuctionTOS with a bidder_number that contains URL-incompatible characters
-        # This mimics the error case from the issue where bidder_number was 'https://atlfishclub./'
-        special_bidder_number = "test/123"
+        """Test that bidder_number with special characters (except slashes) work correctly"""
+        # Note: Slashes are now automatically removed on save (see test_bidder_number_slash_removal_on_save)
+        # Test with special characters that are allowed
+        special_bidder_number = "test@123"
         special_tos = AuctionTOS.objects.create(
             user=self.user,
             auction=self.online_auction,
             pickup_location=self.location,
             bidder_number=special_bidder_number,
-            name="Test Slash User",
+            name="Test Special User",
         )
 
         # Test that the reverse URL generation works with the path converter
-        # This is what happens in models.py line 2837
         problems_url = reverse(
             "auction_no_show",
             kwargs={
@@ -8671,20 +8670,20 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
         )
         self.assertIsNotNone(problems_url)
         self.assertIn(self.online_auction.slug, problems_url)
-        # The path converter handles slashes naturally
-        self.assertIn("test/123", problems_url)
+        self.assertIn("test@123", problems_url)
 
         # Test that the URL can be accessed by an admin
         self.client.force_login(self.admin_user)
         response = self.client.get(problems_url)
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Test Slash User", response.content.decode())
+        self.assertIn("Test Special User", response.content.decode())
 
     def test_bidder_number_with_url_like_content(self):
         """Test with bidder_number that looks like a URL (the actual error case from the issue)"""
         # The actual error case: bidder_number = 'https://atlfishclub./' (22 chars)
-        # We use a shorter version since bidder_number has max_length=20
-        url_like_bidder = "https://site./"
+        # Note: Slashes are now automatically removed on save
+        # We use a shorter version since bidder_number has max_length=20, and without slashes
+        url_like_bidder = "https:site."
         url_tos = AuctionTOS.objects.create(
             user=self.user_with_no_lots,
             auction=self.online_auction,
@@ -8737,7 +8736,8 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
 
     def test_other_bidder_number_urls(self):
         """Test that other URL patterns work with special characters in bidder_number where applicable"""
-        special_bidder_number = "user/123"
+        # Note: Slashes are now automatically removed on save, so we test with other special chars
+        special_bidder_number = "user@123"
         special_tos = AuctionTOS.objects.create(
             user=self.user,
             auction=self.online_auction,
@@ -8746,7 +8746,7 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
             name="User 123",
         )
 
-        # Test bulk_add_image URL - this uses <path:bidder_number> so it supports slashes
+        # Test bulk_add_image URL - this uses <path:bidder_number>
         bulk_image_url = reverse(
             "bulk_add_image",
             kwargs={
@@ -8755,9 +8755,9 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
             },
         )
         self.assertIsNotNone(bulk_image_url)
-        self.assertIn("user/123", bulk_image_url)
+        self.assertIn("user@123", bulk_image_url)
 
-        # Test print_labels_by_bidder_number URL - this uses <path:bidder_number> so it supports slashes
+        # Test print_labels_by_bidder_number URL - this uses <path:bidder_number>
         print_labels_url = reverse(
             "print_labels_by_bidder_number",
             kwargs={
@@ -8766,7 +8766,7 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
             },
         )
         self.assertIsNotNone(print_labels_url)
-        self.assertIn("user/123", print_labels_url)
+        self.assertIn("user@123", print_labels_url)
 
         # Note: bulk_add_lots and bulk_add_lots_auto use <str:bidder_number> because they have
         # additional path segments after the bidder_number parameter, so they cannot support
@@ -8790,3 +8790,29 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
         )
         self.assertIsNotNone(bulk_add_url)
         self.assertIn("user123", bulk_add_url)
+
+    def test_bidder_number_slash_removal_on_save(self):
+        """Test that forward slashes are removed from bidder_number on save and history is created"""
+        from auctions.models import AuctionHistory
+
+        # Create an AuctionTOS with a bidder_number containing slashes
+        bidder_with_slash = "test/123/abc"
+        tos_with_slash = AuctionTOS.objects.create(
+            user=self.user,
+            auction=self.online_auction,
+            pickup_location=self.location,
+            bidder_number=bidder_with_slash,
+            name="Slash Test User",
+        )
+
+        # Verify the slash was removed
+        self.assertEqual(tos_with_slash.bidder_number, "test123abc")
+        self.assertNotIn("/", tos_with_slash.bidder_number)
+
+        # Verify auction history was created
+        history_entries = AuctionHistory.objects.filter(
+            auction=self.online_auction, applies_to="USERS", action__icontains="removed '/' character"
+        )
+        self.assertTrue(history_entries.exists())
+        self.assertTrue(any("test/123/abc" in entry.action for entry in history_entries))
+        self.assertTrue(any("test123abc" in entry.action for entry in history_entries))
