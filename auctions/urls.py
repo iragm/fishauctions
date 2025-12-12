@@ -489,12 +489,12 @@ urlpatterns = [
         name="bulk_set_lots_won",
     ),
     path(
-        "auctions/<slug:slug>/no-show/<str:tos>/",
+        "auctions/<slug:slug>/no-show/<path:tos>/",
         views.AuctionNoShow.as_view(),
         name="auction_no_show",
     ),
     path(
-        "api/auctions/<slug:slug>/no-show/<str:tos>/",
+        "api/auctions/<slug:slug>/no-show/<path:tos>/",
         views.AuctionNoShowAction.as_view(),
         name="auction_no_show_dialog",
     ),

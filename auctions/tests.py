@@ -8642,3 +8642,93 @@ class DuplicateAuctionTOSTests(StandardTestCase):
         # This should not raise MultipleObjectsReturned error
         winner_location = lot.winner_location
         self.assertEqual(winner_location, str(self.location))
+
+
+class AuctionNoShowURLEncodingTest(StandardTestCase):
+    """Test that bidder_number with special characters (like slashes) work with path converter"""
+
+    def test_bidder_number_with_special_characters(self):
+        """Test that reverse() works correctly with bidder_number containing special characters like slashes"""
+        # Create an AuctionTOS with a bidder_number that contains URL-incompatible characters
+        # This mimics the error case from the issue where bidder_number was 'https://atlfishclub./'
+        special_bidder_number = "test/123"
+        special_tos = AuctionTOS.objects.create(
+            user=self.user,
+            auction=self.online_auction,
+            pickup_location=self.location,
+            bidder_number=special_bidder_number,
+        )
+
+        # Test that the reverse URL generation works with the path converter
+        # This is what happens in models.py line 2837
+        problems_url = reverse(
+            "auction_no_show",
+            kwargs={
+                "slug": self.online_auction.slug,
+                "tos": special_tos.bidder_number,
+            },
+        )
+        self.assertIsNotNone(problems_url)
+        self.assertIn(self.online_auction.slug, problems_url)
+        # The path converter handles slashes naturally
+        self.assertIn("test/123", problems_url)
+
+        # Test that the URL can be accessed by an admin
+        self.client.force_login(self.admin_user)
+        response = self.client.get(problems_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(special_tos.name, response.content.decode())
+
+    def test_bidder_number_with_url_like_content(self):
+        """Test with bidder_number that looks like a URL (the actual error case from the issue)"""
+        # The actual error case: bidder_number = 'https://atlfishclub./'
+        url_like_bidder = "https://site./"
+        url_tos = AuctionTOS.objects.create(
+            user=self.user_with_no_lots,
+            auction=self.online_auction,
+            pickup_location=self.location,
+            bidder_number=url_like_bidder,
+            name="Test User",
+        )
+
+        # Test reverse() with the path converter
+        problems_url = reverse(
+            "auction_no_show",
+            kwargs={
+                "slug": self.online_auction.slug,
+                "tos": url_tos.bidder_number,
+            },
+        )
+        self.assertIsNotNone(problems_url)
+
+        # Test accessing the view
+        self.client.force_login(self.admin_user)
+        response = self.client.get(problems_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Test User", response.content.decode())
+
+    def test_auction_no_show_dialog_url(self):
+        """Test the auction_no_show_dialog URL also works with path converter"""
+        special_bidder_number = "test@user"
+        special_tos = AuctionTOS.objects.create(
+            user=self.user,
+            auction=self.online_auction,
+            pickup_location=self.location,
+            bidder_number=special_bidder_number,
+            name="Special User",
+        )
+
+        # Test reverse() for the dialog endpoint (used in forms.py line 1134)
+        dialog_url = reverse(
+            "auction_no_show_dialog",
+            kwargs={
+                "slug": self.online_auction.slug,
+                "tos": special_tos.bidder_number,
+            },
+        )
+        self.assertIsNotNone(dialog_url)
+
+        # Test accessing the dialog view
+        self.client.force_login(self.admin_user)
+        response = self.client.get(dialog_url)
+        self.assertEqual(response.status_code, 200)
