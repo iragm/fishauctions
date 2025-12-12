@@ -8642,3 +8642,204 @@ class DuplicateAuctionTOSTests(StandardTestCase):
         # This should not raise MultipleObjectsReturned error
         winner_location = lot.winner_location
         self.assertEqual(winner_location, str(self.location))
+
+
+class AuctionNoShowURLEncodingTest(StandardTestCase):
+    """Test that bidder_number with special characters (like slashes) work with path converter"""
+
+    def test_bidder_number_with_special_characters(self):
+        """Test that bidder_number with special characters (except slashes) work correctly"""
+        # Note: Slashes are now automatically removed on save (see test_bidder_number_slash_removal_on_save)
+        # Test with special characters that are allowed
+        special_bidder_number = "test@123"
+        special_tos = AuctionTOS.objects.create(
+            user=self.user,
+            auction=self.online_auction,
+            pickup_location=self.location,
+            bidder_number=special_bidder_number,
+            name="Test Special User",
+        )
+
+        # Test that the reverse URL generation works with the path converter
+        problems_url = reverse(
+            "auction_no_show",
+            kwargs={
+                "slug": self.online_auction.slug,
+                "tos": special_tos.bidder_number,
+            },
+        )
+        self.assertIsNotNone(problems_url)
+        self.assertIn(self.online_auction.slug, problems_url)
+        self.assertIn("test@123", problems_url)
+
+        # Test that the URL can be accessed by an admin
+        self.client.force_login(self.admin_user)
+        response = self.client.get(problems_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Test Special User", response.content.decode())
+
+    def test_bidder_number_with_url_like_content(self):
+        """Test with bidder_number that looks like a URL (the actual error case from the issue)"""
+        # The actual error case: bidder_number = 'https://atlfishclub./' (22 chars)
+        # Note: Slashes are now automatically removed on save
+        # We use a shorter version since bidder_number has max_length=20, and without slashes
+        url_like_bidder = "https:site."
+        url_tos = AuctionTOS.objects.create(
+            user=self.user_with_no_lots,
+            auction=self.online_auction,
+            pickup_location=self.location,
+            bidder_number=url_like_bidder,
+            name="Test User",
+        )
+
+        # Test reverse() with the path converter
+        problems_url = reverse(
+            "auction_no_show",
+            kwargs={
+                "slug": self.online_auction.slug,
+                "tos": url_tos.bidder_number,
+            },
+        )
+        self.assertIsNotNone(problems_url)
+
+        # Test accessing the view
+        self.client.force_login(self.admin_user)
+        response = self.client.get(problems_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Test User", response.content.decode())
+
+    def test_auction_no_show_dialog_url(self):
+        """Test the auction_no_show_dialog URL also works with path converter"""
+        special_bidder_number = "test@user"
+        special_tos = AuctionTOS.objects.create(
+            user=self.user,
+            auction=self.online_auction,
+            pickup_location=self.location,
+            bidder_number=special_bidder_number,
+            name="Special User",
+        )
+
+        # Test reverse() for the dialog endpoint (used in forms.py line 1134)
+        dialog_url = reverse(
+            "auction_no_show_dialog",
+            kwargs={
+                "slug": self.online_auction.slug,
+                "tos": special_tos.bidder_number,
+            },
+        )
+        self.assertIsNotNone(dialog_url)
+
+        # Test accessing the dialog view
+        self.client.force_login(self.admin_user)
+        response = self.client.get(dialog_url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_other_bidder_number_urls(self):
+        """Test that other URL patterns work with special characters in bidder_number where applicable"""
+        # Note: Slashes are now automatically removed on save, so we test with other special chars
+        special_bidder_number = "user@123"
+        special_tos = AuctionTOS.objects.create(
+            user=self.user,
+            auction=self.online_auction,
+            pickup_location=self.location,
+            bidder_number=special_bidder_number,
+            name="User 123",
+        )
+
+        # Test bulk_add_image URL - this uses <path:bidder_number>
+        bulk_image_url = reverse(
+            "bulk_add_image",
+            kwargs={
+                "slug": self.online_auction.slug,
+                "bidder_number": special_tos.bidder_number,
+            },
+        )
+        self.assertIsNotNone(bulk_image_url)
+        self.assertIn("user@123", bulk_image_url)
+
+        # Test print_labels_by_bidder_number URL - this uses <path:bidder_number>
+        print_labels_url = reverse(
+            "print_labels_by_bidder_number",
+            kwargs={
+                "slug": self.online_auction.slug,
+                "bidder_number": special_tos.bidder_number,
+            },
+        )
+        self.assertIsNotNone(print_labels_url)
+        self.assertIn("user@123", print_labels_url)
+
+        # Note: bulk_add_lots and bulk_add_lots_auto use <str:bidder_number> because they have
+        # additional path segments after the bidder_number parameter, so they cannot support
+        # slashes in bidder_number (Django's path converter would match too greedily).
+        # These patterns work fine with bidder_numbers that don't contain slashes.
+        normal_bidder = "user123"
+        normal_tos = AuctionTOS.objects.create(
+            user=self.user_with_no_lots,
+            auction=self.online_auction,
+            pickup_location=self.location,
+            bidder_number=normal_bidder,
+            name="Normal User",
+        )
+
+        bulk_add_url = reverse(
+            "bulk_add_lots",
+            kwargs={
+                "slug": self.online_auction.slug,
+                "bidder_number": normal_tos.bidder_number,
+            },
+        )
+        self.assertIsNotNone(bulk_add_url)
+        self.assertIn("user123", bulk_add_url)
+
+    def test_bidder_number_slash_removal_on_save(self):
+        """Test that forward slashes are removed from bidder_number on save and history is created"""
+        from auctions.models import AuctionHistory
+
+        # Create an AuctionTOS with a bidder_number containing slashes
+        bidder_with_slash = "test/123/abc"
+        tos_with_slash = AuctionTOS.objects.create(
+            user=self.user,
+            auction=self.online_auction,
+            pickup_location=self.location,
+            bidder_number=bidder_with_slash,
+            name="Slash Test User",
+        )
+
+        # Verify the slash was removed
+        self.assertEqual(tos_with_slash.bidder_number, "test123abc")
+        self.assertNotIn("/", tos_with_slash.bidder_number)
+
+        # Verify auction history was created
+        history_entries = AuctionHistory.objects.filter(
+            auction=self.online_auction, applies_to="USERS", action__icontains="removed '/' character"
+        )
+        self.assertTrue(history_entries.exists())
+        self.assertTrue(any("test/123/abc" in entry.action for entry in history_entries))
+        self.assertTrue(any("test123abc" in entry.action for entry in history_entries))
+
+    def test_bidder_number_slash_removal_prevents_duplicates(self):
+        """Test that slash removal prevents creating duplicate bidder_numbers"""
+        # Create a TOS with bidder_number "user123"
+        existing_tos = AuctionTOS.objects.create(
+            user=self.user,
+            auction=self.online_auction,
+            pickup_location=self.location,
+            bidder_number="user123",
+            name="Existing User",
+        )
+
+        # Try to create another TOS with bidder_number "user/123" which would become "user123" after cleaning
+        new_tos = AuctionTOS.objects.create(
+            user=self.user_with_no_lots,
+            auction=self.online_auction,
+            pickup_location=self.location,
+            bidder_number="user/123",
+            name="New User",
+        )
+
+        # The new TOS should have a modified bidder_number to avoid duplicate
+        self.assertNotEqual(new_tos.bidder_number, existing_tos.bidder_number)
+        self.assertNotIn("/", new_tos.bidder_number)
+        # Should have a suffix added
+        self.assertTrue(new_tos.bidder_number.startswith("user123"))
+        self.assertIn("1", new_tos.bidder_number)  # Should be "user1231" or similar
