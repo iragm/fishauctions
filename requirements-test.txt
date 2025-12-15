@@ -36,7 +36,7 @@ pysocks==1.7.1
     # via urllib3
 pyyaml==6.0.3
     # via pre-commit
-ruff==0.14.8
+ruff==0.14.9
     # via -r requirements-test.in
 selenium==4.39.0
     # via -r requirements-test.in
@@ -52,7 +52,7 @@ trio-websocket==0.12.2
     # via selenium
 typing-extensions==4.15.0
     # via selenium
-urllib3[socks]==2.6.0
+urllib3[socks]==2.6.2
     # via selenium
 virtualenv==20.35.4
     # via pre-commit

@@ -33,7 +33,7 @@ attrs==25.4.0
     #   aiohttp
     #   service-identity
     #   twisted
-autobahn==25.11.1
+autobahn==25.12.2
     # via
     #   -r requirements.in
     #   daphne
@@ -51,9 +51,9 @@ bleach[css]==6.3.0
     #   django-markdownfield
     #   django-post-office
     #   django-summernote
-boto3==1.42.4
+boto3==1.42.9
     # via django-ses
-botocore==1.42.4
+botocore==1.42.9
     # via
     #   boto3
     #   s3transfer
@@ -74,6 +74,7 @@ certifi==2025.11.12
 cffi==2.0.0
     # via
     #   -r requirements.in
+    #   autobahn
     #   cryptography
     #   pyheif
     #   weasyprint
@@ -210,7 +211,7 @@ easy-thumbnails==2.10.1
     # via -r requirements.in
 exceptiongroup==1.3.1
     # via celery
-fonttools[woff]==4.61.0
+fonttools[woff]==4.61.1
     # via weasyprint
 frozenlist==1.8.0
     # via
@@ -365,7 +366,7 @@ redis==7.1.0
     # via
     #   -r requirements.in
     #   channels-redis
-reportlab==4.4.5
+reportlab==4.4.6
     # via -r requirements.in
 requests==2.32.5
     # via
@@ -412,7 +413,7 @@ twisted[tls]==25.5.0
     # via
     #   -r requirements.in
     #   daphne
-txaio==25.12.1
+txaio==25.12.2
     # via
     #   -r requirements.in
     #   autobahn
@@ -432,7 +433,7 @@ typing-extensions==4.15.0
     #   typing-inspection
 typing-inspection==0.4.2
     # via pydantic
-tzdata==2025.2
+tzdata==2025.3
     # via
     #   django-celery-beat
     #   kombu
@@ -446,7 +447,7 @@ ua-parser-builtins==0.18.0.post1
     # via ua-parser
 ujson==5.11.0
     # via autobahn
-urllib3==2.6.0
+urllib3==2.6.2
     # via
     #   -r requirements.in
     #   botocore
