@@ -51,9 +51,9 @@ bleach[css]==6.3.0
     #   django-markdownfield
     #   django-post-office
     #   django-summernote
-boto3==1.42.9
+boto3==1.42.14
     # via django-ses
-botocore==1.42.9
+botocore==1.42.14
     # via
     #   boto3
     #   s3transfer
@@ -195,7 +195,7 @@ django-qr-code==4.2.0
     # via -r requirements.in
 django-recaptcha==4.1.0
     # via -r requirements.in
-django-ses[events]==4.4.0
+django-ses[events]==4.5.0
     # via -r requirements.in
 django-summernote==0.8.20.0
     # via -r requirements.in
@@ -366,7 +366,7 @@ redis==7.1.0
     # via
     #   -r requirements.in
     #   channels-redis
-reportlab==4.4.6
+reportlab==4.4.7
     # via -r requirements.in
 requests==2.32.5
     # via
@@ -393,9 +393,9 @@ six==1.17.0
     #   -r requirements.in
     #   python-dateutil
     #   pywebpush
-soupsieve==2.8
+soupsieve==2.8.1
     # via beautifulsoup4
-sqlparse==0.5.4
+sqlparse==0.5.5
     # via
     #   -r requirements.in
     #   django
@@ -454,7 +454,7 @@ urllib3==2.6.2
     #   requests
 user-agents==2.2.0
     # via -r requirements.in
-uvicorn[standard]==0.38.0
+uvicorn[standard]==0.40.0
     # via -r requirements.in
 uvloop==0.22.1
     # via uvicorn
