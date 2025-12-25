@@ -101,6 +101,9 @@
       <div class="dropdown-menu" aria-labelledby="dropdownMenuButton">
         {% if auction.online_bidding != 'disable' %}
         <label class="dropdown-item ">
+          <input type="checkbox" class="invoice_filter" id="checkbox_can_bid"> <i class="bi bi-cash-coin"></i> Can bid
+        </label>
+        <label class="dropdown-item ">
           <input type="checkbox" class="invoice_filter" id="checkbox_no_bid"> <i class="bi bi-cash-coin"></i> Can't bid
         </label>
         {% endif %}

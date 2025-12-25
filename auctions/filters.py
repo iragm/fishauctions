@@ -216,6 +216,7 @@ class AuctionTOSFilter(django_filters.FilterSet):
             "club owes": {"auctiontos__calculated_total__gt": 0},
             "seen": {"auctiontos__opened": True},
             "unseen": {"auctiontos__opened": False},
+            "can bid": {"bidding_allowed": True},
             "no bid": {"bidding_allowed": False},
             "no sell": {"selling_allowed": False},
             "email bad": {"email_address_status": "BAD"},
