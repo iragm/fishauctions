@@ -6174,6 +6174,56 @@ class SquarePaymentTests(StandardTestCase):
         # Should find the user with the invoice that has this receipt_number
         self.assertGreater(filtered_qs.count(), 0)
 
+    def test_can_bid_filter_in_auction_tos(self):
+        """Test that 'can bid' filter returns users where bidding_allowed=True"""
+        from auctions.filters import AuctionTOSFilter
+        from auctions.models import AuctionTOS
+
+        # Set bidding_allowed to False for some users
+        self.tosB.bidding_allowed = False
+        self.tosB.save()
+
+        # Create a queryset of all auction TOS
+        qs = AuctionTOS.objects.filter(auction=self.online_auction)
+
+        # Create an instance of AuctionTOSFilter to use its generic method
+        filter_instance = AuctionTOSFilter()
+
+        # Search for users who can bid
+        filtered_qs = filter_instance.generic(qs, "can bid")
+
+        # Should only return users where bidding_allowed=True
+        for tos in filtered_qs:
+            self.assertTrue(tos.bidding_allowed)
+
+        # tosB should not be in the filtered results
+        self.assertNotIn(self.tosB, filtered_qs)
+
+    def test_no_bid_filter_in_auction_tos(self):
+        """Test that 'no bid' filter returns users where bidding_allowed=False"""
+        from auctions.filters import AuctionTOSFilter
+        from auctions.models import AuctionTOS
+
+        # Set bidding_allowed to False for some users
+        self.tosB.bidding_allowed = False
+        self.tosB.save()
+
+        # Create a queryset of all auction TOS
+        qs = AuctionTOS.objects.filter(auction=self.online_auction)
+
+        # Create an instance of AuctionTOSFilter to use its generic method
+        filter_instance = AuctionTOSFilter()
+
+        # Search for users who cannot bid
+        filtered_qs = filter_instance.generic(qs, "no bid")
+
+        # Should only return users where bidding_allowed=False
+        for tos in filtered_qs:
+            self.assertFalse(tos.bidding_allowed)
+
+        # tosB should be in the filtered results
+        self.assertIn(self.tosB, filtered_qs)
+
     def test_pickup_by_mail_requires_address(self):
         """Test that Square payment link requires address when pickup_by_mail is True"""
         from auctions.models import PickupLocation
