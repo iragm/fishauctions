@@ -51,9 +51,9 @@ bleach[css]==6.3.0
     #   django-markdownfield
     #   django-post-office
     #   django-summernote
-boto3==1.42.14
+boto3==1.42.17
     # via django-ses
-botocore==1.42.14
+botocore==1.42.17
     # via
     #   boto3
     #   s3transfer
@@ -340,7 +340,7 @@ pyopenssl==25.3.0
     # via
     #   -r requirements.in
     #   twisted
-pyparsing==3.2.5
+pyparsing==3.3.1
     # via -r requirements.in
 pyphen==0.17.2
     # via weasyprint
