@@ -309,10 +309,12 @@ def schedule_auction_stats_update(run_at=None):
     if run_at > max_run_at:
         run_at = max_run_at
 
-    schedule, _ = ClockedSchedule.objects.get_or_create(clocked_time=run_at)
-
     # Use atomic transaction to ensure delete+create is atomic and prevent race conditions
+    # Moving ClockedSchedule creation inside the transaction to prevent race conditions
     with transaction.atomic():
+        # Create or get the schedule for this run time
+        schedule, _ = ClockedSchedule.objects.get_or_create(clocked_time=run_at)
+
         # Delete the existing task if it exists to ensure clean state
         # This prevents issues with one-off tasks being disabled by celery-beat
         old_tasks = PeriodicTask.objects.filter(name=AUCTION_STATS_TASK_NAME)
@@ -324,7 +326,7 @@ def schedule_auction_stats_update(run_at=None):
             ClockedSchedule.objects.filter(id__in=old_schedule_ids).delete()
 
         # Create a fresh task that's guaranteed to be enabled
-        # The transaction ensures this is atomic with the delete above
+        # The transaction ensures this is atomic with schedule creation and cleanup above
         task = PeriodicTask.objects.create(
             name=AUCTION_STATS_TASK_NAME,
             task="auctions.tasks.update_auction_stats",
