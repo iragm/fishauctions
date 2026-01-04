@@ -289,11 +289,16 @@ def schedule_auction_stats_update(run_at=None):
     a task to run at a specific time. Deletes and recreates the task to ensure
     it's properly enabled and picked up by celery-beat.
 
+    This function uses a database transaction to ensure atomicity and prevent
+    race conditions, guaranteeing there is always exactly one task with the
+    given name.
+
     Args:
         run_at: datetime when the update should run. If None, runs immediately.
     """
     from datetime import timedelta
 
+    from django.db import transaction
     from django.utils import timezone
 
     if run_at is None:
@@ -306,24 +311,27 @@ def schedule_auction_stats_update(run_at=None):
 
     schedule, _ = ClockedSchedule.objects.get_or_create(clocked_time=run_at)
 
-    # Delete the existing task if it exists to ensure clean state
-    # This prevents issues with one-off tasks being disabled by celery-beat
-    old_tasks = PeriodicTask.objects.filter(name=AUCTION_STATS_TASK_NAME)
-    old_schedule_ids = [task.clocked_id for task in old_tasks if task.clocked_id]
-    old_tasks.delete()
+    # Use atomic transaction to ensure delete+create is atomic and prevent race conditions
+    with transaction.atomic():
+        # Delete the existing task if it exists to ensure clean state
+        # This prevents issues with one-off tasks being disabled by celery-beat
+        old_tasks = PeriodicTask.objects.filter(name=AUCTION_STATS_TASK_NAME)
+        old_schedule_ids = [task.clocked_id for task in old_tasks if task.clocked_id]
+        old_tasks.delete()
 
-    # Clean up orphaned ClockedSchedule objects from previous runs
-    if old_schedule_ids:
-        ClockedSchedule.objects.filter(id__in=old_schedule_ids).delete()
+        # Clean up orphaned ClockedSchedule objects from previous runs
+        if old_schedule_ids:
+            ClockedSchedule.objects.filter(id__in=old_schedule_ids).delete()
 
-    # Create a fresh task that's guaranteed to be enabled
-    task = PeriodicTask.objects.create(
-        name=AUCTION_STATS_TASK_NAME,
-        task="auctions.tasks.update_auction_stats",
-        clocked=schedule,
-        one_off=True,
-        enabled=True,
-    )
+        # Create a fresh task that's guaranteed to be enabled
+        # The transaction ensures this is atomic with the delete above
+        task = PeriodicTask.objects.create(
+            name=AUCTION_STATS_TASK_NAME,
+            task="auctions.tasks.update_auction_stats",
+            clocked=schedule,
+            one_off=True,
+            enabled=True,
+        )
 
     logger.info(
         "Scheduled auction stats update task (id=%s) to run at %s", task.id, run_at.strftime("%Y-%m-%d %H:%M:%S %Z")

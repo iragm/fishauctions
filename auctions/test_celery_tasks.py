@@ -171,6 +171,24 @@ class CeleryTasksTestCase(TestCase):
         self.assertTrue(new_task.one_off)
         self.assertEqual(new_task.task, "auctions.tasks.update_auction_stats")
 
+    def test_schedule_auction_stats_update_ensures_single_task(self):
+        """Test that there is always exactly one task after scheduling."""
+        from django_celery_beat.models import PeriodicTask
+
+        # Call the scheduling function multiple times
+        tasks.schedule_auction_stats_update()
+        tasks.schedule_auction_stats_update()
+        tasks.schedule_auction_stats_update()
+
+        # Verify there is exactly one task
+        task_count = PeriodicTask.objects.filter(name=tasks.AUCTION_STATS_TASK_NAME).count()
+        self.assertEqual(task_count, 1, "There should be exactly one auction stats update task")
+
+        # Verify the task is enabled
+        task = PeriodicTask.objects.get(name=tasks.AUCTION_STATS_TASK_NAME)
+        self.assertTrue(task.enabled)
+        self.assertTrue(task.one_off)
+
 
 class SendInvoiceNotificationTaskTestCase(TestCase):
     """Test case for the send_invoice_notification task."""

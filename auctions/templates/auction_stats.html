@@ -20,12 +20,7 @@
     '/ws/auctions/{{ auction.pk }}/'
   );
 
-  statsSocket.onopen = function(e) {
-    console.log('Stats WebSocket connected');
-  };
-
   statsSocket.onmessage = function(e) {
-    console.log('Stats WebSocket message received:', e.data);
     var data = JSON.parse(e.data);
     if (data.type === 'stats_updated') {
       var notification = document.createElement('div');
@@ -36,12 +31,8 @@
     }
   };
 
-  statsSocket.onerror = function(e) {
-    console.error('Stats WebSocket error:', e);
-  };
-
   statsSocket.onclose = function(e) {
-    console.log('Stats WebSocket closed:', e.code, e.reason);
+    //console.log('Stats WebSocket closed');
   };
   {% endif %}
 
