@@ -20,6 +20,8 @@ STATS_UPDATE_MAX_DELAY_SECONDS = 3600  # Maximum delay (1 hour) before checking 
 STATS_UPDATE_FALLBACK_DELAY_SECONDS = 3600  # Fallback delay when no auctions need updates
 AUCTION_STATS_TASK_NAME = "auction_stats_update"  # Name for the one-off scheduled task
 
+logger = logging.getLogger(__name__)
+
 
 @shared_task(bind=True, ignore_result=True)
 def endauctions(self):
@@ -284,14 +286,19 @@ def schedule_auction_stats_update(run_at=None):
     Schedule a one-off task to update auction stats.
 
     Uses django-celery-beat's ClockedSchedule and PeriodicTask to schedule
-    a task to run at a specific time. If a task already exists, it will be
-    updated with the new scheduled time.
+    a task to run at a specific time. Deletes and recreates the task to ensure
+    it's properly enabled and picked up by celery-beat.
+
+    This function uses a database transaction to ensure atomicity and prevent
+    race conditions, guaranteeing there is always exactly one task with the
+    given name.
 
     Args:
         run_at: datetime when the update should run. If None, runs immediately.
     """
     from datetime import timedelta
 
+    from django.db import transaction
     from django.utils import timezone
 
     if run_at is None:
@@ -302,16 +309,34 @@ def schedule_auction_stats_update(run_at=None):
     if run_at > max_run_at:
         run_at = max_run_at
 
-    schedule, _ = ClockedSchedule.objects.get_or_create(clocked_time=run_at)
+    # Use atomic transaction to ensure delete+create is atomic and prevent race conditions
+    # Moving ClockedSchedule creation inside the transaction to prevent race conditions
+    with transaction.atomic():
+        # Create or get the schedule for this run time
+        schedule, _ = ClockedSchedule.objects.get_or_create(clocked_time=run_at)
 
-    PeriodicTask.objects.update_or_create(
-        name=AUCTION_STATS_TASK_NAME,
-        defaults={
-            "task": "auctions.tasks.update_auction_stats",
-            "clocked": schedule,
-            "one_off": True,
-            "enabled": True,
-        },
+        # Delete the existing task if it exists to ensure clean state
+        # This prevents issues with one-off tasks being disabled by celery-beat
+        old_tasks = PeriodicTask.objects.filter(name=AUCTION_STATS_TASK_NAME)
+        old_schedule_ids = [task.clocked_id for task in old_tasks if task.clocked_id]
+        old_tasks.delete()
+
+        # Clean up orphaned ClockedSchedule objects from previous runs
+        if old_schedule_ids:
+            ClockedSchedule.objects.filter(id__in=old_schedule_ids).delete()
+
+        # Create a fresh task that's guaranteed to be enabled
+        # The transaction ensures this is atomic with schedule creation and cleanup above
+        task = PeriodicTask.objects.create(
+            name=AUCTION_STATS_TASK_NAME,
+            task="auctions.tasks.update_auction_stats",
+            clocked=schedule,
+            one_off=True,
+            enabled=True,
+        )
+
+    logger.info(
+        "Scheduled auction stats update task (id=%s) to run at %s", task.id, run_at.strftime("%Y-%m-%d %H:%M:%S %Z")
     )
 
 
@@ -332,8 +357,9 @@ def update_auction_stats(self):
 
     from auctions.models import Auction
 
-    logger = logging.getLogger(__name__)
     now = timezone.now()
+
+    logger.info("Auction stats update task started at %s", now.strftime("%Y-%m-%d %H:%M:%S %Z"))
 
     # Process only one auction per run, ordered by most overdue first
     # Only process auctions that have next_update_due set and are past due
@@ -347,6 +373,7 @@ def update_auction_stats(self):
     )
 
     if auction:
+        logger.info("Found auction needing stats update: %s (id=%s)", auction.title, auction.pk)
         try:
             logger.info("Recalculating stats for auction: %s (%s)", auction.title, auction.slug)
 
@@ -358,17 +385,28 @@ def update_auction_stats(self):
 
             auction.recalculate_stats()
 
-            auction_websocket = get_channel_layer()
-            async_to_sync(auction_websocket.group_send)(
-                f"auctions_{auction.pk}",
-                {
-                    "type": "stats_updated",
-                },
-            )
+            # Send WebSocket notification to users viewing the stats page
+            # This is a best-effort notification - if it fails, we don't want to fail the entire stats update
+            try:
+                logger.info("Sending WebSocket notification for auction: %s", auction.title)
+                auction_websocket = get_channel_layer()
+                async_to_sync(auction_websocket.group_send)(
+                    f"auctions_{auction.pk}",
+                    {
+                        "type": "stats_updated",
+                    },
+                )
+                logger.info("Successfully sent WebSocket notification for auction: %s", auction.title)
+            except Exception as websocket_error:
+                # Log the error but don't fail the stats update
+                logger.error("Failed to send WebSocket notification for auction %s: %s", auction.title, websocket_error)
+
             logger.info("Successfully updated stats for auction: %s", auction.title)
         except Exception as e:
             logger.error("Failed to update stats for auction %s (%s): %s", auction.title, auction.slug, e)
             logger.exception(e)
+    else:
+        logger.info("No auctions need stats update at this time")
 
     # Schedule the next run based on when the next auction update is due
     next_auction = (
@@ -376,7 +414,16 @@ def update_auction_stats(self):
     )
 
     if next_auction and next_auction.next_update_due:
+        logger.info(
+            "Scheduling next stats update for auction '%s' at %s",
+            next_auction.title,
+            next_auction.next_update_due.strftime("%Y-%m-%d %H:%M:%S %Z"),
+        )
         schedule_auction_stats_update(next_auction.next_update_due)
     else:
         # No auctions with scheduled updates, check again later
-        schedule_auction_stats_update(now + timedelta(seconds=STATS_UPDATE_FALLBACK_DELAY_SECONDS))
+        fallback_time = now + timedelta(seconds=STATS_UPDATE_FALLBACK_DELAY_SECONDS)
+        logger.info(
+            "No auctions need stats update, checking again at %s", fallback_time.strftime("%Y-%m-%d %H:%M:%S %Z")
+        )
+        schedule_auction_stats_update(fallback_time)
