@@ -93,6 +93,8 @@ class CeleryTasksTestCase(TestCase):
         )
 
         # Mock the channel layer to track WebSocket sends
+        # The channel layer is used by Django Channels to send messages to WebSocket groups
+        # We mock it to verify the message is sent without requiring a real Redis connection
         mock_channel_layer = mock_channel.return_value
 
         # Run the task

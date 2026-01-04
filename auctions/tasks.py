@@ -376,15 +376,22 @@ def update_auction_stats(self):
             auction.recalculate_stats()
 
             # Send WebSocket notification to users viewing the stats page
-            logger.info("Sending WebSocket notification for auction: %s", auction.title)
-            auction_websocket = get_channel_layer()
-            async_to_sync(auction_websocket.group_send)(
-                f"auctions_{auction.pk}",
-                {
-                    "type": "stats_updated",
-                },
-            )
-            logger.info("Successfully updated stats and sent notification for auction: %s", auction.title)
+            # This is a best-effort notification - if it fails, we don't want to fail the entire stats update
+            try:
+                logger.info("Sending WebSocket notification for auction: %s", auction.title)
+                auction_websocket = get_channel_layer()
+                async_to_sync(auction_websocket.group_send)(
+                    f"auctions_{auction.pk}",
+                    {
+                        "type": "stats_updated",
+                    },
+                )
+                logger.info("Successfully sent WebSocket notification for auction: %s", auction.title)
+            except Exception as websocket_error:
+                # Log the error but don't fail the stats update
+                logger.error("Failed to send WebSocket notification for auction %s: %s", auction.title, websocket_error)
+
+            logger.info("Successfully updated stats for auction: %s", auction.title)
         except Exception as e:
             logger.error("Failed to update stats for auction %s (%s): %s", auction.title, auction.slug, e)
             logger.exception(e)
