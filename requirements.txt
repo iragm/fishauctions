@@ -6,7 +6,7 @@
 #
 aiohappyeyeballs==2.6.1
     # via aiohttp
-aiohttp==3.13.2
+aiohttp==3.13.3
     # via pywebpush
 aiosignal==1.4.0
     # via aiohttp
@@ -49,23 +49,22 @@ bleach[css]==6.3.0
     # via
     #   -r requirements.in
     #   django-markdownfield
-    #   django-post-office
     #   django-summernote
-boto3==1.42.17
+boto3==1.42.21
     # via django-ses
-botocore==1.42.17
+botocore==1.42.21
     # via
     #   boto3
     #   s3transfer
 brotli==1.2.0
     # via fonttools
-cbor2==5.7.1
+cbor2==5.8.0
     # via autobahn
-celery==5.6.0
+celery==5.6.2
     # via
     #   -r requirements.in
     #   django-celery-beat
-certifi==2025.11.12
+certifi==2026.1.4
     # via
     #   -r requirements.in
     #   httpcore
@@ -189,7 +188,7 @@ django-location-field==2.7.3
     # via -r requirements.in
 django-markdownfield==0.11.0
     # via -r requirements.in
-django-post-office==3.10.1
+django-post-office==3.11.0
     # via -r requirements.in
 django-qr-code==4.2.0
     # via -r requirements.in
@@ -209,8 +208,6 @@ django-webpush==0.3.6
     # via -r requirements.in
 easy-thumbnails==2.10.1
     # via -r requirements.in
-exceptiongroup==1.3.1
-    # via celery
 fonttools[woff]==4.61.1
     # via weasyprint
 frozenlist==1.8.0
@@ -257,7 +254,7 @@ jmespath==1.0.1
     #   botocore
 jsonfield==3.2.0
     # via -r requirements.in
-kombu==5.6.1
+kombu==5.6.2
     # via celery
 markdown==3.10
     # via
@@ -273,6 +270,8 @@ multidict==6.7.0
     #   yarl
 mysqlclient==2.2.7
     # via -r requirements.in
+nh3==0.3.2
+    # via django-post-office
 oauthlib==3.3.1
     # via
     #   -r requirements.in
@@ -286,7 +285,7 @@ packaging==25.0
     #   pip-review
 piexif==1.1.3
     # via heif-image-plugin
-pillow==12.0.0
+pillow==12.1.0
     # via
     #   -r requirements.in
     #   easy-thumbnails
@@ -424,7 +423,6 @@ typing-extensions==4.15.0
     #   beautifulsoup4
     #   cron-descriptor
     #   django-bootstrap-datepicker-plus
-    #   exceptiongroup
     #   pydantic
     #   pydantic-core
     #   pyopenssl
@@ -443,7 +441,7 @@ ua-parser==1.0.1
     # via
     #   -r requirements.in
     #   user-agents
-ua-parser-builtins==0.18.0.post1
+ua-parser-builtins==202601
     # via ua-parser
 ujson==5.11.0
     # via autobahn
