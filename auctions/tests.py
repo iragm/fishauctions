@@ -9027,6 +9027,8 @@ class WeeklyPromoManagementCommandTests(StandardTestCase):
         )
 
         # Update user to opt into in-person auctions
+        # Disable online auction notifications to isolate in-person behavior
+        self.promo_user.userdata.email_me_about_new_auctions = False
         self.promo_user.userdata.email_me_about_new_in_person_auctions = True
         self.promo_user.userdata.email_me_about_new_in_person_auctions_distance = 100
         self.promo_user.userdata.save()
