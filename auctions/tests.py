@@ -4,10 +4,12 @@ import hashlib
 import hmac
 import json
 from decimal import Decimal
+from unittest.mock import patch
 
 from django import forms
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.test.client import Client
 from django.urls import reverse
@@ -8933,38 +8935,30 @@ class WeeklyPromoManagementCommandTests(StandardTestCase):
 
     def test_weekly_promo_sends_email(self):
         """Test that weekly_promo sends emails to eligible users."""
-        from unittest.mock import patch
-
-        from django.core.management import call_command
-
         with patch("auctions.management.commands.weekly_promo.mail.send") as mock_send:
             call_command("weekly_promo")
             # Check that email was sent
-            assert mock_send.called, "mail.send should have been called"
+            self.assertTrue(mock_send.called, "mail.send should have been called")
             # Verify the email was sent to the correct user
             call_args = mock_send.call_args
-            assert call_args[0][0] == self.promo_user.email, "Email should be sent to promo_user"
+            self.assertEqual(call_args[0][0], self.promo_user.email, "Email should be sent to promo_user")
             # Verify template is correct
-            assert call_args[1]["template"] == "weekly_promo_email"
+            self.assertEqual(call_args[1]["template"], "weekly_promo_email")
 
     def test_weekly_promo_increments_counter(self):
         """Test that weekly_promo increments the email sent counter."""
-        from django.core.management import call_command
-
         initial_count = self.promo_auction.weekly_promo_emails_sent
         call_command("weekly_promo")
         self.promo_auction.refresh_from_db()
         # Check that counter was incremented
-        assert (
-            self.promo_auction.weekly_promo_emails_sent > initial_count
-        ), "weekly_promo_emails_sent should be incremented"
+        self.assertGreater(
+            self.promo_auction.weekly_promo_emails_sent,
+            initial_count,
+            "weekly_promo_emails_sent should be incremented",
+        )
 
     def test_weekly_promo_excludes_inactive_users(self):
         """Test that weekly_promo excludes users who were recently active."""
-        from unittest.mock import patch
-
-        from django.core.management import call_command
-
         # Update user to be recently active (within last 6 days)
         self.promo_user.userdata.last_activity = timezone.now() - datetime.timedelta(days=3)
         self.promo_user.userdata.save()
@@ -8972,14 +8966,10 @@ class WeeklyPromoManagementCommandTests(StandardTestCase):
         with patch("auctions.management.commands.weekly_promo.mail.send") as mock_send:
             call_command("weekly_promo")
             # Check that email was NOT sent to recently active user
-            assert not mock_send.called, "mail.send should not be called for recently active users"
+            self.assertFalse(mock_send.called, "mail.send should not be called for recently active users")
 
     def test_weekly_promo_excludes_very_old_users(self):
         """Test that weekly_promo excludes users who haven't been active in a long time."""
-        from unittest.mock import patch
-
-        from django.core.management import call_command
-
         # Update user to be inactive for too long (more than 400 days)
         self.promo_user.userdata.last_activity = timezone.now() - datetime.timedelta(days=500)
         self.promo_user.userdata.save()
@@ -8987,14 +8977,10 @@ class WeeklyPromoManagementCommandTests(StandardTestCase):
         with patch("auctions.management.commands.weekly_promo.mail.send") as mock_send:
             call_command("weekly_promo")
             # Check that email was NOT sent to very inactive user
-            assert not mock_send.called, "mail.send should not be called for users inactive for >400 days"
+            self.assertFalse(mock_send.called, "mail.send should not be called for users inactive for >400 days")
 
     def test_weekly_promo_excludes_users_without_location(self):
         """Test that weekly_promo excludes users without a valid location."""
-        from unittest.mock import patch
-
-        from django.core.management import call_command
-
         # Set user location to 0,0
         self.promo_user.userdata.latitude = 0
         self.promo_user.userdata.longitude = 0
@@ -9003,14 +8989,10 @@ class WeeklyPromoManagementCommandTests(StandardTestCase):
         with patch("auctions.management.commands.weekly_promo.mail.send") as mock_send:
             call_command("weekly_promo")
             # Check that email was NOT sent
-            assert not mock_send.called, "mail.send should not be called for users without valid location"
+            self.assertFalse(mock_send.called, "mail.send should not be called for users without valid location")
 
     def test_weekly_promo_respects_opt_out(self):
         """Test that weekly_promo respects user opt-out preferences."""
-        from unittest.mock import patch
-
-        from django.core.management import call_command
-
         # Opt user out of all emails
         self.promo_user.userdata.email_me_about_new_auctions = False
         self.promo_user.userdata.email_me_about_new_in_person_auctions = False
@@ -9021,14 +9003,10 @@ class WeeklyPromoManagementCommandTests(StandardTestCase):
         with patch("auctions.management.commands.weekly_promo.mail.send") as mock_send:
             call_command("weekly_promo")
             # Check that email was NOT sent
-            assert not mock_send.called, "mail.send should not be called for users who opted out"
+            self.assertFalse(mock_send.called, "mail.send should not be called for users who opted out")
 
     def test_weekly_promo_in_person_auctions(self):
         """Test that weekly_promo includes in-person auctions."""
-        from unittest.mock import patch
-
-        from django.core.management import call_command
-
         # Create an in-person auction
         in_person_auction = Auction.objects.create(
             created_by=self.user,
@@ -9055,9 +9033,11 @@ class WeeklyPromoManagementCommandTests(StandardTestCase):
         with patch("auctions.management.commands.weekly_promo.mail.send") as mock_send:
             call_command("weekly_promo")
             # Check that email was sent
-            assert mock_send.called, "mail.send should be called for in-person auctions"
+            self.assertTrue(mock_send.called, "mail.send should be called for in-person auctions")
             # Check that the in-person auction counter was incremented
             in_person_auction.refresh_from_db()
-            assert (
-                in_person_auction.weekly_promo_emails_sent > 0
-            ), "weekly_promo_emails_sent should be incremented for in-person auction"
+            self.assertGreater(
+                in_person_auction.weekly_promo_emails_sent,
+                0,
+                "weekly_promo_emails_sent should be incremented for in-person auction",
+            )
