@@ -8948,7 +8948,8 @@ class WeeklyPromoManagementCommandTests(StandardTestCase):
     def test_weekly_promo_increments_counter(self):
         """Test that weekly_promo increments the email sent counter."""
         initial_count = self.promo_auction.weekly_promo_emails_sent
-        call_command("weekly_promo")
+        with patch("auctions.management.commands.weekly_promo.mail.send"):
+            call_command("weekly_promo")
         self.promo_auction.refresh_from_db()
         # Check that counter was incremented
         self.assertGreater(
