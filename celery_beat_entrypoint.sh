@@ -22,6 +22,9 @@ while True:
     time.sleep(1)
 END
 
-echo "Starting Celery beat scheduler..."
+echo "Setting up Celery beat periodic tasks..."
 cd /home/app/web
+python manage.py setup_celery_beat
+
+echo "Starting Celery beat scheduler..."
 exec celery -A fishauctions beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler
