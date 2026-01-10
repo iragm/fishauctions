@@ -6,6 +6,7 @@ from the beat_schedule defined in fishauctions/celery.py.
 """
 
 from django.core.management.base import BaseCommand
+from django.utils import timezone
 from django_celery_beat.models import CrontabSchedule, IntervalSchedule, PeriodicTask
 
 from fishauctions.celery import app
@@ -75,13 +76,20 @@ class Command(BaseCommand):
                 schedule_type = "crontab"
 
             # Create or update the periodic task
+            defaults = {
+                "task": task_path,
+                schedule_type: schedule_obj,
+                "enabled": True,
+            }
+            
+            # Set start_time for interval-based tasks to ensure they run soon after creation
+            # Without this, tasks wait for the full interval before first execution
+            if schedule_type == "interval":
+                defaults["start_time"] = timezone.now()
+            
             task, task_created = PeriodicTask.objects.get_or_create(
                 name=task_name,
-                defaults={
-                    "task": task_path,
-                    schedule_type: schedule_obj,
-                    "enabled": True,
-                },
+                defaults=defaults,
             )
 
             if task_created:
@@ -100,6 +108,12 @@ class Command(BaseCommand):
                 elif schedule_type == "crontab" and task.crontab != schedule_obj:
                     task.crontab = schedule_obj
                     task.interval = None
+                    updated = True
+                
+                # For interval-based tasks without a start_time, set it to now
+                # This ensures tasks will run soon instead of waiting for the full interval
+                if schedule_type == "interval" and not task.start_time:
+                    task.start_time = timezone.now()
                     updated = True
 
                 if updated:
