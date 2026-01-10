@@ -25,50 +25,51 @@ class SetupCeleryBeatCommandTestCase(TestCase):
 
     def test_updates_existing_interval_tasks_without_start_time(self):
         """Test that existing interval tasks without start_time get updated."""
-        # Create an interval schedule
-        interval = IntervalSchedule.objects.create(every=3600, period=IntervalSchedule.SECONDS)
+        # Create an interval schedule matching set_user_location (7200 seconds = 2 hours)
+        interval = IntervalSchedule.objects.create(every=7200, period=IntervalSchedule.SECONDS)
 
-        # Create a task without start_time
+        # Create set_user_location task without start_time (simulating existing task)
         task = PeriodicTask.objects.create(
-            name="test_task",
-            task="auctions.tasks.endauctions",
+            name="set_user_location",
+            task="auctions.tasks.set_user_location",
             interval=interval,
             enabled=True,
         )
 
-        # Verify start_time is None
-        self.assertIsNone(task.start_time)
+        # Verify start_time is None before running setup
+        self.assertIsNone(task.start_time, "Task should not have start_time before setup")
 
         # Run the setup command
         call_command("setup_celery_beat")
 
-        # Check that the task now has start_time set
+        # Refresh and verify the task now has start_time set
         task.refresh_from_db()
-        # Note: Our command only updates tasks that are in beat_schedule
-        # Since "test_task" is not in the schedule, it won't be updated
-        # Let's check an actual task from the schedule instead
-
-        # Check set_user_location which should be in the schedule
-        set_user_location = PeriodicTask.objects.filter(name="set_user_location").first()
-        if set_user_location:
-            self.assertIsNotNone(
-                set_user_location.start_time,
-                "set_user_location should have start_time set after setup",
-            )
+        self.assertIsNotNone(
+            task.start_time,
+            "set_user_location should have start_time set after setup command runs",
+        )
 
     def test_crontab_tasks_do_not_get_start_time(self):
-        """Test that crontab-based tasks do not get start_time set."""
+        """Test that crontab-based tasks do not get start_time set by the command."""
         # Run the setup command
         call_command("setup_celery_beat")
 
-        # Check that crontab-based tasks do not have start_time set
+        # Check that crontab-based tasks exist and verify start_time behavior
         crontab_tasks = PeriodicTask.objects.filter(crontab__isnull=False, interval__isnull=True)
+        
+        # Should have at least one crontab task (e.g., email_unseen_chats, weekly_promo)
+        self.assertGreater(crontab_tasks.count(), 0, "Should have crontab-based tasks")
 
         for task in crontab_tasks:
             with self.subTest(task=task.name):
-                # Crontab tasks may or may not have start_time - we just don't set it
-                # So we don't assert anything specific here, just verify task exists
+                # Verify the task has a crontab schedule
                 self.assertIsNotNone(task.crontab, f"Crontab task {task.name} should have crontab set")
+                # Verify that our command does not set start_time for crontab tasks
+                # (start_time should be None since we only set it for interval tasks)
+                self.assertIsNone(
+                    task.start_time,
+                    f"Crontab task {task.name} should not have start_time set by setup command",
+                )
 
     def test_all_expected_tasks_created(self):
         """Test that all expected tasks from celery.py are created."""
