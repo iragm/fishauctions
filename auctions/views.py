@@ -3117,7 +3117,7 @@ class ImportFromGoogleDrive(LoginRequiredMixin, AuctionViewMixin, TemplateView, 
             bulk_add_view.auction = self.auction
 
             # Process the CSV data (this adds messages via self.request)
-            bulk_add_view.process_csv_data(csv_reader)
+            bulk_add_view.process_csv_data(csv_reader, filename="Google Drive sync")
 
             # Update the last sync time
             self.auction.last_sync_time = timezone.now()
