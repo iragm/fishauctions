@@ -14,7 +14,7 @@ amqp==5.3.1
     # via kombu
 annotated-types==0.7.0
     # via pydantic
-anyio==4.12.0
+anyio==4.12.1
     # via
     #   httpx
     #   watchfiles
@@ -50,9 +50,9 @@ bleach[css]==6.3.0
     #   -r requirements.in
     #   django-markdownfield
     #   django-summernote
-boto3==1.42.21
+boto3==1.42.25
     # via django-ses
-botocore==1.42.21
+botocore==1.42.25
     # via
     #   boto3
     #   s3transfer
@@ -129,7 +129,7 @@ defusedxml==0.7.1
     # via
     #   -r requirements.in
     #   python3-openid
-django==5.2.9
+django==5.2.10
     # via
     #   -r requirements.in
     #   channels
@@ -194,7 +194,7 @@ django-qr-code==4.2.0
     # via -r requirements.in
 django-recaptcha==4.1.0
     # via -r requirements.in
-django-ses[events]==4.5.0
+django-ses[events]==4.6.0
     # via -r requirements.in
 django-summernote==0.8.20.0
     # via -r requirements.in
@@ -301,7 +301,7 @@ propcache==0.4.1
     #   yarl
 py-ubjson==0.16.1
     # via autobahn
-py-vapid==1.9.2
+py-vapid==1.9.4
     # via pywebpush
 pyasn1==0.6.1
     # via
@@ -355,7 +355,7 @@ python3-openid==3.2.0
     # via -r requirements.in
 pytz==2025.2
     # via -r requirements.in
-pywebpush==2.1.2
+pywebpush==2.2.0
     # via django-webpush
 pyyaml==6.0.3
     # via
@@ -445,7 +445,7 @@ ua-parser-builtins==202601
     # via ua-parser
 ujson==5.11.0
     # via autobahn
-urllib3==2.6.2
+urllib3==2.6.3
     # via
     #   -r requirements.in
     #   botocore
@@ -474,11 +474,11 @@ webencodings==0.5.1
     #   cssselect2
     #   tinycss2
     #   tinyhtml5
-websockets==15.0.1
+websockets==16.0
     # via uvicorn
 yarl==1.22.0
     # via aiohttp
-zope-interface==8.1.1
+zope-interface==8.2
     # via
     #   -r requirements.in
     #   twisted

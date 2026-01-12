@@ -14,7 +14,7 @@ cfgv==3.5.0
     # via pre-commit
 distlib==0.4.0
     # via virtualenv
-filelock==3.20.2
+filelock==3.20.3
     # via virtualenv
 h11==0.16.0
     # via wsproto
@@ -36,7 +36,7 @@ pysocks==1.7.1
     # via urllib3
 pyyaml==6.0.3
     # via pre-commit
-ruff==0.14.10
+ruff==0.14.11
     # via -r requirements-test.in
 selenium==4.39.0
     # via -r requirements-test.in
@@ -52,9 +52,9 @@ trio-websocket==0.12.2
     # via selenium
 typing-extensions==4.15.0
     # via selenium
-urllib3[socks]==2.6.2
+urllib3[socks]==2.6.3
     # via selenium
-virtualenv==20.35.4
+virtualenv==20.36.1
     # via pre-commit
 websocket-client==1.9.0
     # via selenium
