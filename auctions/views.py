@@ -2866,6 +2866,15 @@ class BulkAddUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView, ContextMi
                         if is_admin_field_exists:
                             existing_tos.is_admin = is_admin
                         existing_tos.save()
+                        # Log the user update in auction history
+                        history_action = f"Updated user {existing_tos.name or email} via CSV import"
+                        if filename:
+                            history_action += f" from {filename}"
+                        self.auction.create_history(
+                            applies_to="USERS",
+                            action=history_action,
+                            user=self.request.user,
+                        )
                     else:
                         logger.debug("CSV import adding %s", name)
                         if bidder_number:

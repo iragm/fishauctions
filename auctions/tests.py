@@ -2178,6 +2178,57 @@ class CSVImportTests(StandardTestCase):
         self.assertEqual(existing_tos.memo, "Updated memo")
         self.assertTrue(existing_tos.is_admin)
 
+    def test_csv_import_update_creates_history(self):
+        """Test that updating a user via CSV creates an individual history entry"""
+        import csv
+        from io import StringIO
+
+        # Create an existing user
+        existing_tos = AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            email="update@example.com",
+            name="User to Update",
+            memo="",
+        )
+
+        # Get initial history count
+        initial_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").count()
+
+        # Create CSV content to update the user
+        csv_buffer = StringIO()
+        writer = csv.writer(csv_buffer)
+        writer.writerow(["email", "name", "memo"])
+        writer.writerow(["update@example.com", "User to Update", "New memo from CSV"])
+
+        csv_file = SimpleUploadedFile("update_users.csv", csv_buffer.getvalue().encode("utf-8"), content_type="text/csv")
+
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+
+        # Import CSV
+        self.client.post(
+            reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
+            {"csv_file": csv_file},
+        )
+
+        # Check that user was updated
+        existing_tos.refresh_from_db()
+        self.assertEqual(existing_tos.memo, "New memo from CSV")
+
+        # Check that history was created for the update (should be 2 new entries: summary + individual update)
+        new_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").count()
+        self.assertEqual(new_count, initial_count + 2)
+
+        # Verify there's an individual history entry for the update
+        update_history = AuctionHistory.objects.filter(
+            auction=self.online_auction,
+            applies_to="USERS",
+            action__contains="Updated user"
+        ).latest("timestamp")
+        self.assertIn("User to Update", update_history.action)
+        self.assertIn("update_users.csv", update_history.action)
+
     def test_csv_import_records_filename_in_history(self):
         """Test that CSV import records the filename in auction history"""
         import csv
