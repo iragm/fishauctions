@@ -24,7 +24,7 @@ def remove_duplicate_subscriptions(apps, schema_editor):
         )
 
         # Keep the first (most recent) and delete the rest
-        subscriptions_to_delete = subscriptions[1:]
+        subscriptions_to_delete = list(subscriptions[1:])
         for sub in subscriptions_to_delete:
             sub.delete()
 
