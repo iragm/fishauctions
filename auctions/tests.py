@@ -2178,6 +2178,39 @@ class CSVImportTests(StandardTestCase):
         self.assertEqual(existing_tos.memo, "Updated memo")
         self.assertTrue(existing_tos.is_admin)
 
+    def test_csv_import_records_filename_in_history(self):
+        """Test that CSV import records the filename in auction history"""
+        import csv
+        from io import StringIO
+
+        # Create CSV content
+        csv_buffer = StringIO()
+        writer = csv.writer(csv_buffer)
+        writer.writerow(["email", "name"])
+        writer.writerow(["newuser@example.com", "New User"])
+
+        csv_file = SimpleUploadedFile("users_import.csv", csv_buffer.getvalue().encode("utf-8"), content_type="text/csv")
+
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+
+        # Get initial history count
+        initial_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").count()
+
+        # Import CSV
+        self.client.post(
+            reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
+            {"csv_file": csv_file},
+        )
+
+        # Check that history was created with filename
+        new_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").count()
+        self.assertEqual(new_count, initial_count + 1)
+
+        history = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").latest("timestamp")
+        self.assertIn("users_import.csv", history.action)
+        self.assertIn("1 users added", history.action)
+
 
 class GoogleDriveImportTests(StandardTestCase):
     """Test Google Drive import functionality"""
@@ -5895,6 +5928,47 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         # Check that lot was not created
         new_lot = Lot.objects.filter(lot_name="Should Not Create", auction=self.online_auction).first()
         assert new_lot is None
+
+    def test_import_lots_csv_records_filename_in_history(self):
+        """CSV import records the filename in auction history"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("import_lots_from_csv", kwargs={"slug": self.online_auction.slug})
+
+        # Set name and email on TOS so we can find it
+        self.online_tos.name = "Test User"
+        self.online_tos.email = "testuser@example.com"
+        self.online_tos.save()
+
+        # Create CSV content
+        csv_content = (
+            "Name,Email,Lot Name,Quantity,Reserve Price\n"
+            f"{self.online_tos.name},{self.online_tos.email},History Test Lot,3,15\n"
+        )
+
+        from io import BytesIO
+
+        csv_file = BytesIO(csv_content.encode("utf-8"))
+        csv_file.name = "lots_import.csv"
+
+        # Get initial history count
+        initial_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="LOTS").count()
+
+        response = self.client.post(url, {"csv_file": csv_file})
+
+        # Should redirect successfully
+        assert response.status_code == 200
+
+        # Check that lot was created
+        new_lot = Lot.objects.filter(lot_name="History Test Lot", auction=self.online_auction).first()
+        assert new_lot is not None
+
+        # Check that history was created with filename
+        new_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="LOTS").count()
+        assert new_count == initial_count + 1
+
+        history = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="LOTS").latest("timestamp")
+        assert "lots_import.csv" in history.action
+        assert "1 lots created" in history.action
 
 
 class SquarePaymentTests(StandardTestCase):
