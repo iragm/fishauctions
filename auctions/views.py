@@ -9929,16 +9929,16 @@ class LotChatSubscribe(View, LoginRequiredMixin):
             msg = f"No lot found with key {lot}"
             raise Http404(msg)
         else:
-            subscription, created = ChatSubscription.objects.get_or_create(
-                user=request.user,
-                lot=lot,
-            )
             unsubscribed = request.POST["unsubscribed"]
             if unsubscribed == "true":  # classic javascript, again
-                subscription.unsubscribed = True
+                unsubscribed_value = True
             else:
-                subscription.unsubscribed = False
-            subscription.save()
+                unsubscribed_value = False
+            subscription, created = ChatSubscription.objects.update_or_create(
+                user=request.user,
+                lot=lot,
+                defaults={"unsubscribed": unsubscribed_value},
+            )
         return JsonResponse({"unsubscribed": subscription.unsubscribed})
 
 

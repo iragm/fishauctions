@@ -972,6 +972,46 @@ class ChatSubscriptionTests(TestCase):
         assert lot_owner_data.other_lot_subscriptions_count == 0
         assert lot_owner_data.unnotified_subscriptions_count == 0
 
+    def test_lot_chat_subscribe_with_duplicates(self):
+        """Test that LotChatSubscribe API handles duplicate ChatSubscription records"""
+        # Create a user and lot
+        user = User.objects.create_user(username="testuser", password="testpass")
+        lot = Lot.objects.create(
+            lot_name="Test lot for duplicates",
+            date_end=timezone.now() + datetime.timedelta(days=30),
+            reserve_price=5,
+            user=user,
+            quantity=1,
+        )
+
+        # Create duplicate ChatSubscription records (simulating the bug scenario)
+        ChatSubscription.objects.create(lot=lot, user=user, unsubscribed=False)
+        ChatSubscription.objects.create(lot=lot, user=user, unsubscribed=False)
+
+        # Verify duplicates exist
+        assert ChatSubscription.objects.filter(lot=lot, user=user).count() == 2
+
+        # Test the API endpoint with duplicates - it should handle gracefully
+        client = Client()
+        client.login(username="testuser", password="testpass")
+
+        # Subscribe request (unsubscribed=false)
+        response = client.post("/api/lot/chat_subscribe", {"lot": str(lot.pk), "unsubscribed": "false"})
+        assert response.status_code == 200
+        data = json.loads(response.content)
+        assert data["unsubscribed"] is False
+
+        # Unsubscribe request (unsubscribed=true)
+        response = client.post("/api/lot/chat_subscribe", {"lot": str(lot.pk), "unsubscribed": "true"})
+        assert response.status_code == 200
+        data = json.loads(response.content)
+        assert data["unsubscribed"] is True
+
+        # Verify the subscription status is updated
+        # After update_or_create, at least one subscription should have unsubscribed=True
+        subscriptions = ChatSubscription.objects.filter(lot=lot, user=user)
+        assert subscriptions.filter(unsubscribed=True).exists()
+
 
 class InvoiceModelTests(StandardTestCase):
     def test_invoices(self):
