@@ -2843,38 +2843,43 @@ class BulkAddUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView, ContextMi
                     existing_tos = self.auction.find_user(name="", email=email)
                     if existing_tos:
                         logger.debug("CSV import updating %s", email)
-                        total_updated += 1
-                        if phone:
+                        # Track if any field actually changed
+                        changed = False
+                        if phone and existing_tos.phone_number != phone[:20]:
                             existing_tos.phone_number = phone[:20]
-                        if address:
+                            changed = True
+                        if address and existing_tos.address != address[:500]:
                             existing_tos.address = address[:500]
-                        if is_club_member_field_exists:
+                            changed = True
+                        if is_club_member_field_exists and existing_tos.is_club_member != is_club_member:
                             existing_tos.is_club_member = is_club_member
-                        if is_bidding_allowed_fields_exists:
+                            changed = True
+                        if is_bidding_allowed_fields_exists and existing_tos.bidding_allowed != bidding_allowed:
                             existing_tos.bidding_allowed = bidding_allowed
-                        if name:
+                            changed = True
+                        if name and existing_tos.name != name[:181]:
                             existing_tos.name = name[:181]
+                            changed = True
                         if bidder_number:
                             if (
                                 not AuctionTOS.objects.filter(auction=self.auction, bidder_number=bidder_number)
                                 .exclude(pk=existing_tos.pk)
                                 .first()
                             ):
-                                existing_tos.bidder_number = bidder_number[:20]
+                                if existing_tos.bidder_number != bidder_number[:20]:
+                                    existing_tos.bidder_number = bidder_number[:20]
+                                    changed = True
                         if memo_field_exists:
-                            existing_tos.memo = memo[:500] if memo else ""
-                        if is_admin_field_exists:
+                            new_memo = memo[:500] if memo else ""
+                            if existing_tos.memo != new_memo:
+                                existing_tos.memo = new_memo
+                                changed = True
+                        if is_admin_field_exists and existing_tos.is_admin != is_admin:
                             existing_tos.is_admin = is_admin
-                        existing_tos.save()
-                        # Log the user update in auction history
-                        history_action = f"Updated user {existing_tos.name or email} via CSV import"
-                        if filename:
-                            history_action += f" from {filename}"
-                        self.auction.create_history(
-                            applies_to="USERS",
-                            action=history_action,
-                            user=self.request.user,
-                        )
+                            changed = True
+                        if changed:
+                            existing_tos.save()
+                            total_updated += 1
                     else:
                         logger.debug("CSV import adding %s", name)
                         if bidder_number:
@@ -2899,15 +2904,33 @@ class BulkAddUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView, ContextMi
                     total_skipped += 1
             if error:
                 messages.error(self.request, error)
-            msg = f"{total_tos} users added"
-            if filename:
-                msg += f" from {filename}"
-            self.auction.create_history(applies_to="USERS", action=msg, user=self.request.user)
+            # Create history entry only if users were added or updated
+            if total_tos > 0 or total_updated > 0:
+                msg_parts = []
+                if total_tos > 0:
+                    msg_parts.append(f"{total_tos} users added")
+                if total_updated > 0:
+                    msg_parts.append(f"{total_updated} users updated")
+                msg = ", ".join(msg_parts)
+                if filename:
+                    msg += f" from {filename}"
+                self.auction.create_history(applies_to="USERS", action=msg, user=self.request.user)
+            # Prepare user-facing message
+            msg = ""
+            if total_tos > 0:
+                msg = f"{total_tos} users added"
             if total_updated:
-                msg += f", {total_updated} users are already in this auction (matched by email) and were updated"
+                if msg:
+                    msg += f", {total_updated} users are already in this auction (matched by email) and were updated"
+                else:
+                    msg = f"{total_updated} users were updated"
             if total_skipped:
-                msg += f", {total_skipped} users were skipped because they did not contain an email address"
-            messages.info(self.request, msg)
+                if msg:
+                    msg += f", {total_skipped} users were skipped because they did not contain an email address"
+                else:
+                    msg = f"{total_skipped} users were skipped because they did not contain an email address"
+            if msg:
+                messages.info(self.request, msg)
             url = reverse("auction_tos_list", kwargs={"slug": self.auction.slug})
             response = HttpResponse(status=200)
             response["HX-Redirect"] = url

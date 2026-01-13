@@ -2179,7 +2179,7 @@ class CSVImportTests(StandardTestCase):
         self.assertTrue(existing_tos.is_admin)
 
     def test_csv_import_update_creates_history(self):
-        """Test that updating a user via CSV creates an individual history entry"""
+        """Test that updating a user via CSV creates a summary history entry"""
         import csv
         from io import StringIO
 
@@ -2218,16 +2218,56 @@ class CSVImportTests(StandardTestCase):
         existing_tos.refresh_from_db()
         self.assertEqual(existing_tos.memo, "New memo from CSV")
 
-        # Check that history was created for the update (should be 2 new entries: summary + individual update)
+        # Check that history was created for the update (should be 1 summary entry)
         new_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").count()
-        self.assertEqual(new_count, initial_count + 2)
+        self.assertEqual(new_count, initial_count + 1)
 
-        # Verify there's an individual history entry for the update
+        # Verify the summary history entry contains the update count and filename
         update_history = AuctionHistory.objects.filter(
-            auction=self.online_auction, applies_to="USERS", action__contains="Updated user"
+            auction=self.online_auction, applies_to="USERS"
         ).latest("timestamp")
-        self.assertIn("User to Update", update_history.action)
+        self.assertIn("1 users updated", update_history.action)
         self.assertIn("update_users.csv", update_history.action)
+
+    def test_csv_import_no_change_no_update(self):
+        """Test that users are only counted as updated if they actually change"""
+        import csv
+        from io import StringIO
+
+        # Create an existing user with memo already set
+        existing_tos = AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            email="nochange@example.com",
+            name="No Change User",
+            memo="Existing memo",
+        )
+
+        # Get initial history count
+        initial_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").count()
+
+        # Create CSV content with same data (no actual change)
+        csv_buffer = StringIO()
+        writer = csv.writer(csv_buffer)
+        writer.writerow(["email", "name", "memo"])
+        writer.writerow(["nochange@example.com", "No Change User", "Existing memo"])
+
+        csv_file = SimpleUploadedFile(
+            "no_change.csv", csv_buffer.getvalue().encode("utf-8"), content_type="text/csv"
+        )
+
+        # Login as admin
+        self.client.login(username="admin_user", password="testpassword")
+
+        # Import CSV
+        self.client.post(
+            reverse("bulk_add_users", kwargs={"slug": self.online_auction.slug}),
+            {"csv_file": csv_file},
+        )
+
+        # Check that no history was created (no users added, no users actually updated)
+        new_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").count()
+        self.assertEqual(new_count, initial_count)
 
     def test_csv_import_records_filename_in_history(self):
         """Test that CSV import records the filename in auction history"""
