@@ -2201,7 +2201,9 @@ class CSVImportTests(StandardTestCase):
         writer.writerow(["email", "name", "memo"])
         writer.writerow(["update@example.com", "User to Update", "New memo from CSV"])
 
-        csv_file = SimpleUploadedFile("update_users.csv", csv_buffer.getvalue().encode("utf-8"), content_type="text/csv")
+        csv_file = SimpleUploadedFile(
+            "update_users.csv", csv_buffer.getvalue().encode("utf-8"), content_type="text/csv"
+        )
 
         # Login as admin
         self.client.login(username="admin_user", password="testpassword")
@@ -2222,9 +2224,7 @@ class CSVImportTests(StandardTestCase):
 
         # Verify there's an individual history entry for the update
         update_history = AuctionHistory.objects.filter(
-            auction=self.online_auction,
-            applies_to="USERS",
-            action__contains="Updated user"
+            auction=self.online_auction, applies_to="USERS", action__contains="Updated user"
         ).latest("timestamp")
         self.assertIn("User to Update", update_history.action)
         self.assertIn("update_users.csv", update_history.action)
@@ -2240,7 +2240,9 @@ class CSVImportTests(StandardTestCase):
         writer.writerow(["email", "name"])
         writer.writerow(["newuser@example.com", "New User"])
 
-        csv_file = SimpleUploadedFile("users_import.csv", csv_buffer.getvalue().encode("utf-8"), content_type="text/csv")
+        csv_file = SimpleUploadedFile(
+            "users_import.csv", csv_buffer.getvalue().encode("utf-8"), content_type="text/csv"
+        )
 
         # Login as admin
         self.client.login(username="admin_user", password="testpassword")

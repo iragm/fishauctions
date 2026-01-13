@@ -2926,7 +2926,7 @@ class BulkAddUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView, ContextMi
         try:
             csv_file.seek(0)
             csv_reader = csv.DictReader(TextIOWrapper(csv_file.file))
-            filename = getattr(csv_file, 'name', None)
+            filename = getattr(csv_file, "name", None)
             return self.process_csv_data(csv_reader, filename=filename)
         except (UnicodeDecodeError, ValueError) as e:
             messages.error(
@@ -3707,7 +3707,7 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
         try:
             csv_file.seek(0)
             csv_reader = csv.DictReader(TextIOWrapper(csv_file.file))
-            filename = getattr(csv_file, 'name', None)
+            filename = getattr(csv_file, "name", None)
             return self.process_csv_data(csv_reader, filename=filename)
         except (UnicodeDecodeError, ValueError) as e:
             messages.error(request, f"Unable to read file. Make sure this is a valid UTF-8 CSV file. Error was: {e}")
