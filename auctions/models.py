@@ -6817,11 +6817,6 @@ class ChatSubscription(models.Model):
     last_seen = models.DateTimeField(blank=True, null=True)
     unsubscribed = models.BooleanField(default=False)
 
-    class Meta:
-        constraints = [
-            models.UniqueConstraint(fields=["user", "lot"], name="unique_user_lot_subscription"),
-        ]
-
     def save(self, *args, **kwargs):
         if not self.last_notification_sent:
             self.last_notification_sent = timezone.now()
