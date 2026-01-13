@@ -2738,7 +2738,7 @@ class BulkAddUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView, ContextMi
         context = self.get_context_data(**kwargs)
         return self.render_to_response(context)
 
-    def process_csv_data(self, csv_reader, *args, **kwargs):
+    def process_csv_data(self, csv_reader, filename=None, *args, **kwargs):
         """Process CSV data from a DictReader object and add/update users"""
 
         def extract_info(row, field_name_list, default_response=""):
@@ -2843,29 +2843,43 @@ class BulkAddUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView, ContextMi
                     existing_tos = self.auction.find_user(name="", email=email)
                     if existing_tos:
                         logger.debug("CSV import updating %s", email)
-                        total_updated += 1
-                        if phone:
+                        # Track if any field actually changed
+                        changed = False
+                        if phone and existing_tos.phone_number != phone[:20]:
                             existing_tos.phone_number = phone[:20]
-                        if address:
+                            changed = True
+                        if address and existing_tos.address != address[:500]:
                             existing_tos.address = address[:500]
-                        if is_club_member_field_exists:
+                            changed = True
+                        if is_club_member_field_exists and existing_tos.is_club_member != is_club_member:
                             existing_tos.is_club_member = is_club_member
-                        if is_bidding_allowed_fields_exists:
+                            changed = True
+                        if is_bidding_allowed_fields_exists and existing_tos.bidding_allowed != bidding_allowed:
                             existing_tos.bidding_allowed = bidding_allowed
-                        if name:
+                            changed = True
+                        if name and existing_tos.name != name[:181]:
                             existing_tos.name = name[:181]
+                            changed = True
                         if bidder_number:
                             if (
                                 not AuctionTOS.objects.filter(auction=self.auction, bidder_number=bidder_number)
                                 .exclude(pk=existing_tos.pk)
                                 .first()
                             ):
-                                existing_tos.bidder_number = bidder_number[:20]
+                                if existing_tos.bidder_number != bidder_number[:20]:
+                                    existing_tos.bidder_number = bidder_number[:20]
+                                    changed = True
                         if memo_field_exists:
-                            existing_tos.memo = memo[:500] if memo else ""
-                        if is_admin_field_exists:
+                            new_memo = memo[:500] if memo else ""
+                            if existing_tos.memo != new_memo:
+                                existing_tos.memo = new_memo
+                                changed = True
+                        if is_admin_field_exists and existing_tos.is_admin != is_admin:
                             existing_tos.is_admin = is_admin
-                        existing_tos.save()
+                            changed = True
+                        if changed:
+                            existing_tos.save()
+                            total_updated += 1
                     else:
                         logger.debug("CSV import adding %s", name)
                         if bidder_number:
@@ -2890,13 +2904,33 @@ class BulkAddUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView, ContextMi
                     total_skipped += 1
             if error:
                 messages.error(self.request, error)
-            msg = f"{total_tos} users added"
-            self.auction.create_history(applies_to="USERS", action=msg, user=self.request.user)
+            # Create history entry only if users were added or updated
+            if total_tos > 0 or total_updated > 0:
+                msg_parts = []
+                if total_tos > 0:
+                    msg_parts.append(f"{total_tos} users added")
+                if total_updated > 0:
+                    msg_parts.append(f"{total_updated} users updated")
+                msg = ", ".join(msg_parts)
+                if filename:
+                    msg += f" from {filename}"
+                self.auction.create_history(applies_to="USERS", action=msg, user=self.request.user)
+            # Prepare user-facing message
+            msg = ""
+            if total_tos > 0:
+                msg = f"{total_tos} users added"
             if total_updated:
-                msg += f", {total_updated} users are already in this auction (matched by email) and were updated"
+                if msg:
+                    msg += f", {total_updated} users are already in this auction (matched by email) and were updated"
+                else:
+                    msg = f"{total_updated} users were updated"
             if total_skipped:
-                msg += f", {total_skipped} users were skipped because they did not contain an email address"
-            messages.info(self.request, msg)
+                if msg:
+                    msg += f", {total_skipped} users were skipped because they did not contain an email address"
+                else:
+                    msg = f"{total_skipped} users were skipped because they did not contain an email address"
+            if msg:
+                messages.info(self.request, msg)
             url = reverse("auction_tos_list", kwargs={"slug": self.auction.slug})
             response = HttpResponse(status=200)
             response["HX-Redirect"] = url
@@ -2915,7 +2949,8 @@ class BulkAddUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView, ContextMi
         try:
             csv_file.seek(0)
             csv_reader = csv.DictReader(TextIOWrapper(csv_file.file))
-            return self.process_csv_data(csv_reader)
+            filename = getattr(csv_file, "name", None)
+            return self.process_csv_data(csv_reader, filename=filename)
         except (UnicodeDecodeError, ValueError) as e:
             messages.error(
                 self.request, f"Unable to read file.  Make sure this is a valid UTF-8 CSV file.  Error was: {e}"
@@ -3114,7 +3149,7 @@ class ImportFromGoogleDrive(LoginRequiredMixin, AuctionViewMixin, TemplateView, 
             bulk_add_view.auction = self.auction
 
             # Process the CSV data (this adds messages via self.request)
-            bulk_add_view.process_csv_data(csv_reader)
+            bulk_add_view.process_csv_data(csv_reader, filename="Google Drive sync")
 
             # Update the last sync time
             self.auction.last_sync_time = timezone.now()
@@ -3695,7 +3730,8 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
         try:
             csv_file.seek(0)
             csv_reader = csv.DictReader(TextIOWrapper(csv_file.file))
-            return self.process_csv_data(csv_reader)
+            filename = getattr(csv_file, "name", None)
+            return self.process_csv_data(csv_reader, filename=filename)
         except (UnicodeDecodeError, ValueError) as e:
             messages.error(request, f"Unable to read file. Make sure this is a valid UTF-8 CSV file. Error was: {e}")
             url = reverse("auction_lot_list", kwargs={"slug": self.auction.slug})
@@ -3703,7 +3739,7 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
             response["HX-Redirect"] = url
             return response
 
-    def process_csv_data(self, csv_reader):
+    def process_csv_data(self, csv_reader, filename=None):
         """Process CSV data and create/update lots"""
 
         def extract_info(row, field_name_list, default_response=""):
@@ -3870,9 +3906,12 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
                     )
                     users_created += 1
                     # Update auction history
+                    history_action = f"Added user {name} via CSV import"
+                    if filename:
+                        history_action += f" from {filename}"
                     self.auction.create_history(
                         applies_to="USERS",
-                        action=f"Added user {name} via CSV import",
+                        action=history_action,
                         user=self.request.user,
                     )
 
@@ -3944,6 +3983,8 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
                 history_msg = f"CSV import: {lots_created} lots created, {lots_updated} lots updated"
                 if users_created:
                     history_msg += f", {users_created} users added"
+                if filename:
+                    history_msg += f" from {filename}"
                 self.auction.create_history(applies_to="LOTS", action=history_msg, user=self.request.user)
 
             url = reverse("auction_lot_list", kwargs={"slug": self.auction.slug})
