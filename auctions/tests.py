@@ -2223,9 +2223,9 @@ class CSVImportTests(StandardTestCase):
         self.assertEqual(new_count, initial_count + 1)
 
         # Verify the summary history entry contains the update count and filename
-        update_history = AuctionHistory.objects.filter(
-            auction=self.online_auction, applies_to="USERS"
-        ).latest("timestamp")
+        update_history = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").latest(
+            "timestamp"
+        )
         self.assertIn("1 users updated", update_history.action)
         self.assertIn("update_users.csv", update_history.action)
 
@@ -2235,7 +2235,7 @@ class CSVImportTests(StandardTestCase):
         from io import StringIO
 
         # Create an existing user with memo already set
-        existing_tos = AuctionTOS.objects.create(
+        AuctionTOS.objects.create(
             auction=self.online_auction,
             pickup_location=self.location,
             email="nochange@example.com",
@@ -2252,9 +2252,7 @@ class CSVImportTests(StandardTestCase):
         writer.writerow(["email", "name", "memo"])
         writer.writerow(["nochange@example.com", "No Change User", "Existing memo"])
 
-        csv_file = SimpleUploadedFile(
-            "no_change.csv", csv_buffer.getvalue().encode("utf-8"), content_type="text/csv"
-        )
+        csv_file = SimpleUploadedFile("no_change.csv", csv_buffer.getvalue().encode("utf-8"), content_type="text/csv")
 
         # Login as admin
         self.client.login(username="admin_user", password="testpassword")
