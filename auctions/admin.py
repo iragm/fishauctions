@@ -29,6 +29,7 @@ from .models import (
     PickupLocation,
     Product,
     SearchHistory,
+    SquareCustomerCard,
     UserBan,
     UserData,
     UserInterestCategory,
@@ -759,3 +760,26 @@ admin.site.register(AuctionTOS, AuctionTOSAdmin)
 admin.site.register(PageView, PageViewAdmin)
 admin.site.register(AuctionCampaign, AuctionCampaignAdmin)
 admin.site.register(AuctionHistory, AuctionHistoryAdmin)
+
+
+@admin.register(SquareCustomerCard)
+class SquareCustomerCardAdmin(admin.ModelAdmin):
+    """Admin interface for Square customer card records"""
+
+    list_display = ("user", "square_seller", "card_display", "is_active", "created_on", "updated_on")
+    list_filter = ("is_active", "card_brand", "created_on")
+    search_fields = ("user__username", "user__email", "square_seller__user__username", "card_last_4")
+    readonly_fields = ("square_customer_id", "square_card_id", "created_on", "updated_on")
+    ordering = ("-created_on",)
+
+    def card_display(self, obj):
+        """Display card information"""
+        return obj.get_card_display()
+
+    card_display.short_description = "Card"
+
+    def get_readonly_fields(self, request, obj=None):
+        """Make encrypted fields readonly"""
+        if obj:  # Editing existing object
+            return self.readonly_fields + ("user", "square_seller")
+        return self.readonly_fields

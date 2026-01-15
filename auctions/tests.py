@@ -9209,3 +9209,177 @@ class WeeklyPromoManagementCommandTests(StandardTestCase):
                 0,
                 "weekly_promo_emails_sent should be incremented for in-person auction",
             )
+
+
+class SquareCustomerCardTests(StandardTestCase):
+    """Tests for Square customer card-on-file functionality"""
+
+    def setUp(self):
+        super().setUp()
+        # Create a SquareSeller for the admin user
+        from auctions.models import SquareSeller
+
+        self.square_seller = SquareSeller.objects.create(
+            user=self.admin_user,
+            square_merchant_id="test_merchant_123",
+            access_token="test_access_token",
+            refresh_token="test_refresh_token",
+            currency="USD",
+            payer_email="seller@example.com",
+        )
+
+    def test_square_customer_card_model_creation(self):
+        """Test creating a SquareCustomerCard record"""
+        from auctions.models import SquareCustomerCard
+
+        customer_card = SquareCustomerCard.objects.create(
+            user=self.user,
+            square_seller=self.square_seller,
+            square_customer_id="cust_test_123",
+            square_card_id="card_test_456",
+            card_last_4="4242",
+            card_brand="VISA",
+            card_exp_month=12,
+            card_exp_year=2025,
+            is_active=True,
+        )
+
+        self.assertEqual(customer_card.user, self.user)
+        self.assertEqual(customer_card.square_seller, self.square_seller)
+        self.assertEqual(customer_card.card_last_4, "4242")
+        self.assertEqual(customer_card.card_brand, "VISA")
+        self.assertTrue(customer_card.is_active)
+
+    def test_square_customer_card_unique_constraint(self):
+        """Test that only one card per user per seller is allowed"""
+        from auctions.models import SquareCustomerCard
+
+        # Create first card
+        SquareCustomerCard.objects.create(
+            user=self.user,
+            square_seller=self.square_seller,
+            square_customer_id="cust_test_123",
+            is_active=True,
+        )
+
+        # Attempt to create duplicate should fail
+        with self.assertRaises(Exception):  # IntegrityError
+            SquareCustomerCard.objects.create(
+                user=self.user,
+                square_seller=self.square_seller,
+                square_customer_id="cust_test_456",
+                is_active=True,
+            )
+
+    def test_square_customer_card_display(self):
+        """Test card display methods"""
+        from auctions.models import SquareCustomerCard
+
+        # Card with full info
+        card_with_info = SquareCustomerCard.objects.create(
+            user=self.user,
+            square_seller=self.square_seller,
+            square_customer_id="cust_test_123",
+            square_card_id="card_test_456",
+            card_last_4="4242",
+            card_brand="VISA",
+            is_active=True,
+        )
+
+        self.assertEqual(card_with_info.get_card_display(), "VISA •••• 4242")
+        self.assertIn("VISA ending in 4242", str(card_with_info))
+
+        # Card without details
+        card_without_info = SquareCustomerCard.objects.create(
+            user=self.user_with_no_lots,
+            square_seller=self.square_seller,
+            square_customer_id="cust_test_789",
+            is_active=True,
+        )
+
+        self.assertEqual(card_without_info.get_card_display(), "Card on file")
+
+    def test_square_customer_card_expiration_check(self):
+        """Test card expiration checking"""
+        from auctions.models import SquareCustomerCard
+
+        # Create expired card
+        expired_card = SquareCustomerCard.objects.create(
+            user=self.user,
+            square_seller=self.square_seller,
+            square_customer_id="cust_test_123",
+            square_card_id="card_test_456",
+            card_last_4="4242",
+            card_brand="VISA",
+            card_exp_month=1,
+            card_exp_year=2020,  # Expired
+            is_active=True,
+        )
+
+        self.assertTrue(expired_card.is_expired())
+
+        # Create valid card
+        valid_card = SquareCustomerCard.objects.create(
+            user=self.user_with_no_lots,
+            square_seller=self.square_seller,
+            square_customer_id="cust_test_789",
+            square_card_id="card_test_101",
+            card_last_4="5555",
+            card_brand="MASTERCARD",
+            card_exp_month=12,
+            card_exp_year=2030,  # Future
+            is_active=True,
+        )
+
+        self.assertFalse(valid_card.is_expired())
+
+        # Card without expiration date
+        card_no_exp = SquareCustomerCard.objects.create(
+            user=self.admin_user,
+            square_seller=self.square_seller,
+            square_customer_id="cust_test_999",
+            is_active=True,
+        )
+
+        self.assertFalse(card_no_exp.is_expired())
+
+    def test_square_customer_card_related_names(self):
+        """Test that related names work correctly"""
+        from auctions.models import SquareCustomerCard
+
+        # Create card
+        SquareCustomerCard.objects.create(
+            user=self.user,
+            square_seller=self.square_seller,
+            square_customer_id="cust_test_123",
+            is_active=True,
+        )
+
+        # Access via user
+        user_cards = self.user.square_cards.all()
+        self.assertEqual(user_cards.count(), 1)
+
+        # Access via seller
+        seller_cards = self.square_seller.customer_cards.all()
+        self.assertEqual(seller_cards.count(), 1)
+
+    def test_square_customer_card_admin_display(self):
+        """Test admin display functions"""
+        from auctions.models import SquareCustomerCard
+
+        card = SquareCustomerCard.objects.create(
+            user=self.user,
+            square_seller=self.square_seller,
+            square_customer_id="cust_test_123",
+            square_card_id="card_test_456",
+            card_last_4="4242",
+            card_brand="VISA",
+            is_active=True,
+        )
+
+        # Test that admin can be imported and works
+        from auctions.admin import SquareCustomerCardAdmin
+
+        admin_instance = SquareCustomerCardAdmin(SquareCustomerCard, None)
+        display = admin_instance.card_display(card)
+        self.assertEqual(display, "VISA •••• 4242")

@@ -6499,6 +6499,261 @@ class SquareSeller(models.Model):
             logger.exception("Square refund failed for payment %s: %s", payment.external_id, error_msg)
             return f"Square refund failed: {error_msg}"
 
+    def get_or_create_customer(self, user, email=None):
+        """Get or create a Square customer for a user
+
+        Args:
+            user: Django User object
+            email: Optional email address for the customer
+
+        Returns:
+            tuple: (customer_id, error_message) - customer_id is None if error occurs
+        """
+        client = self.get_square_client()
+        if not client:
+            return None, "Failed to initialize Square client"
+
+        try:
+            # Check if we already have a customer record
+            from auctions.models import SquareCustomerCard
+
+            customer_card = SquareCustomerCard.objects.filter(user=user, square_seller=self).first()
+            if customer_card and customer_card.square_customer_id:
+                # Verify customer still exists in Square
+                try:
+                    client.customers.retrieve(customer_card.square_customer_id)
+                    return customer_card.square_customer_id, None
+                except Exception:
+                    # Customer no longer exists, will create new one
+                    logger.warning(
+                        "Existing Square customer %s not found, creating new", customer_card.square_customer_id
+                    )
+
+            # Create new customer
+            customer_data = {
+                "given_name": user.first_name[:50] if user.first_name else None,
+                "family_name": user.last_name[:50] if user.last_name else None,
+                "email_address": email or user.email,
+                "reference_id": f"user_{user.pk}",
+            }
+
+            # Remove None values
+            customer_data = {k: v for k, v in customer_data.items() if v is not None}
+
+            result = client.customers.create(
+                idempotency_key=str(uuid.uuid4()),
+                **customer_data,
+            )
+
+            customer_id = getattr(result, "id", None)
+            if not customer_id:
+                return None, "Failed to get customer ID from Square response"
+
+            # Save or update customer record
+            if customer_card:
+                customer_card.square_customer_id = customer_id
+                customer_card.save()
+            else:
+                SquareCustomerCard.objects.create(
+                    user=user, square_seller=self, square_customer_id=customer_id, is_active=True
+                )
+
+            logger.info("Created Square customer %s for user %s", customer_id, user.pk)
+            return customer_id, None
+
+        except Exception as e:
+            error_msg = "Failed to create Square customer"
+            if hasattr(e, "body") and isinstance(e.body, dict):
+                errors = e.body.get("errors", [])
+                if errors and isinstance(errors, list) and len(errors) > 0:
+                    error_detail = errors[0].get("detail", "")
+                    if error_detail:
+                        error_msg = f"Square error: {error_detail}"
+            logger.exception("Error creating Square customer for user %s: %s", user.pk, error_msg)
+            return None, error_msg
+
+    def save_card_on_file(self, user, card_nonce, email=None):
+        """Save a card on file for a user using a card nonce from Square Web Payments SDK
+
+        Args:
+            user: Django User object
+            card_nonce: Card nonce from Square Web Payments SDK
+            email: Optional email address
+
+        Returns:
+            tuple: (card_id, error_message) - card_id is None if error occurs
+        """
+        client = self.get_square_client()
+        if not client:
+            return None, "Failed to initialize Square client"
+
+        try:
+            # Get or create customer
+            customer_id, error = self.get_or_create_customer(user, email)
+            if error:
+                return None, error
+
+            # Create card using the nonce
+            result = client.cards.create(
+                idempotency_key=str(uuid.uuid4()),
+                source_id=card_nonce,
+                card={"customer_id": customer_id},
+            )
+
+            card = getattr(result, "card", None)
+            if not card:
+                return None, "Failed to get card from Square response"
+
+            card_id = getattr(card, "id", None)
+            if not card_id:
+                return None, "Failed to get card ID from Square response"
+
+            # Extract card metadata
+            card_brand = getattr(card, "card_brand", None)
+            card_last_4 = getattr(card, "last_4", None)
+            exp_month = getattr(card, "exp_month", None)
+            exp_year = getattr(card, "exp_year", None)
+
+            # Update customer card record
+            from auctions.models import SquareCustomerCard
+
+            customer_card = SquareCustomerCard.objects.filter(user=user, square_seller=self).first()
+            if customer_card:
+                customer_card.square_card_id = card_id
+                customer_card.card_last_4 = card_last_4
+                customer_card.card_brand = card_brand
+                customer_card.card_exp_month = exp_month
+                customer_card.card_exp_year = exp_year
+                customer_card.is_active = True
+                customer_card.save()
+            else:
+                SquareCustomerCard.objects.create(
+                    user=user,
+                    square_seller=self,
+                    square_customer_id=customer_id,
+                    square_card_id=card_id,
+                    card_last_4=card_last_4,
+                    card_brand=card_brand,
+                    card_exp_month=exp_month,
+                    card_exp_year=exp_year,
+                    is_active=True,
+                )
+
+            logger.info("Saved card %s for user %s customer %s", card_id, user.pk, customer_id)
+            return card_id, None
+
+        except Exception as e:
+            error_msg = "Failed to save card on file"
+            if hasattr(e, "body") and isinstance(e.body, dict):
+                errors = e.body.get("errors", [])
+                if errors and isinstance(errors, list) and len(errors) > 0:
+                    error_detail = errors[0].get("detail", "")
+                    if error_detail:
+                        error_msg = f"Square error: {error_detail}"
+            logger.exception("Error saving card for user %s: %s", user.pk, error_msg)
+            return None, error_msg
+
+    def charge_card_on_file(self, user, amount, invoice=None, idempotency_key=None):
+        """Charge a saved card on file
+
+        Args:
+            user: Django User object
+            amount: Decimal amount to charge
+            invoice: Optional Invoice object for reference
+            idempotency_key: Optional idempotency key (auto-generated if not provided)
+
+        Returns:
+            tuple: (payment_id, error_message) - payment_id is None if error occurs
+        """
+        client = self.get_square_client()
+        if not client:
+            return None, "Failed to initialize Square client"
+
+        try:
+            from decimal import Decimal
+
+            from auctions.models import SquareCustomerCard
+
+            # Get customer card
+            customer_card = SquareCustomerCard.objects.filter(
+                user=user, square_seller=self, is_active=True, square_card_id__isnull=False
+            ).first()
+
+            if not customer_card:
+                return None, "No active card on file for this user"
+
+            if customer_card.is_expired():
+                customer_card.is_active = False
+                customer_card.save()
+                return None, "Card on file has expired"
+
+            # Get location ID
+            location_id = self.get_location_id()
+            if not location_id:
+                return None, "Square location not configured"
+
+            # Convert amount to cents
+            amount_cents = int(Decimal(str(amount)) * 100)
+            if amount_cents <= 0:
+                return None, "Invalid payment amount"
+
+            # Generate idempotency key if not provided
+            if not idempotency_key:
+                idempotency_key = str(uuid.uuid4())
+
+            # Build payment note
+            if invoice:
+                payment_note = f"Bidder {invoice.auctiontos_user.bidder_number} in {invoice.auction.title}"[:500]
+                reference_id = str(invoice.pk)
+            else:
+                payment_note = f"Payment for user {user.username}"
+                reference_id = f"user_{user.pk}"
+
+            # Create payment
+            result = client.payments.create(
+                idempotency_key=idempotency_key,
+                source_id=customer_card.square_card_id,
+                amount_money={"amount": amount_cents, "currency": self.currency},
+                location_id=location_id,
+                customer_id=customer_card.square_customer_id,
+                reference_id=reference_id,
+                note=payment_note,
+            )
+
+            payment = getattr(result, "payment", None)
+            if not payment:
+                return None, "Failed to get payment from Square response"
+
+            payment_id = getattr(payment, "id", None)
+            if not payment_id:
+                return None, "Failed to get payment ID from Square response"
+
+            logger.info("Charged card on file for user %s: payment %s", user.pk, payment_id)
+            return payment_id, None
+
+        except Exception as e:
+            error_msg = "Failed to charge card on file"
+            if hasattr(e, "body") and isinstance(e.body, dict):
+                errors = e.body.get("errors", [])
+                if errors and isinstance(errors, list) and len(errors) > 0:
+                    error_detail = errors[0].get("detail", "")
+                    error_code = errors[0].get("code", "")
+                    if error_code == "CARD_EXPIRED":
+                        # Mark card as inactive
+                        from auctions.models import SquareCustomerCard
+
+                        customer_card = SquareCustomerCard.objects.filter(
+                            user=user, square_seller=self, is_active=True
+                        ).first()
+                        if customer_card:
+                            customer_card.is_active = False
+                            customer_card.save()
+                        error_msg = "Card on file has expired"
+                    elif error_detail:
+                        error_msg = f"Square error: {error_detail}"
+            logger.exception("Error charging card on file for user %s: %s", user.pk, error_msg)
+            return None, error_msg
+
     def delete(self):
         auctions = Auction.objects.filter(created_by=self.user, enable_square_payments=True)
         for auction in auctions:
@@ -6510,6 +6765,78 @@ class SquareSeller(models.Model):
             auction.enable_square_payments = False
             auction.save()
         return super().delete()
+
+
+class SquareCustomerCard(models.Model):
+    """Store Square customer and card-on-file information for buyers
+
+    This model stores references to Square customer profiles and payment methods
+    to enable card-on-file functionality for pre-authorizations and recurring payments.
+
+    Security: Only stores Square's tokenized references (customer_id, card_id),
+    never actual card data. All sensitive card information remains with Square.
+    """
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="square_cards")
+    square_seller = models.ForeignKey(SquareSeller, on_delete=models.CASCADE, related_name="customer_cards")
+    square_seller.help_text = "The seller's Square account where this customer is registered"
+
+    # Square customer identifier - created via Customers API
+    square_customer_id = EncryptedCharField(max_length=255, blank=True, null=True)
+    square_customer_id.help_text = "Square customer ID for this buyer under the seller's account"
+
+    # Square card identifier - reference to saved card
+    square_card_id = EncryptedCharField(max_length=255, blank=True, null=True)
+    square_card_id.help_text = "Square card ID (payment method token) for saved card"
+
+    # Card metadata for display purposes only (last 4 digits, brand)
+    card_last_4 = models.CharField(max_length=4, blank=True, null=True)
+    card_brand = models.CharField(max_length=50, blank=True, null=True)  # e.g., "VISA", "MASTERCARD"
+    card_exp_month = models.PositiveIntegerField(
+        blank=True, null=True, validators=[MinValueValidator(1), MaxValueValidator(12)]
+    )
+    card_exp_year = models.PositiveIntegerField(blank=True, null=True, validators=[MinValueValidator(2020)])
+
+    # Timestamps
+    created_on = models.DateTimeField(auto_now_add=True)
+    updated_on = models.DateTimeField(auto_now=True)
+
+    # Active status - set to False when card is removed or expires
+    is_active = models.BooleanField(default=True)
+    is_active.help_text = "Whether this card is currently active and can be used for payments"
+
+    class Meta:
+        verbose_name = "Square Customer Card"
+        verbose_name_plural = "Square Customer Cards"
+        # Ensure one customer record per user per seller
+        unique_together = [["user", "square_seller"]]
+        indexes = [
+            models.Index(fields=["user", "square_seller"]),
+            models.Index(fields=["square_customer_id"]),
+            models.Index(fields=["is_active"]),
+        ]
+
+    def __str__(self):
+        if self.card_last_4 and self.card_brand:
+            return f"{self.user.username} - {self.card_brand} ending in {self.card_last_4}"
+        elif self.square_customer_id:
+            return f"{self.user.username} - Customer ID {self.square_customer_id[:10]}..."
+        return f"{self.user.username} - Card on file with {self.square_seller.user.username}"
+
+    def get_card_display(self):
+        """Return a user-friendly display string for the card"""
+        if not self.card_brand or not self.card_last_4:
+            return "Card on file"
+        return f"{self.card_brand} •••• {self.card_last_4}"
+
+    def is_expired(self):
+        """Check if the card is expired"""
+        if not self.card_exp_month or not self.card_exp_year:
+            return False
+        from datetime import datetime
+
+        now = datetime.now()
+        return now.year > self.card_exp_year or (now.year == self.card_exp_year and now.month > self.card_exp_month)
 
 
 class UserInterestCategory(models.Model):
