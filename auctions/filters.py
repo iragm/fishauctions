@@ -346,6 +346,7 @@ class LotAdminFilter(django_filters.FilterSet):
                 return queryset.filter(
                     winner__isnull=False,
                     pageview__lot_number=F("pk"),
+                    pageview__user=F("winner"),
                     pageview__source__icontains="qr",
                 ).distinct()
             if value == "qrnotviewed":
@@ -353,6 +354,7 @@ class LotAdminFilter(django_filters.FilterSet):
                     queryset.filter(winner__isnull=False)
                     .exclude(
                         pageview__lot_number=F("pk"),
+                        pageview__user=F("winner"),
                         pageview__source__icontains="qr",
                     )
                     .distinct()
