@@ -9206,3 +9206,7 @@ class WeeklyPromoManagementCommandTests(StandardTestCase):
             # Check that the in-person auction counter was incremented
             in_person_auction.refresh_from_db()
             self.assertGreater(
+                mock_send.call_count,
+                0,
+                "Expected at least one weekly promo email for in-person auctions",
+            )
