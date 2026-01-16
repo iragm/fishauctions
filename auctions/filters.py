@@ -349,10 +349,14 @@ class LotAdminFilter(django_filters.FilterSet):
                     pageview__source__icontains="qr",
                 ).distinct()
             if value == "qrnotviewed":
-                return queryset.filter(winner__isnull=False).exclude(
-                    pageview__lot_number=F("pk"),
-                    pageview__source__icontains="qr",
-                ).distinct()
+                return (
+                    queryset.filter(winner__isnull=False)
+                    .exclude(
+                        pageview__lot_number=F("pk"),
+                        pageview__source__icontains="qr",
+                    )
+                    .distinct()
+                )
             if ":" in value:
                 key, val = (s.strip() for s in value.split(":", 1))
                 q_obj = get_colon_filter(key, val)

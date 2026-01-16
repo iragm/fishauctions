@@ -9218,7 +9218,7 @@ class LotAdminFilterTests(StandardTestCase):
     def setUp(self):
         super().setUp()
         # Create additional test data for filter testing
-        
+
         # Create a lot with no bids
         self.lot_no_bids = Lot.objects.create(
             lot_name="Lot with no bids",
@@ -9227,7 +9227,7 @@ class LotAdminFilterTests(StandardTestCase):
             quantity=1,
             active=True,
         )
-        
+
         # Create a lot with bids
         self.lot_with_bids = Lot.objects.create(
             lot_name="Lot with bids",
@@ -9241,7 +9241,7 @@ class LotAdminFilterTests(StandardTestCase):
             lot_number=self.lot_with_bids,
             amount=5,
         )
-        
+
         # Create a lot with winner who viewed via QR
         self.lot_winner_viewed_qr = Lot.objects.create(
             lot_name="Winner viewed via QR",
@@ -9258,7 +9258,7 @@ class LotAdminFilterTests(StandardTestCase):
             lot_number=self.lot_winner_viewed_qr,
             source="qr",
         )
-        
+
         # Create a lot with winner who did not view via QR
         self.lot_winner_not_viewed_qr = Lot.objects.create(
             lot_name="Winner not viewed via QR",
@@ -9274,85 +9274,85 @@ class LotAdminFilterTests(StandardTestCase):
     def test_hasbids_filter(self):
         """Test that 'hasbids' filter returns lots with bids"""
         from auctions.filters import LotAdminFilter
-        
+
         # Create a queryset of all lots in the auction
         qs = Lot.objects.filter(auction=self.online_auction)
-        
+
         # Create an instance of LotAdminFilter to use its generic method
         filter_instance = LotAdminFilter()
         filter_instance.queryset = qs
-        
+
         # Search for lots with bids
         filtered_qs = filter_instance.generic(qs, "hasbids")
-        
+
         # Should include lot with bids
         self.assertIn(self.lot_with_bids, filtered_qs)
-        
+
         # Should not include lot without bids
         self.assertNotIn(self.lot_no_bids, filtered_qs)
 
     def test_nobids_filter(self):
         """Test that 'nobids' filter returns lots without bids"""
         from auctions.filters import LotAdminFilter
-        
+
         # Create a queryset of all lots in the auction
         qs = Lot.objects.filter(auction=self.online_auction)
-        
+
         # Create an instance of LotAdminFilter to use its generic method
         filter_instance = LotAdminFilter()
         filter_instance.queryset = qs
-        
+
         # Search for lots without bids
         filtered_qs = filter_instance.generic(qs, "nobids")
-        
+
         # Should include lot without bids
         self.assertIn(self.lot_no_bids, filtered_qs)
-        
+
         # Should not include lot with bids
         self.assertNotIn(self.lot_with_bids, filtered_qs)
 
     def test_qrviewed_filter(self):
         """Test that 'qrviewed' filter returns lots where winner viewed via QR code"""
         from auctions.filters import LotAdminFilter
-        
+
         # Create a queryset of all lots in the auction
         qs = Lot.objects.filter(auction=self.online_auction)
-        
+
         # Create an instance of LotAdminFilter to use its generic method
         filter_instance = LotAdminFilter()
         filter_instance.queryset = qs
-        
+
         # Search for lots where winner viewed via QR
         filtered_qs = filter_instance.generic(qs, "qrviewed")
-        
+
         # Should include lot with winner who viewed via QR
         self.assertIn(self.lot_winner_viewed_qr, filtered_qs)
-        
+
         # Should not include lot with winner who did not view via QR
         self.assertNotIn(self.lot_winner_not_viewed_qr, filtered_qs)
-        
+
         # Should not include lots without winners
         self.assertNotIn(self.lot_no_bids, filtered_qs)
 
     def test_qrnotviewed_filter(self):
         """Test that 'qrnotviewed' filter returns lots where winner has not viewed via QR code"""
         from auctions.filters import LotAdminFilter
-        
+
         # Create a queryset of all lots in the auction
         qs = Lot.objects.filter(auction=self.online_auction)
-        
+
         # Create an instance of LotAdminFilter to use its generic method
         filter_instance = LotAdminFilter()
         filter_instance.queryset = qs
-        
+
         # Search for lots where winner has not viewed via QR
         filtered_qs = filter_instance.generic(qs, "qrnotviewed")
-        
+
         # Should include lot with winner who did not view via QR
         self.assertIn(self.lot_winner_not_viewed_qr, filtered_qs)
-        
+
         # Should not include lot with winner who viewed via QR
         self.assertNotIn(self.lot_winner_viewed_qr, filtered_qs)
-        
+
         # Should not include lots without winners
         self.assertNotIn(self.lot_no_bids, filtered_qs)
