@@ -338,6 +338,18 @@ class LotAdminFilter(django_filters.FilterSet):
                 return queryset.filter(auctiontos_winner__isnull=True)
             if value == "removed":
                 return queryset.filter(banned=True)
+            if value == "hasbids":
+                return queryset.filter(bid__isnull=False).distinct()
+            if value == "nobids":
+                return queryset.filter(bid__isnull=True).distinct()
+            if value == "qrviewed":
+                return queryset.filter(
+                    winner__isnull=False, pageview__user=F("winner"), pageview__source__icontains="qr"
+                ).distinct()
+            if value == "qrnotviewed":
+                return queryset.filter(winner__isnull=False).exclude(
+                    pageview__user=F("winner"), pageview__source__icontains="qr"
+                ).distinct()
             if ":" in value:
                 key, val = (s.strip() for s in value.split(":", 1))
                 q_obj = get_colon_filter(key, val)
