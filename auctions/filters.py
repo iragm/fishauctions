@@ -344,11 +344,14 @@ class LotAdminFilter(django_filters.FilterSet):
                 return queryset.filter(bid__isnull=True).distinct()
             if value == "qrviewed":
                 return queryset.filter(
-                    winner__isnull=False, pageview__user=F("winner"), pageview__source__icontains="qr"
+                    winner__isnull=False,
+                    pageview__lot_number=F("pk"),
+                    pageview__source__icontains="qr",
                 ).distinct()
             if value == "qrnotviewed":
                 return queryset.filter(winner__isnull=False).exclude(
-                    pageview__user=F("winner"), pageview__source__icontains="qr"
+                    pageview__lot_number=F("pk"),
+                    pageview__source__icontains="qr",
                 ).distinct()
             if ":" in value:
                 key, val = (s.strip() for s in value.split(":", 1))
