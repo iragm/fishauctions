@@ -4,6 +4,7 @@ import datetime
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
+from django.db.models import F
 from django.http import HttpResponse
 
 from .models import (
@@ -36,6 +37,56 @@ from .models import (
     Watch,
     guess_category,
 )
+
+
+class HasBidsListFilter(admin.SimpleListFilter):
+    """Filter lots by whether they have bids or not"""
+
+    title = "has bids"
+    parameter_name = "has_bids"
+
+    def lookups(self, request, model_admin):
+        return (
+            ("yes", "Has bids"),
+            ("no", "No bids"),
+        )
+
+    def queryset(self, request, queryset):
+        if self.value() == "yes":
+            return queryset.filter(bid__isnull=False).distinct()
+        if self.value() == "no":
+            return queryset.filter(bid__isnull=True).distinct()
+        return queryset
+
+
+class WinnerViewedQRListFilter(admin.SimpleListFilter):
+    """Filter lots by whether the winner has viewed the lot via QR code"""
+
+    title = "winner viewed via QR"
+    parameter_name = "winner_viewed_qr"
+
+    def lookups(self, request, model_admin):
+        return (
+            ("yes", "Winner viewed via QR"),
+            ("no", "Winner not viewed via QR"),
+        )
+
+    def queryset(self, request, queryset):
+        if self.value() == "yes":
+            return queryset.filter(
+                winner__isnull=False, pageview__user=F("winner"), pageview__source__icontains="qr"
+            ).distinct()
+        if self.value() == "no":
+            # Lots with a winner but no QR code view by the winner
+            return (
+                queryset.filter(winner__isnull=False)
+                .exclude(
+                    pageview__user=F("winner"),
+                    pageview__source__icontains="qr",
+                )
+                .distinct()
+            )
+        return queryset
 
 
 def export_to_csv(modeladmin, request, queryset):
@@ -446,7 +497,7 @@ class LotAdmin(admin.ModelAdmin):
         "user",
         "species_category",
     )
-    list_filter = ("active", "auction", "banned")
+    list_filter = ("active", "auction", "banned", HasBidsListFilter, WinnerViewedQRListFilter)
     search_fields = (
         "lot_number",
         "lot_name",
