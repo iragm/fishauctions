@@ -26,6 +26,7 @@ from .models import (
     InvoiceAdjustment,
     Lot,
     LotHistory,
+    PageView,
     PayPalSeller,
     PickupLocation,
     UserData,
@@ -9205,7 +9206,3 @@ class WeeklyPromoManagementCommandTests(StandardTestCase):
             # Check that the in-person auction counter was incremented
             in_person_auction.refresh_from_db()
             self.assertGreater(
-                in_person_auction.weekly_promo_emails_sent,
-                0,
-                "weekly_promo_emails_sent should be incremented for in-person auction",
-            )
