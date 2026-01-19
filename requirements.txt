@@ -50,9 +50,9 @@ bleach[css]==6.3.0
     #   -r requirements.in
     #   django-markdownfield
     #   django-summernote
-boto3==1.42.25
+boto3==1.42.30
     # via django-ses
-botocore==1.42.25
+botocore==1.42.30
     # via
     #   boto3
     #   s3transfer
@@ -156,7 +156,7 @@ django==5.2.10
     #   django-weasyprint
     #   easy-thumbnails
     #   jsonfield
-django-allauth==65.13.1
+django-allauth==65.14.0
     # via -r requirements.in
 django-autocomplete-light==3.12.1
     # via -r requirements.in
@@ -303,7 +303,7 @@ py-ubjson==0.16.1
     # via autobahn
 py-vapid==1.9.4
     # via pywebpush
-pyasn1==0.6.1
+pyasn1==0.6.2
     # via
     #   -r requirements.in
     #   pyasn1-modules
@@ -365,7 +365,7 @@ redis==7.1.0
     # via
     #   -r requirements.in
     #   channels-redis
-reportlab==4.4.7
+reportlab==4.4.9
     # via -r requirements.in
 requests==2.32.5
     # via
@@ -392,7 +392,7 @@ six==1.17.0
     #   -r requirements.in
     #   python-dateutil
     #   pywebpush
-soupsieve==2.8.1
+soupsieve==2.8.2
     # via beautifulsoup4
 sqlparse==0.5.5
     # via
