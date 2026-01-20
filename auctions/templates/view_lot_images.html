@@ -11,7 +11,32 @@
 {% endblock %}
 {% block extra_js %}
 
+<style>
+/* Fix for dropdown in overflow container */
+#btnGroupDrop1 ~ .dropdown-menu {
+    position: fixed !important;
+    transform: none !important;
+    z-index: 1050;
+}
+</style>
+
 <script type="text/javascript">
+
+// Configure dropdown to use fixed positioning to escape overflow container
+document.addEventListener('DOMContentLoaded', function() {
+    var dropdownButton = document.getElementById('btnGroupDrop1');
+    if (dropdownButton) {
+        dropdownButton.addEventListener('show.bs.dropdown', function (event) {
+            var dropdownMenu = this.nextElementSibling;
+            var buttonRect = this.getBoundingClientRect();
+            // Position dropdown below button using fixed positioning
+            dropdownMenu.style.position = 'fixed';
+            dropdownMenu.style.top = (buttonRect.bottom + 2) + 'px';
+            dropdownMenu.style.left = buttonRect.left + 'px';
+            dropdownMenu.style.zIndex = '1050';
+        });
+    }
+});
 
 $( "#buy-now" ).click(function() {
     $('#bid_amount').val(Number('{{ lot.buy_now_price }}'));
@@ -171,7 +196,7 @@ function deactivate_lot() {
                             {% endif %}
                             {% if bids %}
                                 <div class="btn-group">
-                                <button id="btnGroupDrop1" type="button" class="btn btn-danger dropdown-toggle" data-bs-toggle="dropdown" data-bs-boundary="viewport" aria-expanded="false">
+                                <button id="btnGroupDrop1" type="button" class="btn btn-danger dropdown-toggle" data-bs-toggle="dropdown" data-bs-auto-close="true" data-bs-offset="0,10" aria-expanded="false">
                                     Remove bids
                                 </button>
                                 <ul class="dropdown-menu" aria-labelledby="btnGroupDrop1">
