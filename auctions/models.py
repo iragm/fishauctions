@@ -2942,16 +2942,14 @@ class AuctionTOS(models.Model):
         if not self.bidder_number or self.bidder_number == "None":
             # recycle numbers from the last auction if we can
             # Build query to find previous AuctionTOS by same auction creator
-            from django.db.models import Q
-
-            query = Q()
-            if self.user:
-                query |= Q(user=self.user)
-            if self.email:
-                query |= Q(email=self.email)
-
             last_number_used = None
-            if query:
+            if self.user or self.email:
+                query = Q()
+                if self.user:
+                    query |= Q(user=self.user)
+                if self.email:
+                    query |= Q(email=self.email)
+
                 last_number_used = (
                     AuctionTOS.objects.filter(query, auction__created_by=self.auction.created_by)
                     .exclude(pk=self.pk)  # Exclude self if updating
