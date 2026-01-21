@@ -20,10 +20,12 @@ document.addEventListener('DOMContentLoaded', function() {
         dropdownButton.addEventListener('show.bs.dropdown', function (event) {
             // Find the dropdown menu (next sibling element)
             var dropdownMenu = this.nextElementSibling;
+            var button = this;
             if (dropdownMenu && dropdownMenu.classList.contains('dropdown-menu')) {
-                var buttonRect = this.getBoundingClientRect();
                 // Use setTimeout to ensure Bootstrap has initialized the dropdown first
                 setTimeout(function() {
+                    // Get button position at time of positioning
+                    var buttonRect = button.getBoundingClientRect();
                     // Position dropdown below button using fixed positioning
                     dropdownMenu.style.position = 'fixed';
                     dropdownMenu.style.top = (buttonRect.bottom + 2) + 'px';
