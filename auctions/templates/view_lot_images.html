@@ -13,6 +13,7 @@
 
 <script type="text/javascript">
 
+{% if bids %}
 // Configure dropdown to use fixed positioning to escape overflow container
 document.addEventListener('DOMContentLoaded', function() {
     var dropdownButton = document.getElementById('btnGroupDrop1');
@@ -37,6 +38,7 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 });
+{% endif %}
 
 $( "#buy-now" ).click(function() {
     $('#bid_amount').val(Number('{{ lot.buy_now_price }}'));
