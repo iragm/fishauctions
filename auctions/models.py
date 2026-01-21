@@ -2941,12 +2941,23 @@ class AuctionTOS(models.Model):
         # set the bidder number based on the phone, address, last used number, or just at random
         if not self.bidder_number or self.bidder_number == "None":
             # recycle numbers from the last auction if we can
-            last_number_used = (
-                AuctionTOS.objects.filter(auction__created_by=self.auction.created_by, email=self.email)
-                .order_by("-auction__date_posted")
-                .first()
-            )
-            if self.email and last_number_used and check_number_in_auction(last_number_used.bidder_number) == 0:
+            # Build query to find previous AuctionTOS by same auction creator
+            last_number_used = None
+            if self.user or self.email:
+                query = Q()
+                if self.user:
+                    query |= Q(user=self.user)
+                if self.email:
+                    query |= Q(email=self.email)
+
+                last_number_used = (
+                    AuctionTOS.objects.filter(query, auction__created_by=self.auction.created_by)
+                    .exclude(pk=self.pk)  # Exclude self if updating
+                    .order_by("-createdon")
+                    .first()
+                )
+
+            if last_number_used and check_number_in_auction(last_number_used.bidder_number) == 0:
                 self.bidder_number = last_number_used.bidder_number
             else:
                 dont_use_these = ["13", "14", "15", "16", "17", "18", "19"]
