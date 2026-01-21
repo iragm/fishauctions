@@ -9077,7 +9077,7 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
         )
 
         # Create an AuctionTOS in the first auction with a specific bidder number
-        first_tos = AuctionTOS.objects.create(
+        AuctionTOS.objects.create(
             auction=self.online_auction,
             pickup_location=self.location,
             email="reuse_test@example.com",
@@ -9111,10 +9111,12 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
         )
 
         # Create a test user
-        test_user = User.objects.create_user(username="reuse_user", password="testpassword", email="different@example.com")
+        test_user = User.objects.create_user(
+            username="reuse_user", password="testpassword", email="different@example.com"
+        )
 
         # Create an AuctionTOS in the first auction with a specific bidder number
-        first_tos = AuctionTOS.objects.create(
+        AuctionTOS.objects.create(
             user=test_user,
             auction=self.online_auction,
             pickup_location=self.location,
@@ -9149,7 +9151,7 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
         )
 
         # Create an AuctionTOS in the first auction
-        first_tos = AuctionTOS.objects.create(
+        AuctionTOS.objects.create(
             auction=self.online_auction,
             pickup_location=self.location,
             email="reuse_test@example.com",
@@ -9158,7 +9160,7 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
         )
 
         # Create someone else using bidder number 999 in the new auction
-        blocking_tos = AuctionTOS.objects.create(
+        AuctionTOS.objects.create(
             auction=new_auction,
             pickup_location=new_location,
             email="blocker@example.com",
@@ -9203,7 +9205,7 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
         )
 
         # Create an AuctionTOS in the old auction
-        old_tos = AuctionTOS.objects.create(
+        AuctionTOS.objects.create(
             auction=old_auction,
             pickup_location=old_location,
             email="reuse_test@example.com",
@@ -9212,7 +9214,7 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
         )
 
         # Create an AuctionTOS in the newer auction with a different bidder number
-        newer_tos = AuctionTOS.objects.create(
+        AuctionTOS.objects.create(
             auction=new_auction,
             pickup_location=new_location,
             email="reuse_test@example.com",

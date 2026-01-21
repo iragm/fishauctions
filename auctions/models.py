@@ -2943,13 +2943,13 @@ class AuctionTOS(models.Model):
             # recycle numbers from the last auction if we can
             # Build query to find previous AuctionTOS by same auction creator
             from django.db.models import Q
-            
+
             query = Q()
             if self.user:
                 query |= Q(user=self.user)
             if self.email:
                 query |= Q(email=self.email)
-            
+
             last_number_used = None
             if query:
                 last_number_used = (
@@ -2958,7 +2958,7 @@ class AuctionTOS(models.Model):
                     .order_by("-auction__date_posted")
                     .first()
                 )
-            
+
             if last_number_used and check_number_in_auction(last_number_used.bidder_number) == 0:
                 self.bidder_number = last_number_used.bidder_number
             else:
