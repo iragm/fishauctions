@@ -9062,6 +9062,187 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
         self.assertTrue(new_tos.bidder_number.startswith("user123"))
         self.assertIn("1", new_tos.bidder_number)  # Should be "user1231" or similar
 
+    def test_bidder_number_reuse_by_email(self):
+        """Test that bidder numbers are reused across auctions for the same auction creator when user has the same email"""
+        # Create a new auction by the same creator
+        new_auction = Auction.objects.create(
+            created_by=self.user,  # same creator as self.online_auction
+            title="Second Auction",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=7),
+            date_start=timezone.now(),
+        )
+        new_location = PickupLocation.objects.create(
+            name="new location", auction=new_auction, pickup_time=timezone.now() + datetime.timedelta(days=8)
+        )
+
+        # Create an AuctionTOS in the first auction with a specific bidder number
+        first_tos = AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            email="reuse_test@example.com",
+            bidder_number="777",
+            name="Test User",
+        )
+
+        # Create an AuctionTOS in the second auction with the same email, no bidder number
+        second_tos = AuctionTOS.objects.create(
+            auction=new_auction,
+            pickup_location=new_location,
+            email="reuse_test@example.com",
+            name="Test User",
+        )
+
+        # The second TOS should reuse the bidder number from the first auction
+        self.assertEqual(second_tos.bidder_number, "777")
+
+    def test_bidder_number_reuse_by_user(self):
+        """Test that bidder numbers are reused across auctions for the same auction creator when user account is the same"""
+        # Create a new auction by the same creator
+        new_auction = Auction.objects.create(
+            created_by=self.user,  # same creator as self.online_auction
+            title="Second Auction",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=7),
+            date_start=timezone.now(),
+        )
+        new_location = PickupLocation.objects.create(
+            name="new location", auction=new_auction, pickup_time=timezone.now() + datetime.timedelta(days=8)
+        )
+
+        # Create a test user
+        test_user = User.objects.create_user(username="reuse_user", password="testpassword", email="different@example.com")
+
+        # Create an AuctionTOS in the first auction with a specific bidder number
+        first_tos = AuctionTOS.objects.create(
+            user=test_user,
+            auction=self.online_auction,
+            pickup_location=self.location,
+            bidder_number="888",
+            name="Test User",
+        )
+
+        # Create an AuctionTOS in the second auction with the same user but different email
+        second_tos = AuctionTOS.objects.create(
+            user=test_user,
+            auction=new_auction,
+            pickup_location=new_location,
+            email="another_email@example.com",  # Different email
+            name="Test User",
+        )
+
+        # The second TOS should reuse the bidder number from the first auction
+        self.assertEqual(second_tos.bidder_number, "888")
+
+    def test_bidder_number_not_reused_if_in_use(self):
+        """Test that bidder numbers are NOT reused if already taken in the current auction"""
+        # Create a new auction by the same creator
+        new_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Second Auction",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=7),
+            date_start=timezone.now(),
+        )
+        new_location = PickupLocation.objects.create(
+            name="new location", auction=new_auction, pickup_time=timezone.now() + datetime.timedelta(days=8)
+        )
+
+        # Create an AuctionTOS in the first auction
+        first_tos = AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            email="reuse_test@example.com",
+            bidder_number="999",
+            name="Test User",
+        )
+
+        # Create someone else using bidder number 999 in the new auction
+        blocking_tos = AuctionTOS.objects.create(
+            auction=new_auction,
+            pickup_location=new_location,
+            email="blocker@example.com",
+            bidder_number="999",
+            name="Blocker User",
+        )
+
+        # Try to create an AuctionTOS in the second auction with the same email
+        second_tos = AuctionTOS.objects.create(
+            auction=new_auction,
+            pickup_location=new_location,
+            email="reuse_test@example.com",
+            name="Test User",
+        )
+
+        # The second TOS should NOT reuse 999 since it's already taken
+        self.assertNotEqual(second_tos.bidder_number, "999")
+
+    def test_bidder_number_reuse_most_recent_auction(self):
+        """Test that bidder numbers are reused from the most recently created auction"""
+        # Create two new auctions by the same creator, in order
+        old_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Older Auction",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=7),
+            date_start=timezone.now(),
+        )
+        old_location = PickupLocation.objects.create(
+            name="old location", auction=old_auction, pickup_time=timezone.now() + datetime.timedelta(days=8)
+        )
+
+        new_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Newer Auction",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=14),
+            date_start=timezone.now() + datetime.timedelta(days=1),
+        )
+        new_location = PickupLocation.objects.create(
+            name="new location", auction=new_auction, pickup_time=timezone.now() + datetime.timedelta(days=15)
+        )
+
+        # Create an AuctionTOS in the old auction
+        old_tos = AuctionTOS.objects.create(
+            auction=old_auction,
+            pickup_location=old_location,
+            email="reuse_test@example.com",
+            bidder_number="111",
+            name="Test User",
+        )
+
+        # Create an AuctionTOS in the newer auction with a different bidder number
+        newer_tos = AuctionTOS.objects.create(
+            auction=new_auction,
+            pickup_location=new_location,
+            email="reuse_test@example.com",
+            bidder_number="222",
+            name="Test User",
+        )
+
+        # Create a third auction
+        third_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Third Auction",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=21),
+            date_start=timezone.now() + datetime.timedelta(days=2),
+        )
+        third_location = PickupLocation.objects.create(
+            name="third location", auction=third_auction, pickup_time=timezone.now() + datetime.timedelta(days=22)
+        )
+
+        # Create an AuctionTOS in the third auction with the same email
+        third_tos = AuctionTOS.objects.create(
+            auction=third_auction,
+            pickup_location=third_location,
+            email="reuse_test@example.com",
+            name="Test User",
+        )
+
+        # Should reuse 222 from the most recently created auction, not 111 from the older one
+        self.assertEqual(third_tos.bidder_number, "222")
+
 
 class WeeklyPromoManagementCommandTests(StandardTestCase):
     """Test the weekly_promo management command."""
