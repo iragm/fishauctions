@@ -2953,7 +2953,7 @@ class AuctionTOS(models.Model):
                 last_number_used = (
                     AuctionTOS.objects.filter(query, auction__created_by=self.auction.created_by)
                     .exclude(pk=self.pk)  # Exclude self if updating
-                    .order_by("-auction__date_posted")
+                    .order_by("-createdon")
                     .first()
                 )
 

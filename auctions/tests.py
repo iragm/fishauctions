@@ -9180,7 +9180,7 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
         self.assertNotEqual(second_tos.bidder_number, "999")
 
     def test_bidder_number_reuse_most_recent_auction(self):
-        """Test that bidder numbers are reused from the most recently created auction"""
+        """Test that bidder numbers are reused from the most recently created AuctionTOS"""
         # Create two new auctions by the same creator, in order
         old_auction = Auction.objects.create(
             created_by=self.user,
@@ -9242,7 +9242,7 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
             name="Test User",
         )
 
-        # Should reuse 222 from the most recently created auction, not 111 from the older one
+        # Should reuse 222 from the most recently created AuctionTOS, not 111 from the older one
         self.assertEqual(third_tos.bidder_number, "222")
 
 
