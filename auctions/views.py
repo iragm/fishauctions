@@ -8883,15 +8883,38 @@ class AuctionStatsLotSellPricesJSONView(AuctionStatsBarChartJSONView):
             max_price = sold_lots.aggregate(max_price=Max("winning_price"))["max_price"] or 40
             max_price = int((max_price + 9) // 10 * 10)
 
+            # Create bins matching the logic in set_stat_lot_sell_prices
+            # Use whole number bin boundaries
+            bin_width = 2  # Each bin covers $2
+            num_bins = min((max_price - 1) // bin_width, 30)
+            if num_bins < 10:
+                num_bins = 10
+                bin_width = max((max_price - 1) // num_bins, 1)
+
+            start_bin = 1
+            end_bin = start_bin + num_bins * bin_width
+
             labels = ["Not sold"]
-            for i in range(0, max_price - 1, 2):
-                labels.append(f"{self.auction.currency_symbol}{i + 1}-{i + 2}")
-            labels.append(f"{self.auction.currency_symbol}{max_price}+")
+            for i in range(num_bins):
+                bin_start = start_bin + i * bin_width
+                bin_end = start_bin + (i + 1) * bin_width
+                labels.append(f"{self.auction.currency_symbol}{bin_start}-{bin_end}")
+            labels.append(f"{self.auction.currency_symbol}{end_bin}+")
             return labels
         else:
-            # No sold lots, use default
-            labels = [(f"{self.auction.currency_symbol}{i + 1}-{i + 2}") for i in range(0, 37, 2)]
-            return ["Not sold"] + labels + [f"{self.auction.currency_symbol}40+"]
+            # No sold lots, use default with whole number boundaries
+            start_bin = 1
+            bin_width = 2
+            num_bins = 19
+            end_bin = start_bin + num_bins * bin_width
+
+            labels = ["Not sold"]
+            for i in range(num_bins):
+                bin_start = start_bin + i * bin_width
+                bin_end = start_bin + (i + 1) * bin_width
+                labels.append(f"{self.auction.currency_symbol}{bin_start}-{bin_end}")
+            labels.append(f"{self.auction.currency_symbol}{end_bin}+")
+            return labels
 
     def get_providers(self):
         providers = []

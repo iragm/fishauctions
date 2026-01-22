@@ -3139,6 +3139,53 @@ class AuctionStatsViewTests(StandardTestCase):
         self.online_auction.refresh_from_db()
         assert self.online_auction.next_update_due == scheduled_time, "Should not reschedule if already scheduled"
 
+    def test_lot_sell_prices_labels_match_bins(self):
+        """Test that lot sell prices chart labels use whole number boundaries"""
+
+        # Create some test lots with various prices
+        lot_prices = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60]
+        for price in lot_prices:
+            Lot.objects.create(
+                lot_name=f"Test lot ${price}",
+                quantity=1,
+                auction=self.online_auction,
+                auctiontos_seller=self.online_tos,
+                winning_price=price,
+            )
+
+        # Recalculate stats
+        stats = self.online_auction.set_stat_lot_sell_prices()
+
+        # Get the stats data
+        labels = stats["labels"]
+        data = stats["data"][0]  # First provider's data
+
+        # Verify data and labels have the same length
+        assert len(data) == len(labels), f"Data length ({len(data)}) should match labels length ({len(labels)})"
+
+        # Verify that all bin labels use whole numbers (no decimals)
+        for i, label in enumerate(labels):
+            if label == "Not sold":
+                continue
+            if "+" in label:
+                # Overflow bin like "$39+"
+                continue
+
+            # Extract the bin boundaries from label
+            label_cleaned = label.replace(self.online_auction.currency_symbol, "")
+            if "-" in label_cleaned:
+                label_start, label_end = label_cleaned.split("-")
+                # Verify both values are whole numbers
+                assert "." not in label_start, f"Label {label} start should be whole number, got {label_start}"
+                assert "." not in label_end, f"Label {label} end should be whole number, got {label_end}"
+
+                # Verify they are valid integers
+                bin_start = int(label_start)
+                bin_end = int(label_end)
+
+                # Verify bin_end > bin_start
+                assert bin_end > bin_start, f"Label {label} end ({bin_end}) should be greater than start ({bin_start})"
+
 
 class BulkAddLotsViewTests(StandardTestCase):
     """Test bulk add lots view with different user types"""

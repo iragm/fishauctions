@@ -2026,25 +2026,32 @@ class Auction(models.Model):
             # Round up to nearest $10 for cleaner bins
             max_price = int((max_price + 9) // 10 * 10)
 
-            # Create bins with $2 intervals up to max price
-            num_bins = min(max_price // 2, 30)  # Cap at 30 bins to avoid too many
+            # Create bins with whole number intervals
+            # Use $2 intervals up to max price, ensuring bins align to whole dollars
+            bin_width = 2  # Each bin covers $2
+            num_bins = min((max_price - 1) // bin_width, 30)  # Cap at 30 bins to avoid too many
             if num_bins < 10:
                 num_bins = 10  # Minimum 10 bins
+                bin_width = max((max_price - 1) // num_bins, 1)  # Adjust bin width if needed
 
+            start_bin = 1
+            end_bin = start_bin + num_bins * bin_width
             histogram = bin_data(
                 sold_lots,
                 "winning_price",
                 number_of_bins=num_bins,
-                start_bin=1,
-                end_bin=max_price - 1,
+                start_bin=start_bin,
+                end_bin=end_bin,
                 add_column_for_high_overflow=True,
             )
 
-            # Generate labels dynamically
+            # Generate labels with whole number boundaries
             labels = ["Not sold"]
-            for i in range(0, max_price - 1, 2):
-                labels.append(f"{self.currency_symbol}{i + 1}-{i + 2}")
-            labels.append(f"{self.currency_symbol}{max_price}+")
+            for i in range(num_bins):
+                bin_start = start_bin + i * bin_width
+                bin_end = start_bin + (i + 1) * bin_width
+                labels.append(f"{self.currency_symbol}{bin_start}-{bin_end}")
+            labels.append(f"{self.currency_symbol}{end_bin}+")
 
             return {
                 "labels": labels,
@@ -2052,40 +2059,30 @@ class Auction(models.Model):
                 "data": [[self.total_unsold_lots] + histogram],
             }
         else:
-            # No sold lots, use default bins
+            # No sold lots, use default bins with whole number boundaries
+            start_bin = 1
+            bin_width = 2
+            num_bins = 19
+            end_bin = start_bin + num_bins * bin_width  # Results in 39
             histogram = bin_data(
                 sold_lots,
                 "winning_price",
-                number_of_bins=19,
-                start_bin=1,
-                end_bin=39,
+                number_of_bins=num_bins,
+                start_bin=start_bin,
+                end_bin=end_bin,
                 add_column_for_high_overflow=True,
             )
+
+            # Generate labels with whole number boundaries
+            labels = ["Not sold"]
+            for i in range(num_bins):
+                bin_start = start_bin + i * bin_width
+                bin_end = start_bin + (i + 1) * bin_width
+                labels.append(f"{self.currency_symbol}{bin_start}-{bin_end}")
+            labels.append(f"{self.currency_symbol}{end_bin}+")
+
             return {
-                "labels": [
-                    "Not sold",
-                    f"{self.currency_symbol}1-2",
-                    f"{self.currency_symbol}3-4",
-                    f"{self.currency_symbol}5-6",
-                    f"{self.currency_symbol}7-8",
-                    f"{self.currency_symbol}9-10",
-                    f"{self.currency_symbol}11-12",
-                    f"{self.currency_symbol}13-14",
-                    f"{self.currency_symbol}15-16",
-                    f"{self.currency_symbol}17-18",
-                    f"{self.currency_symbol}19-20",
-                    f"{self.currency_symbol}21-22",
-                    f"{self.currency_symbol}23-24",
-                    f"{self.currency_symbol}25-26",
-                    f"{self.currency_symbol}27-28",
-                    f"{self.currency_symbol}29-30",
-                    f"{self.currency_symbol}31-32",
-                    f"{self.currency_symbol}33-34",
-                    f"{self.currency_symbol}35-36",
-                    f"{self.currency_symbol}37-38",
-                    f"{self.currency_symbol}39-40",
-                    f"{self.currency_symbol}40+",
-                ],
+                "labels": labels,
                 "providers": ["Number of lots"],
                 "data": [[self.total_unsold_lots] + histogram],
             }
