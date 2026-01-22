@@ -2026,13 +2026,16 @@ class Auction(models.Model):
             # Round up to nearest $10 for cleaner bins
             max_price = int((max_price + 9) // 10 * 10)
 
-            # Create bins with $2 intervals up to max price
-            num_bins = min(max_price // 2, 30)  # Cap at 30 bins to avoid too many
+            # Create bins with whole number intervals
+            # Use $2 intervals up to max price, ensuring bins align to whole dollars
+            bin_width = 2  # Each bin covers $2
+            num_bins = min((max_price - 1) // bin_width, 30)  # Cap at 30 bins to avoid too many
             if num_bins < 10:
                 num_bins = 10  # Minimum 10 bins
+                bin_width = max((max_price - 1) // num_bins, 1)  # Adjust bin width if needed
 
             start_bin = 1
-            end_bin = max_price - 1
+            end_bin = start_bin + num_bins * bin_width
             histogram = bin_data(
                 sold_lots,
                 "winning_price",
@@ -2042,22 +2045,13 @@ class Auction(models.Model):
                 add_column_for_high_overflow=True,
             )
 
-            # Generate labels that match the actual bin boundaries
-            # Calculate bin_size the same way bin_data does
-            bin_size = (end_bin - start_bin) / num_bins
+            # Generate labels with whole number boundaries
             labels = ["Not sold"]
             for i in range(num_bins):
-                bin_start = start_bin + i * bin_size
-                bin_end = start_bin + (i + 1) * bin_size
-                # Round to 2 decimal places to avoid floating point precision issues
-                bin_start = round(bin_start, 2)
-                bin_end = round(bin_end, 2)
-                # Format to avoid unnecessary decimals
-                if bin_start == int(bin_start) and bin_end == int(bin_end):
-                    labels.append(f"{self.currency_symbol}{int(bin_start)}-{int(bin_end)}")
-                else:
-                    labels.append(f"{self.currency_symbol}{bin_start}-{bin_end}")
-            labels.append(f"{self.currency_symbol}{max_price}+")
+                bin_start = start_bin + i * bin_width
+                bin_end = start_bin + (i + 1) * bin_width
+                labels.append(f"{self.currency_symbol}{bin_start}-{bin_end}")
+            labels.append(f"{self.currency_symbol}{end_bin}+")
 
             return {
                 "labels": labels,
@@ -2065,10 +2059,11 @@ class Auction(models.Model):
                 "data": [[self.total_unsold_lots] + histogram],
             }
         else:
-            # No sold lots, use default bins
+            # No sold lots, use default bins with whole number boundaries
             start_bin = 1
-            end_bin = 39
+            bin_width = 2
             num_bins = 19
+            end_bin = start_bin + num_bins * bin_width  # Results in 39
             histogram = bin_data(
                 sold_lots,
                 "winning_price",
@@ -2078,21 +2073,13 @@ class Auction(models.Model):
                 add_column_for_high_overflow=True,
             )
 
-            # Generate labels that match the actual bin boundaries
-            bin_size = (end_bin - start_bin) / num_bins
+            # Generate labels with whole number boundaries
             labels = ["Not sold"]
             for i in range(num_bins):
-                bin_start = start_bin + i * bin_size
-                bin_end = start_bin + (i + 1) * bin_size
-                # Round to 2 decimal places to avoid floating point precision issues
-                bin_start = round(bin_start, 2)
-                bin_end = round(bin_end, 2)
-                # Format to avoid unnecessary decimals
-                if bin_start == int(bin_start) and bin_end == int(bin_end):
-                    labels.append(f"{self.currency_symbol}{int(bin_start)}-{int(bin_end)}")
-                else:
-                    labels.append(f"{self.currency_symbol}{bin_start}-{bin_end}")
-            labels.append(f"{self.currency_symbol}40+")
+                bin_start = start_bin + i * bin_width
+                bin_end = start_bin + (i + 1) * bin_width
+                labels.append(f"{self.currency_symbol}{bin_start}-{bin_end}")
+            labels.append(f"{self.currency_symbol}{end_bin}+")
 
             return {
                 "labels": labels,
