@@ -8883,15 +8883,50 @@ class AuctionStatsLotSellPricesJSONView(AuctionStatsBarChartJSONView):
             max_price = sold_lots.aggregate(max_price=Max("winning_price"))["max_price"] or 40
             max_price = int((max_price + 9) // 10 * 10)
 
+            # Create bins matching the logic in set_stat_lot_sell_prices
+            num_bins = min(max_price // 2, 30)
+            if num_bins < 10:
+                num_bins = 10
+
+            start_bin = 1
+            end_bin = max_price - 1
+            bin_size = (end_bin - start_bin) / num_bins
+
             labels = ["Not sold"]
-            for i in range(0, max_price - 1, 2):
-                labels.append(f"{self.auction.currency_symbol}{i + 1}-{i + 2}")
+            for i in range(num_bins):
+                bin_start = start_bin + i * bin_size
+                bin_end = start_bin + (i + 1) * bin_size
+                # Round to 2 decimal places to avoid floating point precision issues
+                bin_start = round(bin_start, 2)
+                bin_end = round(bin_end, 2)
+                # Format to avoid unnecessary decimals
+                if bin_start == int(bin_start) and bin_end == int(bin_end):
+                    labels.append(f"{self.auction.currency_symbol}{int(bin_start)}-{int(bin_end)}")
+                else:
+                    labels.append(f"{self.auction.currency_symbol}{bin_start}-{bin_end}")
             labels.append(f"{self.auction.currency_symbol}{max_price}+")
             return labels
         else:
             # No sold lots, use default
-            labels = [(f"{self.auction.currency_symbol}{i + 1}-{i + 2}") for i in range(0, 37, 2)]
-            return ["Not sold"] + labels + [f"{self.auction.currency_symbol}40+"]
+            start_bin = 1
+            end_bin = 39
+            num_bins = 19
+            bin_size = (end_bin - start_bin) / num_bins
+
+            labels = ["Not sold"]
+            for i in range(num_bins):
+                bin_start = start_bin + i * bin_size
+                bin_end = start_bin + (i + 1) * bin_size
+                # Round to 2 decimal places to avoid floating point precision issues
+                bin_start = round(bin_start, 2)
+                bin_end = round(bin_end, 2)
+                # Format to avoid unnecessary decimals
+                if bin_start == int(bin_start) and bin_end == int(bin_end):
+                    labels.append(f"{self.auction.currency_symbol}{int(bin_start)}-{int(bin_end)}")
+                else:
+                    labels.append(f"{self.auction.currency_symbol}{bin_start}-{bin_end}")
+            labels.append(f"{self.auction.currency_symbol}40+")
+            return labels
 
     def get_providers(self):
         providers = []

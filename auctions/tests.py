@@ -3139,6 +3139,70 @@ class AuctionStatsViewTests(StandardTestCase):
         self.online_auction.refresh_from_db()
         assert self.online_auction.next_update_due == scheduled_time, "Should not reschedule if already scheduled"
 
+    def test_lot_sell_prices_labels_match_bins(self):
+        """Test that lot sell prices chart labels match the actual bin boundaries"""
+
+        # Create some test lots with various prices
+        lot_prices = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60]
+        for price in lot_prices:
+            Lot.objects.create(
+                lot_name=f"Test lot ${price}",
+                quantity=1,
+                auction=self.online_auction,
+                auctiontos_seller=self.online_tos,
+                winning_price=price,
+            )
+
+        # Recalculate stats
+        stats = self.online_auction.set_stat_lot_sell_prices()
+
+        # Get the stats data
+        labels = stats["labels"]
+        data = stats["data"][0]  # First provider's data
+
+        # Verify data and labels have the same length
+        assert len(data) == len(labels), f"Data length ({len(data)}) should match labels length ({len(labels)})"
+
+        # Verify that the bin boundaries in labels match what bin_data produces
+        # Get the parameters used for binning
+        from django.db.models import Max
+
+        sold_lots = self.online_auction.lots_qs.filter(winning_price__isnull=False)
+        max_price = sold_lots.aggregate(max_price=Max("winning_price"))["max_price"]
+        max_price = int((max_price + 9) // 10 * 10)
+
+        num_bins_calc = min(max_price // 2, 30)
+        if num_bins_calc < 10:
+            num_bins_calc = 10
+
+        start_bin = 1
+        end_bin = max_price - 1
+        bin_size = (end_bin - start_bin) / num_bins_calc
+
+        # Verify each bin label matches the calculated boundaries
+        for i in range(num_bins_calc):
+            bin_start = start_bin + i * bin_size
+            bin_end = start_bin + (i + 1) * bin_size
+            # Round the same way the code does
+            bin_start = round(bin_start, 2)
+            bin_end = round(bin_end, 2)
+
+            # Extract the label (skip "Not sold" at index 0)
+            label = labels[i + 1]
+
+            # Verify the label contains the correct bin boundaries
+            # Remove currency symbol and split on '-'
+            label_cleaned = label.replace(self.online_auction.currency_symbol, "")
+            if "-" in label_cleaned:
+                label_start, label_end = label_cleaned.split("-")
+                label_start = float(label_start)
+                label_end = float(label_end)
+
+                # Check that label boundaries match calculated boundaries
+                # Allow small floating point tolerance
+                assert abs(label_start - bin_start) < 0.01, f"Label {label} start should be {bin_start}"
+                assert abs(label_end - bin_end) < 0.01, f"Label {label} end should be {bin_end}"
+
 
 class BulkAddLotsViewTests(StandardTestCase):
     """Test bulk add lots view with different user types"""

@@ -2031,19 +2031,32 @@ class Auction(models.Model):
             if num_bins < 10:
                 num_bins = 10  # Minimum 10 bins
 
+            start_bin = 1
+            end_bin = max_price - 1
             histogram = bin_data(
                 sold_lots,
                 "winning_price",
                 number_of_bins=num_bins,
-                start_bin=1,
-                end_bin=max_price - 1,
+                start_bin=start_bin,
+                end_bin=end_bin,
                 add_column_for_high_overflow=True,
             )
 
-            # Generate labels dynamically
+            # Generate labels that match the actual bin boundaries
+            # Calculate bin_size the same way bin_data does
+            bin_size = (end_bin - start_bin) / num_bins
             labels = ["Not sold"]
-            for i in range(0, max_price - 1, 2):
-                labels.append(f"{self.currency_symbol}{i + 1}-{i + 2}")
+            for i in range(num_bins):
+                bin_start = start_bin + i * bin_size
+                bin_end = start_bin + (i + 1) * bin_size
+                # Round to 2 decimal places to avoid floating point precision issues
+                bin_start = round(bin_start, 2)
+                bin_end = round(bin_end, 2)
+                # Format to avoid unnecessary decimals
+                if bin_start == int(bin_start) and bin_end == int(bin_end):
+                    labels.append(f"{self.currency_symbol}{int(bin_start)}-{int(bin_end)}")
+                else:
+                    labels.append(f"{self.currency_symbol}{bin_start}-{bin_end}")
             labels.append(f"{self.currency_symbol}{max_price}+")
 
             return {
@@ -2053,39 +2066,36 @@ class Auction(models.Model):
             }
         else:
             # No sold lots, use default bins
+            start_bin = 1
+            end_bin = 39
+            num_bins = 19
             histogram = bin_data(
                 sold_lots,
                 "winning_price",
-                number_of_bins=19,
-                start_bin=1,
-                end_bin=39,
+                number_of_bins=num_bins,
+                start_bin=start_bin,
+                end_bin=end_bin,
                 add_column_for_high_overflow=True,
             )
+
+            # Generate labels that match the actual bin boundaries
+            bin_size = (end_bin - start_bin) / num_bins
+            labels = ["Not sold"]
+            for i in range(num_bins):
+                bin_start = start_bin + i * bin_size
+                bin_end = start_bin + (i + 1) * bin_size
+                # Round to 2 decimal places to avoid floating point precision issues
+                bin_start = round(bin_start, 2)
+                bin_end = round(bin_end, 2)
+                # Format to avoid unnecessary decimals
+                if bin_start == int(bin_start) and bin_end == int(bin_end):
+                    labels.append(f"{self.currency_symbol}{int(bin_start)}-{int(bin_end)}")
+                else:
+                    labels.append(f"{self.currency_symbol}{bin_start}-{bin_end}")
+            labels.append(f"{self.currency_symbol}40+")
+
             return {
-                "labels": [
-                    "Not sold",
-                    f"{self.currency_symbol}1-2",
-                    f"{self.currency_symbol}3-4",
-                    f"{self.currency_symbol}5-6",
-                    f"{self.currency_symbol}7-8",
-                    f"{self.currency_symbol}9-10",
-                    f"{self.currency_symbol}11-12",
-                    f"{self.currency_symbol}13-14",
-                    f"{self.currency_symbol}15-16",
-                    f"{self.currency_symbol}17-18",
-                    f"{self.currency_symbol}19-20",
-                    f"{self.currency_symbol}21-22",
-                    f"{self.currency_symbol}23-24",
-                    f"{self.currency_symbol}25-26",
-                    f"{self.currency_symbol}27-28",
-                    f"{self.currency_symbol}29-30",
-                    f"{self.currency_symbol}31-32",
-                    f"{self.currency_symbol}33-34",
-                    f"{self.currency_symbol}35-36",
-                    f"{self.currency_symbol}37-38",
-                    f"{self.currency_symbol}39-40",
-                    f"{self.currency_symbol}40+",
-                ],
+                "labels": labels,
                 "providers": ["Number of lots"],
                 "data": [[self.total_unsold_lots] + histogram],
             }
