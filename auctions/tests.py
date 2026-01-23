@@ -2522,6 +2522,71 @@ class AuctionPropertyTests(StandardTestCase):
         )
         assert mail_auction.allow_mailing_lots is True
 
+    def test_auction_type_as_str_with_mail_only(self):
+        """Test that auction_type_as_str returns correct string for mail-only auctions"""
+        # Create an online auction with only mail pickup
+        mail_only_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Mail only auction",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+        # Add a mail pickup location (pickup_by_mail=True)
+        PickupLocation.objects.create(
+            name="Mail pickup",
+            auction=mail_only_auction,
+            pickup_by_mail=True,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+        # Should return "online auction with lots delivered by mail"
+        assert mail_only_auction.auction_type == "online_no_location"
+        assert mail_only_auction.auction_type_as_str == "online auction with lots delivered by mail"
+
+        # Create an online auction with no locations at all
+        no_location_auction = Auction.objects.create(
+            created_by=self.user,
+            title="No location auction",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+        # Should return "online auction with no specified pickup location"
+        assert no_location_auction.auction_type == "online_no_location"
+        assert no_location_auction.auction_type_as_str == "online auction with no specified pickup location"
+
+    def test_auction_distance_excludes_zero_coordinates(self):
+        """Test that distance calculation excludes locations with 0,0 coordinates"""
+        # Create an auction with a location that has 0,0 coordinates
+        zero_coord_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Zero coord auction",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+        # Add a location with 0,0 coordinates (should be excluded from distance)
+        PickupLocation.objects.create(
+            name="Zero location",
+            auction=zero_coord_auction,
+            latitude=0,
+            longitude=0,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+        # Verify this is treated as having no location with coordinates
+        assert zero_coord_auction.location_with_location_qs.count() == 0
+
+        # Add a real location
+        PickupLocation.objects.create(
+            name="Real location",
+            auction=zero_coord_auction,
+            latitude=42.0,
+            longitude=-72.0,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+        # Now should have one location with coordinates
+        assert zero_coord_auction.location_with_location_qs.count() == 1
+
     def test_permission_check(self):
         """Test the permission_check method"""
         # Creator has permission
