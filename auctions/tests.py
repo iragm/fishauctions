@@ -2555,8 +2555,8 @@ class AuctionPropertyTests(StandardTestCase):
         assert no_location_auction.auction_type == "online_no_location"
         assert no_location_auction.auction_type_as_str == "online auction with no specified pickup location"
 
-    def test_auction_distance_excludes_zero_coordinates(self):
-        """Test that distance calculation excludes locations with 0,0 coordinates"""
+    def test_location_with_location_qs_excludes_zero_coordinates(self):
+        """Test that location_with_location_qs excludes locations with 0,0 coordinates"""
         # Create an auction with a location that has 0,0 coordinates
         zero_coord_auction = Auction.objects.create(
             created_by=self.user,
