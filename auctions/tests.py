@@ -2587,6 +2587,93 @@ class AuctionPropertyTests(StandardTestCase):
         # Now should have one location with coordinates
         assert zero_coord_auction.location_with_location_qs.count() == 1
 
+    def test_all_auctions_distance_excludes_zero_and_mail_locations(self):
+        """Test that AllAuctions view distance calculation excludes 0,0 and mail locations"""
+        from auctions.views import AllAuctions
+        from django.test import RequestFactory
+
+        # Create auction with only 0,0 location
+        zero_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Zero location auction",
+            is_online=True,
+            promote_this_auction=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=7),
+        )
+        PickupLocation.objects.create(
+            name="Zero location",
+            auction=zero_auction,
+            latitude=0,
+            longitude=0,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+
+        # Create auction with only mail location
+        mail_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Mail only auction",
+            is_online=True,
+            promote_this_auction=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=7),
+        )
+        PickupLocation.objects.create(
+            name="Mail me my lots",
+            auction=mail_auction,
+            pickup_by_mail=True,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+
+        # Create auction with real location
+        real_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Real location auction",
+            is_online=True,
+            promote_this_auction=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=7),
+        )
+        PickupLocation.objects.create(
+            name="Real location",
+            auction=real_auction,
+            latitude=44.0,
+            longitude=-72.5,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+
+        # Set up request with user location
+        factory = RequestFactory()
+        request = factory.get("/auctions/")
+        request.user = self.user
+        # Set user location
+        self.user.userdata.latitude = 43.0
+        self.user.userdata.longitude = -71.5
+        self.user.userdata.save()
+
+        # Get queryset from view
+        view = AllAuctions()
+        view.request = request
+        qs = view.get_queryset()
+
+        # Find our test auctions in the queryset
+        zero_result = qs.filter(pk=zero_auction.pk).first()
+        mail_result = qs.filter(pk=mail_auction.pk).first()
+        real_result = qs.filter(pk=real_auction.pk).first()
+
+        # Zero location auction should have no distance (None or NULL)
+        assert zero_result is not None
+        assert zero_result.distance is None or zero_result.distance == 0
+
+        # Mail location auction should have no distance (None or NULL)
+        assert mail_result is not None
+        assert mail_result.distance is None or mail_result.distance == 0
+
+        # Real location auction should have a calculated distance
+        assert real_result is not None
+        assert real_result.distance is not None
+        assert real_result.distance > 0
+
     def test_permission_check(self):
         """Test the permission_check method"""
         # Creator has permission
