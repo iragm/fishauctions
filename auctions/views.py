@@ -5873,6 +5873,8 @@ class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
         if latitude and longitude:
             closest_pickup_location_subquery = (
                 PickupLocation.objects.filter(auction=OuterRef("pk"))
+                .exclude(latitude=0, longitude=0)
+                .exclude(pickup_by_mail=True)
                 .annotate(distance=distance_to(latitude, longitude))
                 .order_by("distance")
                 .values("distance")[:1]

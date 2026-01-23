@@ -1108,6 +1108,8 @@ class Auction(models.Model):
         if auction_type == "online_multi_location":
             return "online auction with in-person pickup at multiple locations"
         if auction_type == "online_no_location":
+            if self.allow_mailing_lots:
+                return "online auction with lots delivered by mail"
             return "online auction with no specified pickup location"
         if auction_type == "inperson_one_location":
             return "in-person auction"
