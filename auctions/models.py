@@ -1079,9 +1079,7 @@ class Auction(models.Model):
 
     @property
     def allow_mailing_lots(self):
-        if self.location_qs.filter(pickup_by_mail=True).first():
-            return True
-        return False
+        return self.location_qs.filter(pickup_by_mail=True).exists()
 
     @property
     def auction_type(self):
