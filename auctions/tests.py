@@ -9851,3 +9851,73 @@ class LotAdminFilterTests(StandardTestCase):
 
         # Should not include lots without winners
         self.assertNotIn(self.lot_no_bids, filtered_qs)
+
+
+class FeedbackTestCase(StandardTestCase):
+    """Test feedback functionality for buyers and sellers"""
+
+    def test_feedback_text_length_limit(self):
+        """Test that feedback text can be up to 500 characters"""
+        # Login as the winner
+        self.client.login(username="no_tos", password="testpassword")
+        
+        # Create a long feedback text (500 characters)
+        long_text = "A" * 500
+        
+        # Submit feedback as winner (buyer)
+        response = self.client.post(
+            f"/api/feedback/{self.lot.lot_number}/winner/",
+            {"text": long_text, "rating": 1}
+        )
+        
+        # Should be successful
+        self.assertEqual(response.status_code, 200)
+        
+        # Verify the feedback was saved
+        lot = Lot.objects.get(pk=self.lot.pk)
+        self.assertEqual(lot.feedback_text, long_text)
+        self.assertEqual(lot.feedback_rating, 1)
+
+    def test_feedback_text_truncation(self):
+        """Test that feedback text longer than 500 characters is truncated"""
+        # Login as the winner
+        self.client.login(username="no_tos", password="testpassword")
+        
+        # Create a feedback text longer than 500 characters
+        very_long_text = "B" * 600
+        
+        # Submit feedback as winner (buyer)
+        response = self.client.post(
+            f"/api/feedback/{self.lot.lot_number}/winner/",
+            {"text": very_long_text, "rating": 1}
+        )
+        
+        # Should be successful
+        self.assertEqual(response.status_code, 200)
+        
+        # Verify the feedback was truncated to 500 characters
+        lot = Lot.objects.get(pk=self.lot.pk)
+        self.assertEqual(len(lot.feedback_text), 500)
+        self.assertEqual(lot.feedback_text, very_long_text[:500])
+
+    def test_seller_feedback_text_length(self):
+        """Test that seller feedback text can be up to 500 characters"""
+        # Login as the seller
+        self.client.login(username="my_lot", password="testpassword")
+        
+        # Create a long feedback text (500 characters)
+        long_text = "C" * 500
+        
+        # Submit feedback as seller
+        response = self.client.post(
+            f"/api/feedback/{self.lot.lot_number}/seller/",
+            {"text": long_text, "rating": -1}
+        )
+        
+        # Should be successful
+        self.assertEqual(response.status_code, 200)
+        
+        # Verify the feedback was saved
+        lot = Lot.objects.get(pk=self.lot.pk)
+        self.assertEqual(lot.winner_feedback_text, long_text)
+        self.assertEqual(lot.winner_feedback_rating, -1)
