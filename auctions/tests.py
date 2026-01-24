@@ -9921,3 +9921,25 @@ class FeedbackTestCase(StandardTestCase):
         lot = Lot.objects.get(pk=self.lot.pk)
         self.assertEqual(lot.winner_feedback_text, long_text)
         self.assertEqual(lot.winner_feedback_rating, -1)
+
+    def test_seller_feedback_text_truncation(self):
+        """Test that seller feedback text longer than 500 characters is truncated"""
+        # Login as the seller
+        self.client.login(username="my_lot", password="testpassword")
+        
+        # Create a feedback text longer than 500 characters
+        very_long_text = "D" * 600
+        
+        # Submit feedback as seller
+        response = self.client.post(
+            f"/api/feedback/{self.lot.lot_number}/seller/",
+            {"text": very_long_text, "rating": -1}
+        )
+        
+        # Should be successful
+        self.assertEqual(response.status_code, 200)
+        
+        # Verify the feedback was truncated to 500 characters
+        lot = Lot.objects.get(pk=self.lot.pk)
+        self.assertEqual(len(lot.winner_feedback_text), 500)
+        self.assertEqual(lot.winner_feedback_text, very_long_text[:500])
