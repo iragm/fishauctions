@@ -1088,7 +1088,8 @@ class Feedback(LoginRequiredMixin, View):
                 lot.save()
             text = data.get("text")
             if text:
-                lot.feedback_text = text
+                # Truncate text to max length to prevent database errors
+                lot.feedback_text = text[:500]
                 lot.save()
         if leave_as == "seller":
             if lot.user:
@@ -1105,7 +1106,8 @@ class Feedback(LoginRequiredMixin, View):
                 lot.save()
             text = data.get("text")
             if text:
-                lot.winner_feedback_text = text
+                # Truncate text to max length to prevent database errors
+                lot.winner_feedback_text = text[:500]
                 lot.save()
         if not winner_checks_pass and not seller_checks_pass:
             messages.error(request, "Only the seller or winner of a lot can leave feedback")
