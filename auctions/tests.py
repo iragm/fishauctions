@@ -9631,7 +9631,7 @@ class AuctionTOSNotificationsCommandTests(StandardTestCase):
         base_qs = AuctionTOS.objects.filter(manually_added=False, user__isnull=False).exclude(
             pickup_location__pickup_by_mail=True
         )
-        assert mail_tos not in base_qs, "Mail-only TOS should be excluded from base queryset"
+        assert not base_qs.filter(pk=mail_tos.pk).exists(), "Mail-only TOS should be excluded from base queryset"
 
     def test_includes_physical_locations_in_base_queryset(self):
         """Test that physical location TOS are included in the base queryset"""
@@ -9667,7 +9667,7 @@ class AuctionTOSNotificationsCommandTests(StandardTestCase):
         base_qs = AuctionTOS.objects.filter(manually_added=False, user__isnull=False).exclude(
             pickup_location__pickup_by_mail=True
         )
-        assert physical_tos in base_qs, "Physical location TOS should be included in base queryset"
+        assert base_qs.filter(pk=physical_tos.pk).exists(), "Physical location TOS should be included in base queryset"
 
     def test_command_uses_shared_distance_helper(self):
         """Test that the command runs successfully and uses the shared distance calculation helper"""
