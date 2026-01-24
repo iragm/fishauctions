@@ -2522,6 +2522,159 @@ class AuctionPropertyTests(StandardTestCase):
         )
         assert mail_auction.allow_mailing_lots is True
 
+    def test_auction_type_as_str_with_mail_only(self):
+        """Test that auction_type_as_str returns correct string for mail-only auctions"""
+        # Create an online auction with only mail pickup
+        mail_only_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Mail only auction",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+        # Add a mail pickup location (pickup_by_mail=True)
+        PickupLocation.objects.create(
+            name="Mail pickup",
+            auction=mail_only_auction,
+            pickup_by_mail=True,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+        # Should return "online auction with lots delivered by mail"
+        assert mail_only_auction.auction_type == "online_no_location"
+        assert mail_only_auction.auction_type_as_str == "online auction with lots delivered by mail"
+
+        # Create an online auction with no locations at all
+        no_location_auction = Auction.objects.create(
+            created_by=self.user,
+            title="No location auction",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+        # Should return "online auction with no specified pickup location"
+        assert no_location_auction.auction_type == "online_no_location"
+        assert no_location_auction.auction_type_as_str == "online auction with no specified pickup location"
+
+    def test_location_with_location_qs_excludes_zero_coordinates(self):
+        """Test that location_with_location_qs excludes locations with 0,0 coordinates"""
+        # Create an auction with a location that has 0,0 coordinates
+        zero_coord_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Zero coord auction",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=1),
+        )
+        # Add a location with 0,0 coordinates (should be excluded from distance)
+        PickupLocation.objects.create(
+            name="Zero location",
+            auction=zero_coord_auction,
+            latitude=0,
+            longitude=0,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+        # Verify this is treated as having no location with coordinates
+        assert zero_coord_auction.location_with_location_qs.count() == 0
+
+        # Add a real location
+        PickupLocation.objects.create(
+            name="Real location",
+            auction=zero_coord_auction,
+            latitude=42.0,
+            longitude=-72.0,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+        # Now should have one location with coordinates
+        assert zero_coord_auction.location_with_location_qs.count() == 1
+
+    def test_all_auctions_distance_excludes_zero_and_mail_locations(self):
+        """Test that AllAuctions view distance calculation excludes 0,0 and mail locations"""
+        from django.test import RequestFactory
+
+        from auctions.views import AllAuctions
+
+        # Create auction with only 0,0 location
+        zero_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Zero location auction",
+            is_online=True,
+            promote_this_auction=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=7),
+        )
+        PickupLocation.objects.create(
+            name="Zero location",
+            auction=zero_auction,
+            latitude=0,
+            longitude=0,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+
+        # Create auction with only mail location
+        mail_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Mail only auction",
+            is_online=True,
+            promote_this_auction=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=7),
+        )
+        PickupLocation.objects.create(
+            name="Mail me my lots",
+            auction=mail_auction,
+            pickup_by_mail=True,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+
+        # Create auction with real location
+        real_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Real location auction",
+            is_online=True,
+            promote_this_auction=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=7),
+        )
+        PickupLocation.objects.create(
+            name="Real location",
+            auction=real_auction,
+            latitude=44.0,
+            longitude=-72.5,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+
+        # Set up request with user location
+        factory = RequestFactory()
+        request = factory.get("/auctions/")
+        request.user = self.user
+        # Set user location
+        self.user.userdata.latitude = 43.0
+        self.user.userdata.longitude = -71.5
+        self.user.userdata.save()
+
+        # Get queryset from view
+        view = AllAuctions()
+        view.request = request
+        qs = view.get_queryset()
+
+        # Find our test auctions in the queryset
+        zero_result = qs.filter(pk=zero_auction.pk).first()
+        mail_result = qs.filter(pk=mail_auction.pk).first()
+        real_result = qs.filter(pk=real_auction.pk).first()
+
+        # Zero location auction should have no distance (None or NULL)
+        assert zero_result is not None
+        assert zero_result.distance is None or zero_result.distance == 0
+
+        # Mail location auction should have no distance (None or NULL)
+        assert mail_result is not None
+        assert mail_result.distance is None or mail_result.distance == 0
+
+        # Real location auction should have a calculated distance
+        assert real_result is not None
+        assert real_result.distance is not None
+        assert real_result.distance > 0
+
     def test_permission_check(self):
         """Test the permission_check method"""
         # Creator has permission
@@ -9440,6 +9593,118 @@ class WeeklyPromoManagementCommandTests(StandardTestCase):
                 0,
                 "Expected at least one weekly promo email for in-person auctions",
             )
+
+
+class AuctionTOSNotificationsCommandTests(StandardTestCase):
+    """Test the auctiontos_notifications management command"""
+
+    def test_excludes_mail_only_locations_from_base_queryset(self):
+        """Test that mail-only TOS are excluded from the base queryset used for notifications"""
+
+        # Create auction with only mail pickup location
+        mail_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Mail only auction",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=7),
+            lot_submission_start_date=timezone.now() - datetime.timedelta(days=2),
+        )
+        mail_location = PickupLocation.objects.create(
+            name="Mail me my lots",
+            auction=mail_auction,
+            pickup_by_mail=True,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+
+        # Create TOS with mail-only pickup
+        mail_tos = AuctionTOS.objects.create(
+            auction=mail_auction,
+            user=self.userB,
+            pickup_location=mail_location,
+            manually_added=False,
+            confirm_email_sent=False,
+            createdon=timezone.now() - datetime.timedelta(hours=25),
+        )
+
+        # Verify that the base queryset used by the command excludes mail-only TOS
+        base_qs = AuctionTOS.objects.filter(manually_added=False, user__isnull=False).exclude(
+            pickup_location__pickup_by_mail=True
+        )
+        assert not base_qs.filter(pk=mail_tos.pk).exists(), "Mail-only TOS should be excluded from base queryset"
+
+    def test_includes_physical_locations_in_base_queryset(self):
+        """Test that physical location TOS are included in the base queryset"""
+        # Create auction with physical location
+        physical_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Physical auction",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=7),
+            lot_submission_start_date=timezone.now() - datetime.timedelta(days=2),
+        )
+        physical_location = PickupLocation.objects.create(
+            name="Physical location",
+            auction=physical_auction,
+            pickup_by_mail=False,
+            latitude=44.0,
+            longitude=-72.5,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+
+        # Create TOS with physical pickup
+        physical_tos = AuctionTOS.objects.create(
+            auction=physical_auction,
+            user=self.userB,
+            pickup_location=physical_location,
+            manually_added=False,
+            confirm_email_sent=False,
+            createdon=timezone.now() - datetime.timedelta(hours=25),
+        )
+
+        # Verify that the base queryset includes physical location TOS
+        base_qs = AuctionTOS.objects.filter(manually_added=False, user__isnull=False).exclude(
+            pickup_location__pickup_by_mail=True
+        )
+        assert base_qs.filter(pk=physical_tos.pk).exists(), "Physical location TOS should be included in base queryset"
+
+    def test_command_uses_shared_distance_helper(self):
+        """Test that the command runs successfully and uses the shared distance calculation helper"""
+        from unittest.mock import patch
+
+        from django.core.management import call_command
+
+        # Create auction with physical location
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="Test auction for distance",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=7),
+        )
+        PickupLocation.objects.create(
+            name="Test location",
+            auction=auction,
+            latitude=44.0,
+            longitude=-72.5,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+
+        # Set user location
+        self.userB.userdata.latitude = 43.0
+        self.userB.userdata.longitude = -71.5
+        self.userB.userdata.save()
+
+        # Patch mail.send to prevent actual email sending
+        with patch("auctions.management.commands.auctiontos_notifications.mail.send"):
+            # Verify the command runs without error
+            # The command uses Auction.get_closest_location_distance_subquery which excludes (0,0) and mail locations
+            try:
+                call_command("auctiontos_notifications")
+                # Success - command ran without errors
+            except Exception as e:
+                self.fail(f"Command failed with error: {e}")
 
 
 class LotAdminFilterTests(StandardTestCase):

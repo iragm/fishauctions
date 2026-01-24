@@ -565,7 +565,9 @@ This graph shows overall engagement of people with your auction.  You can gauge 
 <br><h4>Promotions and join reminder emails</h4>
 When users with an account view your auction but don't join it, they'll be sent a reminder email 24 hours later.  Users can turn off <b>send reminder emails about joining auctions</b> under preferences.<br><br>
 Promoted auctions are included in a weekly promotional email sent every Wednesday to nearby users.
-
+{% if auction.allow_mailing_lots and not auction.location_with_location_qs.count %}
+<br><br> Join reminder emails are not sent for auctions without an in-person pickup location.
+{% endif %}
 <table class="table table-striped">
     <thead>
         <tr>
