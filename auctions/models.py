@@ -1085,14 +1085,14 @@ class Auction(models.Model):
     def get_closest_location_distance_subquery(latitude, longitude):
         """
         Returns a subquery that calculates the distance to the closest valid pickup location.
-        
+
         Excludes locations with (0,0) coordinates and mail-only pickup locations.
         Used to annotate auction querysets with distance information.
-        
+
         Args:
             latitude: User's latitude
             longitude: User's longitude
-            
+
         Returns:
             Subquery that can be used with .annotate(distance=...) on Auction queryset
         """
