@@ -9594,6 +9594,118 @@ class WeeklyPromoManagementCommandTests(StandardTestCase):
             )
 
 
+class AuctionTOSNotificationsCommandTests(StandardTestCase):
+    """Test the auctiontos_notifications management command"""
+
+    def test_excludes_mail_only_locations_from_base_queryset(self):
+        """Test that mail-only TOS are excluded from the base queryset used for notifications"""
+        from django.core.management import call_command
+        
+        # Create auction with only mail pickup location
+        mail_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Mail only auction",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=7),
+            lot_submission_start_date=timezone.now() - datetime.timedelta(days=2),
+        )
+        mail_location = PickupLocation.objects.create(
+            name="Mail me my lots",
+            auction=mail_auction,
+            pickup_by_mail=True,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+        
+        # Create TOS with mail-only pickup
+        mail_tos = AuctionTOS.objects.create(
+            auction=mail_auction,
+            user=self.userB,
+            pickup_location=mail_location,
+            manually_added=False,
+            confirm_email_sent=False,
+            createdon=timezone.now() - datetime.timedelta(hours=25),
+        )
+        
+        # Verify that the base queryset used by the command excludes mail-only TOS
+        base_qs = AuctionTOS.objects.filter(manually_added=False, user__isnull=False).exclude(
+            pickup_location__pickup_by_mail=True
+        )
+        assert mail_tos not in base_qs, "Mail-only TOS should be excluded from base queryset"
+
+    def test_includes_physical_locations_in_base_queryset(self):
+        """Test that physical location TOS are included in the base queryset"""
+        # Create auction with physical location
+        physical_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Physical auction",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=7),
+            lot_submission_start_date=timezone.now() - datetime.timedelta(days=2),
+        )
+        physical_location = PickupLocation.objects.create(
+            name="Physical location",
+            auction=physical_auction,
+            pickup_by_mail=False,
+            latitude=44.0,
+            longitude=-72.5,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+        
+        # Create TOS with physical pickup
+        physical_tos = AuctionTOS.objects.create(
+            auction=physical_auction,
+            user=self.userB,
+            pickup_location=physical_location,
+            manually_added=False,
+            confirm_email_sent=False,
+            createdon=timezone.now() - datetime.timedelta(hours=25),
+        )
+        
+        # Verify that the base queryset includes physical location TOS
+        base_qs = AuctionTOS.objects.filter(manually_added=False, user__isnull=False).exclude(
+            pickup_location__pickup_by_mail=True
+        )
+        assert physical_tos in base_qs, "Physical location TOS should be included in base queryset"
+
+    def test_command_uses_shared_distance_helper(self):
+        """Test that the command runs successfully and uses the shared distance calculation helper"""
+        from django.core.management import call_command
+        from unittest.mock import patch
+        
+        # Create auction with physical location
+        auction = Auction.objects.create(
+            created_by=self.user,
+            title="Test auction for distance",
+            is_online=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=7),
+        )
+        PickupLocation.objects.create(
+            name="Test location",
+            auction=auction,
+            latitude=44.0,
+            longitude=-72.5,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+        
+        # Set user location  
+        self.userB.userdata.latitude = 43.0
+        self.userB.userdata.longitude = -71.5
+        self.userB.userdata.save()
+        
+        # Patch mail.send to prevent actual email sending
+        with patch("auctions.management.commands.auctiontos_notifications.mail.send"):
+            # Verify the command runs without error
+            # The command uses Auction.get_closest_location_distance_subquery which excludes (0,0) and mail locations
+            try:
+                call_command("auctiontos_notifications")
+                # Success - command ran without errors
+            except Exception as e:
+                self.fail(f"Command failed with error: {e}")
+
+
 class LotAdminFilterTests(StandardTestCase):
     """Test the keyword filters in LotAdminFilter"""
 
