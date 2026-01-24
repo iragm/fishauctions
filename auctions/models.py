@@ -1081,6 +1081,30 @@ class Auction(models.Model):
     def allow_mailing_lots(self):
         return self.location_qs.filter(pickup_by_mail=True).exists()
 
+    @staticmethod
+    def get_closest_location_distance_subquery(latitude, longitude):
+        """
+        Returns a subquery that calculates the distance to the closest valid pickup location.
+        
+        Excludes locations with (0,0) coordinates and mail-only pickup locations.
+        Used to annotate auction querysets with distance information.
+        
+        Args:
+            latitude: User's latitude
+            longitude: User's longitude
+            
+        Returns:
+            Subquery that can be used with .annotate(distance=...) on Auction queryset
+        """
+        return Subquery(
+            PickupLocation.objects.filter(auction=OuterRef("pk"))
+            .exclude(latitude=0, longitude=0)
+            .exclude(pickup_by_mail=True)
+            .annotate(distance=distance_to(latitude, longitude))
+            .order_by("distance")
+            .values("distance")[:1]
+        )
+
     @property
     def auction_type(self):
         """Returns whether this is an online, in-person, or hybrid auction for use in tooltips and templates.  See also auction_type_as_str for a friendly display version"""

@@ -3,7 +3,6 @@ import datetime
 from django.conf import settings
 from django.contrib.sites.models import Site
 from django.core.management.base import BaseCommand
-from django.db.models import OuterRef, Subquery
 from django.utils import timezone
 from post_office import mail
 
@@ -12,8 +11,6 @@ from auctions.models import (
     AuctionCampaign,
     AuctionTOS,
     Lot,
-    PickupLocation,
-    distance_to,
 )
 
 
@@ -144,13 +141,7 @@ class Command(BaseCommand):
             longitude = userData.longitude
             if latitude and longitude:
                 qs = Auction.objects.filter(pk=campaign.auction.pk)
-                closest_pickup_location_subquery = (
-                    PickupLocation.objects.filter(auction=OuterRef("pk"))
-                    .annotate(distance=distance_to(latitude, longitude))
-                    .order_by("distance")
-                    .values("distance")[:1]
-                )
-                qs = qs.annotate(distance=Subquery(closest_pickup_location_subquery))
+                qs = qs.annotate(distance=Auction.get_closest_location_distance_subquery(latitude, longitude))
                 auction = qs.first()
                 if auction and auction.is_online and auction.distance > userData.email_me_about_new_auctions_distance:
                     send_email = False

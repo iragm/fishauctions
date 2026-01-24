@@ -5871,15 +5871,7 @@ class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
         )
         latitude, longitude = self.get_coordinates()
         if latitude and longitude:
-            closest_pickup_location_subquery = (
-                PickupLocation.objects.filter(auction=OuterRef("pk"))
-                .exclude(latitude=0, longitude=0)
-                .exclude(pickup_by_mail=True)
-                .annotate(distance=distance_to(latitude, longitude))
-                .order_by("distance")
-                .values("distance")[:1]
-            )
-            qs = qs.annotate(distance=Subquery(closest_pickup_location_subquery))
+            qs = qs.annotate(distance=Auction.get_closest_location_distance_subquery(latitude, longitude))
         else:
             qs = qs.annotate(distance=Value(0, output_field=FloatField()))
         if not self.request.user.is_authenticated:
