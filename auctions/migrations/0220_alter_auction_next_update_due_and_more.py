@@ -5,25 +5,29 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('auctions', '0219_update_privacy_blog_post'),
+        ("auctions", "0219_update_privacy_blog_post"),
     ]
 
     operations = [
         migrations.AlterField(
-            model_name='auction',
-            name='next_update_due',
-            field=models.DateTimeField(blank=True, default=django.utils.timezone.now, help_text='Timestamp for when the next statistics update should be run', null=True),
+            model_name="auction",
+            name="next_update_due",
+            field=models.DateTimeField(
+                blank=True,
+                default=django.utils.timezone.now,
+                help_text="Timestamp for when the next statistics update should be run",
+                null=True,
+            ),
         ),
         migrations.AlterField(
-            model_name='lot',
-            name='feedback_text',
+            model_name="lot",
+            name="feedback_text",
             field=models.CharField(blank=True, max_length=500, null=True),
         ),
         migrations.AlterField(
-            model_name='lot',
-            name='winner_feedback_text',
+            model_name="lot",
+            name="winner_feedback_text",
             field=models.CharField(blank=True, max_length=500, null=True),
         ),
     ]
