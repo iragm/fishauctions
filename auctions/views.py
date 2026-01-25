@@ -179,6 +179,9 @@ MILES_TO_KM = 1.60934
 # Invoice notification delay in seconds (allows for undo before email is sent)
 INVOICE_NOTIFICATION_DELAY_SECONDS = 15
 
+# Maximum length for feedback text fields
+FEEDBACK_TEXT_MAX_LENGTH = 500
+
 logger = logging.getLogger(__name__)
 
 
@@ -1088,7 +1091,8 @@ class Feedback(LoginRequiredMixin, View):
                 lot.save()
             text = data.get("text")
             if text:
-                lot.feedback_text = text
+                # Truncate text to max length to prevent database errors
+                lot.feedback_text = text[:FEEDBACK_TEXT_MAX_LENGTH]
                 lot.save()
         if leave_as == "seller":
             if lot.user:
@@ -1105,7 +1109,8 @@ class Feedback(LoginRequiredMixin, View):
                 lot.save()
             text = data.get("text")
             if text:
-                lot.winner_feedback_text = text
+                # Truncate text to max length to prevent database errors
+                lot.winner_feedback_text = text[:FEEDBACK_TEXT_MAX_LENGTH]
                 lot.save()
         if not winner_checks_pass and not seller_checks_pass:
             messages.error(request, "Only the seller or winner of a lot can leave feedback")

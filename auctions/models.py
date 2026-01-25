@@ -3396,9 +3396,9 @@ class Lot(models.Model):
     # to allow some stuff that's not in your favorite cateogy to show up in the recommended list
     promotion_weight = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(20)])
     feedback_rating = models.IntegerField(default=0, validators=[MinValueValidator(-1), MaxValueValidator(1)])
-    feedback_text = models.CharField(max_length=100, blank=True, null=True)
+    feedback_text = models.CharField(max_length=500, blank=True, null=True)
     winner_feedback_rating = models.IntegerField(default=0, validators=[MinValueValidator(-1), MaxValueValidator(1)])
-    winner_feedback_text = models.CharField(max_length=100, blank=True, null=True)
+    winner_feedback_text = models.CharField(max_length=500, blank=True, null=True)
     date_of_last_user_edit = models.DateTimeField(auto_now_add=True, blank=True)
     is_chat_allowed = models.BooleanField(default=True)
     is_chat_allowed.help_text = (

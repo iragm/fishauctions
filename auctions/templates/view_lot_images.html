@@ -907,7 +907,7 @@ function deactivate_lot() {
             </div>
         </div>
 
-        <input type="text" placeholder="Comments" id="text_{{lot.lot_number}}_winner" onblur="feedback({{ lot.lot_number }}, 'winner', null, this.value);" value="{% if lot.feedback_text %}{{ lot.feedback_text }}{% endif %}" class="form-control mt-2" style="min-width: 20em;"></td>
+        <input type="text" placeholder="Comments" id="text_{{lot.lot_number}}_winner" onblur="feedback({{ lot.lot_number }}, 'winner', null, this.value);" value="{% if lot.feedback_text %}{{ lot.feedback_text }}{% endif %}" class="form-control mt-2" style="min-width: 20em;" maxlength="500"></td>
         <br>
         <span class="text-muted"><a href="{% url 'feedback' %}">Leave feedback on all lots you've won here.</a></span>
       <div class="modal-footer">

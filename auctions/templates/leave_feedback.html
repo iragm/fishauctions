@@ -78,7 +78,7 @@ function feedback(pk, leave_as, rating, text) {
             <button type="button" id="0_{{lot.lot_number}}_winner" onclick="feedback({{ lot.lot_number }}, 'winner', 0, null);" class="btn btn-secondary">None</button>
             <button type="button" id="-1_{{lot.lot_number}}_winner" onclick="feedback({{ lot.lot_number }}, 'winner', -1, null);"class="btn btn-secondary {% if lot.feedback_rating == -1 %}btn-danger{% endif %}">-1</button>
           </div></td>
-        <td><input type="text" placeholder="Comments" id="text_{{lot.lot_number}}_winner" onblur="feedback({{ lot.lot_number }}, 'winner', null, this.value);" value="{% if lot.feedback_text %}{{ lot.feedback_text }}{% endif %}" class="form-control" style="min-width: 20em;"></td>
+        <td><input type="text" placeholder="Comments" id="text_{{lot.lot_number}}_winner" onblur="feedback({{ lot.lot_number }}, 'winner', null, this.value);" value="{% if lot.feedback_text %}{{ lot.feedback_text }}{% endif %}" class="form-control" style="min-width: 20em;" maxlength="500"></td>
       </tr>
       {% endfor %}
     </tbody>
@@ -105,7 +105,7 @@ function feedback(pk, leave_as, rating, text) {
             <button type="button" id="0_{{lot.lot_number}}_seller" onclick="feedback({{ lot.lot_number }}, 'seller', 0, null);" class="btn btn-secondary">None</button>
             <button type="button" id="-1_{{lot.lot_number}}_seller" onclick="feedback({{ lot.lot_number }}, 'seller', -1, null);"class="btn btn-secondary {% if lot.winner_feedback_rating == -1 %}btn-danger{% endif %}">-1</button>
           </div></td>
-        <td><input type="text" placeholder="Comments" id="text_{{lot.lot_number}}_seller" onblur="feedback({{ lot.lot_number }}, 'seller', null, this.value);" value="{% if lot.winner_feedback_text %}{{ lot.winner_feedback_text }}{% endif %}" class="form-control" style="min-width: 20em;"></td>
+        <td><input type="text" placeholder="Comments" id="text_{{lot.lot_number}}_seller" onblur="feedback({{ lot.lot_number }}, 'seller', null, this.value);" value="{% if lot.winner_feedback_text %}{{ lot.winner_feedback_text }}{% endif %}" class="form-control" style="min-width: 20em;" maxlength="500"></td>
       </tr>
       {% endfor %}
     </tbody>
