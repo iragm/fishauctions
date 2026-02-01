@@ -119,6 +119,25 @@ Tasks are defined in `fishauctions/celery.py` and automatically synced to the da
 1. Verify `POST_OFFICE['CELERY_ENABLED'] = True` in settings
 2. Check worker is processing tasks: `docker logs celery_worker`
 
+### Weekly Promo Emails
+
+To view logs for the weekly_promo task:
+
+```bash
+# View all weekly_promo task logs with timestamps
+docker logs --timestamps celery_worker 2>&1 | grep auctions.tasks.weekly_promo
+
+# View recent weekly_promo logs (last 100 lines)
+docker logs --timestamps --tail 100 celery_worker 2>&1 | grep weekly_promo
+```
+
+The logs will show:
+- Number of eligible users found
+- Each email sent with content breakdown (auctions, nearby lots, shippable lots)
+- Users skipped due to no content
+- Any errors during processing
+- Summary with sent/skipped counts
+
 ## Additional Resources
 
 - [Celery Documentation](https://docs.celeryproject.org/)
