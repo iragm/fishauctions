@@ -9507,16 +9507,16 @@ class WeeklyPromoManagementCommandTests(StandardTestCase):
             "weekly_promo_emails_sent should be incremented",
         )
 
-    def test_weekly_promo_excludes_inactive_users(self):
-        """Test that weekly_promo excludes users who were recently active."""
+    def test_weekly_promo_includes_recently_active_users(self):
+        """Test that weekly_promo includes users who were recently active."""
         # Update user to be recently active (within last 6 days)
         self.promo_user.userdata.last_activity = timezone.now() - datetime.timedelta(days=3)
         self.promo_user.userdata.save()
 
         with patch("auctions.management.commands.weekly_promo.mail.send") as mock_send:
             call_command("weekly_promo")
-            # Check that email was NOT sent to recently active user
-            self.assertFalse(mock_send.called, "mail.send should not be called for recently active users")
+            # Check that email WAS sent to recently active user
+            self.assertTrue(mock_send.called, "mail.send should be called for recently active users")
 
     def test_weekly_promo_excludes_very_old_users(self):
         """Test that weekly_promo excludes users who haven't been active in a long time."""
