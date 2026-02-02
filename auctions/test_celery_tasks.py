@@ -56,6 +56,21 @@ class CeleryTasksTestCase(TestCase):
         mock_call_command.assert_called_once_with("weekly_promo")
 
     @patch("auctions.tasks.call_command")
+    @patch("auctions.tasks.logger")
+    def test_weekly_promo_task_logs_errors(self, mock_logger, mock_call_command):
+        """Test that weekly_promo task logs errors when command fails."""
+        # Make call_command raise an exception
+        mock_call_command.side_effect = Exception("Test error")
+
+        # The task should raise the exception
+        with self.assertRaises(Exception):
+            tasks.weekly_promo()
+
+        # Verify error was logged
+        mock_logger.error.assert_called()
+        mock_logger.exception.assert_called()
+
+    @patch("auctions.tasks.call_command")
     def test_set_user_location_task(self, mock_call_command):
         """Test that set_user_location task calls the management command."""
         tasks.set_user_location()

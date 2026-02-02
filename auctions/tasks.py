@@ -248,7 +248,14 @@ def weekly_promo(self):
 
     Previously run weekly on Wednesday at 9:30 via cron.
     """
-    call_command("weekly_promo")
+    logger.info("Weekly promo Celery task started")
+    try:
+        call_command("weekly_promo")
+        logger.info("Weekly promo Celery task completed successfully")
+    except Exception as e:
+        logger.error("Weekly promo Celery task failed with error: %s", e)
+        logger.exception(e)
+        raise
 
 
 @shared_task(bind=True, ignore_result=True)
