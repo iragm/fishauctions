@@ -50,9 +50,9 @@ bleach[css]==6.3.0
     #   -r requirements.in
     #   django-markdownfield
     #   django-summernote
-boto3==1.42.34
+boto3==1.42.39
     # via django-ses
-botocore==1.42.34
+botocore==1.42.39
     # via
     #   boto3
     #   s3transfer
@@ -110,7 +110,7 @@ crispy-bootstrap5==2025.6
     # via -r requirements.in
 cron-descriptor==2.0.6
     # via django-celery-beat
-cryptography==46.0.3
+cryptography==46.0.4
     # via
     #   -r requirements.in
     #   autobahn
@@ -214,7 +214,7 @@ frozenlist==1.8.0
     # via
     #   aiohttp
     #   aiosignal
-gunicorn==24.1.1
+gunicorn==25.0.0
     # via -r requirements.in
 h11==0.16.0
     # via
@@ -331,7 +331,7 @@ pyhamcrest==2.1.0
     # via -r requirements.in
 pyheif==0.8.0
     # via heif-image-plugin
-pyjwt==2.10.1
+pyjwt==2.11.0
     # via -r requirements.in
 pymysql==1.1.2
     # via -r requirements.in
@@ -463,7 +463,7 @@ vine==5.1.0
     #   kombu
 watchfiles==1.1.1
     # via uvicorn
-wcwidth==0.4.0
+wcwidth==0.5.3
     # via prompt-toolkit
 weasyprint==66.0
     # via django-weasyprint
