@@ -18,7 +18,20 @@ logger = logging.getLogger(__name__)
 class Command(BaseCommand):
     help = "Send a promotional email advertising auctions and lots near you"
 
+    def add_arguments(self, parser):
+        parser.add_argument(
+            "--fake",
+            action="store_true",
+            help="Run in test mode - don't update counters or send emails",
+        )
+
     def handle(self, *args, **options):
+        fake_mode = options.get("fake", False)
+
+        if fake_mode:
+            logger.info("Running in FAKE mode - no emails will be sent, no counters updated")
+            self.stdout.write(self.style.WARNING("Running in FAKE mode - no emails will be sent, no counters updated"))
+
         # get any users who have opted into the weekly email
         exclude_newer_than = timezone.now() - datetime.timedelta(days=6)
         exclude_older_than = timezone.now() - datetime.timedelta(days=400)
@@ -83,9 +96,10 @@ class Command(BaseCommand):
                             }
                         )
                         # Increment the weekly promo email counter for this auction
-                        Auction.objects.filter(slug=auction).update(
-                            weekly_promo_emails_sent=F("weekly_promo_emails_sent") + 1
-                        )
+                        if not fake_mode:
+                            Auction.objects.filter(slug=auction).update(
+                                weekly_promo_emails_sent=F("weekly_promo_emails_sent") + 1
+                            )
                 # see #130; request to differentiate between online and in-person
                 if user.userdata.email_me_about_new_in_person_auctions:
                     locations = (
@@ -125,9 +139,10 @@ class Command(BaseCommand):
                             }
                         )
                         # Increment the weekly promo email counter for this auction
-                        Auction.objects.filter(slug=auction).update(
-                            weekly_promo_emails_sent=F("weekly_promo_emails_sent") + 1
-                        )
+                        if not fake_mode:
+                            Auction.objects.filter(slug=auction).update(
+                                weekly_promo_emails_sent=F("weekly_promo_emails_sent") + 1
+                            )
                 template_nearby_lots = []
                 if user.userdata.email_me_about_new_local_lots:
                     try:
@@ -146,30 +161,44 @@ class Command(BaseCommand):
                 if template_auctions or template_nearby_lots or template_shippable_lots:
                     # don't send an email if there's nothing of interest
                     try:
-                        logger.info(
-                            "Sending weekly promo to %s (auctions: %s, nearby lots: %s, shippable lots: %s)",
-                            user.email,
-                            len(template_auctions),
-                            len(template_nearby_lots),
-                            len(template_shippable_lots),
-                        )
-                        mail.send(
-                            user.email,
-                            template="weekly_promo_email",
-                            context={
-                                "name": user.first_name,
-                                "domain": current_site.domain,
-                                "auctions": template_auctions,
-                                "nearby_lots": template_nearby_lots,
-                                "shippable_lots": template_shippable_lots,
-                                "unsubscribe": user.userdata.unsubscribe_link,
-                                "special_message": settings.WEEKLY_PROMO_MESSAGE,
-                                "mailing_address": settings.MAILING_ADDRESS,
-                            },
-                        )
+                        if fake_mode:
+                            logger.info(
+                                "[FAKE MODE] Would send weekly promo to %s (auctions: %s, nearby lots: %s, shippable lots: %s)",
+                                user.email,
+                                len(template_auctions),
+                                len(template_nearby_lots),
+                                len(template_shippable_lots),
+                            )
+                            self.stdout.write(
+                                f"[FAKE] Would send to {user.email} - {len(template_auctions)} auctions, "
+                                f"{len(template_nearby_lots)} nearby lots, {len(template_shippable_lots)} shippable lots"
+                            )
+                        else:
+                            logger.info(
+                                "Sending weekly promo to %s (auctions: %s, nearby lots: %s, shippable lots: %s)",
+                                user.email,
+                                len(template_auctions),
+                                len(template_nearby_lots),
+                                len(template_shippable_lots),
+                            )
+                            mail.send(
+                                user.email,
+                                template="weekly_promo_email",
+                                context={
+                                    "name": user.first_name,
+                                    "domain": current_site.domain,
+                                    "auctions": template_auctions,
+                                    "nearby_lots": template_nearby_lots,
+                                    "shippable_lots": template_shippable_lots,
+                                    "unsubscribe": user.userdata.unsubscribe_link,
+                                    "special_message": settings.WEEKLY_PROMO_MESSAGE,
+                                    "mailing_address": settings.MAILING_ADDRESS,
+                                },
+                            )
                         emails_sent += 1
                     except Exception as e:
                         logger.error("Error sending email to %s: %s", user.email, e)
+                        self.stdout.write(self.style.ERROR(f"Error for {user.email}: {e}"))
                 else:
                     logger.debug(
                         "Skipping user %s - no content (auctions: %s, nearby lots: %s, shippable lots: %s)",
@@ -178,13 +207,17 @@ class Command(BaseCommand):
                         len(template_nearby_lots),
                         len(template_shippable_lots),
                     )
+                    if fake_mode:
+                        self.stdout.write(f"[FAKE] Skipping {user.username} - no content")
                     emails_skipped += 1
             except Exception:
                 logger.exception("Error processing user %s", user.username)
+                self.stdout.write(self.style.ERROR(f"Exception processing user {user.username}"))
 
-        logger.info("Weekly promo complete: %s sent, %s skipped (no content)", emails_sent, emails_skipped)
+        mode_str = " [FAKE MODE]" if fake_mode else ""
+        logger.info("Weekly promo complete%s: %s sent, %s skipped (no content)", mode_str, emails_sent, emails_skipped)
         self.stdout.write(
             self.style.SUCCESS(
-                f"Weekly promo complete: {emails_sent} emails sent, {emails_skipped} skipped (no content)"
+                f"Weekly promo complete{mode_str}: {emails_sent} emails sent, {emails_skipped} skipped (no content)"
             )
         )
