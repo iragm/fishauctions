@@ -121,22 +121,91 @@ Tasks are defined in `fishauctions/celery.py` and automatically synced to the da
 
 ### Weekly Promo Emails
 
+The weekly_promo task runs every Wednesday at 9:30 AM and sends promotional emails to users who have opted in.
+
+#### Testing the Task
+
+To test the task without waiting for the scheduled time:
+
+```bash
+# Test directly (runs the management command)
+docker exec -it django python3 manage.py test_weekly_promo
+
+# Test via Celery (queues the task for the worker)
+docker exec -it django python3 manage.py test_weekly_promo --celery
+```
+
+#### Viewing Logs
+
 To view logs for the weekly_promo task:
 
 ```bash
-# View all weekly_promo logs with timestamps (both task lifecycle and detailed diagnostics)
-docker logs --timestamps celery_worker 2>&1 | egrep 'auctions.tasks.weekly_promo|Weekly promo'
+# View all weekly_promo logs with timestamps
+docker logs --timestamps celery_worker 2>&1 | grep -E 'weekly_promo|Weekly promo'
 
 # View recent weekly_promo logs (last 100 lines)
-docker logs --timestamps --tail 100 celery_worker 2>&1 | egrep 'auctions.tasks.weekly_promo|Weekly promo'
+docker logs --timestamps --tail 100 celery_worker 2>&1 | grep -E 'weekly_promo|Weekly promo'
+
+# Follow logs in real-time
+docker logs -f celery_worker 2>&1 | grep --line-buffered -E 'weekly_promo|Weekly promo'
 ```
 
 The logs will show:
-- Number of eligible users found
-- Each email sent with content breakdown (auctions, nearby lots, shippable lots)
-- Users skipped due to no content
-- Any errors during processing
-- Summary with sent/skipped counts
+- **Task lifecycle**: Task started, received, completed
+- **Execution details**: Number of eligible users found
+- **Email details**: Each email sent with content breakdown (auctions, nearby lots, shippable lots)
+- **Skipped users**: Users skipped due to no content
+- **Errors**: Any errors during processing with full stack traces
+- **Summary**: Total sent/skipped counts
+
+#### Troubleshooting
+
+If the weekly_promo task isn't working:
+
+1. **Verify the task is registered**:
+   ```bash
+   docker logs celery_worker 2>&1 | grep "auctions.tasks.weekly_promo"
+   ```
+   You should see: `. auctions.tasks.weekly_promo`
+
+2. **Check the task is enabled in the database**:
+   ```bash
+   docker exec -it django python3 manage.py shell -c \
+     "from django_celery_beat.models import PeriodicTask; \
+      task = PeriodicTask.objects.get(name='weekly_promo'); \
+      print(f'Enabled: {task.enabled}, Task: {task.task}')"
+   ```
+   Should output: `Enabled: True, Task: auctions.tasks.weekly_promo`
+
+3. **Manually trigger the task to test**:
+   ```bash
+   docker exec -it django python3 manage.py test_weekly_promo --celery
+   ```
+   Then check the worker logs for execution
+
+4. **Check for errors in the logs**:
+   ```bash
+   docker logs celery_worker 2>&1 | grep -i error | grep -i weekly
+   ```
+
+5. **Verify Celery Beat is running**:
+   ```bash
+   docker ps | grep celery_beat
+   docker logs celery_beat --tail 50
+   ```
+
+6. **Ensure the PeriodicTask is properly configured**:
+   - Log into Django Admin → Periodic Tasks → Periodic tasks
+   - Find "weekly_promo" task
+   - Verify "Task (registered)" shows "auctions.tasks.weekly_promo" OR "Task (custom)" contains "auctions.tasks.weekly_promo"
+   - Ensure "Enabled" is checked
+   - Crontab schedule should be set for Wednesday at 9:30
+
+7. **Run setup_celery_beat to fix configuration**:
+   ```bash
+   docker exec -it django python3 manage.py setup_celery_beat
+   ```
+   This will ensure the task is properly configured from the celery.py beat_schedule
 
 ## Additional Resources
 

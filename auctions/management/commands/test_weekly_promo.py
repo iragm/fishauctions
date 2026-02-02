@@ -28,7 +28,7 @@ class Command(BaseCommand):
             result = weekly_promo.delay()
             self.stdout.write(self.style.SUCCESS(f"Task queued with ID: {result.id}"))
             self.stdout.write("Check celery_worker logs for task execution:")
-            self.stdout.write("  docker logs celery_worker -f | grep -i 'weekly promo'")
+            self.stdout.write("  docker logs celery_worker -f | grep -E 'weekly_promo|Weekly promo'")
         else:
             self.stdout.write(self.style.WARNING("Running weekly_promo task directly (not via Celery)..."))
             weekly_promo()
