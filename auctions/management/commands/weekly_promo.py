@@ -200,7 +200,7 @@ class Command(BaseCommand):
                         logger.error("Error sending email to %s: %s", user.email, e)
                         self.stdout.write(self.style.ERROR(f"Error for {user.email}: {e}"))
                 else:
-                    logger.debug(
+                    logger.info(
                         "Skipping user %s - no content (auctions: %s, nearby lots: %s, shippable lots: %s)",
                         user.username,
                         len(template_auctions),

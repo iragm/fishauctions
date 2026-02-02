@@ -124,11 +124,11 @@ Tasks are defined in `fishauctions/celery.py` and automatically synced to the da
 To view logs for the weekly_promo task:
 
 ```bash
-# View all weekly_promo task logs with timestamps
-docker logs --timestamps celery_worker 2>&1 | grep auctions.tasks.weekly_promo
+# View all weekly_promo logs with timestamps (both task lifecycle and detailed diagnostics)
+docker logs --timestamps celery_worker 2>&1 | egrep 'auctions.tasks.weekly_promo|Weekly promo'
 
 # View recent weekly_promo logs (last 100 lines)
-docker logs --timestamps --tail 100 celery_worker 2>&1 | grep weekly_promo
+docker logs --timestamps --tail 100 celery_worker 2>&1 | egrep 'auctions.tasks.weekly_promo|Weekly promo'
 ```
 
 The logs will show:
