@@ -9594,6 +9594,40 @@ class WeeklyPromoManagementCommandTests(StandardTestCase):
                 "Expected at least one weekly promo email for in-person auctions",
             )
 
+    def test_weekly_promo_fake_mode_no_emails_sent(self):
+        """Test that --fake mode does not send emails."""
+        with patch("auctions.management.commands.weekly_promo.mail.send") as mock_send:
+            call_command("weekly_promo", fake=True)
+            # Check that email was NOT sent in fake mode
+            self.assertFalse(mock_send.called, "mail.send should not be called in fake mode")
+
+    def test_weekly_promo_fake_mode_no_counter_update(self):
+        """Test that --fake mode does not update auction counters."""
+        initial_count = self.promo_auction.weekly_promo_emails_sent
+        with patch("auctions.management.commands.weekly_promo.mail.send"):
+            call_command("weekly_promo", fake=True)
+        self.promo_auction.refresh_from_db()
+        # Check that counter was NOT incremented in fake mode
+        self.assertEqual(
+            self.promo_auction.weekly_promo_emails_sent,
+            initial_count,
+            "weekly_promo_emails_sent should not be incremented in fake mode",
+        )
+
+    def test_weekly_promo_fake_mode_output(self):
+        """Test that --fake mode includes fake mode marker in output."""
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        out = StringIO()
+        with patch("auctions.management.commands.weekly_promo.mail.send"):
+            call_command("weekly_promo", fake=True, stdout=out)
+        output = out.getvalue()
+        # Check that output includes fake mode indicators
+        self.assertIn("[FAKE MODE]", output, "Output should include [FAKE MODE] marker")
+        self.assertIn("FAKE", output, "Output should include FAKE indicator")
+
 
 class AuctionTOSNotificationsCommandTests(StandardTestCase):
     """Test the auctiontos_notifications management command"""
