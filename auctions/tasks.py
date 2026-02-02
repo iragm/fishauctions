@@ -252,8 +252,7 @@ def weekly_promo(self):
     try:
         call_command("weekly_promo")
         logger.info("Weekly promo Celery task completed successfully")
-    except Exception as e:
-        logger.error("Weekly promo Celery task failed with error: %s", e)
+    except Exception:
         logger.exception("Weekly promo Celery task failed")
         raise
 

@@ -66,8 +66,7 @@ class CeleryTasksTestCase(TestCase):
         with self.assertRaises(Exception):
             tasks.weekly_promo()
 
-        # Verify error was logged
-        mock_logger.error.assert_called()
+        # Verify error was logged with exception
         mock_logger.exception.assert_called()
 
     @patch("auctions.tasks.call_command")
