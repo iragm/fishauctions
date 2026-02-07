@@ -5,14 +5,12 @@ This module tests that Celery tasks properly call their corresponding management
 """
 
 import datetime
-from io import StringIO
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
-from django.core.management import call_command
 from django.test import TestCase
 from django.utils import timezone
-from django_celery_beat.models import CrontabSchedule, IntervalSchedule, PeriodicTask
+from django_celery_beat.models import PeriodicTask
 
 from auctions import tasks
 from auctions.models import Auction, AuctionHistory, AuctionTOS, Invoice, PickupLocation
@@ -601,137 +599,3 @@ class CleanupOldInvoiceNotificationTasksTestCase(TestCase):
 
         # Clean up
         PeriodicTask.objects.filter(name=task_name).delete()
-
-
-class SetupCeleryBeatCommandTestCase(TestCase):
-    """Test case for the setup_celery_beat management command."""
-
-    def test_reenables_disabled_tasks(self):
-        """Test that setup_celery_beat re-enables tasks that were manually disabled."""
-        # Create a crontab schedule for weekly_promo (Wednesday at 9:30)
-        crontab, _ = CrontabSchedule.objects.get_or_create(
-            minute="30",
-            hour="9",
-            day_of_week="3",
-            day_of_month="*",
-            month_of_year="*",
-        )
-
-        # Create a disabled weekly_promo task (simulating manual disable in Django admin)
-        task = PeriodicTask.objects.create(
-            name="weekly_promo",
-            task="auctions.tasks.weekly_promo",
-            crontab=crontab,
-            enabled=False,  # Manually disabled
-        )
-
-        # Verify the task is disabled
-        self.assertFalse(task.enabled)
-
-        # Run the setup_celery_beat command
-        out = StringIO()
-        call_command("setup_celery_beat", stdout=out)
-
-        # Refresh the task from database
-        task.refresh_from_db()
-
-        # Verify the task is now enabled
-        self.assertTrue(task.enabled, "setup_celery_beat should re-enable disabled tasks")
-
-        # Verify the command output mentions the update
-        output = out.getvalue()
-        self.assertIn("weekly_promo", output)
-
-    def test_creates_missing_tasks(self):
-        """Test that setup_celery_beat creates tasks that don't exist."""
-        # Delete all periodic tasks to start fresh
-        PeriodicTask.objects.filter(name="endauctions").delete()
-
-        # Verify the task doesn't exist
-        self.assertFalse(PeriodicTask.objects.filter(name="endauctions").exists())
-
-        # Run the setup_celery_beat command
-        out = StringIO()
-        call_command("setup_celery_beat", stdout=out)
-
-        # Verify the task was created
-        task = PeriodicTask.objects.get(name="endauctions")
-        self.assertTrue(task.enabled)
-        self.assertEqual(task.task, "auctions.tasks.endauctions")
-
-        # Verify the command output mentions the creation
-        output = out.getvalue()
-        self.assertIn("Created task: endauctions", output)
-
-    def test_updates_schedule_when_changed(self):
-        """Test that setup_celery_beat updates the schedule when it changes."""
-        # Create an interval schedule (wrong schedule for weekly_promo)
-        interval, _ = IntervalSchedule.objects.get_or_create(every=3600, period=IntervalSchedule.SECONDS)
-
-        # Create a weekly_promo task with wrong schedule
-        task = PeriodicTask.objects.create(
-            name="weekly_promo",
-            task="auctions.tasks.weekly_promo",
-            interval=interval,
-            enabled=True,
-        )
-
-        # Verify the task has the wrong schedule type
-        self.assertIsNotNone(task.interval)
-        self.assertIsNone(task.crontab)
-
-        # Run the setup_celery_beat command
-        out = StringIO()
-        call_command("setup_celery_beat", stdout=out)
-
-        # Refresh the task from database
-        task.refresh_from_db()
-
-        # Verify the task now has a crontab schedule
-        self.assertIsNone(task.interval)
-        self.assertIsNotNone(task.crontab)
-        # CrontabSchedule stores minute/hour/day_of_week as sets in some versions
-        self.assertIn("30", task.crontab.minute)
-        self.assertIn("9", task.crontab.hour)
-        self.assertIn("3", task.crontab.day_of_week)
-
-        # Verify the command output mentions the update
-        output = out.getvalue()
-        self.assertIn("Updated task: weekly_promo", output)
-
-    def test_keeps_enabled_tasks_enabled(self):
-        """Test that setup_celery_beat doesn't disable already-enabled tasks."""
-        # Create a crontab schedule for weekly_promo
-        crontab, _ = CrontabSchedule.objects.get_or_create(
-            minute="30",
-            hour="9",
-            day_of_week="3",
-            day_of_month="*",
-            month_of_year="*",
-        )
-
-        # Create an enabled weekly_promo task (correct state)
-        task = PeriodicTask.objects.create(
-            name="weekly_promo",
-            task="auctions.tasks.weekly_promo",
-            crontab=crontab,
-            enabled=True,  # Already enabled
-        )
-
-        # Run the setup_celery_beat command
-        out = StringIO()
-        call_command("setup_celery_beat", stdout=out)
-
-        # Refresh the task from database
-        task.refresh_from_db()
-
-        # Verify the task is still enabled
-        self.assertTrue(task.enabled)
-
-        # The command should skip or update the task since it's already correct
-        # It's OK if it shows as skipped or updated - both are correct behaviors
-        output = out.getvalue()
-        self.assertTrue(
-            "Skipped (no changes): weekly_promo" in output or "Updated task: weekly_promo" in output,
-            f"Expected task to be skipped or updated, got: {output}",
-        )

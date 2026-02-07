@@ -101,10 +101,6 @@ class Command(BaseCommand):
                     task.crontab = schedule_obj
                     task.interval = None
                     updated = True
-                # Always ensure the task is enabled (in case it was manually disabled)
-                if not task.enabled:
-                    task.enabled = True
-                    updated = True
 
                 if updated:
                     task.save()
