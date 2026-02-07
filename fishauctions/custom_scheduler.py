@@ -36,7 +36,9 @@ class FixedDatabaseScheduler(DatabaseScheduler):
 
         from django.utils.timezone import now
 
-        SCHEDULE_SYNC_MAX_INTERVAL = 300  # 5 minutes
+        # Using the same constant value as the parent class (DatabaseScheduler)
+        # This value represents the maximum time to look ahead for scheduled tasks (5 minutes)
+        SCHEDULE_SYNC_MAX_INTERVAL = 300  # seconds
 
         next_schedule_sync = now() + timedelta(seconds=SCHEDULE_SYNC_MAX_INTERVAL)
 
