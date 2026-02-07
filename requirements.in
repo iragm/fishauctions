@@ -79,9 +79,9 @@ beautifulsoup4
 django-encrypted-model-fields
 celery
 # Celery periodic task scheduling
-# Pinned to 2.8.1 due to bug in crontab filtering optimization
-# TODO: Upgrade to 2.8.2+ once upstream bug is fixed
-# See: fishauctions/custom_scheduler.py for workaround details
-django-celery-beat==2.8.1
+# Using custom scheduler (fishauctions/custom_scheduler.py) to work around
+# crontab filtering bug in django-celery-beat 2.8.1
+# TODO: Test if future versions fix the bug and remove custom scheduler if so
+django-celery-beat
 redis
 squareup
