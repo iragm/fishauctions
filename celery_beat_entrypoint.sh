@@ -22,8 +22,11 @@ while True:
     time.sleep(1)
 END
 
-echo "Setting up Celery beat periodic tasks..."
+echo "Running migrations..."
 cd /home/app/web
+python manage.py migrate --no-input
+
+echo "Setting up Celery beat periodic tasks..."
 python manage.py setup_celery_beat
 
 echo "Starting Celery beat scheduler..."
