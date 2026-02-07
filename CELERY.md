@@ -92,6 +92,10 @@ Tasks are managed via Django Admin:
 
 Tasks are defined in `fishauctions/celery.py` and automatically synced to the database on startup.
 
+**Important:** The `setup_celery_beat` command runs on container startup and ensures all tasks
+from the beat_schedule are created in the database and enabled. If a task was manually disabled
+in Django admin, it will be automatically re-enabled on the next container restart.
+
 ## Development vs Production
 
 ### Development (DEBUG=True)
@@ -113,6 +117,11 @@ Tasks are defined in `fishauctions/celery.py` and automatically synced to the da
 2. Check worker logs: `docker logs celery_worker`
 3. Verify Redis connection: `docker logs redis`
 4. Check beat scheduler: `docker logs celery_beat`
+5. **Check if task is enabled in Django Admin:**
+   - Navigate to Django Admin → Periodic Tasks → Periodic tasks
+   - Find the task (e.g., "weekly_promo") and verify it's enabled
+   - If disabled, restart the celery_beat container to re-enable it: `docker restart celery_beat`
+   - The `setup_celery_beat` command runs on startup and will re-enable all tasks from the beat_schedule
 
 ### Emails Not Being Sent Immediately
 
