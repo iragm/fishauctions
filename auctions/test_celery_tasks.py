@@ -599,3 +599,86 @@ class CleanupOldInvoiceNotificationTasksTestCase(TestCase):
 
         # Clean up
         PeriodicTask.objects.filter(name=task_name).delete()
+
+
+class FixedDatabaseSchedulerTestCase(TestCase):
+    """Test case for the custom FixedDatabaseScheduler."""
+
+    def test_crontab_tasks_not_filtered_by_hour(self):
+        """Test that crontab tasks are loaded regardless of their scheduled hour."""
+        from django_celery_beat.models import CrontabSchedule
+
+        from fishauctions.celery import app
+        from fishauctions.custom_scheduler import FixedDatabaseScheduler
+
+        # Create a crontab schedule for a time far from current hour
+        # This would be filtered out by the buggy scheduler
+        crontab, _ = CrontabSchedule.objects.get_or_create(
+            minute="30",
+            hour="3",  # 3 AM - likely far from test execution time
+            day_of_week="*",
+            day_of_month="*",
+            month_of_year="*",
+        )
+
+        # Create an enabled periodic task with this crontab
+        task = PeriodicTask.objects.create(
+            name="test_crontab_task",
+            task="auctions.tasks.endauctions",
+            crontab=crontab,
+            enabled=True,
+        )
+
+        try:
+            # Create scheduler instance with the celery app
+            scheduler = FixedDatabaseScheduler(app=app)
+
+            # Get the queryset of enabled models
+            enabled_tasks = scheduler.enabled_models_qs()
+
+            # Verify our crontab task is included regardless of hour
+            self.assertIn(task, enabled_tasks)
+
+        finally:
+            # Clean up
+            task.delete()
+            crontab.delete()
+
+    def test_far_future_clocked_tasks_excluded(self):
+        """Test that clocked tasks far in the future are still excluded."""
+        from datetime import timedelta
+
+        from django.utils import timezone
+        from django_celery_beat.models import ClockedSchedule
+
+        from fishauctions.celery import app
+        from fishauctions.custom_scheduler import FixedDatabaseScheduler
+
+        # Create a clocked schedule far in the future
+        far_future = timezone.now() + timedelta(days=365)
+        clocked, _ = ClockedSchedule.objects.get_or_create(clocked_time=far_future)
+
+        # Create an enabled periodic task with this clocked schedule
+        # Clocked tasks must have one_off=True
+        task = PeriodicTask.objects.create(
+            name="test_far_future_clocked_task",
+            task="auctions.tasks.endauctions",
+            clocked=clocked,
+            one_off=True,
+            enabled=True,
+        )
+
+        try:
+            # Create scheduler instance with the celery app
+            scheduler = FixedDatabaseScheduler(app=app)
+
+            # Get the queryset of enabled models
+            enabled_tasks = scheduler.enabled_models_qs()
+
+            # Verify far future clocked task is excluded
+            self.assertNotIn(task, enabled_tasks)
+
+        finally:
+            # Clean up
+            task.delete()
+            clocked.delete()

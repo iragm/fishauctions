@@ -27,4 +27,4 @@ cd /home/app/web
 python manage.py setup_celery_beat
 
 echo "Starting Celery beat scheduler..."
-exec celery -A fishauctions beat --loglevel=info --scheduler fishauctions.custom_scheduler:FixedDatabaseScheduler
+exec celery -A fishauctions beat --loglevel=info

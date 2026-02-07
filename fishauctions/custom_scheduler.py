@@ -6,8 +6,8 @@ optimization that excludes crontab tasks based on a narrow time window. This
 causes crontab tasks to not run if their scheduled hour is outside a ±2 hour
 window of the current server hour.
 
-This custom scheduler disables that optimization by overriding the methods
-that filter out crontab tasks.
+This custom scheduler disables that optimization by overriding the specific
+method responsible for crontab exclusion.
 
 Bug reference: django-celery-beat issue with _get_crontab_exclude_query
 """
@@ -20,33 +20,20 @@ class FixedDatabaseScheduler(DatabaseScheduler):
     """
     Custom DatabaseScheduler that disables the crontab filtering optimization.
 
-    This ensures all enabled periodic tasks are loaded into the schedule,
-    regardless of their scheduled time.
+    This ensures all enabled crontab periodic tasks are loaded into the schedule,
+    regardless of their scheduled time, while preserving all other parent filtering
+    behavior.
     """
 
-    def enabled_models_qs(self):
+    def _get_crontab_exclude_query(self, *args, **kwargs):
         """
-        Return queryset of enabled periodic tasks without filtering crontab tasks.
+        Disable the crontab exclusion optimization from the parent scheduler.
 
-        This overrides the parent method to remove the _get_crontab_exclude_query
-        filter that was causing crontab tasks to be excluded.
+        By returning an empty Q(), all crontab-based periodic tasks remain
+        eligible for scheduling, while all other filtering behavior defined
+        in the parent DatabaseScheduler is preserved.
+
+        This fixes the bug in django-celery-beat 2.8.1 where crontab tasks
+        outside a ±2 hour window of the current server hour were excluded.
         """
-        # Only exclude clocked tasks that are far in the future
-        from datetime import timedelta
-
-        from django.utils.timezone import now
-
-        # Using the same constant value as the parent class (DatabaseScheduler)
-        # This value represents the maximum time to look ahead for scheduled tasks (5 minutes)
-        SCHEDULE_SYNC_MAX_INTERVAL = 300  # seconds
-
-        next_schedule_sync = now() + timedelta(seconds=SCHEDULE_SYNC_MAX_INTERVAL)
-
-        exclude_clock_tasks_query = Q(clocked__isnull=False, clocked__clocked_time__gt=next_schedule_sync)
-
-        # Don't exclude any crontab tasks - let the scheduler evaluate them all
-        # This fixes the bug where crontab tasks outside the current hour window
-        # were being excluded from the schedule
-
-        # Fetch all enabled tasks except clocked tasks that are far in the future
-        return self.Model.objects.enabled().exclude(exclude_clock_tasks_query)
+        return Q()
