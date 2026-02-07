@@ -78,6 +78,6 @@ reportlab
 beautifulsoup4
 django-encrypted-model-fields
 celery
-django-celery-beat
+django-celery-beat==2.8.1
 redis
 squareup

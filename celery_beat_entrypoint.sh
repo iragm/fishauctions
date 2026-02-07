@@ -30,4 +30,4 @@ echo "Setting up Celery beat periodic tasks..."
 python manage.py setup_celery_beat
 
 echo "Starting Celery beat scheduler..."
-exec celery -A fishauctions beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+exec celery -A fishauctions beat --loglevel=info --scheduler fishauctions.custom_scheduler:FixedDatabaseScheduler
