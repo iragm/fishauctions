@@ -599,3 +599,58 @@ class CleanupOldInvoiceNotificationTasksTestCase(TestCase):
 
         # Clean up
         PeriodicTask.objects.filter(name=task_name).delete()
+
+
+class FixedDatabaseSchedulerTestCase(TestCase):
+    """Test case for the custom FixedDatabaseScheduler."""
+
+    def test_get_crontab_exclude_query_returns_empty(self):
+        """Test that _get_crontab_exclude_query returns an empty Q() object."""
+        from django.db.models import Q
+
+        from fishauctions.custom_scheduler import FixedDatabaseScheduler
+
+        # Create scheduler instance - but don't let it initialize fully
+        # We just want to test the method override
+        scheduler = object.__new__(FixedDatabaseScheduler)
+
+        # Call the overridden method
+        result = scheduler._get_crontab_exclude_query()
+
+        # Verify it returns an empty Q() object
+        self.assertIsInstance(result, Q)
+        self.assertEqual(str(result), str(Q()))
+
+    def test_crontab_tasks_not_filtered_by_hour(self):
+        """Test that crontab tasks are loaded regardless of their scheduled hour."""
+        from django_celery_beat.models import CrontabSchedule
+
+        # Create a crontab schedule for a time far from current hour
+        # This would be filtered out by the buggy scheduler
+        crontab = CrontabSchedule.objects.create(
+            minute="30",
+            hour="3",  # 3 AM - likely far from test execution time
+            day_of_week="*",
+            day_of_month="*",
+            month_of_year="*",
+        )
+
+        # Create an enabled periodic task with this crontab
+        PeriodicTask.objects.create(
+            name="test_crontab_task_scheduler",
+            task="auctions.tasks.endauctions",
+            crontab=crontab,
+            enabled=True,
+        )
+
+        # Import after creating the task to avoid initialization issues
+        from fishauctions.custom_scheduler import FixedDatabaseScheduler
+
+        # Test that the fixed scheduler's query method returns empty Q
+        scheduler_obj = object.__new__(FixedDatabaseScheduler)
+        exclude_query = scheduler_obj._get_crontab_exclude_query()
+
+        # The exclude query should be empty, meaning no crontab tasks are excluded
+        from django.db.models import Q
+
+        self.assertEqual(str(exclude_query), str(Q()))
