@@ -608,7 +608,6 @@ class FixedDatabaseSchedulerTestCase(TestCase):
         """Test that _get_crontab_exclude_query returns an empty Q() object."""
         from django.db.models import Q
 
-        from fishauctions.celery import app
         from fishauctions.custom_scheduler import FixedDatabaseScheduler
 
         # Create scheduler instance - but don't let it initialize fully
@@ -637,7 +636,7 @@ class FixedDatabaseSchedulerTestCase(TestCase):
         )
 
         # Create an enabled periodic task with this crontab
-        task = PeriodicTask.objects.create(
+        PeriodicTask.objects.create(
             name="test_crontab_task_scheduler",
             task="auctions.tasks.endauctions",
             crontab=crontab,
