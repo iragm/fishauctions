@@ -44,7 +44,7 @@ pysocks==1.7.1
     # via urllib3
 pyyaml==6.0.3
     # via pre-commit
-ruff==0.14.14
+ruff==0.15.0
     # via -r requirements-test.in
 selenium==4.40.0
     # via -r requirements-test.in
