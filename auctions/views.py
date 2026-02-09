@@ -1815,7 +1815,7 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
             writer.writerow(row)
         self.auction.create_history(
             applies_to="LOTS",
-            action=f"Exported lot list CSV for {query if query else 'all lots'}",
+            action=f"Exported lot list CSV for {query or 'all lots'}",
             user=request.user,
         )
         return response
@@ -3498,7 +3498,7 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                 lot = Lot(
                     auction=self.auction,
                     auctiontos_seller=self.tos,
-                    user=self.tos.user if self.tos.user else None,
+                    user=self.tos.user or None,
                     added_by=request.user,
                 )
                 is_new = True
@@ -3936,7 +3936,7 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
 
                 new_lot = Lot(
                     lot_name=lot_name[:40],
-                    summernote_description=description if description else "",
+                    summernote_description=description or "",
                     quantity=quantity,
                     reserve_price=reserve_price if reserve_price is not None else self.auction.minimum_bid,
                     buy_now_price=buy_now_price,
@@ -10305,7 +10305,7 @@ class PayPalWebhookView(PayPalAPIMixin, View):
                     "Error processing capture webhook for resource: %s, debug_id %s", resource, self.paypal_debug
                 )
             return JsonResponse({"status": "ok"})
-        elif event_type in ("CHECKOUT.ORDER.APPROVED",):
+        elif event_type == "CHECKOUT.ORDER.APPROVED":
             # Extract the reference_id (our invoice reference) from the approved order and print/log it.
             try:
                 purchase_unit = resource.get("purchase_units", [{}])[0]
