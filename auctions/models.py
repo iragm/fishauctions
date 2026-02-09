@@ -6455,7 +6455,7 @@ class SquareSeller(models.Model):
                     ),
                     "ask_for_shipping_address": ask_for_shipping_address,
                 },
-                pre_populated_data=pre_populated_data if pre_populated_data else {},
+                pre_populated_data=pre_populated_data or {},
                 order={
                     "location_id": location_id,
                     "reference_id": str(invoice.pk),
