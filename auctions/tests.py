@@ -9981,8 +9981,8 @@ class AuctionHistoryTestCase(StandardTestCase):
             created_by=self.user,
             title="Test unsaved auction",
             is_online=True,
-            date_start=timezone.now() + datetime.timedelta(days=3650),  # Invalid year to trigger fix_year
-            date_end=timezone.now() + datetime.timedelta(days=3650),
+            date_start=timezone.make_aware(datetime.datetime(2051, 1, 1)),  # Invalid year to trigger fix_year
+            date_end=timezone.make_aware(datetime.datetime(2051, 1, 2)),
             winning_bid_percent_to_club=25,
         )
 
