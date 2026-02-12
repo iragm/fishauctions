@@ -8696,7 +8696,7 @@ class MiddlewareTestCase(TestCase):
         response = middleware(request)
 
         # Headers should be present for voice recognition page
-        self.assertEqual(response["Cross-Origin-Opener-Policy"], "same-origin")
+        self.assertEqual(response["Cross-Origin-Opener-Policy"], "same-origin-allow-popups")
         self.assertEqual(response["Cross-Origin-Embedder-Policy"], "require-corp")
         self.assertEqual(response["Cross-Origin-Resource-Policy"], "cross-origin")
 
@@ -8723,6 +8723,7 @@ class MiddlewareTestCase(TestCase):
             "/auctions/",
             "/auctions/test-auction/",
             "/auctions/test-auction/lots/",
+            "/auctions/test-auction/lots/set-winners/undo/",  # Undo URL should NOT get headers
         ]
 
         for path in test_paths:

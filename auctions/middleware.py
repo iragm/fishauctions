@@ -27,7 +27,7 @@ class CrossOriginIsolationMiddleware:
         if self._needs_cross_origin_isolation(request):
             # Add COOP header - allows popups while isolating the browsing context
             # Using 'same-origin' would be more secure but breaks OAuth popups
-            response["Cross-Origin-Opener-Policy"] = "same-origin"
+            response["Cross-Origin-Opener-Policy"] = "same-origin-allow-popups"
 
             # Add COEP header - requires all resources to be loaded with CORS or same-origin
             response["Cross-Origin-Embedder-Policy"] = "require-corp"
@@ -41,4 +41,5 @@ class CrossOriginIsolationMiddleware:
         Only the dynamic lot winner page needs it for voice recognition.
         """
         # Voice recognition is used on the dynamic set lot winner page
-        return "/lots/set-winners/" in request.path
+        # Use endswith to avoid matching related paths like /lots/set-winners/undo/
+        return request.path.endswith("/lots/set-winners/")
