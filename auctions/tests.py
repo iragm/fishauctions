@@ -9969,3 +9969,41 @@ class FeedbackTestCase(StandardTestCase):
         lot = Lot.objects.get(pk=self.lot.pk)
         self.assertEqual(len(lot.winner_feedback_text), 500)
         self.assertEqual(lot.winner_feedback_text, very_long_text[:500])
+
+
+class AuctionHistoryTestCase(StandardTestCase):
+    """Tests for auction history creation"""
+
+    def test_create_history_for_unsaved_auction(self):
+        """Test that creating history for an unsaved auction doesn't raise an error"""
+        # Create an auction instance without saving it
+        auction = Auction(
+            created_by=self.user,
+            title="Test unsaved auction",
+            is_online=True,
+            date_start=timezone.now() + datetime.timedelta(days=3650),  # Invalid year to trigger fix_year
+            date_end=timezone.now() + datetime.timedelta(days=3650),
+            winning_bid_percent_to_club=25,
+        )
+
+        # This should not raise an error even though create_history is called in fix_year
+        auction.save()
+
+        # Verify the auction was saved successfully
+        self.assertIsNotNone(auction.pk)
+
+        # Verify no history was created during initial save
+        history_count = AuctionHistory.objects.filter(auction=auction).count()
+        self.assertEqual(history_count, 0)
+
+    def test_create_history_for_saved_auction(self):
+        """Test that creating history for a saved auction works correctly"""
+        # Use an existing auction
+        auction = self.online_auction
+
+        # Manually create history
+        auction.create_history("RULES", "Test action")
+
+        # Verify history was created
+        history_count = AuctionHistory.objects.filter(auction=auction, action="Test action").count()
+        self.assertEqual(history_count, 1)

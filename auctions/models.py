@@ -2500,6 +2500,9 @@ class Auction(models.Model):
         """Applies to can be RULES, USERS, INVOICES, LOTS, LOT_WINNERS, user should be the user making the change or None if it's a system change.
         Action is a string describing the change, form is a form instance that has changed data
         """
+        # Don't create history if the auction hasn't been saved yet
+        if not self.pk:
+            return
         if form:
             action += " "
             for field_name in form.changed_data:
