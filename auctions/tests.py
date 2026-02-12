@@ -8677,15 +8677,16 @@ class ContextProcessorsTestCase(TestCase):
 class MiddlewareTestCase(TestCase):
     """Test cases for middleware"""
 
-    def test_cross_origin_isolation_middleware_adds_headers(self):
-        """Test CrossOriginIsolationMiddleware adds required headers"""
+    def test_cross_origin_isolation_middleware_adds_headers_for_voice_recognition(self):
+        """Test CrossOriginIsolationMiddleware adds required headers for voice recognition pages"""
         from django.http import HttpResponse
         from django.test import RequestFactory
 
         from auctions.middleware import CrossOriginIsolationMiddleware
 
         factory = RequestFactory()
-        request = factory.get("/")
+        # Voice recognition page that needs cross-origin isolation
+        request = factory.get("/auctions/test-auction/lots/set-winners/")
 
         # Create a mock get_response that returns a simple response
         def get_response(request):
@@ -8694,9 +8695,45 @@ class MiddlewareTestCase(TestCase):
         middleware = CrossOriginIsolationMiddleware(get_response)
         response = middleware(request)
 
+        # Headers should be present for voice recognition page
         self.assertEqual(response["Cross-Origin-Opener-Policy"], "same-origin")
         self.assertEqual(response["Cross-Origin-Embedder-Policy"], "require-corp")
         self.assertEqual(response["Cross-Origin-Resource-Policy"], "cross-origin")
+
+    def test_cross_origin_isolation_middleware_skips_headers_for_other_pages(self):
+        """Test CrossOriginIsolationMiddleware does not add headers for pages without voice recognition"""
+        from django.http import HttpResponse
+        from django.test import RequestFactory
+
+        from auctions.middleware import CrossOriginIsolationMiddleware
+
+        factory = RequestFactory()
+
+        # Create a mock get_response that returns a simple response
+        def get_response(request):
+            return HttpResponse("OK")
+
+        middleware = CrossOriginIsolationMiddleware(get_response)
+
+        # Test various pages that should NOT have cross-origin isolation headers
+        test_paths = [
+            "/",
+            "/about/",
+            "/promo/",
+            "/auctions/",
+            "/auctions/test-auction/",
+            "/auctions/test-auction/lots/",
+        ]
+
+        for path in test_paths:
+            with self.subTest(path=path):
+                request = factory.get(path)
+                response = middleware(request)
+
+                # Headers should NOT be present on pages without voice recognition
+                self.assertNotIn("Cross-Origin-Opener-Policy", response)
+                self.assertNotIn("Cross-Origin-Embedder-Policy", response)
+                self.assertNotIn("Cross-Origin-Resource-Policy", response)
 
 
 class ModelMethodsTestCase(StandardTestCase):
