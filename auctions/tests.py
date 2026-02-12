@@ -9981,8 +9981,8 @@ class AuctionHistoryTestCase(StandardTestCase):
             created_by=self.user,
             title="Test unsaved auction",
             is_online=True,
-            date_start=timezone.make_aware(datetime.datetime(2051, 1, 1)),  # Invalid year to trigger fix_year
-            date_end=timezone.make_aware(datetime.datetime(2051, 1, 2)),
+            date_start=datetime.datetime(2051, 1, 1, tzinfo=datetime.timezone.utc),  # Invalid year to trigger fix_year
+            date_end=datetime.datetime(2051, 1, 2, tzinfo=datetime.timezone.utc),
             winning_bid_percent_to_club=25,
         )
 
@@ -9991,6 +9991,11 @@ class AuctionHistoryTestCase(StandardTestCase):
 
         # Verify the auction was saved successfully
         self.assertIsNotNone(auction.pk)
+
+        # Verify that fix_year() corrected the invalid dates to current year
+        current_year = timezone.now().year
+        self.assertEqual(auction.date_start.year, current_year)
+        self.assertEqual(auction.date_end.year, current_year)
 
         # Verify no history was created during initial save
         history_count = AuctionHistory.objects.filter(auction=auction).count()
