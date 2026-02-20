@@ -8,6 +8,7 @@ from random import randint
 from urllib.parse import quote_plus
 
 import channels.layers
+import pytz
 from asgiref.sync import async_to_sync
 from autoslug import AutoSlugField
 from bs4 import BeautifulSoup
@@ -5923,7 +5924,7 @@ class UserData(models.Model):
         or advance the existing value by 7 days (ensuring it's in the future)."""
         try:
             tz = pytz_timezone(self.timezone)
-        except Exception:
+        except pytz.exceptions.UnknownTimeZoneError:
             tz = pytz_timezone(settings.TIME_ZONE)
 
         if self.next_promo_email_at is None:
@@ -5932,9 +5933,10 @@ class UserData(models.Model):
             if days_ahead <= 0:
                 days_ahead += 7
             next_wednesday = now_local.date() + datetime.timedelta(days=days_ahead)
-            self.next_promo_email_at = datetime.datetime(
-                next_wednesday.year, next_wednesday.month, next_wednesday.day, 10, 0, tzinfo=tz
+            naive_next_promo = datetime.datetime(  # noqa: DTZ001
+                next_wednesday.year, next_wednesday.month, next_wednesday.day, 10, 0
             )
+            self.next_promo_email_at = tz.localize(naive_next_promo, is_dst=False)
         else:
             self.next_promo_email_at = self.next_promo_email_at + datetime.timedelta(days=7)
             now = timezone.now()

@@ -9788,6 +9788,10 @@ class WeeklyPromoManagementCommandTests(StandardTestCase):
             call_command("weekly_promo")
             self.assertTrue(mock_send.called, "mail.send should be called when last promo was more than 6 days ago")
 
+
+class AuctionTOSNotificationsCommandTests(StandardTestCase):
+    """Test the auctiontos_notifications management command"""
+
     def test_excludes_mail_only_locations_from_base_queryset(self):
         """Test that mail-only TOS are excluded from the base queryset used for notifications"""
 

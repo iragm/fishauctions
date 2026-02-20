@@ -67,10 +67,6 @@ class Command(BaseCommand):
                     emails_skipped += 1
                     continue
 
-                # Advance the per-user schedule before sending
-                if not fake_mode:
-                    user.userdata.set_next_promo()
-
                 # Don't send if a promo email was sent within the last 6 days
                 if (
                     user.userdata.last_promo_email_sent_at is not None
@@ -218,6 +214,7 @@ class Command(BaseCommand):
                             )
                             user.userdata.last_promo_email_sent_at = now
                             user.userdata.save(update_fields=["last_promo_email_sent_at"])
+                            user.userdata.set_next_promo()
                         emails_sent += 1
                     except Exception as e:
                         logger.error("Error sending email to %s: %s", user.email, e)
