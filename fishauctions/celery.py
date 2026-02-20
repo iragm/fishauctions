@@ -7,7 +7,6 @@ This module sets up Celery for handling asynchronous tasks and periodic tasks.
 import os
 
 from celery import Celery
-from celery.schedules import crontab
 from celery.signals import worker_ready
 
 # Constants
@@ -59,10 +58,10 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.email_unseen_chats",
         "schedule": 86400.0,  # Run every 24 hours
     },
-    # Weekly promo email - Wednesday at 9:30
+    # Weekly promo email - every 24 hours (per-user scheduling via next_promo_email_at)
     "weekly_promo": {
         "task": "auctions.tasks.weekly_promo",
-        "schedule": crontab(day_of_week=3, hour=9, minute=30),
+        "schedule": 86400.0,  # Run every 24 hours
     },
     # Set user locations - every 2 hours
     "set_user_location": {

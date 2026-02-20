@@ -5895,6 +5895,7 @@ class UserData(models.Model):
     has_used_proxy_bidding = models.BooleanField(default=False)
     never_show_paypal_connect = models.BooleanField(default=False)
     never_show_square_connect = models.BooleanField(default=False)
+    next_promo_email_at = models.DateTimeField(null=True, blank=True)
 
     @property
     def last_auction_created(self):
@@ -5915,6 +5916,30 @@ class UserData(models.Model):
 
     def __str__(self):
         return f"{self.user.username}'s data"
+
+    def set_next_promo(self):
+        """Set next_promo_email_at to the next Wednesday at 10 AM in user's local time,
+        or advance the existing value by 7 days (ensuring it's in the future)."""
+        try:
+            tz = pytz_timezone(self.timezone)
+        except Exception:
+            tz = pytz_timezone(settings.TIME_ZONE)
+
+        if self.next_promo_email_at is None:
+            now_local = timezone.now().astimezone(tz)
+            days_ahead = 2 - now_local.weekday()  # Wednesday is weekday 2
+            if days_ahead <= 0:
+                days_ahead += 7
+            next_wednesday = now_local.date() + datetime.timedelta(days=days_ahead)
+            self.next_promo_email_at = datetime.datetime(
+                next_wednesday.year, next_wednesday.month, next_wednesday.day, 10, 0, tzinfo=tz
+            )
+        else:
+            self.next_promo_email_at = self.next_promo_email_at + datetime.timedelta(days=7)
+            now = timezone.now()
+            while self.next_promo_email_at <= now:
+                self.next_promo_email_at += datetime.timedelta(days=7)
+        self.save(update_fields=["next_promo_email_at"])
 
     def send_websocket_message(self, message):
         channel_layer = channels.layers.get_channel_layer()

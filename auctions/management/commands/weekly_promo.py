@@ -32,10 +32,11 @@ class Command(BaseCommand):
             logger.info("Running in FAKE mode - no emails will be sent, no counters updated")
             self.stdout.write(self.style.WARNING("Running in FAKE mode - no emails will be sent, no counters updated"))
 
+        now = timezone.now()
         # get any users who have opted into the weekly email
-        exclude_newer_than = timezone.now() - datetime.timedelta(days=6)
-        exclude_older_than = timezone.now() - datetime.timedelta(days=400)
-        in_person_auctions_cutoff = timezone.now() + datetime.timedelta(days=7)
+        exclude_newer_than = now - datetime.timedelta(days=6)
+        exclude_older_than = now - datetime.timedelta(days=400)
+        in_person_auctions_cutoff = now + datetime.timedelta(days=7)
         users = (
             User.objects.filter(
                 Q(userdata__email_me_about_new_in_person_auctions=True)
@@ -46,6 +47,7 @@ class Command(BaseCommand):
             .exclude(userdata__latitude=0, userdata__longitude=0)
             .exclude(userdata__last_activity__gte=(exclude_newer_than))
             .exclude(userdata__last_activity__lte=(exclude_older_than))
+            .filter(Q(userdata__next_promo_email_at__lte=now) | Q(userdata__next_promo_email_at__isnull=True))
         )
         # users = User.objects.filter(pk=1)
 
@@ -58,6 +60,17 @@ class Command(BaseCommand):
 
         for user in users:
             try:
+                # If schedule not yet initialized, set it up and skip sending this run
+                if user.userdata.next_promo_email_at is None:
+                    if not fake_mode:
+                        user.userdata.set_next_promo()
+                    emails_skipped += 1
+                    continue
+
+                # Advance the per-user schedule before sending
+                if not fake_mode:
+                    user.userdata.set_next_promo()
+
                 template_auctions = []
                 if user.userdata.email_me_about_new_auctions:
                     locations = (
