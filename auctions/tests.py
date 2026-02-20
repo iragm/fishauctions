@@ -9757,7 +9757,36 @@ class WeeklyPromoManagementCommandTests(StandardTestCase):
             "next_promo_email_at should not be modified in fake mode",
         )
 
-    """Test the auctiontos_notifications management command"""
+    def test_last_promo_email_sent_at_set_after_sending(self):
+        """Test that last_promo_email_sent_at is updated when a promo email is sent."""
+        self.assertIsNone(self.promo_user.userdata.last_promo_email_sent_at)
+
+        with patch("auctions.management.commands.weekly_promo.mail.send"):
+            call_command("weekly_promo")
+
+        self.promo_user.userdata.refresh_from_db()
+        self.assertIsNotNone(
+            self.promo_user.userdata.last_promo_email_sent_at,
+            "last_promo_email_sent_at should be set after sending a promo email",
+        )
+
+    def test_promo_not_sent_if_sent_within_6_days(self):
+        """Test that promo email is not sent if one was sent in the last 6 days."""
+        self.promo_user.userdata.last_promo_email_sent_at = timezone.now() - datetime.timedelta(days=3)
+        self.promo_user.userdata.save()
+
+        with patch("auctions.management.commands.weekly_promo.mail.send") as mock_send:
+            call_command("weekly_promo")
+            self.assertFalse(mock_send.called, "mail.send should not be called within 6 days of last promo email")
+
+    def test_promo_sent_if_last_sent_more_than_6_days_ago(self):
+        """Test that promo email is sent if the last one was more than 6 days ago."""
+        self.promo_user.userdata.last_promo_email_sent_at = timezone.now() - datetime.timedelta(days=7)
+        self.promo_user.userdata.save()
+
+        with patch("auctions.management.commands.weekly_promo.mail.send") as mock_send:
+            call_command("weekly_promo")
+            self.assertTrue(mock_send.called, "mail.send should be called when last promo was more than 6 days ago")
 
     def test_excludes_mail_only_locations_from_base_queryset(self):
         """Test that mail-only TOS are excluded from the base queryset used for notifications"""

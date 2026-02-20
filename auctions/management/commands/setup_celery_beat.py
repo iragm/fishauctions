@@ -40,7 +40,7 @@ class Command(BaseCommand):
                 "remove_duplicate_views",
                 "webpush_notifications_deduplicate",
                 "cleanup_old_invoice_notification_tasks",
-                "update_auction_stats",  # Old task that should be removed
+                "update_auction_stats",
             ]
         )
         for task in existing_tasks:

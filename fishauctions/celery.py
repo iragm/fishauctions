@@ -58,10 +58,10 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.email_unseen_chats",
         "schedule": 86400.0,  # Run every 24 hours
     },
-    # Weekly promo email - every 24 hours (per-user scheduling via next_promo_email_at)
+    # Weekly promo email - every hour (per-user scheduling via next_promo_email_at allows local timezone delivery)
     "weekly_promo": {
         "task": "auctions.tasks.weekly_promo",
-        "schedule": 86400.0,  # Run every 24 hours
+        "schedule": 3600.0,  # Run every hour
     },
     # Set user locations - every 2 hours
     "set_user_location": {

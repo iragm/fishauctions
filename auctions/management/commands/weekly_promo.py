@@ -71,6 +71,14 @@ class Command(BaseCommand):
                 if not fake_mode:
                     user.userdata.set_next_promo()
 
+                # Don't send if a promo email was sent within the last 6 days
+                if (
+                    user.userdata.last_promo_email_sent_at is not None
+                    and user.userdata.last_promo_email_sent_at >= now - datetime.timedelta(days=6)
+                ):
+                    emails_skipped += 1
+                    continue
+
                 template_auctions = []
                 if user.userdata.email_me_about_new_auctions:
                     locations = (
@@ -208,6 +216,8 @@ class Command(BaseCommand):
                                     "mailing_address": settings.MAILING_ADDRESS,
                                 },
                             )
+                            user.userdata.last_promo_email_sent_at = now
+                            user.userdata.save(update_fields=["last_promo_email_sent_at"])
                         emails_sent += 1
                     except Exception as e:
                         logger.error("Error sending email to %s: %s", user.email, e)
