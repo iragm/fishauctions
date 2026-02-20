@@ -48,7 +48,7 @@ from django.db.models import (
     When,
 )
 from django.db.models.base import Model as Model
-from django.db.models.functions import TruncDay
+from django.db.models.functions import TruncDay, TruncMonth
 from django.forms import modelformset_factory
 from django.http import (
     Http404,
@@ -8116,6 +8116,84 @@ class AdminTrafficJSON(AdminOnlyViewMixin, BaseLineChartView):
         return [
             bin_data(views, "date_start", self.bins, timeframe, timezone.now())[::-1],
         ]
+
+
+class AdminTrafficTimeOfDayJSON(AdminOnlyViewMixin, BaseLineChartView):
+    """Page views binned by hour and day of week"""
+
+    def dispatch(self, request, *args, **kwargs):
+        days_param = self.request.GET.get("days", 30)
+        try:
+            days = int(days_param)
+        except (ValueError, TypeError):
+            days = 30
+        self.bins = days
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_labels(self):
+        return [f"{h}:00" for h in range(24)]
+
+    def get_providers(self):
+        return ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+    def get_data(self):
+        timeframe = timezone.now() - timedelta(days=self.bins)
+        timestamps = PageView.objects.filter(date_start__gte=timeframe).values_list("date_start", flat=True)
+        grid = [[0] * 24 for _ in range(7)]
+        for ts in timestamps:
+            local_ts = timezone.localtime(ts)
+            grid[local_ts.weekday()][local_ts.hour] += 1
+        return grid
+
+
+class AdminUserSignups(AdminOnlyViewMixin, TemplateView):
+    """Cumulative user signups over time"""
+
+    template_name = "dashboard_user_signups.html"
+
+
+class AdminUserSignupsJSON(AdminOnlyViewMixin, BaseLineChartView):
+    """JSON data for cumulative user signups chart, aggregated by month"""
+
+    def dispatch(self, request, *args, **kwargs):
+        earliest = User.objects.order_by("date_joined").values_list("date_joined", flat=True).first()
+        self._end = timezone.now().date()
+        self._start = earliest.date() if earliest else self._end
+        return super().dispatch(request, *args, **kwargs)
+
+    def _monthly_dates(self):
+        months = []
+        current = self._start.replace(day=1)
+        end_month = self._end.replace(day=1)
+        while current <= end_month:
+            months.append(current)
+            current = (
+                current.replace(month=current.month + 1)
+                if current.month < 12
+                else current.replace(year=current.year + 1, month=1)
+            )
+        return months
+
+    def get_labels(self):
+        return [d.strftime("%b %Y") for d in self._monthly_dates()]
+
+    def get_providers(self):
+        return ["Total users"]
+
+    def get_data(self):
+        monthly_counts = (
+            User.objects.annotate(join_month=TruncMonth("date_joined"))
+            .values("join_month")
+            .annotate(count=Count("pk"))
+            .order_by("join_month")
+        )
+        month_counts = {item["join_month"].date(): item["count"] for item in monthly_counts}
+        cumulative = []
+        running_total = 0
+        for month_date in self._monthly_dates():
+            running_total += month_counts.get(month_date, 0)
+            cumulative.append(running_total)
+        return [cumulative]
 
 
 class AdminReferrers(AdminOnlyViewMixin, TemplateView):
