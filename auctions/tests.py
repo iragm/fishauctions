@@ -9499,6 +9499,7 @@ class WeeklyPromoManagementCommandTests(StandardTestCase):
         self.promo_user.userdata.last_activity = timezone.now() - datetime.timedelta(days=10)  # Active 10 days ago
         self.promo_user.userdata.email_me_about_new_auctions = True
         self.promo_user.userdata.email_me_about_new_auctions_distance = 100
+        self.promo_user.userdata.next_promo_email_at = timezone.now() - datetime.timedelta(hours=1)  # Due for email
         self.promo_user.userdata.save()
 
         # Create an active auction with location
@@ -9665,6 +9666,127 @@ class WeeklyPromoManagementCommandTests(StandardTestCase):
         # Check that output includes fake mode indicators
         self.assertIn("[FAKE MODE]", output, "Output should include [FAKE MODE] marker")
         self.assertIn("FAKE", output, "Output should include FAKE indicator")
+
+    def test_weekly_promo_initializes_null_schedule(self):
+        """Test that a user with null next_promo_email_at gets it initialized but no email sent."""
+        self.promo_user.userdata.next_promo_email_at = None
+        self.promo_user.userdata.save()
+
+        with patch("auctions.management.commands.weekly_promo.mail.send") as mock_send:
+            call_command("weekly_promo")
+            self.assertFalse(mock_send.called, "mail.send should not be called during initialization")
+
+        self.promo_user.userdata.refresh_from_db()
+        self.assertIsNotNone(
+            self.promo_user.userdata.next_promo_email_at, "next_promo_email_at should be set after initialization"
+        )
+        self.assertGreater(
+            self.promo_user.userdata.next_promo_email_at,
+            timezone.now(),
+            "next_promo_email_at should be in the future after initialization",
+        )
+
+    def test_weekly_promo_skips_users_with_future_schedule(self):
+        """Test that users with a future next_promo_email_at do not receive an email."""
+        self.promo_user.userdata.next_promo_email_at = timezone.now() + datetime.timedelta(days=3)
+        self.promo_user.userdata.save()
+
+        with patch("auctions.management.commands.weekly_promo.mail.send") as mock_send:
+            call_command("weekly_promo")
+            self.assertFalse(mock_send.called, "mail.send should not be called for users with future schedule")
+
+    def test_weekly_promo_advances_schedule_after_sending(self):
+        """Test that next_promo_email_at is advanced ~7 days after sending."""
+        past_time = timezone.now() - datetime.timedelta(hours=1)
+        self.promo_user.userdata.next_promo_email_at = past_time
+        self.promo_user.userdata.save()
+
+        with patch("auctions.management.commands.weekly_promo.mail.send"):
+            call_command("weekly_promo")
+
+        self.promo_user.userdata.refresh_from_db()
+        self.assertGreater(
+            self.promo_user.userdata.next_promo_email_at,
+            timezone.now(),
+            "next_promo_email_at should be advanced to the future after sending",
+        )
+
+    def test_set_next_promo_initializes_to_next_wednesday(self):
+        """Test that set_next_promo sets next_promo_email_at to the next Wednesday at 10 AM."""
+        self.promo_user.userdata.next_promo_email_at = None
+        self.promo_user.userdata.save()
+
+        self.promo_user.userdata.set_next_promo()
+        self.promo_user.userdata.refresh_from_db()
+
+        dt = self.promo_user.userdata.next_promo_email_at
+        self.assertIsNotNone(dt)
+        self.assertGreater(dt, timezone.now())
+        # Should be a Wednesday (weekday 2)
+        self.assertEqual(dt.weekday(), 2, "next_promo_email_at should be a Wednesday")
+
+    def test_set_next_promo_advances_by_seven_days(self):
+        """Test that set_next_promo advances an existing value by 7 days."""
+        base_time = timezone.now() - datetime.timedelta(hours=1)
+        self.promo_user.userdata.next_promo_email_at = base_time
+        self.promo_user.userdata.save()
+
+        self.promo_user.userdata.set_next_promo()
+        self.promo_user.userdata.refresh_from_db()
+
+        new_time = self.promo_user.userdata.next_promo_email_at
+        self.assertGreater(new_time, timezone.now(), "Advanced time should be in the future")
+        # Should be exactly 7 days from base_time (which was just 1 hour in the past)
+        expected = base_time + datetime.timedelta(days=7)
+        diff = abs((new_time - expected).total_seconds())
+        self.assertLess(diff, 60, "Advanced time should be ~7 days from the original value")
+
+    def test_weekly_promo_fake_mode_does_not_update_schedule(self):
+        """Test that fake mode does not modify next_promo_email_at."""
+        original_time = timezone.now() - datetime.timedelta(hours=1)
+        self.promo_user.userdata.next_promo_email_at = original_time
+        self.promo_user.userdata.save()
+
+        with patch("auctions.management.commands.weekly_promo.mail.send"):
+            call_command("weekly_promo", fake=True)
+
+        self.promo_user.userdata.refresh_from_db()
+        self.assertEqual(
+            self.promo_user.userdata.next_promo_email_at,
+            original_time,
+            "next_promo_email_at should not be modified in fake mode",
+        )
+
+    def test_last_promo_email_sent_at_set_after_sending(self):
+        """Test that last_promo_email_sent_at is updated when a promo email is sent."""
+        self.assertIsNone(self.promo_user.userdata.last_promo_email_sent_at)
+
+        with patch("auctions.management.commands.weekly_promo.mail.send"):
+            call_command("weekly_promo")
+
+        self.promo_user.userdata.refresh_from_db()
+        self.assertIsNotNone(
+            self.promo_user.userdata.last_promo_email_sent_at,
+            "last_promo_email_sent_at should be set after sending a promo email",
+        )
+
+    def test_promo_not_sent_if_sent_within_6_days(self):
+        """Test that promo email is not sent if one was sent in the last 6 days."""
+        self.promo_user.userdata.last_promo_email_sent_at = timezone.now() - datetime.timedelta(days=3)
+        self.promo_user.userdata.save()
+
+        with patch("auctions.management.commands.weekly_promo.mail.send") as mock_send:
+            call_command("weekly_promo")
+            self.assertFalse(mock_send.called, "mail.send should not be called within 6 days of last promo email")
+
+    def test_promo_sent_if_last_sent_more_than_6_days_ago(self):
+        """Test that promo email is sent if the last one was more than 6 days ago."""
+        self.promo_user.userdata.last_promo_email_sent_at = timezone.now() - datetime.timedelta(days=7)
+        self.promo_user.userdata.save()
+
+        with patch("auctions.management.commands.weekly_promo.mail.send") as mock_send:
+            call_command("weekly_promo")
+            self.assertTrue(mock_send.called, "mail.send should be called when last promo was more than 6 days ago")
 
 
 class AuctionTOSNotificationsCommandTests(StandardTestCase):
