@@ -5895,7 +5895,7 @@ class UserData(models.Model):
     has_used_proxy_bidding = models.BooleanField(default=False)
     never_show_paypal_connect = models.BooleanField(default=False)
     never_show_square_connect = models.BooleanField(default=False)
-    next_promo_email_at = models.DateTimeField(null=True, blank=True)
+    next_promo_email_at = models.DateTimeField(null=True, blank=True, db_index=True)
     last_promo_email_sent_at = models.DateTimeField(null=True, blank=True)
 
     @property
