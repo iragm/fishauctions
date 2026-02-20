@@ -54,10 +54,10 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.auction_emails",
         "schedule": 240.0,  # Run every 4 minutes
     },
-    # Send notifications about unread chats - daily at 10:00
+    # Send notifications about unread chats - every 24 hours
     "email_unseen_chats": {
         "task": "auctions.tasks.email_unseen_chats",
-        "schedule": crontab(hour=10, minute=0),
+        "schedule": 86400.0,  # Run every 24 hours
     },
     # Weekly promo email - Wednesday at 9:30
     "weekly_promo": {
@@ -74,15 +74,15 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.remove_duplicate_views",
         "schedule": 900.0,  # Run every 15 minutes
     },
-    # Deduplicate webpush notifications - daily at 10:00
+    # Deduplicate webpush notifications - every 24 hours
     "webpush_notifications_deduplicate": {
         "task": "auctions.tasks.webpush_notifications_deduplicate",
-        "schedule": crontab(hour=10, minute=0),
+        "schedule": 86400.0,  # Run every 24 hours
     },
-    # Clean up old invoice notification tasks - daily at 3:00 AM
+    # Clean up old invoice notification tasks - every 24 hours
     "cleanup_old_invoice_notification_tasks": {
         "task": "auctions.tasks.cleanup_old_invoice_notification_tasks",
-        "schedule": crontab(hour=3, minute=0),
+        "schedule": 86400.0,  # Run every 24 hours
     },
     # Note: update_auction_stats is NOT in beat_schedule as it's self-scheduling.
     # It starts on worker_ready and schedules itself based on when the next
