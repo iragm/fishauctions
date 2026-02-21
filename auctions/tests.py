@@ -9022,82 +9022,27 @@ class SignalLogicTestCase(StandardTestCase):
 
 
 class DuplicateAuctionTOSTests(StandardTestCase):
-    """Test that duplicate AuctionTOS records don't cause MultipleObjectsReturned errors"""
+    """Test that duplicate AuctionTOS records are prevented by the unique constraint"""
 
-    def test_duplicate_auction_tos_in_auction_detail_view(self):
-        """Test that the auction detail view can handle duplicate AuctionTOS records"""
-        # Create a duplicate AuctionTOS for the same user and auction
-        AuctionTOS.objects.create(
-            user=self.admin_user, auction=self.online_auction, pickup_location=self.location, is_admin=False
+    def test_duplicate_user_auction_raises_integrity_error(self):
+        """Creating a second AuctionTOS for the same user+auction should raise IntegrityError"""
+        from django.db import IntegrityError
+
+        with self.assertRaises(IntegrityError):
+            AuctionTOS.objects.create(
+                user=self.admin_user, auction=self.online_auction, pickup_location=self.location, is_admin=False
+            )
+
+    def test_multiple_null_users_allowed_same_auction(self):
+        """Multiple manually-added (user=None) TOS records are allowed in the same auction"""
+        tos1 = AuctionTOS.objects.create(
+            auction=self.online_auction, pickup_location=self.location, manually_added=True, name="Person A"
         )
-        # Verify we now have 2 AuctionTOS records for this user/auction combination
-        tos_count = AuctionTOS.objects.filter(user=self.admin_user, auction=self.online_auction).count()
-        self.assertEqual(tos_count, 2)
-
-        # This should not raise MultipleObjectsReturned error
-        self.client.login(username="admin_user", password="testpassword")
-        response = self.client.get(reverse("auction_main", kwargs={"slug": self.online_auction.slug}))
-        self.assertEqual(response.status_code, 200)
-
-    def test_duplicate_auction_tos_in_lot_list_view(self):
-        """Test that the lot list view can handle duplicate AuctionTOS records"""
-        # Create a duplicate AuctionTOS for the same user and auction
-        AuctionTOS.objects.create(
-            user=self.admin_user, auction=self.online_auction, pickup_location=self.location, is_admin=False
+        tos2 = AuctionTOS.objects.create(
+            auction=self.online_auction, pickup_location=self.location, manually_added=True, name="Person B"
         )
-
-        # This should not raise MultipleObjectsReturned error
-        self.client.login(username="admin_user", password="testpassword")
-        response = self.client.get(reverse("auction_lot_list", kwargs={"slug": self.online_auction.slug}))
-        self.assertEqual(response.status_code, 200)
-
-    def test_duplicate_auction_tos_in_lot_model_properties(self):
-        """Test that Lot model properties can handle duplicate AuctionTOS records"""
-        # Create a lot
-        lot = Lot.objects.create(
-            auction=self.online_auction,
-            auctiontos_seller=self.admin_online_tos,
-            lot_number=1,
-            lot_name="Test Lot",
-            quantity=1,
-            reserve_price=10,
-        )
-
-        # Create a duplicate AuctionTOS for the same user and auction
-        AuctionTOS.objects.create(
-            user=self.admin_user, auction=self.online_auction, pickup_location=self.location, is_admin=False
-        )
-
-        # These properties should not raise MultipleObjectsReturned error
-        tos_needed = lot.tos_needed
-        location_as_object = lot.location_as_object
-
-        # The properties should work correctly
-        self.assertFalse(tos_needed)
-        self.assertEqual(location_as_object, self.location)
-
-    def test_duplicate_auction_tos_winner_location(self):
-        """Test that winner_location property can handle duplicate AuctionTOS records"""
-        # Create a lot with a winner
-        lot = Lot.objects.create(
-            auction=self.online_auction,
-            auctiontos_seller=self.admin_online_tos,
-            lot_number=1,
-            lot_name="Test Lot",
-            quantity=1,
-            reserve_price=10,
-            winner=self.user,
-        )
-
-        # Create TOS for the winner
-        AuctionTOS.objects.create(user=self.user, auction=self.online_auction, pickup_location=self.location)
-
-        # Create a duplicate AuctionTOS for the winner
-        AuctionTOS.objects.create(user=self.user, auction=self.online_auction, pickup_location=self.location)
-
-        # This should not raise MultipleObjectsReturned error
-        winner_location = lot.winner_location
-        self.assertEqual(winner_location, str(self.location))
+        self.assertIsNotNone(tos1.pk)
+        self.assertIsNotNone(tos2.pk)
 
 
 class AuctionNoShowURLEncodingTest(StandardTestCase):

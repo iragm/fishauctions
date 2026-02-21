@@ -209,8 +209,12 @@ def user_logged_in_callback(sender, user, request, **kwargs):
 
     auctiontoss = AuctionTOS.objects.filter(user__isnull=True, email=user.email)
     for auctiontos in auctiontoss:
-        auctiontos.user = user
-        auctiontos.save()
+        existing = AuctionTOS.objects.filter(user=user, auction=auctiontos.auction).first()
+        if existing:
+            existing.merge_duplicate(auctiontos, reason="duplicate detected on login")
+        else:
+            auctiontos.user = user
+            auctiontos.save()
 
 
 @receiver(post_save, sender=User)

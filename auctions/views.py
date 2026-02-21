@@ -5666,8 +5666,19 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
             ).first()
             is_new_join = False
             if find_by_email:
-                obj = find_by_email
-                obj.user = self.request.user
+                # Check if the user already has a separate TOS (from a prior join by user FK)
+                existing_by_user = (
+                    AuctionTOS.objects.filter(user=self.request.user, auction=auction)
+                    .exclude(pk=find_by_email.pk)
+                    .first()
+                )
+                if existing_by_user:
+                    # Merge the email-matched (older, manually-added) TOS into the user-FK TOS
+                    existing_by_user.merge_duplicate(find_by_email, reason="duplicate detected on join")
+                    obj = existing_by_user
+                else:
+                    obj = find_by_email
+                    obj.user = self.request.user
             else:
                 obj, created = AuctionTOS.objects.get_or_create(
                     user=self.request.user,

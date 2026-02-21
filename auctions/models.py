@@ -3134,6 +3134,7 @@ class AuctionTOS(models.Model):
     class Meta:
         verbose_name = "User in auction"
         verbose_name_plural = "Users in auction"
+        unique_together = [("auction", "user")]
 
     def merge_duplicate(self, duplicate, reason="same email"):
         """Merge a duplicate AuctionTOS into self (self should be the older/canonical record).
