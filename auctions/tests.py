@@ -9022,7 +9022,7 @@ class SignalLogicTestCase(StandardTestCase):
 
 
 class DuplicateAuctionTOSTests(StandardTestCase):
-    """Test that duplicate AuctionTOS records (same user+auction) are auto-merged on save"""
+    """Test that duplicate AuctionTOS records are auto-merged on save"""
 
     def test_duplicate_user_auction_is_auto_merged_on_save(self):
         """Creating a second AuctionTOS for the same user+auction via save() auto-merges it into the older one"""
@@ -9034,6 +9034,24 @@ class DuplicateAuctionTOSTests(StandardTestCase):
         )
         # The save() method should have merged it; only 1 record should remain
         final_count = AuctionTOS.objects.filter(user=self.admin_user, auction=self.online_auction).count()
+        self.assertEqual(final_count, 1)
+
+    def test_duplicate_email_is_auto_merged_on_save(self):
+        """Creating a second TOS with the same email in the same auction auto-merges on save"""
+        # Set a known email on the existing TOS
+        AuctionTOS.objects.filter(pk=self.online_tos.pk).update(email="dup@example.com")
+        initial_count = AuctionTOS.objects.filter(auction=self.online_auction, email="dup@example.com").count()
+        self.assertEqual(initial_count, 1)
+        # Create a second TOS with the same email — should be auto-merged
+        AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            manually_added=True,
+            email="dup@example.com",
+            name="Duplicate Person",
+        )
+        # Only one TOS with this email should remain
+        final_count = AuctionTOS.objects.filter(auction=self.online_auction, email="dup@example.com").count()
         self.assertEqual(final_count, 1)
 
     def test_multiple_null_users_allowed_same_auction(self):
@@ -10130,12 +10148,14 @@ class MergeAuctionTOSTests(StandardTestCase):
         # Give online_tos a real email so duplicate checks work
         AuctionTOS.objects.filter(pk=self.online_tos.pk).update(email="canonical@example.com")
         self.online_tos.refresh_from_db()
+        # Use a DIFFERENT email so save() doesn't auto-merge this duplicate on creation
+        # (these tests exercise the explicit merge_duplicate() method, not the auto-merge)
         self.duplicate_tos = AuctionTOS.objects.create(
             auction=self.online_auction,
             pickup_location=self.location,
             manually_added=True,
-            email="canonical@example.com",
-            name="Canonical User",
+            email="duplicate@example.com",
+            name="Duplicate User",
         )
 
     def test_merge_duplicate_moves_won_lots(self):

@@ -3083,7 +3083,36 @@ class AuctionTOS(models.Model):
                 user=None,  # System change
             )
 
-        duplicate_instance = self.auction.find_user(name=self.name, email=self.email, exclude_pk=self.pk)
+        # Check for an exact email duplicate in this auction and merge immediately
+        if self.email:
+            email_duplicate = (
+                AuctionTOS.objects.filter(auction=self.auction, email=self.email)
+                .exclude(pk=self.pk)
+                .order_by("createdon")
+                .first()
+            )
+            if email_duplicate:
+                # Keep the older record; merge self (newer) into it
+                existing = email_duplicate
+                Lot.objects.filter(auctiontos_winner=self).update(auctiontos_winner=existing)
+                Lot.objects.filter(auctiontos_seller=self).update(auctiontos_seller=existing)
+                self_invoice = Invoice.objects.filter(auctiontos_user=self).first()
+                existing_invoice = Invoice.objects.filter(auctiontos_user=existing).first()
+                if not existing_invoice:
+                    existing_invoice = Invoice.objects.create(auctiontos_user=existing, auction=self.auction)
+                if self_invoice:
+                    InvoiceAdjustment.objects.filter(invoice=self_invoice).update(invoice=existing_invoice)
+                existing_invoice.recalculate()
+                self.auction.create_history(
+                    applies_to="USERS",
+                    action=f"Merged duplicate {self.name} (bidder #{self.bidder_number}) into {existing.name} (bidder #{existing.bidder_number}): same email",
+                    user=None,
+                )
+                self.delete()
+                return
+
+        # Flag name/email fuzzy matches as possible duplicates for admin review (no auto-merge)
+        duplicate_instance = self.auction.find_user(name=self.name, email="", exclude_pk=self.pk)
         if duplicate_instance:
             # using update here avoids recursion because update does not call save()
             AuctionTOS.objects.filter(pk=self.pk).update(possible_duplicate=duplicate_instance.pk)
@@ -3118,7 +3147,7 @@ class AuctionTOS(models.Model):
                 existing_invoice.recalculate()
                 self.auction.create_history(
                     applies_to="USERS",
-                    action=f"Merged duplicate {self.name} (bidder #{self.bidder_number}) into {existing.name} (bidder #{existing.bidder_number}): same email",
+                    action=f"Merged duplicate {self.name} (bidder #{self.bidder_number}) into {existing.name} (bidder #{existing.bidder_number}): same user account",
                     user=None,
                 )
                 self.delete()
