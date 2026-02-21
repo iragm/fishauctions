@@ -9022,16 +9022,19 @@ class SignalLogicTestCase(StandardTestCase):
 
 
 class DuplicateAuctionTOSTests(StandardTestCase):
-    """Test that duplicate AuctionTOS records are prevented by the unique constraint"""
+    """Test that duplicate AuctionTOS records (same user+auction) are auto-merged on save"""
 
-    def test_duplicate_user_auction_raises_integrity_error(self):
-        """Creating a second AuctionTOS for the same user+auction should raise IntegrityError"""
-        from django.db import IntegrityError
-
-        with self.assertRaises(IntegrityError):
-            AuctionTOS.objects.create(
-                user=self.admin_user, auction=self.online_auction, pickup_location=self.location, is_admin=False
-            )
+    def test_duplicate_user_auction_is_auto_merged_on_save(self):
+        """Creating a second AuctionTOS for the same user+auction via save() auto-merges it into the older one"""
+        initial_count = AuctionTOS.objects.filter(user=self.admin_user, auction=self.online_auction).count()
+        self.assertEqual(initial_count, 1)
+        # Simulate a duplicate being saved (e.g. race condition)
+        AuctionTOS.objects.create(
+            user=self.admin_user, auction=self.online_auction, pickup_location=self.location, is_admin=False
+        )
+        # The save() method should have merged it; only 1 record should remain
+        final_count = AuctionTOS.objects.filter(user=self.admin_user, auction=self.online_auction).count()
+        self.assertEqual(final_count, 1)
 
     def test_multiple_null_users_allowed_same_auction(self):
         """Multiple manually-added (user=None) TOS records are allowed in the same auction"""

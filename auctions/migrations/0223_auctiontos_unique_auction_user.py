@@ -5,7 +5,7 @@ from django.db import migrations, models
 
 
 def merge_duplicate_auctiontos(apps, schema_editor):
-    """Before adding the unique constraint, merge any existing duplicate (auction, user) pairs.
+    """Merge any existing duplicate (auction, user) pairs.
     Keeps the oldest record and reassigns lots and invoice adjustments to it."""
     AuctionTOS = apps.get_model("auctions", "AuctionTOS")
     Lot = apps.get_model("auctions", "Lot")
@@ -54,8 +54,4 @@ class Migration(migrations.Migration):
             field=models.DateTimeField(blank=True, db_index=True, null=True),
         ),
         migrations.RunPython(merge_duplicate_auctiontos, migrations.RunPython.noop),
-        migrations.AlterUniqueTogether(
-            name="auctiontos",
-            unique_together={("auction", "user")},
-        ),
     ]

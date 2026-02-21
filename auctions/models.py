@@ -3095,6 +3095,35 @@ class AuctionTOS(models.Model):
                 AuctionTOS.objects.filter(pk=self.possible_duplicate.pk).update(possible_duplicate=None)
                 AuctionTOS.objects.filter(pk=self.pk).update(possible_duplicate=None)
 
+        # If the same user already has another AuctionTOS in this auction, merge the older one
+        # into the newer one so we don't end up with duplicates from race conditions or signal re-attaches.
+        if self.user:
+            existing = (
+                AuctionTOS.objects.filter(user=self.user, auction=self.auction)
+                .exclude(pk=self.pk)
+                .order_by("createdon")
+                .first()
+            )
+            if existing:
+                # Keep the older record; merge self (newer) into it and delete self.
+                # We use .update() to avoid triggering save() recursion.
+                Lot.objects.filter(auctiontos_winner=self).update(auctiontos_winner=existing)
+                Lot.objects.filter(auctiontos_seller=self).update(auctiontos_seller=existing)
+                self_invoice = Invoice.objects.filter(auctiontos_user=self).first()
+                existing_invoice = Invoice.objects.filter(auctiontos_user=existing).first()
+                if not existing_invoice:
+                    existing_invoice = Invoice.objects.create(auctiontos_user=existing, auction=self.auction)
+                if self_invoice:
+                    InvoiceAdjustment.objects.filter(invoice=self_invoice).update(invoice=existing_invoice)
+                existing_invoice.recalculate()
+                self.auction.create_history(
+                    applies_to="USERS",
+                    action=f"Merged duplicate {self.name} (bidder #{self.bidder_number}) into {existing.name} (bidder #{existing.bidder_number}): same email",
+                    user=None,
+                )
+                self.delete()
+                return
+
         if self.user:
             related_campaign = (
                 AuctionCampaign.objects.filter(auction=self.auction, user=self.user).exclude(result="JOINED").first()
@@ -3134,7 +3163,6 @@ class AuctionTOS(models.Model):
     class Meta:
         verbose_name = "User in auction"
         verbose_name_plural = "Users in auction"
-        unique_together = [("auction", "user")]
 
     def merge_duplicate(self, duplicate, reason="same email", user=None):
         """Merge a duplicate AuctionTOS into self (self should be the older/canonical record).
