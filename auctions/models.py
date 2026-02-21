@@ -1473,8 +1473,17 @@ class Auction(models.Model):
 
     @property
     def number_of_sellers_who_didnt_buy(self):
-        buyers = AuctionTOS.objects.filter(auctiontos_winner__auction=self.pk)
-        return AuctionTOS.objects.filter(auctiontos_seller__auction=self.pk).exclude(id__in=buyers).distinct().count()
+        buyers = (
+            AuctionTOS.objects.filter(auctiontos_winner__auction=self.pk)
+            .values_list("id", flat=True)
+            .distinct()
+        )
+        return (
+            AuctionTOS.objects.filter(auctiontos_seller__auction=self.pk)
+            .exclude(id__in=buyers)
+            .distinct()
+            .count()
+        )
 
     # @property
     # def number_of_unsuccessful_sellers(self):
