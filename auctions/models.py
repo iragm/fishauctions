@@ -1473,8 +1473,14 @@ class Auction(models.Model):
 
     @property
     def number_of_sellers_who_didnt_buy(self):
+        buyers = (
+            AuctionTOS.objects.filter(auctiontos_winner__auction=self.pk)
+            .values_list("id", flat=True)
+            .distinct()
+        )
         return (
-            AuctionTOS.objects.filter(auctiontos_seller__auction=self.pk, auctiontos_winner__isnull=False)
+            AuctionTOS.objects.filter(auctiontos_seller__auction=self.pk)
+            .exclude(id__in=buyers)
             .distinct()
             .count()
         )
@@ -1678,14 +1684,10 @@ class Auction(models.Model):
         Number of users who bought or sold at least one lot
         """
         buyers = AuctionTOS.objects.filter(auctiontos_winner__auction=self.pk).distinct()
-        sellers = (
-            AuctionTOS.objects.filter(auctiontos_seller__auction=self.pk, auctiontos_winner__isnull=False)
-            .exclude(id__in=buyers)
-            .distinct()
-        )
+        sellers = AuctionTOS.objects.filter(auctiontos_seller__auction=self.pk).exclude(id__in=buyers).distinct()
         # buyers = User.objects.filter(winner__auction=self.pk).distinct()
         # sellers = User.objects.filter(lot__auction=self.pk, lot__winner__isnull=False).exclude(id__in=buyers).distinct()
-        return len(sellers) + len(buyers)
+        return sellers.count() + buyers.count()
 
     @property
     def preregistered_users(self):
