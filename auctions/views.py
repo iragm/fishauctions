@@ -4925,9 +4925,9 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
         form = self.get_form()
         if form.is_valid():
             success_url = reverse("auction_tos_list", kwargs={"slug": self.auctiontos.auction.slug})
-            sold_lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller=self.auctiontos)
-            won_lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_winner=self.auctiontos)
             if form.cleaned_data["delete_lots"]:
+                sold_lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller=self.auctiontos)
+                won_lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_winner=self.auctiontos)
                 for lot in sold_lots:
                     lot.delete()
                 for lot in won_lots:
@@ -4944,29 +4944,13 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
                     lot.winning_price = None
                     lot.active = True
                     lot.save()
-            else:
-                if form.cleaned_data["merge_with"]:
-                    new_auctiontos = AuctionTOS.objects.get(pk=form.cleaned_data["merge_with"])
-                    invoice = Invoice.objects.filter(
-                        auctiontos_user=new_auctiontos, auction=new_auctiontos.auction
-                    ).first()
-                    if not invoice:
-                        invoice = Invoice.objects.create(auctiontos_user=new_auctiontos, auction=new_auctiontos.auction)
-                    invoice.recalculate()
-                    for lot in sold_lots:
-                        lot.auctiontos_seller = new_auctiontos
-                        lot.save()
-                    for lot in won_lots:
-                        lot.auctiontos_winner = new_auctiontos
-                        lot.save()
-                        lot.add_winner_message(request.user, new_auctiontos, lot.winning_price)
-                    invoice.recalculate()
-            # not needed if we have models.CASCADE on Invoice
-            # invoices = Invoice.objects.filter(auctiontos_user=self.auctiontos)
-            # for invoice in invoices:
-            #    invoice.delete()
-            self.auction.create_history(applies_to="USERS", action=f"Deleted {self.auctiontos.name}", user=request.user)
-            self.auctiontos.delete()
+                self.auction.create_history(
+                    applies_to="USERS", action=f"Deleted {self.auctiontos.name}", user=request.user
+                )
+                self.auctiontos.delete()
+            elif form.cleaned_data["merge_with"]:
+                new_auctiontos = AuctionTOS.objects.get(pk=form.cleaned_data["merge_with"])
+                new_auctiontos.merge_duplicate(self.auctiontos, reason=f"merged by {request.user.username}")
             return redirect(success_url)
         else:
             return self.form_invalid(form)
@@ -5196,26 +5180,16 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
                         form=form,
                     )
             else:
-                email = form.cleaned_data.get("email")
-                existing = AuctionTOS.objects.filter(auction=self.auction, email=email).first() if email else None
-                if existing:
-                    obj = existing
-                    self.auction.create_history(
-                        applies_to="USERS",
-                        action=f"Edited existing user {obj.name} (matched by email)",
-                        user=request.user,
-                    )
-                else:
-                    obj = AuctionTOS.objects.create(
-                        auction=self.auction,
-                        pickup_location=form.cleaned_data["pickup_location"],
-                        manually_added=True,
-                    )
-                    self.auction.create_history(
-                        applies_to="USERS",
-                        action=f"Added {form.cleaned_data['name']}",
-                        user=request.user,
-                    )
+                obj = AuctionTOS.objects.create(
+                    auction=self.auction,
+                    pickup_location=form.cleaned_data["pickup_location"],
+                    manually_added=True,
+                )
+                self.auction.create_history(
+                    applies_to="USERS",
+                    action=f"Added {form.cleaned_data['name']}",
+                    user=request.user,
+                )
             obj.bidder_number = form.cleaned_data["bidder_number"]
             obj.pickup_location = form.cleaned_data["pickup_location"]
             obj.name = form.cleaned_data["name"]

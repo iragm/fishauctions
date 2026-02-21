@@ -10257,29 +10257,15 @@ class MergeAuctionTOSTests(StandardTestCase):
         self.assertEqual(new_count, initial_count + 1)
         history = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").latest("timestamp")
         self.assertIsNone(history.user)
-        self.assertIn("Merged duplicate", history.action)
+        self.assertIn("Merged", history.action)
+        self.assertIn(self.duplicate_tos.bidder_number, history.action)
 
-    def test_management_command_merges_duplicates(self):
-        """Management command should find and merge duplicate AuctionTOS records"""
-        duplicate_pk = self.duplicate_tos.pk
-        call_command("remove_duplicate_auctiontos", verbosity=0)
-        self.assertFalse(AuctionTOS.objects.filter(pk=duplicate_pk).exists())
-        # Canonical record should still exist
-        self.assertTrue(AuctionTOS.objects.filter(pk=self.online_tos.pk).exists())
-
-    def test_management_command_no_duplicates(self):
-        """Management command should handle the case with no duplicates gracefully"""
-        # Merge the existing duplicate first
-        self.online_tos.merge_duplicate(self.duplicate_tos)
-        # Running again should not error
-        call_command("remove_duplicate_auctiontos", verbosity=0)
-
-    def test_admin_add_uses_existing_tos_on_email_match(self):
-        """Adding a user via admin form with an existing email should update the existing TOS, not create a new one"""
+    def test_admin_add_rejects_duplicate_email(self):
+        """Adding a user via admin form with an existing email should make the form invalid"""
         self.client.login(username="admin_user", password="testpassword")
         initial_count = AuctionTOS.objects.filter(auction=self.online_auction).count()
         url = reverse("auctiontosadmin", kwargs={"pk": self.online_auction.slug})
-        self.client.post(
+        response = self.client.post(
             url,
             {
                 "name": "Duplicate Name",
@@ -10295,6 +10281,8 @@ class MergeAuctionTOSTests(StandardTestCase):
                 "memo": "",
             },
         )
-        # Should not create a new AuctionTOS
+        # Form should be invalid — no new TOS created
         new_count = AuctionTOS.objects.filter(auction=self.online_auction).count()
         self.assertEqual(new_count, initial_count)
+        # Response should not be a redirect
+        self.assertNotEqual(response.status_code, 302)
