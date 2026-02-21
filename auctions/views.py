@@ -4953,6 +4953,12 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
                 new_auctiontos.merge_duplicate(
                     self.auctiontos, reason=f"merged by {request.user.username}", user=request.user
                 )
+            else:
+                # No lots to delete and no merge target selected; delete this AuctionTOS
+                self.auction.create_history(
+                    applies_to="USERS", action=f"Deleted {self.auctiontos.name}", user=request.user
+                )
+                self.auctiontos.delete()
             return redirect(success_url)
         else:
             return self.form_invalid(form)
