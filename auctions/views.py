@@ -4950,7 +4950,9 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
                 self.auctiontos.delete()
             elif form.cleaned_data["merge_with"]:
                 new_auctiontos = AuctionTOS.objects.get(pk=form.cleaned_data["merge_with"])
-                new_auctiontos.merge_duplicate(self.auctiontos, reason=f"merged by {request.user.username}")
+                new_auctiontos.merge_duplicate(
+                    self.auctiontos, reason=f"merged by {request.user.username}", user=request.user
+                )
             return redirect(success_url)
         else:
             return self.form_invalid(form)

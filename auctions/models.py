@@ -3136,10 +3136,11 @@ class AuctionTOS(models.Model):
         verbose_name_plural = "Users in auction"
         unique_together = [("auction", "user")]
 
-    def merge_duplicate(self, duplicate, reason="same email"):
+    def merge_duplicate(self, duplicate, reason="same email", user=None):
         """Merge a duplicate AuctionTOS into self (self should be the older/canonical record).
         Moves all won lots, sold lots, and invoice adjustments from duplicate onto self's invoice,
         creates an AuctionHistory entry, then deletes the duplicate.
+        Pass user=request.user when this is triggered by an admin action.
         """
         # Move won lots to self
         Lot.objects.filter(auctiontos_winner=duplicate).update(auctiontos_winner=self)
@@ -3158,7 +3159,7 @@ class AuctionTOS(models.Model):
         self.auction.create_history(
             applies_to="USERS",
             action=f"Merged {duplicate.name} (bidder #{duplicate.bidder_number}) into {self.name} (bidder #{self.bidder_number}): {reason}",
-            user=None,
+            user=user,
         )
         # Delete the duplicate (cascades to delete its invoice)
         duplicate.delete()
