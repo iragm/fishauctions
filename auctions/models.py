@@ -3135,6 +3135,32 @@ class AuctionTOS(models.Model):
         verbose_name = "User in auction"
         verbose_name_plural = "Users in auction"
 
+    def merge_duplicate(self, duplicate):
+        """Merge a duplicate AuctionTOS into self (self should be the older/canonical record).
+        Moves all won lots, sold lots, and invoice adjustments from duplicate onto self's invoice,
+        creates an AuctionHistory entry, then deletes the duplicate.
+        """
+        # Move won lots to self
+        Lot.objects.filter(auctiontos_winner=duplicate).update(auctiontos_winner=self)
+        # Move sold lots to self
+        Lot.objects.filter(auctiontos_seller=duplicate).update(auctiontos_seller=self)
+        # Get or create an invoice for self
+        invoice = Invoice.objects.filter(auctiontos_user=self).first()
+        if not invoice:
+            invoice = Invoice.objects.create(auctiontos_user=self, auction=self.auction)
+        # Move invoice adjustments from duplicate's invoice to self's invoice
+        duplicate_invoice = Invoice.objects.filter(auctiontos_user=duplicate).first()
+        if duplicate_invoice:
+            InvoiceAdjustment.objects.filter(invoice=duplicate_invoice).update(invoice=invoice)
+        # Create auction history entry
+        self.auction.create_history(
+            applies_to="USERS",
+            action=f"Merged duplicate user {duplicate.name} (pk={duplicate.pk}) into {self.name} (pk={self.pk})",
+            user=None,
+        )
+        # Delete the duplicate (cascades to delete its invoice)
+        duplicate.delete()
+
     @property
     def closest_location_for_this_user(self):
         result = PickupLocation.objects.none()

@@ -10172,3 +10172,129 @@ class AuctionHistoryTestCase(StandardTestCase):
         # Verify history was created
         history_count = AuctionHistory.objects.filter(auction=auction, action="Test action").count()
         self.assertEqual(history_count, 1)
+
+
+class MergeAuctionTOSTests(StandardTestCase):
+    """Test duplicate AuctionTOS detection and merging"""
+
+    def setUp(self):
+        super().setUp()
+        # Give online_tos a real email so duplicate checks work
+        AuctionTOS.objects.filter(pk=self.online_tos.pk).update(email="canonical@example.com")
+        self.online_tos.refresh_from_db()
+        self.duplicate_tos = AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            manually_added=True,
+            email="canonical@example.com",
+            name="Canonical User",
+        )
+
+    def test_merge_duplicate_moves_won_lots(self):
+        """Merging should reassign won lots from duplicate to canonical TOS"""
+        lot = Lot.objects.create(
+            lot_name="Won lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            auctiontos_winner=self.duplicate_tos,
+            quantity=1,
+            winning_price=5,
+            active=False,
+        )
+        self.online_tos.merge_duplicate(self.duplicate_tos)
+        lot.refresh_from_db()
+        self.assertEqual(lot.auctiontos_winner, self.online_tos)
+
+    def test_merge_duplicate_moves_sold_lots(self):
+        """Merging should reassign sold lots from duplicate to canonical TOS"""
+        lot = Lot.objects.create(
+            lot_name="Sold lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.duplicate_tos,
+            quantity=1,
+            active=False,
+        )
+        self.online_tos.merge_duplicate(self.duplicate_tos)
+        lot.refresh_from_db()
+        self.assertEqual(lot.auctiontos_seller, self.online_tos)
+
+    def test_merge_duplicate_moves_invoice_adjustments(self):
+        """Merging should move InvoiceAdjustments from duplicate's invoice to canonical invoice"""
+        duplicate_invoice = Invoice.objects.create(
+            auctiontos_user=self.duplicate_tos,
+            auction=self.online_auction,
+        )
+        adjustment = InvoiceAdjustment.objects.create(
+            invoice=duplicate_invoice,
+            adjustment_type="DISCOUNT",
+            amount=10,
+            notes="Test adjustment",
+        )
+        self.online_tos.merge_duplicate(self.duplicate_tos)
+        adjustment.refresh_from_db()
+        canonical_invoice = Invoice.objects.filter(auctiontos_user=self.online_tos).first()
+        self.assertEqual(adjustment.invoice, canonical_invoice)
+
+    def test_merge_duplicate_creates_invoice_if_missing(self):
+        """Merging should create an invoice for canonical TOS if it doesn't exist"""
+        # Remove existing invoice if present
+        Invoice.objects.filter(auctiontos_user=self.online_tos).delete()
+        self.online_tos.merge_duplicate(self.duplicate_tos)
+        invoice = Invoice.objects.filter(auctiontos_user=self.online_tos).first()
+        self.assertIsNotNone(invoice)
+
+    def test_merge_duplicate_deletes_duplicate(self):
+        """Merging should delete the duplicate AuctionTOS"""
+        duplicate_pk = self.duplicate_tos.pk
+        self.online_tos.merge_duplicate(self.duplicate_tos)
+        self.assertFalse(AuctionTOS.objects.filter(pk=duplicate_pk).exists())
+
+    def test_merge_duplicate_creates_auction_history(self):
+        """Merging should create an AuctionHistory entry attributed to system"""
+        initial_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").count()
+        self.online_tos.merge_duplicate(self.duplicate_tos)
+        new_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").count()
+        self.assertEqual(new_count, initial_count + 1)
+        history = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").latest("timestamp")
+        self.assertIsNone(history.user)
+        self.assertIn("Merged duplicate", history.action)
+
+    def test_management_command_merges_duplicates(self):
+        """Management command should find and merge duplicate AuctionTOS records"""
+        duplicate_pk = self.duplicate_tos.pk
+        call_command("remove_duplicate_auctiontos", verbosity=0)
+        self.assertFalse(AuctionTOS.objects.filter(pk=duplicate_pk).exists())
+        # Canonical record should still exist
+        self.assertTrue(AuctionTOS.objects.filter(pk=self.online_tos.pk).exists())
+
+    def test_management_command_no_duplicates(self):
+        """Management command should handle the case with no duplicates gracefully"""
+        # Merge the existing duplicate first
+        self.online_tos.merge_duplicate(self.duplicate_tos)
+        # Running again should not error
+        call_command("remove_duplicate_auctiontos", verbosity=0)
+
+    def test_admin_add_uses_existing_tos_on_email_match(self):
+        """Adding a user via admin form with an existing email should update the existing TOS, not create a new one"""
+        self.client.login(username="admin_user", password="testpassword")
+        initial_count = AuctionTOS.objects.filter(auction=self.online_auction).count()
+        url = reverse("auctiontosadmin", kwargs={"pk": self.online_auction.slug})
+        self.client.post(
+            url,
+            {
+                "name": "Duplicate Name",
+                "email": self.online_tos.email,
+                "pickup_location": self.location.pk,
+                "bidder_number": "",
+                "phone_number": "",
+                "address": "",
+                "is_admin": False,
+                "bidding_allowed": True,
+                "selling_allowed": True,
+                "is_club_member": False,
+                "memo": "",
+            },
+        )
+        # Should not create a new AuctionTOS
+        new_count = AuctionTOS.objects.filter(auction=self.online_auction).count()
+        self.assertEqual(new_count, initial_count)

@@ -5196,16 +5196,26 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
                         form=form,
                     )
             else:
-                obj = AuctionTOS.objects.create(
-                    auction=self.auction,
-                    pickup_location=form.cleaned_data["pickup_location"],
-                    manually_added=True,
-                )
-                self.auction.create_history(
-                    applies_to="USERS",
-                    action=f"Added {form.cleaned_data['name']}",
-                    user=request.user,
-                )
+                email = form.cleaned_data.get("email")
+                existing = AuctionTOS.objects.filter(auction=self.auction, email=email).first() if email else None
+                if existing:
+                    obj = existing
+                    self.auction.create_history(
+                        applies_to="USERS",
+                        action=f"Edited existing user {obj.name} (matched by email)",
+                        user=request.user,
+                    )
+                else:
+                    obj = AuctionTOS.objects.create(
+                        auction=self.auction,
+                        pickup_location=form.cleaned_data["pickup_location"],
+                        manually_added=True,
+                    )
+                    self.auction.create_history(
+                        applies_to="USERS",
+                        action=f"Added {form.cleaned_data['name']}",
+                        user=request.user,
+                    )
             obj.bidder_number = form.cleaned_data["bidder_number"]
             obj.pickup_location = form.cleaned_data["pickup_location"]
             obj.name = form.cleaned_data["name"]
