@@ -2790,6 +2790,45 @@ class AuctionPropertyTests(StandardTestCase):
         )
         assert illogical_seconds.has_non_logical_times is not False
 
+    def test_buyer_seller_participant_stats(self):
+        """Test that number_of_buyers, number_of_sellers, number_of_sellers_who_didnt_buy, and number_of_participants are accurate"""
+        # In StandardTestCase setup for online_auction:
+        # - online_tos (user) sold lots but never won any -> seller only
+        # - tosB (userB) won lots but never sold any -> buyer only
+        # - admin_online_tos and tosC neither bought nor sold
+        assert self.online_auction.number_of_buyers == 1
+        assert self.online_auction.number_of_sellers == 1
+        assert self.online_auction.number_of_sellers_who_didnt_buy == 1
+        assert self.online_auction.number_of_participants == 2
+
+        # Add a user who both sells and buys
+        user_both = User.objects.create_user(username="both_buyer_seller", password="testpassword")
+        tos_both = AuctionTOS.objects.create(user=user_both, auction=self.online_auction, pickup_location=self.location)
+        Lot.objects.create(
+            lot_name="Lot sold by both user",
+            auction=self.online_auction,
+            auctiontos_seller=tos_both,
+            quantity=1,
+            winning_price=5,
+            auctiontos_winner=self.tosB,
+            active=False,
+        )
+        Lot.objects.create(
+            lot_name="Lot won by both user",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            winning_price=5,
+            auctiontos_winner=tos_both,
+            active=False,
+        )
+        # tos_both both sold and won a lot, so sellers_who_didnt_buy should stay at 1
+        assert self.online_auction.number_of_buyers == 2
+        assert self.online_auction.number_of_sellers == 2
+        assert self.online_auction.number_of_sellers_who_didnt_buy == 1
+        # participants = buyers (tosB, tos_both) + sellers who didn't buy (online_tos) = 3
+        assert self.online_auction.number_of_participants == 3
+
 
 class LotPropertyTests(StandardTestCase):
     """Test Lot model properties"""
