@@ -4925,9 +4925,9 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
         form = self.get_form()
         if form.is_valid():
             success_url = reverse("auction_tos_list", kwargs={"slug": self.auctiontos.auction.slug})
-            sold_lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller=self.auctiontos)
-            won_lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_winner=self.auctiontos)
             if form.cleaned_data["delete_lots"]:
+                sold_lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller=self.auctiontos)
+                won_lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_winner=self.auctiontos)
                 for lot in sold_lots:
                     lot.delete()
                 for lot in won_lots:
@@ -4944,29 +4944,21 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
                     lot.winning_price = None
                     lot.active = True
                     lot.save()
+                self.auction.create_history(
+                    applies_to="USERS", action=f"Deleted {self.auctiontos.name}", user=request.user
+                )
+                self.auctiontos.delete()
+            elif form.cleaned_data["merge_with"]:
+                new_auctiontos = AuctionTOS.objects.get(pk=form.cleaned_data["merge_with"])
+                new_auctiontos.merge_duplicate(
+                    self.auctiontos, reason=f"merged by {request.user.username}", user=request.user
+                )
             else:
-                if form.cleaned_data["merge_with"]:
-                    new_auctiontos = AuctionTOS.objects.get(pk=form.cleaned_data["merge_with"])
-                    invoice = Invoice.objects.filter(
-                        auctiontos_user=new_auctiontos, auction=new_auctiontos.auction
-                    ).first()
-                    if not invoice:
-                        invoice = Invoice.objects.create(auctiontos_user=new_auctiontos, auction=new_auctiontos.auction)
-                    invoice.recalculate()
-                    for lot in sold_lots:
-                        lot.auctiontos_seller = new_auctiontos
-                        lot.save()
-                    for lot in won_lots:
-                        lot.auctiontos_winner = new_auctiontos
-                        lot.save()
-                        lot.add_winner_message(request.user, new_auctiontos, lot.winning_price)
-                    invoice.recalculate()
-            # not needed if we have models.CASCADE on Invoice
-            # invoices = Invoice.objects.filter(auctiontos_user=self.auctiontos)
-            # for invoice in invoices:
-            #    invoice.delete()
-            self.auction.create_history(applies_to="USERS", action=f"Deleted {self.auctiontos.name}", user=request.user)
-            self.auctiontos.delete()
+                # No lots to delete and no merge target selected; delete this AuctionTOS
+                self.auction.create_history(
+                    applies_to="USERS", action=f"Deleted {self.auctiontos.name}", user=request.user
+                )
+                self.auctiontos.delete()
             return redirect(success_url)
         else:
             return self.form_invalid(form)
@@ -5682,8 +5674,27 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
             ).first()
             is_new_join = False
             if find_by_email:
-                obj = find_by_email
-                obj.user = self.request.user
+                # Check if the user already has a separate TOS (from a prior join by user FK)
+                existing_by_user = (
+                    AuctionTOS.objects.filter(user=self.request.user, auction=auction)
+                    .exclude(pk=find_by_email.pk)
+                    .first()
+                )
+                if existing_by_user:
+                    # Keep the oldest record as canonical
+                    if (
+                        find_by_email.createdon
+                        and existing_by_user.createdon
+                        and find_by_email.createdon < existing_by_user.createdon
+                    ):
+                        canonical, duplicate = find_by_email, existing_by_user
+                    else:
+                        canonical, duplicate = existing_by_user, find_by_email
+                    canonical.merge_duplicate(duplicate, reason="duplicate detected on join")
+                    obj = canonical
+                else:
+                    obj = find_by_email
+                    obj.user = self.request.user
             else:
                 obj, created = AuctionTOS.objects.get_or_create(
                     user=self.request.user,
