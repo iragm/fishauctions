@@ -1687,7 +1687,7 @@ class Auction(models.Model):
         sellers = AuctionTOS.objects.filter(auctiontos_seller__auction=self.pk).exclude(id__in=buyers).distinct()
         # buyers = User.objects.filter(winner__auction=self.pk).distinct()
         # sellers = User.objects.filter(lot__auction=self.pk, lot__winner__isnull=False).exclude(id__in=buyers).distinct()
-        return len(sellers) + len(buyers)
+        return sellers.count() + buyers.count()
 
     @property
     def preregistered_users(self):
