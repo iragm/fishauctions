@@ -6,11 +6,12 @@ from django.db import migrations, models
 
 def merge_duplicate_auctiontos(apps, schema_editor):
     """Merge any existing duplicate (auction, user) pairs.
-    Keeps the oldest record and reassigns lots and invoice adjustments to it."""
+    Keeps the oldest record and reassigns lots, invoice adjustments, and payments to it."""
     AuctionTOS = apps.get_model("auctions", "AuctionTOS")
     Lot = apps.get_model("auctions", "Lot")
     Invoice = apps.get_model("auctions", "Invoice")
     InvoiceAdjustment = apps.get_model("auctions", "InvoiceAdjustment")
+    InvoicePayment = apps.get_model("auctions", "InvoicePayment")
     AuctionHistory = apps.get_model("auctions", "AuctionHistory")
     from django.db.models import Count
 
@@ -32,6 +33,9 @@ def merge_duplicate_auctiontos(apps, schema_editor):
             newer_invoice = Invoice.objects.filter(auctiontos_user_id=newer.pk).first()
             if newer_invoice:
                 InvoiceAdjustment.objects.filter(invoice_id=newer_invoice.pk).update(invoice_id=older_invoice.pk)
+                InvoicePayment.objects.filter(invoice_id=newer_invoice.pk).update(invoice_id=older_invoice.pk)
+            # Mark calculated_total as stale so it gets recomputed on next access
+            Invoice.objects.filter(pk=older_invoice.pk).update(calculated_total=None)
             AuctionHistory.objects.create(
                 auction_id=oldest.auction_id,
                 user=None,

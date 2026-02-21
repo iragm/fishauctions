@@ -5681,9 +5681,17 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                     .first()
                 )
                 if existing_by_user:
-                    # Merge the email-matched (older, manually-added) TOS into the user-FK TOS
-                    existing_by_user.merge_duplicate(find_by_email, reason="duplicate detected on join")
-                    obj = existing_by_user
+                    # Keep the oldest record as canonical
+                    if (
+                        find_by_email.createdon
+                        and existing_by_user.createdon
+                        and find_by_email.createdon < existing_by_user.createdon
+                    ):
+                        canonical, duplicate = find_by_email, existing_by_user
+                    else:
+                        canonical, duplicate = existing_by_user, find_by_email
+                    canonical.merge_duplicate(duplicate, reason="duplicate detected on join")
+                    obj = canonical
                 else:
                     obj = find_by_email
                     obj.user = self.request.user

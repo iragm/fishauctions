@@ -211,7 +211,14 @@ def user_logged_in_callback(sender, user, request, **kwargs):
     for auctiontos in auctiontoss:
         existing = AuctionTOS.objects.filter(user=user, auction=auctiontos.auction).first()
         if existing:
-            existing.merge_duplicate(auctiontos, reason="duplicate detected on login")
+            # Keep the oldest record as canonical
+            if auctiontos.createdon and existing.createdon and auctiontos.createdon < existing.createdon:
+                canonical, duplicate = auctiontos, existing
+                canonical.user = user
+                AuctionTOS.objects.filter(pk=canonical.pk).update(user=user)
+            else:
+                canonical, duplicate = existing, auctiontos
+            canonical.merge_duplicate(duplicate, reason="duplicate detected on login")
         else:
             auctiontos.user = user
             auctiontos.save()
