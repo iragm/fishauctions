@@ -9107,6 +9107,9 @@ class DuplicateAuctionTOSTests(StandardTestCase):
             name="Manual Entry",
             email="linkme@example.com",
         )
+        # Creating this duplicate with the same email triggers the auto-merge inside save():
+        # save() detects the email duplicate (canonical), calls canonical.merge_duplicate(duplicate).
+        # merge_duplicate() copies user from duplicate onto canonical, then deletes duplicate.
         duplicate = AuctionTOS.objects.create(
             user=self.user_who_does_not_join,
             auction=self.online_auction,

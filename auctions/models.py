@@ -3176,13 +3176,14 @@ class AuctionTOS(models.Model):
         if duplicate.auction != self.auction:
             msg = "Cannot merge AuctionTOS records from different auctions."
             raise ValueError(msg)
-        # Preserve non-empty fields from duplicate onto self where self has no value
+        # Preserve non-empty fields from duplicate onto self where self has no value.
+        # Explicit None/"" check rather than `not self_val` to avoid unexpected falsy matches.
         fields_to_preserve = ["user", "name", "email", "memo", "address", "phone_number", "bidder_number"]
         updates = {}
         for field in fields_to_preserve:
             self_val = getattr(self, field, None)
             dup_val = getattr(duplicate, field, None)
-            if not self_val and dup_val:
+            if (self_val is None or self_val == "") and dup_val:
                 updates[field] = dup_val
                 setattr(self, field, dup_val)
         if updates:
