@@ -9065,6 +9065,60 @@ class DuplicateAuctionTOSTests(StandardTestCase):
         self.assertIsNotNone(tos1.pk)
         self.assertIsNotNone(tos2.pk)
 
+    def test_merge_preserves_fields_from_duplicate(self):
+        """merge_duplicate() copies non-empty fields from duplicate onto canonical if canonical is missing them"""
+        canonical = AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            manually_added=True,
+            name="Old Record",
+            bidder_number="OLD1",
+        )
+        duplicate = AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            manually_added=True,
+            name="Newer Record",
+            email="preserve@example.com",
+            phone_number="555-1234",
+            address="123 Fish St",
+            memo="important note",
+            bidder_number="NEW1",
+        )
+        canonical.merge_duplicate(duplicate, reason="test")
+        canonical.refresh_from_db()
+        # Fields missing on canonical should now be copied from duplicate
+        self.assertEqual(canonical.email, "preserve@example.com")
+        self.assertEqual(canonical.phone_number, "555-1234")
+        self.assertEqual(canonical.address, "123 Fish St")
+        self.assertEqual(canonical.memo, "important note")
+        # canonical already had a name and bidder_number — should not be overwritten
+        self.assertEqual(canonical.name, "Old Record")
+        self.assertEqual(canonical.bidder_number, "OLD1")
+        # duplicate should be deleted
+        self.assertFalse(AuctionTOS.objects.filter(pk=duplicate.pk).exists())
+
+    def test_merge_copies_user_from_duplicate_to_canonical(self):
+        """If the canonical record has no user but the duplicate does, user is copied to canonical"""
+        canonical = AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            manually_added=True,
+            name="Manual Entry",
+            email="linkme@example.com",
+        )
+        duplicate = AuctionTOS.objects.create(
+            user=self.user_who_does_not_join,
+            auction=self.online_auction,
+            pickup_location=self.location,
+            email="linkme@example.com",
+            name="User Entry",
+        )
+        canonical.refresh_from_db()
+        # The email-duplicate save path should have merged them; canonical should have the user
+        self.assertFalse(AuctionTOS.objects.filter(pk=duplicate.pk).exists())
+        self.assertEqual(canonical.user, self.user_who_does_not_join)
+
 
 class AuctionNoShowURLEncodingTest(StandardTestCase):
     """Test that bidder_number with special characters (like slashes) work with path converter"""

@@ -3093,10 +3093,7 @@ class AuctionTOS(models.Model):
             )
             if email_duplicate:
                 # Keep the older record; merge self (the newer) into it.
-                # Copy user onto the older record if it doesn't have one yet.
-                if not email_duplicate.user and self.user:
-                    AuctionTOS.objects.filter(pk=email_duplicate.pk).update(user=self.user)
-                    email_duplicate.user = self.user
+                # merge_duplicate() preserves any non-empty fields (including user) from self onto email_duplicate.
                 email_duplicate.merge_duplicate(self, reason="same email")
                 return
 
@@ -3169,6 +3166,7 @@ class AuctionTOS(models.Model):
     def merge_duplicate(self, duplicate, reason="same email", user=None):
         """Merge a duplicate AuctionTOS into self (self should be the older/canonical record).
         Moves all won lots, sold lots, invoice adjustments, and payments from duplicate onto self's invoice,
+        preserves any non-empty fields from duplicate that are missing on self,
         creates an AuctionHistory entry, then deletes the duplicate.
         Pass user=request.user when this is triggered by an admin action.
         """
@@ -3178,6 +3176,17 @@ class AuctionTOS(models.Model):
         if duplicate.auction != self.auction:
             msg = "Cannot merge AuctionTOS records from different auctions."
             raise ValueError(msg)
+        # Preserve non-empty fields from duplicate onto self where self has no value
+        fields_to_preserve = ["user", "name", "email", "memo", "address", "phone_number", "bidder_number"]
+        updates = {}
+        for field in fields_to_preserve:
+            self_val = getattr(self, field, None)
+            dup_val = getattr(duplicate, field, None)
+            if not self_val and dup_val:
+                updates[field] = dup_val
+                setattr(self, field, dup_val)
+        if updates:
+            AuctionTOS.objects.filter(pk=self.pk).update(**updates)
         # Move won lots to self
         Lot.objects.filter(auctiontos_winner=duplicate).update(auctiontos_winner=self)
         # Move sold lots to self
