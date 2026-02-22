@@ -6364,7 +6364,7 @@ class SquarePaymentTests(StandardTestCase):
         """Test square_refund_possible when no Square payment exists"""
         # Create a lot with a different winner who has no Square payment
         other_tos = AuctionTOS.objects.create(
-            user=self.user_with_no_lots, auction=self.online_auction, pickup_location=self.location
+            user=self.user_who_does_not_join, auction=self.online_auction, pickup_location=self.location
         )
         lot = Lot.objects.create(
             lot_name="Test lot no payment",
