@@ -9075,7 +9075,7 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
         # Test with special characters that are allowed
         special_bidder_number = "test@123"
         special_tos = AuctionTOS.objects.create(
-            user=self.user,
+            user=self.user_who_does_not_join,
             auction=self.online_auction,
             pickup_location=self.location,
             bidder_number=special_bidder_number,
@@ -9107,7 +9107,7 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
         # We use a shorter version since bidder_number has max_length=20, and without slashes
         url_like_bidder = "https:site."
         url_tos = AuctionTOS.objects.create(
-            user=self.user_with_no_lots,
+            user=self.user_who_does_not_join,
             auction=self.online_auction,
             pickup_location=self.location,
             bidder_number=url_like_bidder,
@@ -9134,7 +9134,7 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
         """Test the auction_no_show_dialog URL also works with path converter"""
         special_bidder_number = "test@user"
         special_tos = AuctionTOS.objects.create(
-            user=self.user,
+            user=self.user_who_does_not_join,
             auction=self.online_auction,
             pickup_location=self.location,
             bidder_number=special_bidder_number,
@@ -9243,7 +9243,7 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
         """Test that slash removal prevents creating duplicate bidder_numbers"""
         # Create a TOS with bidder_number "user123"
         existing_tos = AuctionTOS.objects.create(
-            user=self.user,
+            user=self.user_who_does_not_join,
             auction=self.online_auction,
             pickup_location=self.location,
             bidder_number="user123",
@@ -9251,8 +9251,9 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
         )
 
         # Try to create another TOS with bidder_number "user/123" which would become "user123" after cleaning
+        fresh_user = User.objects.create_user(username="fresh_noshow_user", password="testpassword")
         new_tos = AuctionTOS.objects.create(
-            user=self.user_with_no_lots,
+            user=fresh_user,
             auction=self.online_auction,
             pickup_location=self.location,
             bidder_number="user/123",
