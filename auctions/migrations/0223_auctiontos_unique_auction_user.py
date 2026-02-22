@@ -4,47 +4,6 @@ from django.conf import settings
 from django.db import migrations, models
 
 
-def merge_duplicate_auctiontos(apps, schema_editor):
-    """Merge any existing duplicate (auction, user) pairs.
-    Keeps the oldest record and reassigns lots, invoice adjustments, and payments to it."""
-    AuctionTOS = apps.get_model("auctions", "AuctionTOS")
-    Lot = apps.get_model("auctions", "Lot")
-    Invoice = apps.get_model("auctions", "Invoice")
-    InvoiceAdjustment = apps.get_model("auctions", "InvoiceAdjustment")
-    InvoicePayment = apps.get_model("auctions", "InvoicePayment")
-    AuctionHistory = apps.get_model("auctions", "AuctionHistory")
-    from django.db.models import Count
-
-    duplicates = (
-        AuctionTOS.objects.exclude(user__isnull=True)
-        .values("auction", "user")
-        .annotate(count=Count("pk"))
-        .filter(count__gt=1)
-    )
-    for dup in duplicates:
-        tos_records = AuctionTOS.objects.filter(auction_id=dup["auction"], user_id=dup["user"]).order_by("createdon")
-        oldest = tos_records.first()
-        for newer in tos_records.exclude(pk=oldest.pk):
-            Lot.objects.filter(auctiontos_winner_id=newer.pk).update(auctiontos_winner_id=oldest.pk)
-            Lot.objects.filter(auctiontos_seller_id=newer.pk).update(auctiontos_seller_id=oldest.pk)
-            older_invoice = Invoice.objects.filter(auctiontos_user_id=oldest.pk).first()
-            if not older_invoice:
-                older_invoice = Invoice.objects.create(auctiontos_user_id=oldest.pk, auction_id=oldest.auction_id)
-            newer_invoice = Invoice.objects.filter(auctiontos_user_id=newer.pk).first()
-            if newer_invoice:
-                InvoiceAdjustment.objects.filter(invoice_id=newer_invoice.pk).update(invoice_id=older_invoice.pk)
-                InvoicePayment.objects.filter(invoice_id=newer_invoice.pk).update(invoice_id=older_invoice.pk)
-            # Mark calculated_total as stale so it gets recomputed on next access
-            Invoice.objects.filter(pk=older_invoice.pk).update(calculated_total=None)
-            AuctionHistory.objects.create(
-                auction_id=oldest.auction_id,
-                user=None,
-                action=f"Merged duplicate user (bidder #{newer.bidder_number}) into bidder #{oldest.bidder_number}: same user account",
-                applies_to="USERS",
-            )
-            newer.delete()
-
-
 class Migration(migrations.Migration):
     dependencies = [
         ("auctions", "0222_userdata_last_promo_email_sent_at"),
@@ -57,5 +16,4 @@ class Migration(migrations.Migration):
             name="next_promo_email_at",
             field=models.DateTimeField(blank=True, db_index=True, null=True),
         ),
-        migrations.RunPython(merge_duplicate_auctiontos, migrations.RunPython.noop),
     ]
