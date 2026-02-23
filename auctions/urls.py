@@ -161,7 +161,7 @@ urlpatterns = [
         name="create_square_payment_link",
     ),
     path(
-        "auctions/<slug:slug>/quick-add-images/<slug:bidder_number>",
+        "auctions/<slug:slug>/quick-add-images/<path:bidder_number>",
         login_required(views.QuickBulkAddImages.as_view()),
         name="bulk_add_image",
     ),
@@ -195,7 +195,7 @@ urlpatterns = [
         name="my_labels_by_username",
     ),
     path(
-        "auctions/<slug:slug>/print/bidder/<str:bidder_number>/",
+        "auctions/<slug:slug>/print/bidder/<path:bidder_number>/",
         login_required(views.LotLabelView.as_view()),
         name="print_labels_by_bidder_number",
     ),
@@ -489,12 +489,12 @@ urlpatterns = [
         name="bulk_set_lots_won",
     ),
     path(
-        "auctions/<slug:slug>/no-show/<str:tos>/",
+        "auctions/<slug:slug>/no-show/<path:tos>/",
         views.AuctionNoShow.as_view(),
         name="auction_no_show",
     ),
     path(
-        "api/auctions/<slug:slug>/no-show/<str:tos>/",
+        "api/auctions/<slug:slug>/no-show/<path:tos>/",
         views.AuctionNoShowAction.as_view(),
         name="auction_no_show_dialog",
     ),

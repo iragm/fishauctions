@@ -715,7 +715,7 @@ CELERY_TIMEZONE = TIME_ZONE
 CELERY_ENABLE_UTC = True
 
 # Celery Beat Scheduler (for periodic tasks)
-CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+CELERY_BEAT_SCHEDULER = "fishauctions.custom_scheduler:FixedDatabaseScheduler"
 
 # Task time limits (in seconds)
 CELERY_TASK_SOFT_TIME_LIMIT = 300  # 5 minutes

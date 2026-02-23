@@ -8,6 +8,7 @@ from random import randint
 from urllib.parse import quote_plus
 
 import channels.layers
+import pytz
 from asgiref.sync import async_to_sync
 from autoslug import AutoSlugField
 from bs4 import BeautifulSoup
@@ -82,8 +83,6 @@ def nearby_auctions(
         if user.is_authenticated and not include_already_joined:
             locations = locations.exclude(auction__auctiontos__user=user)
         locations = locations.exclude(auction__auctionignore__user=user)
-    elif user and not include_already_joined:
-        locations = locations.exclude(auction__auctiontos__user=user)
     for location in locations:
         if location.auction.slug not in slugs:
             auctions.append(location.auction)
@@ -951,6 +950,16 @@ class Auction(models.Model):
         return get_currency_symbol(self.currency)
 
     def delete(self, *args, **kwargs):
+        """Perform a soft delete by setting is_deleted=True.
+
+        Note: This is a soft delete implementation that marks the auction as deleted
+        without removing it from the database. Related objects (lots, bids, etc.) will
+        still exist and may appear in queries unless they explicitly filter out deleted
+        auctions using: .exclude(auction__is_deleted=True)
+
+        This allows for data retention and potential recovery while hiding the auction
+        from normal user operations.
+        """
         self.is_deleted = True
         self.save()
 
@@ -1071,9 +1080,31 @@ class Auction(models.Model):
 
     @property
     def allow_mailing_lots(self):
-        if self.location_qs.filter(pickup_by_mail=True).first():
-            return True
-        return False
+        return self.location_qs.filter(pickup_by_mail=True).exists()
+
+    @staticmethod
+    def get_closest_location_distance_subquery(latitude, longitude):
+        """
+        Returns a subquery that calculates the distance to the closest valid pickup location.
+
+        Excludes locations with (0,0) coordinates and mail-only pickup locations.
+        Used to annotate auction querysets with distance information.
+
+        Args:
+            latitude: User's latitude
+            longitude: User's longitude
+
+        Returns:
+            Subquery that can be used with .annotate(distance=...) on Auction queryset
+        """
+        return Subquery(
+            PickupLocation.objects.filter(auction=OuterRef("pk"))
+            .exclude(latitude=0, longitude=0)
+            .exclude(pickup_by_mail=True)
+            .annotate(distance=distance_to(latitude, longitude))
+            .order_by("distance")
+            .values("distance")[:1]
+        )
 
     @property
     def auction_type(self):
@@ -1100,6 +1131,8 @@ class Auction(models.Model):
         if auction_type == "online_multi_location":
             return "online auction with in-person pickup at multiple locations"
         if auction_type == "online_no_location":
+            if self.allow_mailing_lots:
+                return "online auction with lots delivered by mail"
             return "online auction with no specified pickup location"
         if auction_type == "inperson_one_location":
             return "in-person auction"
@@ -1376,7 +1409,7 @@ class Auction(models.Model):
         """Force update of all invoice totals in this auction"""
         invoices = Invoice.objects.filter(auction=self.pk)
         for invoice in invoices:
-            invoice.recalculate
+            invoice.recalculate()
             invoice.save()
 
     @property
@@ -1440,11 +1473,8 @@ class Auction(models.Model):
 
     @property
     def number_of_sellers_who_didnt_buy(self):
-        return (
-            AuctionTOS.objects.filter(auctiontos_seller__auction=self.pk, auctiontos_winner__isnull=False)
-            .distinct()
-            .count()
-        )
+        buyers = AuctionTOS.objects.filter(auctiontos_winner__auction=self.pk).values_list("id", flat=True).distinct()
+        return AuctionTOS.objects.filter(auctiontos_seller__auction=self.pk).exclude(id__in=buyers).distinct().count()
 
     # @property
     # def number_of_unsuccessful_sellers(self):
@@ -1645,14 +1675,10 @@ class Auction(models.Model):
         Number of users who bought or sold at least one lot
         """
         buyers = AuctionTOS.objects.filter(auctiontos_winner__auction=self.pk).distinct()
-        sellers = (
-            AuctionTOS.objects.filter(auctiontos_seller__auction=self.pk, auctiontos_winner__isnull=False)
-            .exclude(id__in=buyers)
-            .distinct()
-        )
+        sellers = AuctionTOS.objects.filter(auctiontos_seller__auction=self.pk).exclude(id__in=buyers).distinct()
         # buyers = User.objects.filter(winner__auction=self.pk).distinct()
         # sellers = User.objects.filter(lot__auction=self.pk, lot__winner__isnull=False).exclude(id__in=buyers).distinct()
-        return len(sellers) + len(buyers)
+        return sellers.count() + buyers.count()
 
     @property
     def preregistered_users(self):
@@ -2018,25 +2044,32 @@ class Auction(models.Model):
             # Round up to nearest $10 for cleaner bins
             max_price = int((max_price + 9) // 10 * 10)
 
-            # Create bins with $2 intervals up to max price
-            num_bins = min(max_price // 2, 30)  # Cap at 30 bins to avoid too many
+            # Create bins with whole number intervals
+            # Use $2 intervals up to max price, ensuring bins align to whole dollars
+            bin_width = 2  # Each bin covers $2
+            num_bins = min((max_price - 1) // bin_width, 30)  # Cap at 30 bins to avoid too many
             if num_bins < 10:
                 num_bins = 10  # Minimum 10 bins
+                bin_width = max((max_price - 1) // num_bins, 1)  # Adjust bin width if needed
 
+            start_bin = 1
+            end_bin = start_bin + num_bins * bin_width
             histogram = bin_data(
                 sold_lots,
                 "winning_price",
                 number_of_bins=num_bins,
-                start_bin=1,
-                end_bin=max_price - 1,
+                start_bin=start_bin,
+                end_bin=end_bin,
                 add_column_for_high_overflow=True,
             )
 
-            # Generate labels dynamically
+            # Generate labels with whole number boundaries
             labels = ["Not sold"]
-            for i in range(0, max_price - 1, 2):
-                labels.append(f"{self.currency_symbol}{i + 1}-{i + 2}")
-            labels.append(f"{self.currency_symbol}{max_price}+")
+            for i in range(num_bins):
+                bin_start = start_bin + i * bin_width
+                bin_end = start_bin + (i + 1) * bin_width
+                labels.append(f"{self.currency_symbol}{bin_start}-{bin_end}")
+            labels.append(f"{self.currency_symbol}{end_bin}+")
 
             return {
                 "labels": labels,
@@ -2044,40 +2077,30 @@ class Auction(models.Model):
                 "data": [[self.total_unsold_lots] + histogram],
             }
         else:
-            # No sold lots, use default bins
+            # No sold lots, use default bins with whole number boundaries
+            start_bin = 1
+            bin_width = 2
+            num_bins = 19
+            end_bin = start_bin + num_bins * bin_width  # Results in 39
             histogram = bin_data(
                 sold_lots,
                 "winning_price",
-                number_of_bins=19,
-                start_bin=1,
-                end_bin=39,
+                number_of_bins=num_bins,
+                start_bin=start_bin,
+                end_bin=end_bin,
                 add_column_for_high_overflow=True,
             )
+
+            # Generate labels with whole number boundaries
+            labels = ["Not sold"]
+            for i in range(num_bins):
+                bin_start = start_bin + i * bin_width
+                bin_end = start_bin + (i + 1) * bin_width
+                labels.append(f"{self.currency_symbol}{bin_start}-{bin_end}")
+            labels.append(f"{self.currency_symbol}{end_bin}+")
+
             return {
-                "labels": [
-                    "Not sold",
-                    f"{self.currency_symbol}1-2",
-                    f"{self.currency_symbol}3-4",
-                    f"{self.currency_symbol}5-6",
-                    f"{self.currency_symbol}7-8",
-                    f"{self.currency_symbol}9-10",
-                    f"{self.currency_symbol}11-12",
-                    f"{self.currency_symbol}13-14",
-                    f"{self.currency_symbol}15-16",
-                    f"{self.currency_symbol}17-18",
-                    f"{self.currency_symbol}19-20",
-                    f"{self.currency_symbol}21-22",
-                    f"{self.currency_symbol}23-24",
-                    f"{self.currency_symbol}25-26",
-                    f"{self.currency_symbol}27-28",
-                    f"{self.currency_symbol}29-30",
-                    f"{self.currency_symbol}31-32",
-                    f"{self.currency_symbol}33-34",
-                    f"{self.currency_symbol}35-36",
-                    f"{self.currency_symbol}37-38",
-                    f"{self.currency_symbol}39-40",
-                    f"{self.currency_symbol}40+",
-                ],
+                "labels": labels,
                 "providers": ["Number of lots"],
                 "data": [[self.total_unsold_lots] + histogram],
             }
@@ -2471,6 +2494,9 @@ class Auction(models.Model):
         """Applies to can be RULES, USERS, INVOICES, LOTS, LOT_WINNERS, user should be the user making the change or None if it's a system change.
         Action is a string describing the change, form is a form instance that has changed data
         """
+        # Don't create history if the auction hasn't been saved yet
+        if not self.pk:
+            return
         if form:
             action += " "
             for field_name in form.changed_data:
@@ -2933,12 +2959,23 @@ class AuctionTOS(models.Model):
         # set the bidder number based on the phone, address, last used number, or just at random
         if not self.bidder_number or self.bidder_number == "None":
             # recycle numbers from the last auction if we can
-            last_number_used = (
-                AuctionTOS.objects.filter(auction__created_by=self.auction.created_by, email=self.email)
-                .order_by("-auction__date_posted")
-                .first()
-            )
-            if self.email and last_number_used and check_number_in_auction(last_number_used.bidder_number) == 0:
+            # Build query to find previous AuctionTOS by same auction creator
+            last_number_used = None
+            if self.user or self.email:
+                query = Q()
+                if self.user:
+                    query |= Q(user=self.user)
+                if self.email:
+                    query |= Q(email=self.email)
+
+                last_number_used = (
+                    AuctionTOS.objects.filter(query, auction__created_by=self.auction.created_by)
+                    .exclude(pk=self.pk)  # Exclude self if updating
+                    .order_by("-createdon")
+                    .first()
+                )
+
+            if last_number_used and check_number_in_auction(last_number_used.bidder_number) == 0:
                 self.bidder_number = last_number_used.bidder_number
             else:
                 dont_use_these = ["13", "14", "15", "16", "17", "18", "19"]
@@ -3002,9 +3039,59 @@ class AuctionTOS(models.Model):
             if existing_instance:
                 self.email_address_status = existing_instance.email_address_status
 
+        # Check for and remove forward slashes in bidder_number
+        if self.bidder_number and "/" in self.bidder_number:
+            original_bidder_number = self.bidder_number
+            self.bidder_number = self.bidder_number.replace("/", "")
+
+            # Check if the cleaned bidder_number would create a duplicate
+            # Exclude self from the check (if updating existing record)
+            existing_tos = AuctionTOS.objects.filter(bidder_number=self.bidder_number, auction=self.auction)
+            if self.pk:
+                existing_tos = existing_tos.exclude(pk=self.pk)
+
+            if existing_tos.exists():
+                # If there would be a conflict, append a suffix to make it unique
+                suffix = 1
+                base_bidder_number = self.bidder_number
+                while existing_tos.exists() and suffix < 100:
+                    self.bidder_number = f"{base_bidder_number}{suffix}"
+                    existing_tos = AuctionTOS.objects.filter(bidder_number=self.bidder_number, auction=self.auction)
+                    if self.pk:
+                        existing_tos = existing_tos.exclude(pk=self.pk)
+                    suffix += 1
+
+            # Create auction history entry after save
+            needs_history = True
+        else:
+            needs_history = False
+
         super().save(*args, **kwargs)
 
-        duplicate_instance = self.auction.find_user(name=self.name, email=self.email, exclude_pk=self.pk)
+        # Create history entry after save (needs pk to exist)
+        if needs_history:
+            self.auction.create_history(
+                applies_to="USERS",
+                action=f"Removed '/' character from bidder number for {self.name}. Changed from '{original_bidder_number}' to '{self.bidder_number}'. The '/' character is not allowed in bidder numbers.",
+                user=None,  # System change
+            )
+
+        # Check for an exact email duplicate in this auction and merge immediately
+        if self.email:
+            email_duplicate = (
+                AuctionTOS.objects.filter(auction=self.auction, email=self.email)
+                .exclude(pk=self.pk)
+                .order_by("createdon")
+                .first()
+            )
+            if email_duplicate:
+                # Keep the older record; merge self (the newer) into it.
+                # merge_duplicate() preserves any non-empty fields (including user) from self onto email_duplicate.
+                email_duplicate.merge_duplicate(self, reason="same email")
+                return
+
+        # Flag name-based fuzzy matches as possible duplicates for admin review (no auto-merge)
+        duplicate_instance = self.auction.find_user(name=self.name, email="", exclude_pk=self.pk)
         if duplicate_instance:
             # using update here avoids recursion because update does not call save()
             AuctionTOS.objects.filter(pk=self.pk).update(possible_duplicate=duplicate_instance.pk)
@@ -3015,6 +3102,19 @@ class AuctionTOS(models.Model):
                 # remove ourselves from the duplicate if it was previously set
                 AuctionTOS.objects.filter(pk=self.possible_duplicate.pk).update(possible_duplicate=None)
                 AuctionTOS.objects.filter(pk=self.pk).update(possible_duplicate=None)
+
+        # If the same user already has another AuctionTOS in this auction, keep the older one
+        # and merge the newer one (self) into it to prevent duplicates from race conditions or signal re-attaches.
+        if self.user:
+            existing = (
+                AuctionTOS.objects.filter(user=self.user, auction=self.auction)
+                .exclude(pk=self.pk)
+                .order_by("createdon")
+                .first()
+            )
+            if existing:
+                existing.merge_duplicate(self, reason="same user account")
+                return
 
         if self.user:
             related_campaign = (
@@ -3055,6 +3155,54 @@ class AuctionTOS(models.Model):
     class Meta:
         verbose_name = "User in auction"
         verbose_name_plural = "Users in auction"
+
+    def merge_duplicate(self, duplicate, reason="same email", user=None):
+        """Merge a duplicate AuctionTOS into self (self should be the older/canonical record).
+        Moves all won lots, sold lots, invoice adjustments, and payments from duplicate onto self's invoice,
+        preserves any non-empty fields from duplicate that are missing on self,
+        creates an AuctionHistory entry, then deletes the duplicate.
+        Pass user=request.user when this is triggered by an admin action.
+        """
+        if duplicate == self:
+            msg = "Cannot merge an AuctionTOS record with itself."
+            raise ValueError(msg)
+        if duplicate.auction != self.auction:
+            msg = "Cannot merge AuctionTOS records from different auctions."
+            raise ValueError(msg)
+        # Preserve non-empty fields from duplicate onto self where self has no value.
+        # Explicit None/"" check rather than `not self_val` to avoid unexpected falsy matches.
+        fields_to_preserve = ["user", "name", "email", "memo", "address", "phone_number", "bidder_number"]
+        updates = {}
+        for field in fields_to_preserve:
+            self_val = getattr(self, field, None)
+            dup_val = getattr(duplicate, field, None)
+            if (self_val is None or self_val == "") and dup_val:
+                updates[field] = dup_val
+                setattr(self, field, dup_val)
+        if updates:
+            AuctionTOS.objects.filter(pk=self.pk).update(**updates)
+        # Move won lots to self
+        Lot.objects.filter(auctiontos_winner=duplicate).update(auctiontos_winner=self)
+        # Move sold lots to self
+        Lot.objects.filter(auctiontos_seller=duplicate).update(auctiontos_seller=self)
+        # Get or create an invoice for self
+        invoice = Invoice.objects.filter(auctiontos_user=self).first()
+        if not invoice:
+            invoice = Invoice.objects.create(auctiontos_user=self, auction=self.auction)
+        # Move invoice adjustments and payments from duplicate's invoice to self's invoice
+        duplicate_invoice = Invoice.objects.filter(auctiontos_user=duplicate).first()
+        if duplicate_invoice:
+            InvoiceAdjustment.objects.filter(invoice=duplicate_invoice).update(invoice=invoice)
+            InvoicePayment.objects.filter(invoice=duplicate_invoice).update(invoice=invoice)
+        invoice.recalculate()
+        # Create auction history entry
+        self.auction.create_history(
+            applies_to="USERS",
+            action=f"Merged {duplicate.name} (bidder #{duplicate.bidder_number}) into {self.name} (bidder #{self.bidder_number}): {reason}",
+            user=user,
+        )
+        # Delete the duplicate (cascades to delete its now-empty invoice)
+        duplicate.delete()
 
     @property
     def closest_location_for_this_user(self):
@@ -3321,9 +3469,9 @@ class Lot(models.Model):
     # to allow some stuff that's not in your favorite cateogy to show up in the recommended list
     promotion_weight = models.PositiveIntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(20)])
     feedback_rating = models.IntegerField(default=0, validators=[MinValueValidator(-1), MaxValueValidator(1)])
-    feedback_text = models.CharField(max_length=100, blank=True, null=True)
+    feedback_text = models.CharField(max_length=500, blank=True, null=True)
     winner_feedback_rating = models.IntegerField(default=0, validators=[MinValueValidator(-1), MaxValueValidator(1)])
-    winner_feedback_text = models.CharField(max_length=100, blank=True, null=True)
+    winner_feedback_text = models.CharField(max_length=500, blank=True, null=True)
     date_of_last_user_edit = models.DateTimeField(auto_now_add=True, blank=True)
     is_chat_allowed = models.BooleanField(default=True)
     is_chat_allowed.help_text = (
@@ -3371,15 +3519,42 @@ class Lot(models.Model):
     admin_validated = models.BooleanField(default=False)
 
     def save(self, *args, **kwargs):
-        # for old and new auctions, generate a lot number int
-        if self.lot_number_int is None and self.auction:
-            minimum_lot_number = 1
-            # Get the current maximum lot_number_int for the auction
-            # This is deliberately not excluding deleted and removed lots -- don't use auction.lots_qs here
-            max_number = Lot.objects.filter(auction=self.auction).aggregate(Max("lot_number_int"))[
-                "lot_number_int__max"
-            ]
-            self.lot_number_int = (max_number or (minimum_lot_number - 1)) + 1
+        from django.db import transaction
+
+        # for old and new auctions, generate a lot number int or custom_lot_number
+        # Use database-level locking to prevent race conditions when assigning lot numbers
+        needs_lock = self.auction and (
+            (self.lot_number_int is None)  # Standard mode needs lot_number_int
+            or (
+                not self.custom_lot_number and self.auction.use_seller_dash_lot_numbering
+            )  # Seller dash mode needs custom_lot_number
+        )
+
+        if needs_lock:
+            # We need to wrap the entire save in a transaction with locking
+            with transaction.atomic():
+                # Lock the auction row using SELECT FOR UPDATE
+                # This will block other transactions trying to lock the same row until this transaction completes
+                Auction.objects.select_for_update().get(pk=self.auction.pk)
+
+                # Assign lot_number_int if needed
+                if self.lot_number_int is None:
+                    # Now safely get the max lot_number_int while holding the lock
+                    minimum_lot_number = 1
+                    # This is deliberately not excluding deleted and removed lots -- don't use auction.lots_qs here
+                    max_number = Lot.objects.filter(auction=self.auction).aggregate(Max("lot_number_int"))[
+                        "lot_number_int__max"
+                    ]
+                    self.lot_number_int = (max_number or (minimum_lot_number - 1)) + 1
+
+                # Continue with the rest of the save logic
+                self._do_save(*args, **kwargs)
+        else:
+            # No lock needed, proceed normally
+            self._do_save(*args, **kwargs)
+
+    def _do_save(self, *args, **kwargs):
+        """Internal method to complete the save operation"""
         # custom lot number set for old auctions: bidder_number-lot_number format
         if not self.custom_lot_number and self.auction and self.auction.use_seller_dash_lot_numbering:
             if self.auctiontos_seller:
@@ -3443,27 +3618,78 @@ class Lot(models.Model):
                     "unsubscribed": not self.user.userdata.email_me_when_people_comment_on_my_lots,
                 },
             )
-        # make sure lot_number_int is unique within the auction
+        # make sure lot_number_display is unique within the auction
+        # This handles both lot_number_int and custom_lot_number (seller_dash_lot_numbering)
         # reported in a large auction where two lots had the same number but I have not been able to reproduce it
         # https://github.com/iragm/fishauctions/issues/420
-        if self.lot_number_int and self.auction and not self.auction.use_seller_dash_lot_numbering:
-            duplicate_lot_number_check = (
-                Lot.objects.filter(
-                    auction=self.auction,
-                    lot_number_int=self.lot_number_int,
+        # Note: Only check after first save (when pk exists). Race conditions during initial save
+        # are prevented by the SELECT FOR UPDATE locking in the save() method above.
+        if self.auction and self.pk:
+            # Check for duplicates based on lot_number_display
+            if self.auction.use_seller_dash_lot_numbering and self.custom_lot_number:
+                # Check for duplicate custom_lot_number in seller_dash_lot_numbering mode
+                duplicate_lot = (
+                    Lot.objects.filter(
+                        auction=self.auction,
+                        custom_lot_number=self.custom_lot_number,
+                    )
+                    .exclude(pk=self.pk)
+                    .first()
                 )
-                .exclude(pk=self.pk)
-                .first()
-            )
-            if duplicate_lot_number_check:
-                duplicate_lot_number_check.lot_number_int = None
-                duplicate_lot_number_check.label_printed = False
-                duplicate_lot_number_check.save()
-                self.auction.create_history(
-                    "LOTS",
-                    f"Duplicate lot number detected, changing lot number {self.lot_number_int} to {duplicate_lot_number_check.lot_number_int}",
-                    user=None,
+                if duplicate_lot:
+                    # Generate a new custom_lot_number for this (newest) lot
+                    if self.auctiontos_seller:
+                        custom_lot_number = 1
+                        # Only fetch custom_lot_number field for performance
+                        other_lot_numbers = (
+                            Lot.objects.filter(
+                                auction=self.auction,
+                                auctiontos_seller=self.auctiontos_seller,
+                            )
+                            .exclude(pk=self.pk)
+                            .values_list("custom_lot_number", flat=True)
+                        )
+                        for lot_number in other_lot_numbers:
+                            match = re.findall(r"\d+", f"{lot_number}")
+                            if match:
+                                match = int(match[-1])
+                                if match >= custom_lot_number:
+                                    custom_lot_number = match + 1
+                        self.custom_lot_number = f"{self.auctiontos_seller.bidder_number}-{custom_lot_number}"[:9]
+                        self.label_printed = False
+                        # Update in database without triggering full save logic
+                        Lot.objects.filter(pk=self.pk).update(
+                            custom_lot_number=self.custom_lot_number, label_printed=False
+                        )
+                        self.auction.create_history(
+                            "LOTS",
+                            f"Duplicate lot number detected, changed to {self.lot_number_display}",
+                            user=None,
+                        )
+            elif self.lot_number_int and not self.auction.use_seller_dash_lot_numbering:
+                # Check for duplicate lot_number_int in standard mode
+                duplicate_lot = (
+                    Lot.objects.filter(
+                        auction=self.auction,
+                        lot_number_int=self.lot_number_int,
+                    )
+                    .exclude(pk=self.pk)
+                    .first()
                 )
+                if duplicate_lot:
+                    # Generate a new lot_number_int for this (newest) lot
+                    max_number = Lot.objects.filter(auction=self.auction).aggregate(Max("lot_number_int"))[
+                        "lot_number_int__max"
+                    ]
+                    self.lot_number_int = (max_number or 0) + 1
+                    self.label_printed = False
+                    # Update in database without triggering full save logic
+                    Lot.objects.filter(pk=self.pk).update(lot_number_int=self.lot_number_int, label_printed=False)
+                    self.auction.create_history(
+                        "LOTS",
+                        f"Duplicate lot number detected, changed to {self.lot_number_display}",
+                        user=None,
+                    )
 
     def __str__(self):
         return "" + str(self.lot_number_display) + " - " + self.lot_name
@@ -3502,7 +3728,7 @@ class Lot(models.Model):
         invoice = Invoice.objects.filter(auctiontos_user=tos, auction=self.auction).first()
         if not invoice:
             invoice = Invoice.objects.create(auctiontos_user=tos, auction=self.auction)
-        invoice.recalculate
+        invoice.recalculate()
         self.send_websocket_message(
             {
                 "type": "chat_message",
@@ -4635,12 +4861,12 @@ class Lot(models.Model):
             invoice = Invoice.objects.filter(auctiontos_user=self.auctiontos_winner, auction=self.auction).first()
             if not invoice:
                 invoice = Invoice.objects.create(auctiontos_user=self.auctiontos_winner, auction=self.auction)
-            invoice.recalculate
+            invoice.recalculate()
         if self.auction and self.auctiontos_seller:
             invoice = Invoice.objects.filter(auctiontos_user=self.auctiontos_seller, auction=self.auction).first()
             if not invoice:
                 invoice = Invoice.objects.create(auctiontos_user=self.auctiontos_seller, auction=self.auction)
-            invoice.recalculate
+            invoice.recalculate()
 
     @property
     def category(self):
@@ -4905,9 +5131,13 @@ class Invoice(models.Model):
     def changed_adjustments(self):
         return self.adjustments.exclude(amount=0)
 
-    @property
     def recalculate(self):
-        """Store the current net in the calculated_total field.  Call this every time you add or remove a lot from this invoice"""
+        """Store the current net in the calculated_total field.
+
+        Call this method every time you add or remove a lot from this invoice.
+        This method should be called explicitly, not accessed as a property,
+        as it has side effects (modifies and saves database records).
+        """
         self.calculated_total = self.rounded_net
         self.save()
 
@@ -5470,8 +5700,12 @@ class PageView(models.Model):
     def duplicate_count(self):
         return self.duplicates.count()
 
-    @property
     def merge_and_delete_duplicate(self):
+        """Merge duplicate PageView records and delete the duplicate.
+
+        This method should be called explicitly, not accessed as a property,
+        as it has side effects (modifies and deletes database records).
+        """
         if self.duplicate_count:
             dup = self.duplicates.first()
             if self.date_start > dup.date_start:
@@ -5731,6 +5965,8 @@ class UserData(models.Model):
     has_used_proxy_bidding = models.BooleanField(default=False)
     never_show_paypal_connect = models.BooleanField(default=False)
     never_show_square_connect = models.BooleanField(default=False)
+    next_promo_email_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    last_promo_email_sent_at = models.DateTimeField(null=True, blank=True)
 
     @property
     def last_auction_created(self):
@@ -5751,6 +5987,31 @@ class UserData(models.Model):
 
     def __str__(self):
         return f"{self.user.username}'s data"
+
+    def set_next_promo(self):
+        """Set next_promo_email_at to the next Wednesday at 10 AM in user's local time,
+        or advance the existing value by 7 days (ensuring it's in the future)."""
+        try:
+            tz = pytz_timezone(self.timezone)
+        except pytz.exceptions.UnknownTimeZoneError:
+            tz = pytz_timezone(settings.TIME_ZONE)
+
+        if self.next_promo_email_at is None:
+            now_local = timezone.now().astimezone(tz)
+            days_ahead = 2 - now_local.weekday()  # Wednesday is weekday 2
+            if days_ahead <= 0:
+                days_ahead += 7
+            next_wednesday = now_local.date() + datetime.timedelta(days=days_ahead)
+            naive_next_promo = datetime.datetime(  # noqa: DTZ001
+                next_wednesday.year, next_wednesday.month, next_wednesday.day, 10, 0
+            )
+            self.next_promo_email_at = tz.localize(naive_next_promo, is_dst=False)
+        else:
+            self.next_promo_email_at = self.next_promo_email_at + datetime.timedelta(days=7)
+            now = timezone.now()
+            while self.next_promo_email_at <= now:
+                self.next_promo_email_at += datetime.timedelta(days=7)
+        self.save(update_fields=["next_promo_email_at"])
 
     def send_websocket_message(self, message):
         channel_layer = channels.layers.get_channel_layer()
@@ -6294,7 +6555,7 @@ class SquareSeller(models.Model):
                     ),
                     "ask_for_shipping_address": ask_for_shipping_address,
                 },
-                pre_populated_data=pre_populated_data if pre_populated_data else {},
+                pre_populated_data=pre_populated_data or {},
                 order={
                     "location_id": location_id,
                     "reference_id": str(invoice.pk),

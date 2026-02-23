@@ -13,6 +13,33 @@
 
 <script type="text/javascript">
 
+{% if bids %}
+// Configure dropdown to use fixed positioning to escape overflow container
+document.addEventListener('DOMContentLoaded', function() {
+    var dropdownButton = document.getElementById('btnGroupDrop1');
+    if (dropdownButton) {
+        dropdownButton.addEventListener('show.bs.dropdown', function (event) {
+            // Find the dropdown menu (next sibling element)
+            var dropdownMenu = this.nextElementSibling;
+            var button = this;
+            if (dropdownMenu && dropdownMenu.classList.contains('dropdown-menu')) {
+                // Use setTimeout to ensure Bootstrap has initialized the dropdown first
+                setTimeout(function() {
+                    // Get button position at time of positioning
+                    var buttonRect = button.getBoundingClientRect();
+                    // Position dropdown below button using fixed positioning
+                    dropdownMenu.style.position = 'fixed';
+                    dropdownMenu.style.top = (buttonRect.bottom + 2) + 'px';
+                    dropdownMenu.style.left = buttonRect.left + 'px';
+                    dropdownMenu.style.zIndex = '1050';
+                    dropdownMenu.style.transform = 'none';
+                }, 0);
+            }
+        });
+    }
+});
+{% endif %}
+
 $( "#buy-now" ).click(function() {
     $('#bid_amount').val(Number('{{ lot.buy_now_price }}'));
     $('#bid_button').click();
@@ -170,7 +197,8 @@ function deactivate_lot() {
                                 </a>
                             {% endif %}
                             {% if bids %}
-                                <button id="btnGroupDrop1" type="button" class="btn btn-danger dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+                                <div class="btn-group">
+                                <button id="btnGroupDrop1" type="button" class="btn btn-danger dropdown-toggle" data-bs-toggle="dropdown" data-bs-auto-close="true" data-bs-offset="0,10" aria-expanded="false">
                                     Remove bids
                                 </button>
                                 <ul class="dropdown-menu" aria-labelledby="btnGroupDrop1">
@@ -182,6 +210,7 @@ function deactivate_lot() {
                                         </li>
                                     {% endfor %}
                                 </ul>
+                                </div>
                             {% endif %}
                         </div>
                         </div>
@@ -878,7 +907,7 @@ function deactivate_lot() {
             </div>
         </div>
 
-        <input type="text" placeholder="Comments" id="text_{{lot.lot_number}}_winner" onblur="feedback({{ lot.lot_number }}, 'winner', null, this.value);" value="{% if lot.feedback_text %}{{ lot.feedback_text }}{% endif %}" class="form-control mt-2" style="min-width: 20em;"></td>
+        <input type="text" placeholder="Comments" id="text_{{lot.lot_number}}_winner" onblur="feedback({{ lot.lot_number }}, 'winner', null, this.value);" value="{% if lot.feedback_text %}{{ lot.feedback_text }}{% endif %}" class="form-control mt-2" style="min-width: 20em;" maxlength="500"></td>
         <br>
         <span class="text-muted"><a href="{% url 'feedback' %}">Leave feedback on all lots you've won here.</a></span>
       <div class="modal-footer">

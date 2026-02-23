@@ -6,7 +6,7 @@
 #
 aiohappyeyeballs==2.6.1
     # via aiohttp
-aiohttp==3.13.2
+aiohttp==3.13.3
     # via pywebpush
 aiosignal==1.4.0
     # via aiohttp
@@ -14,11 +14,11 @@ amqp==5.3.1
     # via kombu
 annotated-types==0.7.0
     # via pydantic
-anyio==4.12.0
+anyio==4.12.1
     # via
     #   httpx
     #   watchfiles
-asgiref==3.11.0
+asgiref==3.11.1
     # via
     #   -r requirements.in
     #   channels
@@ -33,7 +33,7 @@ attrs==25.4.0
     #   aiohttp
     #   service-identity
     #   twisted
-autobahn==25.11.1
+autobahn==25.12.2
     # via
     #   -r requirements.in
     #   daphne
@@ -49,23 +49,22 @@ bleach[css]==6.3.0
     # via
     #   -r requirements.in
     #   django-markdownfield
-    #   django-post-office
     #   django-summernote
-boto3==1.42.0
+boto3==1.42.49
     # via django-ses
-botocore==1.41.6
+botocore==1.42.49
     # via
     #   boto3
     #   s3transfer
 brotli==1.2.0
     # via fonttools
-cbor2==5.7.1
+cbor2==5.8.0
     # via autobahn
-celery==5.6.0
+celery==5.6.2
     # via
     #   -r requirements.in
     #   django-celery-beat
-certifi==2025.11.12
+certifi==2026.1.4
     # via
     #   -r requirements.in
     #   httpcore
@@ -74,6 +73,7 @@ certifi==2025.11.12
 cffi==2.0.0
     # via
     #   -r requirements.in
+    #   autobahn
     #   cryptography
     #   pyheif
     #   weasyprint
@@ -110,7 +110,7 @@ crispy-bootstrap5==2025.6
     # via -r requirements.in
 cron-descriptor==2.0.6
     # via django-celery-beat
-cryptography==46.0.3
+cryptography==46.0.5
     # via
     #   -r requirements.in
     #   autobahn
@@ -121,7 +121,7 @@ cryptography==46.0.3
     #   pyopenssl
     #   pywebpush
     #   service-identity
-cssselect2==0.8.0
+cssselect2==0.9.0
     # via weasyprint
 daphne==4.2.1
     # via -r requirements.in
@@ -129,7 +129,7 @@ defusedxml==0.7.1
     # via
     #   -r requirements.in
     #   python3-openid
-django==5.2.8
+django==5.2.11
     # via
     #   -r requirements.in
     #   channels
@@ -156,13 +156,13 @@ django==5.2.8
     #   django-weasyprint
     #   easy-thumbnails
     #   jsonfield
-django-allauth==65.13.1
+django-allauth==65.14.3
     # via -r requirements.in
 django-autocomplete-light==3.12.1
     # via -r requirements.in
 django-autoslug==1.9.9
     # via -r requirements.in
-django-bootstrap-datepicker-plus==5.0.6
+django-bootstrap-datepicker-plus==6.0.0
     # via -r requirements.in
 django-celery-beat==2.8.1
     # via -r requirements.in
@@ -172,7 +172,7 @@ django-crispy-forms==2.5
     # via
     #   -r requirements.in
     #   crispy-bootstrap5
-django-debug-toolbar==6.1.0
+django-debug-toolbar==6.2.0
     # via -r requirements.in
 django-el-pagination==4.1.2
     # via -r requirements.in
@@ -188,19 +188,19 @@ django-location-field==2.7.3
     # via -r requirements.in
 django-markdownfield==0.11.0
     # via -r requirements.in
-django-post-office==3.10.1
+django-post-office==3.11.0
     # via -r requirements.in
 django-qr-code==4.2.0
     # via -r requirements.in
 django-recaptcha==4.1.0
     # via -r requirements.in
-django-ses[events]==4.4.0
+django-ses[events]==4.7.1
     # via -r requirements.in
 django-summernote==0.8.20.0
     # via -r requirements.in
 django-tables2==2.8.0
     # via -r requirements.in
-django-timezone-field==7.1
+django-timezone-field==7.2.1
     # via django-celery-beat
 django-weasyprint==2.4.0
     # via -r requirements.in
@@ -208,15 +208,13 @@ django-webpush==0.3.6
     # via -r requirements.in
 easy-thumbnails==2.10.1
     # via -r requirements.in
-exceptiongroup==1.3.1
-    # via celery
-fonttools[woff]==4.61.0
+fonttools[woff]==4.61.1
     # via weasyprint
 frozenlist==1.8.0
     # via
     #   aiohttp
     #   aiosignal
-gunicorn==23.0.0
+gunicorn==25.1.0
     # via -r requirements.in
 h11==0.16.0
     # via
@@ -250,15 +248,15 @@ incremental==24.11.0
     # via
     #   -r requirements.in
     #   twisted
-jmespath==1.0.1
+jmespath==1.1.0
     # via
     #   boto3
     #   botocore
 jsonfield==3.2.0
     # via -r requirements.in
-kombu==5.6.1
+kombu==5.6.2
     # via celery
-markdown==3.10
+markdown==3.10.2
     # via
     #   -r requirements.in
     #   django-markdownfield
@@ -266,17 +264,19 @@ msgpack==1.1.2
     # via
     #   autobahn
     #   channels-redis
-multidict==6.7.0
+multidict==6.7.1
     # via
     #   aiohttp
     #   yarl
-mysqlclient==2.2.7
+mysqlclient==2.2.8
     # via -r requirements.in
+nh3==0.3.3
+    # via django-post-office
 oauthlib==3.3.1
     # via
     #   -r requirements.in
     #   requests-oauthlib
-packaging==25.0
+packaging==26.0
     # via
     #   -r requirements.in
     #   gunicorn
@@ -285,7 +285,7 @@ packaging==25.0
     #   pip-review
 piexif==1.1.3
     # via heif-image-plugin
-pillow==12.0.0
+pillow==12.1.1
     # via
     #   -r requirements.in
     #   easy-thumbnails
@@ -301,9 +301,9 @@ propcache==0.4.1
     #   yarl
 py-ubjson==0.16.1
     # via autobahn
-py-vapid==1.9.2
+py-vapid==1.9.4
     # via pywebpush
-pyasn1==0.6.1
+pyasn1==0.6.2
     # via
     #   -r requirements.in
     #   pyasn1-modules
@@ -312,7 +312,7 @@ pyasn1-modules==0.4.2
     # via
     #   -r requirements.in
     #   service-identity
-pycparser==2.23
+pycparser==3.0
     # via
     #   -r requirements.in
     #   cffi
@@ -320,18 +320,21 @@ pydantic==2.12.5
     # via
     #   django-bootstrap-datepicker-plus
     #   django-qr-code
+    #   pydantic-settings
     #   squareup
 pydantic-core==2.41.5
     # via
     #   pydantic
     #   squareup
-pydyf==0.11.0
+pydantic-settings==2.13.0
+    # via django-bootstrap-datepicker-plus
+pydyf==0.12.1
     # via weasyprint
 pyhamcrest==2.1.0
     # via -r requirements.in
 pyheif==0.8.0
     # via heif-image-plugin
-pyjwt==2.10.1
+pyjwt==2.11.0
     # via -r requirements.in
 pymysql==1.1.2
     # via -r requirements.in
@@ -339,7 +342,7 @@ pyopenssl==25.3.0
     # via
     #   -r requirements.in
     #   twisted
-pyparsing==3.2.5
+pyparsing==3.3.2
     # via -r requirements.in
 pyphen==0.17.2
     # via weasyprint
@@ -350,22 +353,24 @@ python-dateutil==2.9.0.post0
     #   botocore
     #   celery
 python-dotenv==1.2.1
-    # via uvicorn
+    # via
+    #   pydantic-settings
+    #   uvicorn
 python3-openid==3.2.0
     # via -r requirements.in
 pytz==2025.2
     # via -r requirements.in
-pywebpush==2.1.2
+pywebpush==2.3.0
     # via django-webpush
 pyyaml==6.0.3
     # via
     #   -r requirements.in
     #   uvicorn
-redis==7.1.0
+redis==7.1.1
     # via
     #   -r requirements.in
     #   channels-redis
-reportlab==4.4.5
+reportlab==4.4.10
     # via -r requirements.in
 requests==2.32.5
     # via
@@ -391,15 +396,14 @@ six==1.17.0
     # via
     #   -r requirements.in
     #   python-dateutil
-    #   pywebpush
-soupsieve==2.8
+soupsieve==2.8.3
     # via beautifulsoup4
-sqlparse==0.5.4
+sqlparse==0.5.5
     # via
     #   -r requirements.in
     #   django
     #   django-debug-toolbar
-squareup==43.2.0.20251016
+squareup==44.0.1.20260122
     # via -r requirements.in
 tinycss2==1.4.0
     # via
@@ -412,7 +416,7 @@ twisted[tls]==25.5.0
     # via
     #   -r requirements.in
     #   daphne
-txaio==25.9.2
+txaio==25.12.2
     # via
     #   -r requirements.in
     #   autobahn
@@ -423,7 +427,6 @@ typing-extensions==4.15.0
     #   beautifulsoup4
     #   cron-descriptor
     #   django-bootstrap-datepicker-plus
-    #   exceptiongroup
     #   pydantic
     #   pydantic-core
     #   pyopenssl
@@ -431,8 +434,10 @@ typing-extensions==4.15.0
     #   twisted
     #   typing-inspection
 typing-inspection==0.4.2
-    # via pydantic
-tzdata==2025.2
+    # via
+    #   pydantic
+    #   pydantic-settings
+tzdata==2025.3
     # via
     #   django-celery-beat
     #   kombu
@@ -442,18 +447,18 @@ ua-parser==1.0.1
     # via
     #   -r requirements.in
     #   user-agents
-ua-parser-builtins==0.18.0.post1
+ua-parser-builtins==202602
     # via ua-parser
 ujson==5.11.0
     # via autobahn
-urllib3==2.5.0
+urllib3==2.6.3
     # via
     #   -r requirements.in
     #   botocore
     #   requests
 user-agents==2.2.0
     # via -r requirements.in
-uvicorn[standard]==0.38.0
+uvicorn[standard]==0.40.0
     # via -r requirements.in
 uvloop==0.22.1
     # via uvicorn
@@ -464,7 +469,7 @@ vine==5.1.0
     #   kombu
 watchfiles==1.1.1
     # via uvicorn
-wcwidth==0.2.14
+wcwidth==0.6.0
     # via prompt-toolkit
 weasyprint==66.0
     # via django-weasyprint
@@ -475,15 +480,15 @@ webencodings==0.5.1
     #   cssselect2
     #   tinycss2
     #   tinyhtml5
-websockets==15.0.1
+websockets==16.0
     # via uvicorn
 yarl==1.22.0
     # via aiohttp
-zope-interface==8.1.1
+zope-interface==8.2
     # via
     #   -r requirements.in
     #   twisted
-zopfli==0.4.0
+zopfli==0.4.1
     # via fonttools
 
 # The following packages are considered to be unsafe in a requirements file:

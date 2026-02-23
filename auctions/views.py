@@ -179,6 +179,9 @@ MILES_TO_KM = 1.60934
 # Invoice notification delay in seconds (allows for undo before email is sent)
 INVOICE_NOTIFICATION_DELAY_SECONDS = 15
 
+# Maximum length for feedback text fields
+FEEDBACK_TEXT_MAX_LENGTH = 500
+
 logger = logging.getLogger(__name__)
 
 
@@ -1088,7 +1091,8 @@ class Feedback(LoginRequiredMixin, View):
                 lot.save()
             text = data.get("text")
             if text:
-                lot.feedback_text = text
+                # Truncate text to max length to prevent database errors
+                lot.feedback_text = text[:FEEDBACK_TEXT_MAX_LENGTH]
                 lot.save()
         if leave_as == "seller":
             if lot.user:
@@ -1105,7 +1109,8 @@ class Feedback(LoginRequiredMixin, View):
                 lot.save()
             text = data.get("text")
             if text:
-                lot.winner_feedback_text = text
+                # Truncate text to max length to prevent database errors
+                lot.winner_feedback_text = text[:FEEDBACK_TEXT_MAX_LENGTH]
                 lot.save()
         if not winner_checks_pass and not seller_checks_pass:
             messages.error(request, "Only the seller or winner of a lot can leave feedback")
@@ -1702,7 +1707,7 @@ class AuctionInvoicesPayPalCSV(LoginRequiredMixin, AuctionViewMixin, View):
         chunkSize = 150  # attention: this is also set in models.auction.paypal_invoice_chunks
         no_email_count = 0
         for invoice in self.auction.paypal_invoices:
-            invoice.recalculate
+            invoice.recalculate()
             # we loop through everything regardless of which chunk
             if not invoice.user_should_be_paid:
                 count += 1
@@ -1810,7 +1815,7 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
             writer.writerow(row)
         self.auction.create_history(
             applies_to="LOTS",
-            action=f"Exported lot list CSV for {query if query else 'all lots'}",
+            action=f"Exported lot list CSV for {query or 'all lots'}",
             user=request.user,
         )
         return response
@@ -2738,7 +2743,7 @@ class BulkAddUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView, ContextMi
         context = self.get_context_data(**kwargs)
         return self.render_to_response(context)
 
-    def process_csv_data(self, csv_reader, *args, **kwargs):
+    def process_csv_data(self, csv_reader, filename=None, *args, **kwargs):
         """Process CSV data from a DictReader object and add/update users"""
 
         def extract_info(row, field_name_list, default_response=""):
@@ -2843,29 +2848,43 @@ class BulkAddUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView, ContextMi
                     existing_tos = self.auction.find_user(name="", email=email)
                     if existing_tos:
                         logger.debug("CSV import updating %s", email)
-                        total_updated += 1
-                        if phone:
+                        # Track if any field actually changed
+                        changed = False
+                        if phone and existing_tos.phone_number != phone[:20]:
                             existing_tos.phone_number = phone[:20]
-                        if address:
+                            changed = True
+                        if address and existing_tos.address != address[:500]:
                             existing_tos.address = address[:500]
-                        if is_club_member_field_exists:
+                            changed = True
+                        if is_club_member_field_exists and existing_tos.is_club_member != is_club_member:
                             existing_tos.is_club_member = is_club_member
-                        if is_bidding_allowed_fields_exists:
+                            changed = True
+                        if is_bidding_allowed_fields_exists and existing_tos.bidding_allowed != bidding_allowed:
                             existing_tos.bidding_allowed = bidding_allowed
-                        if name:
+                            changed = True
+                        if name and existing_tos.name != name[:181]:
                             existing_tos.name = name[:181]
+                            changed = True
                         if bidder_number:
                             if (
                                 not AuctionTOS.objects.filter(auction=self.auction, bidder_number=bidder_number)
                                 .exclude(pk=existing_tos.pk)
                                 .first()
                             ):
-                                existing_tos.bidder_number = bidder_number[:20]
+                                if existing_tos.bidder_number != bidder_number[:20]:
+                                    existing_tos.bidder_number = bidder_number[:20]
+                                    changed = True
                         if memo_field_exists:
-                            existing_tos.memo = memo[:500] if memo else ""
-                        if is_admin_field_exists:
+                            new_memo = memo[:500] if memo else ""
+                            if existing_tos.memo != new_memo:
+                                existing_tos.memo = new_memo
+                                changed = True
+                        if is_admin_field_exists and existing_tos.is_admin != is_admin:
                             existing_tos.is_admin = is_admin
-                        existing_tos.save()
+                            changed = True
+                        if changed:
+                            existing_tos.save()
+                            total_updated += 1
                     else:
                         logger.debug("CSV import adding %s", name)
                         if bidder_number:
@@ -2890,13 +2909,33 @@ class BulkAddUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView, ContextMi
                     total_skipped += 1
             if error:
                 messages.error(self.request, error)
-            msg = f"{total_tos} users added"
-            self.auction.create_history(applies_to="USERS", action=msg, user=self.request.user)
+            # Create history entry only if users were added or updated
+            if total_tos > 0 or total_updated > 0:
+                msg_parts = []
+                if total_tos > 0:
+                    msg_parts.append(f"{total_tos} users added")
+                if total_updated > 0:
+                    msg_parts.append(f"{total_updated} users updated")
+                msg = ", ".join(msg_parts)
+                if filename:
+                    msg += f" from {filename}"
+                self.auction.create_history(applies_to="USERS", action=msg, user=self.request.user)
+            # Prepare user-facing message
+            msg = ""
+            if total_tos > 0:
+                msg = f"{total_tos} users added"
             if total_updated:
-                msg += f", {total_updated} users are already in this auction (matched by email) and were updated"
+                if msg:
+                    msg += f", {total_updated} users are already in this auction (matched by email) and were updated"
+                else:
+                    msg = f"{total_updated} users were updated"
             if total_skipped:
-                msg += f", {total_skipped} users were skipped because they did not contain an email address"
-            messages.info(self.request, msg)
+                if msg:
+                    msg += f", {total_skipped} users were skipped because they did not contain an email address"
+                else:
+                    msg = f"{total_skipped} users were skipped because they did not contain an email address"
+            if msg:
+                messages.info(self.request, msg)
             url = reverse("auction_tos_list", kwargs={"slug": self.auction.slug})
             response = HttpResponse(status=200)
             response["HX-Redirect"] = url
@@ -2915,7 +2954,8 @@ class BulkAddUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView, ContextMi
         try:
             csv_file.seek(0)
             csv_reader = csv.DictReader(TextIOWrapper(csv_file.file))
-            return self.process_csv_data(csv_reader)
+            filename = getattr(csv_file, "name", None)
+            return self.process_csv_data(csv_reader, filename=filename)
         except (UnicodeDecodeError, ValueError) as e:
             messages.error(
                 self.request, f"Unable to read file.  Make sure this is a valid UTF-8 CSV file.  Error was: {e}"
@@ -3114,7 +3154,7 @@ class ImportFromGoogleDrive(LoginRequiredMixin, AuctionViewMixin, TemplateView, 
             bulk_add_view.auction = self.auction
 
             # Process the CSV data (this adds messages via self.request)
-            bulk_add_view.process_csv_data(csv_reader)
+            bulk_add_view.process_csv_data(csv_reader, filename="Google Drive sync")
 
             # Update the last sync time
             self.auction.last_sync_time = timezone.now()
@@ -3205,7 +3245,7 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 invoice = Invoice.objects.filter(auctiontos_user=self.tos, auction=self.auction).first()
                 if not invoice:
                     invoice = Invoice.objects.create(auctiontos_user=self.tos, auction=self.auction)
-                invoice.recalculate
+                invoice.recalculate()
             # when saving labels, it doesn't take you off from the page you're on
             # So we need to go somewhere, and then say "download labels"
             if "print" in str(self.request.GET.get("type", "")):
@@ -3458,12 +3498,17 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                 lot = Lot(
                     auction=self.auction,
                     auctiontos_seller=self.tos,
-                    user=self.tos.user if self.tos.user else None,
+                    user=self.tos.user or None,
                     added_by=request.user,
                 )
                 is_new = True
 
-            admin_bypassed = False  # Track if admin bypassed lot limit
+            admin_bypassed_lot_limit = False  # Track if admin bypassed lot limit
+            admin_bypassed_selling_allowed = False  # Track if admin bypassed selling_allowed
+
+            # Check if admin is bypassing selling_allowed restriction
+            if self.is_admin and not self.tos.selling_allowed:
+                admin_bypassed_selling_allowed = True
 
             # Check lot limits
             if is_new and self.auction.max_lots_per_user:
@@ -3486,7 +3531,7 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                         )
 
                 # Track if admin bypassed the limit for visual feedback
-                admin_bypassed = bypass_limit and limit_exceeded
+                admin_bypassed_lot_limit = bypass_limit and limit_exceeded
 
             # Validate and save fields
             errors = {}
@@ -3587,7 +3632,7 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
             if errors:
                 return JsonResponse({"success": False, "errors": errors})
 
-            # Save the lot
+            # Save the lot - locking is handled in Lot.save() for both standard and seller_dash modes
             lot.save()
 
             # Create auction history entry
@@ -3614,7 +3659,7 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
             invoice = Invoice.objects.filter(auctiontos_user=self.tos, auction=self.auction).first()
             if not invoice:
                 invoice = Invoice.objects.create(auctiontos_user=self.tos, auction=self.auction)
-            invoice.recalculate
+            invoice.recalculate()
 
             return JsonResponse(
                 {
@@ -3624,7 +3669,8 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                     "lot_link": lot.lot_link,
                     "lot_pk": lot.pk,
                     "is_new": is_new,
-                    "admin_bypassed": admin_bypassed,
+                    "admin_bypassed_lot_limit": admin_bypassed_lot_limit,
+                    "admin_bypassed_selling_allowed": admin_bypassed_selling_allowed,
                 }
             )
 
@@ -3689,7 +3735,8 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
         try:
             csv_file.seek(0)
             csv_reader = csv.DictReader(TextIOWrapper(csv_file.file))
-            return self.process_csv_data(csv_reader)
+            filename = getattr(csv_file, "name", None)
+            return self.process_csv_data(csv_reader, filename=filename)
         except (UnicodeDecodeError, ValueError) as e:
             messages.error(request, f"Unable to read file. Make sure this is a valid UTF-8 CSV file. Error was: {e}")
             url = reverse("auction_lot_list", kwargs={"slug": self.auction.slug})
@@ -3697,7 +3744,7 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
             response["HX-Redirect"] = url
             return response
 
-    def process_csv_data(self, csv_reader):
+    def process_csv_data(self, csv_reader, filename=None):
         """Process CSV data and create/update lots"""
 
         def extract_info(row, field_name_list, default_response=""):
@@ -3864,9 +3911,12 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
                     )
                     users_created += 1
                     # Update auction history
+                    history_action = f"Added user {name} via CSV import"
+                    if filename:
+                        history_action += f" from {filename}"
                     self.auction.create_history(
                         applies_to="USERS",
-                        action=f"Added user {name} via CSV import",
+                        action=history_action,
                         user=self.request.user,
                     )
 
@@ -3886,7 +3936,7 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
 
                 new_lot = Lot(
                     lot_name=lot_name[:40],
-                    summernote_description=description if description else "",
+                    summernote_description=description or "",
                     quantity=quantity,
                     reserve_price=reserve_price if reserve_price is not None else self.auction.minimum_bid,
                     buy_now_price=buy_now_price,
@@ -3938,6 +3988,8 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
                 history_msg = f"CSV import: {lots_created} lots created, {lots_updated} lots updated"
                 if users_created:
                     history_msg += f", {users_created} users added"
+                if filename:
+                    history_msg += f" from {filename}"
                 self.auction.create_history(applies_to="LOTS", action=history_msg, user=self.request.user)
 
             url = reverse("auction_lot_list", kwargs={"slug": self.auction.slug})
@@ -4401,7 +4453,7 @@ class LotValidation(LoginRequiredMixin):
                 invoice = Invoice.objects.filter(auctiontos_user=auctiontos, auction=lot.auction).first()
                 if not invoice:
                     invoice = Invoice.objects.create(auctiontos_user=auctiontos, auction=lot.auction)
-                invoice.recalculate
+                invoice.recalculate()
         else:
             # this lot is NOT part of an auction
             try:
@@ -4511,7 +4563,7 @@ class LotCreateView(LotValidation, CreateView):
             invoice = Invoice.objects.filter(auctiontos_user=lot.auctiontos_seller, auction=lot.auction).first()
             if not invoice:
                 invoice = Invoice.objects.create(auctiontos_user=lot.auctiontos_seller, auction=lot.auction)
-            invoice.recalculate
+            invoice.recalculate()
         result = super().form_valid(form, **kwargs)
         # Create history after lot is saved and has a lot_number_display
         if lot.auction and lot.auctiontos_seller:
@@ -4873,9 +4925,9 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
         form = self.get_form()
         if form.is_valid():
             success_url = reverse("auction_tos_list", kwargs={"slug": self.auctiontos.auction.slug})
-            sold_lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller=self.auctiontos)
-            won_lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_winner=self.auctiontos)
             if form.cleaned_data["delete_lots"]:
+                sold_lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_seller=self.auctiontos)
+                won_lots = Lot.objects.exclude(is_deleted=True).filter(auctiontos_winner=self.auctiontos)
                 for lot in sold_lots:
                     lot.delete()
                 for lot in won_lots:
@@ -4892,29 +4944,21 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
                     lot.winning_price = None
                     lot.active = True
                     lot.save()
+                self.auction.create_history(
+                    applies_to="USERS", action=f"Deleted {self.auctiontos.name}", user=request.user
+                )
+                self.auctiontos.delete()
+            elif form.cleaned_data["merge_with"]:
+                new_auctiontos = AuctionTOS.objects.get(pk=form.cleaned_data["merge_with"])
+                new_auctiontos.merge_duplicate(
+                    self.auctiontos, reason=f"merged by {request.user.username}", user=request.user
+                )
             else:
-                if form.cleaned_data["merge_with"]:
-                    new_auctiontos = AuctionTOS.objects.get(pk=form.cleaned_data["merge_with"])
-                    invoice = Invoice.objects.filter(
-                        auctiontos_user=new_auctiontos, auction=new_auctiontos.auction
-                    ).first()
-                    if not invoice:
-                        invoice = Invoice.objects.create(auctiontos_user=new_auctiontos, auction=new_auctiontos.auction)
-                    invoice.recalculate
-                    for lot in sold_lots:
-                        lot.auctiontos_seller = new_auctiontos
-                        lot.save()
-                    for lot in won_lots:
-                        lot.auctiontos_winner = new_auctiontos
-                        lot.save()
-                        lot.add_winner_message(request.user, new_auctiontos, lot.winning_price)
-                    invoice.recalculate
-            # not needed if we have models.CASCADE on Invoice
-            # invoices = Invoice.objects.filter(auctiontos_user=self.auctiontos)
-            # for invoice in invoices:
-            #    invoice.delete()
-            self.auction.create_history(applies_to="USERS", action=f"Deleted {self.auctiontos.name}", user=request.user)
-            self.auctiontos.delete()
+                # No lots to delete and no merge target selected; delete this AuctionTOS
+                self.auction.create_history(
+                    applies_to="USERS", action=f"Deleted {self.auctiontos.name}", user=request.user
+                )
+                self.auctiontos.delete()
             return redirect(success_url)
         else:
             return self.form_invalid(form)
@@ -5630,8 +5674,27 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
             ).first()
             is_new_join = False
             if find_by_email:
-                obj = find_by_email
-                obj.user = self.request.user
+                # Check if the user already has a separate TOS (from a prior join by user FK)
+                existing_by_user = (
+                    AuctionTOS.objects.filter(user=self.request.user, auction=auction)
+                    .exclude(pk=find_by_email.pk)
+                    .first()
+                )
+                if existing_by_user:
+                    # Keep the oldest record as canonical
+                    if (
+                        find_by_email.createdon
+                        and existing_by_user.createdon
+                        and find_by_email.createdon < existing_by_user.createdon
+                    ):
+                        canonical, duplicate = find_by_email, existing_by_user
+                    else:
+                        canonical, duplicate = existing_by_user, find_by_email
+                    canonical.merge_duplicate(duplicate, reason="duplicate detected on join")
+                    obj = canonical
+                else:
+                    obj = find_by_email
+                    obj.user = self.request.user
             else:
                 obj, created = AuctionTOS.objects.get_or_create(
                     user=self.request.user,
@@ -5824,13 +5887,7 @@ class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
         )
         latitude, longitude = self.get_coordinates()
         if latitude and longitude:
-            closest_pickup_location_subquery = (
-                PickupLocation.objects.filter(auction=OuterRef("pk"))
-                .annotate(distance=distance_to(latitude, longitude))
-                .order_by("distance")
-                .values("distance")[:1]
-            )
-            qs = qs.annotate(distance=Subquery(closest_pickup_location_subquery))
+            qs = qs.annotate(distance=Auction.get_closest_location_distance_subquery(latitude, longitude))
         else:
             qs = qs.annotate(distance=Value(0, output_field=FloatField()))
         if not self.request.user.is_authenticated:
@@ -6020,7 +6077,7 @@ class InvoiceCreateView(LoginRequiredMixin, View, AuctionViewMixin):
 
         # Create new invoice
         invoice = Invoice.objects.create(auctiontos_user=auctiontos, auction=auctiontos.auction)
-        invoice.recalculate
+        invoice.recalculate()
 
         messages.success(request, f"Invoice created for {auctiontos.name}")
         return redirect(invoice.get_absolute_url())
@@ -6167,7 +6224,7 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
         context["helper"] = helper
         # recaluclating slows things down,
         # I am not sure if it's a good idea to have it here or not
-        self.object.recalculate
+        self.object.recalculate()
         return self.render_to_response(context)
 
 
@@ -6629,7 +6686,7 @@ class InvoiceBulkUpdateStatus(LoginRequiredMixin, TemplateView, FormMixin, Aucti
         for invoice in invoices:
             invoice.status = self.new_invoice_status
             invoice.invoice_notification_due = run_at
-            invoice.recalculate
+            invoice.recalculate()
             invoice.save()
             # Schedule or cancel notification for each invoice
             if run_at:
@@ -6737,9 +6794,9 @@ class LotRefundDialog(LoginRequiredMixin, DetailView, FormMixin, AuctionViewMixi
             banned = form.cleaned_data["banned"]
             self.lot.remove(banned, request.user)
             if self.seller_invoice:
-                self.seller_invoice.recalculate
+                self.seller_invoice.recalculate()
             if self.winner_invoice:
-                self.winner_invoice.recalculate
+                self.winner_invoice.recalculate()
             return HttpResponse("<script>location.reload();</script>", status=200)
         else:
             return self.form_invalid(form)
@@ -7139,7 +7196,7 @@ class PayPalAPIMixin:
                 "amount_available_to_refund": amt,
             },
         )
-        invoice.recalculate
+        invoice.recalculate()
         if created:
             action = f"Payment received via PayPal for {invoice.auctiontos_user.name} ${payment.amount} ({payment.external_id})"
             invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
@@ -7260,7 +7317,7 @@ class PayPalAPIMixin:
             },
         )
 
-        invoice.recalculate
+        invoice.recalculate()
         action = f"Refund received via PayPal {refund_id} for capture {capture_id}: {refund_amt_signed} {currency}. Note: {note_to_payer}"
         invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
         return invoice, refund_payment
@@ -8836,15 +8893,38 @@ class AuctionStatsLotSellPricesJSONView(AuctionStatsBarChartJSONView):
             max_price = sold_lots.aggregate(max_price=Max("winning_price"))["max_price"] or 40
             max_price = int((max_price + 9) // 10 * 10)
 
+            # Create bins matching the logic in set_stat_lot_sell_prices
+            # Use whole number bin boundaries
+            bin_width = 2  # Each bin covers $2
+            num_bins = min((max_price - 1) // bin_width, 30)
+            if num_bins < 10:
+                num_bins = 10
+                bin_width = max((max_price - 1) // num_bins, 1)
+
+            start_bin = 1
+            end_bin = start_bin + num_bins * bin_width
+
             labels = ["Not sold"]
-            for i in range(0, max_price - 1, 2):
-                labels.append(f"{self.auction.currency_symbol}{i + 1}-{i + 2}")
-            labels.append(f"{self.auction.currency_symbol}{max_price}+")
+            for i in range(num_bins):
+                bin_start = start_bin + i * bin_width
+                bin_end = start_bin + (i + 1) * bin_width
+                labels.append(f"{self.auction.currency_symbol}{bin_start}-{bin_end}")
+            labels.append(f"{self.auction.currency_symbol}{end_bin}+")
             return labels
         else:
-            # No sold lots, use default
-            labels = [(f"{self.auction.currency_symbol}{i + 1}-{i + 2}") for i in range(0, 37, 2)]
-            return ["Not sold"] + labels + [f"{self.auction.currency_symbol}40+"]
+            # No sold lots, use default with whole number boundaries
+            start_bin = 1
+            bin_width = 2
+            num_bins = 19
+            end_bin = start_bin + num_bins * bin_width
+
+            labels = ["Not sold"]
+            for i in range(num_bins):
+                bin_start = start_bin + i * bin_width
+                bin_end = start_bin + (i + 1) * bin_width
+                labels.append(f"{self.auction.currency_symbol}{bin_start}-{bin_end}")
+            labels.append(f"{self.auction.currency_symbol}{end_bin}+")
+            return labels
 
     def get_providers(self):
         providers = []
@@ -9923,10 +10003,15 @@ class LotChatSubscribe(View, LoginRequiredMixin):
             msg = f"No lot found with key {lot}"
             raise Http404(msg)
         else:
-            subscription, created = ChatSubscription.objects.get_or_create(
+            subscription = ChatSubscription.objects.filter(
                 user=request.user,
                 lot=lot,
-            )
+            ).first()
+            if not subscription:
+                subscription = ChatSubscription.objects.create(
+                    user=request.user,
+                    lot=lot,
+                )
             unsubscribed = request.POST["unsubscribed"]
             if unsubscribed == "true":  # classic javascript, again
                 subscription.unsubscribed = True
@@ -10231,7 +10316,7 @@ class PayPalWebhookView(PayPalAPIMixin, View):
                     "Error processing capture webhook for resource: %s, debug_id %s", resource, self.paypal_debug
                 )
             return JsonResponse({"status": "ok"})
-        elif event_type in ("CHECKOUT.ORDER.APPROVED",):
+        elif event_type == "CHECKOUT.ORDER.APPROVED":
             # Extract the reference_id (our invoice reference) from the approved order and print/log it.
             try:
                 purchase_unit = resource.get("purchase_units", [{}])[0]
@@ -10447,7 +10532,7 @@ class SquareWebhookView(SquareAPIMixin, View):
                             "memo": refund.get("reason", "")[:500],
                         },
                     )
-                    payment_record.invoice.recalculate
+                    payment_record.invoice.recalculate()
                     action = f"Refund via Square for bidder {payment_record.invoice.auctiontos_user.bidder_number} in the amount of {refund_amount} {payment_record.currency}"
                     payment_record.invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
                     logger.info("Square refund completed for payment %s", payment_id)

@@ -92,6 +92,11 @@ class CeleryTasksTestCase(TestCase):
             date_start=now - datetime.timedelta(days=1),
         )
 
+        # Mock the channel layer to track WebSocket sends
+        # The channel layer is used by Django Channels to send messages to WebSocket groups
+        # We mock it to verify the message is sent without requiring a real Redis connection
+        mock_channel_layer = mock_channel.return_value
+
         # Run the task
         tasks.update_auction_stats()
 
@@ -99,6 +104,12 @@ class CeleryTasksTestCase(TestCase):
         auction.refresh_from_db()
         self.assertIsNotNone(auction.next_update_due)
         self.assertGreater(auction.next_update_due, timezone.now())
+
+        # Verify WebSocket message was sent
+        mock_channel_layer.group_send.assert_called_once()
+        call_args = mock_channel_layer.group_send.call_args
+        self.assertEqual(call_args[0][0], f"auctions_{auction.pk}")  # Channel name
+        self.assertEqual(call_args[0][1]["type"], "stats_updated")  # Message type
 
         # Verify the task schedules itself
         mock_schedule.assert_called_once()
@@ -125,6 +136,58 @@ class CeleryTasksTestCase(TestCase):
         self.assertTrue(task.one_off)
         self.assertTrue(task.enabled)
         self.assertEqual(task.task, "auctions.tasks.update_auction_stats")
+
+    def test_schedule_auction_stats_update_recreates_disabled_task(self):
+        """Test that schedule_auction_stats_update recreates a disabled task."""
+        from django.utils import timezone
+        from django_celery_beat.models import ClockedSchedule, PeriodicTask
+
+        # Create a disabled task (simulating what happens after a one-off task runs)
+        old_schedule = ClockedSchedule.objects.create(clocked_time=timezone.now())
+        old_task = PeriodicTask.objects.create(
+            name=tasks.AUCTION_STATS_TASK_NAME,
+            task="auctions.tasks.update_auction_stats",
+            clocked=old_schedule,
+            one_off=True,
+            enabled=False,  # Disabled as would happen after running
+        )
+        old_task_id = old_task.id
+        old_schedule_id = old_schedule.id
+
+        # Call the scheduling function
+        tasks.schedule_auction_stats_update()
+
+        # Verify the old task was deleted
+        self.assertFalse(PeriodicTask.objects.filter(id=old_task_id).exists())
+
+        # Verify the old schedule was cleaned up
+        self.assertFalse(ClockedSchedule.objects.filter(id=old_schedule_id).exists())
+
+        # Verify a new task was created and is enabled
+        new_task = PeriodicTask.objects.filter(name=tasks.AUCTION_STATS_TASK_NAME).first()
+        self.assertIsNotNone(new_task)
+        self.assertNotEqual(new_task.id, old_task_id)  # Different task
+        self.assertTrue(new_task.enabled)  # Enabled!
+        self.assertTrue(new_task.one_off)
+        self.assertEqual(new_task.task, "auctions.tasks.update_auction_stats")
+
+    def test_schedule_auction_stats_update_ensures_single_task(self):
+        """Test that there is always exactly one task after scheduling."""
+        from django_celery_beat.models import PeriodicTask
+
+        # Call the scheduling function multiple times
+        tasks.schedule_auction_stats_update()
+        tasks.schedule_auction_stats_update()
+        tasks.schedule_auction_stats_update()
+
+        # Verify there is exactly one task
+        task_count = PeriodicTask.objects.filter(name=tasks.AUCTION_STATS_TASK_NAME).count()
+        self.assertEqual(task_count, 1, "There should be exactly one auction stats update task")
+
+        # Verify the task is enabled
+        task = PeriodicTask.objects.get(name=tasks.AUCTION_STATS_TASK_NAME)
+        self.assertTrue(task.enabled)
+        self.assertTrue(task.one_off)
 
 
 class SendInvoiceNotificationTaskTestCase(TestCase):
@@ -536,3 +599,58 @@ class CleanupOldInvoiceNotificationTasksTestCase(TestCase):
 
         # Clean up
         PeriodicTask.objects.filter(name=task_name).delete()
+
+
+class FixedDatabaseSchedulerTestCase(TestCase):
+    """Test case for the custom FixedDatabaseScheduler."""
+
+    def test_get_crontab_exclude_query_returns_empty(self):
+        """Test that _get_crontab_exclude_query returns an empty Q() object."""
+        from django.db.models import Q
+
+        from fishauctions.custom_scheduler import FixedDatabaseScheduler
+
+        # Create scheduler instance - but don't let it initialize fully
+        # We just want to test the method override
+        scheduler = object.__new__(FixedDatabaseScheduler)
+
+        # Call the overridden method
+        result = scheduler._get_crontab_exclude_query()
+
+        # Verify it returns an empty Q() object
+        self.assertIsInstance(result, Q)
+        self.assertEqual(str(result), str(Q()))
+
+    def test_crontab_tasks_not_filtered_by_hour(self):
+        """Test that crontab tasks are loaded regardless of their scheduled hour."""
+        from django_celery_beat.models import CrontabSchedule
+
+        # Create a crontab schedule for a time far from current hour
+        # This would be filtered out by the buggy scheduler
+        crontab = CrontabSchedule.objects.create(
+            minute="30",
+            hour="3",  # 3 AM - likely far from test execution time
+            day_of_week="*",
+            day_of_month="*",
+            month_of_year="*",
+        )
+
+        # Create an enabled periodic task with this crontab
+        PeriodicTask.objects.create(
+            name="test_crontab_task_scheduler",
+            task="auctions.tasks.endauctions",
+            crontab=crontab,
+            enabled=True,
+        )
+
+        # Import after creating the task to avoid initialization issues
+        from fishauctions.custom_scheduler import FixedDatabaseScheduler
+
+        # Test that the fixed scheduler's query method returns empty Q
+        scheduler_obj = object.__new__(FixedDatabaseScheduler)
+        exclude_query = scheduler_obj._get_crontab_exclude_query()
+
+        # The exclude query should be empty, meaning no crontab tasks are excluded
+        from django.db.models import Q
+
+        self.assertEqual(str(exclude_query), str(Q()))
