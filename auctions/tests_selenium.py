@@ -23,7 +23,7 @@ import os
 import time
 import unittest
 
-from django.test import TransactionTestCase, tag
+from django.test import TestCase, tag
 
 try:
     from selenium import webdriver
@@ -80,7 +80,7 @@ def selenium_available():
 
 @unittest.skipUnless(SELENIUM_AVAILABLE and selenium_available(), "Selenium not available")
 @tag("selenium")
-class SeleniumTestCase(TransactionTestCase):
+class SeleniumTestCase(TestCase):
     """
     Base class for Selenium tests that provides common setup and utilities.
 
@@ -89,10 +89,6 @@ class SeleniumTestCase(TransactionTestCase):
 
     Note: These tests connect to the live application via nginx, not a test server.
     Test data created in Django tests won't be visible in the browser.
-
-    Uses TransactionTestCase instead of TestCase because these tests interact with
-    a live database (not test database isolation), and we need real database access
-    for session cookies and user authentication to work correctly with Selenium.
     """
 
     @classmethod
