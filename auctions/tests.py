@@ -5840,6 +5840,29 @@ class BulkAddLotsAutoTests(StandardTestCase):
         lot = Lot.objects.get(lot_number=data["lot_id"])
         self.assertEqual(lot.auctiontos_seller, self.admin_in_person_tos)
 
+    def test_non_admin_sees_selling_dashboard_button(self):
+        """Test that non-admin users see the 'To selling dashboard' navigation button"""
+        self.client.login(username="no_lots", password="testpassword")
+        response = self.client.get(
+            reverse("bulk_add_lots_auto_for_myself", kwargs={"slug": self.in_person_auction.slug})
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "selling dashboard")
+        self.assertContains(response, reverse("selling"))
+
+    def test_admin_sees_back_to_users_button(self):
+        """Test that admin users see the 'Back to users' navigation button"""
+        self.client.login(username="admin_user", password="testpassword")
+        response = self.client.get(
+            reverse(
+                "bulk_add_lots_auto",
+                kwargs={"slug": self.in_person_auction.slug, "bidder_number": self.in_person_buyer.bidder_number},
+            )
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Back to users")
+        self.assertContains(response, reverse("auction_tos_list", kwargs={"slug": self.in_person_auction.slug}))
+
 
 class UpdateAuctionStatsCommandTestCase(StandardTestCase):
     """Test the update_auction_stats management command"""
