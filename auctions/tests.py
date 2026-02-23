@@ -2017,7 +2017,7 @@ class CSVImportTests(StandardTestCase):
         csv_buffer = StringIO()
         writer = csv.writer(csv_buffer)
         writer.writerow(["email", "name", "bidder number"])
-        writer.writerow(["bidder1@example.com", "Bidder 1", "999"])
+        writer.writerow(["bidder1@example.com", "Bidder 1", "9999"])
 
         csv_file = SimpleUploadedFile("test.csv", csv_buffer.getvalue().encode("utf-8"), content_type="text/csv")
 
@@ -2031,9 +2031,10 @@ class CSVImportTests(StandardTestCase):
         )
 
         # Check that bidder number was assigned
+        # Using "9999" (outside the 1-999 auto-generation range) to avoid conflicts with randomly assigned bidder numbers
         bidder1 = AuctionTOS.objects.filter(auction=self.online_auction, email="bidder1@example.com").first()
         self.assertIsNotNone(bidder1)
-        self.assertEqual(bidder1.bidder_number, "999")
+        self.assertEqual(bidder1.bidder_number, "9999")
 
     def test_csv_import_bidder_number_in_use_new_user(self):
         """Test that bidder number is not assigned if already in use for a new user"""
