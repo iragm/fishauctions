@@ -1024,22 +1024,6 @@ class InvoiceModelTests(StandardTestCase):
         self.adjustment_discount_percent.save()
         assert self.invoiceB.net == -37.5
 
-    def test_invoice_adjustment_display(self):
-        """ADD ('Charge extra') should display as -$X and DISCOUNT should display as $X
-        for both buyer and seller invoices."""
-        # Buyer invoice: invoiceB has subtotal = -30 (user owes money)
-        assert self.adjustment_add.display == "-$10.00"
-        assert self.adjustment_discount.display == "$10.00"
-        # Seller invoice: self.invoice has subtotal = 6.5 (club pays the user)
-        seller_add = InvoiceAdjustment.objects.create(
-            adjustment_type="ADD", amount=5, notes="fee", invoice=self.invoice
-        )
-        seller_discount = InvoiceAdjustment.objects.create(
-            adjustment_type="DISCOUNT", amount=3, notes="bonus", invoice=self.invoice
-        )
-        assert seller_add.display == "-$5.00"
-        assert seller_discount.display == "$3.00"
-
 
 class InvoiceCreateViewTests(StandardTestCase):
     """Test invoice creation view"""

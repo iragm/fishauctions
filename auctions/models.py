@@ -5528,7 +5528,7 @@ class InvoiceAdjustment(models.Model):
     def display(self):
         """for templates"""
         result = ""
-        if self.adjustment_type in ["ADD", "ADD_PERCENT"]:
+        if self.adjustment_type in ["DISCOUNT", "DISCOUNT_PERCENT"]:
             result += "-"
         if self.adjustment_type in ["ADD", "DISCOUNT"]:
             # Get currency symbol from the invoice
