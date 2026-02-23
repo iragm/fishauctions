@@ -48,7 +48,7 @@ from django.db.models import (
     When,
 )
 from django.db.models.base import Model as Model
-from django.db.models.functions import TruncDay, TruncMonth
+from django.db.models.functions import ExtractHour, ExtractIsoWeekDay, TruncDay
 from django.forms import modelformset_factory
 from django.http import (
     Http404,
@@ -8138,11 +8138,16 @@ class AdminTrafficTimeOfDayJSON(AdminOnlyViewMixin, BaseLineChartView):
 
     def get_data(self):
         timeframe = timezone.now() - timedelta(days=self.bins)
-        timestamps = PageView.objects.filter(date_start__gte=timeframe).values_list("date_start", flat=True)
+        counts = (
+            PageView.objects.filter(date_start__gte=timeframe)
+            .annotate(hour=ExtractHour("date_start", tzinfo=timezone.get_current_timezone()))
+            .annotate(dow=ExtractIsoWeekDay("date_start", tzinfo=timezone.get_current_timezone()))
+            .values("dow", "hour")
+            .annotate(count=Count("pk"))
+        )
         grid = [[0] * 24 for _ in range(7)]
-        for ts in timestamps:
-            local_ts = timezone.localtime(ts)
-            grid[local_ts.weekday()][local_ts.hour] += 1
+        for row in counts:
+            grid[row["dow"] - 1][row["hour"]] += row["count"]
         return grid
 
 
@@ -8163,7 +8168,7 @@ class AdminUserSignups(AdminOnlyViewMixin, TemplateView):
 
 
 class AdminUserSignupsJSON(AdminOnlyViewMixin, BaseLineChartView):
-    """JSON data for cumulative user signups chart, aggregated by month"""
+    """JSON data for cumulative user signups chart, aggregated by day"""
 
     def dispatch(self, request, *args, **kwargs):
         days_param = self.request.GET.get("days", "")
@@ -8177,42 +8182,42 @@ class AdminUserSignupsJSON(AdminOnlyViewMixin, BaseLineChartView):
         else:
             earliest = User.objects.order_by("date_joined").values_list("date_joined", flat=True).first()
             self._start = earliest.date() if earliest else self._end
+        self._days = (self._end - self._start).days
         # count users that already existed before _start (cumulative offset)
-        self._initial_count = User.objects.filter(date_joined__date__lt=self._start).count()
+        start_dt = timezone.make_aware(
+            datetime.combine(self._start, datetime.min.time()),
+            timezone.get_current_timezone(),
+        )
+        self._initial_count = User.objects.filter(date_joined__lt=start_dt).count()
         return super().dispatch(request, *args, **kwargs)
 
-    def _monthly_dates(self):
-        months = []
-        current = self._start.replace(day=1)
-        end_month = self._end.replace(day=1)
-        while current <= end_month:
-            months.append(current)
-            current = (
-                current.replace(month=current.month + 1)
-                if current.month < 12
-                else current.replace(year=current.year + 1, month=1)
-            )
-        return months
-
     def get_labels(self):
-        return [d.strftime("%b %Y") for d in self._monthly_dates()]
+        return [(self._start + timedelta(days=i)).strftime("%b %-d, %Y") for i in range(self._days + 1)]
 
     def get_providers(self):
         return ["Total users"]
 
     def get_data(self):
-        monthly_counts = (
-            User.objects.filter(date_joined__date__gte=self._start)
-            .annotate(join_month=TruncMonth("date_joined"))
-            .values("join_month")
-            .annotate(count=Count("pk"))
-            .order_by("join_month")
+        start_dt = timezone.make_aware(
+            datetime.combine(self._start, datetime.min.time()),
+            timezone.get_current_timezone(),
         )
-        month_counts = {item["join_month"].date(): item["count"] for item in monthly_counts}
+        end_dt = timezone.make_aware(
+            datetime.combine(self._end + timedelta(days=1), datetime.min.time()),
+            timezone.get_current_timezone(),
+        )
+        daily_counts = (
+            User.objects.filter(date_joined__gte=start_dt, date_joined__lt=end_dt)
+            .annotate(join_date=TruncDay("date_joined"))
+            .values("join_date")
+            .annotate(count=Count("pk"))
+            .order_by("join_date")
+        )
+        date_counts = {item["join_date"].date(): item["count"] for item in daily_counts}
         cumulative = []
         running_total = self._initial_count
-        for month_date in self._monthly_dates():
-            running_total += month_counts.get(month_date, 0)
+        for i in range(self._days + 1):
+            running_total += date_counts.get(self._start + timedelta(days=i), 0)
             cumulative.append(running_total)
         return [cumulative]
 
