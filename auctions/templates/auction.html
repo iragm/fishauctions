@@ -310,7 +310,11 @@ function initMap() {
                     </div>
                     <div class="card-body">
                         {% if request.user.is_authenticated %}
+                            {% if auction.is_online %}
                             <p class="mb-3">To participate in this auction, please confirm that you've read the rules and select your pickup location.</p>
+                            {% else %}
+                            <p class="mb-3">To participate in this auction, please confirm that you've read the rules.</p>
+                            {% endif %}
                             {% crispy form form.helper %}
                         {% else %}
                             <p class="mb-0"><a href="/login/?next={% firstof request.path '/' %}" class="btn btn-primary">Please login to join the auction</a></p>
@@ -320,7 +324,6 @@ function initMap() {
                         {% if not auction.multi_location %}
                         {% for location in pickup_locations %}
                         <hr class="my-3">
-                        <h6 class="mb-3">Pickup Location</h6>
                         {% if location.description %}
                             <p>{{ location.description|linebreaksbr }}</p>
                         {% endif %}
