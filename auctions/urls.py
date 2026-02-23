@@ -90,8 +90,15 @@ urlpatterns = [
     path("admin-dashboard/", views.AdminDashboard.as_view(), name="admin_dashboard"),
     path("admin-traffic/", views.AdminTraffic.as_view(), name="admin_traffic"),
     path("admin-traffic-data/", views.AdminTrafficJSON.as_view(), name="admin_traffic_json"),
+    path(
+        "admin-traffic-time-of-day-data/",
+        views.AdminTrafficTimeOfDayJSON.as_view(),
+        name="admin_traffic_time_of_day_json",
+    ),
     path("admin-referrers/", views.AdminReferrers.as_view(), name="admin_referrers"),
     path("admin-error/", views.AdminErrorPage.as_view(), name="admin_error"),
+    path("user-signups/", views.AdminUserSignups.as_view(), name="admin_user_signups"),
+    path("user-signups-data/", views.AdminUserSignupsJSON.as_view(), name="admin_user_signups_json"),
     path("tos/", views.UserAgreement.as_view(), name="tos"),
     path(
         "robots.txt",

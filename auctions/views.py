@@ -48,7 +48,7 @@ from django.db.models import (
     When,
 )
 from django.db.models.base import Model as Model
-from django.db.models.functions import TruncDay
+from django.db.models.functions import ExtractHour, ExtractIsoWeekDay, TruncDay
 from django.forms import modelformset_factory
 from django.http import (
     Http404,
@@ -8127,6 +8127,110 @@ class AdminTrafficJSON(AdminOnlyViewMixin, BaseLineChartView):
         return [
             bin_data(views, "date_start", self.bins, timeframe, timezone.now())[::-1],
         ]
+
+
+class AdminTrafficTimeOfDayJSON(AdminOnlyViewMixin, BaseLineChartView):
+    """Page views binned by hour and day of week"""
+
+    def dispatch(self, request, *args, **kwargs):
+        days_param = self.request.GET.get("days", 30)
+        try:
+            days = int(days_param)
+        except (ValueError, TypeError):
+            days = 30
+        self.bins = days
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_labels(self):
+        return [f"{h}:00" for h in range(24)]
+
+    def get_providers(self):
+        return ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+    def get_data(self):
+        timeframe = timezone.now() - timedelta(days=self.bins)
+        counts = (
+            PageView.objects.filter(date_start__gte=timeframe)
+            .annotate(hour=ExtractHour("date_start", tzinfo=timezone.get_current_timezone()))
+            .annotate(dow=ExtractIsoWeekDay("date_start", tzinfo=timezone.get_current_timezone()))
+            .values("dow", "hour")
+            .annotate(count=Count("pk"))
+        )
+        grid = [[0] * 24 for _ in range(7)]
+        for row in counts:
+            grid[row["dow"] - 1][row["hour"]] += row["count"]
+        return grid
+
+
+class AdminUserSignups(AdminOnlyViewMixin, TemplateView):
+    """Cumulative user signups over time"""
+
+    template_name = "dashboard_user_signups.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        days_param = self.request.GET.get("days", "")
+        try:
+            days = int(days_param)
+        except (ValueError, TypeError):
+            days = None
+        context["days"] = days
+        return context
+
+
+class AdminUserSignupsJSON(AdminOnlyViewMixin, BaseLineChartView):
+    """JSON data for cumulative user signups chart, aggregated by day"""
+
+    def dispatch(self, request, *args, **kwargs):
+        days_param = self.request.GET.get("days", "")
+        try:
+            days = int(days_param)
+        except (ValueError, TypeError):
+            days = None
+        self._end = timezone.now().date()
+        if days:
+            self._start = (timezone.now() - timedelta(days=days)).date()
+        else:
+            earliest = User.objects.order_by("date_joined").values_list("date_joined", flat=True).first()
+            self._start = earliest.date() if earliest else self._end
+        self._days = (self._end - self._start).days
+        # count users that already existed before _start (cumulative offset)
+        start_dt = timezone.make_aware(
+            datetime.combine(self._start, datetime.min.time()),
+            timezone.get_current_timezone(),
+        )
+        self._initial_count = User.objects.filter(date_joined__lt=start_dt).count()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_labels(self):
+        return [(self._start + timedelta(days=i)).strftime("%b %-d, %Y") for i in range(self._days + 1)]
+
+    def get_providers(self):
+        return ["Total users"]
+
+    def get_data(self):
+        start_dt = timezone.make_aware(
+            datetime.combine(self._start, datetime.min.time()),
+            timezone.get_current_timezone(),
+        )
+        end_dt = timezone.make_aware(
+            datetime.combine(self._end + timedelta(days=1), datetime.min.time()),
+            timezone.get_current_timezone(),
+        )
+        daily_counts = (
+            User.objects.filter(date_joined__gte=start_dt, date_joined__lt=end_dt)
+            .annotate(join_date=TruncDay("date_joined"))
+            .values("join_date")
+            .annotate(count=Count("pk"))
+            .order_by("join_date")
+        )
+        date_counts = {item["join_date"].date(): item["count"] for item in daily_counts}
+        cumulative = []
+        running_total = self._initial_count
+        for i in range(self._days + 1):
+            running_total += date_counts.get(self._start + timedelta(days=i), 0)
+            cumulative.append(running_total)
+        return [cumulative]
 
 
 class AdminReferrers(AdminOnlyViewMixin, TemplateView):
