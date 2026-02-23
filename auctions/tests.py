@@ -6403,7 +6403,7 @@ class SquarePaymentTests(StandardTestCase):
         """Test square_refund_possible when no Square payment exists"""
         # Create a lot with a different winner who has no Square payment
         other_tos = AuctionTOS.objects.create(
-            user=self.user_with_no_lots, auction=self.online_auction, pickup_location=self.location
+            user=self.user_who_does_not_join, auction=self.online_auction, pickup_location=self.location
         )
         lot = Lot.objects.create(
             lot_name="Test lot no payment",
@@ -9061,82 +9061,105 @@ class SignalLogicTestCase(StandardTestCase):
 
 
 class DuplicateAuctionTOSTests(StandardTestCase):
-    """Test that duplicate AuctionTOS records don't cause MultipleObjectsReturned errors"""
+    """Test that duplicate AuctionTOS records are auto-merged on save"""
 
-    def test_duplicate_auction_tos_in_auction_detail_view(self):
-        """Test that the auction detail view can handle duplicate AuctionTOS records"""
-        # Create a duplicate AuctionTOS for the same user and auction
+    def test_duplicate_user_auction_is_auto_merged_on_save(self):
+        """Creating a second AuctionTOS for the same user+auction via save() auto-merges it into the older one"""
+        initial_count = AuctionTOS.objects.filter(user=self.admin_user, auction=self.online_auction).count()
+        self.assertEqual(initial_count, 1)
+        # Simulate a duplicate being saved (e.g. race condition)
         AuctionTOS.objects.create(
             user=self.admin_user, auction=self.online_auction, pickup_location=self.location, is_admin=False
         )
-        # Verify we now have 2 AuctionTOS records for this user/auction combination
-        tos_count = AuctionTOS.objects.filter(user=self.admin_user, auction=self.online_auction).count()
-        self.assertEqual(tos_count, 2)
+        # The save() method should have merged it; only 1 record should remain
+        final_count = AuctionTOS.objects.filter(user=self.admin_user, auction=self.online_auction).count()
+        self.assertEqual(final_count, 1)
 
-        # This should not raise MultipleObjectsReturned error
-        self.client.login(username="admin_user", password="testpassword")
-        response = self.client.get(reverse("auction_main", kwargs={"slug": self.online_auction.slug}))
-        self.assertEqual(response.status_code, 200)
-
-    def test_duplicate_auction_tos_in_lot_list_view(self):
-        """Test that the lot list view can handle duplicate AuctionTOS records"""
-        # Create a duplicate AuctionTOS for the same user and auction
+    def test_duplicate_email_is_auto_merged_on_save(self):
+        """Creating a second TOS with the same email in the same auction auto-merges on save"""
+        # Set a known email on the existing TOS
+        AuctionTOS.objects.filter(pk=self.online_tos.pk).update(email="dup@example.com")
+        initial_count = AuctionTOS.objects.filter(auction=self.online_auction, email="dup@example.com").count()
+        self.assertEqual(initial_count, 1)
+        # Create a second TOS with the same email — should be auto-merged
         AuctionTOS.objects.create(
-            user=self.admin_user, auction=self.online_auction, pickup_location=self.location, is_admin=False
-        )
-
-        # This should not raise MultipleObjectsReturned error
-        self.client.login(username="admin_user", password="testpassword")
-        response = self.client.get(reverse("auction_lot_list", kwargs={"slug": self.online_auction.slug}))
-        self.assertEqual(response.status_code, 200)
-
-    def test_duplicate_auction_tos_in_lot_model_properties(self):
-        """Test that Lot model properties can handle duplicate AuctionTOS records"""
-        # Create a lot
-        lot = Lot.objects.create(
             auction=self.online_auction,
-            auctiontos_seller=self.admin_online_tos,
-            lot_number=1,
-            lot_name="Test Lot",
-            quantity=1,
-            reserve_price=10,
+            pickup_location=self.location,
+            manually_added=True,
+            email="dup@example.com",
+            name="Duplicate Person",
         )
+        # Only one TOS with this email should remain
+        final_count = AuctionTOS.objects.filter(auction=self.online_auction, email="dup@example.com").count()
+        self.assertEqual(final_count, 1)
 
-        # Create a duplicate AuctionTOS for the same user and auction
-        AuctionTOS.objects.create(
-            user=self.admin_user, auction=self.online_auction, pickup_location=self.location, is_admin=False
+    def test_multiple_null_users_allowed_same_auction(self):
+        """Multiple manually-added (user=None) TOS records are allowed in the same auction"""
+        tos1 = AuctionTOS.objects.create(
+            auction=self.online_auction, pickup_location=self.location, manually_added=True, name="Person A"
         )
+        tos2 = AuctionTOS.objects.create(
+            auction=self.online_auction, pickup_location=self.location, manually_added=True, name="Person B"
+        )
+        self.assertIsNotNone(tos1.pk)
+        self.assertIsNotNone(tos2.pk)
 
-        # These properties should not raise MultipleObjectsReturned error
-        tos_needed = lot.tos_needed
-        location_as_object = lot.location_as_object
-
-        # The properties should work correctly
-        self.assertFalse(tos_needed)
-        self.assertEqual(location_as_object, self.location)
-
-    def test_duplicate_auction_tos_winner_location(self):
-        """Test that winner_location property can handle duplicate AuctionTOS records"""
-        # Create a lot with a winner
-        lot = Lot.objects.create(
+    def test_merge_preserves_fields_from_duplicate(self):
+        """merge_duplicate() copies non-empty fields from duplicate onto canonical if canonical is missing them"""
+        canonical = AuctionTOS.objects.create(
             auction=self.online_auction,
-            auctiontos_seller=self.admin_online_tos,
-            lot_number=1,
-            lot_name="Test Lot",
-            quantity=1,
-            reserve_price=10,
-            winner=self.user,
+            pickup_location=self.location,
+            manually_added=True,
+            name="Old Record",
+            bidder_number="OLD1",
         )
+        duplicate = AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            manually_added=True,
+            name="Newer Record",
+            email="preserve@example.com",
+            phone_number="555-1234",
+            address="123 Fish St",
+            memo="important note",
+            bidder_number="NEW1",
+        )
+        canonical.merge_duplicate(duplicate, reason="test")
+        canonical.refresh_from_db()
+        # Fields missing on canonical should now be copied from duplicate
+        self.assertEqual(canonical.email, "preserve@example.com")
+        self.assertEqual(canonical.phone_number, "555-1234")
+        self.assertEqual(canonical.address, "123 Fish St")
+        self.assertEqual(canonical.memo, "important note")
+        # canonical already had a name and bidder_number — should not be overwritten
+        self.assertEqual(canonical.name, "Old Record")
+        self.assertEqual(canonical.bidder_number, "OLD1")
+        # duplicate should be deleted
+        self.assertFalse(AuctionTOS.objects.filter(pk=duplicate.pk).exists())
 
-        # Create TOS for the winner
-        AuctionTOS.objects.create(user=self.user, auction=self.online_auction, pickup_location=self.location)
-
-        # Create a duplicate AuctionTOS for the winner
-        AuctionTOS.objects.create(user=self.user, auction=self.online_auction, pickup_location=self.location)
-
-        # This should not raise MultipleObjectsReturned error
-        winner_location = lot.winner_location
-        self.assertEqual(winner_location, str(self.location))
+    def test_merge_copies_user_from_duplicate_to_canonical(self):
+        """If the canonical record has no user but the duplicate does, user is copied to canonical"""
+        canonical = AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            manually_added=True,
+            name="Manual Entry",
+            email="linkme@example.com",
+        )
+        # Creating this duplicate with the same email triggers the auto-merge inside save():
+        # save() detects the email duplicate (canonical), calls canonical.merge_duplicate(duplicate).
+        # merge_duplicate() copies user from duplicate onto canonical, then deletes duplicate.
+        duplicate = AuctionTOS.objects.create(
+            user=self.user_who_does_not_join,
+            auction=self.online_auction,
+            pickup_location=self.location,
+            email="linkme@example.com",
+            name="User Entry",
+        )
+        canonical.refresh_from_db()
+        # The email-duplicate save path should have merged them; canonical should have the user
+        self.assertFalse(AuctionTOS.objects.filter(pk=duplicate.pk).exists())
+        self.assertEqual(canonical.user, self.user_who_does_not_join)
 
 
 class AuctionNoShowURLEncodingTest(StandardTestCase):
@@ -9148,7 +9171,7 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
         # Test with special characters that are allowed
         special_bidder_number = "test@123"
         special_tos = AuctionTOS.objects.create(
-            user=self.user,
+            user=self.user_who_does_not_join,
             auction=self.online_auction,
             pickup_location=self.location,
             bidder_number=special_bidder_number,
@@ -9180,7 +9203,7 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
         # We use a shorter version since bidder_number has max_length=20, and without slashes
         url_like_bidder = "https:site."
         url_tos = AuctionTOS.objects.create(
-            user=self.user_with_no_lots,
+            user=self.user_who_does_not_join,
             auction=self.online_auction,
             pickup_location=self.location,
             bidder_number=url_like_bidder,
@@ -9207,7 +9230,7 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
         """Test the auction_no_show_dialog URL also works with path converter"""
         special_bidder_number = "test@user"
         special_tos = AuctionTOS.objects.create(
-            user=self.user,
+            user=self.user_who_does_not_join,
             auction=self.online_auction,
             pickup_location=self.location,
             bidder_number=special_bidder_number,
@@ -9316,7 +9339,7 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
         """Test that slash removal prevents creating duplicate bidder_numbers"""
         # Create a TOS with bidder_number "user123"
         existing_tos = AuctionTOS.objects.create(
-            user=self.user,
+            user=self.user_who_does_not_join,
             auction=self.online_auction,
             pickup_location=self.location,
             bidder_number="user123",
@@ -9324,8 +9347,9 @@ class AuctionNoShowURLEncodingTest(StandardTestCase):
         )
 
         # Try to create another TOS with bidder_number "user/123" which would become "user123" after cleaning
+        fresh_user = User.objects.create_user(username="fresh_noshow_user", password="testpassword")
         new_tos = AuctionTOS.objects.create(
-            user=self.user_with_no_lots,
+            user=fresh_user,
             auction=self.online_auction,
             pickup_location=self.location,
             bidder_number="user/123",
@@ -10211,3 +10235,119 @@ class AuctionHistoryTestCase(StandardTestCase):
         # Verify history was created
         history_count = AuctionHistory.objects.filter(auction=auction, action="Test action").count()
         self.assertEqual(history_count, 1)
+
+
+class MergeAuctionTOSTests(StandardTestCase):
+    """Test duplicate AuctionTOS detection and merging"""
+
+    def setUp(self):
+        super().setUp()
+        # Give online_tos a real email so duplicate checks work
+        AuctionTOS.objects.filter(pk=self.online_tos.pk).update(email="canonical@example.com")
+        self.online_tos.refresh_from_db()
+        # Use a DIFFERENT email so save() doesn't auto-merge this duplicate on creation
+        # (these tests exercise the explicit merge_duplicate() method, not the auto-merge)
+        self.duplicate_tos = AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            manually_added=True,
+            email="duplicate@example.com",
+            name="Duplicate User",
+        )
+
+    def test_merge_duplicate_moves_won_lots(self):
+        """Merging should reassign won lots from duplicate to canonical TOS"""
+        lot = Lot.objects.create(
+            lot_name="Won lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            auctiontos_winner=self.duplicate_tos,
+            quantity=1,
+            winning_price=5,
+            active=False,
+        )
+        self.online_tos.merge_duplicate(self.duplicate_tos)
+        lot.refresh_from_db()
+        self.assertEqual(lot.auctiontos_winner, self.online_tos)
+
+    def test_merge_duplicate_moves_sold_lots(self):
+        """Merging should reassign sold lots from duplicate to canonical TOS"""
+        lot = Lot.objects.create(
+            lot_name="Sold lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.duplicate_tos,
+            quantity=1,
+            active=False,
+        )
+        self.online_tos.merge_duplicate(self.duplicate_tos)
+        lot.refresh_from_db()
+        self.assertEqual(lot.auctiontos_seller, self.online_tos)
+
+    def test_merge_duplicate_moves_invoice_adjustments(self):
+        """Merging should move InvoiceAdjustments from duplicate's invoice to canonical invoice"""
+        duplicate_invoice = Invoice.objects.create(
+            auctiontos_user=self.duplicate_tos,
+            auction=self.online_auction,
+        )
+        adjustment = InvoiceAdjustment.objects.create(
+            invoice=duplicate_invoice,
+            adjustment_type="DISCOUNT",
+            amount=10,
+            notes="Test adjustment",
+        )
+        self.online_tos.merge_duplicate(self.duplicate_tos)
+        adjustment.refresh_from_db()
+        canonical_invoice = Invoice.objects.filter(auctiontos_user=self.online_tos).first()
+        self.assertEqual(adjustment.invoice, canonical_invoice)
+
+    def test_merge_duplicate_creates_invoice_if_missing(self):
+        """Merging should create an invoice for canonical TOS if it doesn't exist"""
+        # Remove existing invoice if present
+        Invoice.objects.filter(auctiontos_user=self.online_tos).delete()
+        self.online_tos.merge_duplicate(self.duplicate_tos)
+        invoice = Invoice.objects.filter(auctiontos_user=self.online_tos).first()
+        self.assertIsNotNone(invoice)
+
+    def test_merge_duplicate_deletes_duplicate(self):
+        """Merging should delete the duplicate AuctionTOS"""
+        duplicate_pk = self.duplicate_tos.pk
+        self.online_tos.merge_duplicate(self.duplicate_tos)
+        self.assertFalse(AuctionTOS.objects.filter(pk=duplicate_pk).exists())
+
+    def test_merge_duplicate_creates_auction_history(self):
+        """Merging should create an AuctionHistory entry attributed to system"""
+        initial_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").count()
+        self.online_tos.merge_duplicate(self.duplicate_tos)
+        new_count = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").count()
+        self.assertEqual(new_count, initial_count + 1)
+        history = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="USERS").latest("timestamp")
+        self.assertIsNone(history.user)
+        self.assertIn("Merged", history.action)
+        self.assertIn(self.duplicate_tos.bidder_number, history.action)
+
+    def test_admin_add_rejects_duplicate_email(self):
+        """Adding a user via admin form with an existing email should make the form invalid"""
+        self.client.login(username="admin_user", password="testpassword")
+        initial_count = AuctionTOS.objects.filter(auction=self.online_auction).count()
+        url = reverse("auctiontosadmin", kwargs={"pk": self.online_auction.slug})
+        response = self.client.post(
+            url,
+            {
+                "name": "Duplicate Name",
+                "email": self.online_tos.email,
+                "pickup_location": self.location.pk,
+                "bidder_number": "",
+                "phone_number": "",
+                "address": "",
+                "is_admin": False,
+                "bidding_allowed": True,
+                "selling_allowed": True,
+                "is_club_member": False,
+                "memo": "",
+            },
+        )
+        # Form should be invalid — no new TOS created
+        new_count = AuctionTOS.objects.filter(auction=self.online_auction).count()
+        self.assertEqual(new_count, initial_count)
+        # Response should not be a redirect
+        self.assertNotEqual(response.status_code, 302)

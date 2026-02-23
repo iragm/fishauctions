@@ -3076,7 +3076,22 @@ class AuctionTOS(models.Model):
                 user=None,  # System change
             )
 
-        duplicate_instance = self.auction.find_user(name=self.name, email=self.email, exclude_pk=self.pk)
+        # Check for an exact email duplicate in this auction and merge immediately
+        if self.email:
+            email_duplicate = (
+                AuctionTOS.objects.filter(auction=self.auction, email=self.email)
+                .exclude(pk=self.pk)
+                .order_by("createdon")
+                .first()
+            )
+            if email_duplicate:
+                # Keep the older record; merge self (the newer) into it.
+                # merge_duplicate() preserves any non-empty fields (including user) from self onto email_duplicate.
+                email_duplicate.merge_duplicate(self, reason="same email")
+                return
+
+        # Flag name-based fuzzy matches as possible duplicates for admin review (no auto-merge)
+        duplicate_instance = self.auction.find_user(name=self.name, email="", exclude_pk=self.pk)
         if duplicate_instance:
             # using update here avoids recursion because update does not call save()
             AuctionTOS.objects.filter(pk=self.pk).update(possible_duplicate=duplicate_instance.pk)
@@ -3087,6 +3102,19 @@ class AuctionTOS(models.Model):
                 # remove ourselves from the duplicate if it was previously set
                 AuctionTOS.objects.filter(pk=self.possible_duplicate.pk).update(possible_duplicate=None)
                 AuctionTOS.objects.filter(pk=self.pk).update(possible_duplicate=None)
+
+        # If the same user already has another AuctionTOS in this auction, keep the older one
+        # and merge the newer one (self) into it to prevent duplicates from race conditions or signal re-attaches.
+        if self.user:
+            existing = (
+                AuctionTOS.objects.filter(user=self.user, auction=self.auction)
+                .exclude(pk=self.pk)
+                .order_by("createdon")
+                .first()
+            )
+            if existing:
+                existing.merge_duplicate(self, reason="same user account")
+                return
 
         if self.user:
             related_campaign = (
@@ -3127,6 +3155,54 @@ class AuctionTOS(models.Model):
     class Meta:
         verbose_name = "User in auction"
         verbose_name_plural = "Users in auction"
+
+    def merge_duplicate(self, duplicate, reason="same email", user=None):
+        """Merge a duplicate AuctionTOS into self (self should be the older/canonical record).
+        Moves all won lots, sold lots, invoice adjustments, and payments from duplicate onto self's invoice,
+        preserves any non-empty fields from duplicate that are missing on self,
+        creates an AuctionHistory entry, then deletes the duplicate.
+        Pass user=request.user when this is triggered by an admin action.
+        """
+        if duplicate == self:
+            msg = "Cannot merge an AuctionTOS record with itself."
+            raise ValueError(msg)
+        if duplicate.auction != self.auction:
+            msg = "Cannot merge AuctionTOS records from different auctions."
+            raise ValueError(msg)
+        # Preserve non-empty fields from duplicate onto self where self has no value.
+        # Explicit None/"" check rather than `not self_val` to avoid unexpected falsy matches.
+        fields_to_preserve = ["user", "name", "email", "memo", "address", "phone_number", "bidder_number"]
+        updates = {}
+        for field in fields_to_preserve:
+            self_val = getattr(self, field, None)
+            dup_val = getattr(duplicate, field, None)
+            if (self_val is None or self_val == "") and dup_val:
+                updates[field] = dup_val
+                setattr(self, field, dup_val)
+        if updates:
+            AuctionTOS.objects.filter(pk=self.pk).update(**updates)
+        # Move won lots to self
+        Lot.objects.filter(auctiontos_winner=duplicate).update(auctiontos_winner=self)
+        # Move sold lots to self
+        Lot.objects.filter(auctiontos_seller=duplicate).update(auctiontos_seller=self)
+        # Get or create an invoice for self
+        invoice = Invoice.objects.filter(auctiontos_user=self).first()
+        if not invoice:
+            invoice = Invoice.objects.create(auctiontos_user=self, auction=self.auction)
+        # Move invoice adjustments and payments from duplicate's invoice to self's invoice
+        duplicate_invoice = Invoice.objects.filter(auctiontos_user=duplicate).first()
+        if duplicate_invoice:
+            InvoiceAdjustment.objects.filter(invoice=duplicate_invoice).update(invoice=invoice)
+            InvoicePayment.objects.filter(invoice=duplicate_invoice).update(invoice=invoice)
+        invoice.recalculate()
+        # Create auction history entry
+        self.auction.create_history(
+            applies_to="USERS",
+            action=f"Merged {duplicate.name} (bidder #{duplicate.bidder_number}) into {self.name} (bidder #{self.bidder_number}): {reason}",
+            user=user,
+        )
+        # Delete the duplicate (cascades to delete its now-empty invoice)
+        duplicate.delete()
 
     @property
     def closest_location_for_this_user(self):
