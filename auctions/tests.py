@@ -1024,6 +1024,27 @@ class InvoiceModelTests(StandardTestCase):
         self.adjustment_discount_percent.save()
         assert self.invoiceB.net == -37.5
 
+    def test_invoice_adjustment_display(self):
+        """Adjustment display signs should match arithmetic effect on the final total.
+        For buyer invoices: DISCOUNT shows as negative (reduces bill), ADD shows as positive (adds to bill).
+        For seller invoices: ADD shows as negative (deduction from payout), DISCOUNT shows as positive (credit).
+        """
+        # Buyer invoice (invoiceB has subtotal = -30, i.e. the user owes money)
+        assert self.invoiceB.subtotal == -30
+        assert self.adjustment_discount.display == "-$10.00"  # discount reduces buyer's bill
+        assert self.adjustment_add.display == "$10.00"  # charge extra adds to buyer's bill
+
+        # Seller invoice (invoice has subtotal = 6.5, i.e. the club pays the seller)
+        assert self.invoice.subtotal == Decimal("6.5")
+        seller_add = InvoiceAdjustment.objects.create(
+            adjustment_type="ADD", amount=5, notes="fee", invoice=self.invoice
+        )
+        seller_discount = InvoiceAdjustment.objects.create(
+            adjustment_type="DISCOUNT", amount=3, notes="bonus", invoice=self.invoice
+        )
+        assert seller_add.display == "-$5.00"  # charge extra deducts from seller's payout
+        assert seller_discount.display == "$3.00"  # discount adds a credit to seller's payout
+
 
 class InvoiceCreateViewTests(StandardTestCase):
     """Test invoice creation view"""

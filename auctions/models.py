@@ -5526,10 +5526,21 @@ class InvoiceAdjustment(models.Model):
 
     @property
     def display(self):
-        """for templates"""
+        """for templates.
+        For seller invoices (positive subtotal): ADD shows as negative (deduction from payout),
+        DISCOUNT shows as positive (credit added to payout).
+        For buyer invoices (negative subtotal): DISCOUNT shows as negative (reduces bill),
+        ADD shows as positive (adds to bill).
+        This ensures the displayed sign matches the arithmetic effect on the final total.
+        """
         result = ""
-        if self.adjustment_type in ["DISCOUNT", "DISCOUNT_PERCENT"]:
-            result += "-"
+        is_seller_invoice = self.invoice and self.invoice.subtotal >= 0
+        if is_seller_invoice:
+            if self.adjustment_type in ["ADD", "ADD_PERCENT"]:
+                result += "-"
+        else:
+            if self.adjustment_type in ["DISCOUNT", "DISCOUNT_PERCENT"]:
+                result += "-"
         if self.adjustment_type in ["ADD", "DISCOUNT"]:
             # Get currency symbol from the invoice
             currency_symbol = self.invoice.currency_symbol if self.invoice else "$"
