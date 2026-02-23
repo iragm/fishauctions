@@ -8151,14 +8151,34 @@ class AdminUserSignups(AdminOnlyViewMixin, TemplateView):
 
     template_name = "dashboard_user_signups.html"
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        days_param = self.request.GET.get("days", "")
+        try:
+            days = int(days_param)
+        except (ValueError, TypeError):
+            days = None
+        context["days"] = days
+        return context
+
 
 class AdminUserSignupsJSON(AdminOnlyViewMixin, BaseLineChartView):
     """JSON data for cumulative user signups chart, aggregated by month"""
 
     def dispatch(self, request, *args, **kwargs):
-        earliest = User.objects.order_by("date_joined").values_list("date_joined", flat=True).first()
+        days_param = self.request.GET.get("days", "")
+        try:
+            days = int(days_param)
+        except (ValueError, TypeError):
+            days = None
         self._end = timezone.now().date()
-        self._start = earliest.date() if earliest else self._end
+        if days:
+            self._start = (timezone.now() - timedelta(days=days)).date()
+        else:
+            earliest = User.objects.order_by("date_joined").values_list("date_joined", flat=True).first()
+            self._start = earliest.date() if earliest else self._end
+        # count users that already existed before _start (cumulative offset)
+        self._initial_count = User.objects.filter(date_joined__date__lt=self._start).count()
         return super().dispatch(request, *args, **kwargs)
 
     def _monthly_dates(self):
@@ -8182,14 +8202,15 @@ class AdminUserSignupsJSON(AdminOnlyViewMixin, BaseLineChartView):
 
     def get_data(self):
         monthly_counts = (
-            User.objects.annotate(join_month=TruncMonth("date_joined"))
+            User.objects.filter(date_joined__date__gte=self._start)
+            .annotate(join_month=TruncMonth("date_joined"))
             .values("join_month")
             .annotate(count=Count("pk"))
             .order_by("join_month")
         )
         month_counts = {item["join_month"].date(): item["count"] for item in monthly_counts}
         cumulative = []
-        running_total = 0
+        running_total = self._initial_count
         for month_date in self._monthly_dates():
             running_total += month_counts.get(month_date, 0)
             cumulative.append(running_total)

@@ -2,11 +2,11 @@
 {% block title %} User signups {% endblock %}
 {% load static %}
 {% block content %}
-<h3>Cumulative user signups over time</h3>
+<h3>Cumulative user signups over time{% if days %} (last {{ days }} days){% endif %}</h3>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.3/dist/Chart.min.js"></script>
 <canvas id="signups_chart" width="500" height="400"></canvas>
 <script type="text/javascript">
-  $.get('{% url "admin_user_signups_json" %}', function(data) {
+  $.get('{% url "admin_user_signups_json" %}{% if days %}?days={{ days }}{% endif %}', function(data) {
     var ctx = $("#signups_chart").get(0).getContext("2d");
     new Chart(ctx, {
       type: 'line', data: data
