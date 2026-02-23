@@ -108,7 +108,7 @@
             <br><b>Bought to sold ratio (higher is a seller):</b> {{ data.bought_to_sold|floatformat:2}}<br>
             <b>Viewed to bid ratio (lower number is a tire kicker):</b> {{ data.bid_to_view|floatformat:2}}<br>
             <b>Viewed to sold ratio (higher number indicates more selling):</b> {{ data.viewed_to_sold|floatformat:2}}<br>
-            <script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.3/dist/Chart.min.js"></script>
+            <script src="{% static 'js/vendor/Chart.min.js' %}"></script>
             <canvas id="myChart" ></canvas>
             <script>
                 $.ajax({

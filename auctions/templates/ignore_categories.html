@@ -3,9 +3,9 @@
 {% load static %}
 {% block extra_js %}
 <script type='text/javascript'>pageView();</script>
-<link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.0/css/select2.css">
-<link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/select2-bootstrap-theme/0.1.0-beta.10/select2-bootstrap.min.css">
-<script src="//cdnjs.cloudflare.com/ajax/libs/select2/4.0.0/js/select2.js"></script>
+<link rel="stylesheet" type="text/css" href="{% static 'css/vendor/select2.min.css' %}">
+<link rel="stylesheet" type="text/css" href="{% static 'css/vendor/select2-bootstrap.min.css' %}">
+<script src="{% static 'js/vendor/select2.min.js' %}"></script>
 <script>
 $(document).ready(function() {
     $("#category-selection").select2({

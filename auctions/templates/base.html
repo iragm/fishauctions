@@ -55,15 +55,10 @@ window.onload = function() {
         {# Global javascript #}
 
         {% block core_js %}
-        <script type="text/javascript" src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+        <script type="text/javascript" src="{% static 'js/vendor/jquery.min.js' %}"></script>
         {# 3.5.1 needed for focus to go to select2 dropdowns https://github.com/select2/select2/issues/5993 #}
-        <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.11.0/umd/popper.min.js"></script>
-        <!-- <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/js/bootstrap.min.js"></script> -->
-        <!-- <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootswatch@4.5.2/dist/cerulean/bootstrap.min.css" integrity="sha384-3fdgwJw17Bi87e1QQ4fsLn4rUFqWw//KU0g8TvV6quvahISRewev6/EocKNuJmEw" crossorigin="anonymous"> -->
-
-
-        <!-- <link rel="stylesheet" href="https://bootswatch.com/5/darkly/bootstrap.css" integrity="" crossorigin="anonymous"> -->
-        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
+        <script type="text/javascript" src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
+        {# Bootstrap bundle includes Popper.js, no need to load separately #}
         {% endblock %}
         <script type="text/javascript" src="{% static 'js/auction_site.js' %}"></script>
         {% include 'base_page_view.html' %}
@@ -87,10 +82,9 @@ window.onload = function() {
         </script>
         {% endif %}
         {# Global stylesheets #}
-        <!-- <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}" integrity="" crossorigin="anonymous"> -->
         {% block core_css %}
-        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootswatch@5.3.3/dist/darkly/bootstrap.min.css" integrity="" >
-        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+        <link rel="stylesheet" href="{% static 'css/vendor/bootstrap.min.css' %}">
+        <link rel="stylesheet" href="{% static 'css/vendor/bootstrap-icons.min.css' %}">
         {% endblock %}
         <link rel="stylesheet" type="text/css" href="{% static 'css/auction_site.css' %}">
         <style>

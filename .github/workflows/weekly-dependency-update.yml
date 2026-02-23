@@ -37,6 +37,11 @@ jobs:
           chmod +x .github/scripts/update-packages.sh
           ./.github/scripts/update-packages.sh --upgrade
 
+      - name: Update vendor resources
+        run: |
+          chmod +x download_vendor_resources.sh
+          ./download_vendor_resources.sh
+
       - name: Create Pull Request
         id: cpr
         uses: peter-evans/create-pull-request@v6
@@ -49,6 +54,7 @@ jobs:
             ## Changes
             - Updated `requirements.txt` with latest compatible versions
             - Updated `requirements-test.txt` with latest compatible versions
+            - Updated vendor JavaScript and CSS libraries to latest versions
 
             Please review the changes and ensure all tests pass before merging.
           branch: "auto/update-deps"

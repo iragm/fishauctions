@@ -1,10 +1,11 @@
 #!/bin/bash
-# Download script for self-hosted resources required for voice recognition
-# This enables cross-origin isolation for SharedArrayBuffer support
+# Download script for self-hosted vendor resources (JavaScript libraries, CSS frameworks, etc.)
+# This script downloads all external dependencies to enable self-hosting and avoid CDN dependencies
+# Run this script when setting up the project or to update vendor libraries to their latest versions
 
 set -e  # Exit on error
 
-echo "Downloading self-hosted resources for voice recognition..."
+echo "Downloading self-hosted vendor resources..."
 echo "======================================================================"
 
 # Navigate to project root
@@ -77,20 +78,46 @@ fi
 echo "✓ Font paths updated"
 
 echo ""
+echo "8. Downloading Select2 4.0.13..."
+curl -L -o auctions/static/css/vendor/select2.min.css \
+  "https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/css/select2.min.css"
+echo "✓ select2.min.css downloaded"
+
+curl -L -o auctions/static/js/vendor/select2.min.js \
+  "https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/js/select2.min.js"
+echo "✓ select2.min.js downloaded"
+
+echo ""
+echo "9. Downloading Select2 Bootstrap theme..."
+curl -L -o auctions/static/css/vendor/select2-bootstrap.min.css \
+  "https://cdnjs.cloudflare.com/ajax/libs/select2-bootstrap-theme/0.1.0-beta.10/select2-bootstrap.min.css"
+echo "✓ select2-bootstrap.min.css downloaded"
+
+echo ""
+echo "10. Downloading Chart.js 2.9.3..."
+curl -L -o auctions/static/js/vendor/Chart.min.js \
+  "https://cdn.jsdelivr.net/npm/chart.js@2.9.3/dist/Chart.min.js"
+echo "✓ Chart.min.js downloaded"
+
+# Note: Popper.js is included in Bootstrap 5.3.3 bundle, no need to download separately
+# Note: Bootstrap 4.5.2 is not needed - all templates now use Bootstrap 5.3.3
+# Note: jQuery 3.6.1 is not needed - all templates use jQuery 3.5.1
+
+echo ""
 echo "======================================================================"
 echo "All resources downloaded successfully!"
 echo ""
 echo "Next steps:"
 echo "1. Run: docker exec -it django python3 manage.py collectstatic --no-input"
 echo "2. Run: docker compose restart web nginx"
-echo "3. Test the voice recognition feature"
+echo "3. Test the application with self-hosted resources"
 echo ""
 echo "Downloaded files:"
 ls -lh auctions/static/js/vendor/
 ls -lh auctions/static/css/vendor/
-ls -lh auctions/static/fonts/bootstrap-icons.*
+ls -lh auctions/static/fonts/bootstrap-icons.* 2>/dev/null || true
 echo ""
 echo "Total size:"
 du -sh auctions/static/js/vendor/
 du -sh auctions/static/css/vendor/
-du -sh auctions/static/fonts/
+du -sh auctions/static/fonts/ 2>/dev/null || true
