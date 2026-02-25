@@ -4406,8 +4406,7 @@ class LotValidation(LoginRequiredMixin):
         userData = request.user.userdata
         if not userData.address or not request.user.first_name or not request.user.last_name:
             messages.error(self.request, "Please fill out your contact info before creating a lot")
-            return redirect("/contact_info?next=/lots/new/")
-            # return redirect(reverse("contact_info"))
+            return redirect("/contact_info?" + urlencode({"next": request.get_full_path()}))
         return super().dispatch(request, *args, **kwargs)
 
     def form_valid(self, form, **kwargs):
@@ -4555,6 +4554,17 @@ class LotCreateView(LotValidation, CreateView):
                 )
 
         return context
+
+    def get_initial(self):
+        """Pre-fill form fields from GET params. Any field in the form can be set this way.
+        The 'auction' param is handled separately in dispatch() and 'cloned_from' in get_form_kwargs()."""
+        initial = super().get_initial()
+        exclude = {"auction", "cloned_from"}
+        form_fields = set(self.form_class.Meta.fields) | set(self.form_class.declared_fields)
+        for key, value in self.request.GET.items():
+            if key in form_fields and key not in exclude:
+                initial[key] = value
+        return initial
 
     def form_valid(self, form, **kwargs):
         """When a new lot is created, make sure to create an invoice for the seller"""

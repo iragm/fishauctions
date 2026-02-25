@@ -3130,6 +3130,92 @@ class LotCreateViewTests(StandardTestCase):
         response = self.client.get(f"/lots/new/?auction={self.online_auction.slug}")
         assert response.status_code == 302
 
+    def test_anonymous_get_params_preserved_in_login_redirect(self):
+        """Anonymous users should have GET params preserved in the login redirect"""
+        response = self.client.get("/lots/new/?lot_name=TestFish&quantity=3")
+        assert response.status_code == 302
+        # The next parameter should include the full path with query params
+        redirect_url = response["Location"]
+        assert "lot_name=TestFish" in redirect_url or "%3Flot_name%3DTestFish" in redirect_url
+
+    def test_contact_info_redirect_preserves_get_params(self):
+        """If a user needs to fill out contact info, GET params should be preserved"""
+        # user_who_does_not_join has no contact info set
+        self.client.login(username=self.user_who_does_not_join.username, password="testpassword")
+        response = self.client.get("/lots/new/?lot_name=TestFish&quantity=3")
+        assert response.status_code == 302
+        redirect_url = response["Location"]
+        # Should redirect to contact_info and preserve the full path with GET params
+        assert "/contact_info" in redirect_url
+        assert "lots%2Fnew" in redirect_url or "lots/new" in redirect_url
+
+    def test_get_params_set_form_initial_values(self):
+        """GET params matching form fields should set form initial values on the create form"""
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        # Set up user with contact info
+        self.user.first_name = "Test"
+        self.user.last_name = "User"
+        self.user.save()
+        user_data = UserData.objects.get(user=self.user)
+        user_data.address = "123 Test St"
+        user_data.save()
+        # Create an open auction
+        open_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Open auction",
+            is_online=True,
+            date_end=theFuture,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            lot_submission_end_date=theFuture,
+            winning_bid_percent_to_club=25,
+        )
+        open_location = PickupLocation.objects.create(name="open location", auction=open_auction, pickup_time=theFuture)
+        AuctionTOS.objects.create(user=self.user, auction=open_auction, pickup_location=open_location)
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get(f"/lots/new/?auction={open_auction.slug}&lot_name=TestFish&quantity=5&donation=true")
+        assert response.status_code == 200
+        form = response.context["form"]
+        assert form.initial.get("lot_name") == "TestFish"
+        assert form.initial.get("quantity") == "5"
+
+    def test_get_params_not_applied_to_edit_form(self):
+        """GET params should not be applied to the lot edit form"""
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        # Set up user with contact info
+        self.user.first_name = "Test"
+        self.user.last_name = "User"
+        self.user.save()
+        user_data = UserData.objects.get(user=self.user)
+        user_data.address = "123 Test St"
+        user_data.save()
+        # Create an open auction with an editable lot
+        open_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Open auction edit test",
+            is_online=True,
+            date_end=theFuture,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            lot_submission_end_date=theFuture,
+            winning_bid_percent_to_club=25,
+        )
+        open_location = PickupLocation.objects.create(name="edit location", auction=open_auction, pickup_time=theFuture)
+        test_tos = AuctionTOS.objects.create(user=self.user, auction=open_auction, pickup_location=open_location)
+        editable_lot = Lot.objects.create(
+            lot_name="Original Name",
+            auction=open_auction,
+            auctiontos_seller=test_tos,
+            quantity=1,
+            user=self.user,
+        )
+        self.client.login(username=self.user.username, password="testpassword")
+        url = reverse("edit_lot", kwargs={"pk": editable_lot.pk})
+        response = self.client.get(f"{url}?lot_name=HackedName")
+        assert response.status_code == 200
+        form = response.context["form"]
+        # The form should show the existing lot name, not the GET param
+        assert form.initial.get("lot_name") != "HackedName"
+        assert form.instance.lot_name == "Original Name"
+
 
 class InvoiceViewTests(StandardTestCase):
     """Test invoice views with different user types"""
