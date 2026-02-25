@@ -142,7 +142,7 @@ box-shadow: 0px 0px 1px 2px rgba(238, 59, 59, 0.281),
         {% if not lot.auction.ended and lot.sold %}<h1 class='text-danger font-weight-bold' style="position: absolute;-ms-transform: rotate(-20deg);transform: rotate(-20deg);">SOLD</h1>{%endif%}
           {% if lot.thumbnail %}
           <div class="lot-thumbnail-container">
-            <img class="card-img-top" src="{{ lot.thumbnail.image.lot_list.url }}" style="max-width:100%;"></img>
+            <img class="card-img-top" src="{% if lot.thumbnail.image %}{{ lot.thumbnail.image.lot_list.url }}{% else %}{{ lot.thumbnail.url }}{% endif %}" style="max-width:100%;"></img>
             {% if request.user.is_authenticated %}
               {% if lot.is_watched_by_req_user or not lot.ended %}
               <div class="watch-icon-overlay">

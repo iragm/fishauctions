@@ -1551,6 +1551,7 @@ class CreateImageForm(forms.ModelForm):
         model = LotImage
         fields = [
             "image",
+            "url",
             "image_source",
             "caption",
         ]
@@ -1568,6 +1569,7 @@ class CreateImageForm(forms.ModelForm):
         self.helper.form_tag = True
         self.helper.layout = Layout(
             "image",
+            "url",
             Div(
                 Div(
                     "image_source",
@@ -1581,6 +1583,15 @@ class CreateImageForm(forms.ModelForm):
             ),
             Submit("submit", "Save", css_class="create-update-image btn-success"),
         )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        image = cleaned_data.get("image")
+        url = cleaned_data.get("url")
+        if not image and not url:
+            msg = "Please either upload an image or provide a URL."
+            raise forms.ValidationError(msg)
+        return cleaned_data
 
 
 class CreateAuctionForm(forms.ModelForm):
@@ -2189,6 +2200,7 @@ class CreateLotForm(forms.ModelForm):
             "run_duration",
             "custom_checkbox",
             "custom_field_1",
+            "image_url",
         )
         exclude = ["user", "image", "image_source"]
         widgets = {
@@ -2196,6 +2208,7 @@ class CreateLotForm(forms.ModelForm):
             # 'species': forms.HiddenInput(),
             # 'cloned_from': forms.HiddenInput(),
             "shipping_locations": forms.CheckboxSelectMultiple(),
+            "image_url": forms.HiddenInput(),
         }
 
     def __init__(self, *args, **kwargs):
@@ -2322,6 +2335,7 @@ class CreateLotForm(forms.ModelForm):
             # ),
             # HTML("</span><span id='details_selection'><h4>Details</h4><br>"),
             "cloned_from",
+            "image_url",
             Div(
                 Div(
                     "part_of_auction",

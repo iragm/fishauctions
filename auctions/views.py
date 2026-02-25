@@ -80,7 +80,6 @@ from django.views.generic.edit import (
 from django_filters.views import FilterView
 from django_tables2 import SingleTableMixin
 from django_weasyprint import WeasyTemplateResponseMixin
-from easy_thumbnails.files import get_thumbnailer
 from el_pagination.views import AjaxListView
 from PIL import Image
 from pytz import timezone as pytz_timezone
@@ -4190,7 +4189,9 @@ class ViewLot(DetailView):
         if lot.auction and lot.auction.is_online and lot.sold:
             if context["is_auction_admin"] or self.request.user == lot.user:
                 context["show_exchange_info"] = True
-        context["show_image_add_button"] = lot.image_permission_check(self.request.user)
+        context["show_image_add_button"] = lot.image_permission_check(self.request.user) and not lot.use_images_from
+        if lot.use_images_from and lot.image_permission_check(self.request.user):
+            context["images_managed_from_lot"] = lot.use_images_from
         # chat subscription stuff
         if self.request.user.is_authenticated:
             context["show_chat_subscriptions_checkbox"] = True
@@ -4258,7 +4259,7 @@ class ViewLotSimple(ViewLot, AuctionViewMixin):
                             "tag": f"lot_sell_notification_{lot.pk}",
                         }
                         if lot.thumbnail:
-                            payload["icon"] = lot.thumbnail.image.url
+                            payload["icon"] = lot.thumbnail.display_url
                         send_user_notification(user=watch.user, payload=payload, ttl=10000)
         return context
 
@@ -4474,25 +4475,22 @@ class LotValidation(LoginRequiredMixin):
             # this is a new lot
             lot.added_by = self.request.user
             lot.save()
-            # if this was cloned from another lot, get the images from that lot
+            # if cloned from another lot, reassign its images to the new lot and set the original to reference the new lot for images
             if form.cleaned_data["cloned_from"]:
                 try:
                     originalLot = Lot.objects.get(pk=form.cleaned_data["cloned_from"], is_deleted=False)
                     if (originalLot.user.pk == self.request.user.pk) or self.request.user.is_superuser:
                         originalImages = LotImage.objects.filter(lot_number=originalLot.lot_number)
                         for originalImage in originalImages:
-                            newImage = LotImage.objects.create(
-                                createdon=originalImage.createdon,
-                                lot_number=lot,
-                                image_source=originalImage.image_source,
-                                is_primary=originalImage.is_primary,
-                            )
-                            newImage.image = get_thumbnailer(originalImage.image)
                             # if the original lot sold, this picture sure isn't of the actual item
                             if originalLot.winner and originalImage.image_source == "ACTUAL":
-                                newImage.image_source = "REPRESENTATIVE"
-                            newImage.save()
-                        # we are only cloning images here, not watchers, views, or other related models
+                                originalImage.image_source = "REPRESENTATIVE"
+                            originalImage.lot_number = lot
+                            originalImage.save()
+                        # point the original lot to use images from the new lot
+                        originalLot.use_images_from = lot
+                        originalLot.save()
+                        # we only reassign images here; watchers, views, and other related models remain with the original lot
                 except Exception as e:
                     logger.exception(e)
             msg = "Created lot! "
@@ -4503,6 +4501,17 @@ class LotValidation(LoginRequiredMixin):
                 self.request,
                 msg,
             )
+        # if image_url is set, add an image to the lot using this URL, then clear the field
+        image_url = form.cleaned_data.get("image_url")
+        if image_url:
+            LotImage.objects.create(
+                lot_number=lot,
+                url=image_url,
+                is_primary=not lot.image_count,
+                image_source="RANDOM",
+            )
+            lot.image_url = None
+            lot.save(update_fields=["image_url"])
         return super().form_valid(form)
 
     def get_form_kwargs(self, *args, **kwargs):

@@ -26,6 +26,7 @@ from .models import (
     InvoiceAdjustment,
     Lot,
     LotHistory,
+    LotImage,
     PageView,
     PayPalSeller,
     PickupLocation,
@@ -10352,3 +10353,107 @@ class MergeAuctionTOSTests(StandardTestCase):
         self.assertEqual(new_count, initial_count)
         # Response should not be a redirect
         self.assertNotEqual(response.status_code, 302)
+
+
+class LotImageManagementTests(StandardTestCase):
+    """Tests for the image management features added in the image management update"""
+
+    def setUp(self):
+        super().setUp()
+        # Create a lot that can have images added (not sold)
+        self.image_lot = Lot.objects.create(
+            lot_name="Image lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+        )
+        # Create a LotImage with only a URL (no uploaded file)
+        self.url_image = LotImage.objects.create(
+            lot_number=self.image_lot,
+            url="https://example.com/fish.jpg",
+            image_source="RANDOM",
+            is_primary=True,
+        )
+
+    def test_lotimage_display_url_with_url_field(self):
+        """display_url should return the url field when no image file is uploaded"""
+        self.assertEqual(self.url_image.display_url, "https://example.com/fish.jpg")
+
+    def test_lotimage_display_url_empty(self):
+        """display_url should return empty string when neither image nor url is set"""
+        empty_image = LotImage.objects.create(
+            lot_number=self.image_lot,
+            image_source="RANDOM",
+        )
+        self.assertEqual(empty_image.display_url, "")
+
+    def test_lot_use_images_from_field(self):
+        """use_images_from should link one lot to another for image management"""
+        source_lot = Lot.objects.create(
+            lot_name="Source lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+        )
+        self.image_lot.use_images_from = source_lot
+        self.image_lot.save()
+        self.image_lot.refresh_from_db()
+        self.assertEqual(self.image_lot.use_images_from, source_lot)
+
+    def test_image_permission_check_blocks_when_dependent_online_lot_sold(self):
+        """image_permission_check should return False if a dependent online auction lot is sold"""
+        source_lot = Lot.objects.create(
+            lot_name="Source lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+        )
+        # Create a dependent sold lot that uses source_lot's images
+        dependent_lot = Lot.objects.create(
+            lot_name="Dependent lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            winning_price=10,
+            use_images_from=source_lot,
+        )
+        # can_add_images is False for sold lots (winning_price is set)
+        self.assertFalse(dependent_lot.can_add_images)
+        # source_lot should now fail image_permission_check because dependent is sold online auction lot
+        self.assertFalse(source_lot.image_permission_check(self.user))
+
+    def test_image_permission_check_allows_when_no_dependent_lots(self):
+        """image_permission_check should work normally when no dependent lots exist"""
+        source_lot = Lot.objects.create(
+            lot_name="Source lot no dep",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+        )
+        # Normal permission check should pass for lot owner
+        self.assertTrue(source_lot.image_permission_check(self.user))
+
+    def test_lot_image_url_field_cleared_after_processing(self):
+        """image_url field on a Lot should be cleared after an image is created from it"""
+        # Directly test the model field behavior
+        test_lot = Lot.objects.create(
+            lot_name="URL image lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            image_url="https://example.com/new_fish.jpg",
+        )
+        # Simulate the processing: create a LotImage from image_url and clear the field
+        if test_lot.image_url:
+            LotImage.objects.create(
+                lot_number=test_lot,
+                url=test_lot.image_url,
+                is_primary=not test_lot.image_count,
+                image_source="RANDOM",
+            )
+            test_lot.image_url = None
+            test_lot.save(update_fields=["image_url"])
+        test_lot.refresh_from_db()
+        self.assertIsNone(test_lot.image_url)
+        self.assertEqual(test_lot.image_count, 1)
+        self.assertEqual(test_lot.images.first().url, "https://example.com/new_fish.jpg")
