@@ -3066,12 +3066,6 @@ class AuctionTOS(models.Model):
         else:
             needs_history = False
 
-        # Guard against a stale in-memory possible_duplicate_id that references a deleted row.
-        # The post-save code re-establishes this link via .update() (which bypasses this check),
-        # so clearing it here is always safe.
-        if self.possible_duplicate_id and not AuctionTOS.objects.filter(pk=self.possible_duplicate_id).exists():
-            self.possible_duplicate = None
-
         super().save(*args, **kwargs)
 
         # Create history entry after save (needs pk to exist)
