@@ -4561,27 +4561,33 @@ class LotCreateView(LotValidation, CreateView):
         initial = super().get_initial()
         exclude = {"auction", "cloned_from"}
         form_fields = set(self.form_class.Meta.fields) | set(self.form_class.declared_fields)
+        field_objects = getattr(self.form_class, "base_fields", {})
         # Identify checkbox-like fields so we can coerce their initial values properly
         checkbox_fields = {
             name
-            for name, field in getattr(self.form_class, "base_fields", {}).items()
+            for name, field in field_objects.items()
             if getattr(getattr(field, "widget", None), "input_type", None) == "checkbox"
         }
         true_values = {"1", "true", "yes", "on"}
         false_values = {"0", "false", "no", "off"}
-        for key, value in self.request.GET.items():
+        for key, values in self.request.GET.lists():
             if key in form_fields and key not in exclude:
-                if key in checkbox_fields:
-                    normalized = value.strip().lower()
+                field = field_objects.get(key)
+                if field is not None and getattr(field.widget, "allow_multiple_selected", False):
+                    initial[key] = values
+                elif key in checkbox_fields:
+                    # For checkbox fields, use the last value (multiple values shouldn't occur)
+                    normalized = values[-1].strip().lower() if values else ""
                     if normalized in true_values:
                         initial[key] = True
                     elif normalized in false_values:
                         initial[key] = False
                     else:
-                        # Fall back to the raw value to avoid changing behavior for unexpected tokens
-                        initial[key] = value
+                        initial[key] = values[-1] if values else ""
                 else:
-                    initial[key] = value
+                    # For single-value fields, last value wins (mirrors QueryDict.items() behavior)
+                    if values:
+                        initial[key] = values[-1]
         return initial
 
     def form_valid(self, form, **kwargs):

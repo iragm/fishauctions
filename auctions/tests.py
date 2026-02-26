@@ -3147,7 +3147,10 @@ class LotCreateViewTests(StandardTestCase):
         redirect_url = response["Location"]
         # Should redirect to contact_info and preserve the full path with GET params
         assert "/contact_info" in redirect_url
+        # Should preserve the full path including GET params
         assert "lots%2Fnew" in redirect_url or "lots/new" in redirect_url
+        assert "lot_name" in redirect_url
+        assert "quantity" in redirect_url
 
     def test_get_params_set_form_initial_values(self):
         """GET params matching form fields should set form initial values on the create form"""
