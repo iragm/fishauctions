@@ -3212,8 +3212,8 @@ class LotCreateViewTests(StandardTestCase):
         response = self.client.get(f"{url}?lot_name=HackedName")
         assert response.status_code == 200
         form = response.context["form"]
-        # The form should show the existing lot name, not the GET param
-        assert form.initial.get("lot_name") != "HackedName"
+        # The form should show the existing lot name, not be overridden by GET params
+        assert form["lot_name"].value() == "Original Name"
         assert form.instance.lot_name == "Original Name"
 
 
