@@ -1608,7 +1608,8 @@ class CreateImageForm(forms.ModelForm):
         url = cleaned_data.get("url")
         if not image and not url:
             msg = "Please either upload an image or provide a URL."
-            raise forms.ValidationError(msg)
+            self.add_error("image", msg)
+            self.add_error("url", msg)
         return cleaned_data
 
 
