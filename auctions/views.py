@@ -4406,7 +4406,7 @@ class LotValidation(LoginRequiredMixin):
         userData = request.user.userdata
         if not userData.address or not request.user.first_name or not request.user.last_name:
             messages.error(self.request, "Please fill out your contact info before creating a lot")
-            return redirect("/contact_info?" + urlencode({"next": request.get_full_path()}))
+            return redirect(f"{reverse('contact_info')}?{urlencode({'next': request.get_full_path()})}")
         return super().dispatch(request, *args, **kwargs)
 
     def form_valid(self, form, **kwargs):
