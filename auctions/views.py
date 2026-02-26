@@ -4406,8 +4406,7 @@ class LotValidation(LoginRequiredMixin):
         userData = request.user.userdata
         if not userData.address or not request.user.first_name or not request.user.last_name:
             messages.error(self.request, "Please fill out your contact info before creating a lot")
-            return redirect("/contact_info?next=/lots/new/")
-            # return redirect(reverse("contact_info"))
+            return redirect(f"{reverse('contact_info')}?{urlencode({'next': request.get_full_path()})}")
         return super().dispatch(request, *args, **kwargs)
 
     def form_valid(self, form, **kwargs):
@@ -4555,6 +4554,41 @@ class LotCreateView(LotValidation, CreateView):
                 )
 
         return context
+
+    def get_initial(self):
+        """Pre-fill form fields from GET params. Any field in the form can be set this way.
+        The 'auction' param is handled separately in dispatch() and 'cloned_from' in get_form_kwargs()."""
+        initial = super().get_initial()
+        exclude = {"auction", "cloned_from"}
+        form_fields = set(self.form_class.Meta.fields) | set(self.form_class.declared_fields)
+        field_objects = getattr(self.form_class, "base_fields", {})
+        # Identify checkbox-like fields so we can coerce their initial values properly
+        checkbox_fields = {
+            name
+            for name, field in field_objects.items()
+            if getattr(getattr(field, "widget", None), "input_type", None) == "checkbox"
+        }
+        true_values = {"1", "true", "yes", "on"}
+        false_values = {"0", "false", "no", "off"}
+        for key, values in self.request.GET.lists():
+            if key in form_fields and key not in exclude:
+                field = field_objects.get(key)
+                if field is not None and getattr(field.widget, "allow_multiple_selected", False):
+                    initial[key] = values
+                elif key in checkbox_fields:
+                    # For checkbox fields, use the last value (multiple values shouldn't occur)
+                    normalized = values[-1].strip().lower() if values else ""
+                    if normalized in true_values:
+                        initial[key] = True
+                    elif normalized in false_values:
+                        initial[key] = False
+                    else:
+                        initial[key] = values[-1] if values else ""
+                else:
+                    # For single-value fields, last value wins (mirrors QueryDict.items() behavior)
+                    if values:
+                        initial[key] = values[-1]
+        return initial
 
     def form_valid(self, form, **kwargs):
         """When a new lot is created, make sure to create an invoice for the seller"""
