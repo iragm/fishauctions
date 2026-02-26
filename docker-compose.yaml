@@ -84,7 +84,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 60
-      start_period: 120s
+      start_period: 30s # mariadb typically starts in under 60s; CI uses a separate 240s wait loop
 
   redis:
     container_name: redis
