@@ -3517,6 +3517,10 @@ class Lot(models.Model):
         User, null=True, blank=True, on_delete=models.SET_NULL, related_name="max_bid_revealed_by"
     )
     admin_validated = models.BooleanField(default=False)
+    # use_images_from allows a lot to delegate image management to another lot.
+    # When set, the `images` and `thumbnail` properties return images from the source lot.
+    # Note: lot copying (cloning) deep-copies images rather than using this field — it is
+    # primarily set/read for programmatic use (e.g. to show "images managed from" on the lot detail page).
     use_images_from = models.ForeignKey(
         "self",
         null=True,
@@ -4077,10 +4081,10 @@ class Lot(models.Model):
             return False
         if not user.is_authenticated:
             return False
-        # Check if any online auction lots using this lot's images have can_add_images=False (e.g., sold lots)
+        # Check if any auction lots using this lot's images have can_add_images=False (e.g., sold lots)
         dependent_lots = Lot.objects.filter(use_images_from=self, is_deleted=False)
         for dependent_lot in dependent_lots:
-            if dependent_lot.auction and dependent_lot.auction.is_online and not dependent_lot.can_add_images:
+            if dependent_lot.auction and not dependent_lot.can_add_images:
                 return False
         if self.user == user:
             return True
@@ -4714,8 +4718,9 @@ class Lot(models.Model):
 
     @property
     def images(self):
-        """All images associated with this lot"""
-        return LotImage.objects.filter(lot_number=self.lot_number).order_by("-is_primary", "createdon")
+        """All images associated with this lot; delegates to use_images_from if set"""
+        source = self.use_images_from if self.use_images_from_id else self
+        return LotImage.objects.filter(lot_number=source.lot_number).order_by("-is_primary", "createdon")
 
     @property
     def auto_image(self):
@@ -4730,7 +4735,8 @@ class Lot(models.Model):
 
     @property
     def thumbnail(self):
-        default = LotImage.objects.filter(lot_number=self.lot_number, is_primary=True).first()
+        source = self.use_images_from if self.use_images_from_id else self
+        default = LotImage.objects.filter(lot_number=source.lot_number, is_primary=True).first()
         if default:
             return default
         return self.auto_image
@@ -6935,7 +6941,7 @@ class LotImage(models.Model):
         """Return the URL to display this image; prefer uploaded image over url field"""
         if self.image:
             return self.image.url
-        return self.url or ""
+        return self.url or None
 
 
 class FAQ(models.Model):

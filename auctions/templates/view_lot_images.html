@@ -275,7 +275,7 @@ function deactivate_lot() {
                             {% endif %}
                             {% for image in lot.images %}
                             <a href="#" data-bs-target="#image_carousel" data-bs-slide-to="{% if lot.video_link %}{{ forloop.counter }}{% else %}{{ forloop.counter0 }}{% endif %}"  class="me-2 {% if image.is_primary and not lot.video_link %}active{% endif %}">
-                                <img style="min-width: 100px;" src="{% if image.image %}{{ image.image.lot_list.url }}{% else %}{{ image.url }}{% endif %}" class="rounded">
+                                <img style="min-width: 100px;{% if not image.image %} max-height:150px; object-fit:cover;{% endif %}" src="{% if image.image %}{{ image.image.lot_list.url }}{% else %}{{ image.url }}{% endif %}" class="rounded">
                             </a>
                             {% endfor %}
                         </div>

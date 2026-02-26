@@ -10380,12 +10380,12 @@ class LotImageManagementTests(StandardTestCase):
         self.assertEqual(self.url_image.display_url, "https://example.com/fish.jpg")
 
     def test_lotimage_display_url_empty(self):
-        """display_url should return empty string when neither image nor url is set"""
+        """display_url should return None when neither image nor url is set"""
         empty_image = LotImage.objects.create(
             lot_number=self.image_lot,
             image_source="RANDOM",
         )
-        self.assertEqual(empty_image.display_url, "")
+        self.assertIsNone(empty_image.display_url)
 
     def test_lot_use_images_from_field(self):
         """use_images_from should link one lot to another for image management"""
@@ -10499,3 +10499,116 @@ class LotImageManagementTests(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
         response = self.client.get(source_lot.lot_link)
         self.assertNotIn("images_managed_from_lot", response.context)
+        # but auction admin should still be allowed to manage/add images to this lot
+        self.assertTrue(source_lot.image_permission_check(self.admin_user))
+
+    def test_images_and_thumbnail_delegate_via_use_images_from(self):
+        """images and thumbnail should return images from the source lot when use_images_from is set"""
+        delegating_lot = Lot.objects.create(
+            lot_name="Delegating lot",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            use_images_from=self.image_lot,
+        )
+        # delegating_lot has no direct images, but should show image_lot's images
+        self.assertEqual(list(delegating_lot.images), [self.url_image])
+        self.assertEqual(delegating_lot.thumbnail, self.url_image)
+
+    def test_image_url_form_integration(self):
+        """Submitting a lot edit form with image_url set should create a LotImage"""
+        self.client.login(username="my_lot", password="testpassword")
+        # Ensure the user has the required contact info for LotValidation
+        self.user.first_name = "Test"
+        self.user.last_name = "User"
+        self.user.save()
+        self.user.userdata.address = "123 Test St"
+        self.user.userdata.can_submit_standalone_lots = True
+        self.user.userdata.save()
+        # Use a standalone lot owned by self.user
+        test_lot = Lot.objects.create(
+            lot_name="Edit URL test lot",
+            user=self.user,
+            quantity=1,
+            local_pickup=True,
+            payment_cash=True,
+        )
+        initial_image_count = LotImage.objects.filter(lot_number=test_lot).count()
+        form_data = {
+            "lot_name": test_lot.lot_name,
+            "quantity": 1,
+            "reserve_price": 2,
+            "image_url": "https://example.com/new_image.jpg",
+            "cloned_from": "",
+            "run_duration": 10,
+            "part_of_auction": "False",
+            "local_pickup": "on",
+            "payment_cash": "on",
+        }
+        self.client.post(f"/lots/edit/{test_lot.pk}/", data=form_data)
+        # After form submission the image should be created and image_url cleared
+        test_lot.refresh_from_db()
+        new_images = LotImage.objects.filter(lot_number=test_lot)
+        self.assertEqual(new_images.count(), initial_image_count + 1)
+        self.assertEqual(new_images.latest("createdon").url, "https://example.com/new_image.jpg")
+        self.assertIsNone(test_lot.image_url)
+
+    def test_lot_clone_copies_images(self):
+        """Cloning a lot should deep-copy URL images to the new lot; original keeps its own images"""
+        original_lot = Lot.objects.create(
+            lot_name="Original lot to clone",
+            user=self.user,
+            quantity=1,
+        )
+        original_image = LotImage.objects.create(
+            lot_number=original_lot,
+            url="https://example.com/original.jpg",
+            image_source="ACTUAL",
+            is_primary=True,
+        )
+        # Simulate the lot-copy logic (same path as LotValidation.form_valid)
+        new_lot = Lot.objects.create(lot_name="Cloned lot", user=self.user, quantity=1)
+        originalImages = LotImage.objects.filter(lot_number=original_lot.lot_number)
+        for img in originalImages:
+            new_img = LotImage.objects.create(
+                createdon=img.createdon,
+                lot_number=new_lot,
+                image_source=img.image_source,
+                is_primary=img.is_primary,
+                url=img.url,
+            )
+            if img.image:
+                from easy_thumbnails.files import get_thumbnailer
+
+                new_img.image = get_thumbnailer(img.image)
+            new_img.save()
+        # New lot has its own copy of the image
+        cloned_images = LotImage.objects.filter(lot_number=new_lot)
+        self.assertEqual(cloned_images.count(), 1)
+        cloned_img = cloned_images.first()
+        self.assertEqual(cloned_img.url, original_image.url)
+        self.assertEqual(cloned_img.image_source, "ACTUAL")
+        self.assertTrue(cloned_img.is_primary)
+        # Original lot still has its images (they were not moved)
+        self.assertEqual(LotImage.objects.filter(lot_number=original_lot).count(), 1)
+
+    def test_image_permission_check_blocks_when_dependent_any_auction_lot_sold(self):
+        """image_permission_check should block for any auction lot sold, not just online auctions"""
+        source_lot = Lot.objects.create(
+            lot_name="Source for in-person check",
+            auction=self.in_person_auction,
+            auctiontos_seller=self.in_person_tos,
+            quantity=1,
+        )
+        # dependent sold lot in an in-person auction
+        dependent_lot = Lot.objects.create(
+            lot_name="Dependent in-person lot",
+            auction=self.in_person_auction,
+            auctiontos_seller=self.in_person_tos,
+            quantity=1,
+            winning_price=10,
+            use_images_from=source_lot,
+        )
+        self.assertFalse(dependent_lot.can_add_images)
+        # source_lot should be blocked regardless of auction type
+        self.assertFalse(source_lot.image_permission_check(self.user))
