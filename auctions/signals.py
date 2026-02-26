@@ -240,10 +240,7 @@ def bounce_handler(sender, mail_obj, bounce_obj, raw_message, *args, **kwargs):
     email = recipient_list[0]
     from auctions.models import AuctionTOS
 
-    auctiontos = AuctionTOS.objects.filter(email=email)
-    for tos in auctiontos:
-        tos.email_address_status = "BAD"
-        tos.save()
+    AuctionTOS.objects.filter(email=email).update(email_address_status="BAD")
 
 
 @receiver(complaint_received)
