@@ -30,7 +30,7 @@ jobs:
           docker compose logs db
           exit 1
       - name: Run tests
-        run: docker compose run --rm test --ci --verbose
+        run: docker compose run --rm --no-deps test --ci --verbose
   pre-commit:
     name: pre-commit validation
     runs-on: ubuntu-latest
