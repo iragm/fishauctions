@@ -4561,9 +4561,27 @@ class LotCreateView(LotValidation, CreateView):
         initial = super().get_initial()
         exclude = {"auction", "cloned_from"}
         form_fields = set(self.form_class.Meta.fields) | set(self.form_class.declared_fields)
+        # Identify checkbox-like fields so we can coerce their initial values properly
+        checkbox_fields = {
+            name
+            for name, field in getattr(self.form_class, "base_fields", {}).items()
+            if getattr(getattr(field, "widget", None), "input_type", None) == "checkbox"
+        }
+        true_values = {"1", "true", "yes", "on"}
+        false_values = {"0", "false", "no", "off"}
         for key, value in self.request.GET.items():
             if key in form_fields and key not in exclude:
-                initial[key] = value
+                if key in checkbox_fields:
+                    normalized = value.strip().lower()
+                    if normalized in true_values:
+                        initial[key] = True
+                    elif normalized in false_values:
+                        initial[key] = False
+                    else:
+                        # Fall back to the raw value to avoid changing behavior for unexpected tokens
+                        initial[key] = value
+                else:
+                    initial[key] = value
         return initial
 
     def form_valid(self, form, **kwargs):
