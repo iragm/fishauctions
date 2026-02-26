@@ -10481,6 +10481,77 @@ class LotImageManagementTests(StandardTestCase):
         self.assertFalse(form.is_valid())
         self.assertIn("url", form.errors)
 
+    def test_lot_image_url_field_validates_extension(self):
+        """The lot image_url hidden field should reject URLs without image extensions"""
+        from .forms import CreateLotForm
+
+        # Build the minimal form data needed to validate image_url
+        form = CreateLotForm(
+            data={
+                "lot_name": "Test",
+                "quantity": 1,
+                "reserve_price": 2,
+                "image_url": "https://example.com/not-an-image.html",
+                "cloned_from": "",
+                "run_duration": 10,
+                "part_of_auction": "False",
+                "local_pickup": "on",
+                "payment_cash": "on",
+            },
+            user=self.user,
+            cloned_from=None,
+            auction=None,
+        )
+        # image_url should have a validation error for the bad extension
+        self.assertIn("image_url", form.errors)
+
+    def test_lot_image_url_field_validates_scheme(self):
+        """The lot image_url hidden field should reject non-http/https URLs"""
+        from .forms import CreateLotForm
+
+        form = CreateLotForm(
+            data={
+                "lot_name": "Test",
+                "quantity": 1,
+                "reserve_price": 2,
+                "image_url": "ftp://example.com/photo.jpg",
+                "cloned_from": "",
+                "run_duration": 10,
+                "part_of_auction": "False",
+                "local_pickup": "on",
+                "payment_cash": "on",
+            },
+            user=self.user,
+            cloned_from=None,
+            auction=None,
+        )
+        self.assertIn("image_url", form.errors)
+
+    def test_lot_image_url_field_accepts_valid_url(self):
+        """The lot image_url hidden field should accept valid http image URLs"""
+        from .forms import CreateLotForm
+
+        # Ensure user can submit standalone lots
+        self.user.userdata.can_submit_standalone_lots = True
+        self.user.userdata.save()
+        form = CreateLotForm(
+            data={
+                "lot_name": "Test",
+                "quantity": 1,
+                "reserve_price": 2,
+                "image_url": "https://example.com/photo.jpg",
+                "cloned_from": "",
+                "run_duration": 10,
+                "part_of_auction": "False",
+                "local_pickup": "on",
+                "payment_cash": "on",
+            },
+            user=self.user,
+            cloned_from=None,
+            auction=None,
+        )
+        self.assertNotIn("image_url", form.errors)
+
     def test_images_managed_from_only_shown_to_lot_creator(self):
         """images_managed_from_lot context should only be set for the lot creator, not auction admins"""
         source_lot = Lot.objects.create(

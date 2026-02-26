@@ -2471,6 +2471,23 @@ class CreateLotForm(forms.ModelForm):
             HTML("</span>"),
         )
 
+    def clean_image_url(self):
+        """Validate that image_url points to an image (same rules as CreateImageForm.clean_url)"""
+        from urllib.parse import urlparse
+
+        url = self.cleaned_data.get("image_url")
+        if not url:
+            return url
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            msg = "Image URL must use http or https."
+            raise forms.ValidationError(msg)
+        image_extensions = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg")
+        if not any(parsed.path.lower().endswith(ext) for ext in image_extensions):
+            msg = "URL does not appear to point to an image. Please use a URL ending in .jpg, .jpeg, .png, .gif, .webp, etc."
+            raise forms.ValidationError(msg)
+        return url
+
     def clean(self):
         cleaned_data = super().clean()
         # create_new_species = cleaned_data.get("create_new_species")
