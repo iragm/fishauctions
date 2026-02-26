@@ -1584,6 +1584,24 @@ class CreateImageForm(forms.ModelForm):
             Submit("submit", "Save", css_class="create-update-image btn-success"),
         )
 
+    def clean_url(self):
+        """Validate that the URL points to an image"""
+        url = self.cleaned_data.get("url")
+        if not url:
+            return url
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            msg = "Image URL must use http or https."
+            raise forms.ValidationError(msg)
+        image_extensions = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg")
+        path_lower = parsed.path.lower()
+        if not any(path_lower.endswith(ext) for ext in image_extensions):
+            msg = "URL does not appear to point to an image. Please use a URL ending in .jpg, .jpeg, .png, .gif, .webp, etc."
+            raise forms.ValidationError(msg)
+        return url
+
     def clean(self):
         cleaned_data = super().clean()
         image = cleaned_data.get("image")

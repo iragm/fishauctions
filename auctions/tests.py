@@ -10457,3 +10457,45 @@ class LotImageManagementTests(StandardTestCase):
         self.assertIsNone(test_lot.image_url)
         self.assertEqual(test_lot.image_count, 1)
         self.assertEqual(test_lot.images.first().url, "https://example.com/new_fish.jpg")
+
+    def test_create_image_form_url_validation_rejects_non_image(self):
+        """CreateImageForm should reject URLs that don't have image extensions"""
+        from .forms import CreateImageForm
+
+        form = CreateImageForm(data={"url": "https://example.com/page.html", "image_source": "RANDOM"})
+        self.assertFalse(form.is_valid())
+        self.assertIn("url", form.errors)
+
+    def test_create_image_form_url_validation_accepts_image_url(self):
+        """CreateImageForm should accept URLs with image extensions"""
+        from .forms import CreateImageForm
+
+        form = CreateImageForm(data={"url": "https://example.com/photo.jpg", "image_source": "RANDOM"})
+        self.assertTrue(form.is_valid())
+
+    def test_create_image_form_url_rejects_non_http_scheme(self):
+        """CreateImageForm should reject URLs with non-http/https schemes"""
+        from .forms import CreateImageForm
+
+        form = CreateImageForm(data={"url": "ftp://example.com/photo.jpg", "image_source": "RANDOM"})
+        self.assertFalse(form.is_valid())
+        self.assertIn("url", form.errors)
+
+    def test_images_managed_from_only_shown_to_lot_creator(self):
+        """images_managed_from_lot context should only be set for the lot creator, not auction admins"""
+        source_lot = Lot.objects.create(
+            lot_name="Source lot for creator check",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            use_images_from=self.image_lot,
+        )
+        # lot creator (self.user) should see the note
+        self.client.login(username="my_lot", password="testpassword")
+        response = self.client.get(source_lot.lot_link)
+        self.assertIn("images_managed_from_lot", response.context)
+
+        # auction admin (self.admin_user) should NOT see the note
+        self.client.login(username="admin_user", password="testpassword")
+        response = self.client.get(source_lot.lot_link)
+        self.assertNotIn("images_managed_from_lot", response.context)

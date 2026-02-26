@@ -4190,8 +4190,12 @@ class ViewLot(DetailView):
             if context["is_auction_admin"] or self.request.user == lot.user:
                 context["show_exchange_info"] = True
         context["show_image_add_button"] = lot.image_permission_check(self.request.user) and not lot.use_images_from
-        if lot.use_images_from and lot.image_permission_check(self.request.user):
-            context["images_managed_from_lot"] = lot.use_images_from
+        if lot.use_images_from and self.request.user.is_authenticated:
+            is_lot_creator = (lot.user and lot.user == self.request.user) or (
+                lot.auctiontos_seller and lot.auctiontos_seller.user == self.request.user
+            )
+            if is_lot_creator:
+                context["images_managed_from_lot"] = lot.use_images_from
         # chat subscription stuff
         if self.request.user.is_authenticated:
             context["show_chat_subscriptions_checkbox"] = True
