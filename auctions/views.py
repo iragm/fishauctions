@@ -4084,14 +4084,17 @@ class ViewLot(DetailView):
                         f"Bid on (and win) any lot in {lot.auction} and get ${lot.auction.first_bid_payout} back!",
                     )
         if self.request.user.is_authenticated:
-            try:
-                defaultBidAmount = Bid.objects.get(user=self.request.user, lot_number=lot.pk, is_deleted=False).amount
-                context["viewer_bid_pk"] = Bid.objects.get(
-                    user=self.request.user, lot_number=lot.pk, is_deleted=False
-                ).pk
-                context["viewer_bid"] = defaultBidAmount
-                defaultBidAmount = defaultBidAmount + 1
-            except Bid.DoesNotExist:
+            viewer_bid = (
+                Bid.objects.exclude(is_deleted=True)
+                .filter(user=self.request.user, lot_number=lot.pk)
+                .order_by("-bid_time")
+                .first()
+            )
+            if viewer_bid:
+                context["viewer_bid_pk"] = viewer_bid.pk
+                context["viewer_bid"] = viewer_bid.amount
+                defaultBidAmount = viewer_bid.amount + 1
+            else:
                 defaultBidAmount = 0
                 context["viewer_bid"] = None
         else:

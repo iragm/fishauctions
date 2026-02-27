@@ -4560,6 +4560,19 @@ class Lot(models.Model):
             return self.winning_price
         return self.max_bid
 
+    def _latest_bid_per_user_subquery(self):
+        """Return a subquery that identifies the latest bid_time per user for this lot.
+        Used to deduplicate bids when a user has placed multiple bids (keeping only the latest)."""
+        return (
+            Bid.objects.exclude(is_deleted=True)
+            .filter(
+                lot_number=self.lot_number,
+                user=OuterRef("user"),
+            )
+            .order_by("-bid_time")
+            .values("bid_time")[:1]
+        )
+
     @property
     def max_bid(self):
         """returns the highest bid amount for this lot - this number should not be visible to the public"""
@@ -4569,6 +4582,7 @@ class Lot(models.Model):
                 lot_number=self.lot_number,
                 last_bid_time__lte=self.calculated_end,
                 amount__gte=self.reserve_price,
+                bid_time=Subquery(self._latest_bid_per_user_subquery()),
             )
             .order_by("-amount", "last_bid_time")[:2]
         )
@@ -4581,7 +4595,7 @@ class Lot(models.Model):
 
     @property
     def bids(self):
-        """Get all bids for this lot, highest bid first"""
+        """Get all bids for this lot, highest bid first, one per user (their latest bid)"""
         # bids = Bid.objects.filter(lot_number=self.lot_number, last_bid_time__lte=self.calculated_end, amount__gte=self.reserve_price).order_by('-amount', 'last_bid_time')
         bids = (
             Bid.objects.exclude(is_deleted=True)
@@ -4589,6 +4603,7 @@ class Lot(models.Model):
                 lot_number=self.lot_number,
                 last_bid_time__lte=self.calculated_end,
                 amount__gte=self.reserve_price,
+                bid_time=Subquery(self._latest_bid_per_user_subquery()),
             )
             .order_by("-amount", "last_bid_time")
         )
@@ -4654,12 +4669,17 @@ class Lot(models.Model):
     @property
     def number_of_bids(self):
         """How many users placed bids on this lot?"""
-        bids = Bid.objects.exclude(is_deleted=True).filter(
-            lot_number=self.lot_number,
-            bid_time__lte=self.calculated_end,
-            amount__gte=self.reserve_price,
+        return (
+            Bid.objects.exclude(is_deleted=True)
+            .filter(
+                lot_number=self.lot_number,
+                bid_time__lte=self.calculated_end,
+                amount__gte=self.reserve_price,
+            )
+            .values("user")
+            .distinct()
+            .count()
         )
-        return len(bids)
 
     @property
     def view_to_bid_ratio(self):

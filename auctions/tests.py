@@ -21,6 +21,7 @@ from .models import (
     AuctionHistory,
     AuctionTOS,
     Bid,
+    Category,
     ChatSubscription,
     Invoice,
     InvoiceAdjustment,
@@ -478,6 +479,70 @@ class LotModelTests(TestCase):
         Bid.objects.create(user=user, lot_number=lot, amount=2)
         assert lot.high_bidder is False
         assert lot.high_bid == 5
+
+    def test_lot_multiple_bids_per_user_only_latest_counts(self):
+        """When a user has multiple bid records for a lot, only their latest (highest) bid should count"""
+        time = timezone.now() + datetime.timedelta(days=30)
+        lotuser = User.objects.create(username="lotowner_multi")
+        lot = Lot.objects.create(
+            lot_name="A test lot",
+            date_end=time,
+            reserve_price=5,
+            user=lotuser,
+            quantity=1,
+        )
+        userA = User.objects.create(username="User A multi")
+        userB = User.objects.create(username="User B multi")
+        # userA places an initial proxy bid
+        Bid.objects.create(user=userA, lot_number=lot, amount=10)
+        assert lot.high_bidder.pk == userA.pk
+        assert lot.high_bid == 5  # only one bid, returns reserve_price
+        # userB bids the same amount as userA's proxy
+        Bid.objects.create(user=userB, lot_number=lot, amount=10)
+        assert lot.high_bidder.pk == userA.pk  # tied, userA bid first
+        assert lot.high_bid == 10  # tied
+        # userA raises proxy bid - new record created, old record kept
+        Bid.objects.create(user=userA, lot_number=lot, amount=15)
+        assert lot.high_bidder.pk == userA.pk
+        assert lot.high_bid == 11  # $10 + 1 (one more than userB's $10)
+        # Verify the old bid record still exists (kept, not deleted)
+        assert Bid.objects.filter(user=userA, lot_number=lot, is_deleted=False).count() == 2
+
+    def test_bid_on_lot_creates_new_record_not_update(self):
+        """bid_on_lot should create a new bid record when a user raises their proxy bid, not update the old one"""
+        from auctions.consumers import bid_on_lot
+
+        time = timezone.now() + datetime.timedelta(days=30)
+        pastTime = timezone.now() - datetime.timedelta(hours=1)
+        lotuser = User.objects.create_user(username="lotowner_bidtest", password="x")
+        category = Category.objects.create(name="Test Category bidtest")
+        lot = Lot.objects.create(
+            lot_name="A test lot",
+            date_end=time,
+            reserve_price=5,
+            user=lotuser,
+            quantity=1,
+            species_category=category,
+        )
+        # Backdate date_posted so the lot is old enough to accept bids (>20 minutes)
+        lot.date_posted = pastTime
+        lot.save()
+        userA = User.objects.create_user(username="User_A_bidtest", password="x")
+        userB = User.objects.create_user(username="User_B_bidtest", password="x")
+        # userA places initial proxy bid
+        bid_on_lot(lot, userA, 10)
+        assert Bid.objects.filter(user=userA, lot_number=lot, is_deleted=False).count() == 1
+        # userB bids the same amount as userA's proxy bid
+        bid_on_lot(lot, userB, 10)
+        assert Bid.objects.filter(user=userB, lot_number=lot, is_deleted=False).count() == 1
+        assert lot.high_bidder.pk == userA.pk
+        # userA raises their proxy bid - should create a NEW record, not update the old one
+        bid_on_lot(lot, userA, 15)
+        userA_bids = Bid.objects.filter(user=userA, lot_number=lot, is_deleted=False)
+        assert userA_bids.count() == 2, "userA should have 2 bid records (old + new), not 1 updated record"
+        assert userA_bids.order_by("-bid_time").first().amount == 15
+        assert lot.high_bidder.pk == userA.pk
+        assert lot.high_bid == 11  # $10 + 1 (one more than userB's $10)
 
 
 class LotModelConcurrencyTests(TransactionTestCase):
