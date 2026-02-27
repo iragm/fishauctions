@@ -4,7 +4,7 @@
 # For fresh installations, 01-grant-test-permissions.sql handles this automatically.
 
 echo "Granting test database permissions to mysqluser..."
-docker exec -it db mariadb -uroot -p${DATABASE_ROOT_PASSWORD:-secret} -e "
+docker exec -i db mariadb -uroot -p"${DATABASE_ROOT_PASSWORD:-secret}" -e "
 GRANT CREATE, DROP ON *.* TO 'mysqluser'@'%';
 GRANT ALL PRIVILEGES ON \`test_%\`.* TO 'mysqluser'@'%';
 FLUSH PRIVILEGES;
