@@ -12,5 +12,8 @@ $('#auction-form').submit(function(event){
 {% block title %}{{ title }}{% endblock %}
 {% block content %}
             <h4>{{ title }}</h4>
+            {% if images_managed_from_lot %}
+            <p class="text-muted">Images are managed from <a href="{{ images_managed_from_lot.lot_link }}">{{ images_managed_from_lot.lot_name }}</a>.</p>
+            {% endif %}
             {% crispy form form.helper %}
 {% endblock %}

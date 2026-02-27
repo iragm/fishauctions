@@ -130,6 +130,7 @@ from .forms import (
     TOSFormSetHelper,
     UserLabelPrefsForm,
     UserLocation,
+    validate_image_url,
 )
 from .helper_functions import bin_data
 from .models import (
@@ -4191,6 +4192,12 @@ class ViewLot(DetailView):
             if context["is_auction_admin"] or self.request.user == lot.user:
                 context["show_exchange_info"] = True
         context["show_image_add_button"] = lot.image_permission_check(self.request.user)
+        if lot.use_images_from and self.request.user.is_authenticated:
+            is_lot_creator = (lot.user and lot.user == self.request.user) or (
+                lot.auctiontos_seller and lot.auctiontos_seller.user == self.request.user
+            )
+            if is_lot_creator:
+                context["images_managed_from_lot"] = lot.use_images_from
         # chat subscription stuff
         if self.request.user.is_authenticated:
             context["show_chat_subscriptions_checkbox"] = True
@@ -4258,7 +4265,7 @@ class ViewLotSimple(ViewLot, AuctionViewMixin):
                             "tag": f"lot_sell_notification_{lot.pk}",
                         }
                         if lot.thumbnail:
-                            payload["icon"] = lot.thumbnail.image.url
+                            payload["icon"] = lot.thumbnail.display_url
                         send_user_notification(user=watch.user, payload=payload, ttl=10000)
         return context
 
@@ -4305,6 +4312,8 @@ class ImageCreateView(LoginRequiredMixin, CreateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["title"] = f"Add image to {self.lot.lot_name}"
+        if self.lot.use_images_from:
+            context["images_managed_from_lot"] = self.lot.use_images_from
         return context
 
     def form_valid(self, form, **kwargs):
@@ -4379,6 +4388,8 @@ class ImageUpdateView(UpdateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["title"] = f"Editing image for {self.get_object().lot_number.lot_name}"
+        if self.lot.use_images_from:
+            context["images_managed_from_lot"] = self.lot.use_images_from
         return context
 
     def form_valid(self, form, **kwargs):
@@ -4485,8 +4496,10 @@ class LotValidation(LoginRequiredMixin):
                                 lot_number=lot,
                                 image_source=originalImage.image_source,
                                 is_primary=originalImage.is_primary,
+                                url=originalImage.url,
                             )
-                            newImage.image = get_thumbnailer(originalImage.image)
+                            if originalImage.image:
+                                newImage.image = get_thumbnailer(originalImage.image)
                             # if the original lot sold, this picture sure isn't of the actual item
                             if originalLot.winner and originalImage.image_source == "ACTUAL":
                                 newImage.image_source = "REPRESENTATIVE"
@@ -4502,6 +4515,22 @@ class LotValidation(LoginRequiredMixin):
                 self.request,
                 msg,
             )
+        # if image_url is set, add an image to the lot using this URL, then clear the field
+        image_url = form.cleaned_data.get("image_url")
+        if image_url:
+            try:
+                validate_image_url(image_url)
+                # check direct images on this lot (not delegated via use_images_from) for is_primary
+                LotImage.objects.create(
+                    lot_number=lot,
+                    url=image_url,
+                    is_primary=not LotImage.objects.filter(lot_number=lot).exists(),
+                    image_source="RANDOM",
+                )
+            except ValidationError:
+                messages.error(self.request, "The image URL provided was not valid and will not be used.")
+            lot.image_url = None
+            lot.save(update_fields=["image_url"])
         return super().form_valid(form)
 
     def get_form_kwargs(self, *args, **kwargs):

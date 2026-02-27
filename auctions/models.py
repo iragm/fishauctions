@@ -3517,6 +3517,20 @@ class Lot(models.Model):
         User, null=True, blank=True, on_delete=models.SET_NULL, related_name="max_bid_revealed_by"
     )
     admin_validated = models.BooleanField(default=False)
+    # use_images_from allows a lot to delegate image management to another lot.
+    # When set, the `images` and `thumbnail` properties return images from the source lot.
+    # Note: lot copying (cloning) deep-copies images rather than using this field — it is
+    # primarily set/read for programmatic use (e.g. to show "images managed from" on the lot detail page).
+    use_images_from = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="image_source_for",
+        help_text="Images are managed from this lot",
+    )
+    image_url = models.URLField(blank=True, null=True)
+    image_url.help_text = "If filled out, an image will be added to this lot using this URL when saving"
 
     def save(self, *args, **kwargs):
         from django.db import transaction
@@ -3874,8 +3888,10 @@ class Lot(models.Model):
                 lot_number=self,
                 image_source=originalImage.image_source,
                 is_primary=originalImage.is_primary,
+                url=originalImage.url,
             )
-            newImage.image = get_thumbnailer(originalImage.image)
+            if originalImage.image:
+                newImage.image = get_thumbnailer(originalImage.image)
             # if the original lot sold, this picture sure isn't of the actual item
             if originalImage.image_source == "ACTUAL":
                 newImage.image_source = "REPRESENTATIVE"
@@ -4061,10 +4077,18 @@ class Lot(models.Model):
 
     def image_permission_check(self, user):
         """See if `user` can add/edit images to this lot"""
+        if self.use_images_from:
+            # images are managed from another lot; nothing should be added here
+            return False
         if not self.can_add_images:
             return False
         if not user.is_authenticated:
             return False
+        # Check if any auction lots using this lot's images have can_add_images=False (e.g., sold lots)
+        dependent_lots = Lot.objects.filter(use_images_from=self, is_deleted=False)
+        for dependent_lot in dependent_lots:
+            if dependent_lot.auction and not dependent_lot.can_add_images:
+                return False
         if self.user == user:
             return True
         if self.auctiontos_seller and self.auctiontos_seller.user:
@@ -4697,8 +4721,9 @@ class Lot(models.Model):
 
     @property
     def images(self):
-        """All images associated with this lot"""
-        return LotImage.objects.filter(lot_number=self.lot_number).order_by("-is_primary", "createdon")
+        """All images associated with this lot; delegates to use_images_from if set"""
+        source = self.use_images_from if self.use_images_from_id else self
+        return LotImage.objects.filter(lot_number=source.lot_number).order_by("-is_primary", "createdon")
 
     @property
     def auto_image(self):
@@ -4713,7 +4738,8 @@ class Lot(models.Model):
 
     @property
     def thumbnail(self):
-        default = LotImage.objects.filter(lot_number=self.lot_number, is_primary=True).first()
+        source = self.use_images_from if self.use_images_from_id else self
+        default = LotImage.objects.filter(lot_number=source.lot_number, is_primary=True).first()
         if default:
             return default
         return self.auto_image
@@ -6902,14 +6928,23 @@ class LotImage(models.Model):
     caption.help_text = "Optional"
     image = ThumbnailerImageField(
         upload_to="images/",
-        blank=False,
-        null=False,
+        blank=True,
+        null=True,
         resize_source={"size": (600, 600), "quality": 85},
     )
     image.help_text = "Select an image to upload"
+    url = models.URLField(blank=True, null=True)
+    url.help_text = "Or enter a URL to an image instead of uploading one"
     image_source = models.CharField(max_length=20, choices=PIC_CATEGORIES, blank=True)
     is_primary = models.BooleanField(default=False, blank=True)
     createdon = models.DateTimeField(auto_now_add=True)
+
+    @property
+    def display_url(self):
+        """Return the URL to display this image; prefer uploaded image over url field"""
+        if self.image:
+            return self.image.url
+        return self.url or None
 
 
 class FAQ(models.Model):

@@ -51,6 +51,27 @@ MILES_TO_KM = 1.60934
 logger = logging.getLogger(__name__)
 
 
+def validate_image_url(url):
+    """Validate that `url` uses http/https and points to a file with an image extension.
+
+    Raises forms.ValidationError on failure; returns the url unchanged on success.
+    Extension-based validation is used instead of making an HTTP request to avoid SSRF.
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        msg = "Image URL must use http or https."
+        raise forms.ValidationError(msg)
+    image_extensions = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg")
+    if not any(parsed.path.lower().endswith(ext) for ext in image_extensions):
+        msg = (
+            "URL does not appear to point to an image. Please use a URL ending in .jpg, .jpeg, .png, .gif, .webp, etc."
+        )
+        raise forms.ValidationError(msg)
+    return url
+
+
 def clean_summernote(html, max_length=16383):
     """Helper function to shorten summernote fields, which can contain thousands of formatting characters"""
     if len(html) > max_length:
@@ -1551,6 +1572,7 @@ class CreateImageForm(forms.ModelForm):
         model = LotImage
         fields = [
             "image",
+            "url",
             "image_source",
             "caption",
         ]
@@ -1568,6 +1590,7 @@ class CreateImageForm(forms.ModelForm):
         self.helper.form_tag = True
         self.helper.layout = Layout(
             "image",
+            "url",
             Div(
                 Div(
                     "image_source",
@@ -1581,6 +1604,23 @@ class CreateImageForm(forms.ModelForm):
             ),
             Submit("submit", "Save", css_class="create-update-image btn-success"),
         )
+
+    def clean_url(self):
+        """Validate that the URL points to an image"""
+        url = self.cleaned_data.get("url")
+        if not url:
+            return url
+        return validate_image_url(url)
+
+    def clean(self):
+        cleaned_data = super().clean()
+        image = cleaned_data.get("image")
+        url = cleaned_data.get("url")
+        if not image and not url:
+            msg = "Please either upload an image or provide a URL."
+            self.add_error("image", msg)
+            self.add_error("url", msg)
+        return cleaned_data
 
 
 class CreateAuctionForm(forms.ModelForm):
@@ -2189,6 +2229,7 @@ class CreateLotForm(forms.ModelForm):
             "run_duration",
             "custom_checkbox",
             "custom_field_1",
+            "image_url",
         )
         exclude = ["user", "image", "image_source"]
         widgets = {
@@ -2196,6 +2237,7 @@ class CreateLotForm(forms.ModelForm):
             # 'species': forms.HiddenInput(),
             # 'cloned_from': forms.HiddenInput(),
             "shipping_locations": forms.CheckboxSelectMultiple(),
+            "image_url": forms.HiddenInput(),
         }
 
     def __init__(self, *args, **kwargs):
@@ -2322,6 +2364,7 @@ class CreateLotForm(forms.ModelForm):
             # ),
             # HTML("</span><span id='details_selection'><h4>Details</h4><br>"),
             "cloned_from",
+            "image_url",
             Div(
                 Div(
                     "part_of_auction",

@@ -235,7 +235,7 @@ function deactivate_lot() {
                                 {% endif %}
                                 {% for image in lot.images %}
                                 <div class="carousel-item {% if image.is_primary and not lot.video_link %}active{%endif%}">
-                                    <img src="{{ image.image.url }}" class="img-fluid rounded">
+                                    <img src="{{ image.display_url }}" class="img-fluid rounded">
                                     <div class='carousel-caption text-light text-left'>
                                         <span class="text-muted"><small>{{ image.get_image_source_display }}</small></span>{%if image.caption%}<br>{{ image.caption }}{%endif%}
                                     </div>
@@ -275,7 +275,7 @@ function deactivate_lot() {
                             {% endif %}
                             {% for image in lot.images %}
                             <a href="#" data-bs-target="#image_carousel" data-bs-slide-to="{% if lot.video_link %}{{ forloop.counter }}{% else %}{{ forloop.counter0 }}{% endif %}"  class="me-2 {% if image.is_primary and not lot.video_link %}active{% endif %}">
-                                <img style="min-width: 100px;" src="{{ image.image.lot_list.url }}" class="rounded">
+                                <img style="min-width: 100px;{% if not image.image %} max-height:150px; object-fit:cover;{% endif %}" src="{% if image.image %}{{ image.image.lot_list.url }}{% else %}{{ image.url }}{% endif %}" class="rounded">
                             </a>
                             {% endfor %}
                         </div>
@@ -296,6 +296,9 @@ function deactivate_lot() {
                     {% endif %}
                     {% if show_image_add_button %}
                     <a href="{% url 'add_image' lot=lot.lot_number %}" class="mt-2 btn btn-primary"><i class="bi bi-file-image"></i> Add image</a><br>
+                    {% endif %}
+                    {% if images_managed_from_lot %}
+                    <p class="text-muted mt-2">Images are managed from <a href="{{ images_managed_from_lot.lot_link }}">{{ images_managed_from_lot.lot_name }}</a>.</p>
                     {% endif %}
                     <br>
                     <div class="bg-dark mt-2 mb-2">
