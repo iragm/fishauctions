@@ -4077,6 +4077,9 @@ class Lot(models.Model):
 
     def image_permission_check(self, user):
         """See if `user` can add/edit images to this lot"""
+        if self.use_images_from:
+            # images are managed from another lot; nothing should be added here
+            return False
         if not self.can_add_images:
             return False
         if not user.is_authenticated:

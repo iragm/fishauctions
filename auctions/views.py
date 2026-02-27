@@ -4190,7 +4190,7 @@ class ViewLot(DetailView):
         if lot.auction and lot.auction.is_online and lot.sold:
             if context["is_auction_admin"] or self.request.user == lot.user:
                 context["show_exchange_info"] = True
-        context["show_image_add_button"] = lot.image_permission_check(self.request.user) and not lot.use_images_from
+        context["show_image_add_button"] = lot.image_permission_check(self.request.user)
         if lot.use_images_from and self.request.user.is_authenticated:
             is_lot_creator = (lot.user and lot.user == self.request.user) or (
                 lot.auctiontos_seller and lot.auctiontos_seller.user == self.request.user

@@ -51,6 +51,27 @@ MILES_TO_KM = 1.60934
 logger = logging.getLogger(__name__)
 
 
+def validate_image_url(url):
+    """Validate that `url` uses http/https and points to a file with an image extension.
+
+    Raises forms.ValidationError on failure; returns the url unchanged on success.
+    Extension-based validation is used instead of making an HTTP request to avoid SSRF.
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        msg = "Image URL must use http or https."
+        raise forms.ValidationError(msg)
+    image_extensions = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg")
+    if not any(parsed.path.lower().endswith(ext) for ext in image_extensions):
+        msg = (
+            "URL does not appear to point to an image. Please use a URL ending in .jpg, .jpeg, .png, .gif, .webp, etc."
+        )
+        raise forms.ValidationError(msg)
+    return url
+
+
 def clean_summernote(html, max_length=16383):
     """Helper function to shorten summernote fields, which can contain thousands of formatting characters"""
     if len(html) > max_length:
@@ -1589,18 +1610,7 @@ class CreateImageForm(forms.ModelForm):
         url = self.cleaned_data.get("url")
         if not url:
             return url
-        from urllib.parse import urlparse
-
-        parsed = urlparse(url)
-        if parsed.scheme not in ("http", "https"):
-            msg = "Image URL must use http or https."
-            raise forms.ValidationError(msg)
-        image_extensions = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg")
-        path_lower = parsed.path.lower()
-        if not any(path_lower.endswith(ext) for ext in image_extensions):
-            msg = "URL does not appear to point to an image. Please use a URL ending in .jpg, .jpeg, .png, .gif, .webp, etc."
-            raise forms.ValidationError(msg)
-        return url
+        return validate_image_url(url)
 
     def clean(self):
         cleaned_data = super().clean()
@@ -2472,21 +2482,11 @@ class CreateLotForm(forms.ModelForm):
         )
 
     def clean_image_url(self):
-        """Validate that image_url points to an image (same rules as CreateImageForm.clean_url)"""
-        from urllib.parse import urlparse
-
+        """Validate that image_url points to an image"""
         url = self.cleaned_data.get("image_url")
         if not url:
             return url
-        parsed = urlparse(url)
-        if parsed.scheme not in ("http", "https"):
-            msg = "Image URL must use http or https."
-            raise forms.ValidationError(msg)
-        image_extensions = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg")
-        if not any(parsed.path.lower().endswith(ext) for ext in image_extensions):
-            msg = "URL does not appear to point to an image. Please use a URL ending in .jpg, .jpeg, .png, .gif, .webp, etc."
-            raise forms.ValidationError(msg)
-        return url
+        return validate_image_url(url)
 
     def clean(self):
         cleaned_data = super().clean()

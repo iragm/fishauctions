@@ -10570,8 +10570,9 @@ class LotImageManagementTests(StandardTestCase):
         self.client.login(username="admin_user", password="testpassword")
         response = self.client.get(source_lot.lot_link)
         self.assertNotIn("images_managed_from_lot", response.context)
-        # but auction admin should still be allowed to manage/add images to this lot
-        self.assertTrue(source_lot.image_permission_check(self.admin_user))
+        # when use_images_from is set, nobody (not even admin) should be able to add images to this lot
+        # — images are managed from the source lot instead
+        self.assertFalse(source_lot.image_permission_check(self.admin_user))
 
     def test_images_and_thumbnail_delegate_via_use_images_from(self):
         """images and thumbnail should return images from the source lot when use_images_from is set"""
