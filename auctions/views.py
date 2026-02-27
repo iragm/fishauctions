@@ -4792,7 +4792,8 @@ class BidDelete(LoginRequiredMixin, DeleteView):
         return super().dispatch(request, *args, **kwargs)
 
     def form_valid(self, form):
-        lot = self.get_object().lot_number
+        bid = self.get_object()
+        lot = bid.lot_number
         success_url = self.get_success_url()
         if self.removing_own_bid:
             own_bid_removal_messages = [
@@ -4805,7 +4806,7 @@ class BidDelete(LoginRequiredMixin, DeleteView):
             ]
             history_message = choice(own_bid_removal_messages).format(user=self.request.user)
         else:
-            history_message = f"{self.request.user} has removed {self.get_object().user}'s bid"
+            history_message = f"{self.request.user} has removed {bid.user}'s bid"
         if lot.ended:
             lot.winner = None
             lot.auctiontos_winner = None
@@ -4819,10 +4820,10 @@ class BidDelete(LoginRequiredMixin, DeleteView):
             if lot.label_printed:
                 lot.label_needs_reprinting = True
             lot.save()
-        self.get_object().delete()
+        bid.delete()
         # Also soft-delete any other bid records for this user on the same lot
         Bid.objects.exclude(is_deleted=True).filter(
-            user=self.get_object().user,
+            user=bid.user,
             lot_number=lot,
         ).update(is_deleted=True)
         LotHistory.objects.create(lot=lot, user=self.request.user, message=history_message, changed_price=True)

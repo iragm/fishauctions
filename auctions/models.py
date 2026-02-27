@@ -4561,16 +4561,17 @@ class Lot(models.Model):
         return self.max_bid
 
     def _latest_bid_per_user_subquery(self):
-        """Return a subquery that identifies the latest bid_time per user for this lot.
-        Used to deduplicate bids when a user has placed multiple bids (keeping only the latest)."""
+        """Return a subquery that identifies the pk of the latest bid per user for this lot.
+        Used to deduplicate bids when a user has placed multiple bids (keeping only the latest).
+        Using pk (ordered by -bid_time, -pk) avoids false matches when two bids share a timestamp."""
         return (
             Bid.objects.exclude(is_deleted=True)
             .filter(
                 lot_number=self.lot_number,
                 user=OuterRef("user"),
             )
-            .order_by("-bid_time")
-            .values("bid_time")[:1]
+            .order_by("-bid_time", "-pk")
+            .values("pk")[:1]
         )
 
     @property
@@ -4582,7 +4583,7 @@ class Lot(models.Model):
                 lot_number=self.lot_number,
                 last_bid_time__lte=self.calculated_end,
                 amount__gte=self.reserve_price,
-                bid_time=Subquery(self._latest_bid_per_user_subquery()),
+                pk=Subquery(self._latest_bid_per_user_subquery()),
             )
             .order_by("-amount", "last_bid_time")[:2]
         )
@@ -4603,7 +4604,7 @@ class Lot(models.Model):
                 lot_number=self.lot_number,
                 last_bid_time__lte=self.calculated_end,
                 amount__gte=self.reserve_price,
-                bid_time=Subquery(self._latest_bid_per_user_subquery()),
+                pk=Subquery(self._latest_bid_per_user_subquery()),
             )
             .order_by("-amount", "last_bid_time")
         )

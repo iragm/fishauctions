@@ -174,13 +174,9 @@ def bid_on_lot(lot, user, amount):
             Bid.objects.exclude(is_deleted=True).filter(user=user, lot_number=lot).order_by("-bid_time").first()
         )
         created = existing_bid is None
-        if created and not lot.sealed_bid:
-            # For regular auctions, pre-create the bid so lot.high_bidder (which queries the DB)
-            # can see it in the calculations below.
-            # For sealed bids, the bid record is always created fresh in the sealed_bid block.
-            bid = Bid.objects.create(user=user, lot_number=lot, amount=amount)
-        else:
-            bid = existing_bid  # may be None for a new sealed-bid user; assigned in sealed_bid block
+        # Don't persist the bid yet; save it only when the bid is accepted.
+        # For sealed bids, the sealed_bid block below creates the record.
+        bid = Bid(user=user, lot_number=lot, amount=amount) if created else existing_bid
         # also update category interest, max one per bid
         interest, interestCreated = UserInterestCategory.objects.get_or_create(
             category=lot.species_category,
@@ -261,7 +257,7 @@ def bid_on_lot(lot, user, amount):
                         bid_amount=amount,
                     )
                     return result
-            if (not originalHighBidder) and (lot.high_bidder.pk == user.pk):
+            if not originalHighBidder and (created or lot.high_bidder.pk == user.pk):
                 result["send_to"] = "everyone"
                 result["type"] = "NEW_HIGH_BIDDER"
                 result["message"] = f"{user_string} has placed the first bid on this lot"
