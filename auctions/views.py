@@ -130,6 +130,7 @@ from .forms import (
     TOSFormSetHelper,
     UserLabelPrefsForm,
     UserLocation,
+    validate_image_url,
 )
 from .helper_functions import bin_data
 from .models import (
@@ -4518,13 +4519,17 @@ class LotValidation(LoginRequiredMixin):
         # if image_url is set, add an image to the lot using this URL, then clear the field
         image_url = form.cleaned_data.get("image_url")
         if image_url:
-            # check direct images on this lot (not delegated via use_images_from) for is_primary
-            LotImage.objects.create(
-                lot_number=lot,
-                url=image_url,
-                is_primary=not LotImage.objects.filter(lot_number=lot).exists(),
-                image_source="RANDOM",
-            )
+            try:
+                validate_image_url(image_url)
+                # check direct images on this lot (not delegated via use_images_from) for is_primary
+                LotImage.objects.create(
+                    lot_number=lot,
+                    url=image_url,
+                    is_primary=not LotImage.objects.filter(lot_number=lot).exists(),
+                    image_source="RANDOM",
+                )
+            except ValidationError:
+                messages.error(self.request, "The image URL provided was not valid and will not be used.")
             lot.image_url = None
             lot.save(update_fields=["image_url"])
         return super().form_valid(form)

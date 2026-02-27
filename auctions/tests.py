@@ -10481,54 +10481,76 @@ class LotImageManagementTests(StandardTestCase):
         self.assertFalse(form.is_valid())
         self.assertIn("url", form.errors)
 
-    def test_lot_image_url_field_validates_extension(self):
-        """The lot image_url hidden field should reject URLs without image extensions"""
-        from .forms import CreateLotForm
-
-        # Build the minimal form data needed to validate image_url
-        form = CreateLotForm(
-            data={
-                "lot_name": "Test",
-                "quantity": 1,
-                "reserve_price": 2,
-                "image_url": "https://example.com/not-an-image.html",
-                "cloned_from": "",
-                "run_duration": 10,
-                "part_of_auction": "False",
-                "local_pickup": "on",
-                "payment_cash": "on",
-            },
+    def test_lot_image_url_field_invalid_extension_shows_error(self):
+        """Submitting a lot form with an image_url that lacks an image extension should show an error and not create a LotImage"""
+        self.client.login(username="my_lot", password="testpassword")
+        self.user.first_name = "Test"
+        self.user.last_name = "User"
+        self.user.save()
+        self.user.userdata.address = "123 Test St"
+        self.user.userdata.can_submit_standalone_lots = True
+        self.user.userdata.save()
+        test_lot = Lot.objects.create(
+            lot_name="Bad-extension URL test lot",
             user=self.user,
-            cloned_from=None,
-            auction=None,
+            quantity=1,
+            local_pickup=True,
+            payment_cash=True,
         )
-        # image_url should have a validation error for the bad extension
-        self.assertIn("image_url", form.errors)
+        initial_image_count = LotImage.objects.filter(lot_number=test_lot).count()
+        form_data = {
+            "lot_name": test_lot.lot_name,
+            "quantity": 1,
+            "reserve_price": 2,
+            "image_url": "https://example.com/not-an-image.html",
+            "cloned_from": "",
+            "run_duration": 10,
+            "part_of_auction": "False",
+            "local_pickup": "on",
+            "payment_cash": "on",
+        }
+        response = self.client.post(f"/lots/edit/{test_lot.pk}/", data=form_data, follow=True)
+        # No LotImage should be created for the invalid URL
+        self.assertEqual(LotImage.objects.filter(lot_number=test_lot).count(), initial_image_count)
+        # An error message should be shown
+        messages_list = [str(m) for m in response.context["messages"]]
+        self.assertTrue(any("not valid" in m for m in messages_list))
 
-    def test_lot_image_url_field_validates_scheme(self):
-        """The lot image_url hidden field should reject non-http/https URLs"""
-        from .forms import CreateLotForm
-
-        form = CreateLotForm(
-            data={
-                "lot_name": "Test",
-                "quantity": 1,
-                "reserve_price": 2,
-                "image_url": "ftp://example.com/photo.jpg",
-                "cloned_from": "",
-                "run_duration": 10,
-                "part_of_auction": "False",
-                "local_pickup": "on",
-                "payment_cash": "on",
-            },
+    def test_lot_image_url_field_invalid_scheme_shows_error(self):
+        """Submitting a lot form with an image_url that uses a non-http/https scheme should show an error and not create a LotImage"""
+        self.client.login(username="my_lot", password="testpassword")
+        self.user.first_name = "Test"
+        self.user.last_name = "User"
+        self.user.save()
+        self.user.userdata.address = "123 Test St"
+        self.user.userdata.can_submit_standalone_lots = True
+        self.user.userdata.save()
+        test_lot = Lot.objects.create(
+            lot_name="Bad-scheme URL test lot",
             user=self.user,
-            cloned_from=None,
-            auction=None,
+            quantity=1,
+            local_pickup=True,
+            payment_cash=True,
         )
-        self.assertIn("image_url", form.errors)
+        initial_image_count = LotImage.objects.filter(lot_number=test_lot).count()
+        form_data = {
+            "lot_name": test_lot.lot_name,
+            "quantity": 1,
+            "reserve_price": 2,
+            "image_url": "ftp://example.com/photo.jpg",
+            "cloned_from": "",
+            "run_duration": 10,
+            "part_of_auction": "False",
+            "local_pickup": "on",
+            "payment_cash": "on",
+        }
+        response = self.client.post(f"/lots/edit/{test_lot.pk}/", data=form_data, follow=True)
+        self.assertEqual(LotImage.objects.filter(lot_number=test_lot).count(), initial_image_count)
+        messages_list = [str(m) for m in response.context["messages"]]
+        self.assertTrue(any("not valid" in m for m in messages_list))
 
     def test_lot_image_url_field_accepts_valid_url(self):
-        """The lot image_url hidden field should accept valid http image URLs"""
+        """The lot image_url hidden field should accept valid http image URLs without showing errors"""
         from .forms import CreateLotForm
 
         # Ensure user can submit standalone lots

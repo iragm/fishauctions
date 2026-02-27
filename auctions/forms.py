@@ -2481,13 +2481,6 @@ class CreateLotForm(forms.ModelForm):
             HTML("</span>"),
         )
 
-    def clean_image_url(self):
-        """Validate that image_url points to an image"""
-        url = self.cleaned_data.get("image_url")
-        if not url:
-            return url
-        return validate_image_url(url)
-
     def clean(self):
         cleaned_data = super().clean()
         # create_new_species = cleaned_data.get("create_new_species")
