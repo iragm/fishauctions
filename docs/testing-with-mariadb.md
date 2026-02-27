@@ -23,8 +23,8 @@ Tests now run against a MariaDB database instead of SQLite to better match the p
 If you're upgrading from a previous version and have an existing MariaDB volume, you may need to manually grant test database permissions:
 
 ```bash
-# Option 1: Run the helper script
-./db-init/grant-permissions-existing-db.sh
+# Option 1: Run the helper script from the repo root
+./grant-test-permissions.sh
 
 # Option 2: Grant permissions manually
 docker exec -it db mariadb -uroot -p${DATABASE_ROOT_PASSWORD} -e "
