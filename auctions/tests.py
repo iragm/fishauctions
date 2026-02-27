@@ -544,6 +544,38 @@ class LotModelTests(TestCase):
         assert lot.high_bidder.pk == userA.pk
         assert lot.high_bid == 11  # $10 + 1 (one more than userB's $10)
 
+    def test_sealed_bid_creates_exactly_one_record_per_bid(self):
+        """For sealed bids, each call to bid_on_lot should create exactly one bid record (no duplicates)"""
+        from auctions.consumers import bid_on_lot
+
+        time = timezone.now() + datetime.timedelta(days=30)
+        timeStart = timezone.now() - datetime.timedelta(days=1)
+        pastTime = timezone.now() - datetime.timedelta(hours=1)
+        lotuser = User.objects.create_user(username="lotowner_sealed", password="x")
+        category = Category.objects.create(name="Test Category sealed")
+        auction = Auction.objects.create(title="Sealed auction", date_end=time, date_start=timeStart, sealed_bid=True)
+        location = PickupLocation.objects.create(name="location", auction=auction, pickup_time=time)
+        lot = Lot.objects.create(
+            lot_name="A sealed test lot",
+            date_end=time,
+            reserve_price=5,
+            user=lotuser,
+            quantity=1,
+            species_category=category,
+            auction=auction,
+        )
+        lot.date_posted = pastTime
+        lot.save()
+        userA = User.objects.create_user(username="User_A_sealed", password="x")
+        AuctionTOS.objects.create(user=lotuser, auction=auction, pickup_location=location)
+        AuctionTOS.objects.create(user=userA, auction=auction, pickup_location=location)
+        # First bid by userA — should create exactly 1 record
+        bid_on_lot(lot, userA, 10)
+        assert Bid.objects.filter(user=userA, lot_number=lot, is_deleted=False).count() == 1
+        # Second bid by userA (raising proxy) — should add 1 more record, total 2
+        bid_on_lot(lot, userA, 15)
+        assert Bid.objects.filter(user=userA, lot_number=lot, is_deleted=False).count() == 2
+
 
 class LotModelConcurrencyTests(TransactionTestCase):
     """Tests that require real database transactions (not wrapped in TestCase transaction)"""
