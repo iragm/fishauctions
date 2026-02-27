@@ -4172,8 +4172,7 @@ class ViewLot(DetailView):
         context["bids"] = []
         if lot.auction:
             if context["is_auction_admin"]:
-                bids = Bid.objects.exclude(is_deleted=True).filter(lot_number=lot.pk)
-                context["bids"] = bids
+                context["bids"] = lot.bids
         context["debug"] = settings.DEBUG
         try:
             if lot.local_pickup:
@@ -4821,6 +4820,11 @@ class BidDelete(LoginRequiredMixin, DeleteView):
                 lot.label_needs_reprinting = True
             lot.save()
         self.get_object().delete()
+        # Also soft-delete any other bid records for this user on the same lot
+        Bid.objects.exclude(is_deleted=True).filter(
+            user=self.get_object().user,
+            lot_number=lot,
+        ).update(is_deleted=True)
         LotHistory.objects.create(lot=lot, user=self.request.user, message=history_message, changed_price=True)
         return HttpResponseRedirect(success_url)
 
