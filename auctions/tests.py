@@ -576,6 +576,42 @@ class LotModelTests(TestCase):
         bid_on_lot(lot, userA, 15)
         assert Bid.objects.filter(user=userA, lot_number=lot, is_deleted=False).count() == 2
 
+    def test_user_cannot_bid_against_themselves(self):
+        """A user who is already the high bidder should raise their proxy bid silently (INFO),
+        not generate a NEW_HIGH_BIDDER event — i.e., they cannot bid against themselves."""
+        from auctions.consumers import bid_on_lot
+
+        time = timezone.now() + datetime.timedelta(days=30)
+        pastTime = timezone.now() - datetime.timedelta(hours=1)
+        lotuser = User.objects.create_user(username="lotowner_selfbid", password="x")
+        category = Category.objects.create(name="Test Category selfbid")
+        lot = Lot.objects.create(
+            lot_name="A test lot selfbid",
+            date_end=time,
+            reserve_price=5,
+            user=lotuser,
+            quantity=1,
+            species_category=category,
+        )
+        lot.date_posted = pastTime
+        lot.save()
+        userA = User.objects.create_user(username="User_A_selfbid", password="x")
+        userB = User.objects.create_user(username="User_B_selfbid", password="x")
+        # userA places the first bid and becomes high bidder
+        result = bid_on_lot(lot, userA, 10)
+        assert result["type"] == "NEW_HIGH_BIDDER"
+        assert lot.high_bidder.pk == userA.pk
+        # userB places a competing bid, raising the price
+        bid_on_lot(lot, userB, 10)
+        assert lot.high_bidder.pk == userA.pk  # userA still wins (first bid)
+        # userA raises their proxy bid — they are already the high bidder
+        # This should be an INFO message, NOT a NEW_HIGH_BIDDER event
+        result = bid_on_lot(lot, userA, 20)
+        assert result["type"] == "INFO", "Raising proxy while already high bidder should be INFO, not NEW_HIGH_BIDDER"
+        assert lot.high_bidder.pk == userA.pk
+        # Confirm two bid records exist for userA (original + raised proxy)
+        assert Bid.objects.filter(user=userA, lot_number=lot, is_deleted=False).count() == 2
+
 
 class LotModelConcurrencyTests(TransactionTestCase):
     """Tests that require real database transactions (not wrapped in TestCase transaction)"""
