@@ -50,9 +50,9 @@ bleach[css]==6.3.0
     #   -r requirements.in
     #   django-markdownfield
     #   django-summernote
-boto3==1.42.54
+boto3==1.42.59
     # via django-ses
-botocore==1.42.54
+botocore==1.42.59
     # via
     #   boto3
     #   s3transfer
@@ -64,7 +64,7 @@ celery==5.6.2
     # via
     #   -r requirements.in
     #   django-celery-beat
-certifi==2026.1.4
+certifi==2026.2.25
     # via
     #   -r requirements.in
     #   httpcore
@@ -106,9 +106,9 @@ constantly==23.10.4
     # via
     #   -r requirements.in
     #   twisted
-crispy-bootstrap5==2025.6
+crispy-bootstrap5==2026.3
     # via -r requirements.in
-cron-descriptor==2.0.6
+cron-descriptor==1.4.5
     # via django-celery-beat
 cryptography==46.0.5
     # via
@@ -164,11 +164,11 @@ django-autoslug==1.9.9
     # via -r requirements.in
 django-bootstrap-datepicker-plus==6.0.0
     # via -r requirements.in
-django-celery-beat==2.8.1
+django-celery-beat==2.9.0
     # via -r requirements.in
 django-chartjs==2.3.0
     # via -r requirements.in
-django-crispy-forms==2.5
+django-crispy-forms==2.6
     # via
     #   -r requirements.in
     #   crispy-bootstrap5
@@ -352,7 +352,7 @@ python-dateutil==2.9.0.post0
     # via
     #   botocore
     #   celery
-python-dotenv==1.2.1
+python-dotenv==1.2.2
     # via
     #   pydantic-settings
     #   uvicorn
@@ -366,7 +366,7 @@ pyyaml==6.0.3
     # via
     #   -r requirements.in
     #   uvicorn
-redis==7.2.0
+redis==7.2.1
     # via
     #   -r requirements.in
     #   channels-redis
@@ -425,7 +425,6 @@ typing-extensions==4.15.0
     #   aiosignal
     #   anyio
     #   beautifulsoup4
-    #   cron-descriptor
     #   django-bootstrap-datepicker-plus
     #   pydantic
     #   pydantic-core
@@ -447,7 +446,7 @@ ua-parser==1.0.1
     # via
     #   -r requirements.in
     #   user-agents
-ua-parser-builtins==202602
+ua-parser-builtins==202603
     # via ua-parser
 ujson==5.11.0
     # via autobahn
@@ -482,7 +481,7 @@ webencodings==0.5.1
     #   tinyhtml5
 websockets==16.0
     # via uvicorn
-yarl==1.22.0
+yarl==1.23.0
     # via aiohttp
 zope-interface==8.2
     # via
