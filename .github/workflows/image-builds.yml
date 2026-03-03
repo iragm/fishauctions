@@ -13,7 +13,32 @@ jobs:
 
       - run: ./.github/scripts/prepare-ci.sh
       - run: docker compose build
-      - run: docker compose up --detach --wait --wait-timeout 120
+      - name: Start database and wait for health
+        run: |
+          docker compose up -d db
+          echo "Waiting for database to be healthy (up to 240 seconds)..."
+          for i in {1..80}; do  # 80 attempts × 3 seconds = 240 seconds max
+            STATUS=$(docker inspect --format='{{.State.Health.Status}}' db 2>/dev/null || echo "not_found")
+            if [ "$STATUS" = "healthy" ]; then
+              echo "Database is healthy!"
+              break
+            fi
+            echo "Database status: $STATUS (attempt $i/80)"
+            sleep 3
+          done
+      - name: Start remaining services
+        run: docker compose up --detach
+      - name: Wait for web service to be ready
+        run: |
+          echo "Waiting for web service to be ready (up to 60 seconds)..."
+          for i in {1..12}; do  # 12 attempts × 5 seconds = 60 seconds max
+            if docker compose exec -T web python3 -c "import django; django.setup()" 2>/dev/null; then
+              echo "Web service is ready"
+              break
+            fi
+            echo "Waiting for web service... ($i/12)"
+            sleep 5
+          done
 
       - run: docker compose exec web python3 manage.py test
 
