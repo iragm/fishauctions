@@ -41,7 +41,7 @@ jobs:
           echo "Waiting for web service to be ready (up to 120 seconds)..."
           WEB_READY=0
           for i in {1..24}; do  # 24 attempts × 5 seconds = 120 seconds max
-            if docker exec django python3 -c "import django; django.setup()" 2>/dev/null; then
+            if docker exec django nc -z localhost 8000 2>/dev/null; then
               echo "Web service is ready"
               WEB_READY=1
               break
