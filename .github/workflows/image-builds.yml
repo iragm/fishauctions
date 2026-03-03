@@ -38,15 +38,15 @@ jobs:
         run: docker compose up --detach
       - name: Wait for web service to be ready
         run: |
-          echo "Waiting for web service to be ready (up to 60 seconds)..."
+          echo "Waiting for web service to be ready (up to 120 seconds)..."
           WEB_READY=0
-          for i in {1..12}; do  # 12 attempts × 5 seconds = 60 seconds max
-            if docker compose exec -T web python3 -c "import django; django.setup()" 2>/dev/null; then
+          for i in {1..24}; do  # 24 attempts × 5 seconds = 120 seconds max
+            if docker exec django python3 -c "import django; django.setup()" 2>/dev/null; then
               echo "Web service is ready"
               WEB_READY=1
               break
             fi
-            echo "Waiting for web service... ($i/12)"
+            echo "Waiting for web service... ($i/24)"
             sleep 5
           done
           if [ "$WEB_READY" -ne 1 ]; then
