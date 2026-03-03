@@ -26,6 +26,14 @@ jobs:
             echo "Database status: $STATUS (attempt $i/80)"
             sleep 3
           done
+          # Check final status after waiting loop; fail explicitly if not healthy
+          FINAL_STATUS=$(docker inspect --format='{{.State.Health.Status}}' db 2>/dev/null || echo "not_found")
+          if [ "$FINAL_STATUS" != "healthy" ]; then
+            echo "Database failed to become healthy (final status: $FINAL_STATUS)."
+            echo "Printing database container logs for diagnosis:"
+            docker compose logs db || true
+            exit 1
+          fi
       - name: Start remaining services
         run: docker compose up --detach
       - name: Wait for web service to be ready
