@@ -1215,12 +1215,8 @@ class PageViewCreate(View):
                     source=source,
                 )
                 if user:
-                    try:
-                        userdata = user.userdata
-                        userdata.last_activity = timezone.now()
-                        userdata.save(update_fields=["last_activity"])
-                    except UserData.DoesNotExist:
-                        pass
+                    user.userdata.last_activity = timezone.now()
+                    user.userdata.save(update_fields=["last_activity"])
             if user and lot_number and lot_number.species_category:
                 # create interest in this category if this is a new view for this category
                 interest, created = UserInterestCategory.objects.get_or_create(
