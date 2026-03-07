@@ -9050,6 +9050,37 @@ class ModelMethodsTestCase(StandardTestCase):
         self.assertEqual(new_view.latitude, 51.5074)
         self.assertEqual(new_view.longitude, -0.1278)
 
+    def test_pageview_create_updates_last_activity_for_authenticated_user(self):
+        """PageViewCreate should update last_activity on UserData for authenticated users"""
+        old_activity = self.user.userdata.last_activity
+        self.client.force_login(self.user)
+        response = self.client.post(
+            "/api/pageview/",
+            data={
+                "url": "/lots/",
+                "first_view": "true",
+                "referrer": "",
+                "title": "Lots",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.user.userdata.refresh_from_db()
+        self.assertGreater(self.user.userdata.last_activity, old_activity)
+
+    def test_pageview_create_does_not_update_last_activity_for_anonymous_user(self):
+        """PageViewCreate should not update last_activity for anonymous users"""
+        self.client.logout()
+        response = self.client.post(
+            "/api/pageview/",
+            data={
+                "url": "/lots/",
+                "first_view": "true",
+                "referrer": "",
+                "title": "Lots",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+
 
 class SignalLogicTestCase(StandardTestCase):
     """Test cases for signal handlers with complex date logic"""
