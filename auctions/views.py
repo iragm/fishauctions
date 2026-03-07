@@ -1216,7 +1216,7 @@ class PageViewCreate(View):
                 )
                 if user:
                     user.userdata.last_activity = timezone.now()
-                    user.userdata.save(update_fields=["last_activity"])
+                    UserData.objects.filter(pk=user.userdata.pk).update(last_activity=user.userdata.last_activity)
             if user and lot_number and lot_number.species_category:
                 # create interest in this category if this is a new view for this category
                 interest, created = UserInterestCategory.objects.get_or_create(
