@@ -170,12 +170,13 @@ def bid_on_lot(lot, user, amount):
                 return result
         originalHighBidder = lot.high_bidder
         original_bid = lot.high_bid
-        bid, created = Bid.objects.get_or_create(
-            user=user,
-            lot_number=lot,
-            is_deleted=False,
-            defaults={"amount": amount},
+        existing_bid = (
+            Bid.objects.exclude(is_deleted=True).filter(user=user, lot_number=lot).order_by("-bid_time").first()
         )
+        created = existing_bid is None
+        # Don't persist the bid yet; save it only when the bid is accepted.
+        # For sealed bids, the sealed_bid block below creates the record.
+        bid = Bid(user=user, lot_number=lot, amount=amount) if created else existing_bid
         # also update category interest, max one per bid
         interest, interestCreated = UserInterestCategory.objects.get_or_create(
             category=lot.species_category,
@@ -193,9 +194,7 @@ def bid_on_lot(lot, user, amount):
             interest.interest += settings.BID_WEIGHT
             interest.save()
         if lot.sealed_bid:
-            bid.was_high_bid = True
-            bid.amount = amount
-            bid.last_bid_time = timezone.now()
+            bid = Bid(user=user, lot_number=lot, amount=amount, was_high_bid=True)
             bid.save()
             result["type"] = "INFO"
             result["message"] = "Bid placed!  You can change your bid at any time until the auction ends"
@@ -213,10 +212,9 @@ def bid_on_lot(lot, user, amount):
                     )
                     return result
                 else:
-                    bid.last_bid_time = timezone.now()
-                    bid.amount = amount
-                    # bid.amount now contains the actual bid, regardless of whether it was new or not
-                    # bid.save()
+                    # Create a new bid record instead of updating the existing one,
+                    # so the old bid is preserved for history
+                    bid = Bid(user=user, lot_number=lot, amount=amount)
             # no longer true: from here on, lot.high_bidder and lot.high_bid will include the current bid
             if lot.buy_now_price and not originalHighBidder:
                 if bid.amount >= lot.buy_now_price:
@@ -259,7 +257,7 @@ def bid_on_lot(lot, user, amount):
                         bid_amount=amount,
                     )
                     return result
-            if (not originalHighBidder) and (lot.high_bidder.pk == user.pk):
+            if not originalHighBidder and (created or lot.high_bidder.pk == user.pk):
                 result["send_to"] = "everyone"
                 result["type"] = "NEW_HIGH_BIDDER"
                 result["message"] = f"{user_string} has placed the first bid on this lot"
