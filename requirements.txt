@@ -45,14 +45,13 @@ beautifulsoup4==4.14.3
     # via -r requirements.in
 billiard==4.2.4
     # via celery
-bleach[css]==6.3.0
+bleach==6.3.0
     # via
     #   -r requirements.in
-    #   django-markdownfield
     #   django-summernote
-boto3==1.42.59
+boto3==1.42.63
     # via django-ses
-botocore==1.42.59
+botocore==1.42.63
     # via
     #   boto3
     #   s3transfer
@@ -83,9 +82,9 @@ channels==4.3.2
     #   channels-redis
 channels-redis==4.3.0
     # via -r requirements.in
-chardet==6.0.0.post1
+chardet==7.0.1
     # via -r requirements.in
-charset-normalizer==3.4.4
+charset-normalizer==3.4.5
     # via
     #   reportlab
     #   requests
@@ -129,7 +128,7 @@ defusedxml==0.7.1
     # via
     #   -r requirements.in
     #   python3-openid
-django==5.2.11
+django==5.2.12
     # via
     #   -r requirements.in
     #   channels
@@ -186,7 +185,7 @@ django-htmx==1.27.0
     # via -r requirements.in
 django-location-field==2.7.3
     # via -r requirements.in
-django-markdownfield==0.11.0
+django-markdownfield==0.13.2
     # via -r requirements.in
 django-post-office==3.11.0
     # via -r requirements.in
@@ -271,7 +270,9 @@ multidict==6.7.1
 mysqlclient==2.2.8
     # via -r requirements.in
 nh3==0.3.3
-    # via django-post-office
+    # via
+    #   django-markdownfield
+    #   django-post-office
 oauthlib==3.3.1
     # via
     #   -r requirements.in
@@ -358,7 +359,7 @@ python-dotenv==1.2.2
     #   uvicorn
 python3-openid==3.2.0
     # via -r requirements.in
-pytz==2025.2
+pytz==2026.1.post1
     # via -r requirements.in
 pywebpush==2.3.0
     # via django-webpush
@@ -366,7 +367,7 @@ pyyaml==6.0.3
     # via
     #   -r requirements.in
     #   uvicorn
-redis==7.2.1
+redis==7.3.0
     # via
     #   -r requirements.in
     #   channels-redis
@@ -405,12 +406,11 @@ sqlparse==0.5.5
     #   django-debug-toolbar
 squareup==44.0.1.20260122
     # via -r requirements.in
-tinycss2==1.4.0
+tinycss2==1.5.1
     # via
-    #   bleach
     #   cssselect2
     #   weasyprint
-tinyhtml5==2.0.0
+tinyhtml5==2.1.0
     # via weasyprint
 twisted[tls]==25.5.0
     # via
@@ -470,7 +470,7 @@ watchfiles==1.1.1
     # via uvicorn
 wcwidth==0.6.0
     # via prompt-toolkit
-weasyprint==66.0
+weasyprint==68.1
     # via django-weasyprint
 webencodings==0.5.1
     # via
