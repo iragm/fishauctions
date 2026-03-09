@@ -26,11 +26,11 @@ This document lists all the resources that need to be downloaded and self-hosted
 **Size:** ~90KB
 
 **Source:** https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/fonts/bootstrap-icons.woff
-**Destination:** `auctions/static/fonts/bootstrap-icons.woff`
+**Destination:** `auctions/static/css/vendor/fonts/bootstrap-icons.woff`
 **Size:** ~150KB
 
 **Source:** https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/fonts/bootstrap-icons.woff2
-**Destination:** `auctions/static/fonts/bootstrap-icons.woff2`
+**Destination:** `auctions/static/css/vendor/fonts/bootstrap-icons.woff2`
 **Size:** ~100KB
 
 ### 5. jQuery (Already Self-Hosted)
@@ -45,7 +45,7 @@ cd /path/to/fishauctions
 # Create vendor directories
 mkdir -p auctions/static/js/vendor
 mkdir -p auctions/static/css/vendor
-mkdir -p auctions/static/fonts
+mkdir -p auctions/static/css/vendor/fonts
 
 # Download JavaScript files
 curl -L -o auctions/static/js/vendor/Vosklet.js \
@@ -61,32 +61,22 @@ curl -L -o auctions/static/css/vendor/bootstrap.min.css \
 curl -L -o auctions/static/css/vendor/bootstrap-icons.min.css \
   "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
 
-# Download font files
-curl -L -o auctions/static/fonts/bootstrap-icons.woff \
+# Download font files (must be placed alongside the CSS so relative URLs resolve correctly)
+curl -L -o auctions/static/css/vendor/fonts/bootstrap-icons.woff \
   "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/fonts/bootstrap-icons.woff"
 
-curl -L -o auctions/static/fonts/bootstrap-icons.woff2 \
+curl -L -o auctions/static/css/vendor/fonts/bootstrap-icons.woff2 \
   "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/fonts/bootstrap-icons.woff2"
 ```
 
 ## Post-Download Steps
 
-1. **Update CSS Font Paths**
-   Edit `auctions/static/css/vendor/bootstrap-icons.min.css` and update font-face URLs:
-   ```css
-   @font-face {
-     font-family: "bootstrap-icons";
-     src: url("/static/fonts/bootstrap-icons.woff2") format("woff2"),
-          url("/static/fonts/bootstrap-icons.woff") format("woff");
-   }
-   ```
-
-2. **Run Django collectstatic**
+1. **Run Django collectstatic**
    ```bash
    docker exec -it django python3 manage.py collectstatic --no-input
    ```
 
-3. **Restart containers**
+2. **Restart containers**
    ```bash
    docker compose restart web nginx
    ```
@@ -105,7 +95,7 @@ curl -I http://your-domain/static/css/vendor/bootstrap.min.css
 
 # Check Icons
 curl -I http://your-domain/static/css/vendor/bootstrap-icons.min.css
-curl -I http://your-domain/static/fonts/bootstrap-icons.woff2
+curl -I http://your-domain/static/css/vendor/fonts/bootstrap-icons.woff2
 ```
 
 All should return 200 OK with proper CORS headers.
