@@ -323,6 +323,7 @@ ACCOUNT_FORMS = {
     "signup": "auctions.forms.CustomSignupForm",
     "reset_password": "auctions.forms.CustomResetPasswordForm",
 }
+ACCOUNT_USERNAME_VALIDATORS = "auctions.validators.USERNAME_VALIDATORS"
 # ACCOUNT_AUTHENTICATION_METHOD = "username_email"
 ACCOUNT_LOGIN_METHODS = {"username", "email"}
 ACCOUNT_CONFIRM_EMAIL_ON_GET = True

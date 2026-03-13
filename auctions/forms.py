@@ -41,6 +41,7 @@ from .models import (
     UserData,
     UserLabelPrefs,
 )
+from .validators import validate_username_no_at_symbol
 
 # Distance conversion constant
 MILES_TO_KM = 1.60934
@@ -2712,6 +2713,11 @@ class ChangeUsernameForm(forms.ModelForm):
             "email",
             "user_permissions",
         )
+
+    def clean_username(self):
+        username = self.cleaned_data.get("username", "")
+        validate_username_no_at_symbol(username)
+        return username
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

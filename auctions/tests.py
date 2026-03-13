@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from django import forms
 from django.contrib.auth.models import User
+from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.test import TestCase, TransactionTestCase, override_settings
@@ -15,7 +16,7 @@ from django.test.client import Client
 from django.urls import reverse
 from django.utils import timezone
 
-from .forms import AuctionEditForm
+from .forms import AuctionEditForm, ChangeUsernameForm
 from .models import (
     Auction,
     AuctionHistory,
@@ -10964,3 +10965,40 @@ class LotImageManagementTests(StandardTestCase):
         self.assertFalse(dependent_lot.can_add_images)
         # source_lot should be blocked regardless of auction type
         self.assertFalse(source_lot.image_permission_check(self.user))
+
+
+class ChangeUsernameFormTest(TestCase):
+    """Tests for ChangeUsernameForm to ensure @ symbol is disallowed in usernames"""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="testuser", password="testpassword", email="test@example.com")
+
+    def test_username_with_at_symbol_is_invalid(self):
+        form = ChangeUsernameForm(data={"username": "user@name"}, instance=self.user)
+        self.assertFalse(form.is_valid())
+        self.assertIn("username", form.errors)
+
+    def test_username_without_at_symbol_is_valid(self):
+        form = ChangeUsernameForm(data={"username": "validusername"}, instance=self.user)
+        self.assertTrue(form.is_valid())
+
+    def test_username_with_only_at_symbol_is_invalid(self):
+        form = ChangeUsernameForm(data={"username": "@"}, instance=self.user)
+        self.assertFalse(form.is_valid())
+        self.assertIn("username", form.errors)
+
+
+class CustomSignupFormTest(TestCase):
+    """Tests that the allauth adapter rejects usernames with @ via ACCOUNT_USERNAME_VALIDATORS"""
+
+    def test_username_with_at_symbol_rejected_by_adapter(self):
+        from allauth.account.adapter import get_adapter
+
+        with self.assertRaises(ValidationError):
+            get_adapter().clean_username("user@name")
+
+    def test_username_without_at_symbol_accepted_by_adapter(self):
+        from allauth.account.adapter import get_adapter
+
+        result = get_adapter().clean_username("validuser", shallow=True)
+        self.assertEqual(result, "validuser")
