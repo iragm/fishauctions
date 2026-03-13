@@ -41,6 +41,7 @@ from .models import (
     UserData,
     UserLabelPrefs,
 )
+from .validators import validate_username_no_at_symbol
 
 # Distance conversion constant
 MILES_TO_KM = 1.60934
@@ -2611,13 +2612,6 @@ class CustomSignupForm(SignupForm):
     last_name = forms.CharField(max_length=30, label="Last Name")
     captcha = ReCaptchaField(widget=ReCaptchaV2Invisible)
 
-    def clean_username(self):
-        username = super().clean_username()
-        if "@" in username:
-            msg = "Usernames cannot contain the @ symbol."
-            raise forms.ValidationError(msg)
-        return username
-
     def signup(self, request, user):
         user.first_name = self.cleaned_data["first_name"]
         user.last_name = self.cleaned_data["last_name"]
@@ -2722,9 +2716,7 @@ class ChangeUsernameForm(forms.ModelForm):
 
     def clean_username(self):
         username = self.cleaned_data.get("username", "")
-        if "@" in username:
-            msg = "Usernames cannot contain the @ symbol."
-            raise forms.ValidationError(msg)
+        validate_username_no_at_symbol(username)
         return username
 
     def __init__(self, *args, **kwargs):

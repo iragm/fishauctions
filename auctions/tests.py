@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from django import forms
 from django.contrib.auth.models import User
+from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.test import TestCase, TransactionTestCase, override_settings
@@ -10988,22 +10989,16 @@ class ChangeUsernameFormTest(TestCase):
 
 
 class CustomSignupFormTest(TestCase):
-    """Tests for CustomSignupForm to ensure @ symbol is disallowed in usernames"""
+    """Tests that the allauth adapter rejects usernames with @ via ACCOUNT_USERNAME_VALIDATORS"""
 
-    def test_username_with_at_symbol_raises_validation_error(self):
-        from .forms import CustomSignupForm
+    def test_username_with_at_symbol_rejected_by_adapter(self):
+        from allauth.account.adapter import get_adapter
 
-        form = CustomSignupForm.__new__(CustomSignupForm)
-        form.cleaned_data = {"username": "user@name"}
-        with patch("auctions.forms.SignupForm.clean_username", return_value="user@name"):
-            with self.assertRaises(forms.ValidationError):
-                form.clean_username()
+        with self.assertRaises(ValidationError):
+            get_adapter().clean_username("user@name")
 
-    def test_username_without_at_symbol_passes(self):
-        from .forms import CustomSignupForm
+    def test_username_without_at_symbol_accepted_by_adapter(self):
+        from allauth.account.adapter import get_adapter
 
-        form = CustomSignupForm.__new__(CustomSignupForm)
-        form.cleaned_data = {"username": "validuser"}
-        with patch("auctions.forms.SignupForm.clean_username", return_value="validuser"):
-            result = form.clean_username()
+        result = get_adapter().clean_username("validuser", shallow=True)
         self.assertEqual(result, "validuser")
