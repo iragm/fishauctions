@@ -10984,17 +10984,33 @@ class AdminUserSignupsJSONTests(TestCase):
             unsold_lot_fee=10,
             tax=0,
         )
+        self.second_auction = Auction.objects.create(
+            created_by=self.superuser,
+            title="Second auction",
+            is_online=True,
+            date_end=timezone.now() - datetime.timedelta(days=1),
+            date_start=timezone.now() - datetime.timedelta(days=5),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=0,
+        )
         self.pickup = PickupLocation.objects.create(
             name="pickup",
             auction=self.location_auction,
             pickup_time=timezone.now() + datetime.timedelta(days=1),
         )
-        # User who has joined an auction
+        self.second_pickup = PickupLocation.objects.create(
+            name="second pickup",
+            auction=self.second_auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=1),
+        )
+        # User who has joined an auction (no lots)
         self.user_with_tos = User.objects.create_user(
             username="user_with_tos", password="testpassword", email="u1@example.com"
         )
         AuctionTOS.objects.create(user=self.user_with_tos, auction=self.location_auction, pickup_location=self.pickup)
-        # User who has won a lot
+        # User who has won a lot (winner=self, winning_price set)
         self.user_winner = User.objects.create_user(
             username="user_winner", password="testpassword", email="u2@example.com"
         )
@@ -11009,7 +11025,7 @@ class AdminUserSignupsJSONTests(TestCase):
             winner=self.user_winner,
             winning_price=10,
         )
-        # User who has sold a lot (submitted a lot)
+        # User who has sold a lot (Lot.user=seller, winning_price set)
         self.user_seller = User.objects.create_user(
             username="user_seller", password="testpassword", email="u3@example.com"
         )
@@ -11018,6 +11034,7 @@ class AdminUserSignupsJSONTests(TestCase):
             auction=self.location_auction,
             user=self.user_seller,
             quantity=1,
+            winning_price=5,
         )
         # Stale user: last_activity older than 400 days
         self.stale_user = User.objects.create_user(
@@ -11030,6 +11047,32 @@ class AdminUserSignupsJSONTests(TestCase):
         self.fresh_user = User.objects.create_user(
             username="fresh_user", password="testpassword", email="u5@example.com"
         )
+        # User with multiple AuctionTOS entries and multiple sold lots (to test distinct counting)
+        self.multi_user = User.objects.create_user(
+            username="multi_user", password="testpassword", email="u6@example.com"
+        )
+        self.multi_tos1 = AuctionTOS.objects.create(
+            user=self.multi_user, auction=self.location_auction, pickup_location=self.pickup
+        )
+        self.multi_tos2 = AuctionTOS.objects.create(
+            user=self.multi_user, auction=self.second_auction, pickup_location=self.second_pickup
+        )
+        Lot.objects.create(
+            lot_name="Multi lot 1",
+            auction=self.location_auction,
+            user=self.multi_user,
+            quantity=1,
+            winning_price=8,
+        )
+        Lot.objects.create(
+            lot_name="Multi lot 2",
+            auction=self.location_auction,
+            user=self.multi_user,
+            quantity=1,
+            winning_price=9,
+        )
+        # Total users in test DB: superuser + user_with_tos + user_winner + user_seller
+        #                         + stale_user + fresh_user + multi_user = 7
 
     def _get_json(self, days=None):
         self.client.force_login(self.superuser)
@@ -11053,36 +11096,60 @@ class AdminUserSignupsJSONTests(TestCase):
         self.assertIn("Won or sold a lot", labels)
         self.assertIn("Stale (400+ days inactive)", labels)
 
-    def test_total_users_counts_all_users(self):
-        """The total users series should count all users including superuser"""
+    def test_total_users_exact_count(self):
+        """The total users series final value must equal the exact number of users"""
         data = self._get_json(days=90)
         total_ds = next(ds for ds in data["datasets"] if ds["label"] == "Total users")
-        # Last data point should be the total number of users
-        self.assertGreaterEqual(total_ds["data"][-1], 6)  # superuser + 5 created users
+        expected = User.objects.count()
+        self.assertEqual(total_ds["data"][-1], expected)
 
-    def test_joined_auction_series(self):
-        """Joined an auction series should count only users with an AuctionTOS"""
+    def test_joined_auction_exact_count(self):
+        """Joined an auction series must count distinct users with an AuctionTOS, not join rows"""
         data = self._get_json(days=90)
         tos_ds = next(ds for ds in data["datasets"] if ds["label"] == "Joined an auction")
-        total_ds = next(ds for ds in data["datasets"] if ds["label"] == "Total users")
-        # Joined-an-auction count must not exceed total users
-        self.assertLessEqual(tos_ds["data"][-1], total_ds["data"][-1])
-        # At least user_with_tos and user_winner are counted
-        self.assertGreaterEqual(tos_ds["data"][-1], 2)
+        # user_with_tos, user_winner, multi_user (2 TOS) = 3 distinct users
+        # multi_user has 2 AuctionTOS rows but must be counted once
+        expected = User.objects.filter(auctiontos__isnull=False).distinct().count()
+        self.assertEqual(tos_ds["data"][-1], expected)
 
-    def test_won_or_sold_series(self):
-        """Won or sold series should count users who won or sold a lot"""
+    def test_won_or_sold_exact_count(self):
+        """Won or sold series must count distinct users with a won lot or a sold lot (winning_price set)"""
         data = self._get_json(days=90)
         won_sold_ds = next(ds for ds in data["datasets"] if ds["label"] == "Won or sold a lot")
-        # user_winner and user_seller both qualify
-        self.assertGreaterEqual(won_sold_ds["data"][-1], 2)
+        # user_winner (winner field set), user_seller (lot with winning_price), multi_user (lots with winning_price) = 3
+        # multi_user has 2 sold lots but must be counted once
+        winners = set(User.objects.filter(winner__isnull=False).values_list("pk", flat=True))
+        sellers = set(User.objects.filter(lot__winning_price__isnull=False).values_list("pk", flat=True))
+        expected = len(winners | sellers)
+        self.assertEqual(won_sold_ds["data"][-1], expected)
 
-    def test_stale_users_series(self):
-        """Stale users series should count users inactive for 400+ days"""
+    def test_unsold_lot_not_counted_as_sold(self):
+        """A user who submitted a lot without a winning_price must not appear in the 'won or sold' series"""
+        unsold_user = User.objects.create_user(
+            username="unsold_user", password="testpassword", email="unsold@example.com"
+        )
+        Lot.objects.create(
+            lot_name="Unsold lot",
+            auction=self.location_auction,
+            user=unsold_user,
+            quantity=1,
+            # no winning_price
+        )
+        data = self._get_json(days=90)
+        won_sold_ds = next(ds for ds in data["datasets"] if ds["label"] == "Won or sold a lot")
+        winners = set(User.objects.filter(winner__isnull=False).values_list("pk", flat=True))
+        sellers = set(User.objects.filter(lot__winning_price__isnull=False).values_list("pk", flat=True))
+        expected = len(winners | sellers)
+        self.assertEqual(won_sold_ds["data"][-1], expected)
+        self.assertNotIn(unsold_user.pk, winners | sellers)
+
+    def test_stale_users_exact_count(self):
+        """Stale users series must equal the exact count of users inactive for 400+ days"""
         data = self._get_json(days=90)
         stale_ds = next(ds for ds in data["datasets"] if ds["label"] == "Stale (400+ days inactive)")
-        # Only stale_user qualifies
-        self.assertGreaterEqual(stale_ds["data"][-1], 1)
+        cutoff = timezone.now() - datetime.timedelta(days=400)
+        expected = User.objects.filter(userdata__last_activity__lt=cutoff).count()
+        self.assertEqual(stale_ds["data"][-1], expected)
 
     def test_non_admin_is_redirected(self):
         """Non-superuser should be redirected away from the JSON endpoint"""
