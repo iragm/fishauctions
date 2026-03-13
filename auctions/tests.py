@@ -10964,3 +10964,131 @@ class LotImageManagementTests(StandardTestCase):
         self.assertFalse(dependent_lot.can_add_images)
         # source_lot should be blocked regardless of auction type
         self.assertFalse(source_lot.image_permission_check(self.user))
+
+
+class AdminUserSignupsJSONTests(TestCase):
+    """Tests for the AdminUserSignupsJSON view with extended data series"""
+
+    def setUp(self):
+        self.superuser = User.objects.create_superuser(
+            username="superuser_signups", password="testpassword", email="super@example.com"
+        )
+        self.location_auction = Auction.objects.create(
+            created_by=self.superuser,
+            title="Test auction",
+            is_online=True,
+            date_end=timezone.now() - datetime.timedelta(days=1),
+            date_start=timezone.now() - datetime.timedelta(days=5),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=0,
+        )
+        self.pickup = PickupLocation.objects.create(
+            name="pickup",
+            auction=self.location_auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=1),
+        )
+        # User who has joined an auction
+        self.user_with_tos = User.objects.create_user(
+            username="user_with_tos", password="testpassword", email="u1@example.com"
+        )
+        AuctionTOS.objects.create(user=self.user_with_tos, auction=self.location_auction, pickup_location=self.pickup)
+        # User who has won a lot
+        self.user_winner = User.objects.create_user(
+            username="user_winner", password="testpassword", email="u2@example.com"
+        )
+        self.winner_tos = AuctionTOS.objects.create(
+            user=self.user_winner, auction=self.location_auction, pickup_location=self.pickup
+        )
+        self.won_lot = Lot.objects.create(
+            lot_name="Won lot",
+            auction=self.location_auction,
+            auctiontos_seller=self.winner_tos,
+            quantity=1,
+            winner=self.user_winner,
+            winning_price=10,
+        )
+        # User who has sold a lot (submitted a lot)
+        self.user_seller = User.objects.create_user(
+            username="user_seller", password="testpassword", email="u3@example.com"
+        )
+        self.sold_lot = Lot.objects.create(
+            lot_name="Sold lot",
+            auction=self.location_auction,
+            user=self.user_seller,
+            quantity=1,
+        )
+        # Stale user: last_activity older than 400 days
+        self.stale_user = User.objects.create_user(
+            username="stale_user", password="testpassword", email="u4@example.com"
+        )
+        stale_data = UserData.objects.get(user=self.stale_user)
+        stale_data.last_activity = timezone.now() - datetime.timedelta(days=401)
+        stale_data.save()
+        # Non-stale user (no special state)
+        self.fresh_user = User.objects.create_user(
+            username="fresh_user", password="testpassword", email="u5@example.com"
+        )
+
+    def _get_json(self, days=None):
+        self.client.force_login(self.superuser)
+        url = reverse("admin_user_signups_json")
+        params = f"?days={days}" if days else ""
+        response = self.client.get(url + params)
+        self.assertEqual(response.status_code, 200)
+        return json.loads(response.content)
+
+    def test_returns_four_datasets(self):
+        """Response should contain four datasets"""
+        data = self._get_json(days=90)
+        self.assertEqual(len(data["datasets"]), 4)
+
+    def test_dataset_labels(self):
+        """Datasets should have the correct labels"""
+        data = self._get_json(days=90)
+        labels = [ds["label"] for ds in data["datasets"]]
+        self.assertIn("Total users", labels)
+        self.assertIn("Joined an auction", labels)
+        self.assertIn("Won or sold a lot", labels)
+        self.assertIn("Stale (400+ days inactive)", labels)
+
+    def test_total_users_counts_all_users(self):
+        """The total users series should count all users including superuser"""
+        data = self._get_json(days=90)
+        total_ds = next(ds for ds in data["datasets"] if ds["label"] == "Total users")
+        # Last data point should be the total number of users
+        self.assertGreaterEqual(total_ds["data"][-1], 6)  # superuser + 5 created users
+
+    def test_joined_auction_series(self):
+        """Joined an auction series should count only users with an AuctionTOS"""
+        data = self._get_json(days=90)
+        tos_ds = next(ds for ds in data["datasets"] if ds["label"] == "Joined an auction")
+        total_ds = next(ds for ds in data["datasets"] if ds["label"] == "Total users")
+        # Joined-an-auction count must not exceed total users
+        self.assertLessEqual(tos_ds["data"][-1], total_ds["data"][-1])
+        # At least user_with_tos and user_winner are counted
+        self.assertGreaterEqual(tos_ds["data"][-1], 2)
+
+    def test_won_or_sold_series(self):
+        """Won or sold series should count users who won or sold a lot"""
+        data = self._get_json(days=90)
+        won_sold_ds = next(ds for ds in data["datasets"] if ds["label"] == "Won or sold a lot")
+        # user_winner and user_seller both qualify
+        self.assertGreaterEqual(won_sold_ds["data"][-1], 2)
+
+    def test_stale_users_series(self):
+        """Stale users series should count users inactive for 400+ days"""
+        data = self._get_json(days=90)
+        stale_ds = next(ds for ds in data["datasets"] if ds["label"] == "Stale (400+ days inactive)")
+        # Only stale_user qualifies
+        self.assertGreaterEqual(stale_ds["data"][-1], 1)
+
+    def test_non_admin_is_redirected(self):
+        """Non-superuser should be redirected away from the JSON endpoint"""
+        regular_user = User.objects.create_user(
+            username="regular_user_signups", password="testpassword", email="reg@example.com"
+        )
+        self.client.force_login(regular_user)
+        response = self.client.get(reverse("admin_user_signups_json"))
+        self.assertNotEqual(response.status_code, 200)
