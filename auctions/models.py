@@ -3351,7 +3351,7 @@ class Lot(models.Model):
     custom_lot_number = models.CharField(max_length=9, blank=True, null=True, verbose_name="Lot number", db_index=True)
     custom_lot_number.help_text = "You can override the default lot number with this"
     lot_name = models.CharField(max_length=40)
-    slug = AutoSlugField(populate_from="lot_name", unique=False)
+    slug = AutoSlugField(populate_from="lot_name", unique=False, always_update=True)
     # lot_name.help_text = "Short description of this lot"
     image = ThumbnailerImageField(upload_to="images/", blank=True)
     image.help_text = "Optional.  Add a picture of the item here."
