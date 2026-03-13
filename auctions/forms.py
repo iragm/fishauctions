@@ -2611,6 +2611,13 @@ class CustomSignupForm(SignupForm):
     last_name = forms.CharField(max_length=30, label="Last Name")
     captcha = ReCaptchaField(widget=ReCaptchaV2Invisible)
 
+    def clean_username(self):
+        username = super().clean_username()
+        if "@" in username:
+            msg = "Usernames cannot contain the @ symbol."
+            raise forms.ValidationError(msg)
+        return username
+
     def signup(self, request, user):
         user.first_name = self.cleaned_data["first_name"]
         user.last_name = self.cleaned_data["last_name"]
@@ -2712,6 +2719,13 @@ class ChangeUsernameForm(forms.ModelForm):
             "email",
             "user_permissions",
         )
+
+    def clean_username(self):
+        username = self.cleaned_data.get("username", "")
+        if "@" in username:
+            msg = "Usernames cannot contain the @ symbol."
+            raise forms.ValidationError(msg)
+        return username
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
