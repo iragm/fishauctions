@@ -8272,14 +8272,27 @@ class AdminUserSignupsJSON(AdminOnlyViewMixin, BaseLineChartView):
             datetime.combine(self._start, datetime.min.time()),
             timezone.get_current_timezone(),
         )
+        self._stale_cutoff = timezone.now() - timedelta(days=400)
         self._initial_count = User.objects.filter(date_joined__lt=start_dt).count()
+        self._initial_tos_count = (
+            User.objects.filter(date_joined__lt=start_dt, auctiontos__isnull=False).distinct().count()
+        )
+        self._initial_won_sold_count = (
+            User.objects.filter(date_joined__lt=start_dt)
+            .filter(Q(winner__isnull=False) | Q(lot__winning_price__isnull=False))
+            .distinct()
+            .count()
+        )
+        self._initial_stale_count = User.objects.filter(
+            date_joined__lt=start_dt, userdata__last_activity__lt=self._stale_cutoff
+        ).count()
         return super().dispatch(request, *args, **kwargs)
 
     def get_labels(self):
         return [(self._start + timedelta(days=i)).strftime("%b %-d, %Y") for i in range(self._days + 1)]
 
     def get_providers(self):
-        return ["Total users"]
+        return ["Total users", "Joined an auction", "Won or sold a lot", "Stale (400+ days inactive)"]
 
     def get_data(self):
         start_dt = timezone.make_aware(
@@ -8290,20 +8303,38 @@ class AdminUserSignupsJSON(AdminOnlyViewMixin, BaseLineChartView):
             datetime.combine(self._end + timedelta(days=1), datetime.min.time()),
             timezone.get_current_timezone(),
         )
-        daily_counts = (
-            User.objects.filter(date_joined__gte=start_dt, date_joined__lt=end_dt)
-            .annotate(join_date=TruncDay("date_joined"))
-            .values("join_date")
-            .annotate(count=Count("pk"))
-            .order_by("join_date")
-        )
-        date_counts = {item["join_date"].date(): item["count"] for item in daily_counts}
-        cumulative = []
-        running_total = self._initial_count
-        for i in range(self._days + 1):
-            running_total += date_counts.get(self._start + timedelta(days=i), 0)
-            cumulative.append(running_total)
-        return [cumulative]
+        stale_cutoff = self._stale_cutoff
+        base_qs = User.objects.filter(date_joined__gte=start_dt, date_joined__lt=end_dt)
+
+        def daily_count(qs):
+            return (
+                qs.annotate(join_date=TruncDay("date_joined"))
+                .values("join_date")
+                .annotate(count=Count("pk", distinct=True))
+                .order_by("join_date")
+            )
+
+        def make_cumulative(daily_qs, initial):
+            date_counts = {item["join_date"].date(): item["count"] for item in daily_qs}
+            cumulative = []
+            running = initial
+            for i in range(self._days + 1):
+                running += date_counts.get(self._start + timedelta(days=i), 0)
+                cumulative.append(running)
+            return cumulative
+
+        return [
+            make_cumulative(daily_count(base_qs), self._initial_count),
+            make_cumulative(daily_count(base_qs.filter(auctiontos__isnull=False)), self._initial_tos_count),
+            make_cumulative(
+                daily_count(base_qs.filter(Q(winner__isnull=False) | Q(lot__winning_price__isnull=False))),
+                self._initial_won_sold_count,
+            ),
+            make_cumulative(
+                daily_count(base_qs.filter(userdata__last_activity__lt=stale_cutoff)),
+                self._initial_stale_count,
+            ),
+        ]
 
 
 class AdminReferrers(AdminOnlyViewMixin, TemplateView):
