@@ -49,9 +49,9 @@ bleach==6.3.0
     # via
     #   -r requirements.in
     #   django-summernote
-boto3==1.42.63
+boto3==1.42.68
     # via django-ses
-botocore==1.42.63
+botocore==1.42.68
     # via
     #   boto3
     #   s3transfer
@@ -82,9 +82,9 @@ channels==4.3.2
     #   channels-redis
 channels-redis==4.3.0
     # via -r requirements.in
-chardet==7.0.1
+chardet==7.1.0
     # via -r requirements.in
-charset-normalizer==3.4.5
+charset-normalizer==3.4.6
     # via
     #   reportlab
     #   requests
@@ -155,7 +155,7 @@ django==5.2.12
     #   django-weasyprint
     #   easy-thumbnails
     #   jsonfield
-django-allauth==65.14.3
+django-allauth==65.15.0
     # via -r requirements.in
 django-autocomplete-light==3.12.1
     # via -r requirements.in
@@ -207,7 +207,7 @@ django-webpush==0.3.6
     # via -r requirements.in
 easy-thumbnails==2.10.1
     # via -r requirements.in
-fonttools[woff]==4.61.1
+fonttools[woff]==4.62.1
     # via weasyprint
 frozenlist==1.8.0
     # via
@@ -335,11 +335,11 @@ pyhamcrest==2.1.0
     # via -r requirements.in
 pyheif==0.8.0
     # via heif-image-plugin
-pyjwt==2.11.0
+pyjwt==2.12.1
     # via -r requirements.in
 pymysql==1.1.2
     # via -r requirements.in
-pyopenssl==25.3.0
+pyopenssl==26.0.0
     # via
     #   -r requirements.in
     #   twisted
@@ -448,7 +448,7 @@ ua-parser==1.0.1
     #   user-agents
 ua-parser-builtins==202603
     # via ua-parser
-ujson==5.11.0
+ujson==5.12.0
     # via autobahn
 urllib3==2.6.3
     # via
