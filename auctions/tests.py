@@ -11164,30 +11164,29 @@ class AdminUserSignupsJSONTests(TestCase):
 
 
 class PayPalCSVExportTests(StandardTestCase):
-    """Test the PayPal CSV export truncates first/last name fields to 20 characters"""
+    """Test the PayPal CSV export name splitting and truncation behavior"""
 
-    def setUp(self):
-        super().setUp()
-        # Create an AuctionTOS with name parts that each exceed 20 chars
-        self.long_name_tos = AuctionTOS.objects.create(
+    def _create_tos_with_lot(self, name, email):
+        """Helper: create an AuctionTOS with a bought lot so the invoice is in debt"""
+        tos = AuctionTOS.objects.create(
             auction=self.online_auction,
             pickup_location=self.location,
-            name="Bartholomewthefirstofhisname Longfellowtheeloquentspeaker",
-            email="long@example.com",
+            name=name,
+            email=email,
         )
-        # Add a bought lot so net_after_payments < 0 (user owes money)
         Lot.objects.create(
-            lot_name="Lot for long name user",
+            lot_name=f"Lot for {email}",
             auction=self.online_auction,
             auctiontos_seller=self.online_tos,
             quantity=1,
             winning_price=50,
-            auctiontos_winner=self.long_name_tos,
+            auctiontos_winner=tos,
             active=False,
         )
-        self.long_name_invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.long_name_tos)
-        self.long_name_invoice.status = "UNPAID"
-        self.long_name_invoice.save()
+        invoice, _ = Invoice.objects.get_or_create(auctiontos_user=tos)
+        invoice.status = "UNPAID"
+        invoice.save()
+        return tos
 
     def _get_csv_rows(self):
         self.client.force_login(self.admin_user)
@@ -11198,31 +11197,53 @@ class PayPalCSVExportTests(StandardTestCase):
         reader = csv.reader(io.StringIO(content))
         return list(reader)
 
-    def test_first_name_truncated_to_20_chars(self):
-        """First name in CSV must not exceed 20 characters"""
-        rows = self._get_csv_rows()
-        # Row 0 is the header; data rows follow
+    def _row_for_email(self, rows, email):
         for row in rows[1:]:
-            if row and row[0] == "long@example.com":
-                self.assertLessEqual(len(row[1]), 20, f"First name '{row[1]}' exceeds 20 characters")
-                return
-        self.fail("Did not find the expected row for long@example.com in the CSV")
+            if row and row[0] == email:
+                return row
+        return None
 
-    def test_last_name_truncated_to_20_chars(self):
-        """Last name in CSV must not exceed 20 characters"""
+    def test_two_word_name_split_into_first_and_last(self):
+        """Two-word name: first word → first name, second word → last name"""
+        self._create_tos_with_lot("John Doe", "twopart@example.com")
         rows = self._get_csv_rows()
-        for row in rows[1:]:
-            if row and row[0] == "long@example.com":
-                self.assertLessEqual(len(row[2]), 20, f"Last name '{row[2]}' exceeds 20 characters")
-                return
-        self.fail("Did not find the expected row for long@example.com in the CSV")
+        row = self._row_for_email(rows, "twopart@example.com")
+        self.assertIsNotNone(row)
+        self.assertEqual(row[1], "John")
+        self.assertEqual(row[2], "Doe")
 
-    def test_name_split_into_first_and_last(self):
-        """Name should be split: first word (truncated to 20) as first name, remainder (truncated to 20) as last name"""
+    def test_middle_name_dropped(self):
+        """Three-word name: first word → first name, last word → last name, middle dropped"""
+        self._create_tos_with_lot("John Middle Doe", "middle@example.com")
         rows = self._get_csv_rows()
-        for row in rows[1:]:
-            if row and row[0] == "long@example.com":
-                self.assertEqual(row[1], "Bartholomewthefirsto")  # first 20 chars of first word
-                self.assertEqual(row[2], "Longfellowtheeloquen")  # first 20 chars of remainder
-                return
-        self.fail("Did not find the expected row for long@example.com in the CSV")
+        row = self._row_for_email(rows, "middle@example.com")
+        self.assertIsNotNone(row)
+        self.assertEqual(row[1], "John")
+        self.assertEqual(row[2], "Doe")
+
+    def test_single_word_name_goes_to_last_name(self):
+        """Single-word name: first name empty, name goes to last name"""
+        self._create_tos_with_lot("Cher", "singlename@example.com")
+        rows = self._get_csv_rows()
+        row = self._row_for_email(rows, "singlename@example.com")
+        self.assertIsNotNone(row)
+        self.assertEqual(row[1], "")
+        self.assertEqual(row[2], "Cher")
+
+    def test_long_first_name_truncated_to_20_chars(self):
+        """First name exceeding 20 chars must be truncated"""
+        self._create_tos_with_lot("Bartholomewthefirstofhisname Doe", "longfirst@example.com")
+        rows = self._get_csv_rows()
+        row = self._row_for_email(rows, "longfirst@example.com")
+        self.assertIsNotNone(row)
+        self.assertLessEqual(len(row[1]), 20)
+        self.assertEqual(row[1], "Bartholomewthefirsto")
+
+    def test_long_last_name_truncated_to_20_chars(self):
+        """Last name exceeding 20 chars must be truncated"""
+        self._create_tos_with_lot("John Longfellowtheeloquentspeaker", "longlast@example.com")
+        rows = self._get_csv_rows()
+        row = self._row_for_email(rows, "longlast@example.com")
+        self.assertIsNotNone(row)
+        self.assertLessEqual(len(row[2]), 20)
+        self.assertEqual(row[2], "Longfellowtheeloquen")
