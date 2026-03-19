@@ -1,7 +1,9 @@
 import base64
+import csv
 import datetime
 import hashlib
 import hmac
+import io
 import json
 from decimal import Decimal
 from unittest.mock import patch
@@ -11159,3 +11161,68 @@ class AdminUserSignupsJSONTests(TestCase):
         self.client.force_login(regular_user)
         response = self.client.get(reverse("admin_user_signups_json"))
         self.assertNotEqual(response.status_code, 200)
+
+
+class PayPalCSVExportTests(StandardTestCase):
+    """Test the PayPal CSV export truncates first/last name fields to 20 characters"""
+
+    def setUp(self):
+        super().setUp()
+        # Create an AuctionTOS with name parts that each exceed 20 chars
+        self.long_name_tos = AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            name="Bartholomewthefirstofhisname Longfellowtheeloquentspeaker",
+            email="long@example.com",
+        )
+        # Add a bought lot so net_after_payments < 0 (user owes money)
+        Lot.objects.create(
+            lot_name="Lot for long name user",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            winning_price=50,
+            auctiontos_winner=self.long_name_tos,
+            active=False,
+        )
+        self.long_name_invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.long_name_tos)
+        self.long_name_invoice.status = "UNPAID"
+        self.long_name_invoice.save()
+
+    def _get_csv_rows(self):
+        self.client.force_login(self.admin_user)
+        url = reverse("paypal_csv", kwargs={"slug": self.online_auction.slug, "chunk": 1})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode("utf-8")
+        reader = csv.reader(io.StringIO(content))
+        return list(reader)
+
+    def test_first_name_truncated_to_20_chars(self):
+        """First name in CSV must not exceed 20 characters"""
+        rows = self._get_csv_rows()
+        # Row 0 is the header; data rows follow
+        for row in rows[1:]:
+            if row and row[0] == "long@example.com":
+                self.assertLessEqual(len(row[1]), 20, f"First name '{row[1]}' exceeds 20 characters")
+                return
+        self.fail("Did not find the expected row for long@example.com in the CSV")
+
+    def test_last_name_truncated_to_20_chars(self):
+        """Last name in CSV must not exceed 20 characters"""
+        rows = self._get_csv_rows()
+        for row in rows[1:]:
+            if row and row[0] == "long@example.com":
+                self.assertLessEqual(len(row[2]), 20, f"Last name '{row[2]}' exceeds 20 characters")
+                return
+        self.fail("Did not find the expected row for long@example.com in the CSV")
+
+    def test_name_split_into_first_and_last(self):
+        """Name should be split: first word (truncated to 20) as first name, remainder (truncated to 20) as last name"""
+        rows = self._get_csv_rows()
+        for row in rows[1:]:
+            if row and row[0] == "long@example.com":
+                self.assertEqual(row[1], "Bartholomewthefirsto")  # first 20 chars of first word
+                self.assertEqual(row[2], "Longfellowtheeloquen")  # first 20 chars of remainder
+                return
+        self.fail("Did not find the expected row for long@example.com in the CSV")

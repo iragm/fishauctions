@@ -1726,11 +1726,14 @@ class AuctionInvoicesPayPalCSV(LoginRequiredMixin, AuctionViewMixin, View):
                     memoToSelf = invoice.auctiontos_user.memo
                     if invoice.net_after_payments < 0:
                         if invoice.auctiontos_user.email:
+                            name_parts = (invoice.auctiontos_user.name or "").split(None, 1)
+                            first_name = name_parts[0][:20] if name_parts else ""
+                            last_name = name_parts[1][:20] if len(name_parts) > 1 else ""
                             writer.writerow(
                                 [
                                     invoice.auctiontos_user.email,
-                                    "",
-                                    invoice.auctiontos_user.name,
+                                    first_name,
+                                    last_name,
                                     invoice.pk,
                                     due_date,
                                     reference,
