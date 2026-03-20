@@ -1,7 +1,9 @@
 import base64
+import csv
 import datetime
 import hashlib
 import hmac
+import io
 import json
 from decimal import Decimal
 from unittest.mock import patch
@@ -11159,3 +11161,89 @@ class AdminUserSignupsJSONTests(TestCase):
         self.client.force_login(regular_user)
         response = self.client.get(reverse("admin_user_signups_json"))
         self.assertNotEqual(response.status_code, 200)
+
+
+class PayPalCSVExportTests(StandardTestCase):
+    """Test the PayPal CSV export name splitting and truncation behavior"""
+
+    def _create_tos_with_lot(self, name, email):
+        """Helper: create an AuctionTOS with a bought lot so the invoice is in debt"""
+        tos = AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            name=name,
+            email=email,
+        )
+        Lot.objects.create(
+            lot_name=f"Lot for {email}",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            winning_price=50,
+            auctiontos_winner=tos,
+            active=False,
+        )
+        invoice, _ = Invoice.objects.get_or_create(auctiontos_user=tos)
+        invoice.status = "UNPAID"
+        invoice.save()
+        return tos
+
+    def _get_csv_rows(self):
+        self.client.force_login(self.admin_user)
+        url = reverse("paypal_csv", kwargs={"slug": self.online_auction.slug, "chunk": 1})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode("utf-8")
+        reader = csv.reader(io.StringIO(content))
+        return list(reader)
+
+    def _row_for_email(self, rows, email):
+        for row in rows[1:]:
+            if row and row[0] == email:
+                return row
+        return None
+
+    def test_two_word_name_split_into_first_and_last(self):
+        """Two-word name: first word → first name, second word → last name"""
+        self._create_tos_with_lot("John Doe", "twopart@example.com")
+        rows = self._get_csv_rows()
+        row = self._row_for_email(rows, "twopart@example.com")
+        self.assertIsNotNone(row)
+        self.assertEqual(row[1], "John")
+        self.assertEqual(row[2], "Doe")
+
+    def test_middle_name_dropped(self):
+        """Three-word name: first word → first name, last word → last name, middle dropped"""
+        self._create_tos_with_lot("John Middle Doe", "middle@example.com")
+        rows = self._get_csv_rows()
+        row = self._row_for_email(rows, "middle@example.com")
+        self.assertIsNotNone(row)
+        self.assertEqual(row[1], "John")
+        self.assertEqual(row[2], "Doe")
+
+    def test_single_word_name_goes_to_last_name(self):
+        """Single-word name: first name empty, name goes to last name"""
+        self._create_tos_with_lot("Cher", "singlename@example.com")
+        rows = self._get_csv_rows()
+        row = self._row_for_email(rows, "singlename@example.com")
+        self.assertIsNotNone(row)
+        self.assertEqual(row[1], "")
+        self.assertEqual(row[2], "Cher")
+
+    def test_long_first_name_truncated_to_20_chars(self):
+        """First name exceeding 20 chars must be truncated"""
+        self._create_tos_with_lot("Bartholomewthefirstofhisname Doe", "longfirst@example.com")
+        rows = self._get_csv_rows()
+        row = self._row_for_email(rows, "longfirst@example.com")
+        self.assertIsNotNone(row)
+        self.assertLessEqual(len(row[1]), 20)
+        self.assertEqual(row[1], "Bartholomewthefirsto")
+
+    def test_long_last_name_truncated_to_20_chars(self):
+        """Last name exceeding 20 chars must be truncated"""
+        self._create_tos_with_lot("John Longfellowtheeloquentspeaker", "longlast@example.com")
+        rows = self._get_csv_rows()
+        row = self._row_for_email(rows, "longlast@example.com")
+        self.assertIsNotNone(row)
+        self.assertLessEqual(len(row[2]), 20)
+        self.assertEqual(row[2], "Longfellowtheeloquen")
