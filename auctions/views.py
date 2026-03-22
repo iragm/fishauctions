@@ -1320,21 +1320,6 @@ class CheckUsernameAvailability(View):
         return JsonResponse({"available": not taken})
 
 
-class CheckEmailAvailability(View):
-    """GET /check-email/?email=foo@bar.com — returns JSON for real-time signup validation.
-    No authentication required (used on the public signup form).
-    """
-
-    def get(self, request, *args, **kwargs):
-        from allauth.account.models import EmailAddress
-
-        email = request.GET.get("email", "").strip()
-        if not email:
-            return JsonResponse({"available": False, "error": "No email provided"})
-        taken = EmailAddress.objects.filter(email__iexact=email).exists()
-        return JsonResponse({"available": not taken})
-
-
 class AuctionTOSValidation(AuctionViewMixin, APIPostView):
     """For real time validation on the auctiontos admin create form
     See views.AuctionTOSAdmin for the corresponding js and view
