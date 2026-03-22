@@ -1,7 +1,9 @@
 import base64
+import csv
 import datetime
 import hashlib
 import hmac
+import io
 import json
 from decimal import Decimal
 from unittest.mock import patch
@@ -11002,3 +11004,284 @@ class CustomSignupFormTest(TestCase):
 
         result = get_adapter().clean_username("validuser", shallow=True)
         self.assertEqual(result, "validuser")
+
+
+class AdminUserSignupsJSONTests(TestCase):
+    """Tests for the AdminUserSignupsJSON view with extended data series"""
+
+    def setUp(self):
+        self.superuser = User.objects.create_superuser(
+            username="superuser_signups", password="testpassword", email="super@example.com"
+        )
+        self.location_auction = Auction.objects.create(
+            created_by=self.superuser,
+            title="Test auction",
+            is_online=True,
+            date_end=timezone.now() - datetime.timedelta(days=1),
+            date_start=timezone.now() - datetime.timedelta(days=5),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=0,
+        )
+        self.second_auction = Auction.objects.create(
+            created_by=self.superuser,
+            title="Second auction",
+            is_online=True,
+            date_end=timezone.now() - datetime.timedelta(days=1),
+            date_start=timezone.now() - datetime.timedelta(days=5),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=0,
+        )
+        self.pickup = PickupLocation.objects.create(
+            name="pickup",
+            auction=self.location_auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=1),
+        )
+        self.second_pickup = PickupLocation.objects.create(
+            name="second pickup",
+            auction=self.second_auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=1),
+        )
+        # User who has joined an auction (no lots)
+        self.user_with_tos = User.objects.create_user(
+            username="user_with_tos", password="testpassword", email="u1@example.com"
+        )
+        AuctionTOS.objects.create(user=self.user_with_tos, auction=self.location_auction, pickup_location=self.pickup)
+        # User who has won a lot (winner=self, winning_price set)
+        self.user_winner = User.objects.create_user(
+            username="user_winner", password="testpassword", email="u2@example.com"
+        )
+        self.winner_tos = AuctionTOS.objects.create(
+            user=self.user_winner, auction=self.location_auction, pickup_location=self.pickup
+        )
+        self.won_lot = Lot.objects.create(
+            lot_name="Won lot",
+            auction=self.location_auction,
+            auctiontos_seller=self.winner_tos,
+            quantity=1,
+            winner=self.user_winner,
+            winning_price=10,
+        )
+        # User who has sold a lot (Lot.user=seller, winning_price set)
+        self.user_seller = User.objects.create_user(
+            username="user_seller", password="testpassword", email="u3@example.com"
+        )
+        self.sold_lot = Lot.objects.create(
+            lot_name="Sold lot",
+            auction=self.location_auction,
+            user=self.user_seller,
+            quantity=1,
+            winning_price=5,
+        )
+        # Stale user: last_activity older than 400 days
+        self.stale_user = User.objects.create_user(
+            username="stale_user", password="testpassword", email="u4@example.com"
+        )
+        stale_data = UserData.objects.get(user=self.stale_user)
+        stale_data.last_activity = timezone.now() - datetime.timedelta(days=401)
+        stale_data.save()
+        # Non-stale user (no special state)
+        self.fresh_user = User.objects.create_user(
+            username="fresh_user", password="testpassword", email="u5@example.com"
+        )
+        # User with multiple AuctionTOS entries and multiple sold lots (to test distinct counting)
+        self.multi_user = User.objects.create_user(
+            username="multi_user", password="testpassword", email="u6@example.com"
+        )
+        self.multi_tos1 = AuctionTOS.objects.create(
+            user=self.multi_user, auction=self.location_auction, pickup_location=self.pickup
+        )
+        self.multi_tos2 = AuctionTOS.objects.create(
+            user=self.multi_user, auction=self.second_auction, pickup_location=self.second_pickup
+        )
+        Lot.objects.create(
+            lot_name="Multi lot 1",
+            auction=self.location_auction,
+            user=self.multi_user,
+            quantity=1,
+            winning_price=8,
+        )
+        Lot.objects.create(
+            lot_name="Multi lot 2",
+            auction=self.location_auction,
+            user=self.multi_user,
+            quantity=1,
+            winning_price=9,
+        )
+        # Total users in test DB: superuser + user_with_tos + user_winner + user_seller
+        #                         + stale_user + fresh_user + multi_user = 7
+
+    def _get_json(self, days=None):
+        self.client.force_login(self.superuser)
+        url = reverse("admin_user_signups_json")
+        params = f"?days={days}" if days else ""
+        response = self.client.get(url + params)
+        self.assertEqual(response.status_code, 200)
+        return json.loads(response.content)
+
+    def test_returns_four_datasets(self):
+        """Response should contain four datasets"""
+        data = self._get_json(days=90)
+        self.assertEqual(len(data["datasets"]), 4)
+
+    def test_dataset_labels(self):
+        """Datasets should have the correct labels"""
+        data = self._get_json(days=90)
+        labels = [ds["label"] for ds in data["datasets"]]
+        self.assertIn("Total users", labels)
+        self.assertIn("Joined an auction", labels)
+        self.assertIn("Won or sold a lot", labels)
+        self.assertIn("Stale (400+ days inactive)", labels)
+
+    def test_total_users_exact_count(self):
+        """The total users series final value must equal the exact number of users"""
+        data = self._get_json(days=90)
+        total_ds = next(ds for ds in data["datasets"] if ds["label"] == "Total users")
+        expected = User.objects.count()
+        self.assertEqual(total_ds["data"][-1], expected)
+
+    def test_joined_auction_exact_count(self):
+        """Joined an auction series must count distinct users with an AuctionTOS, not join rows"""
+        data = self._get_json(days=90)
+        tos_ds = next(ds for ds in data["datasets"] if ds["label"] == "Joined an auction")
+        # user_with_tos, user_winner, multi_user (2 TOS) = 3 distinct users
+        # multi_user has 2 AuctionTOS rows but must be counted once
+        expected = User.objects.filter(auctiontos__isnull=False).distinct().count()
+        self.assertEqual(tos_ds["data"][-1], expected)
+
+    def test_won_or_sold_exact_count(self):
+        """Won or sold series must count distinct users with a won lot or a sold lot (winning_price set)"""
+        data = self._get_json(days=90)
+        won_sold_ds = next(ds for ds in data["datasets"] if ds["label"] == "Won or sold a lot")
+        # user_winner (winner field set), user_seller (lot with winning_price), multi_user (lots with winning_price) = 3
+        # multi_user has 2 sold lots but must be counted once
+        winners = set(User.objects.filter(winner__isnull=False).values_list("pk", flat=True))
+        sellers = set(User.objects.filter(lot__winning_price__isnull=False).values_list("pk", flat=True))
+        expected = len(winners | sellers)
+        self.assertEqual(won_sold_ds["data"][-1], expected)
+
+    def test_unsold_lot_not_counted_as_sold(self):
+        """A user who submitted a lot without a winning_price must not appear in the 'won or sold' series"""
+        unsold_user = User.objects.create_user(
+            username="unsold_user", password="testpassword", email="unsold@example.com"
+        )
+        Lot.objects.create(
+            lot_name="Unsold lot",
+            auction=self.location_auction,
+            user=unsold_user,
+            quantity=1,
+            # no winning_price
+        )
+        data = self._get_json(days=90)
+        won_sold_ds = next(ds for ds in data["datasets"] if ds["label"] == "Won or sold a lot")
+        winners = set(User.objects.filter(winner__isnull=False).values_list("pk", flat=True))
+        sellers = set(User.objects.filter(lot__winning_price__isnull=False).values_list("pk", flat=True))
+        expected = len(winners | sellers)
+        self.assertEqual(won_sold_ds["data"][-1], expected)
+        self.assertNotIn(unsold_user.pk, winners | sellers)
+
+    def test_stale_users_exact_count(self):
+        """Stale users series must equal the exact count of users inactive for 400+ days"""
+        data = self._get_json(days=90)
+        stale_ds = next(ds for ds in data["datasets"] if ds["label"] == "Stale (400+ days inactive)")
+        cutoff = timezone.now() - datetime.timedelta(days=400)
+        expected = User.objects.filter(userdata__last_activity__lt=cutoff).count()
+        self.assertEqual(stale_ds["data"][-1], expected)
+
+    def test_non_admin_is_redirected(self):
+        """Non-superuser should be redirected away from the JSON endpoint"""
+        regular_user = User.objects.create_user(
+            username="regular_user_signups", password="testpassword", email="reg@example.com"
+        )
+        self.client.force_login(regular_user)
+        response = self.client.get(reverse("admin_user_signups_json"))
+        self.assertNotEqual(response.status_code, 200)
+
+
+class PayPalCSVExportTests(StandardTestCase):
+    """Test the PayPal CSV export name splitting and truncation behavior"""
+
+    def _create_tos_with_lot(self, name, email):
+        """Helper: create an AuctionTOS with a bought lot so the invoice is in debt"""
+        tos = AuctionTOS.objects.create(
+            auction=self.online_auction,
+            pickup_location=self.location,
+            name=name,
+            email=email,
+        )
+        Lot.objects.create(
+            lot_name=f"Lot for {email}",
+            auction=self.online_auction,
+            auctiontos_seller=self.online_tos,
+            quantity=1,
+            winning_price=50,
+            auctiontos_winner=tos,
+            active=False,
+        )
+        invoice, _ = Invoice.objects.get_or_create(auctiontos_user=tos)
+        invoice.status = "UNPAID"
+        invoice.save()
+        return tos
+
+    def _get_csv_rows(self):
+        self.client.force_login(self.admin_user)
+        url = reverse("paypal_csv", kwargs={"slug": self.online_auction.slug, "chunk": 1})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode("utf-8")
+        reader = csv.reader(io.StringIO(content))
+        return list(reader)
+
+    def _row_for_email(self, rows, email):
+        for row in rows[1:]:
+            if row and row[0] == email:
+                return row
+        return None
+
+    def test_two_word_name_split_into_first_and_last(self):
+        """Two-word name: first word → first name, second word → last name"""
+        self._create_tos_with_lot("John Doe", "twopart@example.com")
+        rows = self._get_csv_rows()
+        row = self._row_for_email(rows, "twopart@example.com")
+        self.assertIsNotNone(row)
+        self.assertEqual(row[1], "John")
+        self.assertEqual(row[2], "Doe")
+
+    def test_middle_name_dropped(self):
+        """Three-word name: first word → first name, last word → last name, middle dropped"""
+        self._create_tos_with_lot("John Middle Doe", "middle@example.com")
+        rows = self._get_csv_rows()
+        row = self._row_for_email(rows, "middle@example.com")
+        self.assertIsNotNone(row)
+        self.assertEqual(row[1], "John")
+        self.assertEqual(row[2], "Doe")
+
+    def test_single_word_name_goes_to_last_name(self):
+        """Single-word name: first name empty, name goes to last name"""
+        self._create_tos_with_lot("Cher", "singlename@example.com")
+        rows = self._get_csv_rows()
+        row = self._row_for_email(rows, "singlename@example.com")
+        self.assertIsNotNone(row)
+        self.assertEqual(row[1], "")
+        self.assertEqual(row[2], "Cher")
+
+    def test_long_first_name_truncated_to_20_chars(self):
+        """First name exceeding 20 chars must be truncated"""
+        self._create_tos_with_lot("Bartholomewthefirstofhisname Doe", "longfirst@example.com")
+        rows = self._get_csv_rows()
+        row = self._row_for_email(rows, "longfirst@example.com")
+        self.assertIsNotNone(row)
+        self.assertLessEqual(len(row[1]), 20)
+        self.assertEqual(row[1], "Bartholomewthefirsto")
+
+    def test_long_last_name_truncated_to_20_chars(self):
+        """Last name exceeding 20 chars must be truncated"""
+        self._create_tos_with_lot("John Longfellowtheeloquentspeaker", "longlast@example.com")
+        rows = self._get_csv_rows()
+        row = self._row_for_email(rows, "longlast@example.com")
+        self.assertIsNotNone(row)
+        self.assertLessEqual(len(row[2]), 20)
+        self.assertEqual(row[2], "Longfellowtheeloquen")
