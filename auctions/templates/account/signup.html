@@ -28,6 +28,131 @@ document.addEventListener('DOMContentLoaded', function () {
             submitBtn.innerText = 'Submitting...';
         }
     });
+
+    // --- Username validation ---
+    const usernameField = document.getElementById('id_username');
+    let usernameHint = document.createElement('div');
+    usernameHint.className = 'invalid-feedback';
+    if (usernameField) {
+        usernameField.parentNode.appendChild(usernameHint);
+    }
+
+    let usernameTimer = null;
+
+    function setUsernameError(msg) {
+        if (!usernameField) return;
+        usernameField.classList.add('is-invalid');
+        usernameField.classList.remove('is-valid');
+        usernameHint.style.display = 'block';
+        usernameHint.textContent = msg;
+    }
+
+    function setUsernameValid() {
+        if (!usernameField) return;
+        usernameField.classList.remove('is-invalid');
+        usernameField.classList.add('is-valid');
+        usernameHint.style.display = 'none';
+        usernameHint.textContent = '';
+    }
+
+    function clearUsernameState() {
+        if (!usernameField) return;
+        usernameField.classList.remove('is-invalid', 'is-valid');
+        usernameHint.style.display = 'none';
+        usernameHint.textContent = '';
+    }
+
+    function checkUsername() {
+        const val = usernameField.value.trim();
+        if (!val) { clearUsernameState(); return; }
+        if (val.includes('@')) {
+            setUsernameError('Usernames cannot contain the @ symbol.');
+            return;
+        }
+        // Debounced availability check
+        clearTimeout(usernameTimer);
+        usernameTimer = setTimeout(function () {
+            fetch(checkUsernameUrl + '?username=' + encodeURIComponent(val))
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    if (usernameField.value.trim() !== val) return; // stale
+                    if (data.available) {
+                        setUsernameValid();
+                    } else {
+                        setUsernameError('That username is already taken.');
+                    }
+                })
+                .catch(function () {
+                    // Network error: validation unavailable, allow form to proceed normally
+                });
+        }, 400);
+    }
+
+    const checkUsernameUrl = '{% url "check_username" %}';
+
+    if (usernameField) {
+        usernameField.addEventListener('input', checkUsername);
+        usernameField.addEventListener('blur', checkUsername);
+    }
+
+    // --- Email validation ---
+    const emailField = document.getElementById('id_email');
+    let emailHint = document.createElement('div');
+    emailHint.className = 'form-text';
+    emailHint.style.display = 'none';
+    if (emailField) {
+        emailField.parentNode.appendChild(emailHint);
+    }
+
+    const checkEmailUrl = '{% url "check_email" %}';
+    let emailTimer = null;
+
+    function isGmail(email) {
+        return /@gmail\.com\s*$/i.test(email);
+    }
+
+    function checkEmail() {
+        const val = emailField.value.trim();
+        emailHint.style.display = 'none';
+        emailHint.innerHTML = '';
+        emailField.classList.remove('is-invalid', 'is-valid');
+        if (!val) return;
+
+        // Gmail hint — show immediately
+        if (isGmail(val)) {
+            const next = encodeURIComponent('{{ redirect_field_value|default:"/" }}');
+            emailHint.innerHTML = 'Looks like a Gmail address! You can <a href="/google/login/?process=login&next=' + next + '">sign up with one click using Google</a>.';
+            emailHint.style.display = 'block';
+        }
+
+        // Debounced in-use check
+        clearTimeout(emailTimer);
+        emailTimer = setTimeout(function () {
+            fetch(checkEmailUrl + '?email=' + encodeURIComponent(val))
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    if (emailField.value.trim() !== val) return; // stale
+                    if (!data.available) {
+                        emailField.classList.add('is-invalid');
+                        emailField.classList.remove('is-valid');
+                        emailHint.innerHTML = 'An account with this email already exists. <a href="{{ login_url }}">Sign in instead?</a>';
+                        emailHint.className = 'invalid-feedback';
+                        emailHint.style.display = 'block';
+                    } else if (!isGmail(val)) {
+                        emailField.classList.add('is-valid');
+                        emailHint.style.display = 'none';
+                    }
+                })
+                .catch(function () {
+                    // Network error: validation unavailable, allow form to proceed normally
+                });
+        }, 400);
+    }
+
+    if (emailField) {
+        emailField.addEventListener('input', checkEmail);
+        emailField.addEventListener('blur', checkEmail);
+    }
 });
 </script>
 {% endblock %}
