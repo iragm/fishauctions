@@ -41,6 +41,7 @@ from .models import (
     UserData,
     UserLabelPrefs,
 )
+from .validators import validate_username_no_at_symbol
 
 # Distance conversion constant
 MILES_TO_KM = 1.60934
@@ -2611,6 +2612,8 @@ class CustomSignupForm(SignupForm):
     last_name = forms.CharField(max_length=30, label="Last Name")
     captcha = ReCaptchaField(widget=ReCaptchaV2Invisible)
 
+    field_order = ["email", "first_name", "last_name", "username", "password1", "password2"]
+
     def signup(self, request, user):
         user.first_name = self.cleaned_data["first_name"]
         user.last_name = self.cleaned_data["last_name"]
@@ -2712,6 +2715,11 @@ class ChangeUsernameForm(forms.ModelForm):
             "email",
             "user_permissions",
         )
+
+    def clean_username(self):
+        username = self.cleaned_data.get("username", "")
+        validate_username_no_at_symbol(username)
+        return username
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

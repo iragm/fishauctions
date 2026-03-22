@@ -38,6 +38,7 @@ urlpatterns = [
     path("api/users/enable-notifications", views.UpdateLotPushNotificationsView.as_view(), name="enable_notifications"),
     path("api/users/lot_notifications/", views.LotNotifications.as_view()),
     path("api/users/auction_notifications/", views.AuctionNotifications.as_view()),
+    path("api/check-username/", views.CheckUsernameAvailability.as_view(), name="check_username"),
     path("api/lots/new_lot_last_auction/", views.NoLotAuctions.as_view()),
     path("api/chart/lots/<int:pk>/", views.LotChartView.as_view()),
     path("api/chart/users/<int:pk>/", views.UserChartView.as_view()),

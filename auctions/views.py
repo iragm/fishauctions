@@ -1307,6 +1307,19 @@ class UpdateLotPushNotificationsView(APIPostView):
         return JsonResponse({"result": "success"})
 
 
+class CheckUsernameAvailability(View):
+    """GET /check-username/?username=foo — returns JSON for real-time signup validation.
+    No authentication required (used on the public signup form).
+    """
+
+    def get(self, request, *args, **kwargs):
+        username = request.GET.get("username", "").strip()
+        if not username:
+            return JsonResponse({"available": False, "error": "No username provided"})
+        taken = User.objects.filter(username__iexact=username).exists()
+        return JsonResponse({"available": not taken})
+
+
 class AuctionTOSValidation(AuctionViewMixin, APIPostView):
     """For real time validation on the auctiontos admin create form
     See views.AuctionTOSAdmin for the corresponding js and view
