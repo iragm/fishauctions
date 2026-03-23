@@ -272,6 +272,13 @@ class QuickAddLot(forms.ModelForm):
                 self.auction.custom_field_1 == "required" and self.auction.custom_field_1_name
             ) and not cleaned_data.get("custom_field_1"):
                 self.add_error("buy_now_price", "Required in this auction")
+        if self.auction.only_whole_dollar_bids:
+            reserve_price = cleaned_data.get("reserve_price")
+            if reserve_price is not None and reserve_price != reserve_price.to_integral_value():
+                self.add_error("reserve_price", "This auction only allows whole dollar amounts.")
+            buy_now_price = cleaned_data.get("buy_now_price")
+            if buy_now_price is not None and buy_now_price != buy_now_price.to_integral_value():
+                self.add_error("buy_now_price", "This auction only allows whole dollar amounts.")
         # we need to make sure users can't add extra lots
         if not self.is_admin and self.auction.max_lots_per_user:
             existing_lots = self.tos.unbanned_lot_qs
@@ -419,15 +426,22 @@ class WinnerLot(forms.Form):
             },
         )
     )
-    winning_price = forms.IntegerField(label="Sell price", min_value=0, required=False)
+    winning_price = forms.DecimalField(label="Sell price", min_value=0, required=False, decimal_places=2, max_digits=10)
     invoice = forms.CharField(label="Invoice", max_length=100)
     auction = forms.CharField(label="Auction", max_length=100)
 
     def __init__(self, auction, *args, **kwargs):
         self.auction_pk = auction.pk
+        self.only_whole_dollar_bids = getattr(auction, "only_whole_dollar_bids", True)
         super().__init__(*args, **kwargs)
         # Get currency symbol from auction creator
         currency_symbol = auction.currency_symbol if auction else "$"
+        # Show ".00" suffix only for whole-dollar auctions
+        price_suffix = ".00" if self.only_whole_dollar_bids else ""
+        if self.only_whole_dollar_bids:
+            self.fields["winning_price"].widget.attrs["step"] = "1"
+        else:
+            self.fields["winning_price"].widget.attrs["step"] = "0.01"
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_class = "form"
@@ -438,7 +452,7 @@ class WinnerLot(forms.Form):
             "auction",
             "lot",
             "winner",
-            PrependedAppendedText("winning_price", currency_symbol, ".00"),
+            PrependedAppendedText("winning_price", currency_symbol, price_suffix),
             # Div(
             #     Div('lot',css_class='col-md-5',),
             #     Div('winner',css_class='col-md-3',),
@@ -457,6 +471,14 @@ class WinnerLot(forms.Form):
         self.fields["lot"].widget.attrs["autocomplete"] = "off"
         self.fields["winning_price"].widget.attrs["autocomplete"] = "off"
         self.fields["winner"].widget.attrs["autocomplete"] = "off"
+
+    def clean_winning_price(self):
+        winning_price = self.cleaned_data.get("winning_price")
+        if winning_price is not None and self.only_whole_dollar_bids:
+            if winning_price != winning_price.to_integral_value():
+                msg = "This auction only allows whole dollar amounts."
+                raise forms.ValidationError(msg)
+        return winning_price
 
     class Meta:
         fields = [
@@ -481,6 +503,7 @@ class WinnerLotSimpleImages(WinnerLotSimple):
         super().__init__(auction, *args, **kwargs)
         # Get currency symbol from auction creator
         currency_symbol = auction.currency_symbol if auction else "$"
+        price_suffix = ".00" if getattr(auction, "only_whole_dollar_bids", True) else ""
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_class = "form"
@@ -491,18 +514,10 @@ class WinnerLotSimpleImages(WinnerLotSimple):
             "auction",
             # 'lot',
             # 'winner',
-            # <div class="col-md-3">
-            #     <div id="div_id_winning_price" class="form-group">
-            #             <div class="">
-            #             <div class="input-group">
-            #             </div>
-            #          </div>
-            #      </div>
-            # </div>
             Div(
                 Div("lot", css_class="col-md-3"),
                 Div(
-                    PrependedAppendedText("winning_price", currency_symbol, ".00"),
+                    PrependedAppendedText("winning_price", currency_symbol, price_suffix),
                     css_class="col-md-4",
                 ),
                 Div("winner", css_class="col-md-3"),
@@ -871,16 +886,16 @@ class EditLot(forms.ModelForm):
         if auction:
             if not auction.permission_check(self.user):
                 self.add_error("auction", "How did you even manage to change this field?")
-        # custom_lot_number = cleaned_data.get("custom_lot_number")
-        # if custom_lot_number:
-        #     other_lots = (
-        #         Lot.objects.exclude(is_deleted=True)
-        #         .filter(auction=auction, custom_lot_number=custom_lot_number)
-        #         .exclude(pk=self.lot.pk)
-        #         .count()
-        #     )
-        #     if other_lots:
-        #         self.add_error("custom_lot_number", "Lot number already in use")
+            if auction.only_whole_dollar_bids:
+                reserve_price = cleaned_data.get("reserve_price")
+                if reserve_price is not None and reserve_price != reserve_price.to_integral_value():
+                    self.add_error("reserve_price", "This auction only allows whole dollar amounts.")
+                buy_now_price = cleaned_data.get("buy_now_price")
+                if buy_now_price is not None and buy_now_price != buy_now_price.to_integral_value():
+                    self.add_error("buy_now_price", "This auction only allows whole dollar amounts.")
+                winning_price = cleaned_data.get("winning_price")
+                if winning_price is not None and winning_price != winning_price.to_integral_value():
+                    self.add_error("winning_price", "This auction only allows whole dollar amounts.")
         if not cleaned_data.get("auctiontos_winner") and cleaned_data.get("winning_price"):
             self.add_error("auctiontos_winner", "You need to set a winner")
         if cleaned_data.get("auctiontos_winner") and not cleaned_data.get("winning_price"):
@@ -1754,6 +1769,7 @@ class AuctionEditForm(forms.ModelForm):
             "only_approved_bidders",
             "invoice_payment_instructions",
             "invoice_rounding",
+            "only_whole_dollar_bids",
             "minimum_bid",
             "winning_bid_percent_to_club_for_club_members",
             "lot_entry_fee_for_club_members",
@@ -2103,6 +2119,10 @@ class AuctionEditForm(forms.ModelForm):
                 ),
                 Div(
                     "invoice_rounding",
+                    css_class="col-md-3",
+                ),
+                Div(
+                    "only_whole_dollar_bids",
                     css_class="col-md-3",
                 ),
                 Div(
