@@ -27,7 +27,7 @@ asgiref==3.11.1
     #   django
     #   django-allauth
     #   django-htmx
-attrs==25.4.0
+attrs==26.1.0
     # via
     #   -r requirements.in
     #   aiohttp
@@ -49,15 +49,15 @@ bleach==6.3.0
     # via
     #   -r requirements.in
     #   django-summernote
-boto3==1.42.68
+boto3==1.42.73
     # via django-ses
-botocore==1.42.68
+botocore==1.42.73
     # via
     #   boto3
     #   s3transfer
 brotli==1.2.0
     # via fonttools
-cbor2==5.8.0
+cbor2==5.9.0
     # via autobahn
 celery==5.6.2
     # via
@@ -82,7 +82,7 @@ channels==4.3.2
     #   channels-redis
 channels-redis==4.3.0
     # via -r requirements.in
-chardet==7.1.0
+chardet==7.2.0
     # via -r requirements.in
 charset-normalizer==3.4.6
     # via
@@ -304,7 +304,7 @@ py-ubjson==0.16.1
     # via autobahn
 py-vapid==1.9.4
     # via pywebpush
-pyasn1==0.6.2
+pyasn1==0.6.3
     # via
     #   -r requirements.in
     #   pyasn1-modules
@@ -457,7 +457,7 @@ urllib3==2.6.3
     #   requests
 user-agents==2.2.0
     # via -r requirements.in
-uvicorn[standard]==0.41.0
+uvicorn[standard]==0.42.0
     # via -r requirements.in
 uvloop==0.22.1
     # via uvicorn
