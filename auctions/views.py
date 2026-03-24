@@ -7,7 +7,7 @@ import re
 import uuid
 from datetime import datetime, timedelta
 from datetime import timezone as date_tz
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from io import BytesIO, TextIOWrapper
 from pathlib import Path
 from random import choice, randint, sample, uniform
@@ -2493,16 +2493,20 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         return result_lot, error
 
     def validate_price(self, price, action):
-        """Returns (Int or None, error or None)"""
+        """Returns (Decimal or None, error or None)"""
         result_price = None
         error = None
         try:
-            result_price = int(price)
-        except (ValueError, TypeError):
+            result_price = Decimal(str(price)).quantize(Decimal("0.01"))
+        except (InvalidOperation, ValueError, TypeError):
             if action == "save":
                 error = "Enter the winning price"
             if action == "force_save":
                 error = "You can skip some errors, but you still need to enter a price"
+        if result_price is not None and self.auction.only_whole_dollar_bids:
+            if result_price != result_price.to_integral_value():
+                error = "This auction only allows whole dollar amounts"
+                result_price = None
         return result_price, error
 
     def validate_winner(self, winner, action):

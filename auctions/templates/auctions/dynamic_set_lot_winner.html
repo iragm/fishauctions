@@ -597,8 +597,12 @@ $(document).ready(function() {
         <label class="visually-hidden" for="price" class="form-label">Sell Price</label>
         <div class="input-group">
             <span class="input-group-text">{{ auction.currency_symbol }}</span>
-            <input type="number" class="form-control" id="price" placeholder="0" autocomplete="off">
+            {% if auction.only_whole_dollar_bids %}
+            <input type="number" step="1" class="form-control" id="price" placeholder="0" autocomplete="off">
             <span class="input-group-text">.00</span>
+            {% else %}
+            <input type="number" step="0.01" min="0.01" class="form-control" id="price" placeholder="0.00" autocomplete="off">
+            {% endif %}
             <div class="invalid-tooltip"></div>
         </div>
     </div>

@@ -214,6 +214,10 @@ class QuickAddLot(forms.ModelForm):
         self.fields["reserve_price"].help_text = ""
         self.fields["buy_now_price"].help_text = ""
         self.fields["species_category"].initial = Category.objects.filter(name="Uncategorized").first()
+        if not self.auction.only_whole_dollar_bids:
+            for field_name in ("reserve_price", "buy_now_price"):
+                self.fields[field_name].widget.attrs["step"] = "0.01"
+                self.fields[field_name].widget.attrs["min"] = "0.01"
         if not self.auction.advanced_lot_adding:
             self.fields["quantity"].initial = 1
             self.fields["quantity"].widget = HiddenInput()
@@ -800,6 +804,10 @@ class EditLot(forms.ModelForm):
         self.fields["reserve_price"].initial = self.lot.reserve_price
         self.fields["buy_now_price"].help_text = ""
         self.fields["reserve_price"].help_text = ""
+        if not self.auction.only_whole_dollar_bids:
+            for field_name in ("reserve_price", "buy_now_price", "winning_price"):
+                self.fields[field_name].widget.attrs["step"] = "0.01"
+                self.fields[field_name].widget.attrs["min"] = "0.01"
 
         self.fields["custom_checkbox"].initial = self.lot.custom_checkbox
         self.fields["custom_checkbox"].help_text = ""

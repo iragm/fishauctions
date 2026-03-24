@@ -180,8 +180,7 @@ def add_price_info(qs):
                     Q(winning_price__isnull=True, active=False),
                     then=Case(
                         When(donation=True, then=Value(Decimal(0))),
-                        default=Value(Decimal(0))
-                        - Cast(F("auctiontos_seller__auction__unsold_lot_fee"), money_field),
+                        default=Value(Decimal(0)) - Cast(F("auctiontos_seller__auction__unsold_lot_fee"), money_field),
                     ),
                 ),
                 default=Value(Decimal(0)),
