@@ -2,7 +2,6 @@
 import datetime
 import json
 import logging
-import math
 from decimal import Decimal, InvalidOperation
 
 from asgiref.sync import async_to_sync
@@ -134,7 +133,7 @@ def bid_on_lot(lot, user, amount):
     try:
         # if True:
         try:
-            amount = Decimal(str(amount)).quantize(Decimal("0.01"))
+            amount_decimal = Decimal(str(amount))
         except (InvalidOperation, ValueError):
             result = {
                 "type": "ERROR",
@@ -147,6 +146,20 @@ def bid_on_lot(lot, user, amount):
                 "date_end": None,
             }
             return result
+        # Reject bids with more than 2 decimal places
+        if amount_decimal != amount_decimal.quantize(Decimal("0.01")):
+            result = {
+                "type": "ERROR",
+                "message": "Bids can have at most 2 decimal places",
+                "send_to": "user",
+                "high_bidder_pk": None,
+                "high_bidder_name": None,
+                "current_high_bid": None,
+                "winner": None,
+                "date_end": None,
+            }
+            return result
+        amount = amount_decimal.quantize(Decimal("0.01"))
         if amount <= 0:
             result = {
                 "type": "ERROR",
@@ -317,9 +330,17 @@ def bid_on_lot(lot, user, amount):
                 return result
             # bid increments - also set in views.py and in view_lot_images.html
             if lot.auction and not lot.auction.only_whole_dollar_bids:
-                min_increment = max(Decimal(str(math.floor(float(original_bid) * 0.05) / 1)), Decimal("0.01"))
+                # 5% rounded down to nearest cent, minimum $0.01
+                min_increment = max(
+                    (original_bid * Decimal("0.05")).quantize(Decimal("0.01"), rounding="ROUND_DOWN"),
+                    Decimal("0.01"),
+                )
             else:
-                min_increment = max(Decimal(str(math.floor(float(original_bid) * 0.05))), Decimal(1))
+                # 5% rounded down to nearest dollar, minimum $1
+                min_increment = max(
+                    (original_bid * Decimal("0.05")).to_integral_value(rounding="ROUND_DOWN"),
+                    Decimal(1),
+                )
             next_allowed_amount = original_bid + min_increment
             # if bid.amount <= original_bid:  # changing this to < would allow bumping without being the high bidder
             if bid.amount < next_allowed_amount:

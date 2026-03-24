@@ -2184,6 +2184,10 @@ class AuctionEditForm(forms.ModelForm):
             )
         elif cleaned_data.get("promote_this_auction") and not saved_instance.created_by.userdata.is_trusted:
             self.add_error("promote_this_auction", "Your account doesn't have permission to promote auctions.")
+        if cleaned_data.get("only_whole_dollar_bids"):
+            minimum_bid = cleaned_data.get("minimum_bid")
+            if minimum_bid is not None and minimum_bid != minimum_bid.to_integral_value():
+                self.add_error("minimum_bid", "This auction only allows whole dollar amounts.")
         return cleaned_data
 
 

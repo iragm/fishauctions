@@ -91,7 +91,7 @@ def bin_data(
             if working_with_date:
                 diff = (item_value - start_bin).total_seconds()
             else:
-                diff = item_value - start_bin
+                diff = float(item_value - start_bin)
             bin_index = int(diff // bin_size)
             bin_counts[bin_index] += 1
 

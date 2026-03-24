@@ -26,7 +26,6 @@ from django.db.models import (
     Exists,
     ExpressionWrapper,
     F,
-    FloatField,
     IntegerField,
     Max,
     OuterRef,
@@ -104,15 +103,16 @@ def add_price_info(qs):
     if not (isinstance(qs, QuerySet) and qs.model == Lot):
         msg = "must be passed a queryset of the Lot model"
         raise TypeError(msg)
+    money_field = DecimalField(max_digits=10, decimal_places=2)
     return qs.annotate(
         pre_register_discount=Case(
-            When(auctiontos_seller__isnull=True, then=Value(Decimal("0"))),
+            When(auctiontos_seller__isnull=True, then=Value(Decimal(0))),
             When(
                 added_by=F("user"),
-                then=Cast(F("auctiontos_seller__auction__pre_register_lot_discount_percent"), DecimalField()),
+                then=Cast(F("auctiontos_seller__auction__pre_register_lot_discount_percent"), money_field),
             ),
-            default=Value(Decimal("0")),
-            output_field=DecimalField(),
+            default=Value(Decimal(0)),
+            output_field=money_field,
         ),
         your_cut=ExpressionWrapper(
             Case(
@@ -122,9 +122,9 @@ def add_price_info(qs):
                 ),
                 When(
                     Q(auctiontos_seller__isnull=True, winning_price__isnull=True),
-                    then=Value(Decimal("0")),
+                    then=Value(Decimal(0)),
                 ),
-                When(donation=True, then=Value(Decimal("0"))),
+                When(donation=True, then=Value(Decimal(0))),
                 When(
                     Q(winning_price__isnull=False, active=False),
                     then=(
@@ -140,7 +140,7 @@ def add_price_info(qs):
                                                 F(
                                                     "auctiontos_seller__auction__winning_bid_percent_to_club_for_club_members"
                                                 ),
-                                                DecimalField(),
+                                                money_field,
                                             )
                                             + F("pre_register_discount")
                                         )
@@ -152,13 +152,13 @@ def add_price_info(qs):
                                         100
                                         - Cast(
                                             F("auctiontos_seller__auction__winning_bid_percent_to_club"),
-                                            DecimalField(),
+                                            money_field,
                                         )
                                         + F("pre_register_discount")
                                     )
                                     / 100
                                 ),
-                                output_field=DecimalField(),
+                                output_field=money_field,
                             )
                         )
                         - Cast(
@@ -168,35 +168,35 @@ def add_price_info(qs):
                                     then=F("auction__lot_entry_fee_for_club_members"),
                                 ),
                                 default=F("auction__lot_entry_fee"),
-                                output_field=DecimalField(),
+                                output_field=money_field,
                             ),
-                            DecimalField(),
+                            money_field,
                         )
                     )
-                    * (100 - Cast(F("partial_refund_percent"), DecimalField()))
+                    * (100 - Cast(F("partial_refund_percent"), money_field))
                     / 100,
                 ),
                 When(
                     Q(winning_price__isnull=True, active=False),
                     then=Case(
-                        When(donation=True, then=Value(Decimal("0"))),
-                        default=Value(Decimal("0"))
-                        - Cast(F("auctiontos_seller__auction__unsold_lot_fee"), DecimalField()),
+                        When(donation=True, then=Value(Decimal(0))),
+                        default=Value(Decimal(0))
+                        - Cast(F("auctiontos_seller__auction__unsold_lot_fee"), money_field),
                     ),
                 ),
-                default=Value(Decimal("0")),
-                output_field=DecimalField(),
+                default=Value(Decimal(0)),
+                output_field=money_field,
             ),
-            output_field=DecimalField(),
+            output_field=money_field,
         ),
         club_cut=ExpressionWrapper(
             Case(
-                When(Q(active=False, winning_price__isnull=True), then=Value(Decimal("0"))),
-                When(winning_price__isnull=True, then=Value(Decimal("0"))),
-                default=(F("winning_price") * (100 - Cast(F("partial_refund_percent"), DecimalField())) / 100)
+                When(Q(active=False, winning_price__isnull=True), then=Value(Decimal(0))),
+                When(winning_price__isnull=True, then=Value(Decimal(0))),
+                default=(F("winning_price") * (100 - Cast(F("partial_refund_percent"), money_field)) / 100)
                 - F("your_cut"),
             ),
-            output_field=DecimalField(),
+            output_field=money_field,
         ),
     )
 

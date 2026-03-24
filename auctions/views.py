@@ -3,7 +3,6 @@ import base64
 import csv
 import json
 import logging
-import math
 import re
 import uuid
 from datetime import datetime, timedelta
@@ -4137,9 +4136,17 @@ class ViewLot(DetailView):
                 defaultBidAmount = lot.reserve_price
             else:
                 if lot.auction and not lot.auction.only_whole_dollar_bids:
-                    min_increment = max(Decimal(str(math.floor(float(lot.high_bid) * 0.05) / 1)), Decimal("0.01"))
+                    # 5% rounded down to nearest cent, minimum $0.01
+                    min_increment = max(
+                        (lot.high_bid * Decimal("0.05")).quantize(Decimal("0.01"), rounding="ROUND_DOWN"),
+                        Decimal("0.01"),
+                    )
                 else:
-                    min_increment = max(math.floor(float(lot.high_bid) * 0.05), 1)
+                    # 5% rounded down to nearest dollar, minimum $1
+                    min_increment = max(
+                        (lot.high_bid * Decimal("0.05")).to_integral_value(rounding="ROUND_DOWN"),
+                        Decimal(1),
+                    )
                 if defaultBidAmount > lot.high_bid + min_increment:
                     pass
                 else:
