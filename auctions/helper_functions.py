@@ -92,7 +92,7 @@ def bin_data(
                 diff = (item_value - start_bin).total_seconds()
             else:
                 diff = float(item_value - start_bin)
-            bin_index = int(diff // bin_size)
+            bin_index = int(diff // float(bin_size))
             bin_counts[bin_index] += 1
 
     # Ensure all bins are represented (even those with 0)

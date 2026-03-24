@@ -2441,6 +2441,16 @@ class Auction(models.Model):
             "number_of_lots_with_scanned_qr": qr_scans,
         }
 
+    def _make_stats_json_serializable(self, obj):
+        """Recursively convert Decimal values to float so that cached_stats can be stored in a JSONField."""
+        if isinstance(obj, dict):
+            return {k: self._make_stats_json_serializable(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [self._make_stats_json_serializable(item) for item in obj]
+        if isinstance(obj, Decimal):
+            return float(obj)
+        return obj
+
     def recalculate_stats(self):
         """Recalculate and cache all auction statistics.
         This method calls all the setter methods to calculate chart data
@@ -2462,8 +2472,8 @@ class Auction(models.Model):
         stats["feature_use"] = self.set_stat_feature_use()
         stats["misc"] = self.set_stat_misc()
 
-        # Save the stats
-        self.cached_stats = stats
+        # Save the stats — convert any Decimal values to float so the JSONField can serialize them
+        self.cached_stats = self._make_stats_json_serializable(stats)
         self.last_stats_update = timezone.now()
 
         # Smart scheduling based on auction age and status
