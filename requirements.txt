@@ -14,7 +14,7 @@ amqp==5.3.1
     # via kombu
 annotated-types==0.7.0
     # via pydantic
-anyio==4.12.1
+anyio==4.13.0
     # via
     #   httpx
     #   watchfiles
@@ -49,9 +49,9 @@ bleach==6.3.0
     # via
     #   -r requirements.in
     #   django-summernote
-boto3==1.42.73
+boto3==1.42.75
     # via django-ses
-botocore==1.42.73
+botocore==1.42.75
     # via
     #   boto3
     #   s3transfer
@@ -82,7 +82,7 @@ channels==4.3.2
     #   channels-redis
 channels-redis==4.3.0
     # via -r requirements.in
-chardet==7.2.0
+chardet==7.3.0
     # via -r requirements.in
 charset-normalizer==3.4.6
     # via
@@ -185,7 +185,7 @@ django-htmx==1.27.0
     # via -r requirements.in
 django-location-field==2.7.3
     # via -r requirements.in
-django-markdownfield==0.13.2
+django-markdownfield==0.15.1
     # via -r requirements.in
 django-post-office==3.11.0
     # via -r requirements.in
@@ -213,7 +213,7 @@ frozenlist==1.8.0
     # via
     #   aiohttp
     #   aiosignal
-gunicorn==25.1.0
+gunicorn==25.2.0
     # via -r requirements.in
 h11==0.16.0
     # via
@@ -269,7 +269,7 @@ multidict==6.7.1
     #   yarl
 mysqlclient==2.2.8
     # via -r requirements.in
-nh3==0.3.3
+nh3==0.3.4
     # via
     #   django-markdownfield
     #   django-post-office
@@ -367,13 +367,13 @@ pyyaml==6.0.3
     # via
     #   -r requirements.in
     #   uvicorn
-redis==7.3.0
+redis==7.4.0
     # via
     #   -r requirements.in
     #   channels-redis
 reportlab==4.4.10
     # via -r requirements.in
-requests==2.32.5
+requests==2.33.0
     # via
     #   -r requirements.in
     #   django-ses
