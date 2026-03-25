@@ -3,12 +3,11 @@ import base64
 import csv
 import json
 import logging
-import math
 import re
 import uuid
 from datetime import datetime, timedelta
 from datetime import timezone as date_tz
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from io import BytesIO, TextIOWrapper
 from pathlib import Path
 from random import choice, randint, sample, uniform
@@ -2494,16 +2493,20 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         return result_lot, error
 
     def validate_price(self, price, action):
-        """Returns (Int or None, error or None)"""
+        """Returns (Decimal or None, error or None)"""
         result_price = None
         error = None
         try:
-            result_price = int(price)
-        except (ValueError, TypeError):
+            result_price = Decimal(str(price)).quantize(Decimal("0.01"))
+        except (InvalidOperation, ValueError, TypeError):
             if action == "save":
                 error = "Enter the winning price"
             if action == "force_save":
                 error = "You can skip some errors, but you still need to enter a price"
+        if result_price is not None and self.auction.only_whole_dollar_bids:
+            if result_price != result_price.to_integral_value():
+                error = "This auction only allows whole dollar amounts"
+                result_price = None
         return result_price, error
 
     def validate_winner(self, winner, action):
@@ -4116,7 +4119,10 @@ class ViewLot(DetailView):
             if viewer_bid:
                 context["viewer_bid_pk"] = viewer_bid.pk
                 context["viewer_bid"] = viewer_bid.amount
-                defaultBidAmount = viewer_bid.amount + 1
+                if lot.auction and not lot.auction.only_whole_dollar_bids:
+                    defaultBidAmount = viewer_bid.amount + Decimal("0.01")
+                else:
+                    defaultBidAmount = viewer_bid.amount + 1
             else:
                 defaultBidAmount = 0
                 context["viewer_bid"] = None
@@ -4133,10 +4139,22 @@ class ViewLot(DetailView):
             if not lot.high_bidder:
                 defaultBidAmount = lot.reserve_price
             else:
-                if defaultBidAmount > lot.high_bid + max(math.floor(lot.high_bid * 0.05), 1):
+                if lot.auction and not lot.auction.only_whole_dollar_bids:
+                    # 5% rounded down to nearest cent, minimum $0.01
+                    min_increment = max(
+                        (lot.high_bid * Decimal("0.05")).quantize(Decimal("0.01"), rounding="ROUND_DOWN"),
+                        Decimal("0.01"),
+                    )
+                else:
+                    # 5% rounded down to nearest dollar, minimum $1
+                    min_increment = max(
+                        (lot.high_bid * Decimal("0.05")).to_integral_value(rounding="ROUND_DOWN"),
+                        Decimal(1),
+                    )
+                if defaultBidAmount > lot.high_bid + min_increment:
                     pass
                 else:
-                    defaultBidAmount = lot.high_bid + max(math.floor(lot.high_bid * 0.05), 1)
+                    defaultBidAmount = lot.high_bid + min_increment
         context["viewer_pk"] = self.request.user.pk
         context["submitter_pk"] = getattr(lot.user, "pk", 0)
         context["user_specific_bidding_error"] = False
@@ -4147,6 +4165,7 @@ class ViewLot(DetailView):
         if context["viewer_pk"] == context["submitter_pk"]:
             context["user_specific_bidding_error"] = "You can't bid on your own lot"
         context["amount"] = defaultBidAmount
+        context["only_whole_dollar_bids"] = lot.auction.only_whole_dollar_bids if lot.auction else True
         context["watched"] = Watch.objects.filter(lot_number=lot.lot_number, user=self.request.user.id)
         context["category"] = lot.species_category
         # context['form'] = CreateBid(initial={'user': self.request.user.id, 'lot_number':lot.pk, "amount":defaultBidAmount}, request=self.request)
@@ -5466,6 +5485,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "enable_square_payments",
                 "alternative_split_label",
                 "google_drive_link",
+                "only_whole_dollar_bids",
             ]
             for field in fields_to_clone:
                 setattr(auction, field, getattr(original_auction, field))

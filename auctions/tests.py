@@ -1466,6 +1466,293 @@ class LotPricesTests(TestCase):
         assert invoice.net == invoice.rounded_net
         self.assertAlmostEqual(Decimal(invoice.rounded_net), Decimal(-3.2))
 
+    def test_decimal_price_your_cut(self):
+        """Decimal winning prices should flow correctly through add_price_info your_cut calculation"""
+        self.auction.only_whole_dollar_bids = False
+        self.auction.save()
+        self.lot.winning_price = Decimal("10.50")
+        self.lot.save()
+        lots = add_price_info(Lot.objects.filter(pk=self.lot.pk))
+        lot = lots.first()
+        # your_cut = 10.50 * (100-25)/100 - 2 = 7.875 - 2 = 5.875
+        self.assertAlmostEqual(lot.your_cut, Decimal("5.875"), places=3)
+        # club_cut = 10.50 - your_cut = 4.625
+        self.assertAlmostEqual(lot.club_cut, Decimal("4.625"), places=3)
+
+    def test_decimal_price_invoice_totals(self):
+        """Invoice totals (subtotal, tax, net) should be correct with decimal winning prices"""
+        self.auction.only_whole_dollar_bids = False
+        self.auction.save()
+        self.lot.winning_price = Decimal("10.50")
+        self.lot.save()
+        # Seller invoice
+        invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.tos)
+        # total_sold = your_cut = 5.875 (from sold lot)
+        # unsold lot contributes -10 (unsold fee)
+        # net = 5.875 - 10 = -4.125
+        self.assertAlmostEqual(invoice.total_sold, Decimal("5.875") - 10, places=3)
+        self.assertEqual(invoice.tax, 0)
+        self.assertAlmostEqual(invoice.net, Decimal("5.875") - 10, places=3)
+
+    def test_decimal_price_buyer_invoice_with_tax(self):
+        """Buyer invoice tax should be calculated correctly with decimal winning prices"""
+        self.auction.only_whole_dollar_bids = False
+        self.auction.save()
+        self.lot.winning_price = Decimal("10.50")
+        self.lot.save()
+        # Buyer invoice (tosB bought the lot)
+        invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.tosB)
+        # total_bought = 10.50 (final_price without partial refund)
+        self.assertAlmostEqual(invoice.total_bought, Decimal("10.50"), places=2)
+        # tax = 10.50 * 25% = 2.625 → rounded to 2.63 (ROUND_HALF_UP)
+        self.assertEqual(invoice.tax, Decimal("2.63"))
+        # net = -10.50 - 2.63 = -13.13
+        self.assertAlmostEqual(invoice.net, Decimal("-13.13"), places=2)
+
+    def test_decimal_price_invoice_rounding_seller(self):
+        """rounded_net rounds in seller's favor (up) when invoice_rounding is enabled"""
+        self.auction.only_whole_dollar_bids = False
+        self.auction.invoice_rounding = True
+        self.auction.save()
+        # Use a price that yields a fractional net for the seller
+        # your_cut = 10.50 * 0.75 - 2 = 5.875; unsold fee = -10; net = -4.125
+        self.lot.winning_price = Decimal("10.50")
+        self.lot.save()
+        invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.tos)
+        # net = -4.125; user_should_be_paid=False (negative net)
+        # round(-4.125) = -4; -4.125 <= -4 → True → return -4
+        self.assertEqual(invoice.rounded_net, Decimal(-4))
+
+    def test_decimal_price_invoice_rounding_buyer(self):
+        """rounded_net rounds in buyer's favor (less owed) when invoice_rounding is enabled"""
+        self.auction.only_whole_dollar_bids = False
+        self.auction.invoice_rounding = True
+        self.auction.save()
+        self.lot.winning_price = Decimal("10.50")
+        self.lot.save()
+        invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.tosB)
+        # net = -13.13; user_should_be_paid=False
+        # round(-13.13) = -13; -13.13 <= -13 → True → return -13
+        self.assertEqual(invoice.rounded_net, Decimal(-13))
+
+    def test_decimal_price_no_invoice_rounding(self):
+        """When invoice_rounding is False, rounded_net equals net exactly (preserves decimal cents)"""
+        self.auction.only_whole_dollar_bids = False
+        self.auction.invoice_rounding = False
+        self.auction.save()
+        self.lot.winning_price = Decimal("10.50")
+        self.lot.save()
+        invoice_buyer, _ = Invoice.objects.get_or_create(auctiontos_user=self.tosB)
+        self.assertEqual(invoice_buyer.rounded_net, invoice_buyer.net)
+        self.assertAlmostEqual(invoice_buyer.net, Decimal("-13.13"), places=2)
+
+
+class DecimalBidValidationTests(TestCase):
+    """Tests for bid_on_lot with the only_whole_dollar_bids toggle and decimal price validation"""
+
+    def setUp(self):
+        time = timezone.now() + datetime.timedelta(days=30)
+        pastTime = timezone.now() - datetime.timedelta(hours=1)
+        # Give users valid emails so outbid notification emails don't error out
+        self.lotuser = User.objects.create_user(username="decimal_lotowner", password="x", email="lotowner@example.com")
+        self.userA = User.objects.create_user(username="decimal_userA", password="x", email="userA@example.com")
+        self.userB = User.objects.create_user(username="decimal_userB", password="x", email="userB@example.com")
+
+        self.whole_dollar_auction = Auction.objects.create(
+            title="Whole dollar auction",
+            date_end=time,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            only_whole_dollar_bids=True,
+        )
+        self.decimal_auction = Auction.objects.create(
+            title="Decimal auction",
+            date_end=time,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            only_whole_dollar_bids=False,
+        )
+        location_whole = PickupLocation.objects.create(
+            name="loc_whole", auction=self.whole_dollar_auction, pickup_time=time
+        )
+        location_decimal = PickupLocation.objects.create(
+            name="loc_decimal", auction=self.decimal_auction, pickup_time=time
+        )
+        AuctionTOS.objects.create(user=self.lotuser, auction=self.whole_dollar_auction, pickup_location=location_whole)
+        AuctionTOS.objects.create(user=self.userA, auction=self.whole_dollar_auction, pickup_location=location_whole)
+        AuctionTOS.objects.create(user=self.userB, auction=self.whole_dollar_auction, pickup_location=location_whole)
+        AuctionTOS.objects.create(user=self.lotuser, auction=self.decimal_auction, pickup_location=location_decimal)
+        AuctionTOS.objects.create(user=self.userA, auction=self.decimal_auction, pickup_location=location_decimal)
+        AuctionTOS.objects.create(user=self.userB, auction=self.decimal_auction, pickup_location=location_decimal)
+
+        self.whole_dollar_lot = Lot.objects.create(
+            lot_name="Whole dollar lot",
+            auction=self.whole_dollar_auction,
+            reserve_price=5,
+            user=self.lotuser,
+            quantity=1,
+            date_end=time,
+        )
+        self.whole_dollar_lot.date_posted = pastTime
+        self.whole_dollar_lot.save()
+
+        # Decimal lot with reserve=$5.00; used for most tests
+        self.decimal_lot = Lot.objects.create(
+            lot_name="Decimal lot",
+            auction=self.decimal_auction,
+            reserve_price=Decimal("5.00"),
+            user=self.lotuser,
+            quantity=1,
+            date_end=time,
+        )
+        self.decimal_lot.date_posted = pastTime
+        self.decimal_lot.save()
+
+    def test_fractional_bid_rejected_on_whole_dollar_auction(self):
+        """A bid with cents is rejected when only_whole_dollar_bids=True"""
+        from auctions.consumers import bid_on_lot
+
+        result = bid_on_lot(self.whole_dollar_lot, self.userA, 10.50)
+        self.assertEqual(result["type"], "ERROR")
+        self.assertIn("whole dollar", result["message"].lower())
+
+    def test_whole_dollar_bid_accepted_on_whole_dollar_auction(self):
+        """A whole-dollar bid is accepted when only_whole_dollar_bids=True"""
+        from auctions.consumers import bid_on_lot
+
+        result = bid_on_lot(self.whole_dollar_lot, self.userA, 10)
+        self.assertIn(result["type"], ["NEW_HIGH_BIDDER", "INFO"])
+
+    def test_decimal_bid_accepted_on_decimal_auction(self):
+        """A bid with cents is accepted when only_whole_dollar_bids=False"""
+        from auctions.consumers import bid_on_lot
+
+        result = bid_on_lot(self.decimal_lot, self.userA, Decimal("5.50"))
+        self.assertIn(result["type"], ["NEW_HIGH_BIDDER", "INFO"])
+
+    def test_more_than_two_decimal_places_rejected(self):
+        """A bid with more than 2 decimal places is always rejected"""
+        from auctions.consumers import bid_on_lot
+
+        result = bid_on_lot(self.decimal_lot, self.userA, "10.555")
+        self.assertEqual(result["type"], "ERROR")
+        self.assertIn("2 decimal", result["message"].lower())
+
+    def test_decimal_bid_increment_minimum(self):
+        """Decimal auction: min increment is 5% rounded down to cents, minimum $0.01.
+
+        With one bidder present, lot.high_bid equals the reserve_price.
+        The 5% increment applies to that reserve_price.
+        """
+        from auctions.consumers import bid_on_lot
+
+        # Use a lot with reserve=$10.00 so the math is clean
+        time = timezone.now() + datetime.timedelta(days=30)
+        pastTime = timezone.now() - datetime.timedelta(hours=1)
+        lot = Lot.objects.create(
+            lot_name="Increment test lot",
+            auction=self.decimal_auction,
+            reserve_price=Decimal("10.00"),
+            user=self.lotuser,
+            quantity=1,
+            date_end=time,
+        )
+        lot.date_posted = pastTime
+        lot.save()
+        # userA places proxy bid of $20.00; lot.high_bid = reserve = $10.00 (only one bidder)
+        bid_on_lot(lot, self.userA, Decimal("20.00"))
+        # 5% of $10.00 = $0.50 → quantize(0.01, ROUND_DOWN) = $0.50; next_allowed = $10.50
+        # bid of $10.49 should fail
+        result = bid_on_lot(lot, self.userB, Decimal("10.49"))
+        self.assertEqual(result["type"], "ERROR")
+        self.assertIn("10.50", result["message"])
+        # bid of $10.50 should succeed (bumps against proxy, type is NEW_HIGH_BID)
+        result = bid_on_lot(lot, self.userB, Decimal("10.50"))
+        self.assertIn(result["type"], ["NEW_HIGH_BIDDER", "NEW_HIGH_BID", "INFO"])
+
+    def test_whole_dollar_bid_increment_minimum(self):
+        """Whole-dollar auction: minimum increment is $1 even when 5% < $1"""
+        from auctions.consumers import bid_on_lot
+
+        # Use a lot with reserve=$5 (5% = $0.25, rounded down = $0, min=1 → increment is $1)
+        time = timezone.now() + datetime.timedelta(days=30)
+        pastTime = timezone.now() - datetime.timedelta(hours=1)
+        lot = Lot.objects.create(
+            lot_name="Whole dollar increment lot",
+            auction=self.whole_dollar_auction,
+            reserve_price=5,
+            user=self.lotuser,
+            quantity=1,
+            date_end=time,
+        )
+        lot.date_posted = pastTime
+        lot.save()
+        # userA places proxy bid; lot.high_bid = reserve = $5 (only one bidder)
+        bid_on_lot(lot, self.userA, 10)
+        # 5% of $5 = $0.25 → to_integral_value(ROUND_DOWN) = $0 → max($0, $1) = $1
+        # next_allowed = $5 + $1 = $6; bid of $5 should fail
+        result = bid_on_lot(lot, self.userB, 5)
+        self.assertEqual(result["type"], "ERROR")
+        # bid of $6 should succeed
+        result = bid_on_lot(lot, self.userB, 6)
+        self.assertIn(result["type"], ["NEW_HIGH_BIDDER", "NEW_HIGH_BID", "INFO"])
+
+
+class AuctionEditFormMinimumBidTests(TestCase):
+    """Tests for AuctionEditForm minimum_bid validation with only_whole_dollar_bids"""
+
+    def _get_form_data(self, auction, overrides=None):
+        """Build a minimal valid form data dict for AuctionEditForm from an existing auction"""
+
+        data = {
+            "title": auction.title,
+            "summernote_description": auction.summernote_description or "",
+            "lot_entry_fee": str(auction.lot_entry_fee or "0"),
+            "unsold_lot_fee": str(auction.unsold_lot_fee or "0"),
+            "winning_bid_percent_to_club": str(auction.winning_bid_percent_to_club or "0"),
+            "date_start": auction.date_start.strftime("%Y-%m-%d %H:%M:%S"),
+            "date_end": auction.date_end.strftime("%Y-%m-%d %H:%M:%S"),
+            "invoice_rounding": str(auction.invoice_rounding),
+            "only_whole_dollar_bids": str(auction.only_whole_dollar_bids),
+            "minimum_bid": "",
+        }
+        if overrides:
+            data.update(overrides)
+        return data
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="auction_form_user", password="testpassword")
+        time = timezone.now() + datetime.timedelta(days=7)
+        self.auction = Auction.objects.create(
+            created_by=self.user,
+            title="Form test auction",
+            date_end=time,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            only_whole_dollar_bids=True,
+        )
+
+    def test_fractional_minimum_bid_rejected_when_whole_dollar_required(self):
+        """minimum_bid with cents is invalid when only_whole_dollar_bids=True"""
+        data = self._get_form_data(self.auction, {"only_whole_dollar_bids": True, "minimum_bid": "5.50"})
+        form = AuctionEditForm(data=data, instance=self.auction, user=self.user, cloned_from=None, user_timezone="UTC")
+        form.is_valid()
+        self.assertIn("minimum_bid", form.errors)
+        self.assertIn("whole dollar", str(form.errors["minimum_bid"]).lower())
+
+    def test_whole_dollar_minimum_bid_accepted_when_whole_dollar_required(self):
+        """minimum_bid as a whole dollar is valid when only_whole_dollar_bids=True"""
+        data = self._get_form_data(self.auction, {"only_whole_dollar_bids": True, "minimum_bid": "5"})
+        form = AuctionEditForm(data=data, instance=self.auction, user=self.user, cloned_from=None, user_timezone="UTC")
+        form.is_valid()
+        self.assertNotIn("minimum_bid", form.errors)
+
+    def test_fractional_minimum_bid_allowed_when_decimal_bids_enabled(self):
+        """minimum_bid with cents is valid when only_whole_dollar_bids=False"""
+        self.auction.only_whole_dollar_bids = False
+        self.auction.save()
+        data = self._get_form_data(self.auction, {"only_whole_dollar_bids": False, "minimum_bid": "5.50"})
+        form = AuctionEditForm(data=data, instance=self.auction, user=self.user, cloned_from=None, user_timezone="UTC")
+        form.is_valid()
+        self.assertNotIn("minimum_bid", form.errors)
+
 
 class LotRefundDialogTests(TestCase):
     def setUp(self):

@@ -2,7 +2,7 @@
 import datetime
 import json
 import logging
-import math
+from decimal import Decimal, InvalidOperation
 
 from asgiref.sync import async_to_sync
 from channels.generic.websocket import WebsocketConsumer
@@ -132,7 +132,59 @@ def bid_on_lot(lot, user, amount):
     """
     try:
         # if True:
-        amount = int(amount)
+        try:
+            amount_decimal = Decimal(str(amount))
+        except (InvalidOperation, ValueError):
+            result = {
+                "type": "ERROR",
+                "message": "Invalid bid amount",
+                "send_to": "user",
+                "high_bidder_pk": None,
+                "high_bidder_name": None,
+                "current_high_bid": None,
+                "winner": None,
+                "date_end": None,
+            }
+            return result
+        # Reject bids with more than 2 decimal places
+        if amount_decimal != amount_decimal.quantize(Decimal("0.01")):
+            result = {
+                "type": "ERROR",
+                "message": "Bids can have at most 2 decimal places",
+                "send_to": "user",
+                "high_bidder_pk": None,
+                "high_bidder_name": None,
+                "current_high_bid": None,
+                "winner": None,
+                "date_end": None,
+            }
+            return result
+        amount = amount_decimal.quantize(Decimal("0.01"))
+        if amount <= 0:
+            result = {
+                "type": "ERROR",
+                "message": "Bid must be greater than zero",
+                "send_to": "user",
+                "high_bidder_pk": None,
+                "high_bidder_name": None,
+                "current_high_bid": None,
+                "winner": None,
+                "date_end": None,
+            }
+            return result
+        if lot.auction and lot.auction.only_whole_dollar_bids:
+            if amount != amount.to_integral_value():
+                result = {
+                    "type": "ERROR",
+                    "message": "This auction only allows whole dollar bids",
+                    "send_to": "user",
+                    "high_bidder_pk": None,
+                    "high_bidder_name": None,
+                    "current_high_bid": None,
+                    "winner": None,
+                    "date_end": None,
+                }
+                return result
         result = {
             "type": "ERROR",
             "message": "Override this message",
@@ -277,7 +329,19 @@ def bid_on_lot(lot, user, amount):
                 bid.save()
                 return result
             # bid increments - also set in views.py and in view_lot_images.html
-            next_allowed_amount = original_bid + max(math.floor(original_bid * 0.05), 1)
+            if lot.auction and not lot.auction.only_whole_dollar_bids:
+                # 5% rounded down to nearest cent, minimum $0.01
+                min_increment = max(
+                    (original_bid * Decimal("0.05")).quantize(Decimal("0.01"), rounding="ROUND_DOWN"),
+                    Decimal("0.01"),
+                )
+            else:
+                # 5% rounded down to nearest dollar, minimum $1
+                min_increment = max(
+                    (original_bid * Decimal("0.05")).to_integral_value(rounding="ROUND_DOWN"),
+                    Decimal(1),
+                )
+            next_allowed_amount = original_bid + min_increment
             # if bid.amount <= original_bid:  # changing this to < would allow bumping without being the high bidder
             if bid.amount < next_allowed_amount:
                 # there's a high bidder already

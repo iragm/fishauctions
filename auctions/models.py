@@ -26,7 +26,6 @@ from django.db.models import (
     Exists,
     ExpressionWrapper,
     F,
-    FloatField,
     IntegerField,
     Max,
     OuterRef,
@@ -104,15 +103,16 @@ def add_price_info(qs):
     if not (isinstance(qs, QuerySet) and qs.model == Lot):
         msg = "must be passed a queryset of the Lot model"
         raise TypeError(msg)
+    money_field = DecimalField(max_digits=10, decimal_places=2)
     return qs.annotate(
         pre_register_discount=Case(
-            When(auctiontos_seller__isnull=True, then=Value(0.0)),
+            When(auctiontos_seller__isnull=True, then=Value(Decimal(0))),
             When(
                 added_by=F("user"),
-                then=F("auctiontos_seller__auction__pre_register_lot_discount_percent"),
+                then=Cast(F("auctiontos_seller__auction__pre_register_lot_discount_percent"), money_field),
             ),
-            default=Value(0.0),
-            output_field=FloatField(),
+            default=Value(Decimal(0)),
+            output_field=money_field,
         ),
         your_cut=ExpressionWrapper(
             Case(
@@ -122,9 +122,9 @@ def add_price_info(qs):
                 ),
                 When(
                     Q(auctiontos_seller__isnull=True, winning_price__isnull=True),
-                    then=Value(0.0),
+                    then=Value(Decimal(0)),
                 ),
-                When(donation=True, then=Value(0.0)),
+                When(donation=True, then=Value(Decimal(0))),
                 When(
                     Q(winning_price__isnull=False, active=False),
                     then=(
@@ -136,8 +136,11 @@ def add_price_info(qs):
                                     then=(
                                         (
                                             100
-                                            - F(
-                                                "auctiontos_seller__auction__winning_bid_percent_to_club_for_club_members"
+                                            - Cast(
+                                                F(
+                                                    "auctiontos_seller__auction__winning_bid_percent_to_club_for_club_members"
+                                                ),
+                                                money_field,
                                             )
                                             + F("pre_register_discount")
                                         )
@@ -147,45 +150,52 @@ def add_price_info(qs):
                                 default=(
                                     (
                                         100
-                                        - F("auctiontos_seller__auction__winning_bid_percent_to_club")
+                                        - Cast(
+                                            F("auctiontos_seller__auction__winning_bid_percent_to_club"),
+                                            money_field,
+                                        )
                                         + F("pre_register_discount")
                                     )
                                     / 100
                                 ),
-                                output_field=FloatField(),
+                                output_field=money_field,
                             )
                         )
-                        - Case(
-                            When(
-                                auctiontos_seller__is_club_member=True,
-                                then=F("auction__lot_entry_fee_for_club_members"),
+                        - Cast(
+                            Case(
+                                When(
+                                    auctiontos_seller__is_club_member=True,
+                                    then=F("auction__lot_entry_fee_for_club_members"),
+                                ),
+                                default=F("auction__lot_entry_fee"),
+                                output_field=money_field,
                             ),
-                            default=F("auction__lot_entry_fee"),
-                            output_field=FloatField(),
+                            money_field,
                         )
                     )
-                    * (100 - F("partial_refund_percent"))
+                    * (100 - Cast(F("partial_refund_percent"), money_field))
                     / 100,
                 ),
                 When(
                     Q(winning_price__isnull=True, active=False),
                     then=Case(
-                        When(donation=True, then=Value(0.0)),
-                        default=Value(0.0) - F("auctiontos_seller__auction__unsold_lot_fee"),
+                        When(donation=True, then=Value(Decimal(0))),
+                        default=Value(Decimal(0)) - Cast(F("auctiontos_seller__auction__unsold_lot_fee"), money_field),
                     ),
                 ),
-                default=Value(0.0),
-                output_field=FloatField(),
+                default=Value(Decimal(0)),
+                output_field=money_field,
             ),
-            output_field=FloatField(),
+            output_field=money_field,
         ),
         club_cut=ExpressionWrapper(
             Case(
-                When(Q(active=False, winning_price__isnull=True), then=Value(0.0)),
-                When(winning_price__isnull=True, then=Value(0.0)),
-                default=(F("winning_price") * (100 - F("partial_refund_percent")) / 100) - F("your_cut"),
+                When(Q(active=False, winning_price__isnull=True), then=Value(Decimal(0))),
+                When(winning_price__isnull=True, then=Value(Decimal(0))),
+                default=(F("winning_price") * (100 - Cast(F("partial_refund_percent"), money_field)) / 100)
+                - F("your_cut"),
             ),
-            output_field=FloatField(),
+            output_field=money_field,
         ),
     )
 
@@ -702,7 +712,11 @@ class Auction(models.Model):
     invoice_rounding.help_text = (
         "Round invoice totals to whole dollar amounts.  Check if you plan to accept cash payments."
     )
-    minimum_bid = models.PositiveIntegerField(default=2, validators=[MinValueValidator(1)])
+    only_whole_dollar_bids = models.BooleanField(default=True)
+    only_whole_dollar_bids.help_text = "Require bids, minimum bids, and lot prices to be whole dollar amounts.  Uncheck to allow bids with cents (e.g. $5.50)."
+    minimum_bid = models.DecimalField(
+        default=2, max_digits=10, decimal_places=2, validators=[MinValueValidator(Decimal("0.01"))]
+    )
     minimum_bid.help_text = "Lowest price any lot will be sold for"
     lot_entry_fee_for_club_members = models.PositiveIntegerField(
         default=0, validators=[MinValueValidator(0), MaxValueValidator(10)]
@@ -2427,6 +2441,16 @@ class Auction(models.Model):
             "number_of_lots_with_scanned_qr": qr_scans,
         }
 
+    def _make_stats_json_serializable(self, obj):
+        """Recursively convert Decimal values to float so that cached_stats can be stored in a JSONField."""
+        if isinstance(obj, dict):
+            return {k: self._make_stats_json_serializable(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [self._make_stats_json_serializable(item) for item in obj]
+        if isinstance(obj, Decimal):
+            return float(obj)
+        return obj
+
     def recalculate_stats(self):
         """Recalculate and cache all auction statistics.
         This method calls all the setter methods to calculate chart data
@@ -2448,8 +2472,8 @@ class Auction(models.Model):
         stats["feature_use"] = self.set_stat_feature_use()
         stats["misc"] = self.set_stat_misc()
 
-        # Save the stats
-        self.cached_stats = stats
+        # Save the stats — convert any Decimal values to float so the JSONField can serialize them
+        self.cached_stats = self._make_stats_json_serializable(stats)
         self.last_stats_update = timezone.now()
 
         # Smart scheduling based on auction age and status
@@ -3376,15 +3400,19 @@ class Lot(models.Model):
     )
     quantity = models.PositiveIntegerField(validators=[MinValueValidator(1)])
     quantity.help_text = "How many of this item are in this lot?"
-    reserve_price = models.PositiveIntegerField(
+    reserve_price = models.DecimalField(
         default=2,
-        validators=[MinValueValidator(1), MaxValueValidator(2000)],
+        max_digits=10,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal("0.01")), MaxValueValidator(2000)],
         verbose_name="Minimum bid",
     )
     reserve_price.help_text = "Also called a reserve price. Lot will not be sold unless someone bids at least this much"
-    buy_now_price = models.PositiveIntegerField(
+    buy_now_price = models.DecimalField(
         default=None,
-        validators=[MinValueValidator(1), MaxValueValidator(1000)],
+        max_digits=10,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal("0.01")), MaxValueValidator(1000)],
         blank=True,
         null=True,
     )
@@ -3426,7 +3454,7 @@ class Lot(models.Model):
         verbose_name="Winner",
     )
     active = models.BooleanField(default=True, db_index=True)
-    winning_price = models.PositiveIntegerField(null=True, blank=True, db_index=True)
+    winning_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, db_index=True)
     refunded = models.BooleanField(default=False)
     refunded.help_text = "Don't charge the winner or pay the seller for this lot."
     banned = models.BooleanField(default=False, verbose_name="Removed", blank=True)
@@ -4656,11 +4684,11 @@ class Lot(models.Model):
                 if bids[0].amount == bids[1].amount:
                     return bids[0].amount
                 else:
-                    # this is the old method: 1 dollar more than the second highest bidder
-                    # this would cause an issue if someone was tied for high bidder, and increased their proxy bid
-                    bidPrice = bids[1].amount + 1
-                    # instead, we'll just return the second highest bid in the case of a tie
-                    # bidPrice = bids[1].amount
+                    # 1 cent more than the second highest bidder (or $1 more for whole-dollar auctions)
+                    if self.auction and not self.auction.only_whole_dollar_bids:
+                        bidPrice = bids[1].amount + Decimal("0.01")
+                    else:
+                        bidPrice = bids[1].amount + 1
                 return bidPrice
             except IndexError:
                 return self.reserve_price
@@ -5629,7 +5657,7 @@ class Bid(models.Model):
     lot_number = models.ForeignKey(Lot, on_delete=models.CASCADE)
     bid_time = models.DateTimeField(auto_now_add=True, blank=True)
     last_bid_time = models.DateTimeField(auto_now_add=True, blank=True)
-    amount = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+    amount = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(Decimal("0.01"))])
     was_high_bid = models.BooleanField(default=False)
     is_deleted = models.BooleanField(default=False)
     # note: there is not AuctionTOS field here - this means that bids can only be placed by Users
@@ -6726,7 +6754,7 @@ class LotHistory(models.Model):
     timestamp = models.DateTimeField(auto_now_add=True)
     seen = models.BooleanField(default=False)
     seen.help_text = "Has the lot submitter seen this message?"
-    current_price = models.PositiveIntegerField(null=True, blank=True)
+    current_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     current_price.help_text = "Price of the lot immediately AFTER this message"
     changed_price = models.BooleanField(default=False)
     changed_price.help_text = (
@@ -6734,7 +6762,7 @@ class LotHistory(models.Model):
     )
     notification_sent = models.BooleanField(default=False)
     notification_sent.help_text = "Set to true automatically when the notification email is sent"
-    bid_amount = models.PositiveIntegerField(null=True, blank=True)
+    bid_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     bid_amount.help_text = "For any kind of debugging"
     removed = models.BooleanField(default=False)
 
