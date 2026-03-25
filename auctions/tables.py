@@ -206,12 +206,12 @@ class LotHTMxTable(tables.Table):
         # on mobile, reduce the number of columns and show info below the lot name
         result += f'<span class="d-block d-md-none"><b>Seller:</b> {record.auctiontos_seller} '
         if record.auctiontos_winner:
-            result += f"<b>Winner:</b> {record.auctiontos_winner} (${record.winning_price}.00)"
+            result += f"<b>Winner:</b> {record.auctiontos_winner} (${record.winning_price})"
         result += "</span>"
         return mark_safe(result)
 
     def render_winning_price(self, value, record):
-        return f"${value}.00"
+        return f"${value}"
 
     class Meta:
         model = Lot
@@ -363,7 +363,7 @@ class LotHTMxTableForUsers(tables.Table):
             return mark_safe('<span class="badge bg-secondary">Unsold</span>')
 
     def render_price(self, value, record):
-        return f"${value}.00"
+        return f"${value}"
 
     def render_actions(self, value, record):
         result = ""
