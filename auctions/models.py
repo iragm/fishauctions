@@ -3784,7 +3784,8 @@ class Lot(models.Model):
 
     def send_websocket_message(self, message):
         channel_layer = channels.layers.get_channel_layer()
-        async_to_sync(channel_layer.group_send)(f"lot_{self.pk}", message)
+        serialized = {k: float(v) if isinstance(v, Decimal) else v for k, v in message.items()}
+        async_to_sync(channel_layer.group_send)(f"lot_{self.pk}", serialized)
 
     def send_ending_very_soon_message(self):
         """Send a websocket message when the lot is ending in less than a minute"""
