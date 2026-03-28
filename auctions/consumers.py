@@ -591,6 +591,7 @@ class LotConsumer(WebsocketConsumer):
                                     )
                                 else:
                                     # I think just the sealed bid success and upping your own bids go here
+                                    current_high_bid = result["current_high_bid"]
                                     async_to_sync(self.channel_layer.group_send)(
                                         self.user_room_name,
                                         {
@@ -599,10 +600,13 @@ class LotConsumer(WebsocketConsumer):
                                             "message": result["message"],
                                             "high_bidder_pk": result["high_bidder_pk"],
                                             "high_bidder_name": result["high_bidder_name"],
-                                            "current_high_bid": result["current_high_bid"],
+                                            "current_high_bid": float(current_high_bid)
+                                            if isinstance(current_high_bid, Decimal)
+                                            else current_high_bid,
                                         },
                                     )
                             else:
+                                current_high_bid = result["current_high_bid"]
                                 async_to_sync(self.channel_layer.group_send)(
                                     self.room_group_name,
                                     {
@@ -611,7 +615,9 @@ class LotConsumer(WebsocketConsumer):
                                         "message": result["message"],
                                         "high_bidder_pk": result["high_bidder_pk"],
                                         "high_bidder_name": result["high_bidder_name"],
-                                        "current_high_bid": result["current_high_bid"],
+                                        "current_high_bid": float(current_high_bid)
+                                        if isinstance(current_high_bid, Decimal)
+                                        else current_high_bid,
                                         "date_end": result["date_end"],
                                     },
                                 )
