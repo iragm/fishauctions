@@ -38,11 +38,11 @@ pre-commit==4.5.1
     # via -r requirements-test.in
 pysocks==1.7.1
     # via urllib3
-python-discovery==1.2.0
+python-discovery==1.2.1
     # via virtualenv
 pyyaml==6.0.3
     # via pre-commit
-ruff==0.15.7
+ruff==0.15.8
     # via -r requirements-test.in
 selenium==4.41.0
     # via -r requirements-test.in
