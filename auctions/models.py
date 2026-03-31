@@ -3210,7 +3210,9 @@ class AuctionTOS(models.Model):
         # Move sold lots to self
         Lot.objects.filter(auctiontos_seller=duplicate).update(auctiontos_seller=self)
         # Get or create an invoice for self
-        invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self, defaults={"auction": self.auction})
+        invoice = Invoice.objects.filter(auctiontos_user=self).first()
+        if not invoice:
+            invoice = Invoice.objects.create(auctiontos_user=self, auction=self.auction)
         # Move invoice adjustments and payments from duplicate's invoice to self's invoice
         duplicate_invoice = Invoice.objects.filter(auctiontos_user=duplicate).first()
         if duplicate_invoice:
@@ -3763,7 +3765,9 @@ class Lot(models.Model):
             changed_price=True,
             seen=True,
         )
-        invoice, _ = Invoice.objects.get_or_create(auctiontos_user=tos, defaults={"auction": self.auction})
+        invoice = Invoice.objects.filter(auctiontos_user=tos, auction=self.auction).first()
+        if not invoice:
+            invoice = Invoice.objects.create(auctiontos_user=tos, auction=self.auction)
         invoice.recalculate()
         self.send_websocket_message(
             {
@@ -4928,14 +4932,14 @@ class Lot(models.Model):
             self.auctiontos_winner = tos
             self.save()
         if self.auction and self.auctiontos_winner:
-            invoice, _ = Invoice.objects.get_or_create(
-                auctiontos_user=self.auctiontos_winner, defaults={"auction": self.auction}
-            )
+            invoice = Invoice.objects.filter(auctiontos_user=self.auctiontos_winner, auction=self.auction).first()
+            if not invoice:
+                invoice = Invoice.objects.create(auctiontos_user=self.auctiontos_winner, auction=self.auction)
             invoice.recalculate()
         if self.auction and self.auctiontos_seller:
-            invoice, _ = Invoice.objects.get_or_create(
-                auctiontos_user=self.auctiontos_seller, defaults={"auction": self.auction}
-            )
+            invoice = Invoice.objects.filter(auctiontos_user=self.auctiontos_seller, auction=self.auction).first()
+            if not invoice:
+                invoice = Invoice.objects.create(auctiontos_user=self.auctiontos_seller, auction=self.auction)
             invoice.recalculate()
 
     @property
@@ -4999,11 +5003,6 @@ class Invoice(models.Model):
     """
     The total amount you get paid or owe to the club for an auction
     """
-
-    class Meta:
-        constraints = [
-            models.UniqueConstraint(fields=["auctiontos_user"], name="unique_invoice_per_auctiontos"),
-        ]
 
     auction = models.ForeignKey(Auction, blank=True, null=True, on_delete=models.SET_NULL)
     auctiontos_user = models.ForeignKey(AuctionTOS, blank=True, on_delete=models.CASCADE, related_name="auctiontos")
@@ -5572,6 +5571,25 @@ class Invoice(models.Model):
         if not self.auction:
             self.auction = self.auctiontos_user.auction
         super().save(*args, **kwargs)
+        # Ensure there is only one invoice per AuctionTOS.
+        # Keep the oldest; move payments and adjustments from any duplicates into it, then delete them.
+        oldest = Invoice.objects.filter(auctiontos_user=self.auctiontos_user).order_by("date").first()
+        if oldest and oldest.pk != self.pk:
+            # self is a newer duplicate — migrate its data to the older invoice and delete self
+            InvoiceAdjustment.objects.filter(invoice=self).update(invoice=oldest)
+            InvoicePayment.objects.filter(invoice=self).update(invoice=oldest)
+            Invoice.objects.filter(pk=self.pk).delete()
+            oldest.recalculate()
+            return  # self has been deleted; instance is now invalid
+        else:
+            # self is the oldest — clean up any newer duplicates that may exist
+            newer = Invoice.objects.filter(auctiontos_user=self.auctiontos_user).exclude(pk=self.pk)
+            if newer.exists():
+                for dup in newer:
+                    InvoiceAdjustment.objects.filter(invoice=dup).update(invoice=self)
+                    InvoicePayment.objects.filter(invoice=dup).update(invoice=self)
+                newer.delete()
+                self.recalculate()
 
 
 class InvoiceAdjustment(models.Model):

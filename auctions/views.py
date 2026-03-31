@@ -3268,7 +3268,9 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                     user=self.request.user,
                 )
                 messages.success(self.request, f"Updated lots for {self.tos.name}")
-                invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.tos, defaults={"auction": self.auction})
+                invoice = Invoice.objects.filter(auctiontos_user=self.tos, auction=self.auction).first()
+                if not invoice:
+                    invoice = Invoice.objects.create(auctiontos_user=self.tos, auction=self.auction)
                 invoice.recalculate()
             # when saving labels, it doesn't take you off from the page you're on
             # So we need to go somewhere, and then say "download labels"
@@ -3680,7 +3682,9 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                     )
 
             # Update invoice
-            invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.tos, defaults={"auction": self.auction})
+            invoice = Invoice.objects.filter(auctiontos_user=self.tos, auction=self.auction).first()
+            if not invoice:
+                invoice = Invoice.objects.create(auctiontos_user=self.tos, auction=self.auction)
             invoice.recalculate()
 
             return JsonResponse(
@@ -3943,7 +3947,9 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
                     )
 
                 # Step 4: Check invoice status
-                invoice, _ = Invoice.objects.get_or_create(auctiontos_user=tos, defaults={"auction": self.auction})
+                invoice = Invoice.objects.filter(auctiontos_user=tos, auction=self.auction).first()
+                if not invoice:
+                    invoice = Invoice.objects.create(auctiontos_user=tos, auction=self.auction)
 
                 if invoice.status != "DRAFT":
                     errors["closed_invoices"] += 1
@@ -4497,9 +4503,9 @@ class LotValidation(LoginRequiredMixin):
                 )
             else:
                 lot.auctiontos_seller = auctiontos
-                invoice, _ = Invoice.objects.get_or_create(
-                    auctiontos_user=auctiontos, defaults={"auction": lot.auction}
-                )
+                invoice = Invoice.objects.filter(auctiontos_user=auctiontos, auction=lot.auction).first()
+                if not invoice:
+                    invoice = Invoice.objects.create(auctiontos_user=auctiontos, auction=lot.auction)
                 invoice.recalculate()
         else:
             # this lot is NOT part of an auction
@@ -4660,9 +4666,9 @@ class LotCreateView(LotValidation, CreateView):
         """When a new lot is created, make sure to create an invoice for the seller"""
         lot = form.save(commit=False)
         if lot.auction and lot.auctiontos_seller:
-            invoice, _ = Invoice.objects.get_or_create(
-                auctiontos_user=lot.auctiontos_seller, defaults={"auction": lot.auction}
-            )
+            invoice = Invoice.objects.filter(auctiontos_user=lot.auctiontos_seller, auction=lot.auction).first()
+            if not invoice:
+                invoice = Invoice.objects.create(auctiontos_user=lot.auctiontos_seller, auction=lot.auction)
             invoice.recalculate()
         result = super().form_valid(form, **kwargs)
         # Create history after lot is saved and has a lot_number_display

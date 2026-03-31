@@ -1193,30 +1193,34 @@ class InvoiceCreateViewTests(StandardTestCase):
         assert new_tos.invoice.auction == self.online_auction
 
     def test_invoice_create_duplicate_handling(self):
-        """Test that accessing create URL when an invoice already exists redirects to the existing invoice"""
-        # Create a user with one invoice
+        """Test that creating a second invoice for the same AuctionTOS deduplicates on save: keeps oldest, merges data"""
+        from auctions.models import InvoiceAdjustment, InvoicePayment
+
         new_tos = AuctionTOS.objects.create(
             user=self.user_who_does_not_join,
             auction=self.online_auction,
             pickup_location=self.location,
         )
 
-        # Create first invoice
+        # Create first (oldest) invoice with a payment and an adjustment
         first_invoice = Invoice.objects.create(auctiontos_user=new_tos, auction=self.online_auction)
         first_invoice_pk = first_invoice.pk
+        InvoicePayment.objects.create(invoice=first_invoice, amount=10, payment_method="Cash")
+        InvoiceAdjustment.objects.create(invoice=first_invoice, amount=5, notes="test adj")
 
-        # Login as admin
-        self.client.login(username="admin_user", password="testpassword")
+        # Create a second invoice (simulates a race-condition duplicate); save() should auto-deduplicate
+        Invoice.objects.create(auctiontos_user=new_tos, auction=self.online_auction)
 
-        # Try to create another invoice via the create view
-        response = self.client.get(f"/invoices/create/{new_tos.pk}/")
-
-        # Check redirect to existing invoice
-        assert response.status_code == 302
-
-        # Verify still only one invoice (no duplicate was created)
+        # Exactly one invoice remains, and it's the oldest
         assert Invoice.objects.filter(auctiontos_user=new_tos).count() == 1
-        assert Invoice.objects.filter(auctiontos_user=new_tos).first().pk == first_invoice_pk
+        surviving = Invoice.objects.filter(auctiontos_user=new_tos).first()
+        assert surviving.pk == first_invoice_pk
+
+        # The view-based create also redirects to the existing invoice
+        self.client.login(username="admin_user", password="testpassword")
+        response = self.client.get(f"/invoices/create/{new_tos.pk}/")
+        assert response.status_code == 302
+        assert Invoice.objects.filter(auctiontos_user=new_tos).count() == 1
 
     def test_invoice_create_non_admin_denied(self):
         """Test that non-admins cannot create invoices"""
