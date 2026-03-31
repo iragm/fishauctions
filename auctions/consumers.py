@@ -279,7 +279,7 @@ def bid_on_lot(lot, user, amount):
                         )
                         if auctiontos_winner:
                             lot.auctiontos_winner = auctiontos_winner
-                            lot.create_update_invoices
+                            lot.create_update_invoices()
                     lot.winning_price = lot.buy_now_price
                     lot.buy_now_used = True
                     if lot.label_printed:

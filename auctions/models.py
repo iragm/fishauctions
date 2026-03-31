@@ -4920,7 +4920,6 @@ class Lot(models.Model):
                 return match.group(1)
         return None
 
-    @property
     def create_update_invoices(self):
         """Call whenever ending this lot, or when creating it"""
         if self.auction and self.winner and not self.auctiontos_winner:
