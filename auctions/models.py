@@ -5574,12 +5574,20 @@ class Invoice(models.Model):
         # Keep the oldest; move payments and adjustments from any duplicates into it, then delete them.
         oldest = Invoice.objects.filter(auctiontos_user=self.auctiontos_user).order_by("date").first()
         if oldest and oldest.pk != self.pk:
-            # self is a newer duplicate — migrate its data to the older invoice and delete self
+            # self is a newer duplicate — migrate its data to the older invoice and delete the duplicate row
+            duplicate_pk = self.pk
             InvoiceAdjustment.objects.filter(invoice=self).update(invoice=oldest)
             InvoicePayment.objects.filter(invoice=self).update(invoice=oldest)
-            Invoice.objects.filter(pk=self.pk).delete()
+            Invoice.objects.filter(pk=duplicate_pk).delete()
+            # Rebind this in-memory instance to the canonical (oldest) invoice so callers
+            # do not hold a reference to a deleted object.
+            self.pk = oldest.pk
+            self.id = oldest.pk
+            self._state.adding = False
+            self._state.db = oldest._state.db
+            self.refresh_from_db()
             oldest.recalculate()
-            return  # self has been deleted; instance is now invalid
+            return
         else:
             # self is the oldest — clean up any newer duplicates that may exist
             newer = Invoice.objects.filter(auctiontos_user=self.auctiontos_user).exclude(pk=self.pk)
