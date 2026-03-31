@@ -270,7 +270,7 @@ class AuctionTOSFilter(django_filters.FilterSet):
         return qs
 
     def auctiontos_search(self, queryset, name, value):
-        return self.generic(queryset, value)
+        return self.generic(queryset, value).distinct()
 
 
 class LotAdminFilter(django_filters.FilterSet):

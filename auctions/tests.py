@@ -7164,6 +7164,25 @@ class SquarePaymentTests(StandardTestCase):
         # We can't test the actual API call, but we can verify the location is set correctly
         self.assertTrue(self.tosB.pickup_location.pickup_by_mail)
 
+    def test_open_invoice_filter_no_duplicates(self):
+        """Filtering by 'open' should not return duplicate AuctionTOS rows even when a user has multiple DRAFT invoices"""
+        from auctions.filters import AuctionTOSFilter
+        from auctions.models import AuctionTOS, Invoice
+
+        # Create a second DRAFT invoice for tosB so that a naive JOIN would produce duplicates
+        Invoice.objects.create(auctiontos_user=self.tosB, status="DRAFT")
+
+        qs = AuctionTOS.objects.filter(auction=self.online_auction)
+        filter_instance = AuctionTOSFilter()
+
+        filtered_qs = filter_instance.auctiontos_search(qs, "query", "open")
+
+        # tosB should appear exactly once despite having multiple DRAFT invoices
+        tos_pks = list(filtered_qs.values_list("pk", flat=True))
+        self.assertEqual(
+            tos_pks.count(self.tosB.pk), 1, "tosB appeared more than once in 'open' invoice filter results"
+        )
+
 
 class SquareRefundFormTests(StandardTestCase):
     """Tests for Square refund integration in forms"""
