@@ -1193,7 +1193,7 @@ class InvoiceCreateViewTests(StandardTestCase):
         assert new_tos.invoice.auction == self.online_auction
 
     def test_invoice_create_duplicate_handling(self):
-        """Test that duplicate invoices are deleted and oldest is kept"""
+        """Test that accessing create URL when an invoice already exists redirects to the existing invoice"""
         # Create a user with one invoice
         new_tos = AuctionTOS.objects.create(
             user=self.user_who_does_not_join,
@@ -1201,26 +1201,20 @@ class InvoiceCreateViewTests(StandardTestCase):
             pickup_location=self.location,
         )
 
-        # Create first invoice (oldest)
+        # Create first invoice
         first_invoice = Invoice.objects.create(auctiontos_user=new_tos, auction=self.online_auction)
         first_invoice_pk = first_invoice.pk
-
-        # Create a duplicate invoice (newer)
-        Invoice.objects.create(auctiontos_user=new_tos, auction=self.online_auction)
-
-        # Verify both exist
-        assert Invoice.objects.filter(auctiontos_user=new_tos).count() == 2
 
         # Login as admin
         self.client.login(username="admin_user", password="testpassword")
 
-        # Try to create another invoice
+        # Try to create another invoice via the create view
         response = self.client.get(f"/invoices/create/{new_tos.pk}/")
 
         # Check redirect to existing invoice
         assert response.status_code == 302
 
-        # Verify only one invoice remains (the oldest)
+        # Verify still only one invoice (no duplicate was created)
         assert Invoice.objects.filter(auctiontos_user=new_tos).count() == 1
         assert Invoice.objects.filter(auctiontos_user=new_tos).first().pk == first_invoice_pk
 
@@ -7165,22 +7159,29 @@ class SquarePaymentTests(StandardTestCase):
         self.assertTrue(self.tosB.pickup_location.pickup_by_mail)
 
     def test_open_invoice_filter_no_duplicates(self):
-        """Filtering by 'open' should not return duplicate AuctionTOS rows even when a user has multiple DRAFT invoices"""
+        """Filtering should not return duplicate AuctionTOS rows when a user has multiple payments on their invoice"""
         from auctions.filters import AuctionTOSFilter
-        from auctions.models import AuctionTOS, Invoice
+        from auctions.models import AuctionTOS, InvoicePayment
 
-        # Create a second DRAFT invoice for tosB so that a naive JOIN would produce duplicates
-        Invoice.objects.create(auctiontos_user=self.tosB, status="DRAFT")
+        # Give tosB's existing invoice multiple payments - a naive JOIN would produce duplicate rows
+        InvoicePayment.objects.create(
+            invoice=self.test_invoice, payment_method="Cash", amount=10, receipt_number="RCPT1"
+        )
+        InvoicePayment.objects.create(
+            invoice=self.test_invoice, payment_method="Cash", amount=10, receipt_number="RCPT1"
+        )
 
         qs = AuctionTOS.objects.filter(auction=self.online_auction)
         filter_instance = AuctionTOSFilter()
 
-        filtered_qs = filter_instance.auctiontos_search(qs, "query", "open")
+        filtered_qs = filter_instance.auctiontos_search(qs, "query", "RCPT1")
 
-        # tosB should appear exactly once despite having multiple DRAFT invoices
+        # tosB should appear exactly once despite having multiple payments with the same receipt number
         tos_pks = list(filtered_qs.values_list("pk", flat=True))
         self.assertEqual(
-            tos_pks.count(self.tosB.pk), 1, "tosB appeared more than once in 'open' invoice filter results"
+            tos_pks.count(self.tosB.pk),
+            1,
+            "tosB appeared more than once when searching by receipt number with multiple payments",
         )
 
 
