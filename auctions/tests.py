@@ -1193,36 +1193,34 @@ class InvoiceCreateViewTests(StandardTestCase):
         assert new_tos.invoice.auction == self.online_auction
 
     def test_invoice_create_duplicate_handling(self):
-        """Test that duplicate invoices are deleted and oldest is kept"""
-        # Create a user with one invoice
+        """Test that creating a second invoice for the same AuctionTOS deduplicates on save: keeps oldest, merges data"""
+        from auctions.models import InvoiceAdjustment, InvoicePayment
+
         new_tos = AuctionTOS.objects.create(
             user=self.user_who_does_not_join,
             auction=self.online_auction,
             pickup_location=self.location,
         )
 
-        # Create first invoice (oldest)
+        # Create first (oldest) invoice with a payment and an adjustment
         first_invoice = Invoice.objects.create(auctiontos_user=new_tos, auction=self.online_auction)
         first_invoice_pk = first_invoice.pk
+        InvoicePayment.objects.create(invoice=first_invoice, amount=10, payment_method="Cash")
+        InvoiceAdjustment.objects.create(invoice=first_invoice, amount=5, notes="test adj")
 
-        # Create a duplicate invoice (newer)
+        # Create a second invoice (simulates a race-condition duplicate); save() should auto-deduplicate
         Invoice.objects.create(auctiontos_user=new_tos, auction=self.online_auction)
 
-        # Verify both exist
-        assert Invoice.objects.filter(auctiontos_user=new_tos).count() == 2
-
-        # Login as admin
-        self.client.login(username="admin_user", password="testpassword")
-
-        # Try to create another invoice
-        response = self.client.get(f"/invoices/create/{new_tos.pk}/")
-
-        # Check redirect to existing invoice
-        assert response.status_code == 302
-
-        # Verify only one invoice remains (the oldest)
+        # Exactly one invoice remains, and it's the oldest
         assert Invoice.objects.filter(auctiontos_user=new_tos).count() == 1
-        assert Invoice.objects.filter(auctiontos_user=new_tos).first().pk == first_invoice_pk
+        surviving = Invoice.objects.filter(auctiontos_user=new_tos).first()
+        assert surviving.pk == first_invoice_pk
+
+        # The view-based create also redirects to the existing invoice
+        self.client.login(username="admin_user", password="testpassword")
+        response = self.client.get(f"/invoices/create/{new_tos.pk}/")
+        assert response.status_code == 302
+        assert Invoice.objects.filter(auctiontos_user=new_tos).count() == 1
 
     def test_invoice_create_non_admin_denied(self):
         """Test that non-admins cannot create invoices"""
@@ -7163,6 +7161,32 @@ class SquarePaymentTests(StandardTestCase):
         # The create_payment_link method should set ask_for_shipping_address=True
         # We can't test the actual API call, but we can verify the location is set correctly
         self.assertTrue(self.tosB.pickup_location.pickup_by_mail)
+
+    def test_open_invoice_filter_no_duplicates(self):
+        """Filtering should not return duplicate AuctionTOS rows when a user has multiple payments on their invoice"""
+        from auctions.filters import AuctionTOSFilter
+        from auctions.models import AuctionTOS, InvoicePayment
+
+        # Give tosB's existing invoice multiple payments - a naive JOIN would produce duplicate rows
+        InvoicePayment.objects.create(
+            invoice=self.test_invoice, payment_method="Cash", amount=10, receipt_number="RCPT1"
+        )
+        InvoicePayment.objects.create(
+            invoice=self.test_invoice, payment_method="Cash", amount=10, receipt_number="RCPT1"
+        )
+
+        qs = AuctionTOS.objects.filter(auction=self.online_auction)
+        filter_instance = AuctionTOSFilter()
+
+        filtered_qs = filter_instance.auctiontos_search(qs, "query", "RCPT1")
+
+        # tosB should appear exactly once despite having multiple payments with the same receipt number
+        tos_pks = list(filtered_qs.values_list("pk", flat=True))
+        self.assertEqual(
+            tos_pks.count(self.tosB.pk),
+            1,
+            "tosB appeared more than once when searching by receipt number with multiple payments",
+        )
 
 
 class SquareRefundFormTests(StandardTestCase):

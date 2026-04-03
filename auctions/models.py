@@ -3765,8 +3765,6 @@ class Lot(models.Model):
             changed_price=True,
             seen=True,
         )
-        # Impossibly this line sometimes errors, there must be a way of making duplicates
-        # invoice, created = Invoice.objects.get_or_create(auctiontos_user=tos, auction=self.auction, defaults={})
         invoice = Invoice.objects.filter(auctiontos_user=tos, auction=self.auction).first()
         if not invoice:
             invoice = Invoice.objects.create(auctiontos_user=tos, auction=self.auction)
@@ -4922,7 +4920,6 @@ class Lot(models.Model):
                 return match.group(1)
         return None
 
-    @property
     def create_update_invoices(self):
         """Call whenever ending this lot, or when creating it"""
         if self.auction and self.winner and not self.auctiontos_winner:
@@ -5573,6 +5570,33 @@ class Invoice(models.Model):
         if not self.auction:
             self.auction = self.auctiontos_user.auction
         super().save(*args, **kwargs)
+        # Ensure there is only one invoice per AuctionTOS.
+        # Keep the oldest; move payments and adjustments from any duplicates into it, then delete them.
+        oldest = Invoice.objects.filter(auctiontos_user=self.auctiontos_user).order_by("date").first()
+        if oldest and oldest.pk != self.pk:
+            # self is a newer duplicate — migrate its data to the older invoice and delete the duplicate row
+            duplicate_pk = self.pk
+            InvoiceAdjustment.objects.filter(invoice=self).update(invoice=oldest)
+            InvoicePayment.objects.filter(invoice=self).update(invoice=oldest)
+            Invoice.objects.filter(pk=duplicate_pk).delete()
+            # Rebind this in-memory instance to the canonical (oldest) invoice so callers
+            # do not hold a reference to a deleted object.
+            self.pk = oldest.pk
+            self.id = oldest.pk
+            self._state.adding = False
+            self._state.db = oldest._state.db
+            self.refresh_from_db()
+            oldest.recalculate()
+            return
+        else:
+            # self is the oldest — clean up any newer duplicates that may exist
+            newer = Invoice.objects.filter(auctiontos_user=self.auctiontos_user).exclude(pk=self.pk)
+            if newer.exists():
+                for dup in newer:
+                    InvoiceAdjustment.objects.filter(invoice=dup).update(invoice=self)
+                    InvoicePayment.objects.filter(invoice=dup).update(invoice=self)
+                newer.delete()
+                self.recalculate()
 
 
 class InvoiceAdjustment(models.Model):

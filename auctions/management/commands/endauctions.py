@@ -25,7 +25,7 @@ def declare_winners_on_lots(lots):
                     lot.send_lot_end_message()
 
                 # Update invoices
-                lot.create_update_invoices
+                lot.create_update_invoices()
 
                 # Send emails for non-auction lots
                 lot.send_non_auction_lot_emails()
