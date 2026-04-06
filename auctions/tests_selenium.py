@@ -107,6 +107,11 @@ class SeleniumTestCase(TestCase):
         sys.stdout = io.StringIO()
         try:
             call_command("collectstatic", "--no-input", verbosity=0)
+        except PermissionError:
+            # staticfiles directory may already be populated by the container startup
+            # (entrypoint.sh runs collectstatic as root), so permission errors here
+            # are expected and can be safely ignored
+            pass
         finally:
             sys.stdout = stdout_backup
 
