@@ -107,6 +107,19 @@ class SeleniumTestCase(TestCase):
         sys.stdout = io.StringIO()
         try:
             call_command("collectstatic", "--no-input", verbosity=0)
+        except PermissionError:
+            # staticfiles may already be populated in the test environment, and the
+            # bind-mounted directory or existing files may be owned by another user.
+            # In that case collectstatic can raise PermissionError here and can be
+            # safely ignored for these Selenium tests.
+            import os
+
+            from django.conf import settings
+
+            static_root = settings.STATIC_ROOT
+            if not static_root or not any(os.scandir(static_root)):
+                msg = f"collectstatic failed with PermissionError and {static_root!r} appears empty. Check that the static files directory has correct permissions."
+                raise RuntimeError(msg) from None
         finally:
             sys.stdout = stdout_backup
 
