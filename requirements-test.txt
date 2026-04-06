@@ -42,7 +42,7 @@ python-discovery==1.2.1
     # via virtualenv
 pyyaml==6.0.3
     # via pre-commit
-ruff==0.15.8
+ruff==0.15.9
     # via -r requirements-test.in
 selenium==4.41.0
     # via -r requirements-test.in
