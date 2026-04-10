@@ -2923,8 +2923,12 @@ class ChangeUserPreferencesForm(forms.ModelForm):
         ].help_text = f"Only for lots that don't belong to you.  Unchecking this will turn off notifications for {self.subscriptions} lot(s) you've already commented on."
         # Update help text for distance fields based on selected unit
         unit = "km" if self.instance and self.instance.distance_unit == "km" else "miles"
-        self.fields["email_me_about_new_auctions_distance"].help_text = f"{unit}, from your address"
-        self.fields["email_me_about_new_in_person_auctions_distance"].help_text = f"{unit}, from your address"
+        self.fields[
+            "email_me_about_new_auctions_distance"
+        ].help_text = f"{unit}, from your address. Also controls which auctions appear in the auction list."
+        self.fields[
+            "email_me_about_new_in_person_auctions_distance"
+        ].help_text = f"{unit}, from your address. Also controls which in-person auctions appear in the auction list."
         self.fields["local_distance"].help_text = f"{unit}, from your address"
         self.helper.layout = Layout(
             Div(

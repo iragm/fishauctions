@@ -6012,8 +6012,8 @@ class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
         qs = qs.exclude(is_deleted=True)
         joined_subquery = Exists(
             AuctionTOS.objects.filter(
+                Q(user=self.request.user) | Q(email=self.request.user.email),
                 auction=OuterRef("pk"),
-                user=self.request.user,
             )
         )
         qs = (
@@ -6032,12 +6032,14 @@ class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
         if latitude and longitude and userdata.show_nearby_auctions and self.request.GET.get("nearby") != "false":
             online_distance = userdata.email_me_about_new_auctions_distance or 100
             in_person_distance = userdata.email_me_about_new_in_person_auctions_distance or 100
-            nearby_filter = (
-                Q(joined=True)
-                | Q(created_by=self.request.user)
-                | Q(is_online=True, distance__lte=online_distance)
-                | Q(is_online=False, distance__lte=in_person_distance)
+            qs = qs.annotate(
+                preferred_distance=Case(
+                    When(is_online=True, then=Value(online_distance)),
+                    default=Value(in_person_distance),
+                    output_field=FloatField(),
+                )
             )
+            nearby_filter = Q(joined=True) | Q(created_by=self.request.user) | Q(distance__lte=F("preferred_distance"))
             qs = qs.filter(nearby_filter)
             self.nearby_filter_active = True
         return qs

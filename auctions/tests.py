@@ -3375,6 +3375,69 @@ class AuctionPropertyTests(StandardTestCase):
         # Far auction should now appear
         assert qs.filter(pk=far_auction.pk).exists()
 
+    def test_nearby_filter_in_person_distance(self):
+        """In-person auctions should use email_me_about_new_in_person_auctions_distance, not the online distance"""
+        from django.test import RequestFactory
+
+        from auctions.views import AllAuctions
+
+        # Create a nearby in-person auction (within 100 miles)
+        nearby_in_person = Auction.objects.create(
+            created_by=self.user,
+            title="Nearby in-person auction",
+            is_online=False,
+            promote_this_auction=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=7),
+        )
+        PickupLocation.objects.create(
+            name="Nearby in-person location",
+            auction=nearby_in_person,
+            latitude=43.1,
+            longitude=-71.6,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+
+        # Create a far in-person auction (beyond 100 miles)
+        far_in_person = Auction.objects.create(
+            created_by=self.user,
+            title="Far in-person auction",
+            is_online=False,
+            promote_this_auction=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=7),
+        )
+        PickupLocation.objects.create(
+            name="Far in-person location",
+            auction=far_in_person,
+            latitude=34.0,
+            longitude=-118.0,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+
+        test_user = self.user_who_does_not_join
+        test_user.userdata.latitude = 43.0
+        test_user.userdata.longitude = -71.5
+        # Online distance is very small so online auctions wouldn't qualify via distance
+        test_user.userdata.email_me_about_new_auctions_distance = 10
+        # In-person distance is large enough to include the nearby in-person auction
+        test_user.userdata.email_me_about_new_in_person_auctions_distance = 100
+        test_user.userdata.save()
+
+        factory = RequestFactory()
+        request = factory.get("/auctions/")
+        request.user = test_user
+
+        view = AllAuctions()
+        view.request = request
+        qs = view.get_queryset()
+
+        assert view.nearby_filter_active is True
+        # Nearby in-person auction should be visible
+        assert qs.filter(pk=nearby_in_person.pk).exists()
+        # Far in-person auction should be excluded
+        assert not qs.filter(pk=far_in_person.pk).exists()
+
     def test_permission_check(self):
         """Test the permission_check method"""
         # Creator has permission
