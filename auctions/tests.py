@@ -3290,6 +3290,91 @@ class AuctionPropertyTests(StandardTestCase):
         # Far auction should appear (no filter)
         assert qs.filter(pk=far_auction.pk).exists()
 
+    def test_nearby_filter_shows_created_auctions(self):
+        """Auctions the user created should always appear even if they are far away"""
+        from django.test import RequestFactory
+
+        from auctions.views import AllAuctions
+
+        # Create a far-away auction owned by the test user
+        far_created_auction = Auction.objects.create(
+            created_by=self.user_who_does_not_join,
+            title="Far auction created by user",
+            is_online=True,
+            promote_this_auction=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=7),
+        )
+        PickupLocation.objects.create(
+            name="Far location",
+            auction=far_created_auction,
+            latitude=34.0,
+            longitude=-118.0,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+
+        test_user = self.user_who_does_not_join
+        test_user.userdata.latitude = 43.0
+        test_user.userdata.longitude = -71.5
+        test_user.userdata.email_me_about_new_auctions_distance = 100
+        test_user.userdata.show_nearby_auctions = True
+        test_user.userdata.save()
+
+        factory = RequestFactory()
+        request = factory.get("/auctions/")
+        request.user = test_user
+
+        view = AllAuctions()
+        view.request = request
+        qs = view.get_queryset()
+
+        # Nearby filter should be active
+        assert view.nearby_filter_active is True
+        # The far auction created by the user should still appear
+        assert qs.filter(pk=far_created_auction.pk).exists()
+
+    def test_nearby_filter_disabled_by_preference(self):
+        """When show_nearby_auctions preference is False, the nearby filter should not apply"""
+        from django.test import RequestFactory
+
+        from auctions.views import AllAuctions
+
+        far_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Far auction preference off",
+            is_online=True,
+            promote_this_auction=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=7),
+        )
+        PickupLocation.objects.create(
+            name="Far location",
+            auction=far_auction,
+            latitude=34.0,
+            longitude=-118.0,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+
+        test_user = self.user_who_does_not_join
+        test_user.userdata.latitude = 43.0
+        test_user.userdata.longitude = -71.5
+        test_user.userdata.email_me_about_new_auctions_distance = 100
+        test_user.userdata.show_nearby_auctions = False
+        test_user.userdata.save()
+
+        factory = RequestFactory()
+        request = factory.get("/auctions/")
+        request.user = test_user
+
+        view = AllAuctions()
+        view.request = request
+        qs = view.get_queryset()
+
+        # Nearby filter should be inactive (preference disabled)
+        assert view.nearby_filter_active is False
+        # Far auction should now appear
+        assert qs.filter(pk=far_auction.pk).exists()
+
     def test_permission_check(self):
         """Test the permission_check method"""
         # Creator has permission

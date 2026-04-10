@@ -6026,10 +6026,10 @@ class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
             .annotate(joined=joined_subquery)
             .distinct()
         )
-        # Apply nearby filter if user has a location set and nearby=false is not in GET params
+        # Apply nearby filter if user has a location set, the preference is enabled, and nearby=false is not in GET params
         self.nearby_filter_active = False
         userdata = self.request.user.userdata
-        if latitude and longitude and self.request.GET.get("nearby") != "false":
+        if latitude and longitude and userdata.show_nearby_auctions and self.request.GET.get("nearby") != "false":
             online_distance = userdata.email_me_about_new_auctions_distance or 100
             in_person_distance = userdata.email_me_about_new_in_person_auctions_distance or 100
             nearby_filter = (

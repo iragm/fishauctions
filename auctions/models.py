@@ -5966,6 +5966,11 @@ class UserData(models.Model):
     email_me_about_new_in_person_auctions_distance.help_text = (
         "miles, from your address. Also used to filter the auction list when your location is set."
     )
+    show_nearby_auctions = models.BooleanField(default=True, blank=True, verbose_name="Only show nearby auctions")
+    show_nearby_auctions.help_text = (
+        "When your location is set, only show auctions near you on the auction list. "
+        "Auctions you've joined or created are always shown."
+    )
     email_me_about_new_local_lots = models.BooleanField(default=True, blank=True)
     email_me_about_new_local_lots.help_text = (
         "When new nearby lots (that aren't part of an auction) are created, notify me"

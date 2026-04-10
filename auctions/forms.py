@@ -2892,6 +2892,7 @@ class ChangeUserPreferencesForm(forms.ModelForm):
             "share_lot_images",
             "auto_add_images",
             "push_notifications_when_lots_sell",
+            "show_nearby_auctions",
         )
 
     def __init__(self, user, *args, **kwargs):
@@ -2998,6 +2999,13 @@ class ChangeUserPreferencesForm(forms.ModelForm):
                 Div(
                     "email_me_about_new_in_person_auctions_distance",
                     css_class="col-md-4",
+                ),
+                css_class="row",
+            ),
+            Div(
+                Div(
+                    "show_nearby_auctions",
+                    css_class="col-md-12",
                 ),
                 css_class="row",
             ),
