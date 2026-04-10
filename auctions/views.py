@@ -6010,6 +6010,12 @@ class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
             # joined is disabled for admins because we need to return before filtering non-promoted auctions
             return qs.annotate(joined=Value(0, output_field=FloatField())).order_by("-date_posted").distinct()
         qs = qs.exclude(is_deleted=True)
+        joined_subquery = Exists(
+            AuctionTOS.objects.filter(
+                auction=OuterRef("pk"),
+                user=self.request.user,
+            )
+        )
         qs = (
             qs.filter(
                 Q(auctiontos__user=self.request.user)
@@ -6017,16 +6023,23 @@ class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
                 | Q(created_by=self.request.user)
                 | standard_filter
             )
-            .annotate(
-                joined=Exists(
-                    AuctionTOS.objects.filter(
-                        auction=OuterRef("pk"),
-                        user=self.request.user,
-                    )
-                )
-            )
+            .annotate(joined=joined_subquery)
             .distinct()
         )
+        # Apply nearby filter if user has a location set and nearby=false is not in GET params
+        self.nearby_filter_active = False
+        userdata = self.request.user.userdata
+        if latitude and longitude and self.request.GET.get("nearby") != "false":
+            online_distance = userdata.email_me_about_new_auctions_distance or 100
+            in_person_distance = userdata.email_me_about_new_in_person_auctions_distance or 100
+            nearby_filter = (
+                Q(joined=True)
+                | Q(created_by=self.request.user)
+                | Q(is_online=True, distance__lte=online_distance)
+                | Q(is_online=False, distance__lte=in_person_distance)
+            )
+            qs = qs.filter(nearby_filter)
+            self.nearby_filter_active = True
         return qs
 
     def get_context_data(self, **kwargs):
@@ -6043,6 +6056,7 @@ class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
             context["show_new_auction_button"] = False
         if self.request.user.is_superuser:
             context["show_new_auction_button"] = True
+        context["nearby_filter_active"] = getattr(self, "nearby_filter_active", False)
         return context
 
     def get_table(self, **kwargs):

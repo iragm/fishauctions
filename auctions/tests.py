@@ -3098,6 +3098,198 @@ class AuctionPropertyTests(StandardTestCase):
         assert real_result.distance is not None
         assert real_result.distance > 0
 
+    def test_nearby_filter_applied_when_user_has_location(self):
+        """Nearby filter should hide far auctions and show nearby/joined auctions"""
+        from django.test import RequestFactory
+
+        from auctions.views import AllAuctions
+
+        # Create a nearby online auction (within default 100 miles)
+        nearby_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Nearby online auction",
+            is_online=True,
+            promote_this_auction=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=7),
+        )
+        PickupLocation.objects.create(
+            name="Nearby location",
+            auction=nearby_auction,
+            latitude=43.1,
+            longitude=-71.6,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+
+        # Create a far-away online auction (beyond default 100 miles)
+        far_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Far online auction",
+            is_online=True,
+            promote_this_auction=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=7),
+        )
+        PickupLocation.objects.create(
+            name="Far location",
+            auction=far_auction,
+            latitude=34.0,
+            longitude=-118.0,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+
+        # Use user_who_does_not_join so they have no existing TOS records
+        test_user = self.user_who_does_not_join
+        test_user.userdata.latitude = 43.0
+        test_user.userdata.longitude = -71.5
+        test_user.userdata.email_me_about_new_auctions_distance = 100
+        test_user.userdata.save()
+
+        factory = RequestFactory()
+        request = factory.get("/auctions/")
+        request.user = test_user
+
+        view = AllAuctions()
+        view.request = request
+        qs = view.get_queryset()
+
+        # The view should be filtering by nearby
+        assert view.nearby_filter_active is True
+        # Nearby auction should appear
+        assert qs.filter(pk=nearby_auction.pk).exists()
+        # Far auction should be excluded
+        assert not qs.filter(pk=far_auction.pk).exists()
+
+    def test_nearby_filter_disabled_with_param(self):
+        """When nearby=false is in GET params, the nearby filter should be disabled"""
+        from django.test import RequestFactory
+
+        from auctions.views import AllAuctions
+
+        # Create a far-away online auction
+        far_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Far online auction no filter",
+            is_online=True,
+            promote_this_auction=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=7),
+        )
+        PickupLocation.objects.create(
+            name="Far location",
+            auction=far_auction,
+            latitude=34.0,
+            longitude=-118.0,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+
+        test_user = self.user_who_does_not_join
+        test_user.userdata.latitude = 43.0
+        test_user.userdata.longitude = -71.5
+        test_user.userdata.email_me_about_new_auctions_distance = 100
+        test_user.userdata.save()
+
+        factory = RequestFactory()
+        request = factory.get("/auctions/", {"nearby": "false"})
+        request.user = test_user
+
+        view = AllAuctions()
+        view.request = request
+        qs = view.get_queryset()
+
+        # The nearby filter should be inactive
+        assert view.nearby_filter_active is False
+        # Far auction should now appear (no nearby filter applied)
+        assert qs.filter(pk=far_auction.pk).exists()
+
+    def test_nearby_filter_shows_joined_auctions(self):
+        """Auctions the user has joined should always appear even if they are far away"""
+        from django.test import RequestFactory
+
+        from auctions.views import AllAuctions
+
+        # Create a far-away auction that the user has joined
+        far_joined_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Far joined auction",
+            is_online=True,
+            promote_this_auction=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=7),
+        )
+        far_location = PickupLocation.objects.create(
+            name="Far location",
+            auction=far_joined_auction,
+            latitude=34.0,
+            longitude=-118.0,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+        AuctionTOS.objects.create(
+            user=self.user_who_does_not_join,
+            auction=far_joined_auction,
+            pickup_location=far_location,
+        )
+
+        test_user = self.user_who_does_not_join
+        test_user.userdata.latitude = 43.0
+        test_user.userdata.longitude = -71.5
+        test_user.userdata.email_me_about_new_auctions_distance = 100
+        test_user.userdata.save()
+
+        factory = RequestFactory()
+        request = factory.get("/auctions/")
+        request.user = test_user
+
+        view = AllAuctions()
+        view.request = request
+        qs = view.get_queryset()
+
+        # Nearby filter should be active
+        assert view.nearby_filter_active is True
+        # The far auction the user joined should still appear
+        assert qs.filter(pk=far_joined_auction.pk).exists()
+
+    def test_nearby_filter_not_applied_without_location(self):
+        """Nearby filter should not apply when user has no location set"""
+        from django.test import RequestFactory
+
+        from auctions.views import AllAuctions
+
+        far_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Far auction no user location",
+            is_online=True,
+            promote_this_auction=True,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=7),
+        )
+        PickupLocation.objects.create(
+            name="Far location",
+            auction=far_auction,
+            latitude=34.0,
+            longitude=-118.0,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+
+        # User has no location set
+        test_user = self.user_who_does_not_join
+        test_user.userdata.latitude = 0
+        test_user.userdata.longitude = 0
+        test_user.userdata.save()
+
+        factory = RequestFactory()
+        request = factory.get("/auctions/")
+        request.user = test_user
+
+        view = AllAuctions()
+        view.request = request
+        qs = view.get_queryset()
+
+        # Nearby filter should be inactive (no location)
+        assert view.nearby_filter_active is False
+        # Far auction should appear (no filter)
+        assert qs.filter(pk=far_auction.pk).exists()
+
     def test_permission_check(self):
         """Test the permission_check method"""
         # Creator has permission

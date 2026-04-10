@@ -5950,7 +5950,9 @@ class UserData(models.Model):
     email_me_about_new_auctions_distance = models.PositiveIntegerField(
         null=True, blank=True, default=100, verbose_name="New online auction distance"
     )
-    email_me_about_new_auctions_distance.help_text = "miles, from your address"
+    email_me_about_new_auctions_distance.help_text = (
+        "miles, from your address. Also used to filter the auction list when your location is set."
+    )
     email_me_about_new_in_person_auctions = models.BooleanField(default=True, blank=True)
     email_me_about_new_in_person_auctions.help_text = (
         "When new in-person auctions are created near my location, notify me"
@@ -5961,7 +5963,9 @@ class UserData(models.Model):
         default=100,
         verbose_name="New in-person auction distance",
     )
-    email_me_about_new_in_person_auctions_distance.help_text = "miles, from your address"
+    email_me_about_new_in_person_auctions_distance.help_text = (
+        "miles, from your address. Also used to filter the auction list when your location is set."
+    )
     email_me_about_new_local_lots = models.BooleanField(default=True, blank=True)
     email_me_about_new_local_lots.help_text = (
         "When new nearby lots (that aren't part of an auction) are created, notify me"

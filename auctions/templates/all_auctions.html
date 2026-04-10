@@ -13,6 +13,9 @@
 <form class="col-sm-12 mt-2">
   {% crispy filter.form %}
 </form>
+{% if nearby_filter_active %}
+<small class="text-muted">Only showing nearby auctions. <a href="?nearby=false">Show all</a></small>
+{% endif %}
 <div class="progress d-none"> <div class="indeterminate"></div> </div>
 {% render_table table %}
 
