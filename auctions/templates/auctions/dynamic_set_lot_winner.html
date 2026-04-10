@@ -162,7 +162,8 @@
             $("#success_banner").removeClass('bg-success');
             $("#success_banner").addClass('bg-danger');
             $("#success_banner").removeClass('d-none');
-            $("#success_message").html(`FAILED: ${error}`);
+            let errorMessage = (xhr.responseJSON && xhr.responseJSON.error) || error || 'An unexpected error occurred';
+            $("#success_message").html(`FAILED: ${errorMessage}`);
             $("#undo_button").addClass('d-none');
           }
       });
