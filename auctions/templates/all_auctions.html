@@ -14,7 +14,7 @@
   {% crispy filter.form %}
 </form>
 {% if nearby_filter_active %}
-<small class="text-muted">Only showing nearby auctions. <a href="{% querystring nearby='false' %}">Show all</a> &middot; <a href="{% url 'preferences' %}">Change preference</a></small>
+<small class="text-muted">Only showing nearby auctions. <a href="{% querystring nearby='false' %}">Show all</a> &middot; you can <a href="{% url 'preferences' %}">change this in preferences</a></small>
 {% endif %}
 <div class="progress d-none"> <div class="indeterminate"></div> </div>
 {% render_table table %}
