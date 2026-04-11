@@ -14,7 +14,7 @@
   {% crispy filter.form %}
 </form>
 {% if nearby_filter_active %}
-<small class="text-muted">Only showing nearby auctions. <a href="{% querystring nearby='false' %}">Show all</a> &middot; you can <a href="{% url 'preferences' %}">change this in preferences</a></small>
+<small class="text-muted">Only showing nearby auctions. <a href="{% querystring "nearby"="false" %}">Show all</a></small>
 {% endif %}
 <div class="progress d-none"> <div class="indeterminate"></div> </div>
 {% render_table table %}
@@ -25,6 +25,13 @@
     <li>are starting less than 90 days from today</li>
     <li>were created less than 2 years ago</li>
   </ul>
+  {% if user.is_authenticated %}
+    {% if user_has_location %}
+      Nearby online auctions (within {{ online_distance }} {{ distance_unit }}) and in-person auctions (within {{ in_person_distance }} {{ distance_unit }}) are also shown. <a href="{% url 'preferences' %}">Change these distances or turn off the nearby filter in preferences.</a>
+    {% else %}
+      <a href="{% url 'contact_info' %}">Set your location</a> to also see nearby auctions.
+    {% endif %}
+  {% endif %}
 </small>
 {% endblock %}
 {% block extra_js %}<script type='text/javascript'>pageView();</script>{% endblock %}

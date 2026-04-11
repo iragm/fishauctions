@@ -5999,6 +5999,7 @@ class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
             date_posted__gte=two_years_ago,
         )
         latitude, longitude = self.get_coordinates()
+        self._user_has_location = bool(latitude and longitude)
         if latitude and longitude:
             qs = qs.annotate(distance=Auction.get_closest_location_distance_subquery(latitude, longitude))
         else:
@@ -6059,6 +6060,22 @@ class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
         if self.request.user.is_superuser:
             context["show_new_auction_button"] = True
         context["nearby_filter_active"] = getattr(self, "nearby_filter_active", False)
+        user_has_location = getattr(self, "_user_has_location", False)
+        context["user_has_location"] = user_has_location
+        if user_has_location and self.request.user.is_authenticated:
+            try:
+                ud = self.request.user.userdata
+                unit = ud.distance_unit or "miles"
+                online_d = ud.email_me_about_new_auctions_distance or 100
+                in_person_d = ud.email_me_about_new_in_person_auctions_distance or 100
+                if unit == "km":
+                    online_d = round(online_d * MILES_TO_KM)
+                    in_person_d = round(in_person_d * MILES_TO_KM)
+                context["online_distance"] = online_d
+                context["in_person_distance"] = in_person_d
+                context["distance_unit"] = unit
+            except Exception:
+                context["user_has_location"] = False
         return context
 
     def get_table(self, **kwargs):
