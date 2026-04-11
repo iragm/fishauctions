@@ -10889,3 +10889,4 @@ class QuickCheckoutHTMX(AuctionViewMixin, PayPalAPIMixin, SquareAPIMixin, Templa
                             "Square payment link creation failed for invoice %s: %s", invoice.pk, error_message
                         )
         return context
+
