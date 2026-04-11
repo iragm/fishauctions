@@ -3,6 +3,11 @@
 <div class="table-container mt-2 mb-2">
     {{ no_results | safe }}
 </div>
+{% elif nearby_filter_auto_removed %}
+<div class="table-container mt-2 mb-2">
+    <small class="text-muted">{{ nearby_filter_auto_removed }}</small>
+    {% render_table table %}
+</div>
 {% else %}
 {% render_table table %}
 {% endif %}

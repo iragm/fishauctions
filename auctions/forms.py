@@ -2923,13 +2923,31 @@ class ChangeUserPreferencesForm(forms.ModelForm):
         ].help_text = f"Only for lots that don't belong to you.  Unchecking this will turn off notifications for {self.subscriptions} lot(s) you've already commented on."
         # Update help text for distance fields based on selected unit
         unit = "km" if self.instance and self.instance.distance_unit == "km" else "miles"
-        self.fields[
-            "email_me_about_new_auctions_distance"
-        ].help_text = f"{unit}, from your address. Also controls which auctions appear in the auction list."
-        self.fields[
-            "email_me_about_new_in_person_auctions_distance"
-        ].help_text = f"{unit}, from your address. Also controls which in-person auctions appear in the auction list."
+        self.fields["email_me_about_new_auctions_distance"].help_text = f"{unit}, from your address"
+        self.fields["email_me_about_new_in_person_auctions_distance"].help_text = f"{unit}, from your address"
         self.fields["local_distance"].help_text = f"{unit}, from your address"
+        local_lots_fields = []
+        if settings.ALLOW_USERS_TO_CREATE_LOTS:
+            local_lots_fields = [
+                Div(
+                    Div(
+                        "email_me_about_new_local_lots",
+                        css_class="col-md-8",
+                    ),
+                    Div(
+                        "local_distance",
+                        css_class="col-md-4",
+                    ),
+                    css_class="row",
+                ),
+                Div(
+                    Div(
+                        "email_me_about_new_lots_ship_to_location",
+                        css_class="col-md-12",
+                    ),
+                    css_class="row",
+                ),
+            ]
         self.helper.layout = Layout(
             Div(
                 Div(
@@ -3013,24 +3031,7 @@ class ChangeUserPreferencesForm(forms.ModelForm):
                 ),
                 css_class="row",
             ),
-            Div(
-                Div(
-                    "email_me_about_new_local_lots",
-                    css_class="col-md-8",
-                ),
-                Div(
-                    "local_distance",
-                    css_class="col-md-4",
-                ),
-                css_class="row",
-            ),
-            Div(
-                Div(
-                    "email_me_about_new_lots_ship_to_location",
-                    css_class="col-md-12",
-                ),
-                css_class="row",
-            ),
+            *local_lots_fields,
             # Div(
             #     Div('location',css_class='col-md-6',),
             #

@@ -41,7 +41,7 @@ class AuctionFilter(django_filters.FilterSet):
         label="",
         widget=TextInput(
             attrs={
-                "placeholder": "Filter by auction name, or type a number to see nearby auctions",
+                "placeholder": "Type to filter",
                 "hx-get": "",
                 "hx-target": "div.table-container",
                 "hx-trigger": "keyup changed delay:300ms",

@@ -6030,6 +6030,7 @@ class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
         # Apply nearby filter if user has a location set, the preference is enabled, and nearby=false is not in GET params
         self.nearby_filter_active = False
         userdata = self.request.user.userdata
+        self._base_qs = qs  # save pre-filter qs for auto-remove fallback
         if latitude and longitude and userdata.show_nearby_auctions and self.request.GET.get("nearby") != "false":
             online_distance = userdata.email_me_about_new_auctions_distance or 100
             in_person_distance = userdata.email_me_about_new_in_person_auctions_distance or 100
@@ -6046,12 +6047,25 @@ class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
         return qs
 
     def get_context_data(self, **kwargs):
+        # Auto-remove nearby filter when no results exist but the search term has results without distance constraint
+        nearby_filter_auto_removed = None
+        if getattr(self, "nearby_filter_active", False) and not self.object_list.exists():
+            query = self.request.GET.get("query", "")
+            if query:
+                base_qs = getattr(self, "_base_qs", None)
+                if base_qs is not None:
+                    fallback_qs = AuctionFilter({"query": query}, queryset=base_qs).qs
+                    if fallback_qs.exists():
+                        self.object_list = fallback_qs
+                        self.nearby_filter_active = False
+                        nearby_filter_auto_removed = "No nearby auctions match your search &mdash; showing all results."
         context = super().get_context_data(**kwargs)
         context["hide_google_login"] = True
         if not self.object_list.exists():
             context["no_results"] = (
                 f"<span class='text-danger'>No auctions found.</span>  This only searches club auctions, if you're looking for {settings.WEBSITE_FOCUS} to buy, check out <a href='/lots/'>the list of lots for sale</a>"
             )
+        context["nearby_filter_auto_removed"] = nearby_filter_auto_removed
         context["show_new_auction_button"] = True
         if self.request.user.is_authenticated and not self.request.user.userdata.can_create_club_auctions:
             context["show_new_auction_button"] = False

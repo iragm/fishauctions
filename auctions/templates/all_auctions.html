@@ -16,6 +16,9 @@
 {% if nearby_filter_active %}
 <small class="text-muted">Only showing nearby auctions. <a href="{% querystring "nearby"="false" %}">Show all</a></small>
 {% endif %}
+{% if nearby_filter_auto_removed %}
+<small class="text-muted">{{ nearby_filter_auto_removed }}</small>
+{% endif %}
 <div class="progress d-none"> <div class="indeterminate"></div> </div>
 {% render_table table %}
 
@@ -24,14 +27,14 @@
     <li>have "promote this auction" checked</li>
     <li>are starting less than 90 days from today</li>
     <li>were created less than 2 years ago</li>
-  </ul>
-  {% if user.is_authenticated %}
-    {% if user_has_location %}
-      Nearby online auctions (within {{ online_distance }} {{ distance_unit }}) and in-person auctions (within {{ in_person_distance }} {{ distance_unit }}) are also shown. <a href="{% url 'preferences' %}">Change these distances or turn off the nearby filter in preferences.</a>
-    {% else %}
-      <a href="{% url 'contact_info' %}">Set your location</a> to also see nearby auctions.
+    {% if user.is_authenticated %}
+      {% if user_has_location %}
+        <li>are within {{ online_distance }} {{ distance_unit }} (online) or {{ in_person_distance }} {{ distance_unit }} (in-person) of your location &mdash; <a href="{% url 'preferences' %}?next=/auctions/">change in preferences</a></li>
+      {% else %}
+        <li><a href="{% url 'contact_info' %}">Set your exact location using the map here</a> to also see nearby auctions</li>
+      {% endif %}
     {% endif %}
-  {% endif %}
+  </ul>
 </small>
 {% endblock %}
 {% block extra_js %}<script type='text/javascript'>pageView();</script>{% endblock %}
