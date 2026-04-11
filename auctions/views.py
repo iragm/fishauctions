@@ -6058,7 +6058,7 @@ class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
                     if fallback_qs.exists():
                         self.object_list = fallback_qs
                         self.nearby_filter_active = False
-                        nearby_filter_auto_removed = "No nearby auctions match your search &mdash; showing all results."
+                        nearby_filter_auto_removed = "No nearby auctions match your search \u2014 showing all results."
         context = super().get_context_data(**kwargs)
         context["hide_google_login"] = True
         if not self.object_list.exists():
