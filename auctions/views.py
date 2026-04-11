@@ -6066,6 +6066,7 @@ class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
                 f"<span class='text-danger'>No auctions found.</span>  This only searches club auctions, if you're looking for {settings.WEBSITE_FOCUS} to buy, check out <a href='/lots/'>the list of lots for sale</a>"
             )
         context["nearby_filter_auto_removed"] = nearby_filter_auto_removed
+        context["is_htmx"] = bool(self.request.headers.get("HX-Request"))
         context["show_new_auction_button"] = True
         if self.request.user.is_authenticated and not self.request.user.userdata.can_create_club_auctions:
             context["show_new_auction_button"] = False
