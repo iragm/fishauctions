@@ -6005,6 +6005,7 @@ class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
             date_posted__gte=two_years_ago,
         )
         latitude, longitude = self.get_coordinates()
+        self._user_has_location = bool(latitude and longitude)
         if latitude and longitude:
             qs = qs.annotate(distance=Auction.get_closest_location_distance_subquery(latitude, longitude))
         else:
@@ -6016,6 +6017,12 @@ class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
             # joined is disabled for admins because we need to return before filtering non-promoted auctions
             return qs.annotate(joined=Value(0, output_field=FloatField())).order_by("-date_posted").distinct()
         qs = qs.exclude(is_deleted=True)
+        joined_subquery = Exists(
+            AuctionTOS.objects.filter(
+                Q(user=self.request.user) | Q(email=self.request.user.email),
+                auction=OuterRef("pk"),
+            )
+        )
         qs = (
             qs.filter(
                 Q(auctiontos__user=self.request.user)
@@ -6023,25 +6030,49 @@ class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
                 | Q(created_by=self.request.user)
                 | standard_filter
             )
-            .annotate(
-                joined=Exists(
-                    AuctionTOS.objects.filter(
-                        auction=OuterRef("pk"),
-                        user=self.request.user,
-                    )
-                )
-            )
+            .annotate(joined=joined_subquery)
             .distinct()
         )
+        # Apply nearby filter if user has a location set, the preference is enabled, and nearby=false is not in GET params
+        self.nearby_filter_active = False
+        userdata = self.request.user.userdata
+        self._base_qs = qs  # save pre-filter qs for auto-remove fallback
+        if latitude and longitude and userdata.show_nearby_auctions and self.request.GET.get("nearby") != "false":
+            online_distance = userdata.email_me_about_new_auctions_distance or 100
+            in_person_distance = userdata.email_me_about_new_in_person_auctions_distance or 100
+            qs = qs.annotate(
+                preferred_distance=Case(
+                    When(is_online=True, then=Value(online_distance)),
+                    default=Value(in_person_distance),
+                    output_field=FloatField(),
+                )
+            )
+            nearby_filter = Q(joined=True) | Q(created_by=self.request.user) | Q(distance__lte=F("preferred_distance"))
+            qs = qs.filter(nearby_filter)
+            self.nearby_filter_active = True
         return qs
 
     def get_context_data(self, **kwargs):
+        # Auto-remove nearby filter when no results exist but the search term has results without distance constraint
+        nearby_filter_auto_removed = None
+        if getattr(self, "nearby_filter_active", False) and not self.object_list.exists():
+            query = self.request.GET.get("query", "")
+            if query:
+                base_qs = getattr(self, "_base_qs", None)
+                if base_qs is not None:
+                    fallback_qs = AuctionFilter({"query": query}, queryset=base_qs).qs
+                    if fallback_qs.exists():
+                        self.object_list = fallback_qs
+                        self.nearby_filter_active = False
+                        nearby_filter_auto_removed = "No nearby auctions match your search \u2014 showing all results."
         context = super().get_context_data(**kwargs)
         context["hide_google_login"] = True
         if not self.object_list.exists():
             context["no_results"] = (
                 f"<span class='text-danger'>No auctions found.</span>  This only searches club auctions, if you're looking for {settings.WEBSITE_FOCUS} to buy, check out <a href='/lots/'>the list of lots for sale</a>"
             )
+        context["nearby_filter_auto_removed"] = nearby_filter_auto_removed
+        context["is_htmx"] = bool(self.request.headers.get("HX-Request"))
         context["show_new_auction_button"] = True
         if self.request.user.is_authenticated and not self.request.user.userdata.can_create_club_auctions:
             context["show_new_auction_button"] = False
@@ -6049,6 +6080,23 @@ class AllAuctions(LocationMixin, SingleTableMixin, FilterView):
             context["show_new_auction_button"] = False
         if self.request.user.is_superuser:
             context["show_new_auction_button"] = True
+        context["nearby_filter_active"] = getattr(self, "nearby_filter_active", False)
+        user_has_location = getattr(self, "_user_has_location", False)
+        context["user_has_location"] = user_has_location
+        if user_has_location and self.request.user.is_authenticated:
+            try:
+                ud = self.request.user.userdata
+                unit = ud.distance_unit or "miles"
+                online_d = ud.email_me_about_new_auctions_distance or 100
+                in_person_d = ud.email_me_about_new_in_person_auctions_distance or 100
+                if unit == "km":
+                    online_d = round(online_d * MILES_TO_KM)
+                    in_person_d = round(in_person_d * MILES_TO_KM)
+                context["online_distance"] = online_d
+                context["in_person_distance"] = in_person_d
+                context["distance_unit"] = unit
+            except Exception:
+                context["user_has_location"] = False
         return context
 
     def get_table(self, **kwargs):

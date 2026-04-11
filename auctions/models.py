@@ -5948,9 +5948,11 @@ class UserData(models.Model):
         "When new online auctions are created with pickup locations near my location, notify me"
     )
     email_me_about_new_auctions_distance = models.PositiveIntegerField(
-        null=True, blank=True, default=100, verbose_name="New online auction distance"
+        null=True, blank=True, default=100, verbose_name="Nearby online auction distance"
     )
-    email_me_about_new_auctions_distance.help_text = "miles, from your address"
+    email_me_about_new_auctions_distance.help_text = (
+        "miles, from your address. Also used to filter the auction list when your location is set."
+    )
     email_me_about_new_in_person_auctions = models.BooleanField(default=True, blank=True)
     email_me_about_new_in_person_auctions.help_text = (
         "When new in-person auctions are created near my location, notify me"
@@ -5959,9 +5961,16 @@ class UserData(models.Model):
         null=True,
         blank=True,
         default=100,
-        verbose_name="New in-person auction distance",
+        verbose_name="Nearby in-person auction distance",
     )
-    email_me_about_new_in_person_auctions_distance.help_text = "miles, from your address"
+    email_me_about_new_in_person_auctions_distance.help_text = (
+        "miles, from your address. Also used to filter the auction list when your location is set."
+    )
+    show_nearby_auctions = models.BooleanField(default=True, blank=True, verbose_name="Only show nearby auctions")
+    show_nearby_auctions.help_text = (
+        "When your location is set, only show auctions near you on the auction list. "
+        "Auctions you've joined or created are always shown."
+    )
     email_me_about_new_local_lots = models.BooleanField(default=True, blank=True)
     email_me_about_new_local_lots.help_text = (
         "When new nearby lots (that aren't part of an auction) are created, notify me"

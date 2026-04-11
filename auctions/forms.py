@@ -2896,6 +2896,7 @@ class ChangeUserPreferencesForm(forms.ModelForm):
             "share_lot_images",
             "auto_add_images",
             "push_notifications_when_lots_sell",
+            "show_nearby_auctions",
         )
 
     def __init__(self, user, *args, **kwargs):
@@ -2929,6 +2930,28 @@ class ChangeUserPreferencesForm(forms.ModelForm):
         self.fields["email_me_about_new_auctions_distance"].help_text = f"{unit}, from your address"
         self.fields["email_me_about_new_in_person_auctions_distance"].help_text = f"{unit}, from your address"
         self.fields["local_distance"].help_text = f"{unit}, from your address"
+        local_lots_fields = []
+        if settings.ALLOW_USERS_TO_CREATE_LOTS:
+            local_lots_fields = [
+                Div(
+                    Div(
+                        "email_me_about_new_local_lots",
+                        css_class="col-md-8",
+                    ),
+                    Div(
+                        "local_distance",
+                        css_class="col-md-4",
+                    ),
+                    css_class="row",
+                ),
+                Div(
+                    Div(
+                        "email_me_about_new_lots_ship_to_location",
+                        css_class="col-md-12",
+                    ),
+                    css_class="row",
+                ),
+            ]
         self.helper.layout = Layout(
             Div(
                 Div(
@@ -2961,6 +2984,13 @@ class ChangeUserPreferencesForm(forms.ModelForm):
                 Div(
                     "preferred_currency",
                     css_class="col-md-4",
+                ),
+                css_class="row",
+            ),
+            Div(
+                Div(
+                    "show_nearby_auctions",
+                    css_class="col-md-12",
                 ),
                 css_class="row",
             ),
@@ -3005,24 +3035,7 @@ class ChangeUserPreferencesForm(forms.ModelForm):
                 ),
                 css_class="row",
             ),
-            Div(
-                Div(
-                    "email_me_about_new_local_lots",
-                    css_class="col-md-8",
-                ),
-                Div(
-                    "local_distance",
-                    css_class="col-md-4",
-                ),
-                css_class="row",
-            ),
-            Div(
-                Div(
-                    "email_me_about_new_lots_ship_to_location",
-                    css_class="col-md-12",
-                ),
-                css_class="row",
-            ),
+            *local_lots_fields,
             # Div(
             #     Div('location',css_class='col-md-6',),
             #

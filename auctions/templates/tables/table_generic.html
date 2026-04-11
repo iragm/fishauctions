@@ -1,8 +1,19 @@
-{% load render_table from django_tables2 %}
+{% load render_table querystring from django_tables2 %}
 {% if no_results %}
 <div class="table-container mt-2 mb-2">
     {{ no_results | safe }}
 </div>
+{% elif nearby_filter_auto_removed %}
+<div class="table-container mt-2 mb-2">
+    {% render_table table %}
+</div>
 {% else %}
 {% render_table table %}
+{% endif %}
+{% if is_htmx %}
+<div id="nearby-filter-notice" hx-swap-oob="true">
+{% if nearby_filter_active %}<small class="text-muted">Only showing nearby auctions. <a href="{% querystring "nearby"="false" %}">Show all</a></small>
+{% elif nearby_filter_auto_removed %}<small class="text-muted">{{ nearby_filter_auto_removed }}</small>
+{% endif %}
+</div>
 {% endif %}
