@@ -510,6 +510,7 @@ class AuctionTOSAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetVie
     def get_queryset(self):
         auction = self.forwarded.get("auction")
         invoice = self.forwarded.get("invoice")
+        exclude_auctiontos = self.forwarded.get("exclude_auctiontos")
         try:
             auction = Auction.objects.get(pk=auction, is_deleted=False)
         except Auction.DoesNotExist:
@@ -517,6 +518,11 @@ class AuctionTOSAutocomplete(LoginRequiredMixin, autocomplete.Select2QuerySetVie
         if not auction.permission_check(self.request.user):
             return AuctionTOS.objects.none()
         qs = AuctionTOS.objects.filter(auction=auction)
+        if exclude_auctiontos:
+            try:
+                qs = qs.exclude(pk=int(exclude_auctiontos))
+            except (ValueError, TypeError):
+                pass
         if invoice:
             qs = qs.exclude(
                 Exists(

@@ -606,7 +606,7 @@ class DeleteAuctionTOS(forms.Form):
     merge_with = forms.CharField(
         widget=autocomplete.Select2(
             url="auctiontos-autocomplete",
-            forward=["auction"],
+            forward=["auction", "exclude_auctiontos"],
             attrs={
                 "data-html": True,
                 "data-container-css-class": "",
@@ -614,6 +614,7 @@ class DeleteAuctionTOS(forms.Form):
         )
     )
     auction = forms.CharField(label="Auction", max_length=100)
+    exclude_auctiontos = forms.IntegerField(required=False)
 
     def __init__(self, auctiontos, auction, *args, **kwargs):
         self.auction = auction
@@ -626,6 +627,7 @@ class DeleteAuctionTOS(forms.Form):
         self.helper.form_tag = True
         self.helper.layout = Layout(
             "auction",
+            "exclude_auctiontos",
             Div(
                 "delete_lots",
                 css_class="row",
@@ -646,6 +648,8 @@ class DeleteAuctionTOS(forms.Form):
         )
         self.fields["auction"].widget = HiddenInput()
         self.fields["auction"].initial = self.auctiontos.auction.pk
+        self.fields["exclude_auctiontos"].widget = HiddenInput()
+        self.fields["exclude_auctiontos"].initial = self.auctiontos.pk
         self.fields["merge_with"].required = False
         existing_lots = self.auctiontos.unbanned_lot_count
         bought_lots = self.auctiontos.bought_lots_qs.count()
