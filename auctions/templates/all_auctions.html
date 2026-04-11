@@ -13,12 +13,13 @@
 <form class="col-sm-12 mt-2">
   {% crispy filter.form %}
 </form>
+<div id="nearby-filter-notice">
 {% if nearby_filter_active and not nearby_filter_auto_removed %}
 <small class="text-muted">Only showing nearby auctions. <a href="{% querystring "nearby"="false" %}">Show all</a></small>
-{% endif %}
-{% if nearby_filter_auto_removed %}
+{% elif nearby_filter_auto_removed %}
 <small class="text-muted">{{ nearby_filter_auto_removed }}</small>
 {% endif %}
+</div>
 <div class="progress d-none"> <div class="indeterminate"></div> </div>
 {% render_table table %}
 
