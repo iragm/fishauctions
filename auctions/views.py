@@ -83,6 +83,7 @@ from easy_thumbnails.files import get_thumbnailer
 from el_pagination.views import AjaxListView
 from PIL import Image
 from pytz import timezone as pytz_timezone
+from pywebpush import WebPushException
 from qr_code.qrcode.utils import QRCodeOptions
 from reportlab.platypus import (
     Image as PImage,
@@ -4318,9 +4319,11 @@ class ViewLotSimple(ViewLot, AuctionViewMixin):
                             payload["icon"] = lot.thumbnail.display_url
                         try:
                             send_user_notification(user=watch.user, payload=payload, ttl=10000)
-                        except requests.exceptions.RequestException:
+                        except (requests.exceptions.RequestException, WebPushException):
                             # The push endpoint is invalid or unreachable; remove the stale subscription
                             # and record the failure in the auction history so admins can see it.
+                            # Note: django-webpush only auto-deletes on HTTP 410, but FCM uses
+                            # HTTP 404 for expired tokens, so we must also handle that here.
                             push_info.delete()
                             AuctionHistory.objects.create(
                                 auction=lot.auction,

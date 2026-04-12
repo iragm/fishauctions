@@ -2103,6 +2103,32 @@ class ViewLotSimpleTestCase(StandardTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertFalse(PushInformation.objects.filter(user=self.user_with_no_lots).exists())
 
+    def test_admin_push_webpush_exception_cleans_up(self):
+        """WebPushException (e.g. FCM returning HTTP 404 for expired token) is also handled"""
+        from pywebpush import WebPushException
+        from webpush.models import PushInformation
+
+        self._setup_watcher_with_push()
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        # Simulate django-webpush re-raising WebPushException for a 404 response
+        # (FCM uses 404, not 410, for expired/invalid tokens)
+        mock_response = type("Response", (), {"status_code": 404, "reason": "Not Found", "text": ""})()
+        with patch(
+            "auctions.views.send_user_notification",
+            side_effect=WebPushException("Push failed: 404 Not Found", response=mock_response),
+        ):
+            response = self.client.get(self.get_url())
+        self.assertEqual(response.status_code, 200)
+        # Stale PushInformation must be cleaned up
+        self.assertFalse(PushInformation.objects.filter(user=self.user_with_no_lots).exists())
+        # AuctionHistory must be created
+        history = AuctionHistory.objects.filter(auction=self.in_person_auction, user=None).first()
+        self.assertIsNotNone(history)
+        self.assertEqual(
+            history.action,
+            f"push notification error occurred for {self.user_with_no_lots.username}",
+        )
+
     def test_sold_lot_no_push_notification(self):
         """No push notification sent when the lot is already sold"""
         from webpush.models import PushInformation
