@@ -4306,7 +4306,8 @@ class ViewLotSimple(ViewLot, AuctionViewMixin):
                 )
                 for watch in watchers:
                     # does the user actually have a subscription?
-                    if PushInformation.objects.filter(user=watch.user).first():
+                    push_info = PushInformation.objects.filter(user=watch.user).first()
+                    if push_info:
                         payload = {
                             "head": lot.lot_name + " is about to be sold",
                             "body": f"Lot {lot.custom_lot_number}  Don't miss out, bid now!  You're getting this notification because you watched this lot.",
@@ -4318,7 +4319,15 @@ class ViewLotSimple(ViewLot, AuctionViewMixin):
                         try:
                             send_user_notification(user=watch.user, payload=payload, ttl=10000)
                         except requests.exceptions.RequestException:
-                            logger.exception("Failed to send push notification to user %s", watch.user)
+                            # The push endpoint is invalid or unreachable; remove the stale subscription
+                            # and record the failure in the auction history so admins can see it.
+                            push_info.delete()
+                            AuctionHistory.objects.create(
+                                auction=lot.auction,
+                                user=None,
+                                action=f"push notification error occurred for {watch.user.username}",
+                                applies_to="USERS",
+                            )
         return context
 
 

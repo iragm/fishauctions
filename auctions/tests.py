@@ -36,6 +36,7 @@ from .models import (
     PickupLocation,
     UserData,
     UserLabelPrefs,
+    Watch,
     add_price_info,
 )
 
@@ -2009,6 +2010,113 @@ class UpdateLotPushNotificationsViewTestCase(StandardTestCase):
         assert response.status_code == 200
         userdata = UserData.objects.get(user=self.user_who_does_not_join)
         assert userdata.push_notifications_when_lots_sell is True
+
+
+class ViewLotSimpleTestCase(StandardTestCase):
+    """Tests for ViewLotSimple (the htmx_lot endpoint used by auction admins to project lot images)"""
+
+    def get_url(self):
+        return reverse(
+            "htmx_lot",
+            kwargs={"slug": self.in_person_auction.slug, "custom_lot_number": self.in_person_lot.custom_lot_number},
+        )
+
+    def _setup_watcher_with_push(self):
+        """Helper: give user_with_no_lots a watch on in_person_lot and a push subscription"""
+        from webpush.models import PushInformation, SubscriptionInfo
+
+        watcher_userdata = UserData.objects.get(user=self.user_with_no_lots)
+        watcher_userdata.push_notifications_when_lots_sell = True
+        watcher_userdata.save()
+        Watch.objects.create(lot_number=self.in_person_lot, user=self.user_with_no_lots)
+        sub = SubscriptionInfo.objects.create(
+            browser="Chrome",
+            endpoint="https://fcm.googleapis.com/push/example_token",
+            auth="auth_secret",
+            p256dh="p256dh_key",
+        )
+        return PushInformation.objects.create(user=self.user_with_no_lots, subscription=sub)
+
+    def test_anonymous_user(self):
+        """Anonymous users are denied access to htmx lot view for auctioned lots"""
+        response = self.client.get(self.get_url())
+        self.assertEqual(response.status_code, 403)
+
+    def test_non_admin_user(self):
+        """Non-admin users are denied access to htmx lot view for auctioned lots"""
+        self.client.login(username=self.user_who_does_not_join.username, password="testpassword")
+        response = self.client.get(self.get_url())
+        self.assertEqual(response.status_code, 403)
+
+    def test_admin_no_watchers(self):
+        """Admin user can view lot; no push notifications sent when there are no watchers"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        with patch("auctions.views.send_user_notification") as mock_notify:
+            response = self.client.get(self.get_url())
+        self.assertEqual(response.status_code, 200)
+        mock_notify.assert_not_called()
+
+    def test_admin_push_notification_success(self):
+        """Admin viewing unsold lot triggers a push notification for a watching user with push enabled"""
+        self._setup_watcher_with_push()
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        with patch("auctions.views.send_user_notification") as mock_notify:
+            response = self.client.get(self.get_url())
+        self.assertEqual(response.status_code, 200)
+        mock_notify.assert_called_once()
+
+    def test_admin_push_failure_deletes_push_info_and_creates_history(self):
+        """When push notification fails, stale PushInformation is deleted and AuctionHistory is created"""
+        import requests
+        from webpush.models import PushInformation
+
+        self._setup_watcher_with_push()
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        with patch(
+            "auctions.views.send_user_notification",
+            side_effect=requests.exceptions.ConnectionError("push endpoint permanently removed"),
+        ):
+            response = self.client.get(self.get_url())
+        self.assertEqual(response.status_code, 200)
+        # Stale PushInformation must be deleted so the endpoint is never retried
+        self.assertFalse(PushInformation.objects.filter(user=self.user_with_no_lots).exists())
+        # AuctionHistory must record the failure for visibility
+        history = AuctionHistory.objects.filter(auction=self.in_person_auction, user=None).first()
+        self.assertIsNotNone(history)
+        self.assertIn("push notification error", history.action)
+        self.assertIn(self.user_with_no_lots.username, history.action)
+
+    def test_sold_lot_no_push_notification(self):
+        """No push notification sent when the lot is already sold"""
+        from webpush.models import PushInformation
+
+        self._setup_watcher_with_push()
+        # Mark lot as sold
+        self.in_person_lot.auctiontos_winner = self.in_person_buyer
+        self.in_person_lot.winning_price = 10
+        self.in_person_lot.save()
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        with patch("auctions.views.send_user_notification") as mock_notify:
+            response = self.client.get(self.get_url())
+        self.assertEqual(response.status_code, 200)
+        mock_notify.assert_not_called()
+        # PushInformation must be untouched
+        self.assertTrue(PushInformation.objects.filter(user=self.user_with_no_lots).exists())
+
+    def test_message_users_disabled_no_push_notification(self):
+        """No push notification sent when auction.message_users_when_lots_sell is False"""
+        from webpush.models import PushInformation
+
+        self.in_person_auction.message_users_when_lots_sell = False
+        self.in_person_auction.save()
+        self._setup_watcher_with_push()
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        with patch("auctions.views.send_user_notification") as mock_notify:
+            response = self.client.get(self.get_url())
+        self.assertEqual(response.status_code, 200)
+        mock_notify.assert_not_called()
+        # PushInformation must be untouched
+        self.assertTrue(PushInformation.objects.filter(user=self.user_with_no_lots).exists())
 
 
 class DynamicSetLotWinnerViewTestCase(StandardTestCase):
