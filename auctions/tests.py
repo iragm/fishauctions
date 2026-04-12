@@ -2080,11 +2080,28 @@ class ViewLotSimpleTestCase(StandardTestCase):
         self.assertEqual(response.status_code, 200)
         # Stale PushInformation must be deleted so the endpoint is never retried
         self.assertFalse(PushInformation.objects.filter(user=self.user_with_no_lots).exists())
-        # AuctionHistory must record the failure for visibility
+        # AuctionHistory must record the failure with the exact expected message
         history = AuctionHistory.objects.filter(auction=self.in_person_auction, user=None).first()
         self.assertIsNotNone(history)
-        self.assertIn("push notification error", history.action)
-        self.assertIn(self.user_with_no_lots.username, history.action)
+        self.assertEqual(
+            history.action,
+            f"push notification error occurred for {self.user_with_no_lots.username}",
+        )
+
+    def test_admin_push_timeout_also_cleans_up(self):
+        """RequestException subclasses other than ConnectionError (e.g. Timeout) are also handled"""
+        import requests
+        from webpush.models import PushInformation
+
+        self._setup_watcher_with_push()
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        with patch(
+            "auctions.views.send_user_notification",
+            side_effect=requests.exceptions.Timeout("push endpoint timed out"),
+        ):
+            response = self.client.get(self.get_url())
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(PushInformation.objects.filter(user=self.user_with_no_lots).exists())
 
     def test_sold_lot_no_push_notification(self):
         """No push notification sent when the lot is already sold"""
