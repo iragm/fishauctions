@@ -4315,7 +4315,10 @@ class ViewLotSimple(ViewLot, AuctionViewMixin):
                         }
                         if lot.thumbnail:
                             payload["icon"] = lot.thumbnail.display_url
-                        send_user_notification(user=watch.user, payload=payload, ttl=10000)
+                        try:
+                            send_user_notification(user=watch.user, payload=payload, ttl=10000)
+                        except requests.exceptions.RequestException:
+                            logger.exception("Failed to send push notification to user %s", watch.user)
         return context
 
 
