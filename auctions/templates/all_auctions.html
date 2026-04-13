@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% load render_table querystring from django_tables2 %}
+{% load render_table querystring_replace from django_tables2 %}
 {% load crispy_forms_tags %}
 {% block title %}Auctions
 {% endblock %}
@@ -15,7 +15,7 @@
 </form>
 <div id="nearby-filter-notice">
 {% if nearby_filter_active and not nearby_filter_auto_removed %}
-<small class="text-muted">Only showing nearby auctions. <a href="{% querystring "nearby"="false" %}">Show all</a></small>
+<small class="text-muted">Only showing nearby auctions. <a href="{% querystring_replace "nearby"="false" %}">Show all</a></small>
 {% elif nearby_filter_auto_removed %}
 <small class="text-muted">{{ nearby_filter_auto_removed }}</small>
 {% endif %}
