@@ -137,7 +137,7 @@ services:
       - SE_NODE_MAX_SESSIONS=4
       - SE_NODE_SESSION_TIMEOUT=300
     healthcheck:
-      test: ["CMD-SHELL", "curl -sSL http://localhost:4444/wd/hub/status | grep -q '\"ready\":true'"]
+      test: ["CMD-SHELL", "curl -sSL http://localhost:4444/status | grep -qE '\"ready\"\\s*:\\s*true'"]
       interval: 10s
       timeout: 5s
       retries: 5

@@ -86,7 +86,7 @@ jobs:
           done
           # Wait for Selenium to be ready (up to 60 seconds)
           for i in {1..12}; do
-            if curl -sSf http://localhost:4444/wd/hub/status 2>/dev/null | grep -q '"ready":true'; then
+            if docker exec selenium curl -sSL http://localhost:4444/status 2>/dev/null | grep -qE '"ready"\s*:\s*true'; then
               echo "Selenium service is ready"
               break
             fi
