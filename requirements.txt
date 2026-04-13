@@ -49,9 +49,9 @@ bleach==6.3.0
     # via
     #   -r requirements.in
     #   django-summernote
-boto3==1.42.83
+boto3==1.42.88
     # via django-ses
-botocore==1.42.83
+botocore==1.42.88
     # via
     #   boto3
     #   s3transfer
@@ -82,7 +82,7 @@ channels==4.3.2
     #   channels-redis
 channels-redis==4.3.0
     # via -r requirements.in
-chardet==7.4.0.post2
+chardet==7.4.2
     # via -r requirements.in
 charset-normalizer==3.4.7
     # via
@@ -109,7 +109,7 @@ crispy-bootstrap5==2026.3
     # via -r requirements.in
 cron-descriptor==1.4.5
     # via django-celery-beat
-cryptography==46.0.6
+cryptography==46.0.7
     # via
     #   -r requirements.in
     #   autobahn
@@ -128,7 +128,7 @@ defusedxml==0.7.1
     # via
     #   -r requirements.in
     #   python3-openid
-django==5.2.12
+django==5.2.13
     # via
     #   -r requirements.in
     #   channels
@@ -185,7 +185,7 @@ django-htmx==1.27.0
     # via -r requirements.in
 django-location-field==2.7.3
     # via -r requirements.in
-django-markdownfield==0.19.0
+django-markdownfield==0.20.0
     # via -r requirements.in
 django-post-office==3.11.0
     # via -r requirements.in
@@ -197,11 +197,11 @@ django-ses[events]==4.7.2
     # via -r requirements.in
 django-summernote==0.8.20.0
     # via -r requirements.in
-django-tables2==2.8.0
+django-tables2==2.9.0
     # via -r requirements.in
 django-timezone-field==7.2.1
     # via django-celery-beat
-django-weasyprint==2.4.0
+django-weasyprint==2.5.0
     # via -r requirements.in
 django-webpush==0.3.6
     # via -r requirements.in
@@ -467,7 +467,7 @@ urllib3==2.6.3
     #   requests
 user-agents==2.2.0
     # via -r requirements.in
-uvicorn[standard]==0.43.0
+uvicorn[standard]==0.44.0
     # via -r requirements.in
 uvloop==0.22.1
     # via uvicorn
@@ -493,7 +493,7 @@ websockets==16.0
     # via uvicorn
 yarl==1.23.0
     # via aiohttp
-zope-interface==8.2
+zope-interface==8.3
     # via
     #   -r requirements.in
     #   twisted
