@@ -12,13 +12,23 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AddField(
-            model_name="auction",
-            name="only_whole_dollar_bids",
-            field=models.BooleanField(
-                default=True,
-                help_text="Require bids, minimum bids, and lot prices to be whole dollar amounts.  Uncheck to allow bids with cents (e.g. $5.50).",
-            ),
+        migrations.SeparateDatabaseAndState(
+            database_operations=[
+                migrations.RunSQL(
+                    sql="ALTER TABLE auctions_auction ADD COLUMN IF NOT EXISTS only_whole_dollar_bids TINYINT(1) DEFAULT 1 NOT NULL",
+                    reverse_sql="ALTER TABLE auctions_auction DROP COLUMN IF EXISTS only_whole_dollar_bids",
+                ),
+            ],
+            state_operations=[
+                migrations.AddField(
+                    model_name="auction",
+                    name="only_whole_dollar_bids",
+                    field=models.BooleanField(
+                        default=True,
+                        help_text="Require bids, minimum bids, and lot prices to be whole dollar amounts.  Uncheck to allow bids with cents (e.g. $5.50).",
+                    ),
+                ),
+            ],
         ),
         migrations.AlterField(
             model_name="auction",
