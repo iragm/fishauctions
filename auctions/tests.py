@@ -100,6 +100,15 @@ class StandardTestCase(TestCase):
         self.in_person_location = PickupLocation.objects.create(
             name="location", auction=self.in_person_auction, pickup_time=theFuture
         )
+        # Create in_person_buyer before other in_person_auction TOS objects so the explicit
+        # bidder_number="555" is registered first; the auto-assignment in AuctionTOS.save() checks
+        # for conflicts, so later auto-assigned records won't receive "555" and cause flaky failures.
+        self.in_person_buyer = AuctionTOS.objects.create(
+            user=self.user_with_no_lots,
+            auction=self.in_person_auction,
+            pickup_location=self.in_person_location,
+            bidder_number="555",
+        )
         self.userB = User.objects.create_user(username="no_tos", password="testpassword")
         self.admin_online_tos = AuctionTOS.objects.create(
             user=self.admin_user, auction=self.online_auction, pickup_location=self.location, is_admin=True
@@ -118,12 +127,6 @@ class StandardTestCase(TestCase):
         )
         self.tosC = AuctionTOS.objects.create(
             user=self.user_with_no_lots, auction=self.online_auction, pickup_location=self.location
-        )
-        self.in_person_buyer = AuctionTOS.objects.create(
-            user=self.user_with_no_lots,
-            auction=self.in_person_auction,
-            pickup_location=self.in_person_location,
-            bidder_number="555",
         )
         self.lot = Lot.objects.create(
             lot_name="A test lot",
@@ -5570,6 +5573,15 @@ class WebSocketConsumerTests(TransactionTestCase):
         self.in_person_location = PickupLocation.objects.create(
             name="location", auction=self.in_person_auction, pickup_time=theFuture
         )
+        # Create in_person_buyer before other in_person_auction TOS objects so the explicit
+        # bidder_number="555" is registered first; the auto-assignment in AuctionTOS.save() checks
+        # for conflicts, so later auto-assigned records won't receive "555" and cause flaky failures.
+        self.in_person_buyer = AuctionTOS.objects.create(
+            user=self.user_with_no_lots,
+            auction=self.in_person_auction,
+            pickup_location=self.in_person_location,
+            bidder_number="555",
+        )
         self.userB = User.objects.create_user(username="no_tos", password="testpassword")
         self.admin_online_tos = AuctionTOS.objects.create(
             user=self.admin_user, auction=self.online_auction, pickup_location=self.location, is_admin=True
@@ -5588,12 +5600,6 @@ class WebSocketConsumerTests(TransactionTestCase):
         )
         self.tosC = AuctionTOS.objects.create(
             user=self.user_with_no_lots, auction=self.online_auction, pickup_location=self.location
-        )
-        self.in_person_buyer = AuctionTOS.objects.create(
-            user=self.user_with_no_lots,
-            auction=self.in_person_auction,
-            pickup_location=self.in_person_location,
-            bidder_number="555",
         )
         self.lot = Lot.objects.create(
             lot_name="A test lot",

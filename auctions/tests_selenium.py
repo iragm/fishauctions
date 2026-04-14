@@ -112,8 +112,6 @@ class SeleniumTestCase(TestCase):
             # bind-mounted directory or existing files may be owned by another user.
             # In that case collectstatic can raise PermissionError here and can be
             # safely ignored for these Selenium tests.
-            import os
-
             from django.conf import settings
 
             static_root = settings.STATIC_ROOT
