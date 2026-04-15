@@ -3626,14 +3626,16 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                 if reserve_price is None or reserve_price == "":
                     reserve_price = self.auction.minimum_bid
                 try:
-                    reserve_price = int(reserve_price)
-                    if reserve_price < 1:
-                        errors["reserve_price"] = "Minimum bid must be at least $1"
+                    reserve_price = Decimal(str(reserve_price))
+                    if reserve_price < Decimal("0.01"):
+                        errors["reserve_price"] = "Minimum bid must be at least $0.01"
                     elif reserve_price > 2000:
                         errors["reserve_price"] = "Minimum bid must be $2000 or less"
+                    elif self.auction.only_whole_dollar_bids and reserve_price != reserve_price.to_integral_value():
+                        errors["reserve_price"] = "This auction only allows whole dollar amounts"
                     else:
                         lot.reserve_price = reserve_price
-                except (ValueError, TypeError):
+                except (ValueError, TypeError, InvalidOperation):
                     errors["reserve_price"] = "Minimum bid must be a number"
 
                 if self.auction.reserve_price == "required" and not reserve_price:
@@ -3646,14 +3648,16 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                 buy_now_price = data.get("buy_now_price")
                 if buy_now_price is not None and buy_now_price != "":
                     try:
-                        buy_now_price = int(buy_now_price)
-                        if buy_now_price < 1:
-                            errors["buy_now_price"] = "Buy now price must be at least $1"
+                        buy_now_price = Decimal(str(buy_now_price))
+                        if buy_now_price < Decimal("0.01"):
+                            errors["buy_now_price"] = "Buy now price must be at least $0.01"
                         elif buy_now_price > 1000:
                             errors["buy_now_price"] = "Buy now price must be $1000 or less"
+                        elif self.auction.only_whole_dollar_bids and buy_now_price != buy_now_price.to_integral_value():
+                            errors["buy_now_price"] = "This auction only allows whole dollar amounts"
                         else:
                             lot.buy_now_price = buy_now_price
-                    except (ValueError, TypeError):
+                    except (ValueError, TypeError, InvalidOperation):
                         errors["buy_now_price"] = "Buy now price must be a number"
                 else:
                     lot.buy_now_price = None

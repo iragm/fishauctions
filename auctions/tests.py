@@ -6848,6 +6848,39 @@ class BulkAddLotsAutoTests(StandardTestCase):
         lot = Lot.objects.get(lot_number=data["lot_id"])
         self.assertEqual(lot.auctiontos_seller, self.admin_in_person_tos)
 
+    def test_decimal_minimum_bid_accepted(self):
+        """Test that decimal minimum bids (e.g. 2.50) are accepted when auction allows them"""
+        self.in_person_auction.only_whole_dollar_bids = False
+        self.in_person_auction.save()
+
+        self.client.login(username="no_lots", password="testpassword")
+        response = self.client.post(
+            reverse("save_lot_ajax", kwargs={"slug": self.in_person_auction.slug}),
+            data='{"lot_name": "Decimal Bid Lot", "reserve_price": "2.50"}',
+            content_type="application/json",
+        )
+        data = response.json()
+        self.assertTrue(data["success"], f"Decimal reserve_price should be accepted: {data}")
+        lot = Lot.objects.get(lot_number=data["lot_id"])
+        from decimal import Decimal
+
+        self.assertEqual(lot.reserve_price, Decimal("2.50"))
+
+    def test_decimal_minimum_bid_rejected_when_whole_dollar_required(self):
+        """Test that decimal minimum bids are rejected when auction requires whole dollar amounts"""
+        self.in_person_auction.only_whole_dollar_bids = True
+        self.in_person_auction.save()
+
+        self.client.login(username="no_lots", password="testpassword")
+        response = self.client.post(
+            reverse("save_lot_ajax", kwargs={"slug": self.in_person_auction.slug}),
+            data='{"lot_name": "Decimal Bid Lot", "reserve_price": "2.50"}',
+            content_type="application/json",
+        )
+        data = response.json()
+        self.assertFalse(data["success"])
+        self.assertIn("reserve_price", data.get("errors", {}))
+
 
 class UpdateAuctionStatsCommandTestCase(StandardTestCase):
     """Test the update_auction_stats management command"""
