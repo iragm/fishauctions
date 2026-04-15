@@ -4822,6 +4822,7 @@ class LotDelete(LoginRequiredMixin, DeleteView):
                 action=f"Deleted lot {lot.lot_number_display}",
                 user=self.request.user,
             )
+        messages.info(self.request, f"Successfully deleted lot {lot.lot_number_display} {lot.lot_name}")
         return super().form_valid(form)
 
 
