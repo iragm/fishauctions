@@ -2223,26 +2223,24 @@ class AuctionEditForm(forms.ModelForm):
         return cleaned_data
 
     def save(self, commit=True):
-        was_only_whole_dollar_bids = (
-            Auction.objects.exclude(is_deleted=True)
-            .filter(pk=self.instance.pk)
-            .values_list("only_whole_dollar_bids", flat=True)
-            .first()
-            if self.instance.pk
-            else self.instance.only_whole_dollar_bids
+        was_only_whole_dollar_bids = bool(
+            self.initial.get("only_whole_dollar_bids", self.instance.only_whole_dollar_bids)
         )
         auction = super().save(commit=commit)
         if commit and not was_only_whole_dollar_bids and auction.only_whole_dollar_bids:
             lots = Lot.objects.exclude(is_deleted=True).filter(auction=auction)
+            lots_to_update = []
             for lot in lots:
-                fields_to_update = []
+                lot_changed = False
                 for field_name in ("reserve_price", "buy_now_price", "winning_price"):
                     value = getattr(lot, field_name)
                     if value is not None and value != value.to_integral_value():
                         setattr(lot, field_name, round_to_whole_dollar(value))
-                        fields_to_update.append(field_name)
-                if fields_to_update:
-                    lot.save(update_fields=fields_to_update)
+                        lot_changed = True
+                if lot_changed:
+                    lots_to_update.append(lot)
+            if lots_to_update:
+                Lot.objects.bulk_update(lots_to_update, ["reserve_price", "buy_now_price", "winning_price"])
         return auction
 
 
