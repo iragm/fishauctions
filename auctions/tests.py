@@ -1819,6 +1819,14 @@ class AuctionEditFormMinimumBidTests(TestCase):
         self.assertEqual(lot.reserve_price, Decimal(6))
         self.assertEqual(lot.buy_now_price, Decimal(8))
 
+        fractional_lot_data = {**lot_data, "reserve_price": "6.50", "buy_now_price": "8.25"}
+        fractional_lot_form = CreateLotForm(
+            data=fractional_lot_data, instance=lot, user=self.user, cloned_from=None, auction=self.auction
+        )
+        self.assertFalse(fractional_lot_form.is_valid())
+        self.assertIn("reserve_price", fractional_lot_form.errors)
+        self.assertIn("buy_now_price", fractional_lot_form.errors)
+
 
 class CreateLotFormWholeDollarValidationTests(TestCase):
     def setUp(self):

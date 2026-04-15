@@ -2184,18 +2184,18 @@ class AuctionEditForm(forms.ModelForm):
     def clean(self):
         cleaned_data = super().clean()
         use_seller_dash_lot_numbering = cleaned_data.get("use_seller_dash_lot_numbering")
-        saved_instance = self.instance
+        existing_instance = self.instance
 
-        if saved_instance and saved_instance.pk:
-            if use_seller_dash_lot_numbering is not saved_instance.use_seller_dash_lot_numbering:
-                if saved_instance.admin_checklist_lots_added:
+        if existing_instance and existing_instance.pk:
+            if use_seller_dash_lot_numbering is not existing_instance.use_seller_dash_lot_numbering:
+                if existing_instance.admin_checklist_lots_added:
                     self.add_error(
                         "use_seller_dash_lot_numbering", "This option cannot be changed after lots have been added."
                     )
         pattern = r"^(test|mock|trial|example)([-_]|$)|([-_])(test|mock|trial|example)([-_]|$)"
-        if cleaned_data.get("promote_this_auction") and re.search(pattern, saved_instance.slug, re.IGNORECASE):
+        if cleaned_data.get("promote_this_auction") and re.search(pattern, existing_instance.slug, re.IGNORECASE):
             self.add_error("promote_this_auction", "Test auctions cannot be promoted.")
-        elif cleaned_data.get("promote_this_auction") and not saved_instance.admin_checklist_location_set:
+        elif cleaned_data.get("promote_this_auction") and not existing_instance.admin_checklist_location_set:
             self.add_error("promote_this_auction", "Set the location before promoting this auction")
         elif cleaned_data.get(
             "promote_this_auction"
@@ -2206,14 +2206,14 @@ class AuctionEditForm(forms.ModelForm):
                 "promote_this_auction",
                 "Edit the text in the rules section above before promoting this auction.  There's still placeholder text in there that needs to be removed.",
             )
-        elif cleaned_data.get("promote_this_auction") and not saved_instance.created_by.userdata.is_trusted:
+        elif cleaned_data.get("promote_this_auction") and not existing_instance.created_by.userdata.is_trusted:
             self.add_error("promote_this_auction", "Your account doesn't have permission to promote auctions.")
         if cleaned_data.get("only_whole_dollar_bids"):
             minimum_bid = cleaned_data.get("minimum_bid")
             if minimum_bid is not None and minimum_bid != minimum_bid.to_integral_value():
                 is_toggling_to_whole_dollar = (
-                    bool(saved_instance and saved_instance.pk)
-                    and not saved_instance.only_whole_dollar_bids
+                    bool(existing_instance and existing_instance.pk)
+                    and not existing_instance.only_whole_dollar_bids
                     and cleaned_data.get("only_whole_dollar_bids")
                 )
                 if is_toggling_to_whole_dollar:
