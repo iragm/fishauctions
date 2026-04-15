@@ -353,6 +353,8 @@ class LotHTMxTableForUsers(tables.Table):
         if record.can_be_edited:
             result += f' <a href="{reverse("edit_lot", kwargs={"pk": record.pk})}" class="badge text-dark bg-warning"><i class="bi bi-calendar"></i> Edit</a>'
         result += f' <a href="{reverse("new_lot")}?copy={record.pk}" class="badge bg-info"><i class="bi bi-calendar-plus"></i> Copy to new lot</a>'
+        if record.can_be_deleted:
+            result += f' <a href="{reverse("delete_lot", kwargs={"pk": record.pk})}?next={reverse("selling")}" class="badge bg-danger"><i class="bi bi-trash"></i> Delete</a>'
         return mark_safe(result)
 
     def render_lot_name(self, value, record):

@@ -65,6 +65,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.utils.html import format_html
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.safestring import mark_safe
 from django.views.decorators.csrf import csrf_exempt
 from django.views.generic import DetailView, ListView, RedirectView, TemplateView, View
@@ -4807,7 +4808,10 @@ class LotDelete(LoginRequiredMixin, DeleteView):
         return super().dispatch(request, *args, **kwargs)
 
     def get_success_url(self):
-        return f"/lots/user/?user={self.request.user.pk}"
+        next_url = self.request.GET.get("next")
+        if next_url and url_has_allowed_host_and_scheme(next_url, allowed_hosts={self.request.get_host()}):
+            return next_url
+        return reverse("selling")
 
     def form_valid(self, form):
         """Track history when a lot is deleted"""
@@ -4818,6 +4822,7 @@ class LotDelete(LoginRequiredMixin, DeleteView):
                 action=f"Deleted lot {lot.lot_number_display}",
                 user=self.request.user,
             )
+        messages.info(self.request, f"Successfully deleted lot {lot.lot_number_display} {lot.lot_name}")
         return super().form_valid(form)
 
 
