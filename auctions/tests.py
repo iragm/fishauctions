@@ -6493,6 +6493,15 @@ class BulkAddLotsAutoTests(StandardTestCase):
         self.in_person_auction.lot_submission_end_date = timezone.now() + datetime.timedelta(days=7)
         self.in_person_auction.save()
 
+    def _get_bulk_add_input_tags(self, response, field_name):
+        html = response.content.decode("utf-8")
+        tags = []
+        for input_chunk in html.split("<input")[1:]:
+            tag = "<input" + input_chunk.split(">", 1)[0] + ">"
+            if f'data-field="{field_name}"' in tag:
+                tags.append(tag)
+        return tags
+
     def test_bulk_add_lots_view_access(self):
         """Test that users can access bulk add lots page"""
         # Login as regular user
@@ -6524,8 +6533,14 @@ class BulkAddLotsAutoTests(StandardTestCase):
             reverse("bulk_add_lots_auto_for_myself", kwargs={"slug": self.in_person_auction.slug})
         )
 
-        self.assertContains(response, 'min="1" step="1" max="2000" data-field="reserve_price"')
-        self.assertContains(response, 'min="1" step="1" max="1000" data-field="buy_now_price"')
+        reserve_price_tags = self._get_bulk_add_input_tags(response, "reserve_price")
+        buy_now_price_tags = self._get_bulk_add_input_tags(response, "buy_now_price")
+        self.assertTrue(
+            any('min="1"' in tag and 'step="1"' in tag and 'max="2000"' in tag for tag in reserve_price_tags)
+        )
+        self.assertTrue(
+            any('min="1"' in tag and 'step="1"' in tag and 'max="1000"' in tag for tag in buy_now_price_tags)
+        )
 
     def test_bulk_add_lots_decimal_inputs_use_cent_step(self):
         """Price inputs use cent-level client-side validation when auction allows decimal bids"""
@@ -6537,8 +6552,47 @@ class BulkAddLotsAutoTests(StandardTestCase):
             reverse("bulk_add_lots_auto_for_myself", kwargs={"slug": self.in_person_auction.slug})
         )
 
-        self.assertContains(response, 'min="0.01" step="0.01" max="2000" data-field="reserve_price"')
-        self.assertContains(response, 'min="0.01" step="0.01" max="1000" data-field="buy_now_price"')
+        reserve_price_tags = self._get_bulk_add_input_tags(response, "reserve_price")
+        buy_now_price_tags = self._get_bulk_add_input_tags(response, "buy_now_price")
+        self.assertTrue(
+            any('min="0.01"' in tag and 'step="0.01"' in tag and 'max="2000"' in tag for tag in reserve_price_tags)
+        )
+        self.assertTrue(
+            any('min="0.01"' in tag and 'step="0.01"' in tag and 'max="1000"' in tag for tag in buy_now_price_tags)
+        )
+
+    def test_bulk_add_lots_existing_row_inputs_match_whole_dollar_rules(self):
+        """Existing lot rows use the same whole-dollar min/step rules as new lot rows."""
+        self.in_person_auction.only_whole_dollar_bids = True
+        self.in_person_auction.save()
+        existing_lot = Lot.objects.create(
+            lot_name="Existing bulk lot",
+            auction=self.in_person_auction,
+            auctiontos_seller=self.in_person_buyer,
+            reserve_price=Decimal("9.00"),
+            buy_now_price=Decimal("11.00"),
+            quantity=1,
+        )
+        self.client.login(username="no_lots", password="testpassword")
+
+        response = self.client.get(
+            reverse("bulk_add_lots_auto_for_myself", kwargs={"slug": self.in_person_auction.slug})
+        )
+
+        reserve_price_tags = self._get_bulk_add_input_tags(response, "reserve_price")
+        buy_now_price_tags = self._get_bulk_add_input_tags(response, "buy_now_price")
+        existing_reserve_tag = next(
+            (tag for tag in reserve_price_tags if f'value="{existing_lot.reserve_price}"' in tag), None
+        )
+        existing_buy_now_tag = next(
+            (tag for tag in buy_now_price_tags if f'value="{existing_lot.buy_now_price}"' in tag), None
+        )
+        self.assertIsNotNone(existing_reserve_tag)
+        self.assertIsNotNone(existing_buy_now_tag)
+        self.assertIn('min="1"', existing_reserve_tag)
+        self.assertIn('step="1"', existing_reserve_tag)
+        self.assertIn('min="1"', existing_buy_now_tag)
+        self.assertIn('step="1"', existing_buy_now_tag)
 
     def test_bulk_add_lots_non_admin_cannot_access_bidder_url(self):
         """Test that non-admin users cannot access the bidder_number URL"""
