@@ -6399,6 +6399,32 @@ class BulkAddLotsAutoTests(StandardTestCase):
         )
         self.assertEqual(response.status_code, 200)
 
+    def test_bulk_add_lots_whole_dollar_inputs_use_integer_step(self):
+        """Price inputs use whole-dollar client-side validation when auction requires whole-dollar bids"""
+        self.in_person_auction.only_whole_dollar_bids = True
+        self.in_person_auction.save()
+        self.client.login(username="no_lots", password="testpassword")
+
+        response = self.client.get(
+            reverse("bulk_add_lots_auto_for_myself", kwargs={"slug": self.in_person_auction.slug})
+        )
+
+        self.assertContains(response, 'min="1" step="1" max="2000" data-field="reserve_price"')
+        self.assertContains(response, 'min="1" step="1" max="1000" data-field="buy_now_price"')
+
+    def test_bulk_add_lots_decimal_inputs_use_cent_step(self):
+        """Price inputs use cent-level client-side validation when auction allows decimal bids"""
+        self.in_person_auction.only_whole_dollar_bids = False
+        self.in_person_auction.save()
+        self.client.login(username="no_lots", password="testpassword")
+
+        response = self.client.get(
+            reverse("bulk_add_lots_auto_for_myself", kwargs={"slug": self.in_person_auction.slug})
+        )
+
+        self.assertContains(response, 'min="0.01" step="0.01" max="2000" data-field="reserve_price"')
+        self.assertContains(response, 'min="0.01" step="0.01" max="1000" data-field="buy_now_price"')
+
     def test_bulk_add_lots_non_admin_cannot_access_bidder_url(self):
         """Test that non-admin users cannot access the bidder_number URL"""
         # Login as regular user (not auction creator)
