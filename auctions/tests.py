@@ -6862,8 +6862,6 @@ class BulkAddLotsAutoTests(StandardTestCase):
         data = response.json()
         self.assertTrue(data["success"], f"Decimal reserve_price should be accepted: {data}")
         lot = Lot.objects.get(lot_number=data["lot_id"])
-        from decimal import Decimal
-
         self.assertEqual(lot.reserve_price, Decimal("2.50"))
 
     def test_decimal_minimum_bid_rejected_when_whole_dollar_required(self):
