@@ -1814,6 +1814,10 @@ class AuctionEditFormMinimumBidTests(TestCase):
         }
         lot_form = CreateLotForm(data=lot_data, instance=lot, user=self.user, cloned_from=None, auction=self.auction)
         self.assertTrue(lot_form.is_valid(), lot_form.errors)
+        lot_form.save()
+        lot.refresh_from_db()
+        self.assertEqual(lot.reserve_price, Decimal(6))
+        self.assertEqual(lot.buy_now_price, Decimal(8))
 
 
 class CreateLotFormWholeDollarValidationTests(TestCase):

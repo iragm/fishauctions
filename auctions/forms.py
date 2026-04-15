@@ -2223,14 +2223,14 @@ class AuctionEditForm(forms.ModelForm):
         return cleaned_data
 
     def save(self, commit=True):
-        was_only_whole_dollar_bids = self.instance.only_whole_dollar_bids
-        if self.instance.pk:
-            was_only_whole_dollar_bids = (
-                Auction.objects.exclude(is_deleted=True)
-                .filter(pk=self.instance.pk)
-                .values_list("only_whole_dollar_bids", flat=True)
-                .first()
-            )
+        was_only_whole_dollar_bids = (
+            Auction.objects.exclude(is_deleted=True)
+            .filter(pk=self.instance.pk)
+            .values_list("only_whole_dollar_bids", flat=True)
+            .first()
+            if self.instance.pk
+            else self.instance.only_whole_dollar_bids
+        )
         auction = super().save(commit=commit)
         if commit and not was_only_whole_dollar_bids and auction.only_whole_dollar_bids:
             lots = Lot.objects.exclude(is_deleted=True).filter(auction=auction)
