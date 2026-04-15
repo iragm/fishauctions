@@ -18,7 +18,7 @@ from django.test.client import Client
 from django.urls import reverse
 from django.utils import timezone
 
-from .forms import AuctionEditForm, ChangeUsernameForm
+from .forms import AuctionEditForm, ChangeUsernameForm, CreateLotForm
 from .models import (
     Auction,
     AuctionHistory,
@@ -1710,6 +1710,17 @@ class AuctionEditFormMinimumBidTests(TestCase):
             "lot_entry_fee": str(auction.lot_entry_fee or "0"),
             "unsold_lot_fee": str(auction.unsold_lot_fee or "0"),
             "winning_bid_percent_to_club": str(auction.winning_bid_percent_to_club or "0"),
+            "winning_bid_percent_to_club_for_club_members": str(
+                auction.winning_bid_percent_to_club_for_club_members or "0"
+            ),
+            "lot_entry_fee_for_club_members": str(auction.lot_entry_fee_for_club_members or "0"),
+            "pre_register_lot_discount_percent": str(auction.pre_register_lot_discount_percent or "0"),
+            "alternative_split_label": auction.alternative_split_label or "",
+            "reserve_price": auction.reserve_price,
+            "buy_now": auction.buy_now,
+            "tax": str(auction.tax or "0"),
+            "online_bidding": auction.online_bidding,
+            "custom_field_1": auction.custom_field_1,
             "date_start": auction.date_start.strftime("%Y-%m-%d %H:%M:%S"),
             "date_end": auction.date_end.strftime("%Y-%m-%d %H:%M:%S"),
             "invoice_rounding": str(auction.invoice_rounding),
@@ -1729,7 +1740,15 @@ class AuctionEditFormMinimumBidTests(TestCase):
             date_end=time,
             date_start=timezone.now() - datetime.timedelta(days=1),
             only_whole_dollar_bids=True,
+            reserve_price="allow",
+            buy_now="allow",
         )
+        self.location = PickupLocation.objects.create(
+            name="form test pickup",
+            auction=self.auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=8),
+        )
+        self.tos = AuctionTOS.objects.create(user=self.user, auction=self.auction, pickup_location=self.location)
 
     def test_fractional_minimum_bid_rejected_when_whole_dollar_required(self):
         """minimum_bid with cents is invalid when only_whole_dollar_bids=True"""
@@ -1754,6 +1773,90 @@ class AuctionEditFormMinimumBidTests(TestCase):
         form = AuctionEditForm(data=data, instance=self.auction, user=self.user, cloned_from=None, user_timezone="UTC")
         form.is_valid()
         self.assertNotIn("minimum_bid", form.errors)
+
+    def test_toggle_to_whole_dollar_rounds_existing_prices(self):
+        """Switching to whole-dollar mode rounds auction minimum bid and existing lot prices"""
+        self.auction.only_whole_dollar_bids = False
+        self.auction.minimum_bid = Decimal("5.75")
+        self.auction.save()
+        lot = Lot.objects.create(
+            lot_name="Decimal lot",
+            auction=self.auction,
+            auctiontos_seller=self.tos,
+            reserve_price=Decimal("6.25"),
+            buy_now_price=Decimal("7.75"),
+            winning_price=Decimal("8.80"),
+            quantity=1,
+        )
+
+        data = self._get_form_data(self.auction, {"only_whole_dollar_bids": True, "minimum_bid": "5.75"})
+        form = AuctionEditForm(data=data, instance=self.auction, user=self.user, cloned_from=None, user_timezone="UTC")
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+
+        self.auction.refresh_from_db()
+        lot.refresh_from_db()
+        self.assertEqual(self.auction.minimum_bid, Decimal(6))
+        self.assertEqual(lot.reserve_price, Decimal(6))
+        self.assertEqual(lot.buy_now_price, Decimal(8))
+        self.assertEqual(lot.winning_price, Decimal(9))
+
+        lot_data = {
+            "lot_name": lot.lot_name,
+            "auction": self.auction.pk,
+            "quantity": lot.quantity,
+            "reserve_price": str(lot.reserve_price),
+            "buy_now_price": str(lot.buy_now_price),
+            "part_of_auction": "True",
+            "run_duration": "10",
+            "cloned_from": "",
+            "image_url": "",
+        }
+        lot_form = CreateLotForm(data=lot_data, instance=lot, user=self.user, cloned_from=None, auction=self.auction)
+        self.assertTrue(lot_form.is_valid(), lot_form.errors)
+
+
+class CreateLotFormWholeDollarValidationTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="whole_dollar_lot_user", password="testpassword")
+        self.auction = Auction.objects.create(
+            created_by=self.user,
+            title="Whole dollar lot form auction",
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=7),
+            lot_submission_end_date=timezone.now() + datetime.timedelta(days=7),
+            only_whole_dollar_bids=True,
+        )
+        self.location = PickupLocation.objects.create(
+            name="whole dollar pickup",
+            auction=self.auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=8),
+        )
+        AuctionTOS.objects.create(user=self.user, auction=self.auction, pickup_location=self.location)
+
+    def test_single_lot_form_uses_whole_dollar_step_for_auction(self):
+        form = CreateLotForm(user=self.user, cloned_from=None, auction=self.auction)
+        self.assertEqual(form.fields["reserve_price"].widget.attrs.get("step"), "1")
+        self.assertEqual(form.fields["reserve_price"].widget.attrs.get("min"), "1")
+        self.assertEqual(form.fields["buy_now_price"].widget.attrs.get("step"), "1")
+        self.assertEqual(form.fields["buy_now_price"].widget.attrs.get("min"), "1")
+
+    def test_single_lot_form_rejects_fractional_prices_for_whole_dollar_auction(self):
+        data = {
+            "lot_name": "Whole dollar form lot",
+            "auction": self.auction.pk,
+            "quantity": 1,
+            "reserve_price": "2.50",
+            "buy_now_price": "3.75",
+            "part_of_auction": "True",
+            "run_duration": "10",
+            "cloned_from": "",
+            "image_url": "",
+        }
+        form = CreateLotForm(data=data, user=self.user, cloned_from=None, auction=self.auction)
+        self.assertFalse(form.is_valid())
+        self.assertIn("reserve_price", form.errors)
+        self.assertIn("buy_now_price", form.errors)
 
 
 class LotRefundDialogTests(TestCase):
