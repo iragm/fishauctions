@@ -22,6 +22,7 @@
       <div class="col-12">
         <div id="lots-container">
           <!-- Existing lots will be loaded here via AJAX -->
+          {% with price_min=auction.only_whole_dollar_bids|yesno:"1,0.01" price_step=auction.only_whole_dollar_bids|yesno:"1,0.01" %}
           {% for lot in existing_lots %}
           <div class="lot-row card mb-3" data-lot-id="{{ lot.lot_number }}" {% if not lot.can_be_edited %}data-locked="true"{% endif %}>
             <div class="card-body">
@@ -87,7 +88,7 @@
                     <div class="col-6 col-md-3">
                       <label class="form-label small mb-1 {% if not lot.can_be_edited %}text-light{% endif %}">Min bid {% if reserve_price_mode == 'required' %}<span class="text-danger">*</span>{% endif %}</label>
                       <input type="number" class="form-control form-control-sm lot-input {% if not lot.can_be_edited %}text-light{% endif %}" name="reserve_price"
-                             value="{{ lot.reserve_price }}" min="1" max="2000" data-field="reserve_price"
+                             value="{{ lot.reserve_price }}" min="{{ price_min }}" step="{{ price_step }}" max="2000" data-field="reserve_price"
                              {% if not lot.can_be_edited %}disabled{% endif %}>
                       <div class="invalid-feedback"></div>
                     </div>
@@ -97,7 +98,7 @@
                     <div class="col-6 col-md-3">
                       <label class="form-label small mb-1 {% if not lot.can_be_edited %}text-light{% endif %}">Buy now {% if buy_now_mode == 'required' %}<span class="text-danger">*</span>{% endif %}</label>
                       <input type="number" class="form-control form-control-sm lot-input {% if not lot.can_be_edited %}text-light{% endif %}" name="buy_now_price"
-                             value="{{ lot.buy_now_price|default:'' }}" min="1" max="1000" data-field="buy_now_price"
+                             value="{{ lot.buy_now_price|default:'' }}" min="{{ price_min }}" step="{{ price_step }}" max="1000" data-field="buy_now_price"
                              {% if not lot.can_be_edited %}disabled{% endif %}>
                       <div class="invalid-feedback"></div>
                     </div>
@@ -200,7 +201,7 @@
                     <div class="col-6 col-md-3">
                       <label class="form-label small mb-1">Min bid {% if reserve_price_mode == 'required' %}<span class="text-danger">*</span>{% endif %}</label>
                       <input type="number" class="form-control form-control-sm lot-input" name="reserve_price"
-                             value="{{ minimum_bid }}" min="1" max="2000" data-field="reserve_price">
+                             value="{{ minimum_bid }}" min="{{ price_min }}" step="{{ price_step }}" max="2000" data-field="reserve_price">
                       <div class="invalid-feedback"></div>
                     </div>
                     {% endif %}
@@ -209,7 +210,7 @@
                     <div class="col-6 col-md-3">
                       <label class="form-label small mb-1">Buy now {% if buy_now_mode == 'required' %}<span class="text-danger">*</span>{% endif %}</label>
                       <input type="number" class="form-control form-control-sm lot-input" name="buy_now_price"
-                             placeholder="Optional" min="1" max="1000" data-field="buy_now_price">
+                             placeholder="Optional" min="{{ price_min }}" step="{{ price_step }}" max="1000" data-field="buy_now_price">
                       <div class="invalid-feedback"></div>
                     </div>
                     {% endif %}
@@ -246,6 +247,7 @@
             </div>
           </div>
           {% endfor %}
+          {% endwith %}
         </div>
 
         <div class="mt-3 d-flex align-items-center gap-2">

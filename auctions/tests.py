@@ -18,7 +18,7 @@ from django.test.client import Client
 from django.urls import reverse
 from django.utils import timezone
 
-from .forms import AuctionEditForm, ChangeUsernameForm
+from .forms import AuctionEditForm, ChangeUsernameForm, CreateLotForm
 from .models import (
     Auction,
     AuctionHistory,
@@ -1710,6 +1710,17 @@ class AuctionEditFormMinimumBidTests(TestCase):
             "lot_entry_fee": str(auction.lot_entry_fee or "0"),
             "unsold_lot_fee": str(auction.unsold_lot_fee or "0"),
             "winning_bid_percent_to_club": str(auction.winning_bid_percent_to_club or "0"),
+            "winning_bid_percent_to_club_for_club_members": str(
+                auction.winning_bid_percent_to_club_for_club_members or "0"
+            ),
+            "lot_entry_fee_for_club_members": str(auction.lot_entry_fee_for_club_members or "0"),
+            "pre_register_lot_discount_percent": str(auction.pre_register_lot_discount_percent or "0"),
+            "alternative_split_label": auction.alternative_split_label or "",
+            "reserve_price": auction.reserve_price,
+            "buy_now": auction.buy_now,
+            "tax": str(auction.tax or "0"),
+            "online_bidding": auction.online_bidding,
+            "custom_field_1": auction.custom_field_1,
             "date_start": auction.date_start.strftime("%Y-%m-%d %H:%M:%S"),
             "date_end": auction.date_end.strftime("%Y-%m-%d %H:%M:%S"),
             "invoice_rounding": str(auction.invoice_rounding),
@@ -1729,7 +1740,15 @@ class AuctionEditFormMinimumBidTests(TestCase):
             date_end=time,
             date_start=timezone.now() - datetime.timedelta(days=1),
             only_whole_dollar_bids=True,
+            reserve_price="allow",
+            buy_now="allow",
         )
+        self.location = PickupLocation.objects.create(
+            name="form test pickup",
+            auction=self.auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=8),
+        )
+        self.tos = AuctionTOS.objects.create(user=self.user, auction=self.auction, pickup_location=self.location)
 
     def test_fractional_minimum_bid_rejected_when_whole_dollar_required(self):
         """minimum_bid with cents is invalid when only_whole_dollar_bids=True"""
@@ -1754,6 +1773,102 @@ class AuctionEditFormMinimumBidTests(TestCase):
         form = AuctionEditForm(data=data, instance=self.auction, user=self.user, cloned_from=None, user_timezone="UTC")
         form.is_valid()
         self.assertNotIn("minimum_bid", form.errors)
+
+    def test_toggle_to_whole_dollar_rounds_existing_prices(self):
+        """Switching to whole-dollar mode rounds auction minimum bid and existing lot prices"""
+        self.auction.only_whole_dollar_bids = False
+        self.auction.minimum_bid = Decimal("5.75")
+        self.auction.save()
+        lot = Lot.objects.create(
+            lot_name="Decimal lot",
+            auction=self.auction,
+            auctiontos_seller=self.tos,
+            reserve_price=Decimal("6.25"),
+            buy_now_price=Decimal("7.75"),
+            winning_price=Decimal("8.80"),
+            quantity=1,
+        )
+
+        data = self._get_form_data(self.auction, {"only_whole_dollar_bids": True, "minimum_bid": "5.75"})
+        form = AuctionEditForm(data=data, instance=self.auction, user=self.user, cloned_from=None, user_timezone="UTC")
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+
+        self.auction.refresh_from_db()
+        lot.refresh_from_db()
+        self.assertEqual(self.auction.minimum_bid, Decimal(6))
+        self.assertEqual(lot.reserve_price, Decimal(6))
+        self.assertEqual(lot.buy_now_price, Decimal(8))
+        self.assertEqual(lot.winning_price, Decimal(9))
+
+        lot_data = {
+            "lot_name": lot.lot_name,
+            "auction": self.auction.pk,
+            "quantity": lot.quantity,
+            "reserve_price": str(lot.reserve_price),
+            "buy_now_price": str(lot.buy_now_price),
+            "part_of_auction": "True",
+            "run_duration": "10",
+            "cloned_from": "",
+            "image_url": "",
+        }
+        lot_form = CreateLotForm(data=lot_data, instance=lot, user=self.user, cloned_from=None, auction=self.auction)
+        self.assertTrue(lot_form.is_valid(), lot_form.errors)
+        lot_form.save()
+        lot.refresh_from_db()
+        self.assertEqual(lot.reserve_price, Decimal(6))
+        self.assertEqual(lot.buy_now_price, Decimal(8))
+
+        fractional_lot_data = {**lot_data, "reserve_price": "6.50", "buy_now_price": "8.25"}
+        fractional_lot_form = CreateLotForm(
+            data=fractional_lot_data, instance=lot, user=self.user, cloned_from=None, auction=self.auction
+        )
+        self.assertFalse(fractional_lot_form.is_valid())
+        self.assertIn("reserve_price", fractional_lot_form.errors)
+        self.assertIn("buy_now_price", fractional_lot_form.errors)
+
+
+class CreateLotFormWholeDollarValidationTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="whole_dollar_lot_user", password="testpassword")
+        self.auction = Auction.objects.create(
+            created_by=self.user,
+            title="Whole dollar lot form auction",
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            date_end=timezone.now() + datetime.timedelta(days=7),
+            lot_submission_end_date=timezone.now() + datetime.timedelta(days=7),
+            only_whole_dollar_bids=True,
+        )
+        self.location = PickupLocation.objects.create(
+            name="whole dollar pickup",
+            auction=self.auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=8),
+        )
+        AuctionTOS.objects.create(user=self.user, auction=self.auction, pickup_location=self.location)
+
+    def test_single_lot_form_uses_whole_dollar_step_for_auction(self):
+        form = CreateLotForm(user=self.user, cloned_from=None, auction=self.auction)
+        self.assertEqual(form.fields["reserve_price"].widget.attrs.get("step"), "1")
+        self.assertEqual(form.fields["reserve_price"].widget.attrs.get("min"), "1")
+        self.assertEqual(form.fields["buy_now_price"].widget.attrs.get("step"), "1")
+        self.assertEqual(form.fields["buy_now_price"].widget.attrs.get("min"), "1")
+
+    def test_single_lot_form_rejects_fractional_prices_for_whole_dollar_auction(self):
+        data = {
+            "lot_name": "Whole dollar form lot",
+            "auction": self.auction.pk,
+            "quantity": 1,
+            "reserve_price": "2.50",
+            "buy_now_price": "3.75",
+            "part_of_auction": "True",
+            "run_duration": "10",
+            "cloned_from": "",
+            "image_url": "",
+        }
+        form = CreateLotForm(data=data, user=self.user, cloned_from=None, auction=self.auction)
+        self.assertFalse(form.is_valid())
+        self.assertIn("reserve_price", form.errors)
+        self.assertIn("buy_now_price", form.errors)
 
 
 class LotRefundDialogTests(TestCase):
@@ -6378,6 +6493,15 @@ class BulkAddLotsAutoTests(StandardTestCase):
         self.in_person_auction.lot_submission_end_date = timezone.now() + datetime.timedelta(days=7)
         self.in_person_auction.save()
 
+    def _get_bulk_add_input_tags(self, response, field_name):
+        html = response.content.decode("utf-8")
+        tags = []
+        for input_chunk in html.split("<input")[1:]:
+            tag = "<input" + input_chunk.split(">", 1)[0] + ">"
+            if f'data-field="{field_name}"' in tag:
+                tags.append(tag)
+        return tags
+
     def test_bulk_add_lots_view_access(self):
         """Test that users can access bulk add lots page"""
         # Login as regular user
@@ -6398,6 +6522,77 @@ class BulkAddLotsAutoTests(StandardTestCase):
             )
         )
         self.assertEqual(response.status_code, 200)
+
+    def test_bulk_add_lots_whole_dollar_inputs_use_integer_step(self):
+        """Price inputs use whole-dollar client-side validation when auction requires whole-dollar bids"""
+        self.in_person_auction.only_whole_dollar_bids = True
+        self.in_person_auction.save()
+        self.client.login(username="no_lots", password="testpassword")
+
+        response = self.client.get(
+            reverse("bulk_add_lots_auto_for_myself", kwargs={"slug": self.in_person_auction.slug})
+        )
+
+        reserve_price_tags = self._get_bulk_add_input_tags(response, "reserve_price")
+        buy_now_price_tags = self._get_bulk_add_input_tags(response, "buy_now_price")
+        self.assertTrue(
+            any('min="1"' in tag and 'step="1"' in tag and 'max="2000"' in tag for tag in reserve_price_tags)
+        )
+        self.assertTrue(
+            any('min="1"' in tag and 'step="1"' in tag and 'max="1000"' in tag for tag in buy_now_price_tags)
+        )
+
+    def test_bulk_add_lots_decimal_inputs_use_cent_step(self):
+        """Price inputs use cent-level client-side validation when auction allows decimal bids"""
+        self.in_person_auction.only_whole_dollar_bids = False
+        self.in_person_auction.save()
+        self.client.login(username="no_lots", password="testpassword")
+
+        response = self.client.get(
+            reverse("bulk_add_lots_auto_for_myself", kwargs={"slug": self.in_person_auction.slug})
+        )
+
+        reserve_price_tags = self._get_bulk_add_input_tags(response, "reserve_price")
+        buy_now_price_tags = self._get_bulk_add_input_tags(response, "buy_now_price")
+        self.assertTrue(
+            any('min="0.01"' in tag and 'step="0.01"' in tag and 'max="2000"' in tag for tag in reserve_price_tags)
+        )
+        self.assertTrue(
+            any('min="0.01"' in tag and 'step="0.01"' in tag and 'max="1000"' in tag for tag in buy_now_price_tags)
+        )
+
+    def test_bulk_add_lots_existing_row_inputs_match_whole_dollar_rules(self):
+        """Existing lot rows use the same whole-dollar min/step rules as new lot rows."""
+        self.in_person_auction.only_whole_dollar_bids = True
+        self.in_person_auction.save()
+        existing_lot = Lot.objects.create(
+            lot_name="Existing bulk lot",
+            auction=self.in_person_auction,
+            auctiontos_seller=self.in_person_buyer,
+            reserve_price=Decimal("9.00"),
+            buy_now_price=Decimal("11.00"),
+            quantity=1,
+        )
+        self.client.login(username="no_lots", password="testpassword")
+
+        response = self.client.get(
+            reverse("bulk_add_lots_auto_for_myself", kwargs={"slug": self.in_person_auction.slug})
+        )
+
+        reserve_price_tags = self._get_bulk_add_input_tags(response, "reserve_price")
+        buy_now_price_tags = self._get_bulk_add_input_tags(response, "buy_now_price")
+        existing_reserve_tag = next(
+            (tag for tag in reserve_price_tags if f'value="{existing_lot.reserve_price}"' in tag), None
+        )
+        existing_buy_now_tag = next(
+            (tag for tag in buy_now_price_tags if f'value="{existing_lot.buy_now_price}"' in tag), None
+        )
+        self.assertIsNotNone(existing_reserve_tag)
+        self.assertIsNotNone(existing_buy_now_tag)
+        self.assertIn('min="1"', existing_reserve_tag)
+        self.assertIn('step="1"', existing_reserve_tag)
+        self.assertIn('min="1"', existing_buy_now_tag)
+        self.assertIn('step="1"', existing_buy_now_tag)
 
     def test_bulk_add_lots_non_admin_cannot_access_bidder_url(self):
         """Test that non-admin users cannot access the bidder_number URL"""

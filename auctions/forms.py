@@ -1,5 +1,6 @@
 import logging
 import re
+from decimal import ROUND_HALF_UP, Decimal
 
 # from django.core.exceptions import ValidationError
 from allauth.account.forms import ResetPasswordForm, SignupForm
@@ -50,6 +51,19 @@ MILES_TO_KM = 1.60934
 #     input_type = 'datetime-local'
 
 logger = logging.getLogger(__name__)
+
+
+def round_to_whole_dollar(value):
+    """Round a Decimal currency amount to the nearest whole dollar."""
+    return value.quantize(Decimal(1), rounding=ROUND_HALF_UP)
+
+
+def apply_price_input_constraints(fields, field_names, only_whole_dollar_bids):
+    """Set min/step attributes for price fields based on whole-dollar setting."""
+    min_value, step = ("1", "1") if only_whole_dollar_bids else ("0.01", "0.01")
+    for field_name in field_names:
+        fields[field_name].widget.attrs["min"] = min_value
+        fields[field_name].widget.attrs["step"] = step
 
 
 def validate_image_url(url):
@@ -214,10 +228,9 @@ class QuickAddLot(forms.ModelForm):
         self.fields["reserve_price"].help_text = ""
         self.fields["buy_now_price"].help_text = ""
         self.fields["species_category"].initial = Category.objects.filter(name="Uncategorized").first()
-        if not self.auction.only_whole_dollar_bids:
-            for field_name in ("reserve_price", "buy_now_price"):
-                self.fields[field_name].widget.attrs["step"] = "0.01"
-                self.fields[field_name].widget.attrs["min"] = "0.01"
+        apply_price_input_constraints(
+            self.fields, ("reserve_price", "buy_now_price"), self.auction.only_whole_dollar_bids
+        )
         if not self.auction.advanced_lot_adding:
             self.fields["quantity"].initial = 1
             self.fields["quantity"].widget = HiddenInput()
@@ -808,10 +821,9 @@ class EditLot(forms.ModelForm):
         self.fields["reserve_price"].initial = self.lot.reserve_price
         self.fields["buy_now_price"].help_text = ""
         self.fields["reserve_price"].help_text = ""
-        if not self.auction.only_whole_dollar_bids:
-            for field_name in ("reserve_price", "buy_now_price", "winning_price"):
-                self.fields[field_name].widget.attrs["step"] = "0.01"
-                self.fields[field_name].widget.attrs["min"] = "0.01"
+        apply_price_input_constraints(
+            self.fields, ("reserve_price", "buy_now_price", "winning_price"), self.auction.only_whole_dollar_bids
+        )
 
         self.fields["custom_checkbox"].initial = self.lot.custom_checkbox
         self.fields["custom_checkbox"].help_text = ""
@@ -2172,18 +2184,18 @@ class AuctionEditForm(forms.ModelForm):
     def clean(self):
         cleaned_data = super().clean()
         use_seller_dash_lot_numbering = cleaned_data.get("use_seller_dash_lot_numbering")
-        saved_instance = self.instance
+        existing_instance = self.instance
 
-        if saved_instance and saved_instance.pk:
-            if use_seller_dash_lot_numbering is not saved_instance.use_seller_dash_lot_numbering:
-                if saved_instance.admin_checklist_lots_added:
+        if existing_instance and existing_instance.pk:
+            if use_seller_dash_lot_numbering is not existing_instance.use_seller_dash_lot_numbering:
+                if existing_instance.admin_checklist_lots_added:
                     self.add_error(
                         "use_seller_dash_lot_numbering", "This option cannot be changed after lots have been added."
                     )
         pattern = r"^(test|mock|trial|example)([-_]|$)|([-_])(test|mock|trial|example)([-_]|$)"
-        if cleaned_data.get("promote_this_auction") and re.search(pattern, saved_instance.slug, re.IGNORECASE):
+        if cleaned_data.get("promote_this_auction") and re.search(pattern, existing_instance.slug, re.IGNORECASE):
             self.add_error("promote_this_auction", "Test auctions cannot be promoted.")
-        elif cleaned_data.get("promote_this_auction") and not saved_instance.admin_checklist_location_set:
+        elif cleaned_data.get("promote_this_auction") and not existing_instance.admin_checklist_location_set:
             self.add_error("promote_this_auction", "Set the location before promoting this auction")
         elif cleaned_data.get(
             "promote_this_auction"
@@ -2194,13 +2206,42 @@ class AuctionEditForm(forms.ModelForm):
                 "promote_this_auction",
                 "Edit the text in the rules section above before promoting this auction.  There's still placeholder text in there that needs to be removed.",
             )
-        elif cleaned_data.get("promote_this_auction") and not saved_instance.created_by.userdata.is_trusted:
+        elif cleaned_data.get("promote_this_auction") and not existing_instance.created_by.userdata.is_trusted:
             self.add_error("promote_this_auction", "Your account doesn't have permission to promote auctions.")
         if cleaned_data.get("only_whole_dollar_bids"):
             minimum_bid = cleaned_data.get("minimum_bid")
             if minimum_bid is not None and minimum_bid != minimum_bid.to_integral_value():
-                self.add_error("minimum_bid", "This auction only allows whole dollar amounts.")
+                is_toggling_to_whole_dollar = (
+                    bool(existing_instance and existing_instance.pk)
+                    and not existing_instance.only_whole_dollar_bids
+                    and cleaned_data.get("only_whole_dollar_bids")
+                )
+                if is_toggling_to_whole_dollar:
+                    cleaned_data["minimum_bid"] = round_to_whole_dollar(minimum_bid)
+                else:
+                    self.add_error("minimum_bid", "This auction only allows whole dollar amounts.")
         return cleaned_data
+
+    def save(self, commit=True):
+        was_only_whole_dollar_bids = bool(
+            self.initial.get("only_whole_dollar_bids", self.instance.only_whole_dollar_bids)
+        )
+        auction = super().save(commit=commit)
+        if commit and not was_only_whole_dollar_bids and auction.only_whole_dollar_bids:
+            lots = Lot.objects.exclude(is_deleted=True).filter(auction=auction)
+            lots_to_update = []
+            for lot in lots:
+                lot_changed = False
+                for field_name in ("reserve_price", "buy_now_price", "winning_price"):
+                    value = getattr(lot, field_name)
+                    if value is not None and value != value.to_integral_value():
+                        setattr(lot, field_name, round_to_whole_dollar(value))
+                        lot_changed = True
+                if lot_changed:
+                    lots_to_update.append(lot)
+            if lots_to_update:
+                Lot.objects.bulk_update(lots_to_update, ["reserve_price", "buy_now_price", "winning_price"])
+        return auction
 
 
 class CreateLotForm(forms.ModelForm):
@@ -2371,6 +2412,11 @@ class CreateLotForm(forms.ModelForm):
                         self.fields["auction"].initial = lastUserAuction
                 except (AttributeError, Auction.DoesNotExist):
                     pass
+        selected_auction = self.instance.auction or self.auction
+        if selected_auction:
+            apply_price_input_constraints(
+                self.fields, ("reserve_price", "buy_now_price"), selected_auction.only_whole_dollar_bids
+            )
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_id = "lot-form"
@@ -2564,6 +2610,13 @@ class CreateLotForm(forms.ModelForm):
             if cleaned_data.get("payment_other") and not cleaned_data.get("payment_other_method"):
                 self.add_error("payment_other_method", "Enter your payment method")
         if auction:
+            if auction.only_whole_dollar_bids:
+                reserve_price = cleaned_data.get("reserve_price")
+                if reserve_price is not None and reserve_price != reserve_price.to_integral_value():
+                    self.add_error("reserve_price", "This auction only allows whole dollar amounts.")
+                buy_now_price = cleaned_data.get("buy_now_price")
+                if buy_now_price is not None and buy_now_price != buy_now_price.to_integral_value():
+                    self.add_error("buy_now_price", "This auction only allows whole dollar amounts.")
             auctiontos = AuctionTOS.objects.filter(user=self.user.pk, auction=auction).first()
             if not auctiontos:
                 self.add_error("auction", "You need to join this auction before you can add lots")
