@@ -58,6 +58,14 @@ def round_to_whole_dollar(value):
     return value.quantize(Decimal(1), rounding=ROUND_HALF_UP)
 
 
+def apply_price_input_constraints(fields, field_names, only_whole_dollar_bids):
+    """Set min/step attributes for price fields based on whole-dollar setting."""
+    min_value, step = ("1", "1") if only_whole_dollar_bids else ("0.01", "0.01")
+    for field_name in field_names:
+        fields[field_name].widget.attrs["min"] = min_value
+        fields[field_name].widget.attrs["step"] = step
+
+
 def validate_image_url(url):
     """Validate that `url` uses http/https and points to a file with an image extension.
 
@@ -220,13 +228,9 @@ class QuickAddLot(forms.ModelForm):
         self.fields["reserve_price"].help_text = ""
         self.fields["buy_now_price"].help_text = ""
         self.fields["species_category"].initial = Category.objects.filter(name="Uncategorized").first()
-        for field_name in ("reserve_price", "buy_now_price"):
-            if self.auction.only_whole_dollar_bids:
-                self.fields[field_name].widget.attrs["step"] = "1"
-                self.fields[field_name].widget.attrs["min"] = "1"
-            else:
-                self.fields[field_name].widget.attrs["step"] = "0.01"
-                self.fields[field_name].widget.attrs["min"] = "0.01"
+        apply_price_input_constraints(
+            self.fields, ("reserve_price", "buy_now_price"), self.auction.only_whole_dollar_bids
+        )
         if not self.auction.advanced_lot_adding:
             self.fields["quantity"].initial = 1
             self.fields["quantity"].widget = HiddenInput()
@@ -817,13 +821,9 @@ class EditLot(forms.ModelForm):
         self.fields["reserve_price"].initial = self.lot.reserve_price
         self.fields["buy_now_price"].help_text = ""
         self.fields["reserve_price"].help_text = ""
-        for field_name in ("reserve_price", "buy_now_price", "winning_price"):
-            if self.auction.only_whole_dollar_bids:
-                self.fields[field_name].widget.attrs["step"] = "1"
-                self.fields[field_name].widget.attrs["min"] = "1"
-            else:
-                self.fields[field_name].widget.attrs["step"] = "0.01"
-                self.fields[field_name].widget.attrs["min"] = "0.01"
+        apply_price_input_constraints(
+            self.fields, ("reserve_price", "buy_now_price", "winning_price"), self.auction.only_whole_dollar_bids
+        )
 
         self.fields["custom_checkbox"].initial = self.lot.custom_checkbox
         self.fields["custom_checkbox"].help_text = ""
@@ -2223,7 +2223,7 @@ class AuctionEditForm(forms.ModelForm):
         return cleaned_data
 
     def save(self, commit=True):
-        was_only_whole_dollar_bids = True
+        was_only_whole_dollar_bids = self.instance.only_whole_dollar_bids
         if self.instance.pk:
             was_only_whole_dollar_bids = (
                 Auction.objects.exclude(is_deleted=True)
@@ -2416,13 +2416,9 @@ class CreateLotForm(forms.ModelForm):
                     pass
         selected_auction = self.instance.auction or self.auction
         if selected_auction:
-            for field_name in ("reserve_price", "buy_now_price"):
-                if selected_auction.only_whole_dollar_bids:
-                    self.fields[field_name].widget.attrs["step"] = "1"
-                    self.fields[field_name].widget.attrs["min"] = "1"
-                else:
-                    self.fields[field_name].widget.attrs["step"] = "0.01"
-                    self.fields[field_name].widget.attrs["min"] = "0.01"
+            apply_price_input_constraints(
+                self.fields, ("reserve_price", "buy_now_price"), selected_auction.only_whole_dollar_bids
+            )
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_id = "lot-form"
