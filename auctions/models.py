@@ -4957,13 +4957,13 @@ class Lot(models.Model):
     @property
     def min_bid_label(self):
         if self.reserve_price > self.auction.minimum_bid and not self.sold:
-            return f"Min: ${self.reserve_price}"
+            return f"Min: {self.currency_symbol}{self.reserve_price}"
         return ""
 
     @property
     def buy_now_label(self):
         if self.buy_now_price and not self.sold:
-            return f"Buy: ${self.buy_now_price}"
+            return f"Buy: {self.currency_symbol}{self.buy_now_price}"
         return ""
 
     @property
