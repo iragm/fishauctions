@@ -2437,6 +2437,15 @@ class DynamicSetLotWinnerViewTestCase(StandardTestCase):
         assert response.status_code == 200
         mock_notify.assert_called_once()
         assert mock_notify.call_args.kwargs["user"] == self.user_with_no_lots
+        assert mock_notify.call_args.kwargs["ttl"] == 10000
+        payload = mock_notify.call_args.kwargs["payload"]
+        assert payload["head"] == f"{self.in_person_lot.lot_name} is about to be sold"
+        assert payload["body"] == (
+            f"Lot {self.in_person_lot.custom_lot_number}  Don't miss out, bid now!  "
+            "You're getting this notification because you watched this lot."
+        )
+        assert payload["url"] == f"https://{self.in_person_lot.full_lot_link}"
+        assert payload["tag"] == f"lot_sell_notification_{self.in_person_lot.pk}"
 
 
 class AlternativeSplitLabelTests(StandardTestCase):
