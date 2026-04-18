@@ -604,7 +604,9 @@ function deactivate_lot() {
                                 request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
                             },
                             success: function() {
-                                $('#subscribe_success').append(" <span class='text-success'>Test notification sent</span>");
+                                const statusHtml = " <span class='text-success' id='test-notification-status'>Test notification sent</span>";
+                                $('#test-notification-status').remove();
+                                $('#subscribe_success').append(statusHtml);
                             }
                         });
                     });
