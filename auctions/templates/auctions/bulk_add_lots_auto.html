@@ -630,9 +630,6 @@ function attachLotEventListeners(lotRow) {
         // Disable browser validation to prevent shake effect
         input.setAttribute('novalidate', 'true');
 
-        input.addEventListener('input', () => {
-            saveLot(lotRow);
-        });
         input.addEventListener('change', () => {
             saveLot(lotRow);
         });
