@@ -2409,6 +2409,34 @@ class DynamicSetLotWinnerViewTestCase(StandardTestCase):
             f"New lot should have been assigned a different number, got: {new_lot.custom_lot_number}"
         )
 
+    def test_entering_lot_number_sends_push_notification_to_watcher(self):
+        from webpush.models import PushInformation, SubscriptionInfo
+
+        watcher_userdata = UserData.objects.get(user=self.user_with_no_lots)
+        watcher_userdata.push_notifications_when_lots_sell = True
+        watcher_userdata.save()
+        Watch.objects.create(lot_number=self.in_person_lot, user=self.user_with_no_lots)
+        sub = SubscriptionInfo.objects.create(
+            browser="Chrome",
+            endpoint="https://fcm.googleapis.com/push/example_token",
+            auth="auth_secret",
+            p256dh="p256dh_key",
+        )
+        PushInformation.objects.create(user=self.user_with_no_lots, subscription=sub)
+
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.get(self.get_url())
+        assert response.status_code == 200
+
+        lot_preview_url = reverse(
+            "htmx_lot",
+            kwargs={"slug": self.in_person_auction.slug, "custom_lot_number": self.in_person_lot.custom_lot_number},
+        )
+        with patch("auctions.views.send_user_notification") as mock_notify:
+            response = self.client.get(lot_preview_url)
+        assert response.status_code == 200
+        mock_notify.assert_called_once()
+
 
 class AlternativeSplitLabelTests(StandardTestCase):
     """Test the alternative_split_label field"""
