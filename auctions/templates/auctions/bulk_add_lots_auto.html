@@ -630,15 +630,9 @@ function attachLotEventListeners(lotRow) {
         // Disable browser validation to prevent shake effect
         input.setAttribute('novalidate', 'true');
 
-        if (input.type === 'text') {
-            input.addEventListener('blur', () => {
-                saveLot(lotRow);
-            });
-        } else {
-            input.addEventListener('change', () => {
-                saveLot(lotRow);
-            });
-        }
+        input.addEventListener('change', () => {
+            saveLot(lotRow);
+        });
 
         // Prevent invalid event which can cause shake
         input.addEventListener('invalid', (e) => {
