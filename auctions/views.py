@@ -1314,6 +1314,26 @@ class UpdateLotPushNotificationsView(APIPostView):
         return JsonResponse({"result": "success"})
 
 
+class LotPushTestNotificationView(APIPostView):
+    def post(self, request, *args, **kwargs):
+        lot = get_object_or_404(Lot, pk=kwargs["pk"], is_deleted=False)
+        if not Watch.objects.filter(lot_number=lot, user=request.user).exists():
+            return JsonResponse({"result": "error", "message": "You must watch this lot first."}, status=403)
+        if not PushInformation.objects.filter(user=request.user).exists():
+            return JsonResponse({"result": "error", "message": "No push subscription found."}, status=400)
+
+        payload = {
+            "head": f"{lot.lot_name} test notification",
+            "body": f"Lot {lot.custom_lot_number}  Test notification for this watched lot.",
+            "url": "https://" + lot.full_lot_link,
+            "tag": f"lot_sell_notification_test_{lot.pk}",
+        }
+        if lot.thumbnail:
+            payload["icon"] = lot.thumbnail.display_url
+        send_user_notification(user=request.user, payload=payload, ttl=10000)
+        return JsonResponse({"result": "success"})
+
+
 class CheckUsernameAvailability(View):
     """GET /check-username/?username=foo — returns JSON for real-time signup validation.
     No authentication required (used on the public signup form).
@@ -4137,10 +4157,12 @@ class ViewLot(DetailView):
                     defaultBidAmount = viewer_bid.amount + 1
             else:
                 defaultBidAmount = 0
-                context["viewer_bid"] = None
+            context["viewer_bid"] = None
+            context["has_push_subscription"] = PushInformation.objects.filter(user=self.request.user).exists()
         else:
             defaultBidAmount = 0
             context["viewer_bid"] = None
+            context["has_push_subscription"] = False
         if lot.auction and lot.auction.online_bidding == "buy_now_only" and lot.buy_now_price:
             defaultBidAmount = lot.buy_now_price
             context["force_buy_now"] = True

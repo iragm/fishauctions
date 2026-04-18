@@ -560,8 +560,9 @@ function deactivate_lot() {
             <span id="watch" {% if watched %} class="watched text-warning"><i class="bi bi-star-fill"></i> Watching{% else %}><i class="bi bi-star"></i> Watch{% endif %}</span>
                 {% if push_notifications_possible %}
                     <span id='subscribe_success'>
-                    {% if watched and request.user.userdata.push_notifications_when_lots_sell %}
+                    {% if watched and has_push_subscription %}
                         You'll get a notification when bidding starts on this lot
+                        <button id="test-notification" class='btn btn-primary btn-sm'>Test notification</button>
                         <button class='btn btn-primary btn-sm' data-bs-toggle="modal" data-bs-target="#notification-help" style="cursor: pointer;"><i class="bi bi-question-circle"></i> More information</button>
                     {% endif %}
                     </span>
@@ -596,6 +597,18 @@ function deactivate_lot() {
                     </div>
                     </div>
                     <script>
+                    $('#test-notification').click(function() {
+                        $.post({
+                            url: "{% url 'lot_push_test' pk=lot.pk %}",
+                            beforeSend: function (request) {
+                                request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+                            },
+                            success: function() {
+                                $('#subscribe_success').append(" <span class='text-success'>Test notification sent</span>");
+                            }
+                        });
+                    });
+
                     if (Notification.permission !== "granted") {
                         $('#subscribe_success').addClass("d-none");
                         $('#subscribe_message_area').removeClass("d-none");

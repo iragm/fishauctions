@@ -2130,6 +2130,60 @@ class UpdateLotPushNotificationsViewTestCase(StandardTestCase):
         assert userdata.push_notifications_when_lots_sell is True
 
 
+class LotPushTestNotificationViewTestCase(StandardTestCase):
+    def get_url(self):
+        return reverse("lot_push_test", kwargs={"pk": self.in_person_lot.pk})
+
+    def _setup_watcher_with_push(self):
+        from webpush.models import PushInformation, SubscriptionInfo
+
+        watcher_userdata = UserData.objects.get(user=self.user_with_no_lots)
+        watcher_userdata.push_notifications_when_lots_sell = True
+        watcher_userdata.save()
+        Watch.objects.create(lot_number=self.in_person_lot, user=self.user_with_no_lots)
+        sub = SubscriptionInfo.objects.create(
+            browser="Chrome",
+            endpoint="https://fcm.googleapis.com/push/example_token",
+            auth="auth_secret",
+            p256dh="p256dh_key",
+        )
+        return PushInformation.objects.create(user=self.user_with_no_lots, subscription=sub)
+
+    def test_test_button_visible_for_watched_user_with_push_info(self):
+        self._setup_watcher_with_push()
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        response = self.client.get(reverse("lot_by_pk", kwargs={"pk": self.in_person_lot.pk}))
+        assert response.status_code == 200
+        self.assertContains(response, 'id="test-notification"')
+
+    def test_test_button_hidden_without_push_info(self):
+        Watch.objects.create(lot_number=self.in_person_lot, user=self.user_with_no_lots)
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        response = self.client.get(reverse("lot_by_pk", kwargs={"pk": self.in_person_lot.pk}))
+        assert response.status_code == 200
+        self.assertNotContains(response, 'id="test-notification"')
+
+    def test_watched_user_with_push_can_send_test_notification(self):
+        self._setup_watcher_with_push()
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        with patch("auctions.views.send_user_notification") as mock_notify:
+            response = self.client.post(self.get_url())
+        assert response.status_code == 200
+        mock_notify.assert_called_once()
+        assert mock_notify.call_args.kwargs["user"] == self.user_with_no_lots
+        payload = mock_notify.call_args.kwargs["payload"]
+        assert payload["head"] == f"{self.in_person_lot.lot_name} test notification"
+        assert "Test notification" in payload["body"]
+        assert payload["url"] == f"https://{self.in_person_lot.full_lot_link}"
+
+    def test_test_notification_requires_watch(self):
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        with patch("auctions.views.send_user_notification") as mock_notify:
+            response = self.client.post(self.get_url())
+        assert response.status_code == 403
+        mock_notify.assert_not_called()
+
+
 class ViewLotSimpleTestCase(StandardTestCase):
     """Tests for ViewLotSimple (the htmx_lot endpoint used by auction admins to project lot images)"""
 
