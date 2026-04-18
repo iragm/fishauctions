@@ -1325,7 +1325,7 @@ class LotPushTestNotificationView(APIPostView):
         payload = {
             "head": f"{lot.lot_name} test notification",
             "body": f"Lot {lot.custom_lot_number} Test notification for this watched lot.",
-            "url": "https://" + lot.full_lot_link,
+            "url": f"https://{lot.full_lot_link}",
             "tag": f"lot_sell_notification_test_{lot.pk}",
         }
         if lot.thumbnail:

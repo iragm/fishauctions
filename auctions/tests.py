@@ -2126,6 +2126,7 @@ class UpdateLotPushNotificationsViewTestCase(StandardTestCase):
         assert response.status_code == 405
         response = self.client.post(self.get_url())
         assert response.status_code == 200
+        assert response.json()["result"] == "success"
         userdata = UserData.objects.get(user=self.user_who_does_not_join)
         assert userdata.push_notifications_when_lots_sell is True
 

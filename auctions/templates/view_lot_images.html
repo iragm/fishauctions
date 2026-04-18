@@ -564,6 +564,7 @@ function deactivate_lot() {
                         You'll get a notification when bidding starts on this lot
                         <button id="test-notification" class='btn btn-primary btn-sm'>Test notification</button>
                         <button class='btn btn-primary btn-sm' data-bs-toggle="modal" data-bs-target="#notification-help" style="cursor: pointer;"><i class="bi bi-question-circle"></i> More information</button>
+                        <span class='text-success d-none' id='test-notification-status'></span>
                     {% endif %}
                     </span>
                     <span id='subscribe_message_area' class='d-none'>
@@ -604,9 +605,7 @@ function deactivate_lot() {
                                 request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
                             },
                             success: function() {
-                                const statusHtml = " <span class='text-success' id='test-notification-status'>Test notification sent</span>";
-                                $('#test-notification-status').remove();
-                                $('#subscribe_success').append(statusHtml);
+                                $('#test-notification-status').text("Test notification sent").removeClass("d-none");
                             }
                         });
                     });
