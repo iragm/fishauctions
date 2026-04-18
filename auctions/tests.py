@@ -2109,6 +2109,22 @@ class LotLabelViewTestCase(StandardTestCase):
         response = self.client.get(self.url)
         assert response.status_code == 302
 
+    def test_get_seller_email_font_size_for_thermal_3x2(self):
+        from .views import LotLabelView
+
+        short_email_size = LotLabelView.get_seller_email_font_size("short@example.com", "thermal_sm")
+        long_email_size = LotLabelView.get_seller_email_font_size(
+            "really.long.seller.email.address@example-very-long-domain-name.com", "thermal_sm"
+        )
+        non_thermal_size = LotLabelView.get_seller_email_font_size(
+            "really.long.seller.email.address@example-very-long-domain-name.com", "sm"
+        )
+
+        self.assertIsNone(short_email_size)
+        self.assertIsNotNone(long_email_size)
+        self.assertRegex(long_email_size, r"^\d+\.\d{2}em$")
+        self.assertIsNone(non_thermal_size)
+
 
 class UpdateLotPushNotificationsViewTestCase(StandardTestCase):
     def get_url(self):
@@ -8506,6 +8522,22 @@ class CurrencyCustomizationTests(StandardTestCase):
         )
 
         self.assertEqual(lot.currency_symbol, "£")
+
+    def test_lot_label_prices_use_currency_symbol(self):
+        self.user.userdata.preferred_currency = "GBP"
+        self.user.userdata.save()
+
+        lot = Lot.objects.create(
+            lot_name="GBP Label Lot",
+            auction=self.online_auction,
+            quantity=1,
+            user=self.user,
+            reserve_price=Decimal("5.00"),
+            buy_now_price=Decimal("9.00"),
+        )
+
+        self.assertEqual(lot.min_bid_label, "Min: £5.00")
+        self.assertEqual(lot.buy_now_label, "Buy: £9.00")
 
     def test_change_user_preferences_form_includes_currency(self):
         """Test that ChangeUserPreferencesForm includes preferred_currency field"""

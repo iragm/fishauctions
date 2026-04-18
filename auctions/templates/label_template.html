@@ -95,7 +95,7 @@
                         Seller: {{ label.seller_name }}
                     {% endif %}
                     {% if 'seller_email' in label.auction.label_print_fields %}
-                        {{ label.seller_email }}
+                        <span{% if label.seller_email_font_size %} style="font-size: {{ label.seller_email_font_size }};"{% endif %}>{{ label.seller_email }}</span>
                     {% endif %}
                     {% if 'seller_name' in label.auction.label_print_fields or 'seller_email' in label.auction.label_print_fields %}
                         <br>
