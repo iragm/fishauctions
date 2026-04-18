@@ -6523,6 +6523,17 @@ class BulkAddLotsAutoTests(StandardTestCase):
         )
         self.assertEqual(response.status_code, 200)
 
+    def test_bulk_add_lots_auto_saves_text_fields_on_blur(self):
+        """Auto-save wiring for text inputs should use blur events instead of input/keyup-style events."""
+        self.client.login(username="no_lots", password="testpassword")
+        response = self.client.get(
+            reverse("bulk_add_lots_auto_for_myself", kwargs={"slug": self.in_person_auction.slug})
+        )
+        html = response.content.decode("utf-8")
+        self.assertIn("if (input.type === 'text') {", html)
+        self.assertIn("input.addEventListener('blur'", html)
+        self.assertNotIn("input.addEventListener('input'", html)
+
     def test_bulk_add_lots_whole_dollar_inputs_use_integer_step(self):
         """Price inputs use whole-dollar client-side validation when auction requires whole-dollar bids"""
         self.in_person_auction.only_whole_dollar_bids = True
