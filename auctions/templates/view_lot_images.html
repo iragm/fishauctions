@@ -599,6 +599,8 @@ function deactivate_lot() {
                     </div>
                     <script>
                     $('#test-notification').click(function() {
+                        const button = $('#test-notification');
+                        button.prop("disabled", true);
                         $.post({
                             url: "{% url 'lot_push_test' pk=lot.pk %}",
                             beforeSend: function (request) {
@@ -606,6 +608,12 @@ function deactivate_lot() {
                             },
                             success: function() {
                                 $('#test-notification-status').text("Test notification sent").removeClass("d-none");
+                                setTimeout(function() {
+                                    $('#test-notification-status').addClass("d-none").text("");
+                                }, 5000);
+                            },
+                            complete: function() {
+                                button.prop("disabled", false);
                             }
                         });
                     });

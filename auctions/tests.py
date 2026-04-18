@@ -2174,7 +2174,7 @@ class LotPushTestNotificationViewTestCase(StandardTestCase):
         assert mock_notify.call_args.kwargs["user"] == self.user_with_no_lots
         payload = mock_notify.call_args.kwargs["payload"]
         assert payload["head"] == f"{self.in_person_lot.lot_name} test notification"
-        assert "Test notification" in payload["body"]
+        assert "test notification" in payload["body"]
         assert payload["url"] == f"https://{self.in_person_lot.full_lot_link}"
 
     def test_test_notification_requires_watch(self):
@@ -2182,6 +2182,14 @@ class LotPushTestNotificationViewTestCase(StandardTestCase):
         with patch("auctions.views.send_user_notification") as mock_notify:
             response = self.client.post(self.get_url())
         assert response.status_code == 403
+        mock_notify.assert_not_called()
+
+    def test_watched_user_without_push_subscription_gets_400(self):
+        Watch.objects.create(lot_number=self.in_person_lot, user=self.user_with_no_lots)
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        with patch("auctions.views.send_user_notification") as mock_notify:
+            response = self.client.post(self.get_url())
+        assert response.status_code == 400
         mock_notify.assert_not_called()
 
 
