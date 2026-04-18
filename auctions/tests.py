@@ -2409,7 +2409,7 @@ class DynamicSetLotWinnerViewTestCase(StandardTestCase):
             f"New lot should have been assigned a different number, got: {new_lot.custom_lot_number}"
         )
 
-    def test_entering_lot_number_sends_push_notification_to_watcher(self):
+    def test_htmx_lot_preview_sends_push_notification_to_watcher(self):
         from webpush.models import PushInformation, SubscriptionInfo
 
         watcher_userdata = UserData.objects.get(user=self.user_with_no_lots)
@@ -2436,6 +2436,7 @@ class DynamicSetLotWinnerViewTestCase(StandardTestCase):
             response = self.client.get(lot_preview_url)
         assert response.status_code == 200
         mock_notify.assert_called_once()
+        assert mock_notify.call_args.kwargs["user"] == self.user_with_no_lots
 
 
 class AlternativeSplitLabelTests(StandardTestCase):
