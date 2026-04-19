@@ -4346,6 +4346,32 @@ class InvoiceStatusButtonTests(StandardTestCase):
         assert response.status_code == 302
 
 
+class QuickCheckoutHTMXTests(StandardTestCase):
+    def test_quick_checkout_shows_obvious_unsold_lot_warning(self):
+        self.in_person_tos.bidder_number = "UNSOLD1"
+        self.in_person_tos.save()
+        Lot.objects.create(
+            lot_name="Unsold in-person lot",
+            auction=self.in_person_auction,
+            auctiontos_seller=self.in_person_tos,
+            quantity=1,
+            active=True,
+            donation=False,
+        )
+        invoice, _ = Invoice.objects.get_or_create(auctiontos_user=self.in_person_tos)
+        self.client.force_login(self.admin_user)
+        response = self.client.get(
+            reverse(
+                "auction_quick_checkout_htmx",
+                kwargs={"slug": self.in_person_auction.slug, "filter": "UNSOLD1"},
+            )
+        )
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode("utf-8")
+        self.assertIn("alert alert-warning", content)
+        self.assertIn(invoice.unsold_lot_warning, content)
+
+
 class PickupLocationTests(StandardTestCase):
     """Test PickupLocation model properties and views"""
 

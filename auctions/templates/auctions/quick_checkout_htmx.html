@@ -7,7 +7,9 @@
       {% if not invoice %}
         This user does not have an invoice
       {% else %}
-        {% if invoice.unsold_lot_warning %}<span class='text-warning'>{{unsold_lot_warning}}</span><br>{% endif %}
+        {% if invoice.unsold_lot_warning %}
+          <div class="alert alert-warning fw-bold fs-5 py-2" role="alert">{{ invoice.unsold_lot_warning }}</div>
+        {% endif %}
         {{ tos.name }} {{ invoice.invoice_summary_short }} {% include 'invoice_buttons.html' %}<br>
         {% if tos.is_club_member %}<span class="badge bg-info ms-1 me-1" title="Alternate selling fees will be applied">{{ tos.auction.alternative_split_label|capfirst }}</span>{% endif %}
         {% if tos.memo %}Memo: {{ tos.memo }}<br>{% endif %}
