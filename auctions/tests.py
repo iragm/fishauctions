@@ -4299,6 +4299,15 @@ class InvoiceViewTests(StandardTestCase):
         response = self.client.get(url)
         assert response.status_code == 200
 
+    def test_invoice_view_admin_new_adjustment_amount_starts_blank(self):
+        """New adjustment rows should not prefill amount with 0."""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("invoice_by_pk", kwargs={"pk": self.invoice.pk})
+        response = self.client.get(url)
+        assert response.status_code == 200
+        amount_value = response.context["formset"].forms[0]["amount"].value()
+        assert amount_value in ["", None]
+
 
 class InvoiceStatusButtonTests(StandardTestCase):
     """Test invoice status buttons can be clicked and update correctly"""
