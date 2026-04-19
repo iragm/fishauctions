@@ -2156,6 +2156,7 @@ class LotPushTestNotificationViewTestCase(StandardTestCase):
         response = self.client.get(reverse("lot_by_pk", kwargs={"pk": self.in_person_lot.pk}))
         assert response.status_code == 200
         self.assertContains(response, 'id="test-notification"')
+        self.assertNotContains(response, 'if (Notification.permission !== "granted")')
 
     def test_test_button_hidden_without_push_info(self):
         Watch.objects.create(lot_number=self.in_person_lot, user=self.user_with_no_lots)
@@ -2163,6 +2164,7 @@ class LotPushTestNotificationViewTestCase(StandardTestCase):
         response = self.client.get(reverse("lot_by_pk", kwargs={"pk": self.in_person_lot.pk}))
         assert response.status_code == 200
         self.assertNotContains(response, 'id="test-notification"')
+        self.assertContains(response, 'if (Notification.permission !== "granted")')
 
     def test_watch_notification_message_still_shows_without_push_info(self):
         watcher_userdata = UserData.objects.get(user=self.user_with_no_lots)

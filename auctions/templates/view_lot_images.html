@@ -624,6 +624,7 @@ function deactivate_lot() {
                     });
                     {% endif %}
 
+                    {% if not has_push_subscription %}
                     if (Notification.permission !== "granted") {
                         $('#subscribe_success').addClass("d-none");
                         $('#subscribe_message_area').removeClass("d-none");
@@ -653,6 +654,7 @@ function deactivate_lot() {
                         // Start observing the target node for configured mutations
                         observer.observe(targetNode, config);
                     }
+                    {% endif %}
                     </script>
                 {% endif %}
             <br>
