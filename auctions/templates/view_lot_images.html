@@ -560,11 +560,15 @@ function deactivate_lot() {
             <span id="watch" {% if watched %} class="watched text-warning"><i class="bi bi-star-fill"></i> Watching{% else %}><i class="bi bi-star"></i> Watch{% endif %}</span>
                 {% if push_notifications_possible %}
                     <span id='subscribe_success'>
-                    {% if watched and has_push_subscription %}
+                    {% if watched and request.user.userdata.push_notifications_when_lots_sell %}
                         You'll get a notification when bidding starts on this lot
+                        {% if has_push_subscription %}
                         <button id="test-notification" class='btn btn-primary btn-sm'>Test notification</button>
+                        {% endif %}
                         <button class='btn btn-primary btn-sm' data-bs-toggle="modal" data-bs-target="#notification-help" style="cursor: pointer;"><i class="bi bi-question-circle"></i> More information</button>
+                        {% if has_push_subscription %}
                         <span class='text-success d-none' id='test-notification-status'></span>
+                        {% endif %}
                     {% endif %}
                     </span>
                     <span id='subscribe_message_area' class='d-none'>
@@ -598,6 +602,7 @@ function deactivate_lot() {
                     </div>
                     </div>
                     <script>
+                    {% if has_push_subscription %}
                     $('#test-notification').click(function() {
                         const button = $('#test-notification');
                         button.prop("disabled", true);
@@ -617,6 +622,7 @@ function deactivate_lot() {
                             }
                         });
                     });
+                    {% endif %}
 
                     if (Notification.permission !== "granted") {
                         $('#subscribe_success').addClass("d-none");

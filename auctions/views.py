@@ -4157,7 +4157,7 @@ class ViewLot(DetailView):
                     defaultBidAmount = viewer_bid.amount + 1
             else:
                 defaultBidAmount = 0
-            context["viewer_bid"] = None
+                context["viewer_bid"] = None
             context["has_push_subscription"] = PushInformation.objects.filter(user=self.request.user).exists()
         else:
             defaultBidAmount = 0

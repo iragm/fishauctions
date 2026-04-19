@@ -2164,6 +2164,24 @@ class LotPushTestNotificationViewTestCase(StandardTestCase):
         assert response.status_code == 200
         self.assertNotContains(response, 'id="test-notification"')
 
+    def test_watch_notification_message_still_shows_without_push_info(self):
+        watcher_userdata = UserData.objects.get(user=self.user_with_no_lots)
+        watcher_userdata.push_notifications_when_lots_sell = True
+        watcher_userdata.save()
+        Watch.objects.create(lot_number=self.in_person_lot, user=self.user_with_no_lots)
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        response = self.client.get(reverse("lot_by_pk", kwargs={"pk": self.in_person_lot.pk}))
+        assert response.status_code == 200
+        self.assertContains(response, "You'll get a notification when bidding starts on this lot")
+        self.assertContains(response, "More information")
+        self.assertNotContains(response, 'id="test-notification"')
+
+    def test_anonymous_user_does_not_see_test_notification_controls(self):
+        response = self.client.get(reverse("lot_by_pk", kwargs={"pk": self.in_person_lot.pk}))
+        assert response.status_code == 200
+        self.assertNotContains(response, 'id="test-notification"')
+        self.assertNotContains(response, "You'll get a notification when bidding starts on this lot")
+
     def test_watched_user_with_push_can_send_test_notification(self):
         self._setup_watcher_with_push()
         self.client.login(username=self.user_with_no_lots.username, password="testpassword")
