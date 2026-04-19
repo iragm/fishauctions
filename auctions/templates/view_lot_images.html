@@ -572,6 +572,7 @@ function deactivate_lot() {
                     {% endif %}
                     </span>
                     <span id='subscribe_message_area' class='d-none'>
+                        Enable push notifications on this device:
                         {% webpush_button with_class="btn btn-primary btn-sm" %} to get a notification when bidding starts on this lot
                         <button class='btn btn-primary btn-sm' data-bs-toggle="modal" data-bs-target="#notification-help" style="cursor: pointer;"><i class="bi bi-question-circle"></i> More information</button>
                     </span>
@@ -625,15 +626,17 @@ function deactivate_lot() {
                     {% endif %}
 
                     {% if not has_push_subscription %}
-                    if (Notification.permission !== "granted") {
-                        $('#subscribe_success').addClass("d-none");
-                        $('#subscribe_message_area').removeClass("d-none");
-                        const targetNode = document.getElementById('webpush-subscribe-button');
+                    $('#subscribe_success').addClass("d-none");
+                    $('#subscribe_message_area').removeClass("d-none");
+                    const targetNode = document.getElementById('webpush-subscribe-button');
+                    if (targetNode) {
                         // Create a callback function that executes when mutations are observed
                         const callback = function(mutationsList) {
                             for (let mutation of mutationsList) {
                                 if (mutation.type === 'childList') {
                                     if (targetNode.textContent == "Subscribe to Push Messaging") {
+                                        $('#subscribe_success').addClass("d-none");
+                                        $('#subscribe_message_area').removeClass("d-none");
                                     } else {
                                         $('#subscribe_message_area').addClass("d-none");
                                         $('#subscribe_success').removeClass("d-none");
