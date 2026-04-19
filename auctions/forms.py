@@ -408,6 +408,8 @@ class InvoiceAdjustmentForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         self.invoice = kwargs.pop("invoice")
         result = super().__init__(*args, **kwargs)
+        if not self.is_bound and not self.instance.pk:
+            self.initial["amount"] = ""
         self.fields["notes"].widget.attrs = {"placeholder": "ex: membership fee"}
 
         return result
