@@ -36,6 +36,7 @@ urlpatterns = [
     path("api/users/unban/<int:pk>/", views.UserUnban.as_view()),
     path("api/users/location/", views.SetCoordinates.as_view()),
     path("api/users/enable-notifications", views.UpdateLotPushNotificationsView.as_view(), name="enable_notifications"),
+    path("api/lots/<int:pk>/test-notification/", views.LotPushTestNotificationView.as_view(), name="lot_push_test"),
     path("api/users/lot_notifications/", views.LotNotifications.as_view()),
     path("api/users/auction_notifications/", views.AuctionNotifications.as_view()),
     path("api/check-username/", views.CheckUsernameAvailability.as_view(), name="check_username"),

@@ -562,10 +562,17 @@ function deactivate_lot() {
                     <span id='subscribe_success'>
                     {% if watched and request.user.userdata.push_notifications_when_lots_sell %}
                         You'll get a notification when bidding starts on this lot
+                        {% if has_push_subscription %}
+                        <button id="test-notification" class='btn btn-primary btn-sm'>Test notification</button>
+                        {% endif %}
                         <button class='btn btn-primary btn-sm' data-bs-toggle="modal" data-bs-target="#notification-help" style="cursor: pointer;"><i class="bi bi-question-circle"></i> More information</button>
+                        {% if has_push_subscription %}
+                        <span class='text-success d-none' id='test-notification-status'></span>
+                        {% endif %}
                     {% endif %}
                     </span>
                     <span id='subscribe_message_area' class='d-none'>
+                        Enable push notifications on this device:
                         {% webpush_button with_class="btn btn-primary btn-sm" %} to get a notification when bidding starts on this lot
                         <button class='btn btn-primary btn-sm' data-bs-toggle="modal" data-bs-target="#notification-help" style="cursor: pointer;"><i class="bi bi-question-circle"></i> More information</button>
                     </span>
@@ -596,15 +603,40 @@ function deactivate_lot() {
                     </div>
                     </div>
                     <script>
-                    if (Notification.permission !== "granted") {
-                        $('#subscribe_success').addClass("d-none");
-                        $('#subscribe_message_area').removeClass("d-none");
-                        const targetNode = document.getElementById('webpush-subscribe-button');
+                    {% if has_push_subscription %}
+                    $('#test-notification').click(function() {
+                        const button = $('#test-notification');
+                        button.prop("disabled", true);
+                        $.post({
+                            url: "{% url 'lot_push_test' pk=lot.pk %}",
+                            beforeSend: function (request) {
+                                request.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}");
+                            },
+                            success: function() {
+                                $('#test-notification-status').text("Test notification sent").removeClass("d-none");
+                                setTimeout(function() {
+                                    $('#test-notification-status').addClass("d-none").text("");
+                                }, 5000);
+                            },
+                            complete: function() {
+                                button.prop("disabled", false);
+                            }
+                        });
+                    });
+                    {% endif %}
+
+                    {% if not has_push_subscription %}
+                    $('#subscribe_success').addClass("d-none");
+                    $('#subscribe_message_area').removeClass("d-none");
+                    const targetNode = document.getElementById('webpush-subscribe-button');
+                    if (targetNode) {
                         // Create a callback function that executes when mutations are observed
                         const callback = function(mutationsList) {
                             for (let mutation of mutationsList) {
                                 if (mutation.type === 'childList') {
                                     if (targetNode.textContent == "Subscribe to Push Messaging") {
+                                        $('#subscribe_success').addClass("d-none");
+                                        $('#subscribe_message_area').removeClass("d-none");
                                     } else {
                                         $('#subscribe_message_area').addClass("d-none");
                                         $('#subscribe_success').removeClass("d-none");
@@ -625,6 +657,7 @@ function deactivate_lot() {
                         // Start observing the target node for configured mutations
                         observer.observe(targetNode, config);
                     }
+                    {% endif %}
                     </script>
                 {% endif %}
             <br>

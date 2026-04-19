@@ -2142,8 +2142,93 @@ class UpdateLotPushNotificationsViewTestCase(StandardTestCase):
         assert response.status_code == 405
         response = self.client.post(self.get_url())
         assert response.status_code == 200
+        assert response.json()["result"] == "success"
         userdata = UserData.objects.get(user=self.user_who_does_not_join)
         assert userdata.push_notifications_when_lots_sell is True
+
+
+class LotPushTestNotificationViewTestCase(StandardTestCase):
+    def get_url(self):
+        return reverse("lot_push_test", kwargs={"pk": self.in_person_lot.pk})
+
+    def _setup_watcher_with_push(self):
+        from webpush.models import PushInformation, SubscriptionInfo
+
+        watcher_userdata = UserData.objects.get(user=self.user_with_no_lots)
+        watcher_userdata.push_notifications_when_lots_sell = True
+        watcher_userdata.save()
+        Watch.objects.create(lot_number=self.in_person_lot, user=self.user_with_no_lots)
+        sub = SubscriptionInfo.objects.create(
+            browser="Chrome",
+            endpoint="https://fcm.googleapis.com/push/example_token",
+            auth="auth_secret",
+            p256dh="p256dh_key",
+        )
+        return PushInformation.objects.create(user=self.user_with_no_lots, subscription=sub)
+
+    def test_test_button_visible_for_watched_user_with_push_info(self):
+        self._setup_watcher_with_push()
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        response = self.client.get(reverse("lot_by_pk", kwargs={"pk": self.in_person_lot.pk}))
+        assert response.status_code == 200
+        self.assertContains(response, 'id="test-notification"')
+        self.assertNotContains(response, 'if (Notification.permission !== "granted")')
+
+    def test_test_button_hidden_without_push_info(self):
+        Watch.objects.create(lot_number=self.in_person_lot, user=self.user_with_no_lots)
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        response = self.client.get(reverse("lot_by_pk", kwargs={"pk": self.in_person_lot.pk}))
+        assert response.status_code == 200
+        self.assertNotContains(response, 'id="test-notification"')
+        self.assertNotContains(response, 'if (Notification.permission !== "granted")')
+        self.assertContains(response, "$('#subscribe_success').addClass(\"d-none\")")
+        self.assertContains(response, "Enable push notifications on this device")
+
+    def test_watch_notification_message_still_shows_without_push_info(self):
+        watcher_userdata = UserData.objects.get(user=self.user_with_no_lots)
+        watcher_userdata.push_notifications_when_lots_sell = True
+        watcher_userdata.save()
+        Watch.objects.create(lot_number=self.in_person_lot, user=self.user_with_no_lots)
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        response = self.client.get(reverse("lot_by_pk", kwargs={"pk": self.in_person_lot.pk}))
+        assert response.status_code == 200
+        self.assertContains(response, "You'll get a notification when bidding starts on this lot")
+        self.assertContains(response, "More information")
+        self.assertNotContains(response, 'id="test-notification"')
+
+    def test_anonymous_user_does_not_see_test_notification_controls(self):
+        response = self.client.get(reverse("lot_by_pk", kwargs={"pk": self.in_person_lot.pk}))
+        assert response.status_code == 200
+        self.assertNotContains(response, 'id="test-notification"')
+        self.assertNotContains(response, "You'll get a notification when bidding starts on this lot")
+
+    def test_watched_user_with_push_can_send_test_notification(self):
+        self._setup_watcher_with_push()
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        with patch("auctions.views.send_user_notification") as mock_notify:
+            response = self.client.post(self.get_url())
+        assert response.status_code == 200
+        mock_notify.assert_called_once()
+        assert mock_notify.call_args.kwargs["user"] == self.user_with_no_lots
+        payload = mock_notify.call_args.kwargs["payload"]
+        assert payload["head"] == f"{self.in_person_lot.lot_name} test notification"
+        assert payload["body"] == f"Lot {self.in_person_lot.lot_number_display} test notification for this watched lot."
+        assert payload["url"] == f"https://{self.in_person_lot.full_lot_link}"
+
+    def test_test_notification_requires_watch(self):
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        with patch("auctions.views.send_user_notification") as mock_notify:
+            response = self.client.post(self.get_url())
+        assert response.status_code == 403
+        mock_notify.assert_not_called()
+
+    def test_watched_user_without_push_subscription_gets_400(self):
+        Watch.objects.create(lot_number=self.in_person_lot, user=self.user_with_no_lots)
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        with patch("auctions.views.send_user_notification") as mock_notify:
+            response = self.client.post(self.get_url())
+        assert response.status_code == 400
+        mock_notify.assert_not_called()
 
 
 class ViewLotSimpleTestCase(StandardTestCase):
@@ -2424,6 +2509,44 @@ class DynamicSetLotWinnerViewTestCase(StandardTestCase):
         assert new_lot.custom_lot_number != "101-1", (
             f"New lot should have been assigned a different number, got: {new_lot.custom_lot_number}"
         )
+
+    def test_htmx_lot_preview_sends_push_notification_to_watcher(self):
+        from webpush.models import PushInformation, SubscriptionInfo
+
+        watcher_userdata = UserData.objects.get(user=self.user_with_no_lots)
+        watcher_userdata.push_notifications_when_lots_sell = True
+        watcher_userdata.save()
+        Watch.objects.create(lot_number=self.in_person_lot, user=self.user_with_no_lots)
+        sub = SubscriptionInfo.objects.create(
+            browser="Chrome",
+            endpoint="https://fcm.googleapis.com/push/example_token",
+            auth="auth_secret",
+            p256dh="p256dh_key",
+        )
+        PushInformation.objects.create(user=self.user_with_no_lots, subscription=sub)
+
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.get(self.get_url())
+        assert response.status_code == 200
+
+        lot_preview_url = reverse(
+            "htmx_lot",
+            kwargs={"slug": self.in_person_auction.slug, "custom_lot_number": self.in_person_lot.custom_lot_number},
+        )
+        with patch("auctions.views.send_user_notification") as mock_notify:
+            response = self.client.get(lot_preview_url)
+        assert response.status_code == 200
+        mock_notify.assert_called_once()
+        assert mock_notify.call_args.kwargs["user"] == self.user_with_no_lots
+        assert mock_notify.call_args.kwargs["ttl"] == 10000
+        payload = mock_notify.call_args.kwargs["payload"]
+        assert payload["head"] == f"{self.in_person_lot.lot_name} is about to be sold"
+        assert payload["body"] == (
+            f"Lot {self.in_person_lot.lot_number_display}  Don't miss out, bid now!  "
+            "You're getting this notification because you watched this lot."
+        )
+        assert payload["url"] == f"https://{self.in_person_lot.full_lot_link}"
+        assert payload["tag"] == f"lot_sell_notification_{self.in_person_lot.pk}"
 
 
 class AlternativeSplitLabelTests(StandardTestCase):
