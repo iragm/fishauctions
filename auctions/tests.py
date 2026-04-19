@@ -2196,7 +2196,7 @@ class LotPushTestNotificationViewTestCase(StandardTestCase):
         assert mock_notify.call_args.kwargs["user"] == self.user_with_no_lots
         payload = mock_notify.call_args.kwargs["payload"]
         assert payload["head"] == f"{self.in_person_lot.lot_name} test notification"
-        assert "test notification" in payload["body"]
+        assert payload["body"] == f"Lot {self.in_person_lot.lot_number_display} test notification for this watched lot."
         assert payload["url"] == f"https://{self.in_person_lot.full_lot_link}"
 
     def test_test_notification_requires_watch(self):
@@ -2526,7 +2526,7 @@ class DynamicSetLotWinnerViewTestCase(StandardTestCase):
         payload = mock_notify.call_args.kwargs["payload"]
         assert payload["head"] == f"{self.in_person_lot.lot_name} is about to be sold"
         assert payload["body"] == (
-            f"Lot {self.in_person_lot.custom_lot_number}  Don't miss out, bid now!  "
+            f"Lot {self.in_person_lot.lot_number_display}  Don't miss out, bid now!  "
             "You're getting this notification because you watched this lot."
         )
         assert payload["url"] == f"https://{self.in_person_lot.full_lot_link}"
