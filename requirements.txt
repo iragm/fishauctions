@@ -49,9 +49,9 @@ bleach==6.3.0
     # via
     #   -r requirements.in
     #   django-summernote
-boto3==1.42.88
+boto3==1.42.91
     # via django-ses
-botocore==1.42.88
+botocore==1.42.91
     # via
     #   boto3
     #   s3transfer
@@ -82,7 +82,7 @@ channels==4.3.2
     #   channels-redis
 channels-redis==4.3.0
     # via -r requirements.in
-chardet==7.4.2
+chardet==7.4.3
     # via -r requirements.in
 charset-normalizer==3.4.7
     # via
@@ -155,7 +155,7 @@ django==5.2.13
     #   django-weasyprint
     #   easy-thumbnails
     #   jsonfield
-django-allauth==65.15.1
+django-allauth==65.16.1
     # via -r requirements.in
 django-autocomplete-light==3.12.1
     # via -r requirements.in
@@ -187,7 +187,7 @@ django-location-field==2.7.3
     # via -r requirements.in
 django-markdownfield==0.20.0
     # via -r requirements.in
-django-post-office==3.11.0
+django-post-office==3.11.2
     # via -r requirements.in
 django-qr-code==4.2.0
     # via -r requirements.in
@@ -197,7 +197,7 @@ django-ses[events]==4.7.2
     # via -r requirements.in
 django-summernote==0.8.20.0
     # via -r requirements.in
-django-tables2==2.9.0
+django-tables2==3.0.0
     # via -r requirements.in
 django-timezone-field==7.2.1
     # via django-celery-beat
@@ -285,7 +285,7 @@ oauthlib==3.3.1
     # via
     #   -r requirements.in
     #   requests-oauthlib
-packaging==26.0
+packaging==26.1
     # via
     #   -r requirements.in
     #   gunicorn
@@ -325,13 +325,13 @@ pycparser==3.0
     # via
     #   -r requirements.in
     #   cffi
-pydantic==2.12.5
+pydantic==2.13.2
     # via
     #   django-bootstrap-datepicker-plus
     #   django-qr-code
     #   pydantic-settings
     #   squareup
-pydantic-core==2.41.5
+pydantic-core==2.46.2
     # via
     #   pydantic
     #   squareup
