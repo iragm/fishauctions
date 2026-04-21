@@ -4276,6 +4276,15 @@ class AuctionUsersViewTests(StandardTestCase):
         response = self.client.get(url)
         assert response.status_code == 200
 
+    def test_auction_users_query_sync_script_handles_checkbox_filters(self):
+        """User filter page keeps query URL/export sync for checkbox-triggered keyup events"""
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("auction_tos_list", kwargs={"slug": self.online_auction.slug})
+        response = self.client.get(url)
+        assert response.status_code == 200
+        assert b"queryInput.addEventListener('keyup', syncQueryUrlAndExport);" in response.content
+        assert b'$("#id_query").trigger("blur");' in response.content
+
 
 class LotCreateViewTests(StandardTestCase):
     """Test lot creation with different user types"""

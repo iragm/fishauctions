@@ -181,6 +181,7 @@ $(document).ready(function(){
     });
     idsToUncheck.forEach(function(id) { $("#" + id).prop("checked", false); });
   });
+  $("#id_query").trigger("blur");
 
   $(".invoice_filter").change(function(){
     var cmd = this.id.replace("checkbox_", "").replace("_", " ");
@@ -212,13 +213,15 @@ function updateLinkWithQuery(linkId, query) {
 // Update URL + CSV link as user types
 let queryInput = document.getElementById('id_query');
 if (queryInput) {
-  queryInput.addEventListener('input', function(event) {
+  function syncQueryUrlAndExport(event) {
     let query = event.target.value;
     let newUrl = new URL(window.location);
     newUrl.searchParams.set('query', query);
     history.replaceState({}, '', newUrl);
     updateLinkWithQuery('user_csv_export', query);
-  });
+  }
+  queryInput.addEventListener('input', syncQueryUrlAndExport);
+  queryInput.addEventListener('keyup', syncQueryUrlAndExport);
 }
 </script>
 {% endblock %}
