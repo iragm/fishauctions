@@ -166,7 +166,7 @@ $(document).ready(function(){
   $('#user_csv_export').attr('data-bs-title', "This export uses your current filter");
   new bootstrap.Tooltip(document.getElementById('user_csv_export'));
 
-  // Sync checkboxes into the query input, then dispatch keyup on #id_query (htmx listens to that)
+  // Sync checkboxes into the query input, then dispatch events for HTMX + URL/export sync
   $("#id_query").blur(function(){
     var value = this.value;
     var idsToUncheck = [];
@@ -181,6 +181,7 @@ $(document).ready(function(){
     });
     idsToUncheck.forEach(function(id) { $("#" + id).prop("checked", false); });
   });
+  $("#id_query").trigger("blur");
 
   $(".invoice_filter").change(function(){
     var cmd = this.id.replace("checkbox_", "").replace("_", " ");
@@ -194,9 +195,12 @@ $(document).ready(function(){
     queryValue = queryValue.replace(regex, "");
     if (add_cmd) queryValue += " " + cmd;
     queryInput.val(queryValue.trim());
-    // Fire keyup on #id_query so htmx refreshes the email button
+    // Fire events on #id_query so htmx refreshes and URL/export sync updates
     var el = document.getElementById("id_query");
-    if (el) el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, cancelable: true }));
+    if (el) {
+      el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, cancelable: true }));
+      el.dispatchEvent(new Event("input", { bubbles: true, cancelable: true }));
+    }
   }
 });
 
@@ -212,13 +216,15 @@ function updateLinkWithQuery(linkId, query) {
 // Update URL + CSV link as user types
 let queryInput = document.getElementById('id_query');
 if (queryInput) {
-  queryInput.addEventListener('input', function(event) {
+  function syncQueryUrlAndExport(event) {
     let query = event.target.value;
     let newUrl = new URL(window.location);
     newUrl.searchParams.set('query', query);
     history.replaceState({}, '', newUrl);
     updateLinkWithQuery('user_csv_export', query);
-  });
+  }
+  queryInput.addEventListener('input', syncQueryUrlAndExport);
+  syncQueryUrlAndExport({ target: queryInput });
 }
 </script>
 {% endblock %}
