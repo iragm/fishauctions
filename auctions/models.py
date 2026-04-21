@@ -4833,9 +4833,9 @@ class Lot(models.Model):
     def reserve_and_buy_now_info(self):
         result = ""
         if self.reserve_price > self.auction.minimum_bid and not self.sold:
-            result += f" Min bid: ${self.reserve_price}"
+            result += f" Min bid: {self.currency_symbol}{self.reserve_price}"
         if self.buy_now_price and not self.sold:
-            result += f" Buy now: ${self.buy_now_price}"
+            result += f" Buy now: {self.currency_symbol}{self.buy_now_price}"
         return result
 
     @property

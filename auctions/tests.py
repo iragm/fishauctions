@@ -8709,6 +8709,56 @@ class CurrencyCustomizationTests(StandardTestCase):
         self.assertEqual(lot.min_bid_label, "Min: £5.00")
         self.assertEqual(lot.buy_now_label, "Buy: £9.00")
 
+    def test_reserve_and_buy_now_info_uses_currency_symbol(self):
+        self.user.userdata.preferred_currency = "GBP"
+        self.user.userdata.save()
+
+        lot = Lot.objects.create(
+            lot_name="GBP Reserve Label Lot",
+            auction=self.online_auction,
+            quantity=1,
+            user=self.user,
+            reserve_price=Decimal("10.00"),
+            buy_now_price=Decimal("15.00"),
+        )
+
+        self.assertEqual(lot.reserve_and_buy_now_info, " Min bid: £10.00 Buy now: £15.00")
+
+    def test_printed_label_line_3_uses_currency_symbol_for_non_multi_location(self):
+        self.user.userdata.preferred_currency = "GBP"
+        self.user.userdata.save()
+
+        lot = Lot.objects.create(
+            lot_name="GBP Printed Label Lot",
+            auction=self.online_auction,
+            quantity=1,
+            user=self.user,
+            reserve_price=Decimal("10.00"),
+            buy_now_price=Decimal("15.00"),
+        )
+
+        self.assertEqual(lot.label_line_3, " Min bid: £10.00 Buy now: £15.00")
+
+    def test_printed_label_line_2_uses_currency_symbol_for_multi_location(self):
+        self.user.userdata.preferred_currency = "GBP"
+        self.user.userdata.save()
+        PickupLocation.objects.create(
+            name="Second pickup",
+            auction=self.online_auction,
+            pickup_time=self.location.pickup_time,
+        )
+
+        lot = Lot.objects.create(
+            lot_name="GBP Multi-location Printed Label Lot",
+            auction=self.online_auction,
+            quantity=1,
+            user=self.user,
+            reserve_price=Decimal("10.00"),
+            buy_now_price=Decimal("15.00"),
+        )
+
+        self.assertEqual(lot.label_line_2, " Min bid: £10.00 Buy now: £15.00")
+
     def test_change_user_preferences_form_includes_currency(self):
         """Test that ChangeUserPreferencesForm includes preferred_currency field"""
         from .forms import ChangeUserPreferencesForm
