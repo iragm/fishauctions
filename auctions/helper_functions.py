@@ -23,7 +23,8 @@ def get_currency_symbol(currency_code):
         "CAD": "$",
         "AUD": "$",
     }
-    return symbol_map.get(currency_code, "$")
+    normalized_currency_code = (currency_code or "").upper()
+    return symbol_map.get(normalized_currency_code, "$")
 
 
 def bin_data(

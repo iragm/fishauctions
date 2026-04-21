@@ -8705,6 +8705,20 @@ class CurrencyCustomizationTests(StandardTestCase):
 
         self.assertEqual(lot.currency_symbol, "£")
 
+    def test_lot_label_prices_use_currency_symbol_when_currency_code_is_lowercase(self):
+        self.user.userdata.preferred_currency = "gbp"
+        self.user.userdata.save()
+
+        lot = Lot.objects.create(
+            lot_name="Lowercase GBP Label Lot",
+            auction=self.online_auction,
+            quantity=1,
+            user=self.user,
+            reserve_price=Decimal("10.00"),
+        )
+
+        self.assertEqual(lot.min_bid_label, "Min: £10.00")
+
     def test_lot_label_prices_use_currency_symbol(self):
         self.user.userdata.preferred_currency = "GBP"
         self.user.userdata.save()
