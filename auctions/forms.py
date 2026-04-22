@@ -2156,11 +2156,9 @@ class AuctionEditForm(forms.ModelForm):
             ),
             Submit("submit", "Save", css_class="create-update-auction btn-success"),
             HTML(
-                str(
-                    format_html(
-                        '<div class="mt-2"><a href="{}">Customize lot fields</a></div>',
-                        reverse("edit_auction_custom_fields", kwargs={"slug": self.instance.slug}),
-                    )
+                format_html(
+                    '<div class="mt-2"><a href="{}">Customize lot fields</a></div>',
+                    reverse("edit_auction_custom_fields", kwargs={"slug": self.instance.slug}),
                 )
             ),
         )
@@ -2279,11 +2277,9 @@ class AuctionCustomFieldsForm(forms.ModelForm):
             ),
             Submit("submit", "Save", css_class="btn btn-success"),
             HTML(
-                str(
-                    format_html(
-                        '<div class="mt-2"><a href="{}">Back to rules</a></div>',
-                        reverse("edit_auction", kwargs={"slug": self.instance.slug}),
-                    )
+                format_html(
+                    '<div class="mt-2"><a href="{}">Back to rules</a></div>',
+                    reverse("edit_auction", kwargs={"slug": self.instance.slug}),
                 )
             ),
         )

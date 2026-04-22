@@ -2259,6 +2259,7 @@ class AuctionCustomFieldsUpdate(LoginRequiredMixin, AuctionViewMixin, UpdateView
         context["title"] = f"{self.auction} - Custom fields"
         context["auction"] = self.auction
         context["dropdown_options"] = AuctionDropdown.objects.filter(auction=self.auction).order_by("createdon")
+        context["custom_dropdown_max_length"] = CUSTOM_DROPDOWN_MAX_LENGTH
         return context
 
     def form_valid(self, form, **kwargs):

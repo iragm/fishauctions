@@ -102,13 +102,13 @@ $(document).ready(function() {
             <div id="custom-dropdown-options-section" class="mt-3">
                 <h5>Custom dropdown options</h5>
                 <div class="input-group mb-2">
-                    <input type="text" id="new-dropdown-option" class="form-control" maxlength="15" placeholder="Add option">
+                    <input type="text" id="new-dropdown-option" class="form-control" maxlength="{{ custom_dropdown_max_length }}" placeholder="Add option">
                     <button type="button" id="add-dropdown-option-btn" class="btn btn-outline-success">Add</button>
                 </div>
                 <ul class="list-group" id="custom-dropdown-options-list">
                     {% for option in dropdown_options %}
                     <li class="list-group-item d-flex align-items-center gap-2" data-option-id="{{ option.pk }}">
-                        <input type="text" class="form-control form-control-sm dropdown-option-value" maxlength="15" value="{{ option.value }}">
+                        <input type="text" class="form-control form-control-sm dropdown-option-value" maxlength="{{ custom_dropdown_max_length }}" value="{{ option.value }}">
                         <button type="button" class="btn btn-sm btn-outline-success dropdown-option-save">Rename</button>
                         <button type="button" class="btn btn-sm btn-outline-danger dropdown-option-delete">Delete</button>
                     </li>
