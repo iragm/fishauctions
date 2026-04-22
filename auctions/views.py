@@ -6568,14 +6568,24 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
         return f"{label_name}.pdf"
 
     @staticmethod
+    def get_lot_number_font_size(lot_number_display, preset):
+        """Shrink lot number font on 3x2 thermal labels when needed."""
+        if preset != "thermal_sm" or not lot_number_display:
+            return None
+        lot_number_display = str(lot_number_display)
+        if len(lot_number_display) <= 5:
+            return None
+        return "0.60em"
+
+    @staticmethod
     def get_seller_email_font_size(seller_email, preset):
         """Shrink seller email font on 3x2 thermal labels when needed."""
         if preset != "thermal_sm" or not seller_email:
             return None
-        max_chars_at_default_size = 30
+        max_chars_at_default_size = 24
         if len(seller_email) <= max_chars_at_default_size:
             return None
-        font_ratio = max(0.55, max_chars_at_default_size / len(seller_email))
+        font_ratio = max(0.50, max_chars_at_default_size / len(seller_email))
         return f"{font_ratio:.2f}em"
 
     def get_context_data(self, **kwargs):
@@ -6746,6 +6756,9 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
                 label_second_column_fields.append(getattr(label, field))
             label.first_column_fields = label_first_column_fields
             label.second_column_fields = label_second_column_fields
+            label.lot_number_font_size = self.get_lot_number_font_size(
+                label.lot_number_display, user_label_prefs.preset
+            )
             label.seller_email_font_size = self.get_seller_email_font_size(label.seller_email, user_label_prefs.preset)
         context["labels"] = (["empty"] * context["empty_labels"]) + list(labels)
         context["text_area_width"] = context["label_width"] - context["first_column_width"]
