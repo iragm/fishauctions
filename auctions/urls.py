@@ -47,6 +47,11 @@ urlpatterns = [
     path("api/get_auction_info/", views.AuctionFinder.as_view(), name="get_auction_info"),
     path("api/lot/<int:pk>/", views.LotAdmin.as_view(), name="auctionlotadmin"),
     path(
+        "api/auctions/<slug:slug>/custom-dropdown-options/",
+        views.AuctionDropdownOptionsAPI.as_view(),
+        name="auction_custom_dropdown_options",
+    ),
+    path(
         "api/lot/chat_subscribe",
         views.LotChatSubscribe.as_view(),
         name="lot_chat_subscribe",
@@ -182,6 +187,11 @@ urlpatterns = [
     # path('auctions/new/', views.createAuction, name='createAuction'),
     path("auctions/new/", login_required(views.AuctionCreateView.as_view()), name="create_auction"),
     path("auctions/<slug:slug>/edit/", views.AuctionUpdate.as_view(), name="edit_auction"),
+    path(
+        "auctions/<slug:slug>/custom-fields/",
+        views.AuctionCustomFieldsUpdate.as_view(),
+        name="edit_auction_custom_fields",
+    ),
     path("auctions/<slug:slug>/invoices/", login_required(views.AuctionUsers.as_view())),
     path(
         "auctions/<slug:slug>/invoice/",

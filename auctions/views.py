@@ -106,6 +106,7 @@ from .filters import (
     get_recommended_lots,
 )
 from .forms import (
+    AuctionCustomFieldsForm,
     AuctionEditForm,
     AuctionJoin,
     AuctionNoShowForm,
@@ -139,6 +140,7 @@ from .models import (
     AdCampaign,
     AdCampaignResponse,
     Auction,
+    AuctionDropdown,
     AuctionCampaign,
     AuctionHistory,
     AuctionIgnore,
@@ -2243,6 +2245,79 @@ class AuctionUpdate(LoginRequiredMixin, AuctionViewMixin, UpdateView):
         return form
 
 
+class AuctionCustomFieldsUpdate(LoginRequiredMixin, AuctionViewMixin, UpdateView):
+    model = Auction
+    template_name = "auction_custom_fields_form.html"
+    form_class = AuctionCustomFieldsForm
+
+    def get_success_url(self):
+        return "/auctions/" + str(self.kwargs["slug"])
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["title"] = f"{self.auction} - Custom fields"
+        context["auction"] = self.auction
+        context["dropdown_options"] = AuctionDropdown.objects.filter(auction=self.auction).order_by("createdon")
+        return context
+
+    def form_valid(self, form, **kwargs):
+        if form.has_changed():
+            self.get_object().create_history(applies_to="RULES", user=self.request.user, form=form)
+        return super().form_valid(form)
+
+    def form_invalid(self, form):
+        if form.cleaned_data.get("_disable_custom_dropdown"):
+            self.auction.use_custom_dropdown_field = False
+            self.auction.save(update_fields=["use_custom_dropdown_field"])
+        return super().form_invalid(form)
+
+
+class AuctionDropdownOptionsAPI(LoginRequiredMixin, AuctionViewMixin, View):
+    def get(self, request, *args, **kwargs):
+        options = list(
+            AuctionDropdown.objects.filter(auction=self.auction)
+            .order_by("createdon")
+            .values("id", "value", "user_id", "createdon")
+        )
+        return JsonResponse({"options": options})
+
+    def post(self, request, *args, **kwargs):
+        if not self.is_auction_admin:
+            return HttpResponseForbidden()
+        action = request.POST.get("action")
+        value = (request.POST.get("value") or "").strip()[:15]
+        option_id = request.POST.get("option_id")
+
+        if action == "create":
+            if not value:
+                return JsonResponse({"success": False, "error": "Option value is required"})
+            if AuctionDropdown.objects.filter(auction=self.auction, value__iexact=value).exists():
+                return JsonResponse({"success": False, "error": "That option already exists"})
+            option = AuctionDropdown.objects.create(auction=self.auction, user=request.user, value=value)
+            return JsonResponse({"success": True, "option": {"id": option.pk, "value": option.value}})
+
+        if not option_id:
+            return JsonResponse({"success": False, "error": "Option id is required"})
+        option = AuctionDropdown.objects.filter(pk=option_id, auction=self.auction).first()
+        if not option:
+            return JsonResponse({"success": False, "error": "Option not found"})
+        option.user = request.user
+
+        if action == "update":
+            if not value:
+                return JsonResponse({"success": False, "error": "Option value is required"})
+            duplicate = AuctionDropdown.objects.filter(auction=self.auction, value__iexact=value).exclude(pk=option.pk)
+            if duplicate.exists():
+                return JsonResponse({"success": False, "error": "That option already exists"})
+            option.value = value
+            option.save()
+            return JsonResponse({"success": True, "option": {"id": option.pk, "value": option.value}})
+        if action == "delete":
+            option.delete()
+            return JsonResponse({"success": True})
+        return JsonResponse({"success": False, "error": "Invalid action"})
+
+
 class AuctionHistoryView(LoginRequiredMixin, SingleTableMixin, AuctionViewMixin, FilterView):
     model = AuctionHistory
     table_class = AuctionHistoryHTMxTable
@@ -3391,6 +3466,7 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
                 "buy_now_price",
                 "custom_checkbox",
                 "custom_field_1",
+                "custom_dropdown",
             ),
             form=QuickAddLot,
         )
@@ -3423,6 +3499,12 @@ class BulkAddLotsAuto(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         context["use_custom_field_1"] = self.auction.custom_field_1 != "disable" and self.auction.custom_field_1_name
         context["custom_field_1_name"] = self.auction.custom_field_1_name if context["use_custom_field_1"] else ""
         context["custom_field_1_required"] = self.auction.custom_field_1 == "required"
+        context["custom_dropdown_options"] = list(
+            AuctionDropdown.objects.filter(auction=self.auction).order_by("createdon").values_list("value", flat=True)
+        )
+        context["use_custom_dropdown"] = (
+            self.auction.use_custom_dropdown_field and len(context["custom_dropdown_options"]) >= 2
+        )
 
         context["use_i_bred_this_fish"] = self.auction.use_i_bred_this_fish_field
         context["use_quantity"] = self.auction.use_quantity_field
@@ -3615,6 +3697,18 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                     errors["custom_field_1"] = f"{self.auction.custom_field_1_name} must be 60 characters or less"
                 else:
                     lot.custom_field_1 = custom_field_1
+
+            custom_dropdown_options = list(
+                AuctionDropdown.objects.filter(auction=self.auction).values_list("value", flat=True)
+            )
+            if self.auction.use_custom_dropdown_field and len(custom_dropdown_options) >= 2:
+                custom_dropdown = data.get("custom_dropdown", "").strip()[:15]
+                if custom_dropdown and custom_dropdown not in custom_dropdown_options:
+                    errors["custom_dropdown"] = "Select a valid custom dropdown option"
+                else:
+                    lot.custom_dropdown = custom_dropdown
+            else:
+                lot.custom_dropdown = ""
 
             # I bred this fish
             if self.auction.use_i_bred_this_fish_field:
@@ -5034,6 +5128,7 @@ class LotAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
             obj.winning_price = form.cleaned_data["winning_price"]
             obj.custom_checkbox = form.cleaned_data["custom_checkbox"]
             obj.custom_field_1 = form.cleaned_data["custom_field_1"]
+            obj.custom_dropdown = form.cleaned_data["custom_dropdown"]
             # need to make sure the winner matches the auctiontos_winner
             if obj.pk and obj.winner:
                 if not obj.auctiontos_winner:
@@ -5528,6 +5623,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "custom_checkbox_name",
                 "custom_field_1",
                 "custom_field_1_name",
+                "use_custom_dropdown_field",
                 "allow_bulk_adding_lots",
                 "copy_users_when_copying_this_auction",
                 "use_donation_field",
@@ -5643,6 +5739,13 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                         tos.save()
                         tos.bidding_allowed = original_bid_permission
                         tos.save()  # see comment above
+            original_dropdown_options = AuctionDropdown.objects.filter(auction=clone_from_auction)
+            for dropdown_option in original_dropdown_options:
+                AuctionDropdown.objects.create(
+                    auction=auction,
+                    user=dropdown_option.user,
+                    value=dropdown_option.value,
+                )
         action = "Created auction"
         if clone_from_auction:
             action += f" by copying {clone_from_auction}"
@@ -6727,6 +6830,7 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
             "min_bid_label",
             "buy_now_label",
             "custom_checkbox_label",
+            "custom_dropdown_label",
             "i_bred_this_fish_label",
             "auction_date",
         ]
@@ -10342,6 +10446,12 @@ class AuctionFinder(View, LoginRequiredMixin):
                 "use_donation_field": self.auction.use_donation_field,
                 "use_i_bred_this_fish_field": self.auction.use_i_bred_this_fish_field,
                 "use_custom_checkbox_field": self.auction.use_custom_checkbox_field,
+                "use_custom_dropdown_field": self.auction.use_custom_dropdown_field,
+                "custom_dropdown_options": list(
+                    AuctionDropdown.objects.filter(auction=self.auction)
+                    .order_by("createdon")
+                    .values_list("value", flat=True)
+                ),
                 "use_reference_link": self.auction.use_reference_link,
                 "use_description": self.auction.use_description,
             }

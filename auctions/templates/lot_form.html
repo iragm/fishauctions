@@ -75,6 +75,24 @@ function setAuctionRequiredFields(val) {
                         $('#id_custom_field_1').attr('required', false);
                         $('#div_id_custom_field_1').closest('.col-md-12').hide();
                     }
+                    if (result.use_custom_dropdown_field && result.custom_dropdown_options && result.custom_dropdown_options.length >= 2) {
+                        const $customDropdown = $('#id_custom_dropdown');
+                        const currentValue = $customDropdown.val();
+                        const options = ['<option value="">---------</option>'];
+                        result.custom_dropdown_options.forEach(function(optionValue) {
+                            options.push(`<option value="${optionValue}">${optionValue}</option>`);
+                        });
+                        $customDropdown.html(options.join(''));
+                        if (result.custom_dropdown_options.includes(currentValue)) {
+                            $customDropdown.val(currentValue);
+                        } else {
+                            $customDropdown.val('');
+                        }
+                        $('#div_id_custom_dropdown').closest('.col-md-3').show();
+                    } else {
+                        $('#id_custom_dropdown').val('');
+                        $('#div_id_custom_dropdown').closest('.col-md-3').hide();
+                    }
                     if (result.use_donation_field) {
                         $('#div_id_donation').closest('.col-md-3').show();
                     } else {
@@ -119,6 +137,7 @@ function setAuctionRequiredFields(val) {
                     $('#div_id_quantity').closest('.col-md-3').show();
                     $('#div_id_custom_field_1').closest('.col-md-12').hide();
                     $('#div_id_custom_checkbox').closest('.col-md-3').hide();
+                    $('#div_id_custom_dropdown').closest('.col-md-3').hide();
                     $('#div_id_reference_link').closest('.col-md-3').show();
                     $('#div_id_summernote_description').closest('.col-md-12').show();
                     $('#div_id_species_category').closest('.col-md-12').show();

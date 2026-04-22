@@ -28,6 +28,7 @@ from django_summernote.widgets import SummernoteWidget
 from .helper_functions import get_currency_symbol
 from .models import (
     Auction,
+    AuctionDropdown,
     AuctionTOS,
     Bid,
     Category,
@@ -178,6 +179,7 @@ class QuickAddLot(forms.ModelForm):
             "buy_now_price",
             "custom_checkbox",
             "custom_field_1",
+            "custom_dropdown",
         ]
         widgets = {
             # "summernote_description": SummernoteWidget(
@@ -257,6 +259,17 @@ class QuickAddLot(forms.ModelForm):
         else:
             if self.auction.custom_field_1 == "required":
                 self.fields["custom_field_1"].required = True
+        custom_dropdown_options = list(
+            AuctionDropdown.objects.filter(auction=self.auction).order_by("createdon").values_list("value", flat=True)
+        )
+        if self.auction.use_custom_dropdown_field and len(custom_dropdown_options) >= 2:
+            self.fields["custom_dropdown"].widget = forms.Select(
+                choices=[("", "---------")] + [(value, value) for value in custom_dropdown_options]
+            )
+            self.fields["custom_dropdown"].label = "Custom dropdown"
+            self.fields["custom_dropdown"].required = False
+        else:
+            self.fields["custom_dropdown"].widget = HiddenInput()
         if not self.auction.use_quantity_field:
             self.fields["quantity"].widget = HiddenInput()
         if not self.auction.use_donation_field:
@@ -296,6 +309,18 @@ class QuickAddLot(forms.ModelForm):
             buy_now_price = cleaned_data.get("buy_now_price")
             if buy_now_price is not None and buy_now_price != buy_now_price.to_integral_value():
                 self.add_error("buy_now_price", "This auction only allows whole dollar amounts.")
+        if self.auction.use_custom_dropdown_field:
+            custom_dropdown_options = list(
+                AuctionDropdown.objects.filter(auction=self.auction).values_list("value", flat=True)
+            )
+            selected_dropdown = cleaned_data.get("custom_dropdown", "")
+            if len(custom_dropdown_options) >= 2:
+                if selected_dropdown and selected_dropdown not in custom_dropdown_options:
+                    self.add_error("custom_dropdown", "Select a valid option")
+            else:
+                cleaned_data["custom_dropdown"] = ""
+        else:
+            cleaned_data["custom_dropdown"] = ""
         # we need to make sure users can't add extra lots
         if not self.is_admin and self.auction.max_lots_per_user:
             existing_lots = self.tos.unbanned_lot_qs
@@ -744,6 +769,10 @@ class EditLot(forms.ModelForm):
                     css_class="col-sm-3",
                 ),
                 Div(
+                    "custom_dropdown",
+                    css_class="col-sm-3",
+                ),
+                Div(
                     "i_bred_this_fish",
                     css_class="col-sm-3",
                 ),
@@ -841,6 +870,22 @@ class EditLot(forms.ModelForm):
                 self.fields["custom_field_1"].required = True
         else:
             self.fields["custom_field_1"].widget = HiddenInput()
+        custom_dropdown_options = list(
+            AuctionDropdown.objects.filter(auction=self.auction).order_by("createdon").values_list("value", flat=True)
+        )
+        current_dropdown_value = self.lot.custom_dropdown
+        if current_dropdown_value and current_dropdown_value not in custom_dropdown_options:
+            custom_dropdown_options.append(current_dropdown_value)
+        self.fields["custom_dropdown"].initial = current_dropdown_value
+        if self.auction.use_custom_dropdown_field and len(custom_dropdown_options) >= 2:
+            self.fields["custom_dropdown"].widget = forms.Select(
+                choices=[("", "---------")] + [(value, value) for value in custom_dropdown_options]
+            )
+            self.fields["custom_dropdown"].label = "Custom dropdown"
+            self.fields["custom_dropdown"].required = False
+            self.fields["custom_dropdown"].help_text = ""
+        else:
+            self.fields["custom_dropdown"].widget = HiddenInput()
         self.fields["banned"].initial = self.lot.banned
         self.fields["auctiontos_winner"].initial = self.lot.auctiontos_winner
         # and some housekeeping on labels and help text
@@ -893,6 +938,7 @@ class EditLot(forms.ModelForm):
             "winning_price",
             "custom_checkbox",
             "custom_field_1",
+            "custom_dropdown",
         ]
         widgets = {
             "summernote_description": SummernoteWidget(attrs={"summernote": {"width": "100%", "height": "300px"}}),
@@ -1802,8 +1848,6 @@ class AuctionEditForm(forms.ModelForm):
             "alternative_split_label",
             "force_donation_threshold",
             "require_phone_number",
-            "reserve_price",
-            "buy_now",
             "tax",
             "advanced_lot_adding",
             "online_bidding",
@@ -1812,18 +1856,8 @@ class AuctionEditForm(forms.ModelForm):
             "allow_deleting_bids",
             "auto_add_images",
             "message_users_when_lots_sell",
-            "use_quantity_field",
-            "custom_checkbox_name",
-            "custom_field_1",
-            "custom_field_1_name",
-            "allow_bulk_adding_lots",
             "copy_users_when_copying_this_auction",
             "use_seller_dash_lot_numbering",
-            "use_donation_field",
-            "use_i_bred_this_fish_field",
-            "use_custom_checkbox_field",
-            "use_reference_link",
-            "use_description",
             "enable_online_payments",
             "enable_square_payments",
         ]
@@ -1877,8 +1911,6 @@ class AuctionEditForm(forms.ModelForm):
             self.fields[
                 "lot_submission_end_date"
             ].help_text = "This should be 1-24 hours before the end of your auction"
-            self.fields["use_description"].widget = forms.HiddenInput()
-            self.fields["allow_bulk_adding_lots"].widget = forms.HiddenInput()
             self.fields["online_bidding"].widget = forms.HiddenInput()
             self.fields["message_users_when_lots_sell"].widget = forms.HiddenInput()
             self.fields["advanced_lot_adding"].widget = forms.HiddenInput()
@@ -2062,65 +2094,6 @@ class AuctionEditForm(forms.ModelForm):
                 ),
                 css_class="row",
             ),
-            HTML("""<h4>Fields</h4>Control what information your users can enter about lots.
-                <span class='text-warning'>For advanced users only!</span>
-                The default settings are recommended for most auctions<br>
-                <small>If you enable more than a couple extra fields here, you should disable bulk adding lots, as too many fields in the bulk adding lots form quickly becomes overwhelming for users</small><br><br>"""),
-            Div(
-                Div(
-                    "allow_bulk_adding_lots",
-                    css_class="col-md-3",
-                ),
-                Div(
-                    "use_categories",
-                    css_class="col-md-3",
-                ),
-                Div(
-                    "use_quantity_field",
-                    css_class="col-md-3",
-                ),
-                Div(
-                    "use_donation_field",
-                    css_class="col-md-3",
-                ),
-                Div(
-                    "use_i_bred_this_fish_field",
-                    css_class="col-md-3",
-                ),
-                Div(
-                    "use_reference_link",
-                    css_class="col-md-3",
-                ),
-                Div(
-                    "use_description",
-                    css_class="col-md-3",
-                ),
-                Div(
-                    "custom_field_1",
-                    css_class="col-md-3",
-                ),
-                Div(
-                    "custom_field_1_name",
-                    css_class="col-md-3",
-                ),
-                Div(
-                    "use_custom_checkbox_field",
-                    css_class="col-md-3",
-                ),
-                Div(
-                    "custom_checkbox_name",
-                    css_class="col-md-3",
-                ),
-                Div(
-                    "reserve_price",
-                    css_class="col-md-3",
-                ),
-                Div(
-                    "buy_now",
-                    css_class="col-md-3",
-                ),
-                css_class="row",
-            ),
             HTML("<h4>General</h4>"),
             Div(
                 Div(
@@ -2181,6 +2154,9 @@ class AuctionEditForm(forms.ModelForm):
                 css_class="row",
             ),
             Submit("submit", "Save", css_class="create-update-auction btn-success"),
+            HTML(
+                f"""<div class="mt-2"><a href="{reverse("edit_auction_custom_fields", kwargs={"slug": self.instance.slug})}">Customize lot fields</a></div>"""
+            ),
         )
 
     def clean(self):
@@ -2246,6 +2222,76 @@ class AuctionEditForm(forms.ModelForm):
         return auction
 
 
+class AuctionCustomFieldsForm(forms.ModelForm):
+    class Meta:
+        model = Auction
+        fields = [
+            "allow_bulk_adding_lots",
+            "use_categories",
+            "use_quantity_field",
+            "use_donation_field",
+            "use_i_bred_this_fish_field",
+            "use_reference_link",
+            "use_description",
+            "custom_field_1",
+            "custom_field_1_name",
+            "use_custom_checkbox_field",
+            "custom_checkbox_name",
+            "use_custom_dropdown_field",
+            "reserve_price",
+            "buy_now",
+        ]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.form_id = "auction-custom-fields-form"
+        self.helper.form_class = "form"
+        self.helper.form_tag = True
+        self.helper.layout = Layout(
+            HTML("""<h4>Custom fields</h4>Control what information your users can enter about lots.
+                <span class='text-warning'>For advanced users only!</span>
+                The default settings are recommended for most auctions<br>
+                <small>If you enable more than a couple extra fields here, you should disable bulk adding lots, as too many fields in the bulk adding lots form quickly becomes overwhelming for users</small><br><br>"""),
+            Div(
+                Div("allow_bulk_adding_lots", css_class="col-md-4"),
+                Div("use_categories", css_class="col-md-4"),
+                Div("use_quantity_field", css_class="col-md-4"),
+                Div("use_donation_field", css_class="col-md-4"),
+                Div("use_i_bred_this_fish_field", css_class="col-md-4"),
+                Div("use_reference_link", css_class="col-md-4"),
+                Div("use_description", css_class="col-md-4"),
+                Div("custom_field_1", css_class="col-md-4"),
+                Div("custom_field_1_name", css_class="col-md-4"),
+                Div("use_custom_checkbox_field", css_class="col-md-4"),
+                Div("custom_checkbox_name", css_class="col-md-4"),
+                Div("use_custom_dropdown_field", css_class="col-md-4"),
+                Div("reserve_price", css_class="col-md-4"),
+                Div("buy_now", css_class="col-md-4"),
+                css_class="row",
+            ),
+            Submit("submit", "Save", css_class="btn btn-success"),
+            HTML(
+                f"""<div class="mt-2"><a href="{reverse("edit_auction", kwargs={"slug": self.instance.slug})}">Back to rules</a></div>"""
+            ),
+        )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        cleaned_data["_disable_custom_dropdown"] = False
+        if cleaned_data.get("use_custom_dropdown_field"):
+            options_count = AuctionDropdown.objects.filter(auction=self.instance).count()
+            if options_count < 2:
+                self.add_error(
+                    "use_custom_dropdown_field",
+                    "Custom dropdown requires at least two options. It has been disabled.",
+                )
+                cleaned_data["use_custom_dropdown_field"] = False
+                cleaned_data["_disable_custom_dropdown"] = True
+        return cleaned_data
+
+
 class CreateLotForm(forms.ModelForm):
     """Form for creating or updating of lots"""
 
@@ -2309,6 +2355,7 @@ class CreateLotForm(forms.ModelForm):
             "run_duration",
             "custom_checkbox",
             "custom_field_1",
+            "custom_dropdown",
             "image_url",
         )
         exclude = ["user", "image", "image_source"]
@@ -2373,6 +2420,7 @@ class CreateLotForm(forms.ModelForm):
                         "donation",
                         "custom_checkbox",
                         "custom_field_1",
+                        "custom_dropdown",
                     ]
                     for field in cloneFields:
                         self.fields[field].initial = getattr(clone_from_lot, field)
@@ -2419,6 +2467,25 @@ class CreateLotForm(forms.ModelForm):
             apply_price_input_constraints(
                 self.fields, ("reserve_price", "buy_now_price"), selected_auction.only_whole_dollar_bids
             )
+            custom_dropdown_options = list(
+                AuctionDropdown.objects.filter(auction=selected_auction)
+                .order_by("createdon")
+                .values_list("value", flat=True)
+            )
+            current_dropdown_value = self.instance.custom_dropdown
+            if current_dropdown_value and current_dropdown_value not in custom_dropdown_options:
+                custom_dropdown_options.append(current_dropdown_value)
+            if selected_auction.use_custom_dropdown_field and len(custom_dropdown_options) >= 2:
+                self.fields["custom_dropdown"].widget = forms.Select(
+                    choices=[("", "---------")] + [(value, value) for value in custom_dropdown_options]
+                )
+                self.fields["custom_dropdown"].label = "Custom dropdown"
+                self.fields["custom_dropdown"].required = False
+                self.fields["custom_dropdown"].help_text = ""
+            else:
+                self.fields["custom_dropdown"].widget = HiddenInput()
+        else:
+            self.fields["custom_dropdown"].widget = HiddenInput()
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_id = "lot-form"
@@ -2505,6 +2572,10 @@ class CreateLotForm(forms.ModelForm):
                 ),
                 Div(
                     "custom_checkbox",
+                    css_class="col-md-3",
+                ),
+                Div(
+                    "custom_dropdown",
                     css_class="col-md-3",
                 ),
                 Div(
@@ -2612,6 +2683,13 @@ class CreateLotForm(forms.ModelForm):
             if cleaned_data.get("payment_other") and not cleaned_data.get("payment_other_method"):
                 self.add_error("payment_other_method", "Enter your payment method")
         if auction:
+            custom_dropdown_options = list(AuctionDropdown.objects.filter(auction=auction).values_list("value", flat=True))
+            selected_dropdown = cleaned_data.get("custom_dropdown", "")
+            if auction.use_custom_dropdown_field and len(custom_dropdown_options) >= 2:
+                if selected_dropdown and selected_dropdown not in custom_dropdown_options:
+                    self.add_error("custom_dropdown", "Select a valid option")
+            else:
+                cleaned_data["custom_dropdown"] = ""
             if auction.only_whole_dollar_bids:
                 reserve_price = cleaned_data.get("reserve_price")
                 if reserve_price is not None and reserve_price != reserve_price.to_integral_value():
@@ -2684,6 +2762,8 @@ class CreateLotForm(forms.ModelForm):
                             "donation",
                             "This needs to be a donation due to the max lots per user allowed in this auction",
                         )
+        else:
+            cleaned_data["custom_dropdown"] = ""
 
         # check to see if this lot exists already
         # this code is no longer needed since we disable the submit button on click; if there start being problems with duplicate lots, I'll uncomment the below
@@ -3181,6 +3261,13 @@ class LabelPrintFieldsForm(forms.Form):
                 else self.auction.custom_checkbox_name,
                 "tooltip": "Custom checkbox is disabled in this auction, this will not do anything"
                 if not self.auction.use_custom_checkbox_field
+                else "",
+            },
+            {
+                "value": "custom_dropdown_label",
+                "description": "Custom dropdown",
+                "tooltip": "Custom dropdown is disabled in this auction, this will not do anything"
+                if not self.auction.use_custom_dropdown_field
                 else "",
             },
             {

@@ -136,6 +136,19 @@
                       </div>
                     </div>
                     {% endif %}
+
+                    {% if use_custom_dropdown %}
+                    <div class="col-6 col-md-3">
+                      <label class="form-label small mb-1 {% if not lot.can_be_edited %}text-light{% endif %}">Custom dropdown</label>
+                      <select class="form-select form-select-sm lot-input {% if not lot.can_be_edited %}text-light{% endif %}" name="custom_dropdown" data-field="custom_dropdown" {% if not lot.can_be_edited %}disabled{% endif %}>
+                        <option value="">---------</option>
+                        {% for option in custom_dropdown_options %}
+                        <option value="{{ option }}" {% if lot.custom_dropdown == option %}selected{% endif %}>{{ option }}</option>
+                        {% endfor %}
+                      </select>
+                      <div class="invalid-feedback"></div>
+                    </div>
+                    {% endif %}
                   </div>
                 </div>
               </div>
@@ -239,6 +252,19 @@
                         <input type="checkbox" class="form-check-input lot-input" name="custom_checkbox" data-field="custom_checkbox">
                         <label class="form-check-label small">{{ custom_checkbox_name }}</label>
                       </div>
+                    </div>
+                    {% endif %}
+
+                    {% if use_custom_dropdown %}
+                    <div class="col-6 col-md-3">
+                      <label class="form-label small mb-1">Custom dropdown</label>
+                      <select class="form-select form-select-sm lot-input" name="custom_dropdown" data-field="custom_dropdown">
+                        <option value="">---------</option>
+                        {% for option in custom_dropdown_options %}
+                        <option value="{{ option }}">{{ option }}</option>
+                        {% endfor %}
+                      </select>
+                      <div class="invalid-feedback"></div>
                     </div>
                     {% endif %}
                   </div>

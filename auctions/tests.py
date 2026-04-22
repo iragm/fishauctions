@@ -21,6 +21,7 @@ from django.utils import timezone
 from .forms import AuctionEditForm, ChangeUsernameForm, CreateLotForm
 from .models import (
     Auction,
+    AuctionDropdown,
     AuctionHistory,
     AuctionTOS,
     Bid,
@@ -4150,6 +4151,62 @@ class AuctionEditViewTests(StandardTestCase):
         assert response.status_code == 200
 
 
+class AuctionCustomFieldsViewTests(StandardTestCase):
+    def _custom_fields_data(self, use_custom_dropdown=False):
+        data = {
+            "custom_field_1": self.online_auction.custom_field_1,
+            "custom_field_1_name": self.online_auction.custom_field_1_name or "Notes",
+            "custom_checkbox_name": self.online_auction.custom_checkbox_name or "",
+            "reserve_price": self.online_auction.reserve_price,
+            "buy_now": self.online_auction.buy_now,
+        }
+        true_boolean_fields = [
+            "allow_bulk_adding_lots",
+            "use_categories",
+            "use_quantity_field",
+            "use_donation_field",
+            "use_i_bred_this_fish_field",
+            "use_reference_link",
+            "use_description",
+            "use_custom_checkbox_field",
+        ]
+        for field_name in true_boolean_fields:
+            if getattr(self.online_auction, field_name):
+                data[field_name] = "on"
+        if use_custom_dropdown:
+            data["use_custom_dropdown_field"] = "on"
+        return data
+
+    def test_custom_dropdown_requires_two_options(self):
+        self.client.login(username="my_lot", password="testpassword")
+        response = self.client.post(
+            reverse("edit_auction_custom_fields", kwargs={"slug": self.online_auction.slug}),
+            data=self._custom_fields_data(use_custom_dropdown=True),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.online_auction.refresh_from_db()
+        self.assertFalse(self.online_auction.use_custom_dropdown_field)
+        self.assertContains(response, "requires at least two options")
+
+    def test_custom_dropdown_model_creates_history(self):
+        option = AuctionDropdown.objects.create(auction=self.online_auction, user=self.user, value="Red")
+        option.value = "Blue"
+        option.user = self.user
+        option.save()
+        option.delete()
+        actions = AuctionHistory.objects.filter(auction=self.online_auction, applies_to="RULES").values_list(
+            "action", flat=True
+        )
+        self.assertTrue(any("Added custom dropdown option 'Red'" in action for action in actions))
+        self.assertTrue(any("Renamed custom dropdown option 'Red' to 'Blue'" in action for action in actions))
+        self.assertTrue(any("Removed custom dropdown option 'Blue'" in action for action in actions))
+
+    def test_label_print_fields_include_custom_dropdown(self):
+        self.client.login(username="my_lot", password="testpassword")
+        response = self.client.get(reverse("auction_label_config", kwargs={"slug": self.online_auction.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Custom dropdown")
+
 class PayPalFormFieldVisibilityTests(StandardTestCase):
     """Test that PayPal payment field is only shown when user has PayPal connected"""
 
@@ -6987,6 +7044,41 @@ class BulkAddLotsAutoTests(StandardTestCase):
         self.assertEqual(lot.quantity, 2)
         self.assertTrue(lot.donation)
         self.assertTrue(lot.i_bred_this_fish)
+
+    def test_custom_dropdown_saved(self):
+        """Custom dropdown values should save through the auto-save endpoint"""
+        self.in_person_auction.use_custom_dropdown_field = True
+        self.in_person_auction.save()
+        AuctionDropdown.objects.create(auction=self.in_person_auction, user=self.admin_user, value="Red")
+        AuctionDropdown.objects.create(auction=self.in_person_auction, user=self.admin_user, value="Blue")
+
+        self.client.login(username="my_lot", password="testpassword")
+        response = self.client.post(
+            reverse("save_lot_ajax", kwargs={"slug": self.in_person_auction.slug}),
+            data='{"lot_name": "Dropdown Lot", "reserve_price": 5, "custom_dropdown": "Blue"}',
+            content_type="application/json",
+        )
+        data = response.json()
+        self.assertTrue(data["success"])
+        lot = Lot.objects.get(lot_number=data["lot_id"])
+        self.assertEqual(lot.custom_dropdown, "Blue")
+
+    def test_custom_dropdown_rejects_invalid_option(self):
+        """Auto-save rejects dropdown values not configured in the auction."""
+        self.in_person_auction.use_custom_dropdown_field = True
+        self.in_person_auction.save()
+        AuctionDropdown.objects.create(auction=self.in_person_auction, user=self.admin_user, value="Red")
+        AuctionDropdown.objects.create(auction=self.in_person_auction, user=self.admin_user, value="Blue")
+
+        self.client.login(username="my_lot", password="testpassword")
+        response = self.client.post(
+            reverse("save_lot_ajax", kwargs={"slug": self.in_person_auction.slug}),
+            data='{"lot_name": "Dropdown Lot", "reserve_price": 5, "custom_dropdown": "Green"}',
+            content_type="application/json",
+        )
+        data = response.json()
+        self.assertFalse(data["success"])
+        self.assertIn("custom_dropdown", data["errors"])
 
     def test_required_field_validation(self):
         """Test that required fields are validated"""
