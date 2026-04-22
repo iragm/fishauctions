@@ -4207,6 +4207,7 @@ class AuctionCustomFieldsViewTests(StandardTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Custom dropdown")
 
+
 class PayPalFormFieldVisibilityTests(StandardTestCase):
     """Test that PayPal payment field is only shown when user has PayPal connected"""
 

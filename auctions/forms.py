@@ -2683,7 +2683,9 @@ class CreateLotForm(forms.ModelForm):
             if cleaned_data.get("payment_other") and not cleaned_data.get("payment_other_method"):
                 self.add_error("payment_other_method", "Enter your payment method")
         if auction:
-            custom_dropdown_options = list(AuctionDropdown.objects.filter(auction=auction).values_list("value", flat=True))
+            custom_dropdown_options = list(
+                AuctionDropdown.objects.filter(auction=auction).values_list("value", flat=True)
+            )
             selected_dropdown = cleaned_data.get("custom_dropdown", "")
             if auction.use_custom_dropdown_field and len(custom_dropdown_options) >= 2:
                 if selected_dropdown and selected_dropdown not in custom_dropdown_options:
