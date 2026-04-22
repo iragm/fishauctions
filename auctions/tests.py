@@ -4182,6 +4182,7 @@ class AuctionCustomFieldsViewTests(StandardTestCase):
         response = self.client.post(
             reverse("edit_auction_custom_fields", kwargs={"slug": self.online_auction.slug}),
             data=self._custom_fields_data(use_custom_dropdown=True),
+            follow=True,
         )
         self.assertEqual(response.status_code, 200)
         self.online_auction.refresh_from_db()

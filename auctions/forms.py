@@ -21,6 +21,7 @@ from django.forms import (
 )
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.html import format_html
 from django_recaptcha.fields import ReCaptchaField
 from django_recaptcha.widgets import ReCaptchaV2Invisible
 from django_summernote.widgets import SummernoteWidget
@@ -2155,7 +2156,12 @@ class AuctionEditForm(forms.ModelForm):
             ),
             Submit("submit", "Save", css_class="create-update-auction btn-success"),
             HTML(
-                f"""<div class="mt-2"><a href="{reverse("edit_auction_custom_fields", kwargs={"slug": self.instance.slug})}">Customize lot fields</a></div>"""
+                str(
+                    format_html(
+                        '<div class="mt-2"><a href="{}">Customize lot fields</a></div>',
+                        reverse("edit_auction_custom_fields", kwargs={"slug": self.instance.slug}),
+                    )
+                )
             ),
         )
 
@@ -2273,22 +2279,23 @@ class AuctionCustomFieldsForm(forms.ModelForm):
             ),
             Submit("submit", "Save", css_class="btn btn-success"),
             HTML(
-                f"""<div class="mt-2"><a href="{reverse("edit_auction", kwargs={"slug": self.instance.slug})}">Back to rules</a></div>"""
+                str(
+                    format_html(
+                        '<div class="mt-2"><a href="{}">Back to rules</a></div>',
+                        reverse("edit_auction", kwargs={"slug": self.instance.slug}),
+                    )
+                )
             ),
         )
 
     def clean(self):
         cleaned_data = super().clean()
-        cleaned_data["_disable_custom_dropdown"] = False
+        self.custom_dropdown_auto_disabled = False
         if cleaned_data.get("use_custom_dropdown_field"):
             options_count = AuctionDropdown.objects.filter(auction=self.instance).count()
             if options_count < 2:
-                self.add_error(
-                    "use_custom_dropdown_field",
-                    "Custom dropdown requires at least two options. It has been disabled.",
-                )
                 cleaned_data["use_custom_dropdown_field"] = False
-                cleaned_data["_disable_custom_dropdown"] = True
+                self.custom_dropdown_auto_disabled = True
         return cleaned_data
 
 

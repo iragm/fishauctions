@@ -136,6 +136,7 @@ from .forms import (
 )
 from .helper_functions import bin_data
 from .models import (
+    CUSTOM_DROPDOWN_MAX_LENGTH,
     FAQ,
     AdCampaign,
     AdCampaignResponse,
@@ -2263,13 +2264,9 @@ class AuctionCustomFieldsUpdate(LoginRequiredMixin, AuctionViewMixin, UpdateView
     def form_valid(self, form, **kwargs):
         if form.has_changed():
             self.get_object().create_history(applies_to="RULES", user=self.request.user, form=form)
+        if getattr(form, "custom_dropdown_auto_disabled", False):
+            messages.error(self.request, "Custom dropdown requires at least two options. It has been disabled.")
         return super().form_valid(form)
-
-    def form_invalid(self, form):
-        if form.cleaned_data.get("_disable_custom_dropdown"):
-            self.auction.use_custom_dropdown_field = False
-            self.auction.save(update_fields=["use_custom_dropdown_field"])
-        return super().form_invalid(form)
 
 
 class AuctionDropdownOptionsAPI(LoginRequiredMixin, AuctionViewMixin, View):
@@ -2285,12 +2282,16 @@ class AuctionDropdownOptionsAPI(LoginRequiredMixin, AuctionViewMixin, View):
         if not self.is_auction_admin:
             return HttpResponseForbidden()
         action = request.POST.get("action")
-        value = (request.POST.get("value") or "").strip()[:15]
+        value = (request.POST.get("value") or "").strip()
         option_id = request.POST.get("option_id")
 
         if action == "create":
             if not value:
                 return JsonResponse({"success": False, "error": "Option value is required"})
+            if len(value) > CUSTOM_DROPDOWN_MAX_LENGTH:
+                return JsonResponse(
+                    {"success": False, "error": f"Option value must be {CUSTOM_DROPDOWN_MAX_LENGTH} characters or less"}
+                )
             if AuctionDropdown.objects.filter(auction=self.auction, value__iexact=value).exists():
                 return JsonResponse({"success": False, "error": "That option already exists"})
             option = AuctionDropdown.objects.create(auction=self.auction, user=request.user, value=value)
@@ -2306,6 +2307,10 @@ class AuctionDropdownOptionsAPI(LoginRequiredMixin, AuctionViewMixin, View):
         if action == "update":
             if not value:
                 return JsonResponse({"success": False, "error": "Option value is required"})
+            if len(value) > CUSTOM_DROPDOWN_MAX_LENGTH:
+                return JsonResponse(
+                    {"success": False, "error": f"Option value must be {CUSTOM_DROPDOWN_MAX_LENGTH} characters or less"}
+                )
             duplicate = AuctionDropdown.objects.filter(auction=self.auction, value__iexact=value).exclude(pk=option.pk)
             if duplicate.exists():
                 return JsonResponse({"success": False, "error": "That option already exists"})
@@ -3702,8 +3707,12 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                 AuctionDropdown.objects.filter(auction=self.auction).values_list("value", flat=True)
             )
             if self.auction.use_custom_dropdown_field and len(custom_dropdown_options) >= 2:
-                custom_dropdown = data.get("custom_dropdown", "").strip()[:15]
-                if custom_dropdown and custom_dropdown not in custom_dropdown_options:
+                custom_dropdown = data.get("custom_dropdown", "").strip()
+                if len(custom_dropdown) > CUSTOM_DROPDOWN_MAX_LENGTH:
+                    errors["custom_dropdown"] = (
+                        f"Custom dropdown value must be {CUSTOM_DROPDOWN_MAX_LENGTH} characters or less"
+                    )
+                elif custom_dropdown and custom_dropdown not in custom_dropdown_options:
                     errors["custom_dropdown"] = "Select a valid custom dropdown option"
                 else:
                     lot.custom_dropdown = custom_dropdown

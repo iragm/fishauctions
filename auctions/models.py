@@ -55,6 +55,8 @@ from .helper_functions import bin_data, get_currency_symbol
 
 logger = logging.getLogger(__name__)
 
+CUSTOM_DROPDOWN_MAX_LENGTH = 15
+
 
 def nearby_auctions(
     latitude,
@@ -3359,7 +3361,7 @@ class AuctionDropdown(models.Model):
     auction = models.ForeignKey(Auction, on_delete=models.CASCADE)
     createdon = models.DateTimeField(auto_now_add=True)
     user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
-    value = models.CharField(max_length=15)
+    value = models.CharField(max_length=CUSTOM_DROPDOWN_MAX_LENGTH)
 
     def __str__(self):
         return self.value
@@ -3425,7 +3427,7 @@ class Lot(models.Model):
     image_source.help_text = "Where did you get this image?"
     custom_checkbox = models.BooleanField(default=False, verbose_name="Custom checkbox")
     custom_field_1 = models.CharField(max_length=60, default="", blank=True)
-    custom_dropdown = models.CharField(max_length=15, default="", blank=True)
+    custom_dropdown = models.CharField(max_length=CUSTOM_DROPDOWN_MAX_LENGTH, default="", blank=True)
     i_bred_this_fish = models.BooleanField(default=False, verbose_name=settings.I_BRED_THIS_FISH_LABEL)
     i_bred_this_fish.help_text = "Check to get breeder points for this lot"
     summernote_description = models.TextField(verbose_name="Description", default="", blank=True)
