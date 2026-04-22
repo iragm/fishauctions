@@ -2113,16 +2113,37 @@ class LotLabelViewTestCase(StandardTestCase):
         from .views import LotLabelView
 
         short_email_size = LotLabelView.get_seller_email_font_size("short@example.com", "thermal_sm")
-        long_email_size = LotLabelView.get_seller_email_font_size(
-            "really.long.seller.email.address@example-very-long-domain-name.com", "thermal_sm"
-        )
+        threshold_email_size = LotLabelView.get_seller_email_font_size("seller1234567890@example.com", "thermal_sm")
         non_thermal_size = LotLabelView.get_seller_email_font_size(
             "really.long.seller.email.address@example-very-long-domain-name.com", "sm"
         )
+        thermal_very_sm_size = LotLabelView.get_seller_email_font_size(
+            "seller1234567890@example.com", "thermal_very_sm"
+        )
 
         self.assertIsNone(short_email_size)
-        self.assertIsNotNone(long_email_size)
-        self.assertRegex(long_email_size, r"^\d+\.\d{2}em$")
+        self.assertIsNotNone(threshold_email_size)
+        self.assertRegex(threshold_email_size, r"^\d+\.\d{2}em$")
+        self.assertIsNotNone(thermal_very_sm_size)
+        self.assertRegex(thermal_very_sm_size, r"^\d+\.\d{2}em$")
+        self.assertLess(float(threshold_email_size[:-2]), 1)
+        self.assertLess(float(thermal_very_sm_size[:-2]), float(threshold_email_size[:-2]))
+        self.assertIsNone(non_thermal_size)
+
+    def test_get_lot_number_font_size_for_thermal_labels(self):
+        from .views import LotLabelView
+
+        six_digit_thermal_size = LotLabelView.get_lot_number_font_size("123456", "thermal_sm")
+        seven_digit_thermal_size = LotLabelView.get_lot_number_font_size("1234567", "thermal_sm")
+        short_thermal_size = LotLabelView.get_lot_number_font_size("12345", "thermal_sm")
+        non_thermal_size = LotLabelView.get_lot_number_font_size("1234567", "lg")
+
+        self.assertIsNotNone(six_digit_thermal_size)
+        self.assertRegex(six_digit_thermal_size, r"^\d+\.\d{2}em$")
+        self.assertIsNotNone(seven_digit_thermal_size)
+        self.assertRegex(seven_digit_thermal_size, r"^\d+\.\d{2}em$")
+        self.assertLess(float(seven_digit_thermal_size[:-2]), float(six_digit_thermal_size[:-2]))
+        self.assertIsNone(short_thermal_size)
         self.assertIsNone(non_thermal_size)
 
 
