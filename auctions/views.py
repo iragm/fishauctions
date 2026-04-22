@@ -6490,6 +6490,11 @@ class SquarePaymentSuccessView(InvoiceNoLoginView):
 class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
     """View and print labels for an auction"""
 
+    THERMAL_LOT_NUMBER_MAX_CHARS = 5
+    THERMAL_LOT_NUMBER_FONT_SIZE = "0.60em"
+    THERMAL_EMAIL_MAX_CHARS = 24
+    THERMAL_EMAIL_MIN_FONT_RATIO = 0.50
+
     # these are defined in urls.py and used in get_object(), below
     bidder_number = None
     username = None
@@ -6570,22 +6575,25 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
     @staticmethod
     def get_lot_number_font_size(lot_number_display, preset):
         """Shrink lot number font on 3x2 thermal labels when needed."""
-        if preset != "thermal_sm" or not lot_number_display:
+        if preset != "thermal_sm" or lot_number_display is None:
             return None
+        # lot_number_display can be numeric in some label querysets, so normalize before length checks.
         lot_number_display = str(lot_number_display)
-        if len(lot_number_display) <= 5:
+        if not lot_number_display:
             return None
-        return "0.60em"
+        if len(lot_number_display) <= LotLabelView.THERMAL_LOT_NUMBER_MAX_CHARS:
+            return None
+        return LotLabelView.THERMAL_LOT_NUMBER_FONT_SIZE
 
     @staticmethod
     def get_seller_email_font_size(seller_email, preset):
         """Shrink seller email font on 3x2 thermal labels when needed."""
         if preset != "thermal_sm" or not seller_email:
             return None
-        max_chars_at_default_size = 24
+        max_chars_at_default_size = LotLabelView.THERMAL_EMAIL_MAX_CHARS
         if len(seller_email) <= max_chars_at_default_size:
             return None
-        font_ratio = max(0.50, max_chars_at_default_size / len(seller_email))
+        font_ratio = max(LotLabelView.THERMAL_EMAIL_MIN_FONT_RATIO, max_chars_at_default_size / len(seller_email))
         return f"{font_ratio:.2f}em"
 
     def get_context_data(self, **kwargs):
