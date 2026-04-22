@@ -6503,10 +6503,14 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
     # ratio_base: numerator for ratio_base / text_length scaling.
     # min_ratio: floor so text stays readable.
     SELLER_EMAIL_FONT_CONFIG = {
+        "sm": {"shrink_threshold": 22, "ratio_base": 18, "min_ratio": 0.6},
+        "lg": {"shrink_threshold": 32, "ratio_base": 28, "min_ratio": 0.7},
         "thermal_sm": {"shrink_threshold": 21, "ratio_base": 17, "min_ratio": 0.45},
         "thermal_very_sm": {"shrink_threshold": 16, "ratio_base": 13, "min_ratio": 0.4},
     }
     LOT_NUMBER_FONT_CONFIG = {
+        "sm": {"shrink_threshold": 6, "ratio_base": 4.2, "min_ratio": 0.6},
+        "lg": {"shrink_threshold": 7, "ratio_base": 5.5, "min_ratio": 0.65},
         "thermal_sm": {"shrink_threshold": 5, "ratio_base": 3.5, "min_ratio": 0.45},
         "thermal_very_sm": {"shrink_threshold": 4, "ratio_base": 3, "min_ratio": 0.4},
     }
