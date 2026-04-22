@@ -10,7 +10,10 @@ fi
 
 # Get latest changes
 git restore .
-git pull
+if ! git pull; then
+    echo "Update failed. Docker services were not restarted."
+    exit 1
+fi
 
 # Load environment variables from .env file (really only need $SITE_DOMAIN)
 if [ -f ./.env ]; then
