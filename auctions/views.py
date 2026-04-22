@@ -6498,6 +6498,18 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
     template_name = "label_template.html"
     allow_non_admins = True
     filename = ""  # this will be automatically generated in dispatch
+    # Tuned for the known overflow breakpoints on thermal presets (long seller emails/lot numbers).
+    # shrink_threshold: start scaling after this length.
+    # ratio_base: numerator for ratio_base / text_length scaling.
+    # min_ratio: floor so text stays readable.
+    SELLER_EMAIL_FONT_CONFIG = {
+        "thermal_sm": {"shrink_threshold": 21, "ratio_base": 17, "min_ratio": 0.45},
+        "thermal_very_sm": {"shrink_threshold": 16, "ratio_base": 13, "min_ratio": 0.4},
+    }
+    LOT_NUMBER_FONT_CONFIG = {
+        "thermal_sm": {"shrink_threshold": 5, "ratio_base": 3.5, "min_ratio": 0.45},
+        "thermal_very_sm": {"shrink_threshold": 4, "ratio_base": 3, "min_ratio": 0.4},
+    }
 
     def get_queryset(self):
         return self.tos.print_labels_qs
@@ -6572,50 +6584,26 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
         """Shrink seller email font on thermal labels when needed."""
         if not seller_email:
             return None
-        max_chars_by_preset = {
-            "thermal_sm": 21,
-            "thermal_very_sm": 16,
-        }
-        shrink_threshold = max_chars_by_preset.get(preset)
-        if not shrink_threshold:
+        config = LotLabelView.SELLER_EMAIL_FONT_CONFIG.get(preset)
+        if not config:
             return None
-        if len(seller_email) <= shrink_threshold:
+        if len(seller_email) <= config["shrink_threshold"]:
             return None
-        fit_chars_by_preset = {
-            "thermal_sm": 17,
-            "thermal_very_sm": 13,
-        }
-        min_ratio_by_preset = {
-            "thermal_sm": 0.45,
-            "thermal_very_sm": 0.4,
-        }
-        font_ratio = max(min_ratio_by_preset[preset], fit_chars_by_preset[preset] / len(seller_email))
+        font_ratio = max(config["min_ratio"], config["ratio_base"] / len(seller_email))
         return f"{font_ratio:.2f}em"
 
     @staticmethod
     def get_lot_number_font_size(lot_number_display, preset):
         """Shrink lot number font on thermal labels when needed."""
-        if lot_number_display is None:
+        if not lot_number_display:
             return None
         lot_number_display = str(lot_number_display)
-        max_chars_by_preset = {
-            "thermal_sm": 5,
-            "thermal_very_sm": 4,
-        }
-        shrink_threshold = max_chars_by_preset.get(preset)
-        if not shrink_threshold:
+        config = LotLabelView.LOT_NUMBER_FONT_CONFIG.get(preset)
+        if not config:
             return None
-        if len(lot_number_display) <= shrink_threshold:
+        if len(lot_number_display) <= config["shrink_threshold"]:
             return None
-        fit_chars_by_preset = {
-            "thermal_sm": 3.5,
-            "thermal_very_sm": 3,
-        }
-        min_ratio_by_preset = {
-            "thermal_sm": 0.45,
-            "thermal_very_sm": 0.4,
-        }
-        font_ratio = max(min_ratio_by_preset[preset], fit_chars_by_preset[preset] / len(lot_number_display))
+        font_ratio = max(config["min_ratio"], config["ratio_base"] / len(lot_number_display))
         return f"{font_ratio:.2f}em"
 
     def get_context_data(self, **kwargs):
