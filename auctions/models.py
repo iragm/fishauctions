@@ -3389,9 +3389,10 @@ class AuctionDropdown(models.Model):
             AuctionDropdown.objects.filter(pk=self.pk).delete()
             self.pk = oldest.pk
             self.id = oldest.pk
-            self._state.adding = False
-            self._state.db = oldest._state.db
-            self.refresh_from_db()
+            self.createdon = oldest.createdon
+            self.user = oldest.user
+            self.value = oldest.value
+            self.auction = oldest.auction
             return
         duplicates.exclude(pk=self.pk).delete()
         if is_new:

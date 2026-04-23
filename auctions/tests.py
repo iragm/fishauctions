@@ -4236,7 +4236,10 @@ class AuctionCustomFieldsViewTests(StandardTestCase):
     def test_custom_dropdown_save_keeps_oldest_duplicate(self):
         oldest = AuctionDropdown.objects.create(auction=self.online_auction, user=self.user, value="River")
         newer = AuctionDropdown.objects.create(auction=self.online_auction, user=self.admin_user, value="river")
-        self.assertEqual(AuctionDropdown.objects.filter(auction=self.online_auction, value__iexact="river").count(), 1)
+        options = AuctionDropdown.objects.filter(auction=self.online_auction, value__iexact="river")
+        self.assertEqual(options.count(), 1)
+        self.assertEqual(options.first().pk, oldest.pk)
+        self.assertEqual(options.first().user, self.user)
         newer.refresh_from_db()
         self.assertEqual(newer.pk, oldest.pk)
 
