@@ -599,7 +599,6 @@ class MultiAuctionTOSPrintLabelForm(forms.Form):
 
         self.helper = FormHelper()
         self.helper.form_method = "post"
-        self.helper.form_target = "_blank"
         self.helper.add_input(Submit("submit", "Print"))
         layout = [
             "print_only_unprinted",

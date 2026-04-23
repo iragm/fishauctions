@@ -2190,13 +2190,14 @@ class LotLabelViewTestCase(StandardTestCase):
         assert response.status_code == 200
         assert "attachment;filename=" in response.headers["Content-Disposition"]
 
-    def test_bulk_print_form_opens_in_new_tab(self):
-        """The bulk print form should open in a new tab so the PDF generation doesn't block the print page."""
+    def test_bulk_print_form_uses_fetch(self):
+        """Bulk print form should use fetch() to download PDF without a page navigation."""
         self.client.login(username="admin_user", password="testpassword")
         url = reverse("auction_printing", kwargs={"slug": self.in_person_auction.slug})
         response = self.client.get(url)
         assert response.status_code == 200
-        self.assertContains(response, 'target="_blank"')
+        self.assertContains(response, "fetch(")
+        self.assertContains(response, "application/pdf")
 
 
 class UpdateLotPushNotificationsViewTestCase(StandardTestCase):

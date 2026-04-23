@@ -20,13 +20,40 @@
     {% crispy form %}
 {% endblock %}
 {% block extra_js %}
-{# script following reloads the page on form submit so the numbers are accurate #}
 <script>
 $(document).ready(function() {
   $('#submit-id-submit').on('click', function(event) {
-      setTimeout(function() {
-          location.reload();
-      }, 5000);
+    event.preventDefault();
+    var $btn = $(this);
+    $btn.prop('disabled', true).text('Generating PDF...');
+    var form = $btn.closest('form');
+    fetch(form.attr('action'), {
+      method: 'POST',
+      body: new FormData(form[0]),
+      redirect: 'follow'
+    })
+    .then(function(response) {
+      var contentType = response.headers.get('Content-Type') || '';
+      if (contentType.includes('application/pdf')) {
+        var disposition = response.headers.get('Content-Disposition') || '';
+        var filenameMatch = disposition.match(/filename=([^;]+)/);
+        var filename = filenameMatch ? filenameMatch[1].trim() : 'labels.pdf';
+        return response.blob().then(function(blob) {
+          var url = URL.createObjectURL(blob);
+          var a = document.createElement('a');
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        });
+      }
+      // Non-PDF response (e.g. server error redirect): fall through to reload
+      // so any Django messages are displayed.
+    })
+    .then(function() { location.reload(); })
+    .catch(function() { location.reload(); });
   });
 });
 </script>
