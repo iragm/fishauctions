@@ -2498,9 +2498,9 @@ class CreateLotForm(forms.ModelForm):
                 .order_by("createdon")
                 .values_list("value", flat=True)
             )
-            dropdown_initial_value = self.instance.custom_dropdown or self.fields["custom_dropdown"].initial or ""
-            if dropdown_initial_value and dropdown_initial_value not in custom_dropdown_options:
-                dropdown_initial_value = ""
+            validated_dropdown_value = self.instance.custom_dropdown or self.fields["custom_dropdown"].initial or ""
+            if validated_dropdown_value and validated_dropdown_value not in custom_dropdown_options:
+                validated_dropdown_value = ""
             if (
                 selected_auction.use_custom_dropdown_field != "disable"
                 and selected_auction.custom_dropdown_name
@@ -2511,7 +2511,7 @@ class CreateLotForm(forms.ModelForm):
                 )
                 self.fields["custom_dropdown"].label = selected_auction.custom_dropdown_name
                 self.fields["custom_dropdown"].required = selected_auction.use_custom_dropdown_field == "required"
-                self.fields["custom_dropdown"].initial = dropdown_initial_value
+                self.fields["custom_dropdown"].initial = validated_dropdown_value
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_id = "lot-form"

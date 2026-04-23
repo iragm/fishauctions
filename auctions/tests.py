@@ -60,7 +60,8 @@ class StandardTestCase(TestCase):
     def setUp(self):
         time = timezone.now() - datetime.timedelta(days=2)
         timeStart = timezone.now() - datetime.timedelta(days=3)
-        theFuture = timezone.now() + datetime.timedelta(days=3)
+        the_future = timezone.now() + datetime.timedelta(days=3)
+        theFuture = the_future
         self.admin_user = User.objects.create_user(
             username="admin_user", password="testpassword", email="test@example.com"
         )
@@ -213,15 +214,15 @@ class ViewLotTest(TestCase):
     def setUp(self):
         time = timezone.now() - datetime.timedelta(days=2)
         timeStart = timezone.now() - datetime.timedelta(days=3)
-        theFuture = timezone.now() + datetime.timedelta(days=3)
+        the_future = timezone.now() + datetime.timedelta(days=3)
         self.auction = Auction.objects.create(title="A test auction", date_end=time, date_start=timeStart)
-        self.location = PickupLocation.objects.create(name="location", auction=self.auction, pickup_time=theFuture)
+        self.location = PickupLocation.objects.create(name="location", auction=self.auction, pickup_time=the_future)
         self.user = User.objects.create_user(username="my_lot", password="testpassword")
         self.userB = User.objects.create_user(username="no_tos", password="testpassword")
         self.tos = AuctionTOS.objects.create(user=self.user, auction=self.auction, pickup_location=self.location)
         self.lot = Lot.objects.create(
             lot_name="A test lot",
-            date_end=theFuture,
+            date_end=the_future,
             reserve_price=5,
             auction=self.auction,
             user=self.user,
@@ -281,12 +282,12 @@ class AuctionModelTests(TestCase):
     def test_lots_in_auction_end_with_auction(self):
         time = timezone.now() - datetime.timedelta(days=2)
         timeStart = timezone.now() - datetime.timedelta(days=3)
-        theFuture = timezone.now() + datetime.timedelta(days=3)
+        the_future = timezone.now() + datetime.timedelta(days=3)
         auction = Auction.objects.create(title="A test auction", date_end=time, date_start=timeStart)
         user = User.objects.create(username="Test user")
         lot = Lot.objects.create(
             lot_name="A test lot",
-            date_end=theFuture,
+            date_end=the_future,
             reserve_price=5,
             auction=auction,
             user=user,
@@ -4519,6 +4520,7 @@ class LotCreateViewTests(StandardTestCase):
 
     def test_lot_create_switch_from_required_dropdown_to_disabled_auction_saves(self):
         theFuture = timezone.now() + datetime.timedelta(days=3)
+        the_future = theFuture
         self.user.first_name = "Test"
         self.user.last_name = "User"
         self.user.save()
@@ -4538,7 +4540,7 @@ class LotCreateViewTests(StandardTestCase):
             custom_dropdown_name="Habitat",
         )
         required_location = PickupLocation.objects.create(
-            name="required location", auction=required_auction, pickup_time=theFuture
+            name="required location", auction=required_auction, pickup_time=the_future
         )
         AuctionTOS.objects.create(user=self.user, auction=required_auction, pickup_location=required_location)
         AuctionDropdown.objects.create(auction=required_auction, user=self.user, value="River")
@@ -4548,14 +4550,14 @@ class LotCreateViewTests(StandardTestCase):
             created_by=self.user,
             title="Disabled dropdown auction",
             is_online=True,
-            date_end=theFuture,
+            date_end=the_future,
             date_start=timezone.now() - datetime.timedelta(days=1),
-            lot_submission_end_date=theFuture,
+            lot_submission_end_date=the_future,
             winning_bid_percent_to_club=25,
             use_custom_dropdown_field="disable",
         )
         disabled_location = PickupLocation.objects.create(
-            name="disabled location", auction=disabled_auction, pickup_time=theFuture
+            name="disabled location", auction=disabled_auction, pickup_time=the_future
         )
         AuctionTOS.objects.create(user=self.user, auction=disabled_auction, pickup_location=disabled_location)
         user_data.last_auction_used = required_auction
@@ -4580,7 +4582,7 @@ class LotCreateViewTests(StandardTestCase):
         self.assertEqual(lot.custom_dropdown, "")
 
     def test_lot_create_copy_prefills_custom_dropdown_when_target_options_match(self):
-        theFuture = timezone.now() + datetime.timedelta(days=3)
+        the_future = timezone.now() + datetime.timedelta(days=3)
         self.user.first_name = "Test"
         self.user.last_name = "User"
         self.user.save()
@@ -4592,15 +4594,15 @@ class LotCreateViewTests(StandardTestCase):
             created_by=self.user,
             title="Source auction",
             is_online=True,
-            date_end=theFuture,
+            date_end=the_future,
             date_start=timezone.now() - datetime.timedelta(days=1),
-            lot_submission_end_date=theFuture,
+            lot_submission_end_date=the_future,
             winning_bid_percent_to_club=25,
             use_custom_dropdown_field="allow",
             custom_dropdown_name="Habitat",
         )
         source_location = PickupLocation.objects.create(
-            name="source location", auction=source_auction, pickup_time=theFuture
+            name="source location", auction=source_auction, pickup_time=the_future
         )
         source_tos = AuctionTOS.objects.create(user=self.user, auction=source_auction, pickup_location=source_location)
         AuctionDropdown.objects.create(auction=source_auction, user=self.user, value="River")
@@ -4618,15 +4620,15 @@ class LotCreateViewTests(StandardTestCase):
             created_by=self.user,
             title="Target auction",
             is_online=True,
-            date_end=theFuture,
+            date_end=the_future,
             date_start=timezone.now() - datetime.timedelta(days=1),
-            lot_submission_end_date=theFuture,
+            lot_submission_end_date=the_future,
             winning_bid_percent_to_club=25,
             use_custom_dropdown_field="allow",
             custom_dropdown_name="Habitat",
         )
         target_location = PickupLocation.objects.create(
-            name="target location", auction=target_auction, pickup_time=theFuture
+            name="target location", auction=target_auction, pickup_time=the_future
         )
         AuctionTOS.objects.create(user=self.user, auction=target_auction, pickup_location=target_location)
         AuctionDropdown.objects.create(auction=target_auction, user=self.user, value="River")
@@ -4639,7 +4641,7 @@ class LotCreateViewTests(StandardTestCase):
         self.assertEqual(form["custom_dropdown"].value(), "River")
 
     def test_lot_create_copy_does_not_prefill_custom_dropdown_when_target_options_do_not_match(self):
-        theFuture = timezone.now() + datetime.timedelta(days=3)
+        the_future = timezone.now() + datetime.timedelta(days=3)
         self.user.first_name = "Test"
         self.user.last_name = "User"
         self.user.save()
@@ -4651,15 +4653,15 @@ class LotCreateViewTests(StandardTestCase):
             created_by=self.user,
             title="Source auction mismatch",
             is_online=True,
-            date_end=theFuture,
+            date_end=the_future,
             date_start=timezone.now() - datetime.timedelta(days=1),
-            lot_submission_end_date=theFuture,
+            lot_submission_end_date=the_future,
             winning_bid_percent_to_club=25,
             use_custom_dropdown_field="allow",
             custom_dropdown_name="Habitat",
         )
         source_location = PickupLocation.objects.create(
-            name="source mismatch location", auction=source_auction, pickup_time=theFuture
+            name="source mismatch location", auction=source_auction, pickup_time=the_future
         )
         source_tos = AuctionTOS.objects.create(user=self.user, auction=source_auction, pickup_location=source_location)
         AuctionDropdown.objects.create(auction=source_auction, user=self.user, value="River")
@@ -4677,15 +4679,15 @@ class LotCreateViewTests(StandardTestCase):
             created_by=self.user,
             title="Target auction mismatch",
             is_online=True,
-            date_end=theFuture,
+            date_end=the_future,
             date_start=timezone.now() - datetime.timedelta(days=1),
-            lot_submission_end_date=theFuture,
+            lot_submission_end_date=the_future,
             winning_bid_percent_to_club=25,
             use_custom_dropdown_field="allow",
             custom_dropdown_name="Habitat",
         )
         target_location = PickupLocation.objects.create(
-            name="target mismatch location", auction=target_auction, pickup_time=theFuture
+            name="target mismatch location", auction=target_auction, pickup_time=the_future
         )
         AuctionTOS.objects.create(user=self.user, auction=target_auction, pickup_location=target_location)
         AuctionDropdown.objects.create(auction=target_auction, user=self.user, value="Lake")
@@ -4698,7 +4700,7 @@ class LotCreateViewTests(StandardTestCase):
         self.assertIn(form["custom_dropdown"].value(), ("", None))
 
     def test_lot_create_switch_to_required_dropdown_auction_requires_selection(self):
-        theFuture = timezone.now() + datetime.timedelta(days=3)
+        the_future = timezone.now() + datetime.timedelta(days=3)
         self.user.first_name = "Test"
         self.user.last_name = "User"
         self.user.save()
@@ -4710,14 +4712,14 @@ class LotCreateViewTests(StandardTestCase):
             created_by=self.user,
             title="Disabled start auction",
             is_online=True,
-            date_end=theFuture,
+            date_end=the_future,
             date_start=timezone.now() - datetime.timedelta(days=1),
-            lot_submission_end_date=theFuture,
+            lot_submission_end_date=the_future,
             winning_bid_percent_to_club=25,
             use_custom_dropdown_field="disable",
         )
         disabled_location = PickupLocation.objects.create(
-            name="disabled start location", auction=disabled_auction, pickup_time=theFuture
+            name="disabled start location", auction=disabled_auction, pickup_time=the_future
         )
         AuctionTOS.objects.create(user=self.user, auction=disabled_auction, pickup_location=disabled_location)
 
@@ -4725,15 +4727,15 @@ class LotCreateViewTests(StandardTestCase):
             created_by=self.user,
             title="Required target auction",
             is_online=True,
-            date_end=theFuture,
+            date_end=the_future,
             date_start=timezone.now() - datetime.timedelta(days=1),
-            lot_submission_end_date=theFuture,
+            lot_submission_end_date=the_future,
             winning_bid_percent_to_club=25,
             use_custom_dropdown_field="required",
             custom_dropdown_name="Habitat",
         )
         required_location = PickupLocation.objects.create(
-            name="required target location", auction=required_auction, pickup_time=theFuture
+            name="required target location", auction=required_auction, pickup_time=the_future
         )
         AuctionTOS.objects.create(user=self.user, auction=required_auction, pickup_location=required_location)
         AuctionDropdown.objects.create(auction=required_auction, user=self.user, value="River")
