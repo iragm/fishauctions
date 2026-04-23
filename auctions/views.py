@@ -6498,6 +6498,22 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
     template_name = "label_template.html"
     allow_non_admins = True
     filename = ""  # this will be automatically generated in dispatch
+    # Tuned for known overflow breakpoints (long seller emails/lot numbers) per label preset.
+    # shrink_threshold: start scaling after this length.
+    # ratio_base: numerator for ratio_base / text_length scaling.
+    # min_ratio: floor so text stays readable.
+    SELLER_EMAIL_FONT_CONFIG = {
+        "sm": {"shrink_threshold": 22, "ratio_base": 18, "min_ratio": 0.6},
+        "lg": {"shrink_threshold": 24, "ratio_base": 19, "min_ratio": 0.55},
+        "thermal_sm": {"shrink_threshold": 21, "ratio_base": 17, "min_ratio": 0.45},
+        "thermal_very_sm": {"shrink_threshold": 16, "ratio_base": 13, "min_ratio": 0.4},
+    }
+    LOT_NUMBER_FONT_CONFIG = {
+        "sm": {"shrink_threshold": 6, "ratio_base": 4.2, "min_ratio": 0.6},
+        "lg": {"shrink_threshold": 6, "ratio_base": 4.8, "min_ratio": 0.6},
+        "thermal_sm": {"shrink_threshold": 5, "ratio_base": 3.5, "min_ratio": 0.45},
+        "thermal_very_sm": {"shrink_threshold": 4, "ratio_base": 3, "min_ratio": 0.4},
+    }
 
     def get_queryset(self):
         return self.tos.print_labels_qs
@@ -6569,13 +6585,29 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
 
     @staticmethod
     def get_seller_email_font_size(seller_email, preset):
-        """Shrink seller email font on 3x2 thermal labels when needed."""
-        if preset != "thermal_sm" or not seller_email:
+        """Shrink seller email font for configured label presets when needed."""
+        if not seller_email:
             return None
-        max_chars_at_default_size = 30
-        if len(seller_email) <= max_chars_at_default_size:
+        config = LotLabelView.SELLER_EMAIL_FONT_CONFIG.get(preset)
+        if not config:
             return None
-        font_ratio = max(0.55, max_chars_at_default_size / len(seller_email))
+        if len(seller_email) <= config["shrink_threshold"]:
+            return None
+        font_ratio = max(config["min_ratio"], config["ratio_base"] / len(seller_email))
+        return f"{font_ratio:.2f}em"
+
+    @staticmethod
+    def get_lot_number_font_size(lot_number_display, preset):
+        """Shrink lot number font for configured label presets when needed."""
+        if not lot_number_display:
+            return None
+        lot_number_display = str(lot_number_display)
+        config = LotLabelView.LOT_NUMBER_FONT_CONFIG.get(preset)
+        if not config:
+            return None
+        if len(lot_number_display) <= config["shrink_threshold"]:
+            return None
+        font_ratio = max(config["min_ratio"], config["ratio_base"] / len(lot_number_display))
         return f"{font_ratio:.2f}em"
 
     def get_context_data(self, **kwargs):
@@ -6747,6 +6779,9 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
             label.first_column_fields = label_first_column_fields
             label.second_column_fields = label_second_column_fields
             label.seller_email_font_size = self.get_seller_email_font_size(label.seller_email, user_label_prefs.preset)
+            label.lot_number_font_size = self.get_lot_number_font_size(
+                label.lot_number_display, user_label_prefs.preset
+            )
         context["labels"] = (["empty"] * context["empty_labels"]) + list(labels)
         context["text_area_width"] = context["label_width"] - context["first_column_width"]
         context["description_font_size"] = int(context["font_size"] * 0.7)
