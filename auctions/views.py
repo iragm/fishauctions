@@ -4123,6 +4123,9 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
                     errors["missing_info"] += 1
                     continue
 
+                custom_dropdown_value = (
+                    custom_dropdown if use_custom_dropdown and custom_dropdown in custom_dropdown_options else ""
+                )
                 new_lot = Lot(
                     lot_name=lot_name[:40],
                     summernote_description=description or "",
@@ -4133,9 +4136,7 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
                     donation=donation,
                     custom_checkbox=custom_checkbox,
                     custom_field_1=custom_field_1[:60] if custom_field_1 else "",
-                    custom_dropdown=custom_dropdown
-                    if use_custom_dropdown and custom_dropdown in custom_dropdown_options
-                    else "",
+                    custom_dropdown=custom_dropdown_value,
                     auctiontos_seller=tos,
                     auction=self.auction,
                     added_by=self.request.user,

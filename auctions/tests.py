@@ -4299,7 +4299,7 @@ class LotListViewTests(StandardTestCase):
         response = self.client.get(f"/lots/?auction={self.online_auction.slug}")
         assert response.status_code == 200
 
-    def test_auction_lotlist_csv_includes_custom_dropdown_column(self):
+    def test_auction_lot_list_csv_export_includes_custom_dropdown(self):
         self.online_auction.use_custom_dropdown_field = True
         self.online_auction.custom_dropdown_name = "Habitat"
         self.online_auction.save()
