@@ -2236,6 +2236,8 @@ class AuctionCustomFieldsForm(forms.ModelForm):
         model = Auction
         fields = [
             "allow_bulk_adding_lots",
+            "reserve_price",
+            "buy_now",
             "use_categories",
             "use_quantity_field",
             "use_donation_field",
@@ -2248,8 +2250,6 @@ class AuctionCustomFieldsForm(forms.ModelForm):
             "custom_checkbox_name",
             "use_custom_dropdown_field",
             "custom_dropdown_name",
-            "reserve_price",
-            "buy_now",
         ]
 
     def __init__(self, *args, **kwargs):
@@ -2259,6 +2259,7 @@ class AuctionCustomFieldsForm(forms.ModelForm):
         self.helper.form_id = "auction-custom-fields-form"
         self.helper.form_class = "form"
         self.helper.form_tag = True
+        self.fields["custom_field_1"].label = "Use custom text field"
         self.helper.layout = Layout(
             HTML("""<h4>Custom fields</h4>Control what information your users can enter about lots.
                 <span class='text-warning'>For advanced users only!</span>
@@ -2266,6 +2267,8 @@ class AuctionCustomFieldsForm(forms.ModelForm):
                 <small>If you enable more than a couple extra fields here, you should disable bulk adding lots, as too many fields in the bulk adding lots form quickly becomes overwhelming for users</small><br><br>"""),
             Div(
                 Div("allow_bulk_adding_lots", css_class="col-md-4"),
+                Div("reserve_price", css_class="col-md-4"),
+                Div("buy_now", css_class="col-md-4"),
                 Div("use_categories", css_class="col-md-4"),
                 Div("use_quantity_field", css_class="col-md-4"),
                 Div("use_donation_field", css_class="col-md-4"),
@@ -2278,8 +2281,6 @@ class AuctionCustomFieldsForm(forms.ModelForm):
                 Div("custom_checkbox_name", css_class="col-md-4"),
                 Div("use_custom_dropdown_field", css_class="col-md-4"),
                 Div("custom_dropdown_name", css_class="col-md-4"),
-                Div("reserve_price", css_class="col-md-4"),
-                Div("buy_now", css_class="col-md-4"),
                 css_class="row",
             ),
             Submit("submit", "Save", css_class="btn btn-success"),

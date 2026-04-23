@@ -4208,8 +4208,17 @@ class AuctionCustomFieldsViewTests(StandardTestCase):
         self.client.login(username="my_lot", password="testpassword")
         response = self.client.get(reverse("edit_auction_custom_fields", kwargs={"slug": self.online_auction.slug}))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Custom text field")
+        self.assertContains(response, "Use custom text field")
         self.assertContains(response, "Custom text field name")
+
+    def test_custom_fields_form_shows_seller_price_fields_before_custom_dropdown(self):
+        self.client.login(username="my_lot", password="testpassword")
+        response = self.client.get(reverse("edit_auction_custom_fields", kwargs={"slug": self.online_auction.slug}))
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode(response.charset or "utf-8")
+        self.assertLess(html.index("Allow bulk adding lots"), html.index("Seller set minimum bid"))
+        self.assertLess(html.index("Seller set minimum bid"), html.index("Buy now"))
+        self.assertLess(html.index("Buy now"), html.index("Use custom dropdown field"))
 
     def test_custom_dropdown_model_creates_history(self):
         option = AuctionDropdown.objects.create(auction=self.online_auction, user=self.user, value="Red")
