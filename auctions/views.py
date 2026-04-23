@@ -2266,7 +2266,9 @@ class AuctionCustomFieldsUpdate(LoginRequiredMixin, AuctionViewMixin, UpdateView
         if form.has_changed():
             self.get_object().create_history(applies_to="RULES", user=self.request.user, form=form)
         if getattr(form, "custom_dropdown_auto_disabled", False):
-            messages.error(self.request, "Custom dropdown requires at least two options. It has been disabled.")
+            messages.error(
+                self.request, "Custom dropdown requires a name and at least two options. It has been disabled."
+            )
         return super().form_valid(form)
 
 
@@ -3505,11 +3507,14 @@ class BulkAddLotsAuto(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         context["use_custom_field_1"] = self.auction.custom_field_1 != "disable" and self.auction.custom_field_1_name
         context["custom_field_1_name"] = self.auction.custom_field_1_name if context["use_custom_field_1"] else ""
         context["custom_field_1_required"] = self.auction.custom_field_1 == "required"
+        context["custom_dropdown_name"] = self.auction.custom_dropdown_name
         context["custom_dropdown_options"] = list(
             AuctionDropdown.objects.filter(auction=self.auction).order_by("createdon").values_list("value", flat=True)
         )
         context["use_custom_dropdown"] = (
-            self.auction.use_custom_dropdown_field and len(context["custom_dropdown_options"]) >= 2
+            self.auction.use_custom_dropdown_field
+            and self.auction.custom_dropdown_name
+            and len(context["custom_dropdown_options"]) >= 2
         )
 
         context["use_i_bred_this_fish"] = self.auction.use_i_bred_this_fish_field
@@ -3707,7 +3712,11 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
             custom_dropdown_options = list(
                 AuctionDropdown.objects.filter(auction=self.auction).values_list("value", flat=True)
             )
-            if self.auction.use_custom_dropdown_field and len(custom_dropdown_options) >= 2:
+            if (
+                self.auction.use_custom_dropdown_field
+                and self.auction.custom_dropdown_name
+                and len(custom_dropdown_options) >= 2
+            ):
                 custom_dropdown = data.get("custom_dropdown", "").strip()
                 if len(custom_dropdown) > CUSTOM_DROPDOWN_MAX_LENGTH:
                     errors["custom_dropdown"] = (
@@ -5634,6 +5643,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "custom_field_1",
                 "custom_field_1_name",
                 "use_custom_dropdown_field",
+                "custom_dropdown_name",
                 "allow_bulk_adding_lots",
                 "copy_users_when_copying_this_auction",
                 "use_donation_field",
@@ -10457,6 +10467,7 @@ class AuctionFinder(View, LoginRequiredMixin):
                 "use_i_bred_this_fish_field": self.auction.use_i_bred_this_fish_field,
                 "use_custom_checkbox_field": self.auction.use_custom_checkbox_field,
                 "use_custom_dropdown_field": self.auction.use_custom_dropdown_field,
+                "custom_dropdown_name": self.auction.custom_dropdown_name,
                 "custom_dropdown_options": list(
                     AuctionDropdown.objects.filter(auction=self.auction)
                     .order_by("createdon")

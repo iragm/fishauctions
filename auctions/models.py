@@ -786,6 +786,10 @@ class Auction(models.Model):
     use_i_bred_this_fish_field = models.BooleanField(default=True, blank=True, verbose_name="Use Breeder Points field")
     use_custom_checkbox_field = models.BooleanField(default=False, blank=True)
     use_custom_checkbox_field.help_text = "Optional information such as CARES, native species, difficult to keep, etc."
+    custom_dropdown_name = models.CharField(
+        max_length=50, default="", blank=True, null=True, verbose_name="Custom dropdown name"
+    )
+    custom_dropdown_name.help_text = "Shown when users add lots"
     use_custom_dropdown_field = models.BooleanField(default=False, blank=True)
     use_custom_dropdown_field.help_text = "Optional dropdown shown when users add lots."
     CUSTOM_CHOICES = (

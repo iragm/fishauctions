@@ -261,6 +261,18 @@ class ViewLotTest(TestCase):
         response = self.client.get(self.url)
         self.assertContains(response, "This lot is very new")
 
+    def test_custom_dropdown_displays_on_lot_views(self):
+        self.auction.use_custom_dropdown_field = True
+        self.auction.custom_dropdown_name = "Habitat"
+        self.auction.save()
+        self.lot.custom_dropdown = "River"
+        self.lot.custom_lot_number = "101"
+        self.lot.save()
+
+        response = self.client.get(self.url)
+        self.assertContains(response, "Habitat:")
+        self.assertContains(response, "River")
+
 
 class AuctionModelTests(TestCase):
     """Test for the auction model, duh"""
@@ -4157,6 +4169,7 @@ class AuctionCustomFieldsViewTests(StandardTestCase):
             "custom_field_1": self.online_auction.custom_field_1,
             "custom_field_1_name": self.online_auction.custom_field_1_name or "Notes",
             "custom_checkbox_name": self.online_auction.custom_checkbox_name or "",
+            "custom_dropdown_name": self.online_auction.custom_dropdown_name or "My dropdown",
             "reserve_price": self.online_auction.reserve_price,
             "buy_now": self.online_auction.buy_now,
         }
@@ -4187,7 +4200,7 @@ class AuctionCustomFieldsViewTests(StandardTestCase):
         self.assertEqual(response.status_code, 200)
         self.online_auction.refresh_from_db()
         self.assertFalse(self.online_auction.use_custom_dropdown_field)
-        self.assertContains(response, "requires at least two options")
+        self.assertContains(response, "requires a name and at least two options")
 
     def test_custom_dropdown_model_creates_history(self):
         option = AuctionDropdown.objects.create(auction=self.online_auction, user=self.user, value="Red")
@@ -4421,6 +4434,35 @@ class LotCreateViewTests(StandardTestCase):
         form = response.context["form"]
         assert form.initial.get("lot_name") == "TestFish"
         assert form.initial.get("quantity") == "5"
+
+    def test_lot_create_form_shows_custom_dropdown_when_enabled(self):
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        self.user.first_name = "Test"
+        self.user.last_name = "User"
+        self.user.save()
+        user_data = UserData.objects.get(user=self.user)
+        user_data.address = "123 Test St"
+        user_data.save()
+        open_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Open auction with dropdown",
+            is_online=True,
+            date_end=theFuture,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            lot_submission_end_date=theFuture,
+            winning_bid_percent_to_club=25,
+            use_custom_dropdown_field=True,
+            custom_dropdown_name="Habitat",
+        )
+        open_location = PickupLocation.objects.create(name="open location", auction=open_auction, pickup_time=theFuture)
+        AuctionTOS.objects.create(user=self.user, auction=open_auction, pickup_location=open_location)
+        AuctionDropdown.objects.create(auction=open_auction, user=self.user, value="River")
+        AuctionDropdown.objects.create(auction=open_auction, user=self.user, value="Pond")
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get(f"/lots/new/?auction={open_auction.slug}")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Habitat")
+        self.assertContains(response, 'id="id_custom_dropdown"')
 
     def test_get_params_not_applied_to_edit_form(self):
         """GET params should not be applied to the lot edit form"""
@@ -7050,6 +7092,7 @@ class BulkAddLotsAutoTests(StandardTestCase):
     def test_custom_dropdown_saved(self):
         """Custom dropdown values should save through the auto-save endpoint"""
         self.in_person_auction.use_custom_dropdown_field = True
+        self.in_person_auction.custom_dropdown_name = "Habitat"
         self.in_person_auction.save()
         AuctionDropdown.objects.create(auction=self.in_person_auction, user=self.admin_user, value="Red")
         AuctionDropdown.objects.create(auction=self.in_person_auction, user=self.admin_user, value="Blue")
@@ -7068,6 +7111,7 @@ class BulkAddLotsAutoTests(StandardTestCase):
     def test_custom_dropdown_rejects_invalid_option(self):
         """Auto-save rejects dropdown values not configured in the auction."""
         self.in_person_auction.use_custom_dropdown_field = True
+        self.in_person_auction.custom_dropdown_name = "Habitat"
         self.in_person_auction.save()
         AuctionDropdown.objects.create(auction=self.in_person_auction, user=self.admin_user, value="Red")
         AuctionDropdown.objects.create(auction=self.in_person_auction, user=self.admin_user, value="Blue")

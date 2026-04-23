@@ -37,6 +37,9 @@
             {% if lot.auction.custom_field_1 != 'disable' and lot.auction.custom_field_1_name and lot.custom_field_1 %}
                 <b>{{ lot.auction.custom_field_1_name }}:</b> {{ lot.custom_field_1 }}<br>
             {% endif %}
+            {% if lot.auction.use_custom_dropdown_field and lot.auction.custom_dropdown_name and lot.custom_dropdown %}
+                <b>{{ lot.auction.custom_dropdown_name }}:</b> {{ lot.custom_dropdown }}<br>
+            {% endif %}
             {{ lot.summernote_description | safe }}
         </div>
     </div>

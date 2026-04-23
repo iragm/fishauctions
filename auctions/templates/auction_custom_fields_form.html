@@ -22,8 +22,10 @@ function toggleCustomCheckboxSettings() {
 
 function toggleCustomDropdownSettings() {
     if ($('#id_use_custom_dropdown_field').is(':checked')) {
+        $('#div_id_custom_dropdown_name').closest('.col-md-4').show();
         $('#custom-dropdown-options-section').show();
     } else {
+        $('#div_id_custom_dropdown_name').closest('.col-md-4').hide();
         $('#custom-dropdown-options-section').hide();
     }
 }
@@ -32,8 +34,8 @@ function renderDropdownOption(option) {
     const escapedValue = $('<div>').text(option.value).html();
     return `
         <li class="list-group-item d-flex align-items-center gap-2" data-option-id="${option.id}">
-            <input type="text" class="form-control form-control-sm dropdown-option-value" maxlength="15" value="${escapedValue}">
-            <button type="button" class="btn btn-sm btn-outline-success dropdown-option-save">Rename</button>
+            <input type="text" class="form-control form-control-sm dropdown-option-value" maxlength="{{ custom_dropdown_max_length }}" value="${escapedValue}">
+            <button type="button" class="btn btn-sm btn-outline-success dropdown-option-save">Save</button>
             <button type="button" class="btn btn-sm btn-outline-danger dropdown-option-delete">Delete</button>
         </li>
     `;
@@ -59,6 +61,10 @@ function postDropdownOption(data, onSuccess) {
 }
 
 $(document).ready(function() {
+    const submitButton = $('#auction-custom-fields-form input[type="submit"], #auction-custom-fields-form button[type="submit"]').first();
+    if (submitButton.length) {
+        $('#custom-dropdown-options-section').insertBefore(submitButton);
+    }
     toggleCustomFieldSettings();
     toggleCustomCheckboxSettings();
     toggleCustomDropdownSettings();
@@ -75,6 +81,12 @@ $(document).ready(function() {
             input.val('');
         });
     });
+    $('#new-dropdown-option').on('keydown', function(event) {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            $('#add-dropdown-option-btn').trigger('click');
+        }
+    });
 
     $('#custom-dropdown-options-list').on('click', '.dropdown-option-save', function() {
         const $row = $(this).closest('li');
@@ -83,6 +95,12 @@ $(document).ready(function() {
         postDropdownOption({ action: 'update', option_id: optionId, value: value }, function(response) {
             $row.find('.dropdown-option-value').val(response.option.value);
         });
+    });
+    $('#custom-dropdown-options-list').on('keydown', '.dropdown-option-value', function(event) {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            $(this).closest('li').find('.dropdown-option-save').trigger('click');
+        }
     });
 
     $('#custom-dropdown-options-list').on('click', '.dropdown-option-delete', function() {
@@ -109,7 +127,7 @@ $(document).ready(function() {
                     {% for option in dropdown_options %}
                     <li class="list-group-item d-flex align-items-center gap-2" data-option-id="{{ option.pk }}">
                         <input type="text" class="form-control form-control-sm dropdown-option-value" maxlength="{{ custom_dropdown_max_length }}" value="{{ option.value }}">
-                        <button type="button" class="btn btn-sm btn-outline-success dropdown-option-save">Rename</button>
+                        <button type="button" class="btn btn-sm btn-outline-success dropdown-option-save">Save</button>
                         <button type="button" class="btn btn-sm btn-outline-danger dropdown-option-delete">Delete</button>
                     </li>
                     {% endfor %}

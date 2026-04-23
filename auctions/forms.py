@@ -21,7 +21,6 @@ from django.forms import (
 )
 from django.urls import reverse
 from django.utils import timezone
-from django.utils.html import format_html
 from django_recaptcha.fields import ReCaptchaField
 from django_recaptcha.widgets import ReCaptchaV2Invisible
 from django_summernote.widgets import SummernoteWidget
@@ -263,11 +262,15 @@ class QuickAddLot(forms.ModelForm):
         custom_dropdown_options = list(
             AuctionDropdown.objects.filter(auction=self.auction).order_by("createdon").values_list("value", flat=True)
         )
-        if self.auction.use_custom_dropdown_field and len(custom_dropdown_options) >= 2:
+        if (
+            self.auction.use_custom_dropdown_field
+            and self.auction.custom_dropdown_name
+            and len(custom_dropdown_options) >= 2
+        ):
             self.fields["custom_dropdown"].widget = forms.Select(
                 choices=[("", "---------")] + [(value, value) for value in custom_dropdown_options]
             )
-            self.fields["custom_dropdown"].label = "Custom dropdown"
+            self.fields["custom_dropdown"].label = self.auction.custom_dropdown_name
             self.fields["custom_dropdown"].required = False
         else:
             self.fields["custom_dropdown"].widget = HiddenInput()
@@ -310,7 +313,7 @@ class QuickAddLot(forms.ModelForm):
             buy_now_price = cleaned_data.get("buy_now_price")
             if buy_now_price is not None and buy_now_price != buy_now_price.to_integral_value():
                 self.add_error("buy_now_price", "This auction only allows whole dollar amounts.")
-        if self.auction.use_custom_dropdown_field:
+        if self.auction.use_custom_dropdown_field and self.auction.custom_dropdown_name:
             custom_dropdown_options = list(
                 AuctionDropdown.objects.filter(auction=self.auction).values_list("value", flat=True)
             )
@@ -878,11 +881,15 @@ class EditLot(forms.ModelForm):
         if current_dropdown_value and current_dropdown_value not in custom_dropdown_options:
             custom_dropdown_options.append(current_dropdown_value)
         self.fields["custom_dropdown"].initial = current_dropdown_value
-        if self.auction.use_custom_dropdown_field and len(custom_dropdown_options) >= 2:
+        if (
+            self.auction.use_custom_dropdown_field
+            and self.auction.custom_dropdown_name
+            and len(custom_dropdown_options) >= 2
+        ):
             self.fields["custom_dropdown"].widget = forms.Select(
                 choices=[("", "---------")] + [(value, value) for value in custom_dropdown_options]
             )
-            self.fields["custom_dropdown"].label = "Custom dropdown"
+            self.fields["custom_dropdown"].label = self.auction.custom_dropdown_name
             self.fields["custom_dropdown"].required = False
             self.fields["custom_dropdown"].help_text = ""
         else:
@@ -2155,12 +2162,6 @@ class AuctionEditForm(forms.ModelForm):
                 css_class="row",
             ),
             Submit("submit", "Save", css_class="create-update-auction btn-success"),
-            HTML(
-                format_html(
-                    '<div class="mt-2"><a href="{}">Customize lot fields</a></div>',
-                    reverse("edit_auction_custom_fields", kwargs={"slug": self.instance.slug}),
-                )
-            ),
         )
 
     def clean(self):
@@ -2242,6 +2243,7 @@ class AuctionCustomFieldsForm(forms.ModelForm):
             "use_custom_checkbox_field",
             "custom_checkbox_name",
             "use_custom_dropdown_field",
+            "custom_dropdown_name",
             "reserve_price",
             "buy_now",
         ]
@@ -2271,23 +2273,28 @@ class AuctionCustomFieldsForm(forms.ModelForm):
                 Div("use_custom_checkbox_field", css_class="col-md-4"),
                 Div("custom_checkbox_name", css_class="col-md-4"),
                 Div("use_custom_dropdown_field", css_class="col-md-4"),
+                Div("custom_dropdown_name", css_class="col-md-4"),
                 Div("reserve_price", css_class="col-md-4"),
                 Div("buy_now", css_class="col-md-4"),
                 css_class="row",
             ),
             Submit("submit", "Save", css_class="btn btn-success"),
-            HTML(
-                format_html(
-                    '<div class="mt-2"><a href="{}">Back to rules</a></div>',
-                    reverse("edit_auction", kwargs={"slug": self.instance.slug}),
-                )
-            ),
         )
 
     def clean(self):
         cleaned_data = super().clean()
         self.custom_dropdown_auto_disabled = False
+        if cleaned_data.get("custom_field_1") == "disable":
+            cleaned_data["custom_field_1_name"] = ""
+        if not cleaned_data.get("use_custom_checkbox_field"):
+            cleaned_data["custom_checkbox_name"] = ""
+        if not cleaned_data.get("use_custom_dropdown_field"):
+            cleaned_data["custom_dropdown_name"] = ""
         if cleaned_data.get("use_custom_dropdown_field"):
+            if not cleaned_data.get("custom_dropdown_name"):
+                cleaned_data["use_custom_dropdown_field"] = False
+                self.custom_dropdown_auto_disabled = True
+                return cleaned_data
             options_count = AuctionDropdown.objects.filter(auction=self.instance).count()
             if options_count < 2:
                 cleaned_data["use_custom_dropdown_field"] = False
@@ -2478,11 +2485,15 @@ class CreateLotForm(forms.ModelForm):
             current_dropdown_value = self.instance.custom_dropdown
             if current_dropdown_value and current_dropdown_value not in custom_dropdown_options:
                 custom_dropdown_options.append(current_dropdown_value)
-            if selected_auction.use_custom_dropdown_field and len(custom_dropdown_options) >= 2:
+            if (
+                selected_auction.use_custom_dropdown_field
+                and selected_auction.custom_dropdown_name
+                and len(custom_dropdown_options) >= 2
+            ):
                 self.fields["custom_dropdown"].widget = forms.Select(
                     choices=[("", "---------")] + [(value, value) for value in custom_dropdown_options]
                 )
-                self.fields["custom_dropdown"].label = "Custom dropdown"
+                self.fields["custom_dropdown"].label = selected_auction.custom_dropdown_name
                 self.fields["custom_dropdown"].required = False
                 self.fields["custom_dropdown"].help_text = ""
             else:
@@ -2690,7 +2701,7 @@ class CreateLotForm(forms.ModelForm):
                 AuctionDropdown.objects.filter(auction=auction).values_list("value", flat=True)
             )
             selected_dropdown = cleaned_data.get("custom_dropdown", "")
-            if auction.use_custom_dropdown_field and len(custom_dropdown_options) >= 2:
+            if auction.use_custom_dropdown_field and auction.custom_dropdown_name and len(custom_dropdown_options) >= 2:
                 if selected_dropdown and selected_dropdown not in custom_dropdown_options:
                     self.add_error("custom_dropdown", "Select a valid option")
             else:
@@ -3270,9 +3281,11 @@ class LabelPrintFieldsForm(forms.Form):
             },
             {
                 "value": "custom_dropdown_label",
-                "description": "Custom dropdown",
+                "description": "Custom dropdown"
+                if not self.auction.custom_dropdown_name
+                else self.auction.custom_dropdown_name,
                 "tooltip": "Custom dropdown is disabled in this auction, this will not do anything"
-                if not self.auction.use_custom_dropdown_field
+                if not self.auction.use_custom_dropdown_field or not self.auction.custom_dropdown_name
                 else "",
             },
             {

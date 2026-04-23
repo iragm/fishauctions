@@ -75,7 +75,7 @@ function setAuctionRequiredFields(val) {
                         $('#id_custom_field_1').attr('required', false);
                         $('#div_id_custom_field_1').closest('.col-md-12').hide();
                     }
-                    if (result.use_custom_dropdown_field && result.custom_dropdown_options && result.custom_dropdown_options.length >= 2) {
+                    if (result.use_custom_dropdown_field && result.custom_dropdown_name && result.custom_dropdown_options && result.custom_dropdown_options.length >= 2) {
                         const $customDropdown = $('#id_custom_dropdown');
                         const currentValue = $customDropdown.val();
                         const options = ['<option value="">---------</option>'];
@@ -88,6 +88,7 @@ function setAuctionRequiredFields(val) {
                         } else {
                             $customDropdown.val('');
                         }
+                        $('label[for="id_custom_dropdown"]').text(result.custom_dropdown_name);
                         $('#div_id_custom_dropdown').closest('.col-md-3').show();
                     } else {
                         $('#id_custom_dropdown').val('');

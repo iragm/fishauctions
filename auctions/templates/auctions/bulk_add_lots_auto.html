@@ -139,7 +139,7 @@
 
                     {% if use_custom_dropdown %}
                     <div class="col-6 col-md-3">
-                      <label class="form-label small mb-1 {% if not lot.can_be_edited %}text-light{% endif %}">Custom dropdown</label>
+                      <label class="form-label small mb-1 {% if not lot.can_be_edited %}text-light{% endif %}">{{ custom_dropdown_name }}</label>
                       <select class="form-select form-select-sm lot-input {% if not lot.can_be_edited %}text-light{% endif %}" name="custom_dropdown" data-field="custom_dropdown" {% if not lot.can_be_edited %}disabled{% endif %}>
                         <option value="">---------</option>
                         {% for option in custom_dropdown_options %}
@@ -257,7 +257,7 @@
 
                     {% if use_custom_dropdown %}
                     <div class="col-6 col-md-3">
-                      <label class="form-label small mb-1">Custom dropdown</label>
+                      <label class="form-label small mb-1">{{ custom_dropdown_name }}</label>
                       <select class="form-select form-select-sm lot-input" name="custom_dropdown" data-field="custom_dropdown">
                         <option value="">---------</option>
                         {% for option in custom_dropdown_options %}
