@@ -4233,6 +4233,13 @@ class AuctionCustomFieldsViewTests(StandardTestCase):
         self.assertTrue(any("Renamed custom dropdown option 'Red' to 'Blue'" in action for action in actions))
         self.assertTrue(any("Removed custom dropdown option 'Blue'" in action for action in actions))
 
+    def test_custom_dropdown_save_keeps_oldest_duplicate(self):
+        oldest = AuctionDropdown.objects.create(auction=self.online_auction, user=self.user, value="River")
+        newer = AuctionDropdown.objects.create(auction=self.online_auction, user=self.admin_user, value="river")
+        self.assertEqual(AuctionDropdown.objects.filter(auction=self.online_auction, value__iexact="river").count(), 1)
+        newer.refresh_from_db()
+        self.assertEqual(newer.pk, oldest.pk)
+
     def test_label_print_fields_include_custom_dropdown(self):
         self.client.login(username="my_lot", password="testpassword")
         response = self.client.get(reverse("auction_label_config", kwargs={"slug": self.online_auction.slug}))
@@ -4321,6 +4328,8 @@ class LotListViewTests(StandardTestCase):
         self.online_auction.use_custom_dropdown_field = "allow"
         self.online_auction.custom_dropdown_name = "Habitat"
         self.online_auction.save()
+        AuctionDropdown.objects.create(auction=self.online_auction, user=self.admin_user, value="River")
+        AuctionDropdown.objects.create(auction=self.online_auction, user=self.admin_user, value="Pond")
         self.lot.custom_dropdown = "River"
         self.lot.save()
         self.client.login(username=self.admin_user.username, password="testpassword")
@@ -4330,6 +4339,40 @@ class LotListViewTests(StandardTestCase):
         content = response.content.decode("utf-8")
         self.assertIn("Habitat", content)
         self.assertIn("River", content)
+
+    def test_auction_lot_list_csv_export_skips_custom_dropdown_when_fewer_than_two_options(self):
+        self.online_auction.use_custom_dropdown_field = "allow"
+        self.online_auction.custom_dropdown_name = "Habitat"
+        self.online_auction.save()
+        AuctionDropdown.objects.create(auction=self.online_auction, user=self.admin_user, value="River")
+        self.lot.custom_dropdown = "River"
+        self.lot.save()
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.get(reverse("lot_list", kwargs={"slug": self.online_auction.slug}))
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode("utf-8")
+        self.assertNotIn("Habitat", content)
+
+    def test_auction_lot_admin_helper_text_skips_custom_dropdown_when_fewer_than_two_options(self):
+        self.online_auction.use_custom_dropdown_field = "allow"
+        self.online_auction.custom_dropdown_name = "Habitat"
+        self.online_auction.save()
+        AuctionDropdown.objects.create(auction=self.online_auction, user=self.admin_user, value="River")
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.get(reverse("auction_lot_list", kwargs={"slug": self.online_auction.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, ", Habitat")
+
+    def test_auction_lot_admin_helper_text_includes_custom_dropdown_when_enabled(self):
+        self.online_auction.use_custom_dropdown_field = "allow"
+        self.online_auction.custom_dropdown_name = "Habitat"
+        self.online_auction.save()
+        AuctionDropdown.objects.create(auction=self.online_auction, user=self.admin_user, value="River")
+        AuctionDropdown.objects.create(auction=self.online_auction, user=self.admin_user, value="Pond")
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.get(reverse("auction_lot_list", kwargs={"slug": self.online_auction.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, ", Habitat")
 
 
 class MyLotsViewTests(StandardTestCase):

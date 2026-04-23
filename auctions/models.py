@@ -3381,6 +3381,19 @@ class AuctionDropdown(models.Model):
         if not is_new:
             old_value = AuctionDropdown.objects.filter(pk=self.pk).values_list("value", flat=True).first()
         super().save(*args, **kwargs)
+        duplicates = AuctionDropdown.objects.filter(auction=self.auction, value__iexact=self.value).order_by(
+            "createdon", "pk"
+        )
+        oldest = duplicates.first()
+        if oldest and oldest.pk != self.pk:
+            AuctionDropdown.objects.filter(pk=self.pk).delete()
+            self.pk = oldest.pk
+            self.id = oldest.pk
+            self._state.adding = False
+            self._state.db = oldest._state.db
+            self.refresh_from_db()
+            return
+        duplicates.exclude(pk=self.pk).delete()
         if is_new:
             self.auction.create_history(
                 applies_to="RULES",

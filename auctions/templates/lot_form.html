@@ -78,11 +78,11 @@ function setAuctionRequiredFields(val) {
                     if (result.use_custom_dropdown_field !== 'disable' && result.custom_dropdown_name && result.custom_dropdown_options && result.custom_dropdown_options.length >= 2) {
                         const $customDropdown = $('#id_custom_dropdown');
                         const currentValue = $customDropdown.val();
-                        const options = ['<option value="">---------</option>'];
+                        $customDropdown.empty();
+                        $customDropdown.append($('<option>').val('').text('---------'));
                         result.custom_dropdown_options.forEach(function(optionValue) {
-                            options.push(`<option value="${optionValue}">${optionValue}</option>`);
+                            $customDropdown.append($('<option>').val(optionValue).text(optionValue));
                         });
-                        $customDropdown.html(options.join(''));
                         if (result.custom_dropdown_options.includes(currentValue)) {
                             $customDropdown.val(currentValue);
                         } else {

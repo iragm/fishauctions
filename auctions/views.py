@@ -1819,6 +1819,11 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
             query = unquote(query)
         response["Content-Disposition"] = f'attachment; filename="{self.auction.slug}-{filename}.csv"'
         writer = csv.writer(response)
+        custom_dropdown_enabled = (
+            self.auction.use_custom_dropdown_field != "disable"
+            and bool(self.auction.custom_dropdown_name)
+            and AuctionDropdown.objects.filter(auction=self.auction).count() >= 2
+        )
         first_row_fields = [
             "Lot number",
             "Lot",
@@ -1839,7 +1844,7 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
             first_row_fields.append(self.auction.custom_checkbox_name)
         if self.auction.custom_field_1 != "disable" and self.auction.custom_field_1_name:
             first_row_fields.append(self.auction.custom_field_1_name)
-        if self.auction.use_custom_dropdown_field != "disable" and self.auction.custom_dropdown_name:
+        if custom_dropdown_enabled:
             first_row_fields.append(self.auction.custom_dropdown_name)
         writer.writerow(first_row_fields)
         lots = self.auction.lots_qs
@@ -1867,7 +1872,7 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
                 row.append(lot.custom_checkbox_label)
             if self.auction.custom_field_1 != "disable" and self.auction.custom_field_1_name:
                 row.append(lot.custom_field_1)
-            if self.auction.use_custom_dropdown_field != "disable" and self.auction.custom_dropdown_name:
+            if custom_dropdown_enabled:
                 row.append(lot.custom_dropdown)
             writer.writerow(row)
         self.auction.create_history(
@@ -2379,6 +2384,12 @@ class AuctionLots(LoginRequiredMixin, SingleTableMixin, AuctionViewMixin, Filter
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        custom_dropdown_options_count = AuctionDropdown.objects.filter(auction=self.auction).count()
+        context["custom_dropdown_enabled"] = (
+            self.auction.use_custom_dropdown_field != "disable"
+            and bool(self.auction.custom_dropdown_name)
+            and custom_dropdown_options_count >= 2
+        )
         context["active_tab"] = "lots"
         context["auction"] = self.auction
         # context['filter'] = LotAdminFilter(auction = self.auction)

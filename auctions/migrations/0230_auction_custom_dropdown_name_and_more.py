@@ -3,6 +3,15 @@
 from django.db import migrations, models
 
 
+def append_custom_dropdown_label_field(apps, schema_editor):
+    Auction = apps.get_model("auctions", "Auction")
+    for auction in Auction.objects.exclude(label_print_fields__isnull=True):
+        fields = [field.strip() for field in (auction.label_print_fields or "").split(",") if field.strip()]
+        if "custom_dropdown_label" not in fields:
+            fields.append("custom_dropdown_label")
+            Auction.objects.filter(pk=auction.pk).update(label_print_fields=",".join(fields))
+
+
 class Migration(migrations.Migration):
     dependencies = [
         ("auctions", "0229_auction_use_custom_dropdown_field_and_more"),
@@ -21,4 +30,5 @@ class Migration(migrations.Migration):
                 verbose_name="Custom dropdown name",
             ),
         ),
+        migrations.RunPython(append_custom_dropdown_label_field, migrations.RunPython.noop),
     ]
