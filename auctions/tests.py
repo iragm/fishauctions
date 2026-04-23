@@ -2164,6 +2164,32 @@ class LotLabelViewTestCase(StandardTestCase):
         self.assertIsNone(short_thermal_size)
         self.assertIsNone(custom_size)
 
+    def test_seller_email_scales_sooner_for_medium_length(self):
+        """Emails that are moderately long (between old and new threshold) should now be scaled."""
+        from .views import LotLabelView
+
+        # "john.doe@example.com" is 20 chars: above new sm threshold (18) so should scale
+        medium_sm_size = LotLabelView.get_seller_email_font_size("john.doe@example.com", "sm")
+        # "user@longertesthost.com" is 23 chars: above new lg threshold (20) so should scale
+        medium_lg_size = LotLabelView.get_seller_email_font_size("user@longertesthost.com", "lg")
+        # "user@test.com" is 13 chars: below all thresholds, should never scale
+        very_short_sm_size = LotLabelView.get_seller_email_font_size("user@test.com", "sm")
+
+        self.assertIsNotNone(medium_sm_size)
+        self.assertRegex(medium_sm_size, r"^\d+\.\d{2}em$")
+        self.assertLess(float(medium_sm_size[:-2]), 1)
+        self.assertIsNotNone(medium_lg_size)
+        self.assertLess(float(medium_lg_size[:-2]), 1)
+        self.assertIsNone(very_short_sm_size)
+
+    def test_bulk_print_pdf_with_default_label_fields(self):
+        """Admin can print labels for all users via AuctionBulkPrintingPDF with default (custom-field-heavy) config."""
+        self.client.login(username="admin_user", password="testpassword")
+        url = reverse("auction_printing_pdf", kwargs={"slug": self.in_person_auction.slug})
+        response = self.client.get(url)
+        assert response.status_code == 200
+        assert "attachment;filename=" in response.headers["Content-Disposition"]
+
 
 class UpdateLotPushNotificationsViewTestCase(StandardTestCase):
     def get_url(self):

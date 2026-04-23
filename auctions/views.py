@@ -6503,10 +6503,10 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
     # ratio_base: numerator for ratio_base / text_length scaling.
     # min_ratio: floor so text stays readable.
     SELLER_EMAIL_FONT_CONFIG = {
-        "sm": {"shrink_threshold": 22, "ratio_base": 18, "min_ratio": 0.6},
-        "lg": {"shrink_threshold": 24, "ratio_base": 19, "min_ratio": 0.55},
-        "thermal_sm": {"shrink_threshold": 21, "ratio_base": 17, "min_ratio": 0.45},
-        "thermal_very_sm": {"shrink_threshold": 16, "ratio_base": 13, "min_ratio": 0.4},
+        "sm": {"shrink_threshold": 18, "ratio_base": 14, "min_ratio": 0.6},
+        "lg": {"shrink_threshold": 20, "ratio_base": 15, "min_ratio": 0.55},
+        "thermal_sm": {"shrink_threshold": 17, "ratio_base": 13, "min_ratio": 0.45},
+        "thermal_very_sm": {"shrink_threshold": 13, "ratio_base": 10, "min_ratio": 0.4},
     }
     LOT_NUMBER_FONT_CONFIG = {
         "sm": {"shrink_threshold": 6, "ratio_base": 4.2, "min_ratio": 0.6},
@@ -6714,7 +6714,14 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
             )
             context["labels_per_page"] = 1
 
-        labels = self.get_queryset()
+        labels = self.get_queryset().select_related(
+            "auction",
+            "auctiontos_seller",
+            "auctiontos_winner",
+            "auctiontos_winner__pickup_location",
+            "species_category",
+            "user",
+        )
 
         # Cap thermal labels at 100 per PDF
         is_thermal = user_label_prefs.preset in ["thermal_sm", "thermal_very_sm"]
@@ -6735,11 +6742,13 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
             else:
                 # Use the list we already fetched (100 or fewer labels)
                 labels = labels_list
+        else:
+            labels = list(labels)
 
         for label in labels:
             label.label_printed = True
             label.label_needs_reprinting = False
-            label.save()
+        Lot.objects.bulk_update(labels, ["label_printed", "label_needs_reprinting"])
 
         # First column width is fixed at 0.63 for most labels and overridden for large and thermal
         # context['first_column_width'] = (context['label_width'] / 4)
