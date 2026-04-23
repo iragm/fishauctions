@@ -3972,6 +3972,11 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
             and len(custom_dropdown_options) >= 2
         )
 
+        def valid_custom_dropdown(value):
+            if use_custom_dropdown and value in custom_dropdown_options:
+                return value
+            return ""
+
         # Track results
         lots_created = 0
         lots_updated = 0
@@ -4075,8 +4080,9 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
                         lot.custom_checkbox = custom_checkbox
                         if custom_field_1:
                             lot.custom_field_1 = custom_field_1[:60]
-                        if use_custom_dropdown and custom_dropdown in custom_dropdown_options:
-                            lot.custom_dropdown = custom_dropdown
+                        custom_dropdown_value = valid_custom_dropdown(custom_dropdown)
+                        if custom_dropdown_value:
+                            lot.custom_dropdown = custom_dropdown_value
                         lot.save()
                         lots_updated += 1
                         continue
@@ -4123,9 +4129,7 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
                     errors["missing_info"] += 1
                     continue
 
-                custom_dropdown_value = (
-                    custom_dropdown if use_custom_dropdown and custom_dropdown in custom_dropdown_options else ""
-                )
+                custom_dropdown_value = valid_custom_dropdown(custom_dropdown)
                 new_lot = Lot(
                     lot_name=lot_name[:40],
                     summernote_description=description or "",
