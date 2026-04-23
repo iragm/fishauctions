@@ -4759,7 +4759,7 @@ class LotCreateViewTests(StandardTestCase):
 
     def test_get_params_not_applied_to_edit_form(self):
         """GET params should not be applied to the lot edit form"""
-        theFuture = timezone.now() + datetime.timedelta(days=3)
+        the_future = timezone.now() + datetime.timedelta(days=3)
         # Set up user with contact info
         self.user.first_name = "Test"
         self.user.last_name = "User"
@@ -4772,12 +4772,14 @@ class LotCreateViewTests(StandardTestCase):
             created_by=self.user,
             title="Open auction edit test",
             is_online=True,
-            date_end=theFuture,
+            date_end=the_future,
             date_start=timezone.now() - datetime.timedelta(days=1),
-            lot_submission_end_date=theFuture,
+            lot_submission_end_date=the_future,
             winning_bid_percent_to_club=25,
         )
-        open_location = PickupLocation.objects.create(name="edit location", auction=open_auction, pickup_time=theFuture)
+        open_location = PickupLocation.objects.create(
+            name="edit location", auction=open_auction, pickup_time=the_future
+        )
         test_tos = AuctionTOS.objects.create(user=self.user, auction=open_auction, pickup_location=open_location)
         editable_lot = Lot.objects.create(
             lot_name="Original Name",
