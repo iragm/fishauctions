@@ -2477,7 +2477,8 @@ class CreateLotForm(forms.ModelForm):
                 except (AttributeError, Auction.DoesNotExist):
                     pass
         selected_auction = self.instance.auction or self.auction
-        if self.is_bound and self.data.get("part_of_auction") == "True":
+        part_of_auction_selected = str(self.data.get("part_of_auction", "")).lower() in {"true", "1", "on"}
+        if self.is_bound and part_of_auction_selected:
             selected_auction = self.fields["auction"].queryset.filter(pk=self.data.get("auction")).first()
         elif self.is_bound:
             selected_auction = None
@@ -2497,9 +2498,9 @@ class CreateLotForm(forms.ModelForm):
                 .order_by("createdon")
                 .values_list("value", flat=True)
             )
-            current_dropdown_value = self.instance.custom_dropdown or self.fields["custom_dropdown"].initial or ""
-            if current_dropdown_value and current_dropdown_value not in custom_dropdown_options:
-                current_dropdown_value = ""
+            dropdown_initial_value = self.instance.custom_dropdown or self.fields["custom_dropdown"].initial or ""
+            if dropdown_initial_value and dropdown_initial_value not in custom_dropdown_options:
+                dropdown_initial_value = ""
             if (
                 selected_auction.use_custom_dropdown_field != "disable"
                 and selected_auction.custom_dropdown_name
@@ -2510,7 +2511,7 @@ class CreateLotForm(forms.ModelForm):
                 )
                 self.fields["custom_dropdown"].label = selected_auction.custom_dropdown_name
                 self.fields["custom_dropdown"].required = selected_auction.use_custom_dropdown_field == "required"
-                self.fields["custom_dropdown"].initial = current_dropdown_value
+                self.fields["custom_dropdown"].initial = dropdown_initial_value
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_id = "lot-form"
