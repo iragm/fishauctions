@@ -66,13 +66,13 @@ function setAuctionRequiredFields(val) {
                         $('#div_id_custom_field_1').closest('.col-md-12').show();
                         $('label[for="id_custom_field_1"]').text(result.custom_field_1_name);
                         if (result.custom_field_1 == 'required') {
-                            $('#id_custom_field_1').attr('required', true);
+                            $('#id_custom_field_1').prop('required', true);
                         } else {
-                            $('#id_custom_field_1').attr('required', false);
+                            $('#id_custom_field_1').prop('required', false);
 
                         }
                     } else {
-                        $('#id_custom_field_1').attr('required', false);
+                        $('#id_custom_field_1').prop('required', false);
                         $('#div_id_custom_field_1').closest('.col-md-12').hide();
                     }
                     if (result.use_custom_dropdown_field !== 'disable' && result.custom_dropdown_name && result.custom_dropdown_options && result.custom_dropdown_options.length >= 2) {
@@ -89,11 +89,13 @@ function setAuctionRequiredFields(val) {
                             $customDropdown.val('');
                         }
                         $('label[for="id_custom_dropdown"]').text(result.custom_dropdown_name);
-                        $('#id_custom_dropdown').attr('required', result.use_custom_dropdown_field === 'required');
+                        $('#id_custom_dropdown').prop('disabled', false);
+                        $('#id_custom_dropdown').prop('required', result.use_custom_dropdown_field === 'required');
                         $('#div_id_custom_dropdown').closest('.col-md-3').show();
                     } else {
+                        $('#id_custom_dropdown').prop('required', false);
                         $('#id_custom_dropdown').val('');
-                        $('#id_custom_dropdown').attr('required', false);
+                        $('#id_custom_dropdown').prop('disabled', true);
                         $('#div_id_custom_dropdown').closest('.col-md-3').hide();
                     }
                     if (result.use_donation_field) {
@@ -141,7 +143,8 @@ function setAuctionRequiredFields(val) {
                     $('#div_id_custom_field_1').closest('.col-md-12').hide();
                     $('#div_id_custom_checkbox').closest('.col-md-3').hide();
                     $('#div_id_custom_dropdown').closest('.col-md-3').hide();
-                    $('#id_custom_dropdown').attr('required', false);
+                    $('#id_custom_dropdown').prop('required', false);
+                    $('#id_custom_dropdown').prop('disabled', true);
                     $('#div_id_reference_link').closest('.col-md-3').show();
                     $('#div_id_summernote_description').closest('.col-md-12').show();
                     $('#div_id_species_category').closest('.col-md-12').show();
