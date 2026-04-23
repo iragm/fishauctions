@@ -305,6 +305,7 @@ class LotAdminFilter(django_filters.FilterSet):
                 | Q(custom_lot_number=value)
                 | Q(lot_number_int=value)
                 | Q(custom_field_1=value)
+                | Q(custom_dropdown=value)
             )
         else:
             try:
@@ -373,6 +374,7 @@ class LotAdminFilter(django_filters.FilterSet):
                 | Q(lot_name__icontains=value)
                 | Q(custom_lot_number=value)
                 | Q(custom_field_1__icontains=value)
+                | Q(custom_dropdown__icontains=value)
                 | Q(auction__title__icontains=value)
             )
         return queryset

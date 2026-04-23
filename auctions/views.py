@@ -1839,6 +1839,8 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
             first_row_fields.append(self.auction.custom_checkbox_name)
         if self.auction.custom_field_1 != "disable" and self.auction.custom_field_1_name:
             first_row_fields.append(self.auction.custom_field_1_name)
+        if self.auction.use_custom_dropdown_field and self.auction.custom_dropdown_name:
+            first_row_fields.append(self.auction.custom_dropdown_name)
         writer.writerow(first_row_fields)
         lots = self.auction.lots_qs
         lots = add_price_info(lots)
@@ -1865,6 +1867,8 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
                 row.append(lot.custom_checkbox_label)
             if self.auction.custom_field_1 != "disable" and self.auction.custom_field_1_name:
                 row.append(lot.custom_field_1)
+            if self.auction.use_custom_dropdown_field and self.auction.custom_dropdown_name:
+                row.append(lot.custom_dropdown)
             writer.writerow(row)
         self.auction.create_history(
             applies_to="LOTS",
@@ -3956,6 +3960,17 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
         custom_field_1_fields = ["custom field", "custom_field_1", "custom field 1"]
         if self.auction.custom_field_1 != "disable" and self.auction.custom_field_1_name:
             custom_field_1_fields.append(self.auction.custom_field_1_name.lower())
+        custom_dropdown_fields = ["custom dropdown", "custom_dropdown"]
+        if self.auction.custom_dropdown_name:
+            custom_dropdown_fields.append(self.auction.custom_dropdown_name.lower())
+        custom_dropdown_options = set(
+            AuctionDropdown.objects.filter(auction=self.auction).values_list("value", flat=True)
+        )
+        use_custom_dropdown = (
+            self.auction.use_custom_dropdown_field
+            and self.auction.custom_dropdown_name
+            and len(custom_dropdown_options) >= 2
+        )
 
         # Track results
         lots_created = 0
@@ -3985,6 +4000,7 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
                 donation_str = extract_info(row, donation_fields)
                 custom_checkbox_str = extract_info(row, custom_checkbox_fields)
                 custom_field_1 = extract_info(row, custom_field_1_fields)
+                custom_dropdown = extract_info(row, custom_dropdown_fields)
 
                 # Convert boolean fields
                 def to_bool(value):
@@ -4059,6 +4075,8 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
                         lot.custom_checkbox = custom_checkbox
                         if custom_field_1:
                             lot.custom_field_1 = custom_field_1[:60]
+                        if use_custom_dropdown and custom_dropdown in custom_dropdown_options:
+                            lot.custom_dropdown = custom_dropdown
                         lot.save()
                         lots_updated += 1
                         continue
@@ -4115,6 +4133,9 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
                     donation=donation,
                     custom_checkbox=custom_checkbox,
                     custom_field_1=custom_field_1[:60] if custom_field_1 else "",
+                    custom_dropdown=custom_dropdown
+                    if use_custom_dropdown and custom_dropdown in custom_dropdown_options
+                    else "",
                     auctiontos_seller=tos,
                     auction=self.auction,
                     added_by=self.request.user,

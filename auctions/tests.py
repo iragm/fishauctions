@@ -4299,6 +4299,18 @@ class LotListViewTests(StandardTestCase):
         response = self.client.get(f"/lots/?auction={self.online_auction.slug}")
         assert response.status_code == 200
 
+    def test_auction_lotlist_csv_includes_custom_dropdown_column(self):
+        self.online_auction.use_custom_dropdown_field = True
+        self.online_auction.custom_dropdown_name = "Habitat"
+        self.online_auction.save()
+        self.lot.custom_dropdown = "River"
+        self.lot.save()
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.get(reverse("lot_list", kwargs={"slug": self.online_auction.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Habitat")
+        self.assertContains(response, "River")
+
 
 class MyLotsViewTests(StandardTestCase):
     """Test my lots view with different user types"""
@@ -7744,6 +7756,30 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         assert new_lot is not None
         assert new_lot.i_bred_this_fish is True
         assert new_lot.donation is True
+
+    def test_import_lots_csv_custom_dropdown(self):
+        self.online_auction.use_custom_dropdown_field = True
+        self.online_auction.custom_dropdown_name = "Habitat"
+        self.online_auction.save()
+        AuctionDropdown.objects.create(auction=self.online_auction, user=self.admin_user, value="River")
+        AuctionDropdown.objects.create(auction=self.online_auction, user=self.admin_user, value="Pond")
+        self.online_tos.name = "Test User"
+        self.online_tos.email = "testuser@example.com"
+        self.online_tos.save()
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        url = reverse("import_lots_from_csv", kwargs={"slug": self.online_auction.slug})
+        csv_content = (
+            f"Name,Email,Lot Name,Habitat\n{self.online_tos.name},{self.online_tos.email},Dropdown CSV Lot,River\n"
+        )
+        from io import BytesIO
+
+        csv_file = BytesIO(csv_content.encode("utf-8"))
+        csv_file.name = "test.csv"
+        response = self.client.post(url, {"csv_file": csv_file})
+        self.assertEqual(response.status_code, 200)
+        new_lot = Lot.objects.filter(lot_name="Dropdown CSV Lot", auction=self.online_auction).first()
+        self.assertIsNotNone(new_lot)
+        self.assertEqual(new_lot.custom_dropdown, "River")
 
     def test_import_lots_csv_missing_info(self):
         """CSV import skips rows with missing required information"""
@@ -11807,6 +11843,17 @@ class LotAdminFilterTests(StandardTestCase):
 
         # Should not include lots without winners
         self.assertNotIn(self.lot_no_bids, filtered_qs)
+
+    def test_custom_dropdown_search(self):
+        from auctions.filters import LotAdminFilter
+
+        self.lot_no_bids.custom_dropdown = "River"
+        self.lot_no_bids.save()
+        qs = Lot.objects.filter(auction=self.online_auction)
+        filter_instance = LotAdminFilter()
+        filter_instance.queryset = qs
+        filtered_qs = filter_instance.generic(qs, "River")
+        self.assertIn(self.lot_no_bids, filtered_qs)
 
 
 class FeedbackTestCase(StandardTestCase):
