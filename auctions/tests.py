@@ -2115,23 +2115,27 @@ class LotLabelViewTestCase(StandardTestCase):
         short_sm_email_size = LotLabelView.get_seller_email_font_size("short@example.com", "sm")
         long_sm_email_size = LotLabelView.get_seller_email_font_size("admin13423523452@example.com", "sm")
         short_email_size = LotLabelView.get_seller_email_font_size("short@example.com", "thermal_sm")
-        at_threshold_email_size = LotLabelView.get_seller_email_font_size("seller1234567890@example.com", "thermal_sm")
+        long_thermal_email_size = LotLabelView.get_seller_email_font_size("seller1234567890@example.com", "thermal_sm")
         thermal_very_sm_size = LotLabelView.get_seller_email_font_size(
             "seller1234567890@example.com", "thermal_very_sm"
         )
+        long_lg_email_size = LotLabelView.get_seller_email_font_size("admin13423523452@example.com", "lg")
         custom_size = LotLabelView.get_seller_email_font_size("really.long.seller.email.address@example.com", "custom")
 
         self.assertIsNone(short_sm_email_size)
         self.assertIsNotNone(long_sm_email_size)
         self.assertRegex(long_sm_email_size, r"^\d+\.\d{2}em$")
         self.assertIsNone(short_email_size)
-        self.assertIsNotNone(at_threshold_email_size)
-        self.assertRegex(at_threshold_email_size, r"^\d+\.\d{2}em$")
+        self.assertIsNotNone(long_thermal_email_size)
+        self.assertRegex(long_thermal_email_size, r"^\d+\.\d{2}em$")
         self.assertIsNotNone(thermal_very_sm_size)
         self.assertRegex(thermal_very_sm_size, r"^\d+\.\d{2}em$")
+        self.assertIsNotNone(long_lg_email_size)
+        self.assertRegex(long_lg_email_size, r"^\d+\.\d{2}em$")
         self.assertLess(float(long_sm_email_size[:-2]), 1)
-        self.assertLess(float(at_threshold_email_size[:-2]), 1)
-        self.assertLess(float(thermal_very_sm_size[:-2]), float(at_threshold_email_size[:-2]))
+        self.assertLess(float(long_thermal_email_size[:-2]), 1)
+        self.assertLess(float(thermal_very_sm_size[:-2]), float(long_thermal_email_size[:-2]))
+        self.assertLess(float(long_lg_email_size[:-2]), 1)
         self.assertIsNone(custom_size)
 
     def test_get_lot_number_font_size_for_supported_presets(self):
@@ -2142,8 +2146,8 @@ class LotLabelViewTestCase(StandardTestCase):
         six_digit_thermal_size = LotLabelView.get_lot_number_font_size("123456", "thermal_sm")
         seven_digit_thermal_size = LotLabelView.get_lot_number_font_size("1234567", "thermal_sm")
         short_thermal_size = LotLabelView.get_lot_number_font_size("12345", "thermal_sm")
-        long_lg_size = LotLabelView.get_lot_number_font_size("12345678", "lg")
-        short_lg_size = LotLabelView.get_lot_number_font_size("1234567", "lg")
+        long_lg_size = LotLabelView.get_lot_number_font_size("123-456", "lg")
+        short_lg_size = LotLabelView.get_lot_number_font_size("123456", "lg")
         custom_size = LotLabelView.get_lot_number_font_size("123456789", "custom")
 
         self.assertIsNotNone(seven_digit_sm_size)

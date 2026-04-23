@@ -6498,19 +6498,19 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
     template_name = "label_template.html"
     allow_non_admins = True
     filename = ""  # this will be automatically generated in dispatch
-    # Tuned for the known overflow breakpoints on thermal presets (long seller emails/lot numbers).
+    # Tuned for known overflow breakpoints (long seller emails/lot numbers) per label preset.
     # shrink_threshold: start scaling after this length.
     # ratio_base: numerator for ratio_base / text_length scaling.
     # min_ratio: floor so text stays readable.
     SELLER_EMAIL_FONT_CONFIG = {
         "sm": {"shrink_threshold": 22, "ratio_base": 18, "min_ratio": 0.6},
-        "lg": {"shrink_threshold": 32, "ratio_base": 28, "min_ratio": 0.7},
+        "lg": {"shrink_threshold": 24, "ratio_base": 19, "min_ratio": 0.55},
         "thermal_sm": {"shrink_threshold": 21, "ratio_base": 17, "min_ratio": 0.45},
         "thermal_very_sm": {"shrink_threshold": 16, "ratio_base": 13, "min_ratio": 0.4},
     }
     LOT_NUMBER_FONT_CONFIG = {
         "sm": {"shrink_threshold": 6, "ratio_base": 4.2, "min_ratio": 0.6},
-        "lg": {"shrink_threshold": 7, "ratio_base": 5.5, "min_ratio": 0.65},
+        "lg": {"shrink_threshold": 6, "ratio_base": 4.8, "min_ratio": 0.6},
         "thermal_sm": {"shrink_threshold": 5, "ratio_base": 3.5, "min_ratio": 0.45},
         "thermal_very_sm": {"shrink_threshold": 4, "ratio_base": 3, "min_ratio": 0.4},
     }
@@ -6585,7 +6585,7 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
 
     @staticmethod
     def get_seller_email_font_size(seller_email, preset):
-        """Shrink seller email font on thermal labels when needed."""
+        """Shrink seller email font for configured label presets when needed."""
         if not seller_email:
             return None
         config = LotLabelView.SELLER_EMAIL_FONT_CONFIG.get(preset)
@@ -6598,7 +6598,7 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
 
     @staticmethod
     def get_lot_number_font_size(lot_number_display, preset):
-        """Shrink lot number font on thermal labels when needed."""
+        """Shrink lot number font for configured label presets when needed."""
         if not lot_number_display:
             return None
         lot_number_display = str(lot_number_display)
