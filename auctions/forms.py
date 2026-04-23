@@ -2481,6 +2481,9 @@ class CreateLotForm(forms.ModelForm):
             initial_auction = self.fields["auction"].initial
             if initial_auction and isinstance(initial_auction, Auction):
                 selected_auction = initial_auction
+        self.fields["custom_dropdown"].widget = forms.Select(choices=[("", "---------")])
+        self.fields["custom_dropdown"].required = False
+        self.fields["custom_dropdown"].help_text = ""
         if selected_auction:
             apply_price_input_constraints(
                 self.fields, ("reserve_price", "buy_now_price"), selected_auction.only_whole_dollar_bids
@@ -2503,15 +2506,6 @@ class CreateLotForm(forms.ModelForm):
                 )
                 self.fields["custom_dropdown"].label = selected_auction.custom_dropdown_name
                 self.fields["custom_dropdown"].required = selected_auction.use_custom_dropdown_field == "required"
-                self.fields["custom_dropdown"].help_text = ""
-            else:
-                self.fields["custom_dropdown"].widget = forms.Select(choices=[("", "---------")])
-                self.fields["custom_dropdown"].required = False
-                self.fields["custom_dropdown"].help_text = ""
-        else:
-            self.fields["custom_dropdown"].widget = forms.Select(choices=[("", "---------")])
-            self.fields["custom_dropdown"].required = False
-            self.fields["custom_dropdown"].help_text = ""
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_id = "lot-form"
