@@ -27,33 +27,66 @@ $(document).ready(function() {
     var $btn = $(this);
     $btn.prop('disabled', true).text('Generating PDF...');
     var form = $btn.closest('form');
+
+    function downloadPdf(response) {
+      var disposition = response.headers.get('Content-Disposition') || '';
+      var filenameMatch = disposition.match(/filename=([^;]+)/);
+      var filename = filenameMatch ? filenameMatch[1].trim() : 'labels.pdf';
+      return response.blob().then(function(blob) {
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      });
+    }
+
     fetch(form.attr('action'), {
       method: 'POST',
       body: new FormData(form[0]),
-      redirect: 'follow'
+      redirect: 'manual'
     })
     .then(function(response) {
       var contentType = response.headers.get('Content-Type') || '';
       if (contentType.includes('application/pdf')) {
-        var disposition = response.headers.get('Content-Disposition') || '';
-        var filenameMatch = disposition.match(/filename=([^;]+)/);
-        var filename = filenameMatch ? filenameMatch[1].trim() : 'labels.pdf';
-        return response.blob().then(function(blob) {
-          var url = URL.createObjectURL(blob);
-          var a = document.createElement('a');
-          a.href = url;
-          a.download = filename;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
+        return downloadPdf(response).then(function() {
+          location.reload();
         });
       }
-      // Non-PDF response (e.g. server error redirect): fall through to reload
-      // so any Django messages are displayed.
+
+      var redirectTarget = response.headers.get('Location');
+      if (redirectTarget) {
+        var absoluteRedirectUrl = new URL(redirectTarget, window.location.href);
+        if (absoluteRedirectUrl.pathname.indexOf('/print/pdf') !== -1) {
+          return fetch(absoluteRedirectUrl.toString(), {
+            credentials: 'same-origin'
+          })
+          .then(function(pdfResponse) {
+            var pdfContentType = pdfResponse.headers.get('Content-Type') || '';
+            if (!pdfContentType.includes('application/pdf')) {
+              window.location = absoluteRedirectUrl.toString();
+              return;
+            }
+            return downloadPdf(pdfResponse).then(function() {
+              location.reload();
+            });
+          });
+        }
+
+        window.location = absoluteRedirectUrl.toString();
+        return;
+      }
+
+      // Non-PDF response without a usable redirect target: fall through to reload.
+      location.reload();
     })
-    .then(function() { location.reload(); })
-    .catch(function() { location.reload(); });
+    .catch(function() {
+      $btn.prop('disabled', false).text('Submit');
+      location.reload();
+    });
   });
 });
 </script>
