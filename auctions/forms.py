@@ -2294,11 +2294,11 @@ class AuctionCustomFieldsForm(forms.ModelForm):
             if not cleaned_data.get("custom_dropdown_name"):
                 cleaned_data["use_custom_dropdown_field"] = False
                 self.custom_dropdown_auto_disabled = True
-                return cleaned_data
-            options_count = AuctionDropdown.objects.filter(auction=self.instance).count()
-            if options_count < 2:
-                cleaned_data["use_custom_dropdown_field"] = False
-                self.custom_dropdown_auto_disabled = True
+            else:
+                options_count = AuctionDropdown.objects.filter(auction=self.instance).count()
+                if options_count < 2:
+                    cleaned_data["use_custom_dropdown_field"] = False
+                    self.custom_dropdown_auto_disabled = True
         return cleaned_data
 
 
