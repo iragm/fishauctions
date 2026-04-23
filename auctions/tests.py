@@ -61,7 +61,6 @@ class StandardTestCase(TestCase):
         time = timezone.now() - datetime.timedelta(days=2)
         timeStart = timezone.now() - datetime.timedelta(days=3)
         the_future = timezone.now() + datetime.timedelta(days=3)
-        theFuture = the_future
         self.admin_user = User.objects.create_user(
             username="admin_user", password="testpassword", email="test@example.com"
         )
@@ -98,10 +97,10 @@ class StandardTestCase(TestCase):
             use_seller_dash_lot_numbering=True,
         )
         self.location = PickupLocation.objects.create(
-            name="location", auction=self.online_auction, pickup_time=theFuture
+            name="location", auction=self.online_auction, pickup_time=the_future
         )
         self.in_person_location = PickupLocation.objects.create(
-            name="location", auction=self.in_person_auction, pickup_time=theFuture
+            name="location", auction=self.in_person_auction, pickup_time=the_future
         )
         # Create in_person_buyer before other in_person_auction TOS objects so the explicit
         # bidder_number="555" is registered first; the auto-assignment in AuctionTOS.save() checks
@@ -4519,8 +4518,7 @@ class LotCreateViewTests(StandardTestCase):
         self.assertContains(response, 'id="id_custom_dropdown"')
 
     def test_lot_create_switch_from_required_dropdown_to_disabled_auction_saves(self):
-        theFuture = timezone.now() + datetime.timedelta(days=3)
-        the_future = theFuture
+        the_future = timezone.now() + datetime.timedelta(days=3)
         self.user.first_name = "Test"
         self.user.last_name = "User"
         self.user.save()
@@ -4532,9 +4530,9 @@ class LotCreateViewTests(StandardTestCase):
             created_by=self.user,
             title="Required dropdown auction",
             is_online=True,
-            date_end=theFuture,
+            date_end=the_future,
             date_start=timezone.now() - datetime.timedelta(days=1),
-            lot_submission_end_date=theFuture,
+            lot_submission_end_date=the_future,
             winning_bid_percent_to_club=25,
             use_custom_dropdown_field="required",
             custom_dropdown_name="Habitat",

@@ -2500,6 +2500,7 @@ class CreateLotForm(forms.ModelForm):
             )
             validated_dropdown_value = self.instance.custom_dropdown or self.fields["custom_dropdown"].initial or ""
             if validated_dropdown_value and validated_dropdown_value not in custom_dropdown_options:
+                # When copying from another lot/auction, only prefill dropdown values that exist in destination options.
                 validated_dropdown_value = ""
             if (
                 selected_auction.use_custom_dropdown_field != "disable"
