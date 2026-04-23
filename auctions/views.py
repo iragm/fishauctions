@@ -1839,7 +1839,7 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
             first_row_fields.append(self.auction.custom_checkbox_name)
         if self.auction.custom_field_1 != "disable" and self.auction.custom_field_1_name:
             first_row_fields.append(self.auction.custom_field_1_name)
-        if self.auction.use_custom_dropdown_field and self.auction.custom_dropdown_name:
+        if self.auction.use_custom_dropdown_field != "disable" and self.auction.custom_dropdown_name:
             first_row_fields.append(self.auction.custom_dropdown_name)
         writer.writerow(first_row_fields)
         lots = self.auction.lots_qs
@@ -1867,7 +1867,7 @@ class AuctionLotsCSV(LoginRequiredMixin, AuctionViewMixin, View):
                 row.append(lot.custom_checkbox_label)
             if self.auction.custom_field_1 != "disable" and self.auction.custom_field_1_name:
                 row.append(lot.custom_field_1)
-            if self.auction.use_custom_dropdown_field and self.auction.custom_dropdown_name:
+            if self.auction.use_custom_dropdown_field != "disable" and self.auction.custom_dropdown_name:
                 row.append(lot.custom_dropdown)
             writer.writerow(row)
         self.auction.create_history(
@@ -3516,10 +3516,11 @@ class BulkAddLotsAuto(LoginRequiredMixin, AuctionViewMixin, TemplateView):
             AuctionDropdown.objects.filter(auction=self.auction).order_by("createdon").values_list("value", flat=True)
         )
         context["use_custom_dropdown"] = (
-            self.auction.use_custom_dropdown_field
+            self.auction.use_custom_dropdown_field != "disable"
             and self.auction.custom_dropdown_name
             and len(context["custom_dropdown_options"]) >= 2
         )
+        context["custom_dropdown_required"] = self.auction.use_custom_dropdown_field == "required"
 
         context["use_i_bred_this_fish"] = self.auction.use_i_bred_this_fish_field
         context["use_quantity"] = self.auction.use_quantity_field
@@ -3717,7 +3718,7 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                 AuctionDropdown.objects.filter(auction=self.auction).values_list("value", flat=True)
             )
             if (
-                self.auction.use_custom_dropdown_field
+                self.auction.use_custom_dropdown_field != "disable"
                 and self.auction.custom_dropdown_name
                 and len(custom_dropdown_options) >= 2
             ):
@@ -3728,6 +3729,8 @@ class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
                     )
                 elif custom_dropdown and custom_dropdown not in custom_dropdown_options:
                     errors["custom_dropdown"] = "Select a valid custom dropdown option"
+                elif self.auction.use_custom_dropdown_field == "required" and not custom_dropdown:
+                    errors["custom_dropdown"] = f"{self.auction.custom_dropdown_name} is required"
                 else:
                     lot.custom_dropdown = custom_dropdown
             else:
@@ -3965,7 +3968,7 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
             custom_dropdown_fields.append(self.auction.custom_dropdown_name.lower())
         custom_dropdown_options = set()
         use_custom_dropdown = False
-        if self.auction.use_custom_dropdown_field and self.auction.custom_dropdown_name:
+        if self.auction.use_custom_dropdown_field != "disable" and self.auction.custom_dropdown_name:
             custom_dropdown_options = set(
                 AuctionDropdown.objects.filter(auction=self.auction).values_list("value", flat=True)
             )
@@ -10492,6 +10495,7 @@ class AuctionFinder(View, LoginRequiredMixin):
                 "use_i_bred_this_fish_field": self.auction.use_i_bred_this_fish_field,
                 "use_custom_checkbox_field": self.auction.use_custom_checkbox_field,
                 "use_custom_dropdown_field": self.auction.use_custom_dropdown_field,
+                "custom_dropdown_required": self.auction.use_custom_dropdown_field == "required",
                 "custom_dropdown_name": self.auction.custom_dropdown_name,
                 "custom_dropdown_options": list(
                     AuctionDropdown.objects.filter(auction=self.auction)

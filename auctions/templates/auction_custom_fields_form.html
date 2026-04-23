@@ -21,7 +21,7 @@ function toggleCustomCheckboxSettings() {
 }
 
 function toggleCustomDropdownSettings() {
-    if ($('#id_use_custom_dropdown_field').is(':checked')) {
+    if ($('#id_use_custom_dropdown_field').val() !== 'disable') {
         $('#div_id_custom_dropdown_name').closest('.col-md-4').show();
         $('#custom-dropdown-options-section').show();
     } else {

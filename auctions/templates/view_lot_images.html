@@ -330,7 +330,7 @@ function deactivate_lot() {
                             <td><b>{{ lot.auction.custom_field_1_name }}:</b></td><td>{{ lot.custom_field_1 }}</td>
                         </tr>
                         {% endif %}
-                        {% if lot.auction and lot.auction.use_custom_dropdown_field and lot.auction.custom_dropdown_name and lot.custom_dropdown %}
+                        {% if lot.auction and lot.auction.use_custom_dropdown_field != 'disable' and lot.auction.custom_dropdown_name and lot.custom_dropdown %}
                         <tr>
                             <td><b>{{ lot.auction.custom_dropdown_name }}:</b></td><td>{{ lot.custom_dropdown }}</td>
                         </tr>

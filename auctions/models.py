@@ -790,8 +790,13 @@ class Auction(models.Model):
         max_length=50, default="", blank=True, null=True, verbose_name="Custom dropdown name"
     )
     custom_dropdown_name.help_text = "Shown when users add lots"
-    use_custom_dropdown_field = models.BooleanField(default=False, blank=True)
-    use_custom_dropdown_field.help_text = "Optional dropdown shown when users add lots."
+    CUSTOM_DROPDOWN_CHOICES = (
+        ("disable", "Off"),
+        ("allow", "Optional"),
+        ("required", "Required for all lots"),
+    )
+    use_custom_dropdown_field = models.CharField(max_length=20, choices=CUSTOM_DROPDOWN_CHOICES, default="disable")
+    use_custom_dropdown_field.help_text = "Dropdown shown when users add lots."
     CUSTOM_CHOICES = (
         ("disable", "Off"),
         ("allow", "Optional"),
@@ -801,13 +806,13 @@ class Auction(models.Model):
         max_length=20,
         choices=CUSTOM_CHOICES,
         default="disable",
-        verbose_name="Custom field for lots",
+        verbose_name="Custom text field",
     )
     custom_field_1.help_text = (
         "Additional information on the label such as notes, scientific name, collection location..."
     )
     custom_field_1_name = models.CharField(
-        max_length=50, default="Notes", blank=True, null=True, verbose_name="Custom field name"
+        max_length=50, default="Notes", blank=True, null=True, verbose_name="Custom text field name"
     )
     custom_field_1_name.help_text = "What's the custom field used for?  This is shown to users"
     allow_bulk_adding_lots = models.BooleanField(default=True)
@@ -5029,7 +5034,7 @@ class Lot(models.Model):
 
     @property
     def custom_dropdown_label(self):
-        if self.auction.use_custom_dropdown_field and self.custom_dropdown:
+        if self.auction.use_custom_dropdown_field != "disable" and self.custom_dropdown:
             return self.custom_dropdown
         return ""
 

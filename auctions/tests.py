@@ -263,7 +263,7 @@ class ViewLotTest(TestCase):
         self.assertContains(response, "This lot is very new")
 
     def test_custom_dropdown_displays_on_lot_views(self):
-        self.auction.use_custom_dropdown_field = True
+        self.auction.use_custom_dropdown_field = "allow"
         self.auction.custom_dropdown_name = "Habitat"
         self.auction.save()
         self.lot.custom_dropdown = "River"
@@ -4171,6 +4171,7 @@ class AuctionCustomFieldsViewTests(StandardTestCase):
             "custom_field_1_name": self.online_auction.custom_field_1_name or "Notes",
             "custom_checkbox_name": self.online_auction.custom_checkbox_name or "",
             "custom_dropdown_name": self.online_auction.custom_dropdown_name or "My dropdown",
+            "use_custom_dropdown_field": self.online_auction.use_custom_dropdown_field,
             "reserve_price": self.online_auction.reserve_price,
             "buy_now": self.online_auction.buy_now,
         }
@@ -4188,7 +4189,7 @@ class AuctionCustomFieldsViewTests(StandardTestCase):
             if getattr(self.online_auction, field_name):
                 data[field_name] = "on"
         if use_custom_dropdown:
-            data["use_custom_dropdown_field"] = "on"
+            data["use_custom_dropdown_field"] = "allow"
         return data
 
     def test_custom_dropdown_requires_two_options(self):
@@ -4200,8 +4201,15 @@ class AuctionCustomFieldsViewTests(StandardTestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.online_auction.refresh_from_db()
-        self.assertFalse(self.online_auction.use_custom_dropdown_field)
+        self.assertEqual(self.online_auction.use_custom_dropdown_field, "disable")
         self.assertContains(response, "requires a name and at least two options")
+
+    def test_custom_field_labels_use_custom_text_wording(self):
+        self.client.login(username="my_lot", password="testpassword")
+        response = self.client.get(reverse("edit_auction_custom_fields", kwargs={"slug": self.online_auction.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Custom text field")
+        self.assertContains(response, "Custom text field name")
 
     def test_custom_dropdown_model_creates_history(self):
         option = AuctionDropdown.objects.create(auction=self.online_auction, user=self.user, value="Red")
@@ -4301,7 +4309,7 @@ class LotListViewTests(StandardTestCase):
         assert response.status_code == 200
 
     def test_auction_lot_list_csv_export_includes_custom_dropdown(self):
-        self.online_auction.use_custom_dropdown_field = True
+        self.online_auction.use_custom_dropdown_field = "allow"
         self.online_auction.custom_dropdown_name = "Habitat"
         self.online_auction.save()
         self.lot.custom_dropdown = "River"
@@ -4466,7 +4474,7 @@ class LotCreateViewTests(StandardTestCase):
             date_start=timezone.now() - datetime.timedelta(days=1),
             lot_submission_end_date=theFuture,
             winning_bid_percent_to_club=25,
-            use_custom_dropdown_field=True,
+            use_custom_dropdown_field="allow",
             custom_dropdown_name="Habitat",
         )
         open_location = PickupLocation.objects.create(name="open location", auction=open_auction, pickup_time=theFuture)
@@ -4475,6 +4483,36 @@ class LotCreateViewTests(StandardTestCase):
         AuctionDropdown.objects.create(auction=open_auction, user=self.user, value="Pond")
         self.client.login(username=self.user.username, password="testpassword")
         response = self.client.get(f"/lots/new/?auction={open_auction.slug}")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Habitat")
+        self.assertContains(response, 'id="id_custom_dropdown"')
+
+    def test_lot_create_form_shows_custom_dropdown_for_last_auction_used(self):
+        theFuture = timezone.now() + datetime.timedelta(days=3)
+        self.user.first_name = "Test"
+        self.user.last_name = "User"
+        self.user.save()
+        user_data = UserData.objects.get(user=self.user)
+        user_data.address = "123 Test St"
+        open_auction = Auction.objects.create(
+            created_by=self.user,
+            title="Last auction with dropdown",
+            is_online=True,
+            date_end=theFuture,
+            date_start=timezone.now() - datetime.timedelta(days=1),
+            lot_submission_end_date=theFuture,
+            winning_bid_percent_to_club=25,
+            use_custom_dropdown_field="allow",
+            custom_dropdown_name="Habitat",
+        )
+        open_location = PickupLocation.objects.create(name="open location", auction=open_auction, pickup_time=theFuture)
+        AuctionTOS.objects.create(user=self.user, auction=open_auction, pickup_location=open_location)
+        AuctionDropdown.objects.create(auction=open_auction, user=self.user, value="River")
+        AuctionDropdown.objects.create(auction=open_auction, user=self.user, value="Pond")
+        user_data.last_auction_used = open_auction
+        user_data.save()
+        self.client.login(username=self.user.username, password="testpassword")
+        response = self.client.get("/lots/new/")
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Habitat")
         self.assertContains(response, 'id="id_custom_dropdown"')
@@ -6825,6 +6863,20 @@ class BulkAddLotsAutoTests(StandardTestCase):
         )
         self.assertEqual(response.status_code, 200)
 
+    def test_bulk_add_lots_shows_required_custom_dropdown_indicator(self):
+        self.in_person_auction.use_custom_dropdown_field = "required"
+        self.in_person_auction.custom_dropdown_name = "Habitat"
+        self.in_person_auction.save()
+        AuctionDropdown.objects.create(auction=self.in_person_auction, user=self.admin_user, value="River")
+        AuctionDropdown.objects.create(auction=self.in_person_auction, user=self.admin_user, value="Pond")
+        self.client.login(username="my_lot", password="testpassword")
+        response = self.client.get(
+            reverse("bulk_add_lots_auto_for_myself", kwargs={"slug": self.in_person_auction.slug})
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Habitat <span class="text-danger">*</span>')
+        self.assertContains(response, 'data-field="custom_dropdown" required')
+
     def test_bulk_add_lots_auto_saves_text_fields_on_change(self):
         """Auto-save wiring should use change events and avoid input/keyup-style listeners."""
         self.client.login(username="no_lots", password="testpassword")
@@ -7106,7 +7158,7 @@ class BulkAddLotsAutoTests(StandardTestCase):
 
     def test_custom_dropdown_saved(self):
         """Custom dropdown values should save through the auto-save endpoint"""
-        self.in_person_auction.use_custom_dropdown_field = True
+        self.in_person_auction.use_custom_dropdown_field = "allow"
         self.in_person_auction.custom_dropdown_name = "Habitat"
         self.in_person_auction.save()
         AuctionDropdown.objects.create(auction=self.in_person_auction, user=self.admin_user, value="Red")
@@ -7125,7 +7177,7 @@ class BulkAddLotsAutoTests(StandardTestCase):
 
     def test_custom_dropdown_rejects_invalid_option(self):
         """Auto-save rejects dropdown values not configured in the auction."""
-        self.in_person_auction.use_custom_dropdown_field = True
+        self.in_person_auction.use_custom_dropdown_field = "allow"
         self.in_person_auction.custom_dropdown_name = "Habitat"
         self.in_person_auction.save()
         AuctionDropdown.objects.create(auction=self.in_person_auction, user=self.admin_user, value="Red")
@@ -7135,6 +7187,23 @@ class BulkAddLotsAutoTests(StandardTestCase):
         response = self.client.post(
             reverse("save_lot_ajax", kwargs={"slug": self.in_person_auction.slug}),
             data='{"lot_name": "Dropdown Lot", "reserve_price": 5, "custom_dropdown": "Green"}',
+            content_type="application/json",
+        )
+        data = response.json()
+        self.assertFalse(data["success"])
+        self.assertIn("custom_dropdown", data["errors"])
+
+    def test_custom_dropdown_required_validation(self):
+        self.in_person_auction.use_custom_dropdown_field = "required"
+        self.in_person_auction.custom_dropdown_name = "Habitat"
+        self.in_person_auction.save()
+        AuctionDropdown.objects.create(auction=self.in_person_auction, user=self.admin_user, value="Red")
+        AuctionDropdown.objects.create(auction=self.in_person_auction, user=self.admin_user, value="Blue")
+
+        self.client.login(username="my_lot", password="testpassword")
+        response = self.client.post(
+            reverse("save_lot_ajax", kwargs={"slug": self.in_person_auction.slug}),
+            data='{"lot_name": "Dropdown Lot", "reserve_price": 5}',
             content_type="application/json",
         )
         data = response.json()
@@ -7761,7 +7830,7 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         assert new_lot.donation is True
 
     def test_import_lots_csv_custom_dropdown(self):
-        self.online_auction.use_custom_dropdown_field = True
+        self.online_auction.use_custom_dropdown_field = "allow"
         self.online_auction.custom_dropdown_name = "Habitat"
         self.online_auction.save()
         AuctionDropdown.objects.create(auction=self.online_auction, user=self.admin_user, value="River")

@@ -263,7 +263,7 @@ class QuickAddLot(forms.ModelForm):
             AuctionDropdown.objects.filter(auction=self.auction).order_by("createdon").values_list("value", flat=True)
         )
         if (
-            self.auction.use_custom_dropdown_field
+            self.auction.use_custom_dropdown_field != "disable"
             and self.auction.custom_dropdown_name
             and len(custom_dropdown_options) >= 2
         ):
@@ -271,7 +271,7 @@ class QuickAddLot(forms.ModelForm):
                 choices=[("", "---------")] + [(value, value) for value in custom_dropdown_options]
             )
             self.fields["custom_dropdown"].label = self.auction.custom_dropdown_name
-            self.fields["custom_dropdown"].required = False
+            self.fields["custom_dropdown"].required = self.auction.use_custom_dropdown_field == "required"
         else:
             self.fields["custom_dropdown"].widget = HiddenInput()
         if not self.auction.use_quantity_field:
@@ -313,12 +313,16 @@ class QuickAddLot(forms.ModelForm):
             buy_now_price = cleaned_data.get("buy_now_price")
             if buy_now_price is not None and buy_now_price != buy_now_price.to_integral_value():
                 self.add_error("buy_now_price", "This auction only allows whole dollar amounts.")
-        if self.auction.use_custom_dropdown_field and self.auction.custom_dropdown_name:
+        if self.auction.use_custom_dropdown_field != "disable" and self.auction.custom_dropdown_name:
             custom_dropdown_options = list(
                 AuctionDropdown.objects.filter(auction=self.auction).values_list("value", flat=True)
             )
             selected_dropdown = cleaned_data.get("custom_dropdown", "")
             if len(custom_dropdown_options) >= 2:
+                if self.auction.use_custom_dropdown_field == "required" and not selected_dropdown:
+                    self.add_error(
+                        "custom_dropdown", f"{self.auction.custom_dropdown_name} is required in this auction"
+                    )
                 if selected_dropdown and selected_dropdown not in custom_dropdown_options:
                     self.add_error("custom_dropdown", "Select a valid option")
             else:
@@ -882,7 +886,7 @@ class EditLot(forms.ModelForm):
             custom_dropdown_options.append(current_dropdown_value)
         self.fields["custom_dropdown"].initial = current_dropdown_value
         if (
-            self.auction.use_custom_dropdown_field
+            self.auction.use_custom_dropdown_field != "disable"
             and self.auction.custom_dropdown_name
             and len(custom_dropdown_options) >= 2
         ):
@@ -890,7 +894,7 @@ class EditLot(forms.ModelForm):
                 choices=[("", "---------")] + [(value, value) for value in custom_dropdown_options]
             )
             self.fields["custom_dropdown"].label = self.auction.custom_dropdown_name
-            self.fields["custom_dropdown"].required = False
+            self.fields["custom_dropdown"].required = self.auction.use_custom_dropdown_field == "required"
             self.fields["custom_dropdown"].help_text = ""
         else:
             self.fields["custom_dropdown"].widget = HiddenInput()
@@ -2288,16 +2292,16 @@ class AuctionCustomFieldsForm(forms.ModelForm):
             cleaned_data["custom_field_1_name"] = ""
         if not cleaned_data.get("use_custom_checkbox_field"):
             cleaned_data["custom_checkbox_name"] = ""
-        if not cleaned_data.get("use_custom_dropdown_field"):
+        if cleaned_data.get("use_custom_dropdown_field") == "disable":
             cleaned_data["custom_dropdown_name"] = ""
-        if cleaned_data.get("use_custom_dropdown_field"):
+        if cleaned_data.get("use_custom_dropdown_field") != "disable":
             if not cleaned_data.get("custom_dropdown_name"):
-                cleaned_data["use_custom_dropdown_field"] = False
+                cleaned_data["use_custom_dropdown_field"] = "disable"
                 self.custom_dropdown_auto_disabled = True
             else:
                 options_count = AuctionDropdown.objects.filter(auction=self.instance).count()
                 if options_count < 2:
-                    cleaned_data["use_custom_dropdown_field"] = False
+                    cleaned_data["use_custom_dropdown_field"] = "disable"
                     self.custom_dropdown_auto_disabled = True
         return cleaned_data
 
@@ -2473,6 +2477,10 @@ class CreateLotForm(forms.ModelForm):
                 except (AttributeError, Auction.DoesNotExist):
                     pass
         selected_auction = self.instance.auction or self.auction
+        if not selected_auction:
+            initial_auction = self.fields["auction"].initial
+            if initial_auction and isinstance(initial_auction, Auction):
+                selected_auction = initial_auction
         if selected_auction:
             apply_price_input_constraints(
                 self.fields, ("reserve_price", "buy_now_price"), selected_auction.only_whole_dollar_bids
@@ -2486,7 +2494,7 @@ class CreateLotForm(forms.ModelForm):
             if current_dropdown_value and current_dropdown_value not in custom_dropdown_options:
                 custom_dropdown_options.append(current_dropdown_value)
             if (
-                selected_auction.use_custom_dropdown_field
+                selected_auction.use_custom_dropdown_field != "disable"
                 and selected_auction.custom_dropdown_name
                 and len(custom_dropdown_options) >= 2
             ):
@@ -2494,12 +2502,16 @@ class CreateLotForm(forms.ModelForm):
                     choices=[("", "---------")] + [(value, value) for value in custom_dropdown_options]
                 )
                 self.fields["custom_dropdown"].label = selected_auction.custom_dropdown_name
-                self.fields["custom_dropdown"].required = False
+                self.fields["custom_dropdown"].required = selected_auction.use_custom_dropdown_field == "required"
                 self.fields["custom_dropdown"].help_text = ""
             else:
-                self.fields["custom_dropdown"].widget = HiddenInput()
+                self.fields["custom_dropdown"].widget = forms.Select(choices=[("", "---------")])
+                self.fields["custom_dropdown"].required = False
+                self.fields["custom_dropdown"].help_text = ""
         else:
-            self.fields["custom_dropdown"].widget = HiddenInput()
+            self.fields["custom_dropdown"].widget = forms.Select(choices=[("", "---------")])
+            self.fields["custom_dropdown"].required = False
+            self.fields["custom_dropdown"].help_text = ""
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.form_id = "lot-form"
@@ -2701,7 +2713,13 @@ class CreateLotForm(forms.ModelForm):
                 AuctionDropdown.objects.filter(auction=auction).values_list("value", flat=True)
             )
             selected_dropdown = cleaned_data.get("custom_dropdown", "")
-            if auction.use_custom_dropdown_field and auction.custom_dropdown_name and len(custom_dropdown_options) >= 2:
+            if (
+                auction.use_custom_dropdown_field != "disable"
+                and auction.custom_dropdown_name
+                and len(custom_dropdown_options) >= 2
+            ):
+                if auction.use_custom_dropdown_field == "required" and not selected_dropdown:
+                    self.add_error("custom_dropdown", f"{auction.custom_dropdown_name} is required")
                 if selected_dropdown and selected_dropdown not in custom_dropdown_options:
                     self.add_error("custom_dropdown", "Select a valid option")
             else:
@@ -3263,10 +3281,10 @@ class LabelPrintFieldsForm(forms.Form):
             },
             {
                 "value": "custom_field_1",
-                "description": "Custom field"
+                "description": "Custom text field"
                 if not self.auction.custom_field_1_name
                 else self.auction.custom_field_1_name,
-                "tooltip": "Custom field is disabled in this auction, this will not do anything"
+                "tooltip": "Custom text field is disabled in this auction, this will not do anything"
                 if self.auction.custom_field_1 == "disable"
                 else "",
             },
@@ -3285,7 +3303,7 @@ class LabelPrintFieldsForm(forms.Form):
                 if not self.auction.custom_dropdown_name
                 else self.auction.custom_dropdown_name,
                 "tooltip": "Custom dropdown is disabled in this auction, this will not do anything"
-                if not self.auction.use_custom_dropdown_field or not self.auction.custom_dropdown_name
+                if self.auction.use_custom_dropdown_field == "disable" or not self.auction.custom_dropdown_name
                 else "",
             },
             {
