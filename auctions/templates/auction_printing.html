@@ -28,10 +28,22 @@ $(document).ready(function() {
     $btn.prop('disabled', true).text('Generating PDF...');
     var form = $btn.closest('form');
 
+    function getFilenameFromDisposition(disposition) {
+      // RFC5987 filename* takes priority (handles non-ASCII names)
+      var rfcMatch = disposition.match(/filename\*=(?:UTF-8'')?([^;]+)/i);
+      if (rfcMatch) {
+        try { return decodeURIComponent(rfcMatch[1].trim()); } catch (e) {}
+      }
+      var basicMatch = disposition.match(/filename=([^;]+)/i);
+      if (basicMatch) {
+        return basicMatch[1].trim().replace(/^["']|["']$/g, '');
+      }
+      return 'labels.pdf';
+    }
+
     function downloadPdf(response) {
       var disposition = response.headers.get('Content-Disposition') || '';
-      var filenameMatch = disposition.match(/filename=([^;]+)/);
-      var filename = filenameMatch ? filenameMatch[1].trim() : 'labels.pdf';
+      var filename = getFilenameFromDisposition(disposition);
       return response.blob().then(function(blob) {
         var url = URL.createObjectURL(blob);
         var a = document.createElement('a');
