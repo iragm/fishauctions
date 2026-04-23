@@ -18,6 +18,7 @@ from django.test.client import Client
 from django.urls import reverse
 from django.utils import timezone
 
+from .filters import LotAdminFilter
 from .forms import AuctionEditForm, ChangeUsernameForm, CreateLotForm
 from .models import (
     Auction,
@@ -4308,8 +4309,10 @@ class LotListViewTests(StandardTestCase):
         self.client.login(username=self.admin_user.username, password="testpassword")
         response = self.client.get(reverse("lot_list", kwargs={"slug": self.online_auction.slug}))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Habitat")
-        self.assertContains(response, "River")
+        self.assertEqual(response["Content-Type"], "text/csv")
+        content = response.content.decode("utf-8")
+        self.assertIn("Habitat", content)
+        self.assertIn("River", content)
 
 
 class MyLotsViewTests(StandardTestCase):
@@ -7771,9 +7774,7 @@ class ImportLotsFromCSVViewTests(StandardTestCase):
         csv_content = (
             f"Name,Email,Lot Name,Habitat\n{self.online_tos.name},{self.online_tos.email},Dropdown CSV Lot,River\n"
         )
-        from io import BytesIO
-
-        csv_file = BytesIO(csv_content.encode("utf-8"))
+        csv_file = io.BytesIO(csv_content.encode("utf-8"))
         csv_file.name = "test.csv"
         response = self.client.post(url, {"csv_file": csv_file})
         self.assertEqual(response.status_code, 200)
@@ -11845,8 +11846,6 @@ class LotAdminFilterTests(StandardTestCase):
         self.assertNotIn(self.lot_no_bids, filtered_qs)
 
     def test_custom_dropdown_search(self):
-        from auctions.filters import LotAdminFilter
-
         self.lot_no_bids.custom_dropdown = "River"
         self.lot_no_bids.save()
         qs = Lot.objects.filter(auction=self.online_auction)

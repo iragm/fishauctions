@@ -3963,14 +3963,13 @@ class ImportLotsFromCSV(LoginRequiredMixin, AuctionViewMixin, View):
         custom_dropdown_fields = ["custom dropdown", "custom_dropdown"]
         if self.auction.custom_dropdown_name:
             custom_dropdown_fields.append(self.auction.custom_dropdown_name.lower())
-        custom_dropdown_options = set(
-            AuctionDropdown.objects.filter(auction=self.auction).values_list("value", flat=True)
-        )
-        use_custom_dropdown = (
-            self.auction.use_custom_dropdown_field
-            and self.auction.custom_dropdown_name
-            and len(custom_dropdown_options) >= 2
-        )
+        custom_dropdown_options = set()
+        use_custom_dropdown = False
+        if self.auction.use_custom_dropdown_field and self.auction.custom_dropdown_name:
+            custom_dropdown_options = set(
+                AuctionDropdown.objects.filter(auction=self.auction).values_list("value", flat=True)
+            )
+            use_custom_dropdown = len(custom_dropdown_options) >= 2
 
         def valid_custom_dropdown(value):
             if use_custom_dropdown and value in custom_dropdown_options:
