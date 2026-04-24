@@ -59,7 +59,7 @@ $(document).ready(function() {
     fetch(form.attr('action'), {
       method: 'POST',
       body: new FormData(form[0]),
-      redirect: 'manual'
+      redirect: 'follow'
     })
     .then(function(response) {
       var contentType = response.headers.get('Content-Type') || '';
@@ -68,32 +68,9 @@ $(document).ready(function() {
           location.reload();
         });
       }
-
-      var redirectTarget = response.headers.get('Location');
-      if (redirectTarget) {
-        var absoluteRedirectUrl = new URL(redirectTarget, window.location.href);
-        if (absoluteRedirectUrl.pathname.indexOf('/print/pdf') !== -1) {
-          return fetch(absoluteRedirectUrl.toString(), {
-            credentials: 'same-origin'
-          })
-          .then(function(pdfResponse) {
-            var pdfContentType = pdfResponse.headers.get('Content-Type') || '';
-            if (!pdfContentType.includes('application/pdf')) {
-              window.location = absoluteRedirectUrl.toString();
-              return;
-            }
-            return downloadPdf(pdfResponse).then(function() {
-              location.reload();
-            });
-          });
-        }
-
-        window.location = absoluteRedirectUrl.toString();
-        return;
-      }
-
-      // Non-PDF response without a usable redirect target: fall through to reload.
-      location.reload();
+      // Non-PDF response means server redirected back (e.g. no labels to print).
+      // Navigate to the final URL so the user sees the updated page.
+      window.location.href = response.url || window.location.href;
     })
     .catch(function() {
       $btn.prop('disabled', false).text('Submit');
