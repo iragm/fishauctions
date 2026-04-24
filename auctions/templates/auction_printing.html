@@ -56,7 +56,7 @@ $(document).ready(function() {
       });
     }
 
-    fetch(form.attr('action'), {
+    fetch(form[0].action, {
       method: 'POST',
       body: new FormData(form[0]),
       redirect: 'follow'
