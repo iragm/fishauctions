@@ -1209,7 +1209,7 @@ class PageViewCreate(View):
                     if tos:
                         campaign.result = "JOINED"
                         campaign.save()
-            if "Googlebot" not in user_agent:
+            if "Googlebot" not in user_agent and "Baiduspider" not in user_agent:
                 PageView.objects.create(
                     lot_number=lot_number,
                     url=url_without_params,
