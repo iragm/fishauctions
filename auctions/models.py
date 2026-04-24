@@ -55,6 +55,8 @@ from .helper_functions import bin_data, get_currency_symbol
 
 logger = logging.getLogger(__name__)
 
+CUSTOM_DROPDOWN_MAX_LENGTH = 15
+
 
 def nearby_auctions(
     latitude,
@@ -784,6 +786,17 @@ class Auction(models.Model):
     use_i_bred_this_fish_field = models.BooleanField(default=True, blank=True, verbose_name="Use Breeder Points field")
     use_custom_checkbox_field = models.BooleanField(default=False, blank=True)
     use_custom_checkbox_field.help_text = "Optional information such as CARES, native species, difficult to keep, etc."
+    custom_dropdown_name = models.CharField(
+        max_length=50, default="", blank=True, null=True, verbose_name="Custom dropdown name"
+    )
+    custom_dropdown_name.help_text = "Shown when users add lots"
+    CUSTOM_DROPDOWN_CHOICES = (
+        ("disable", "Off"),
+        ("allow", "Optional"),
+        ("required", "Required for all lots"),
+    )
+    use_custom_dropdown_field = models.CharField(max_length=20, choices=CUSTOM_DROPDOWN_CHOICES, default="disable")
+    use_custom_dropdown_field.help_text = "Dropdown shown when users add lots."
     CUSTOM_CHOICES = (
         ("disable", "Off"),
         ("allow", "Optional"),
@@ -793,13 +806,13 @@ class Auction(models.Model):
         max_length=20,
         choices=CUSTOM_CHOICES,
         default="disable",
-        verbose_name="Custom field for lots",
+        verbose_name="Custom text field",
     )
     custom_field_1.help_text = (
         "Additional information on the label such as notes, scientific name, collection location..."
     )
     custom_field_1_name = models.CharField(
-        max_length=50, default="Notes", blank=True, null=True, verbose_name="Custom field name"
+        max_length=50, default="Notes", blank=True, null=True, verbose_name="Custom text field name"
     )
     custom_field_1_name.help_text = "What's the custom field used for?  This is shown to users"
     allow_bulk_adding_lots = models.BooleanField(default=True)
@@ -822,7 +835,7 @@ class Auction(models.Model):
         max_length=1000,
         blank=True,
         null=True,
-        default="qr_code,lot_name,min_bid_label,buy_now_label,quantity_label,seller_name,donation_label,custom_field_1,i_bred_this_fish_label,custom_checkbox_label",
+        default="qr_code,lot_name,min_bid_label,buy_now_label,quantity_label,seller_name,donation_label,custom_field_1,i_bred_this_fish_label,custom_checkbox_label,custom_dropdown_label",
     )
     use_seller_dash_lot_numbering = models.BooleanField(default=False, blank=True)
     use_seller_dash_lot_numbering.help_text = "Include the seller's bidder number with the lot number.  This option is not recommended as users find it confusing."
@@ -3353,6 +3366,60 @@ class AuctionTOS(models.Model):
         return ""
 
 
+class AuctionDropdown(models.Model):
+    auction = models.ForeignKey(Auction, on_delete=models.CASCADE)
+    createdon = models.DateTimeField(auto_now_add=True)
+    user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+    value = models.CharField(max_length=CUSTOM_DROPDOWN_MAX_LENGTH)
+
+    def __str__(self):
+        return self.value
+
+    def save(self, *args, **kwargs):
+        is_new = self.pk is None
+        old_value = None
+        if not is_new:
+            old_value = AuctionDropdown.objects.filter(pk=self.pk).values_list("value", flat=True).first()
+        super().save(*args, **kwargs)
+        duplicates = AuctionDropdown.objects.filter(auction=self.auction, value__iexact=self.value).order_by(
+            "createdon", "pk"
+        )
+        oldest = duplicates.first()
+        if oldest and oldest.pk != self.pk:
+            AuctionDropdown.objects.filter(pk=self.pk).delete()
+            self.pk = oldest.pk
+            self.id = oldest.pk
+            self.createdon = oldest.createdon
+            self.user = oldest.user
+            self.value = oldest.value
+            self.auction = oldest.auction
+            return
+        duplicates.exclude(pk=self.pk).delete()
+        if is_new:
+            self.auction.create_history(
+                applies_to="RULES",
+                action=f"Added custom dropdown option '{self.value}'",
+                user=self.user,
+            )
+        elif old_value != self.value:
+            self.auction.create_history(
+                applies_to="RULES",
+                action=f"Renamed custom dropdown option '{old_value}' to '{self.value}'",
+                user=self.user,
+            )
+
+    def delete(self, *args, **kwargs):
+        value = self.value
+        auction = self.auction
+        user = self.user
+        super().delete(*args, **kwargs)
+        auction.create_history(
+            applies_to="RULES",
+            action=f"Removed custom dropdown option '{value}'",
+            user=user,
+        )
+
+
 class Lot(models.Model):
     """A lot is something to bid on"""
 
@@ -3383,6 +3450,7 @@ class Lot(models.Model):
     image_source.help_text = "Where did you get this image?"
     custom_checkbox = models.BooleanField(default=False, verbose_name="Custom checkbox")
     custom_field_1 = models.CharField(max_length=60, default="", blank=True)
+    custom_dropdown = models.CharField(max_length=CUSTOM_DROPDOWN_MAX_LENGTH, default="", blank=True)
     i_bred_this_fish = models.BooleanField(default=False, verbose_name=settings.I_BRED_THIS_FISH_LABEL)
     i_bred_this_fish.help_text = "Check to get breeder points for this lot"
     summernote_description = models.TextField(verbose_name="Description", default="", blank=True)
@@ -4976,6 +5044,12 @@ class Lot(models.Model):
     def custom_checkbox_label(self):
         if self.auction.custom_checkbox_name and self.auction.use_custom_checkbox_field and self.custom_checkbox:
             return self.auction.custom_checkbox_name
+        return ""
+
+    @property
+    def custom_dropdown_label(self):
+        if self.auction.use_custom_dropdown_field != "disable" and self.custom_dropdown:
+            return self.custom_dropdown
         return ""
 
     @property

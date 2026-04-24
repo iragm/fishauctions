@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{{ form.media }}
+{% load crispy_forms_tags %}
+{% block extra_js %}
+<script type='text/javascript'>pageView();</script>
+<script type="text/javascript">
+function toggleCustomFieldSettings() {
+    if ($('#id_custom_field_1').val() === 'disable') {
+        $('#div_id_custom_field_1_name').closest('.col-md-4').hide();
+    } else {
+        $('#div_id_custom_field_1_name').closest('.col-md-4').show();
+    }
+}
+
+function toggleCustomCheckboxSettings() {
+    if ($('#id_use_custom_checkbox_field').is(':checked')) {
+        $('#div_id_custom_checkbox_name').closest('.col-md-4').show();
+    } else {
+        $('#div_id_custom_checkbox_name').closest('.col-md-4').hide();
+    }
+}
+
+function toggleCustomDropdownSettings() {
+    if ($('#id_use_custom_dropdown_field').val() !== 'disable') {
+        $('#div_id_custom_dropdown_name').closest('.col-md-4').show();
+        $('#custom-dropdown-options-section').show();
+    } else {
+        $('#div_id_custom_dropdown_name').closest('.col-md-4').hide();
+        $('#custom-dropdown-options-section').hide();
+    }
+}
+
+function renderDropdownOption(option) {
+    const escapedValue = $('<div>').text(option.value).html();
+    return `
+        <li class="list-group-item d-flex align-items-center gap-2" data-option-id="${option.id}">
+            <input type="text" class="form-control form-control-sm dropdown-option-value" maxlength="{{ custom_dropdown_max_length }}" value="${escapedValue}">
+            <button type="button" class="btn btn-sm btn-outline-success dropdown-option-save">Save</button>
+            <button type="button" class="btn btn-sm btn-outline-danger dropdown-option-delete">Delete</button>
+        </li>
+    `;
+}
+
+function postDropdownOption(data, onSuccess) {
+    $.ajax({
+        url: "{% url 'auction_custom_dropdown_options' slug=auction.slug %}",
+        method: "POST",
+        data: data,
+        headers: { "X-CSRFToken": "{{ csrf_token }}" },
+        success: function(response) {
+            if (!response.success) {
+                alert(response.error || "Error updating dropdown options");
+                return;
+            }
+            onSuccess(response);
+        },
+        error: function() {
+            alert("Error updating dropdown options");
+        }
+    });
+}
+
+$(document).ready(function() {
+    const submitButton = $('#auction-custom-fields-form input[type="submit"], #auction-custom-fields-form button[type="submit"]').first();
+    if (submitButton.length) {
+        $('#custom-dropdown-options-section').insertBefore(submitButton);
+    }
+    toggleCustomFieldSettings();
+    toggleCustomCheckboxSettings();
+    toggleCustomDropdownSettings();
+    $('#id_custom_field_1').on('change', toggleCustomFieldSettings);
+    $('#id_use_custom_checkbox_field').on('change', toggleCustomCheckboxSettings);
+    $('#id_use_custom_dropdown_field').on('change', toggleCustomDropdownSettings);
+
+    $('#add-dropdown-option-btn').on('click', function() {
+        const input = $('#new-dropdown-option');
+        const value = input.val().trim();
+        if (!value) return;
+        postDropdownOption({ action: 'create', value: value }, function(response) {
+            $('#custom-dropdown-options-list').append(renderDropdownOption(response.option));
+            input.val('');
+        });
+    });
+    $('#new-dropdown-option').on('keydown', function(event) {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            $('#add-dropdown-option-btn').trigger('click');
+        }
+    });
+
+    $('#custom-dropdown-options-list').on('click', '.dropdown-option-save', function() {
+        const $row = $(this).closest('li');
+        const optionId = $row.data('option-id');
+        const value = $row.find('.dropdown-option-value').val().trim();
+        postDropdownOption({ action: 'update', option_id: optionId, value: value }, function(response) {
+            $row.find('.dropdown-option-value').val(response.option.value);
+        });
+    });
+    $('#custom-dropdown-options-list').on('keydown', '.dropdown-option-value', function(event) {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            $(this).closest('li').find('.dropdown-option-save').trigger('click');
+        }
+    });
+
+    $('#custom-dropdown-options-list').on('click', '.dropdown-option-delete', function() {
+        const $row = $(this).closest('li');
+        const optionId = $row.data('option-id');
+        postDropdownOption({ action: 'delete', option_id: optionId }, function() {
+            $row.remove();
+        });
+    });
+});
+</script>
+{% endblock %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+            {% include 'auction_ribbon.html' %}
+            {% crispy form form.helper %}
+            <div id="custom-dropdown-options-section" class="mt-3">
+                <h5>Custom dropdown options</h5>
+                <div class="input-group mb-2">
+                    <input type="text" id="new-dropdown-option" class="form-control" maxlength="{{ custom_dropdown_max_length }}" placeholder="Add option">
+                    <button type="button" id="add-dropdown-option-btn" class="btn btn-outline-success">Add</button>
+                </div>
+                <ul class="list-group" id="custom-dropdown-options-list">
+                    {% for option in dropdown_options %}
+                    <li class="list-group-item d-flex align-items-center gap-2" data-option-id="{{ option.pk }}">
+                        <input type="text" class="form-control form-control-sm dropdown-option-value" maxlength="{{ custom_dropdown_max_length }}" value="{{ option.value }}">
+                        <button type="button" class="btn btn-sm btn-outline-success dropdown-option-save">Save</button>
+                        <button type="button" class="btn btn-sm btn-outline-danger dropdown-option-delete">Delete</button>
+                    </li>
+                    {% endfor %}
+                </ul>
+                <small class="text-muted">At least 2 options are required before this field can be enabled.</small>
+            </div>
+{% endblock %}
