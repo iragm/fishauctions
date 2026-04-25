@@ -4401,6 +4401,17 @@ class LotListViewTests(StandardTestCase):
         response = self.client.get(f"/lots/?auction={self.online_auction.slug}")
         assert response.status_code == 200
 
+    def test_auction_lot_list_csv_export_includes_donation(self):
+        self.lot.donation = True
+        self.lot.save()
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.get(reverse("lot_list", kwargs={"slug": self.online_auction.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "text/csv")
+        content = response.content.decode("utf-8")
+        self.assertIn("Donation", content)
+        self.assertIn("True", content)
+
     def test_auction_lot_list_csv_export_includes_custom_dropdown(self):
         self.online_auction.use_custom_dropdown_field = "allow"
         self.online_auction.custom_dropdown_name = "Habitat"
