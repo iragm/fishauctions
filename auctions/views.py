@@ -119,6 +119,7 @@ from .forms import (
     ChangeInvoiceStatusForm,
     ChangeUsernameForm,
     ChangeUserPreferencesForm,
+    ClubMemberSelfServiceForm,
     CreateAuctionForm,
     CreateEditAuctionTOS,
     CreateImageForm,
@@ -2889,7 +2890,53 @@ class AuctionUnsellLot(LoginRequiredMixin, AuctionViewMixin, View):
         return self.http_method_not_allowed
 
 
-class BulkAddUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView, ContextMixin):
+class CSVContactImportMixin:
+    """Shared utilities for importing contacts from CSV files."""
+
+    EMAIL_FIELD_NAMES = ["email", "e-mail", "email address", "e-mail address"]
+    NAME_FIELD_NAMES = ["name", "full name", "first name", "firstname"]
+    ADDRESS_FIELD_NAMES = ["address", "mailing address"]
+    PHONE_FIELD_NAMES = ["phone", "phone number", "telephone", "telephone number"]
+    MEMO_FIELD_NAMES = ["memo", "note", "notes"]
+    FIRST_NAME_FIELD_NAMES = ["first name", "firstname", "first"]
+    LAST_NAME_FIELD_NAMES = ["last name", "lastname", "last", "surname"]
+
+    @staticmethod
+    def extract_csv_field(row, field_name_list, default_response=""):
+        """Pass a row, and a lowercase list of field names.
+        Extract the first match found (case insensitive) and return the value from the row.
+        Empty string returned if the value is not found in the row."""
+        case_insensitive_row = {k.lower(): v for k, v in row.items()}
+        for name in field_name_list:
+            value = case_insensitive_row.get(name)
+            if value is not None:
+                return value
+        return default_response
+
+    @staticmethod
+    def csv_columns_exist(field_names, columns):
+        """Returns True if any value in the list `columns` exists in the file headers."""
+        case_insensitive_row = {k.lower() for k in field_names}
+        for column in columns:
+            if column in case_insensitive_row:
+                return True
+        return False
+
+    def handle_csv_upload(self, csv_file):
+        """If a CSV file has been uploaded, parse it and redirect. Calls process_csv_data()."""
+        try:
+            csv_file.seek(0)
+            csv_reader = csv.DictReader(TextIOWrapper(csv_file.file))
+            filename = getattr(csv_file, "name", None)
+            return self.process_csv_data(csv_reader, filename=filename)
+        except (UnicodeDecodeError, ValueError) as e:
+            messages.error(
+                self.request, f"Unable to read file. Make sure this is a valid UTF-8 CSV file. Error was: {e}"
+            )
+            return None
+
+
+class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, TemplateView, ContextMixin):
     """Add/edit lots of auctiontos"""
 
     template_name = "auctions/bulk_add_users.html"
@@ -2957,25 +3004,6 @@ class BulkAddUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView, ContextMi
     def process_csv_data(self, csv_reader, filename=None, *args, **kwargs):
         """Process CSV data from a DictReader object and add/update users"""
 
-        def extract_info(row, field_name_list, default_response=""):
-            """Pass a row, and a lowercase list of field names
-            extract the first match found (case insensitive) and return the value from the row
-            empty string returned if the value is not found in the row"""
-            case_insensitive_row = {k.lower(): v for k, v in row.items()}
-            for name in field_name_list:
-                value = case_insensitive_row.get(name)
-                if value is not None:
-                    return value
-            return default_response
-
-        def columns_exist(field_names, columns):
-            """returns True if any value in the list `columns` exists in the file"""
-            case_insensitive_row = {k.lower() for k in field_names}
-            for column in columns:
-                if column in case_insensitive_row:
-                    return True
-            return False
-
         email_field_names = ["email", "e-mail", "email address", "e-mail address"]
         bidder_number_fields = ["bidder number", "bidder", "membernumber", "tempguestnumber"]
         name_field_names = ["name", "full name", "first name", "firstname"]
@@ -2992,23 +3020,25 @@ class BulkAddUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView, ContextMi
         # so the error refers to the most important missing column
         try:
             # we're not going to error out for club member or bidding allowed missing columns, but track it for updating existing users
-            is_club_member_field_exists = columns_exist(csv_reader.fieldnames, is_club_member_fields)
-            is_bidding_allowed_fields_exists = columns_exist(csv_reader.fieldnames, is_bidding_allowed_field_names)
-            memo_field_exists = columns_exist(csv_reader.fieldnames, memo_field_names)
-            is_admin_field_exists = columns_exist(csv_reader.fieldnames, is_admin_field_names)
-            if not columns_exist(csv_reader.fieldnames, phone_field_names):
+            is_club_member_field_exists = self.csv_columns_exist(csv_reader.fieldnames, is_club_member_fields)
+            is_bidding_allowed_fields_exists = self.csv_columns_exist(
+                csv_reader.fieldnames, is_bidding_allowed_field_names
+            )
+            memo_field_exists = self.csv_columns_exist(csv_reader.fieldnames, memo_field_names)
+            is_admin_field_exists = self.csv_columns_exist(csv_reader.fieldnames, is_admin_field_names)
+            if not self.csv_columns_exist(csv_reader.fieldnames, phone_field_names):
                 error = "Warning: This file does not contain a phone column"
             else:
                 some_columns_exist = True
-            if not columns_exist(csv_reader.fieldnames, address_field_names):
+            if not self.csv_columns_exist(csv_reader.fieldnames, address_field_names):
                 error = "Warning: This file does not contain an address column"
             else:
                 some_columns_exist = True
-            if not columns_exist(csv_reader.fieldnames, name_field_names):
+            if not self.csv_columns_exist(csv_reader.fieldnames, name_field_names):
                 error = "Warning: This file does not contain a name column"
             else:
                 some_columns_exist = True
-            if not columns_exist(csv_reader.fieldnames, email_field_names):
+            if not self.csv_columns_exist(csv_reader.fieldnames, email_field_names):
                 error = "Warning: This file does not contain an email column"
             else:
                 some_columns_exist = True
@@ -3021,13 +3051,13 @@ class BulkAddUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView, ContextMi
             total_skipped = 0
             total_updated = 0
             for row in csv_reader:
-                bidder_number = extract_info(row, bidder_number_fields)
-                email = extract_info(row, email_field_names)
-                name = extract_info(row, name_field_names)
-                phone = extract_info(row, phone_field_names)
-                address = extract_info(row, address_field_names)
-                memo = extract_info(row, memo_field_names)
-                is_club_member = extract_info(row, is_club_member_fields)
+                bidder_number = self.extract_csv_field(row, bidder_number_fields)
+                email = self.extract_csv_field(row, email_field_names)
+                name = self.extract_csv_field(row, name_field_names)
+                phone = self.extract_csv_field(row, phone_field_names)
+                address = self.extract_csv_field(row, address_field_names)
+                memo = self.extract_csv_field(row, memo_field_names)
+                is_club_member = self.extract_csv_field(row, is_club_member_fields)
                 if is_club_member.lower() in [
                     "yes",
                     "true",
@@ -3038,12 +3068,12 @@ class BulkAddUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView, ContextMi
                     is_club_member = True
                 else:
                     is_club_member = False
-                is_bidding_allowed = extract_info(row, is_bidding_allowed_field_names, "yes")
+                is_bidding_allowed = self.extract_csv_field(row, is_bidding_allowed_field_names, "yes")
                 if is_bidding_allowed.lower() in ["yes", "true"]:
                     bidding_allowed = True
                 else:
                     bidding_allowed = False
-                is_admin = extract_info(row, is_admin_field_names)
+                is_admin = self.extract_csv_field(row, is_admin_field_names)
                 if is_admin and is_admin.lower() in ["yes", "true", "1"]:
                     is_admin = True
                 else:
@@ -11243,6 +11273,8 @@ class ClubDetailView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         if self.request.user.is_authenticated:
             member = ClubMember.objects.filter(club=self.club, user=self.request.user, is_deleted=False).first()
         context["member"] = member
+        if member:
+            context["update_form"] = ClubMemberSelfServiceForm(instance=member)
         has_points = (
             ClubMember.objects.filter(club=self.club, is_deleted=False)
             .filter(Q(bap_points__gt=0) | Q(hap_points__gt=0))
@@ -11260,7 +11292,16 @@ class ClubDetailView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         return context
 
     def post(self, request, *args, **kwargs):
-        """Handle join requests"""
+        action = request.POST.get("action", "join")
+        if action == "update":
+            member = ClubMember.objects.filter(club=self.club, user=request.user, is_deleted=False).first()
+            if member:
+                form = ClubMemberSelfServiceForm(request.POST, instance=member)
+                if form.is_valid():
+                    form.save()
+                    messages.success(request, "Your info has been updated.")
+            return redirect(reverse("club_detail", kwargs={"slug": self.club.slug}))
+        # join logic
         if not self.club.allow_joining:
             messages.error(request, "This club is not accepting new members right now.")
             return redirect(reverse("club_detail", kwargs={"slug": self.club.slug}))
@@ -11294,10 +11335,10 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterV
     filterset_class = ClubMemberFilter
 
     def dispatch(self, request, *args, **kwargs):
-        result = super().dispatch(request, *args, **kwargs)
-        if not self.user_has_club_permission("permission_view"):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_view"):
             raise PermissionDenied()
-        return result
+        return super().dispatch(request, *args, **kwargs)
 
     def get_queryset(self):
         return ClubMember.objects.filter(club=self.club, is_deleted=False).order_by("last_name", "first_name")
@@ -11311,6 +11352,8 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterV
         context = super().get_context_data(**kwargs)
         context["club"] = self.club
         context["can_edit"] = self.user_has_club_permission("permission_edit_club")
+        context["can_export"] = self.user_has_club_permission("permission_export")
+        context["can_add_edit"] = self.user_has_club_permission("permission_add_edit")
         return context
 
 
@@ -11344,10 +11387,10 @@ class ClubEditView(LoginRequiredMixin, ClubViewMixin, TemplateView):
     template_name = "auctions/club_edit.html"
 
     def dispatch(self, request, *args, **kwargs):
-        result = super().dispatch(request, *args, **kwargs)
-        if not self.user_has_club_permission("permission_edit_club"):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
             raise PermissionDenied()
-        return result
+        return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -11363,10 +11406,10 @@ class ClubHistoryView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, Filte
     filterset_class = ClubHistoryFilter
 
     def dispatch(self, request, *args, **kwargs):
-        result = super().dispatch(request, *args, **kwargs)
-        if not self.user_has_club_permission("permission_view"):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_view"):
             raise PermissionDenied()
-        return result
+        return super().dispatch(request, *args, **kwargs)
 
     def get_queryset(self):
         return ClubHistory.objects.filter(club=self.club).order_by("-timestamp")
@@ -11385,6 +11428,181 @@ class ClubHistoryView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, Filte
         kwargs = super().get_table_kwargs(**kwargs)
         kwargs["club"] = self.club
         return kwargs
+
+
+class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubViewMixin, View):
+    """Import club members from a CSV file"""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not check_club_permission(request.user, self.club, "permission_add_edit"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        csv_file = request.FILES.get("csv_file")
+        if not csv_file:
+            messages.error(request, "No file uploaded.")
+            return redirect(reverse("club_admin", kwargs={"slug": self.club.slug}))
+        try:
+            csv_file.seek(0)
+            csv_reader = csv.DictReader(TextIOWrapper(csv_file.file))
+            return self.process_csv_data(csv_reader, filename=getattr(csv_file, "name", None))
+        except (UnicodeDecodeError, ValueError) as e:
+            messages.error(
+                self.request, f"Unable to read file. Make sure this is a valid UTF-8 CSV file. Error was: {e}"
+            )
+            return redirect(reverse("club_admin", kwargs={"slug": self.club.slug}))
+
+    def process_csv_data(self, csv_reader, filename=None):
+        total_added = 0
+        total_updated = 0
+        total_skipped = 0
+        try:
+            for row in csv_reader:
+                email = self.extract_csv_field(row, self.EMAIL_FIELD_NAMES)
+                if not email:
+                    total_skipped += 1
+                    continue
+                first_name = self.extract_csv_field(row, self.FIRST_NAME_FIELD_NAMES)
+                last_name = self.extract_csv_field(row, self.LAST_NAME_FIELD_NAMES)
+                if not first_name and not last_name:
+                    full_name = self.extract_csv_field(row, self.NAME_FIELD_NAMES)
+                    if full_name:
+                        parts = full_name.split(" ", 1)
+                        first_name = parts[0]
+                        last_name = parts[1] if len(parts) > 1 else ""
+                phone = self.extract_csv_field(row, self.PHONE_FIELD_NAMES)
+                address = self.extract_csv_field(row, self.ADDRESS_FIELD_NAMES)
+                memo = self.extract_csv_field(row, self.MEMO_FIELD_NAMES)
+                existing = ClubMember.objects.filter(club=self.club, email=email, is_deleted=False).first()
+                if existing:
+                    changed = False
+                    if first_name and existing.first_name != first_name[:100]:
+                        existing.first_name = first_name[:100]
+                        changed = True
+                    if last_name and existing.last_name != last_name[:100]:
+                        existing.last_name = last_name[:100]
+                        changed = True
+                    if phone and existing.phone_number != phone[:20]:
+                        existing.phone_number = phone[:20]
+                        changed = True
+                    if address and existing.address != address[:500]:
+                        existing.address = address[:500]
+                        changed = True
+                    if changed:
+                        existing.save()
+                        total_updated += 1
+                else:
+                    ClubMember.objects.create(
+                        club=self.club,
+                        email=email[:254],
+                        first_name=first_name[:100] if first_name else "",
+                        last_name=last_name[:100] if last_name else "",
+                        phone_number=phone[:20] if phone else "",
+                        address=address[:500] if address else "",
+                        memo=memo[:500] if memo else "",
+                        source="manually_added",
+                        added_by=self.request.user,
+                    )
+                    total_added += 1
+
+            msg_parts = []
+            if total_added:
+                msg_parts.append(f"{total_added} members added")
+            if total_updated:
+                msg_parts.append(f"{total_updated} members updated")
+            if total_skipped:
+                msg_parts.append(f"{total_skipped} rows skipped (no email)")
+            if msg_parts:
+                messages.success(self.request, ", ".join(msg_parts))
+
+            if total_added > 0 or total_updated > 0:
+                ClubHistory.objects.create(
+                    club=self.club,
+                    user=self.request.user,
+                    action=f"CSV import: {', '.join(msg_parts)}" + (f" from {filename}" if filename else ""),
+                    applies_to="MEMBERS",
+                )
+        except Exception as e:
+            messages.error(self.request, f"Error processing CSV: {e}")
+
+        return redirect(reverse("club_admin", kwargs={"slug": self.club.slug}))
+
+
+class ClubMemberCSVExportView(LoginRequiredMixin, ClubViewMixin, View):
+    """Export club members as CSV"""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not check_club_permission(request.user, self.club, "permission_export"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request, *args, **kwargs):
+        export_type = kwargs.get("export_type", "all")
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = f'attachment; filename="{self.club.slug}-members-{export_type}.csv"'
+        writer = csv.writer(response)
+        writer.writerow(
+            [
+                "First Name",
+                "Last Name",
+                "Email",
+                "Phone",
+                "Address",
+                "BAP Points",
+                "HAP Points",
+                "Membership Last Paid",
+                "Date Joined",
+                "Source",
+                "Contact Status",
+                "Discord ID",
+                "Memo",
+            ]
+        )
+        qs = ClubMember.objects.filter(club=self.club, is_deleted=False)
+        today = timezone.now().date()
+        if export_type == "current":
+            qs = qs.filter(membership_last_paid__isnull=False)
+            if self.club.membership_system == "rolling":
+                qs = qs.filter(membership_last_paid__gte=today - timedelta(days=365))
+            else:
+                qs = qs.filter(membership_last_paid__year=today.year)
+        elif export_type == "expired":
+            qs_paid = ClubMember.objects.filter(club=self.club, is_deleted=False, membership_last_paid__isnull=False)
+            if self.club.membership_system == "rolling":
+                qs_paid = qs_paid.exclude(membership_last_paid__gte=today - timedelta(days=365))
+            else:
+                qs_paid = qs_paid.exclude(membership_last_paid__year=today.year)
+            qs = qs_paid
+        elif export_type == "marketing":
+            qs = qs.exclude(contact_status="do_not_contact")
+        for member in qs:
+            writer.writerow(
+                [
+                    member.first_name,
+                    member.last_name,
+                    member.email or "",
+                    member.phone_as_string,
+                    member.address,
+                    member.bap_points,
+                    member.hap_points,
+                    member.membership_last_paid or "",
+                    member.createdon.date(),
+                    member.source,
+                    member.contact_status,
+                    member.discord_id or "",
+                    member.memo,
+                ]
+            )
+        ClubHistory.objects.create(
+            club=self.club,
+            user=request.user,
+            action=f"Exported {export_type} member CSV",
+            applies_to="MEMBERS",
+        )
+        return response
 
 
 class ClubAPIViewMixin:

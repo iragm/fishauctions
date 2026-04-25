@@ -42,6 +42,7 @@ function initMap() {
         ['<div class="info_content" style="color:black;">' +
         '<h5>{{ club.name }}</h5>' +
         '<p>{% if request.user.is_superuser %}<a href="/admin/auctions/club/{{ club.pk }}/change/" target="_blank">Admin</a><br>{% endif%}' +
+        '{% if club.slug %}<a href="/clubs/{{club.slug}}/">Club page</a><br>{% endif%}' +
         '{% if club.homepage %}<a href="{{club.homepage}}" target="_blank">Website</a><br>{% endif%}' +
         '{% if club.facebook_page %}<a href="{{club.facebook_page}}" target="_blank">Facebook page</a><br>{% endif%}' +
         '<br><b>Interests:</b><br>{% for interest in club.interests.all %}{{interest}}<br>{%endfor%}</p>' +

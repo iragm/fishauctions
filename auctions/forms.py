@@ -33,6 +33,7 @@ from .models import (
     Bid,
     Category,
     ChatSubscription,
+    ClubMember,
     InvoiceAdjustment,
     Lot,
     LotImage,
@@ -3361,3 +3362,11 @@ class LabelPrintFieldsForm(forms.Form):
         selected_fields = [field["value"] for field in self.available_fields if self.cleaned_data.get(field["value"])]
         self.auction.label_print_fields = ",".join(selected_fields)
         self.auction.save()
+
+
+class ClubMemberSelfServiceForm(forms.ModelForm):
+    """Form for club members to update their own contact info."""
+
+    class Meta:
+        model = ClubMember
+        fields = ["first_name", "last_name", "phone_number", "address"]

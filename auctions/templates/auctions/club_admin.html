@@ -11,6 +11,26 @@
   <a href="{% url 'club_edit' club.slug %}" class="btn btn-sm btn-warning"><i class="bi bi-gear"></i> Edit club settings</a>
   {% endif %}
   <a href="{% url 'club_history' club.slug %}" class="btn btn-sm btn-info"><i class="bi bi-clock-history"></i> History</a>
+  {% if can_export %}
+  <div class="dropdown d-inline">
+    <button class="btn btn-sm btn-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
+      <i class="bi bi-download"></i> Export
+    </button>
+    <ul class="dropdown-menu">
+      <li><a class="dropdown-item" href="{% url 'club_member_export' club.slug 'current' %}">Current members</a></li>
+      <li><a class="dropdown-item" href="{% url 'club_member_export' club.slug 'expired' %}">Expired members</a></li>
+      <li><a class="dropdown-item" href="{% url 'club_member_export' club.slug 'marketing' %}">Marketing list</a></li>
+      <li><a class="dropdown-item" href="{% url 'club_member_export' club.slug 'all' %}">All members</a></li>
+    </ul>
+  </div>
+  {% endif %}
+  {% if can_add_edit %}
+  <form method="post" enctype="multipart/form-data" action="{% url 'club_member_import' club.slug %}" class="d-inline">
+    {% csrf_token %}
+    <label class="btn btn-sm btn-secondary" for="csv_import_file"><i class="bi bi-upload"></i> Import CSV</label>
+    <input id="csv_import_file" type="file" name="csv_file" accept=".csv" style="display:none" onchange="this.form.submit()">
+  </form>
+  {% endif %}
 </div>
 
 <form class="col-sm-12 mt-2">

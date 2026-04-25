@@ -659,9 +659,12 @@ class ClubMember(ContactRecord):
     added_by = models.ForeignKey(
         User, on_delete=models.SET_NULL, null=True, blank=True, related_name="added_club_members"
     )
-    contact = models.BooleanField(default=True)
-    non_essential_emails = models.BooleanField(default=True)
-    do_not_contact = models.BooleanField(default=False)
+    CONTACT_STATUS_CHOICES = (
+        ("contact", "Contact normally"),
+        ("non_essential", "No non-essential emails"),
+        ("do_not_contact", "Do not contact"),
+    )
+    contact_status = models.CharField(max_length=20, choices=CONTACT_STATUS_CHOICES, default="contact")
     discord_roles = models.TextField(blank=True)
     is_deleted = models.BooleanField(default=False, db_index=True)
     SOURCE_CHOICES = (
@@ -696,6 +699,7 @@ class ClubHistory(models.Model):
         choices=(
             ("RULES", "Rules"),
             ("MEMBERS", "Members"),
+            ("MEMBERSHIP", "Membership"),
             ("SETTINGS", "Settings"),
         ),
         blank=True,

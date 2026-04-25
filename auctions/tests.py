@@ -13283,9 +13283,7 @@ class ClubModelTests(TestCase):
         member = ClubMember.objects.create(club=self.club, first_name="Test", last_name="User")
         self.assertFalse(member.is_deleted)
         self.assertEqual(member.source, "manually_added")
-        self.assertTrue(member.contact)
-        self.assertFalse(member.do_not_contact)
-        self.assertTrue(member.non_essential_emails)
+        self.assertEqual(member.contact_status, "contact")
         self.assertEqual(member.bap_points, 0)
         self.assertEqual(member.hap_points, 0)
 
@@ -13414,6 +13412,78 @@ class ClubViewTests(TestCase):
         url = reverse("club_detail", kwargs={"slug": "nonexistent-club-xyz"})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 404)
+
+    def test_club_admin_anonymous_redirects_to_login(self):
+        """Anonymous user accessing club_admin should be redirected to login, not get 403"""
+        url = reverse("club_admin", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response["Location"])
+
+    def test_club_edit_anonymous_redirects_to_login(self):
+        """Anonymous user accessing club_edit should be redirected to login"""
+        url = reverse("club_edit", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response["Location"])
+
+    def test_club_history_anonymous_redirects_to_login(self):
+        """Anonymous user accessing club_history should be redirected to login"""
+        url = reverse("club_history", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response["Location"])
+
+    def test_club_admin_non_member_gets_403(self):
+        """Authenticated non-member user gets 403 on club admin"""
+        self.client.login(username="other2", password="testpass")
+        url = reverse("club_admin", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_club_edit_non_member_gets_403(self):
+        """Authenticated non-member user gets 403 on club edit"""
+        self.client.login(username="other2", password="testpass")
+        url = reverse("club_edit", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_club_history_non_member_gets_403(self):
+        """Authenticated non-member user gets 403 on club history"""
+        self.client.login(username="other2", password="testpass")
+        url = reverse("club_history", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_club_detail_non_member_can_view(self):
+        """Non-member authenticated user can view club detail page"""
+        self.client.login(username="other2", password="testpass")
+        url = reverse("club_detail", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_club_admin_regular_member_gets_403(self):
+        """Regular member (no admin role) cannot access club admin"""
+        perm_view = ClubPermission.objects.get_or_create(name="permission_view", defaults={"description": "View"})[0]
+        # Create a non-admin role
+        viewer_role = ClubRole.objects.create(club=self.club, name="Viewer")
+        viewer_role.permissions.add(perm_view)
+        regular_user = User.objects.create_user(username="regular_member", password="testpass", email="reg@example.com")
+        regular_member = ClubMember.objects.create(club=self.club, user=regular_user, first_name="Regular")
+        regular_member.roles.add(viewer_role)
+        self.client.login(username="regular_member", password="testpass")
+        url = reverse("club_edit", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_club_superuser_can_access_all(self):
+        """Superuser can access all club views"""
+        User.objects.create_superuser(username="su_test", password="testpass", email="su@example.com")
+        self.client.login(username="su_test", password="testpass")
+        for url_name in ["club_admin", "club_edit", "club_history"]:
+            url = reverse(url_name, kwargs={"slug": self.club.slug})
+            response = self.client.get(url)
+            self.assertEqual(response.status_code, 200, f"{url_name} should return 200 for superuser")
 
 
 class ClubAPITests(TestCase):
