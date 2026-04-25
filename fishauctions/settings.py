@@ -191,6 +191,7 @@ INSTALLED_APPS = [
     "webpush",
     "django_celery_beat",
     "rest_framework",
+    "rest_framework.authtoken",
 ]
 ASGI_APPLICATION = "fishauctions.asgi.application"
 MIDDLEWARE = [

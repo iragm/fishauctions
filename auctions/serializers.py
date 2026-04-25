@@ -25,4 +25,4 @@ class ClubMemberSerializer(serializers.ModelSerializer):
             "is_deleted",
             "memo",
         ]
-        read_only_fields = ["id", "createdon"]
+        read_only_fields = ["id", "createdon", "club", "is_deleted"]

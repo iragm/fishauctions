@@ -28,6 +28,11 @@ from .models import (
     Bid,
     Category,
     ChatSubscription,
+    Club,
+    ClubHistory,
+    ClubMember,
+    ClubPermission,
+    ClubRole,
     Invoice,
     InvoiceAdjustment,
     Lot,
@@ -13218,3 +13223,225 @@ class PayPalCSVExportTests(StandardTestCase):
         self.assertIsNotNone(row)
         self.assertLessEqual(len(row[2]), 20)
         self.assertEqual(row[2], "Longfellowtheeloquen")
+
+
+class ClubModelTests(TestCase):
+    """Tests for Club, ClubMember, ClubRole, ClubPermission, ClubHistory models"""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="club_owner", password="testpass", email="owner@example.com")
+        self.member_user = User.objects.create_user(
+            username="club_member", password="testpass", email="member@example.com"
+        )
+        self.club = Club.objects.create(
+            name="Test Fish Club",
+            owner=self.owner,
+            allow_joining=True,
+        )
+
+    def test_club_slug_auto_generated(self):
+        """Club slug should be auto-generated from name"""
+        self.assertIsNotNone(self.club.slug)
+        self.assertIn("test-fish-club", self.club.slug)
+
+    def test_club_str(self):
+        self.assertEqual(str(self.club), "Test Fish Club")
+
+    def test_club_member_phone_as_string(self):
+        """phone_as_string should format a 10-digit number with dashes"""
+        member = ClubMember.objects.create(
+            club=self.club,
+            first_name="Alice",
+            last_name="Smith",
+            phone_number="5551234567",
+        )
+        self.assertEqual(member.phone_as_string, "555-123-4567")
+
+    def test_club_member_phone_as_string_non_10_digit(self):
+        """phone_as_string returns raw digits for non-10-digit numbers"""
+        member = ClubMember.objects.create(
+            club=self.club,
+            first_name="Bob",
+            last_name="Jones",
+            phone_number="123456",
+        )
+        self.assertEqual(member.phone_as_string, "123456")
+
+    def test_club_member_str_with_name(self):
+        member = ClubMember.objects.create(club=self.club, first_name="Alice", last_name="Smith")
+        self.assertEqual(str(member), "Alice Smith")
+
+    def test_club_member_str_with_email_no_name(self):
+        member = ClubMember.objects.create(club=self.club, email="alice@example.com")
+        self.assertEqual(str(member), "alice@example.com")
+
+    def test_club_member_str_fallback(self):
+        member = ClubMember.objects.create(club=self.club)
+        self.assertIn("Member #", str(member))
+
+    def test_club_member_defaults(self):
+        member = ClubMember.objects.create(club=self.club, first_name="Test", last_name="User")
+        self.assertFalse(member.is_deleted)
+        self.assertEqual(member.source, "manually_added")
+        self.assertTrue(member.contact)
+        self.assertFalse(member.do_not_contact)
+        self.assertTrue(member.non_essential_emails)
+        self.assertEqual(member.bap_points, 0)
+        self.assertEqual(member.hap_points, 0)
+
+    def test_club_history_str_with_user(self):
+        history = ClubHistory.objects.create(
+            club=self.club,
+            user=self.owner,
+            action="Added a member",
+            applies_to="MEMBERS",
+        )
+        result = str(history)
+        self.assertIn("Added a member", result)
+
+    def test_club_history_str_system(self):
+        history = ClubHistory.objects.create(
+            club=self.club,
+            action="System sync",
+            applies_to="MEMBERS",
+        )
+        self.assertIn("System", str(history))
+
+    def test_club_permission_str(self):
+        perm = ClubPermission.objects.create(
+            name="permission_admin",
+            description="Full admin access",
+        )
+        self.assertEqual(str(perm), "Full admin access")
+
+    def test_club_role_with_permissions(self):
+        perm = ClubPermission.objects.create(name="permission_view", description="View members")
+        role = ClubRole.objects.create(club=self.club, name="Viewer")
+        role.permissions.add(perm)
+        self.assertEqual(role.permissions.count(), 1)
+        self.assertIn(perm, role.permissions.all())
+
+    def test_club_member_with_user(self):
+        member = ClubMember.objects.create(
+            club=self.club,
+            user=self.member_user,
+            first_name="Jane",
+            last_name="Doe",
+            source="joined",
+        )
+        self.assertEqual(member.user, self.member_user)
+        self.assertEqual(member.source, "joined")
+
+
+class ClubViewTests(TestCase):
+    """Tests for club views"""
+
+    def setUp(self):
+        self.client = Client()
+        self.owner = User.objects.create_user(username="club_owner2", password="testpass", email="owner2@example.com")
+        self.other_user = User.objects.create_user(username="other2", password="testpass", email="other2@example.com")
+        self.club = Club.objects.create(
+            name="View Test Club",
+            owner=self.owner,
+            allow_joining=True,
+        )
+        # Give owner the admin permission via a role
+        perm_admin = ClubPermission.objects.create(name="permission_admin", description="Full admin")
+        self.admin_role = ClubRole.objects.create(club=self.club, name="Admin")
+        self.admin_role.permissions.add(perm_admin)
+        self.owner_member = ClubMember.objects.create(
+            club=self.club,
+            user=self.owner,
+            first_name="Owner",
+            last_name="User",
+        )
+        self.owner_member.roles.add(self.admin_role)
+
+    def test_club_detail_requires_login(self):
+        """Anonymous user should be redirected to login"""
+        url = reverse("club_detail", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertIn(response.status_code, [302, 301])
+        self.assertIn("/login", response["Location"])
+
+    def test_club_admin_requires_login(self):
+        """Anonymous user should be redirected or blocked"""
+        url = reverse("club_admin", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertIn(response.status_code, [302, 301, 403])
+
+    def test_club_detail_logged_in(self):
+        """Logged-in user can view club detail page"""
+        self.client.login(username="club_owner2", password="testpass")
+        url = reverse("club_detail", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_club_admin_owner_can_access(self):
+        """Club owner with admin role can access admin page"""
+        self.client.login(username="club_owner2", password="testpass")
+        url = reverse("club_admin", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_club_admin_non_member_blocked(self):
+        """Non-admin user cannot access club admin page"""
+        self.client.login(username="other2", password="testpass")
+        url = reverse("club_admin", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        # Should return 403 or redirect
+        self.assertIn(response.status_code, [403, 302])
+
+    def test_club_edit_owner_can_access(self):
+        """Club owner with edit_club permission can access edit page"""
+        perm_edit = ClubPermission.objects.create(name="permission_edit_club", description="Edit club settings")
+        self.admin_role.permissions.add(perm_edit)
+        self.client.login(username="club_owner2", password="testpass")
+        url = reverse("club_edit", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_club_history_owner_can_access(self):
+        """Club owner with admin permission can view history"""
+        self.client.login(username="club_owner2", password="testpass")
+        url = reverse("club_history", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_club_404_for_invalid_slug(self):
+        """Non-existent club slug returns 404"""
+        self.client.login(username="club_owner2", password="testpass")
+        url = reverse("club_detail", kwargs={"slug": "nonexistent-club-xyz"})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
+
+
+class ClubAPITests(TestCase):
+    """Tests for the DRF REST API for club members"""
+
+    def setUp(self):
+        self.client = Client()
+        self.owner = User.objects.create_user(username="api_owner", password="testpass", email="api@example.com")
+        self.club = Club.objects.create(
+            name="API Test Club",
+            owner=self.owner,
+            allow_joining=True,
+        )
+
+    def test_api_requires_authentication(self):
+        """API endpoint should return 401 for unauthenticated requests"""
+        url = reverse("api_club_members", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 401)
+
+    def test_api_club_members_list(self):
+        """Authenticated user can list club members via API"""
+        from rest_framework.authtoken.models import Token  # noqa: PLC0415
+
+        token = Token.objects.create(user=self.owner)
+        ClubMember.objects.create(club=self.club, first_name="Test", last_name="Member", email="tm@example.com")
+        url = reverse("api_club_members", kwargs={"slug": self.club.slug})
+        response = self.client.get(url, HTTP_AUTHORIZATION=f"Token {token.key}")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertGreaterEqual(len(data), 1)

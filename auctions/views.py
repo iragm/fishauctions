@@ -258,7 +258,11 @@ class AuctionViewMixin:
 
 def check_club_permission(user, club, permission_name):
     """Check if a user has a specific permission for a club.
-    Returns True if the user is a superuser, the club owner, or has the required role permission."""
+
+    Returns True if the user is a superuser, the club owner, or has a role with the required
+    permission. Note: 'permission_admin' is treated as a wildcard that grants all permissions —
+    any member with a role that includes 'permission_admin' can perform any action.
+    """
     if not user.is_authenticated:
         return False
     if user.is_superuser:
@@ -268,6 +272,7 @@ def check_club_permission(user, club, permission_name):
     member = ClubMember.objects.filter(club=club, user=user, is_deleted=False).first()
     if not member:
         return False
+    # permission_admin is an explicit wildcard: having it grants all permissions
     return member.roles.filter(permissions__name__in=[permission_name, "permission_admin"]).exists()
 
 
@@ -11382,43 +11387,49 @@ class ClubHistoryView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, Filte
         return kwargs
 
 
-class ClubMemberListCreateAPIView(generics.ListCreateAPIView):
-    """List and create club members via REST API"""
+class ClubAPIViewMixin:
+    """Shared mixin for club REST API views"""
 
     serializer_class = ClubMemberSerializer
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
-    def _get_club(self):
-        slug = self.kwargs.get("slug")
-        return get_object_or_404(Club, slug=slug)
+    def get_club(self):
+        if not hasattr(self, "_club"):
+            slug = self.kwargs.get("slug")
+            self._club = get_object_or_404(Club, slug=slug)
+        return self._club
 
     def get_queryset(self):
-        club = self._get_club()
+        club = self.get_club()
         if not check_club_permission(self.request.user, club, "permission_view"):
             self.permission_denied(self.request, message="You do not have permission to view members of this club.")
         return ClubMember.objects.filter(club=club, is_deleted=False)
 
+
+class ClubMemberListCreateAPIView(ClubAPIViewMixin, generics.ListCreateAPIView):
+    """List and create club members via REST API"""
+
     def perform_create(self, serializer):
-        club = self._get_club()
+        club = self.get_club()
         if not check_club_permission(self.request.user, club, "permission_add_edit"):
             self.permission_denied(self.request, message="You do not have permission to add members to this club.")
         serializer.save(club=club, added_by=self.request.user)
 
 
-class ClubMemberDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
+class ClubMemberDetailAPIView(ClubAPIViewMixin, generics.RetrieveUpdateDestroyAPIView):
     """Retrieve, update, or delete a club member via REST API"""
 
-    serializer_class = ClubMemberSerializer
-    authentication_classes = [TokenAuthentication]
-    permission_classes = [IsAuthenticated]
+    def perform_update(self, serializer):
+        club = self.get_club()
+        if not check_club_permission(self.request.user, club, "permission_add_edit"):
+            self.permission_denied(self.request, message="You do not have permission to edit members of this club.")
+        serializer.save()
 
-    def _get_club(self):
-        slug = self.kwargs.get("slug")
-        return get_object_or_404(Club, slug=slug)
-
-    def get_queryset(self):
-        club = self._get_club()
-        if not check_club_permission(self.request.user, club, "permission_view"):
-            self.permission_denied(self.request, message="You do not have permission to view members of this club.")
-        return ClubMember.objects.filter(club=club, is_deleted=False)
+    def perform_destroy(self, instance):
+        club = self.get_club()
+        if not check_club_permission(self.request.user, club, "permission_add_edit"):
+            self.permission_denied(self.request, message="You do not have permission to delete members of this club.")
+        # Soft delete
+        instance.is_deleted = True
+        instance.save(update_fields=["is_deleted"])
