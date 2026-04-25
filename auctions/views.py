@@ -256,6 +256,21 @@ class AuctionViewMixin:
         return result
 
 
+def check_club_permission(user, club, permission_name):
+    """Check if a user has a specific permission for a club.
+    Returns True if the user is a superuser, the club owner, or has the required role permission."""
+    if not user.is_authenticated:
+        return False
+    if user.is_superuser:
+        return True
+    if club.owner == user:
+        return True
+    member = ClubMember.objects.filter(club=club, user=user, is_deleted=False).first()
+    if not member:
+        return False
+    return member.roles.filter(permissions__name__in=[permission_name, "permission_admin"]).exists()
+
+
 class ClubViewMixin:
     """For club permissions, similar to AuctionViewMixin"""
 
@@ -274,17 +289,7 @@ class ClubViewMixin:
 
     def user_has_club_permission(self, permission_name):
         """Check if the current user has a specific permission for self.club"""
-        user = self.request.user
-        if not user.is_authenticated:
-            return False
-        if user.is_superuser:
-            return True
-        if self.club.owner == user:
-            return True
-        member = ClubMember.objects.filter(club=self.club, user=user, is_deleted=False).first()
-        if not member:
-            return False
-        return member.roles.filter(permissions__name__in=[permission_name, "permission_admin"]).exists()
+        return check_club_permission(self.request.user, self.club, permission_name)
 
 
 class AdminOnlyViewMixin:
@@ -11264,7 +11269,7 @@ class ClubDetailView(LoginRequiredMixin, ClubViewMixin, TemplateView):
                 first_name=request.user.first_name,
                 last_name=request.user.last_name,
                 email=request.user.email,
-                source=ClubMember.SOURCE_CHOICES[0][0],  # "joined"
+                source="joined",
             )
             ClubHistory.objects.create(
                 club=self.club,
@@ -11388,26 +11393,15 @@ class ClubMemberListCreateAPIView(generics.ListCreateAPIView):
         slug = self.kwargs.get("slug")
         return get_object_or_404(Club, slug=slug)
 
-    def _check_club_permission(self, club, permission_name):
-        user = self.request.user
-        if user.is_superuser:
-            return True
-        if club.owner == user:
-            return True
-        member = ClubMember.objects.filter(club=club, user=user, is_deleted=False).first()
-        if not member:
-            return False
-        return member.roles.filter(permissions__name__in=[permission_name, "permission_admin"]).exists()
-
     def get_queryset(self):
         club = self._get_club()
-        if not self._check_club_permission(club, "permission_view"):
+        if not check_club_permission(self.request.user, club, "permission_view"):
             self.permission_denied(self.request, message="You do not have permission to view members of this club.")
         return ClubMember.objects.filter(club=club, is_deleted=False)
 
     def perform_create(self, serializer):
         club = self._get_club()
-        if not self._check_club_permission(club, "permission_add_edit"):
+        if not check_club_permission(self.request.user, club, "permission_add_edit"):
             self.permission_denied(self.request, message="You do not have permission to add members to this club.")
         serializer.save(club=club, added_by=self.request.user)
 
@@ -11423,19 +11417,8 @@ class ClubMemberDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
         slug = self.kwargs.get("slug")
         return get_object_or_404(Club, slug=slug)
 
-    def _check_club_permission(self, club, permission_name):
-        user = self.request.user
-        if user.is_superuser:
-            return True
-        if club.owner == user:
-            return True
-        member = ClubMember.objects.filter(club=club, user=user, is_deleted=False).first()
-        if not member:
-            return False
-        return member.roles.filter(permissions__name__in=[permission_name, "permission_admin"]).exists()
-
     def get_queryset(self):
         club = self._get_club()
-        if not self._check_club_permission(club, "permission_view"):
+        if not check_club_permission(self.request.user, club, "permission_view"):
             self.permission_denied(self.request, message="You do not have permission to view members of this club.")
         return ClubMember.objects.filter(club=club, is_deleted=False)
