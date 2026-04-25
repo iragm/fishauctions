@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Edit {{ club.name }}{% endblock %}
+
+{% block content %}
+<h3><i class="bi bi-gear"></i> Edit {{ club.name }}</h3>
+<a href="{% url 'club_admin' club.slug %}" class="btn btn-sm btn-secondary mb-3"><i class="bi bi-arrow-left"></i> Back to admin</a>
+<p class="text-muted">Club settings can be managed through the <a href="/admin/auctions/club/{{ club.pk }}/change/">Django admin</a>.</p>
+<div id="modals-here"></div>
+{% endblock %}

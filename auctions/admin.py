@@ -19,6 +19,11 @@ from .models import (
     BlogPost,
     Category,
     Club,
+    ClubDiscordRole,
+    ClubHistory,
+    ClubMember,
+    ClubPermission,
+    ClubRole,
     GeneralInterest,
     Invoice,
     InvoicePayment,
@@ -759,3 +764,43 @@ admin.site.register(AuctionTOS, AuctionTOSAdmin)
 admin.site.register(PageView, PageViewAdmin)
 admin.site.register(AuctionCampaign, AuctionCampaignAdmin)
 admin.site.register(AuctionHistory, AuctionHistoryAdmin)
+
+
+class ClubMemberAdmin(admin.ModelAdmin):
+    model = ClubMember
+    list_display = ("__str__", "club", "email", "source", "is_deleted", "createdon")
+    search_fields = ("first_name", "last_name", "email", "user__email", "user__username")
+    list_filter = ("club", "source", "is_deleted")
+    actions = [export_to_csv]
+
+
+class ClubRoleAdmin(admin.ModelAdmin):
+    model = ClubRole
+    list_display = ("name", "club")
+    search_fields = ("name", "club__name")
+
+
+class ClubPermissionAdmin(admin.ModelAdmin):
+    model = ClubPermission
+    list_display = ("name", "description")
+
+
+class ClubDiscordRoleAdmin(admin.ModelAdmin):
+    model = ClubDiscordRole
+    list_display = ("role_name", "club", "createdon")
+    search_fields = ("role_name", "club__name")
+
+
+class ClubHistoryAdmin(admin.ModelAdmin):
+    model = ClubHistory
+    list_display = ("club", "user", "action", "applies_to", "timestamp")
+    list_filter = ("timestamp", "applies_to", "club")
+    search_fields = ("user__first_name", "user__last_name", "action", "club__name")
+    ordering = ("-timestamp",)
+
+
+admin.site.register(ClubMember, ClubMemberAdmin)
+admin.site.register(ClubRole, ClubRoleAdmin)
+admin.site.register(ClubPermission, ClubPermissionAdmin)
+admin.site.register(ClubDiscordRole, ClubDiscordRoleAdmin)
+admin.site.register(ClubHistory, ClubHistoryAdmin)

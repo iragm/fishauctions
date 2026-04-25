@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% load render_table from django_tables2 %}
+{% block title %}History - {{ club.name }}{% endblock %}
+
+{% block content %}
+<h3><i class="bi bi-clock-history"></i> {{ club.name }} &mdash; History</h3>
+<a href="{% url 'club_admin' club.slug %}" class="btn btn-sm btn-secondary mb-3"><i class="bi bi-arrow-left"></i> Back to admin</a>
+
+{% render_table table %}
+
+<div id="modals-here"></div>
+{% endblock %}

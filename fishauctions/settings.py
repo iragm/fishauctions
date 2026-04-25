@@ -190,6 +190,7 @@ INSTALLED_APPS = [
     "django_ses",
     "webpush",
     "django_celery_beat",
+    "rest_framework",
 ]
 ASGI_APPLICATION = "fishauctions.asgi.application"
 MIDDLEWARE = [

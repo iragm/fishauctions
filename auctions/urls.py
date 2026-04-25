@@ -554,4 +554,17 @@ urlpatterns = [
     re_path(r"^webpush/", include("webpush.urls")),
     re_path(r"^paypal/webhook/$", views.PayPalWebhookView.as_view(), name="paypal-webhook"),
     re_path(r"^square/webhook/$", views.SquareWebhookView.as_view(), name="square_webhook"),
+    # Club management URLs
+    path("clubs/<slug:slug>/", views.ClubDetailView.as_view(), name="club_detail"),
+    path("clubs/<slug:slug>/admin/", views.ClubAdminView.as_view(), name="club_admin"),
+    path("clubs/<slug:slug>/edit/", views.ClubEditView.as_view(), name="club_edit"),
+    path("clubs/<slug:slug>/admin/history/", views.ClubHistoryView.as_view(), name="club_history"),
+    path("api/clubmember/<int:pk>/", views.ClubMemberAdminView.as_view(), name="clubmember_admin"),
+    # REST API v1
+    path("api/v1/clubs/<slug:slug>/members/", views.ClubMemberListCreateAPIView.as_view(), name="api_club_members"),
+    path(
+        "api/v1/clubs/<slug:slug>/members/<int:pk>/",
+        views.ClubMemberDetailAPIView.as_view(),
+        name="api_club_member_detail",
+    ),
 ]

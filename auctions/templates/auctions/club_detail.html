@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}{{ club.name }}{% endblock %}
+
+{% block content %}
+<h3>{{ club.name }}</h3>
+{% if club.homepage %}
+<p><a href="{{ club.homepage }}" target="_blank"><i class="bi bi-house"></i> Website</a></p>
+{% endif %}
+{% if club.facebook_page %}
+<p><a href="{{ club.facebook_page }}" target="_blank"><i class="bi bi-facebook"></i> Facebook</a></p>
+{% endif %}
+{% if club.contact_email %}
+<p><a href="mailto:{{ club.contact_email }}"><i class="bi bi-envelope"></i> {{ club.contact_email }}</a></p>
+{% endif %}
+
+{% if is_club_admin %}
+<a href="{% url 'club_admin' club.slug %}" class="btn btn-sm btn-warning mb-3"><i class="bi bi-gear"></i> Admin panel</a>
+{% endif %}
+
+{% if member %}
+  <div class="card mb-3">
+    <div class="card-body">
+      <h5 class="card-title">Your membership</h5>
+      <p>Member since: {{ member.createdon|date:"N j, Y" }}</p>
+      {% if member.bap_points or member.hap_points %}
+      <p>BAP Points: {{ member.bap_points }} | HAP Points: {{ member.hap_points }}</p>
+      {% endif %}
+    </div>
+  </div>
+{% elif club.allow_joining %}
+  <form method="post">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-success mb-3"><i class="bi bi-person-fill-add"></i> Join {{ club.name }}</button>
+  </form>
+{% else %}
+  <p class="text-muted">This club is not currently accepting new members through this site.</p>
+{% endif %}
+
+{% if has_points %}
+<h4 class="mt-4">Leaderboard</h4>
+<div class="row">
+  {% if bap_leaderboard %}
+  <div class="col-md-6">
+    <h5>BAP Points</h5>
+    <ol>
+      {% for m in bap_leaderboard %}
+      <li>{{ m }} &mdash; {{ m.bap_points }} pts</li>
+      {% endfor %}
+    </ol>
+  </div>
+  {% endif %}
+  {% if hap_leaderboard %}
+  <div class="col-md-6">
+    <h5>HAP Points</h5>
+    <ol>
+      {% for m in hap_leaderboard %}
+      <li>{{ m }} &mdash; {{ m.hap_points }} pts</li>
+      {% endfor %}
+    </ol>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
+<div id="modals-here"></div>
+{% endblock %}

@@ -2,7 +2,7 @@ import django_tables2 as tables
 from django.urls import reverse
 from django.utils.safestring import mark_safe
 
-from .models import Auction, AuctionHistory, AuctionTOS, Lot
+from .models import Auction, AuctionHistory, AuctionTOS, ClubHistory, ClubMember, Lot
 
 
 class AuctionTOSHTMxTable(tables.Table):
@@ -386,3 +386,81 @@ class LotHTMxTableForUsers(tables.Table):
             # 'hx-trigger':"click",
             # '_':"on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop"
         }
+
+
+class ClubMemberHTMxTable(tables.Table):
+    hide_string = "d-md-table-cell d-none"
+    name = tables.Column(accessor="__str__", verbose_name="Name", orderable=False)
+    email = tables.Column(accessor="email", verbose_name="Email", orderable=True)
+    bap_points = tables.Column(
+        accessor="bap_points",
+        verbose_name="BAP",
+        orderable=True,
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
+    hap_points = tables.Column(
+        accessor="hap_points",
+        verbose_name="HAP",
+        orderable=True,
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
+    source = tables.Column(
+        accessor="source",
+        verbose_name="Source",
+        orderable=True,
+        attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
+    )
+
+    def render_name(self, value, record):
+        result = (
+            f"<a href='' hx-noget hx-get='/api/clubmember/{record.pk}/' hx-target='#modals-here' hx-trigger='click'>"
+        )
+        result += f"<i class='bi bi-person-fill-gear me-1'></i>{value}</a>"
+        if record.email_address_status == "BAD":
+            result += "<i class='bi bi-envelope-exclamation-fill text-danger ms-1' title='Unable to send email to this address'></i>"
+        if record.email_address_status == "VALID":
+            result += "<i class='bi bi-envelope-check-fill ms-1' title='Verified email'></i>"
+        return mark_safe(result)
+
+    class Meta:
+        model = ClubMember
+        template_name = "tables/bootstrap_htmx.html"
+        fields = ("name", "email", "bap_points", "hap_points", "source")
+
+    def __init__(self, *args, **kwargs):
+        self.request = kwargs.pop("request", None)
+        super().__init__(*args, **kwargs)
+
+
+class ClubHistoryHTMxTable(tables.Table):
+    name = tables.Column(accessor="user", verbose_name="User", default="System")
+    action = tables.Column(accessor="action", verbose_name="Action")
+    applies_to = tables.Column(accessor="applies_to", verbose_name="Modified")
+    timestamp = tables.Column(accessor="timestamp", verbose_name="Time")
+
+    def render_applies_to(self, value, record):
+        if record.applies_to == "RULES":
+            result = "<i class='bi bi-gear-fill'></i>"
+        elif record.applies_to == "MEMBERS":
+            result = "<i class='bi bi-people-fill'></i>"
+        elif record.applies_to == "SETTINGS":
+            result = "<i class='bi bi-sliders'></i>"
+        else:
+            result = ""
+        result += f" {value}"
+        return mark_safe(result)
+
+    def render_name(self, value, record):
+        if record.user:
+            result = record.user.get_full_name()
+            return mark_safe(result)
+        return "System"
+
+    class Meta:
+        model = ClubHistory
+        template_name = "tables/bootstrap_htmx.html"
+        fields = ()
+
+    def __init__(self, *args, **kwargs):
+        self.club = kwargs.pop("club", None)
+        super().__init__(*args, **kwargs)

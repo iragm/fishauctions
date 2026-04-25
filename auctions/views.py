@@ -89,6 +89,9 @@ from qr_code.qrcode.utils import QRCodeOptions
 from reportlab.platypus import (
     Image as PImage,
 )
+from rest_framework import generics
+from rest_framework.authentication import TokenAuthentication
+from rest_framework.permissions import IsAuthenticated
 from user_agents import parse
 from webpush import send_user_notification
 from webpush.models import PushInformation
@@ -97,6 +100,8 @@ from .filters import (
     AuctionFilter,
     AuctionHistoryFilter,
     AuctionTOSFilter,
+    ClubHistoryFilter,
+    ClubMemberFilter,
     LotAdminFilter,
     LotFilter,
     UserBidLotFilter,
@@ -151,6 +156,8 @@ from .models import (
     Category,
     ChatSubscription,
     Club,
+    ClubHistory,
+    ClubMember,
     Invoice,
     InvoiceAdjustment,
     InvoicePayment,
@@ -175,7 +182,16 @@ from .models import (
     median_value,
     nearby_auctions,
 )
-from .tables import AuctionHistoryHTMxTable, AuctionHTMxTable, AuctionTOSHTMxTable, LotHTMxTable, LotHTMxTableForUsers
+from .serializers import ClubMemberSerializer
+from .tables import (
+    AuctionHistoryHTMxTable,
+    AuctionHTMxTable,
+    AuctionTOSHTMxTable,
+    ClubHistoryHTMxTable,
+    ClubMemberHTMxTable,
+    LotHTMxTable,
+    LotHTMxTableForUsers,
+)
 from .tasks import cancel_invoice_notification, schedule_invoice_notification
 
 # Distance conversion constant
@@ -238,6 +254,37 @@ class AuctionViewMixin:
             # logger.debug("allowing user %s to view %s", self.request.user, self.auction)
             pass
         return result
+
+
+class ClubViewMixin:
+    """For club permissions, similar to AuctionViewMixin"""
+
+    allow_non_admins = False
+    club = None
+
+    def get_club(self, slug):
+        if not self.club and slug:
+            self.club = Club.objects.filter(Q(slug=slug) | Q(abbreviation=slug)).order_by("pk").first()
+            if not self.club:
+                raise Http404
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        return super().dispatch(request, *args, **kwargs)
+
+    def user_has_club_permission(self, permission_name):
+        """Check if the current user has a specific permission for self.club"""
+        user = self.request.user
+        if not user.is_authenticated:
+            return False
+        if user.is_superuser:
+            return True
+        if self.club.owner == user:
+            return True
+        member = ClubMember.objects.filter(club=self.club, user=user, is_deleted=False).first()
+        if not member:
+            return False
+        return member.roles.filter(permissions__name__in=[permission_name, "permission_admin"]).exists()
 
 
 class AdminOnlyViewMixin:
@@ -11170,3 +11217,192 @@ class QuickCheckoutHTMX(AuctionViewMixin, PayPalAPIMixin, SquareAPIMixin, Templa
                             "Square payment link creation failed for invoice %s: %s", invoice.pk, error_message
                         )
         return context
+
+
+# Club management views
+class ClubDetailView(LoginRequiredMixin, ClubViewMixin, TemplateView):
+    """User self-service page for a club"""
+
+    template_name = "auctions/club_detail.html"
+    allow_non_admins = True
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["club"] = self.club
+        member = None
+        if self.request.user.is_authenticated:
+            member = ClubMember.objects.filter(club=self.club, user=self.request.user, is_deleted=False).first()
+        context["member"] = member
+        has_points = (
+            ClubMember.objects.filter(club=self.club, is_deleted=False)
+            .filter(Q(bap_points__gt=0) | Q(hap_points__gt=0))
+            .exists()
+        )
+        context["has_points"] = has_points
+        if has_points:
+            context["bap_leaderboard"] = ClubMember.objects.filter(
+                club=self.club, is_deleted=False, bap_points__gt=0
+            ).order_by("-bap_points")[:10]
+            context["hap_leaderboard"] = ClubMember.objects.filter(
+                club=self.club, is_deleted=False, hap_points__gt=0
+            ).order_by("-hap_points")[:10]
+        context["is_club_admin"] = self.user_has_club_permission("permission_admin")
+        return context
+
+    def post(self, request, *args, **kwargs):
+        """Handle join requests"""
+        if not self.club.allow_joining:
+            messages.error(request, "This club is not accepting new members right now.")
+            return redirect(request.path)
+        existing = ClubMember.objects.filter(club=self.club, user=request.user, is_deleted=False).first()
+        if existing:
+            messages.info(request, "You are already a member of this club.")
+        else:
+            ClubMember.objects.create(
+                club=self.club,
+                user=request.user,
+                first_name=request.user.first_name,
+                last_name=request.user.last_name,
+                email=request.user.email,
+                source="joined",
+            )
+            ClubHistory.objects.create(
+                club=self.club,
+                user=request.user,
+                action=f"{request.user.get_full_name()} joined the club",
+                applies_to="MEMBERS",
+            )
+            messages.success(request, f"You have joined {self.club.name}!")
+        return redirect(request.path)
+
+
+class ClubAdminView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterView):
+    """Admin panel for a club"""
+
+    model = ClubMember
+    table_class = ClubMemberHTMxTable
+    filterset_class = ClubMemberFilter
+
+    def dispatch(self, request, *args, **kwargs):
+        result = super().dispatch(request, *args, **kwargs)
+        if not self.user_has_club_permission("permission_view"):
+            raise PermissionDenied()
+        return result
+
+    def get_queryset(self):
+        return ClubMember.objects.filter(club=self.club, is_deleted=False).order_by("last_name", "first_name")
+
+    def get_template_names(self):
+        if self.request.htmx:
+            return "tables/table_generic.html"
+        return "auctions/club_admin.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["club"] = self.club
+        context["can_edit"] = self.user_has_club_permission("permission_edit_club")
+        return context
+
+
+class ClubMemberAdminView(LoginRequiredMixin, ClubViewMixin, TemplateView):
+    """HTMX view for managing an individual club member"""
+
+    template_name = "auctions/generic_admin_form.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        pk = kwargs.get("pk")
+        try:
+            self.club_member = ClubMember.objects.get(pk=pk)
+            self.club = self.club_member.club
+        except ClubMember.DoesNotExist:
+            raise Http404
+        if not self.user_has_club_permission("permission_add_edit"):
+            raise PermissionDenied()
+        return TemplateView.dispatch(self, request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["club"] = self.club
+        context["club_member"] = self.club_member
+        context["modal_title"] = str(self.club_member)
+        return context
+
+
+class ClubEditView(LoginRequiredMixin, ClubViewMixin, TemplateView):
+    """Edit club info"""
+
+    template_name = "auctions/club_edit.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        result = super().dispatch(request, *args, **kwargs)
+        if not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return result
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["club"] = self.club
+        return context
+
+
+class ClubHistoryView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterView):
+    """History log for a club"""
+
+    model = ClubHistory
+    table_class = ClubHistoryHTMxTable
+    filterset_class = ClubHistoryFilter
+
+    def dispatch(self, request, *args, **kwargs):
+        result = super().dispatch(request, *args, **kwargs)
+        if not self.user_has_club_permission("permission_view"):
+            raise PermissionDenied()
+        return result
+
+    def get_queryset(self):
+        return ClubHistory.objects.filter(club=self.club).order_by("-timestamp")
+
+    def get_template_names(self):
+        if self.request.htmx:
+            return "tables/table_generic.html"
+        return "auctions/club_history.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["club"] = self.club
+        return context
+
+    def get_table_kwargs(self, **kwargs):
+        kwargs = super().get_table_kwargs(**kwargs)
+        kwargs["club"] = self.club
+        return kwargs
+
+
+class ClubMemberListCreateAPIView(generics.ListCreateAPIView):
+    """List and create club members via REST API"""
+
+    serializer_class = ClubMemberSerializer
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        slug = self.kwargs.get("slug")
+        club = get_object_or_404(Club, slug=slug)
+        return ClubMember.objects.filter(club=club, is_deleted=False)
+
+    def perform_create(self, serializer):
+        slug = self.kwargs.get("slug")
+        club = get_object_or_404(Club, slug=slug)
+        serializer.save(club=club, added_by=self.request.user)
+
+
+class ClubMemberDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
+    """Retrieve, update, or delete a club member via REST API"""
+
+    serializer_class = ClubMemberSerializer
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        slug = self.kwargs.get("slug")
+        club = get_object_or_404(Club, slug=slug)
+        return ClubMember.objects.filter(club=club, is_deleted=False)

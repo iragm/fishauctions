@@ -24,6 +24,8 @@ from .models import (
     AuctionHistory,
     AuctionTOS,
     Category,
+    ClubHistory,
+    ClubMember,
     Location,
     Lot,
     UserInterestCategory,
@@ -985,3 +987,42 @@ def get_recommended_lots(
         keywords=keywords,
     ).qs
     return qs[:qty]
+
+
+class ClubMemberFilter(django_filters.FilterSet):
+    """Filter for club members admin view"""
+
+    query = django_filters.CharFilter(
+        method="clubmember_search",
+        label="",
+        widget=TextInput(
+            attrs={
+                "placeholder": "Filter by name, email...",
+                "hx-get": "",
+                "hx-target": "div.table-container",
+                "hx-trigger": "keyup changed delay:300ms",
+                "hx-swap": "outerHTML",
+                "hx-indicator": ".progress",
+            }
+        ),
+    )
+
+    class Meta:
+        model = ClubMember
+        fields = []
+
+    def clubmember_search(self, queryset, name, value):
+        return queryset.filter(
+            Q(first_name__icontains=value)
+            | Q(last_name__icontains=value)
+            | Q(email__icontains=value)
+            | Q(user__email__icontains=value)
+        )
+
+
+class ClubHistoryFilter(django_filters.FilterSet):
+    """Filter for club history"""
+
+    class Meta:
+        model = ClubHistory
+        fields = []
