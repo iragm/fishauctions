@@ -2891,7 +2891,24 @@ class AuctionUnsellLot(LoginRequiredMixin, AuctionViewMixin, View):
 
 
 class CSVContactImportMixin:
-    """Shared utilities for importing contacts from CSV files."""
+    """Mixin providing shared CSV parsing utilities for importing contact records.
+
+    Use this with views that need to import contacts (e.g., AuctionTOS or ClubMember)
+    from CSV files. Subclass and implement `process_csv_data(csv_reader, filename=None)`
+    to define how parsed rows are applied to your model.
+
+    Example usage in a view::
+
+        class MyImportView(LoginRequiredMixin, CSVContactImportMixin, View):
+            def post(self, request, *args, **kwargs):
+                csv_file = request.FILES.get("csv_file")
+                return self.handle_csv_upload(csv_file)
+
+            def process_csv_data(self, csv_reader, filename=None):
+                for row in csv_reader:
+                    email = self.extract_csv_field(row, self.EMAIL_FIELD_NAMES)
+                    ...
+    """
 
     EMAIL_FIELD_NAMES = ["email", "e-mail", "email address", "e-mail address"]
     NAME_FIELD_NAMES = ["name", "full name", "first name", "firstname"]

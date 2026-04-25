@@ -13595,7 +13595,7 @@ class ClubMemberUpdateTests(TestCase):
 class ClubAPITests(TestCase):
     """Tests for the DRF REST API for club members"""
 
-    def setUp(self):  # noqa: F811
+    def setUp(self):
         self.client = Client()
         self.owner = User.objects.create_user(username="api_owner", password="testpass", email="api@example.com")
         self.club = Club.objects.create(
