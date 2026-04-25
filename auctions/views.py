@@ -11444,15 +11444,10 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
         if not csv_file:
             messages.error(request, "No file uploaded.")
             return redirect(reverse("club_admin", kwargs={"slug": self.club.slug}))
-        try:
-            csv_file.seek(0)
-            csv_reader = csv.DictReader(TextIOWrapper(csv_file.file))
-            return self.process_csv_data(csv_reader, filename=getattr(csv_file, "name", None))
-        except (UnicodeDecodeError, ValueError) as e:
-            messages.error(
-                self.request, f"Unable to read file. Make sure this is a valid UTF-8 CSV file. Error was: {e}"
-            )
+        result = self.handle_csv_upload(csv_file)
+        if result is None:
             return redirect(reverse("club_admin", kwargs={"slug": self.club.slug}))
+        return result
 
     def process_csv_data(self, csv_reader, filename=None):
         total_added = 0

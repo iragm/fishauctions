@@ -13486,10 +13486,116 @@ class ClubViewTests(TestCase):
             self.assertEqual(response.status_code, 200, f"{url_name} should return 200 for superuser")
 
 
+class ClubMemberUpdateTests(TestCase):
+    """Tests for club member self-service update and CSV import/export"""
+
+    def setUp(self):
+        self.client = Client()
+        self.owner = User.objects.create_user(username="cu_owner", password="testpass", email="cu_owner@example.com")
+        self.member_user = User.objects.create_user(
+            username="cu_member", password="testpass", email="cu_member@example.com"
+        )
+        self.other_user = User.objects.create_user(
+            username="cu_other", password="testpass", email="cu_other@example.com"
+        )
+        self.club = Club.objects.create(name="Update Test Club", owner=self.owner, allow_joining=True)
+        self.member = ClubMember.objects.create(
+            club=self.club, user=self.member_user, first_name="Jane", last_name="Doe", email="cu_member@example.com"
+        )
+
+    def test_member_can_update_info(self):
+        """A club member can update their own contact info"""
+        self.client.login(username="cu_member", password="testpass")
+        url = reverse("club_detail", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"action": "update", "first_name": "Janet", "last_name": "Doe"})
+        self.assertEqual(response.status_code, 302)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.first_name, "Janet")
+
+    def test_non_member_update_is_ignored(self):
+        """A non-member's update action is silently ignored"""
+        self.client.login(username="cu_other", password="testpass")
+        url = reverse("club_detail", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"action": "update", "first_name": "Hacker", "last_name": "X"})
+        self.assertEqual(response.status_code, 302)
+        # member record unchanged
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.first_name, "Jane")
+
+    def test_csv_import_adds_members(self):
+        """CSV import creates new club members"""
+
+        perm_add_edit = ClubPermission.objects.get_or_create(
+            name="permission_add_edit", defaults={"description": "Add/edit"}
+        )[0]
+        role = ClubRole.objects.get_or_create(club=self.club, name="Importer")[0]
+        role.permissions.add(perm_add_edit)
+        owner_member = ClubMember.objects.get_or_create(club=self.club, user=self.owner)[0]
+        owner_member.roles.add(role)
+        self.client.login(username="cu_owner", password="testpass")
+        csv_content = "email,first name,last name\nnewmember@example.com,New,Member\n"
+        csv_file = SimpleUploadedFile("members.csv", csv_content.encode("utf-8"), content_type="text/csv")
+        url = reverse("club_member_import", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"csv_file": csv_file})
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(ClubMember.objects.filter(club=self.club, email="newmember@example.com").exists())
+
+    def test_csv_import_skips_rows_without_email(self):
+        """CSV import skips rows with no email"""
+        perm_add_edit = ClubPermission.objects.get_or_create(
+            name="permission_add_edit", defaults={"description": "Add/edit"}
+        )[0]
+        role = ClubRole.objects.get_or_create(club=self.club, name="Importer2")[0]
+        role.permissions.add(perm_add_edit)
+        owner_member = ClubMember.objects.get_or_create(club=self.club, user=self.owner)[0]
+        owner_member.roles.add(role)
+        self.client.login(username="cu_owner", password="testpass")
+        csv_content = "email,first name\n,NoEmail\n"
+        csv_file = SimpleUploadedFile("members.csv", csv_content.encode("utf-8"), content_type="text/csv")
+        url = reverse("club_member_import", kwargs={"slug": self.club.slug})
+        initial_count = ClubMember.objects.filter(club=self.club, is_deleted=False).count()
+        response = self.client.post(url, {"csv_file": csv_file})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(ClubMember.objects.filter(club=self.club, is_deleted=False).count(), initial_count)
+
+    def test_csv_import_non_admin_gets_403(self):
+        """Non-admin user cannot import CSV"""
+        self.client.login(username="cu_other", password="testpass")
+        csv_file = SimpleUploadedFile("members.csv", b"email\ntest@example.com\n", content_type="text/csv")
+        url = reverse("club_member_import", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"csv_file": csv_file})
+        self.assertEqual(response.status_code, 403)
+
+    def test_csv_export_requires_permission(self):
+        """Non-admin user cannot export CSV"""
+        self.client.login(username="cu_other", password="testpass")
+        url = reverse("club_member_export", kwargs={"slug": self.club.slug, "export_type": "all"})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_csv_export_all_returns_csv(self):
+        """Owner can export all members as CSV"""
+        perm_export = ClubPermission.objects.get_or_create(
+            name="permission_export", defaults={"description": "Export"}
+        )[0]
+        role = ClubRole.objects.get_or_create(club=self.club, name="Exporter")[0]
+        role.permissions.add(perm_export)
+        owner_member = ClubMember.objects.get_or_create(club=self.club, user=self.owner)[0]
+        owner_member.roles.add(role)
+        self.client.login(username="cu_owner", password="testpass")
+        url = reverse("club_member_export", kwargs={"slug": self.club.slug, "export_type": "all"})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "text/csv")
+        content = response.content.decode("utf-8")
+        self.assertIn("First Name", content)
+        self.assertIn("Jane", content)
+
+
 class ClubAPITests(TestCase):
     """Tests for the DRF REST API for club members"""
 
-    def setUp(self):
+    def setUp(self):  # noqa: F811
         self.client = Client()
         self.owner = User.objects.create_user(username="api_owner", password="testpass", email="api@example.com")
         self.club = Club.objects.create(
