@@ -11253,7 +11253,7 @@ class ClubDetailView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         """Handle join requests"""
         if not self.club.allow_joining:
             messages.error(request, "This club is not accepting new members right now.")
-            return redirect(request.path)
+            return redirect(reverse("club_detail", kwargs={"slug": self.club.slug}))
         existing = ClubMember.objects.filter(club=self.club, user=request.user, is_deleted=False).first()
         if existing:
             messages.info(request, "You are already a member of this club.")
@@ -11264,7 +11264,7 @@ class ClubDetailView(LoginRequiredMixin, ClubViewMixin, TemplateView):
                 first_name=request.user.first_name,
                 last_name=request.user.last_name,
                 email=request.user.email,
-                source="joined",
+                source=ClubMember.SOURCE_CHOICES[0][0],  # "joined"
             )
             ClubHistory.objects.create(
                 club=self.club,
@@ -11273,7 +11273,7 @@ class ClubDetailView(LoginRequiredMixin, ClubViewMixin, TemplateView):
                 applies_to="MEMBERS",
             )
             messages.success(request, f"You have joined {self.club.name}!")
-        return redirect(request.path)
+        return redirect(reverse("club_detail", kwargs={"slug": self.club.slug}))
 
 
 class ClubAdminView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterView):
@@ -11384,14 +11384,31 @@ class ClubMemberListCreateAPIView(generics.ListCreateAPIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
-    def get_queryset(self):
+    def _get_club(self):
         slug = self.kwargs.get("slug")
-        club = get_object_or_404(Club, slug=slug)
+        return get_object_or_404(Club, slug=slug)
+
+    def _check_club_permission(self, club, permission_name):
+        user = self.request.user
+        if user.is_superuser:
+            return True
+        if club.owner == user:
+            return True
+        member = ClubMember.objects.filter(club=club, user=user, is_deleted=False).first()
+        if not member:
+            return False
+        return member.roles.filter(permissions__name__in=[permission_name, "permission_admin"]).exists()
+
+    def get_queryset(self):
+        club = self._get_club()
+        if not self._check_club_permission(club, "permission_view"):
+            self.permission_denied(self.request, message="You do not have permission to view members of this club.")
         return ClubMember.objects.filter(club=club, is_deleted=False)
 
     def perform_create(self, serializer):
-        slug = self.kwargs.get("slug")
-        club = get_object_or_404(Club, slug=slug)
+        club = self._get_club()
+        if not self._check_club_permission(club, "permission_add_edit"):
+            self.permission_denied(self.request, message="You do not have permission to add members to this club.")
         serializer.save(club=club, added_by=self.request.user)
 
 
@@ -11402,7 +11419,23 @@ class ClubMemberDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
-    def get_queryset(self):
+    def _get_club(self):
         slug = self.kwargs.get("slug")
-        club = get_object_or_404(Club, slug=slug)
+        return get_object_or_404(Club, slug=slug)
+
+    def _check_club_permission(self, club, permission_name):
+        user = self.request.user
+        if user.is_superuser:
+            return True
+        if club.owner == user:
+            return True
+        member = ClubMember.objects.filter(club=club, user=user, is_deleted=False).first()
+        if not member:
+            return False
+        return member.roles.filter(permissions__name__in=[permission_name, "permission_admin"]).exists()
+
+    def get_queryset(self):
+        club = self._get_club()
+        if not self._check_club_permission(club, "permission_view"):
+            self.permission_denied(self.request, message="You do not have permission to view members of this club.")
         return ClubMember.objects.filter(club=club, is_deleted=False)
