@@ -1055,8 +1055,33 @@ class ClubMemberFilter(django_filters.FilterSet):
 
 
 class ClubHistoryFilter(django_filters.FilterSet):
-    """Filter for club history"""
+    """Filter club history by user, action, or date"""
+
+    query = django_filters.CharFilter(
+        method="club_history_search",
+        label="",
+        widget=TextInput(
+            attrs={
+                "placeholder": "Type to filter...",
+                "hx-get": "",
+                "hx-target": "div.table-container",
+                "hx-trigger": "keyup changed delay:300ms",
+                "hx-swap": "outerHTML",
+            }
+        ),
+    )
 
     class Meta:
         model = ClubHistory
         fields = []
+
+    def generic(self, queryset, value):
+        return queryset.filter(
+            Q(user__first_name__icontains=value)
+            | Q(user__last_name__icontains=value)
+            | Q(action__icontains=value)
+            | Q(applies_to__icontains=value)
+        )
+
+    def club_history_search(self, queryset, name, value):
+        return self.generic(queryset, value)

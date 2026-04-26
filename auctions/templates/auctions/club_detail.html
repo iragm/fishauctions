@@ -5,10 +5,10 @@
 {% block content %}
 <h3>{{ club.name }}</h3>
 {% if club.homepage %}
-<p><a href="{{ club.homepage }}" target="_blank" rel="noopener noreferrer"><i class="bi bi-house"></i> Website</a></p>
+<p><a href="{% if club.homepage|slice:':4' != 'http' %}https://{% endif %}{{ club.homepage }}" target="_blank" rel="noopener noreferrer"><i class="bi bi-house"></i> Website</a></p>
 {% endif %}
 {% if club.facebook_page %}
-<p><a href="{{ club.facebook_page }}" target="_blank" rel="noopener noreferrer"><i class="bi bi-facebook"></i> Facebook</a></p>
+<p><a href="{% if club.facebook_page|slice:':4' != 'http' %}https://{% endif %}{{ club.facebook_page }}" target="_blank" rel="noopener noreferrer"><i class="bi bi-facebook"></i> Facebook</a></p>
 {% endif %}
 
 {% if is_club_admin %}

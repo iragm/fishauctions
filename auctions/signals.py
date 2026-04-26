@@ -232,6 +232,11 @@ def user_logged_in_callback(sender, user, request, **kwargs):
             auctiontos.user = user
             auctiontos.save()
 
+    # Also link ClubMember records
+    from auctions.models import ClubMember
+
+    ClubMember.objects.filter(user__isnull=True, email=user.email, is_deleted=False).update(user=user)
+
 
 @receiver(post_save, sender=User)
 def create_user_userdata(sender, instance, created, **kwargs):
@@ -247,9 +252,10 @@ def bounce_handler(sender, mail_obj, bounce_obj, raw_message, *args, **kwargs):
     # message_id = mail_obj['messageId']
     recipient_list = mail_obj["destination"]
     email = recipient_list[0]
-    from auctions.models import AuctionTOS
+    from auctions.models import AuctionTOS, ClubMember
 
     AuctionTOS.objects.filter(email=email).update(email_address_status="BAD")
+    ClubMember.objects.filter(email=email, is_deleted=False).update(email_address_status="BAD")
 
 
 @receiver(complaint_received)

@@ -1,12 +1,22 @@
 {% extends "base.html" %}
 {% load render_table from django_tables2 %}
+{% load crispy_forms_tags %}
 {% block title %}History - {{ club.name }}{% endblock %}
 
 {% block content %}
 <h3><i class="bi bi-clock-history"></i> {{ club.name }} &mdash; History</h3>
 <a href="{% url 'club_admin' club.slug %}" class="btn btn-sm btn-secondary mb-3"><i class="bi bi-arrow-left"></i> Back to admin</a>
 
-{% render_table table %}
+<form class="col-sm-12 mt-2">
+  {% crispy filter.form %}
+</form>
+
+<div class="table-container"
+     hx-get=""
+     hx-trigger="clubHistoryChanged from:body"
+     hx-swap="outerHTML">
+  {% render_table table %}
+</div>
 
 <div id="modals-here"></div>
 {% endblock %}

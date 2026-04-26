@@ -564,9 +564,10 @@ class Club(models.Model):
     membership_system = models.CharField(max_length=20, choices=MEMBERSHIP_SYSTEM_CHOICES, default="january_first")
     membership_annual_fee = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     discord_server_id = models.CharField(max_length=100, blank=True, null=True)
-    slug = AutoSlugField(populate_from="name", unique=True)
+    slug = AutoSlugField(populate_from="name", unique=True, always_update=True)
     allow_joining = models.BooleanField(default=False)
     allow_integrated_payments = models.BooleanField(default=False)
+    description = models.TextField(verbose_name="About this club", default="", blank=True)
 
     class Meta:
         ordering = ["name"]

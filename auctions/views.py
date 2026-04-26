@@ -11711,7 +11711,7 @@ class ClubEditView(LoginRequiredMixin, ClubViewMixin, UpdateView):
 
     def get_success_url(self):
         messages.success(self.request, "Club settings saved.")
-        return reverse("club_edit", kwargs={"slug": self.club.slug})
+        return reverse("club_edit", kwargs={"slug": self.object.slug})
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)

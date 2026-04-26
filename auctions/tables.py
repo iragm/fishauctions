@@ -412,9 +412,10 @@ class ClubMemberHTMxTable(tables.Table):
     )
 
     def render_name(self, value, record):
+        name = str(record)
         url = reverse("clubmember_admin", kwargs={"pk": record.pk})
-        result = f"<a href='' hx-noget hx-get='{url}' hx-target='#modals-here' hx-trigger='click'>"
-        result += f"<i class='bi bi-person-fill-gear me-1'></i>{value}</a>"
+        result = f"<a href='' hx-get='{url}' hx-target='#modals-here' hx-trigger='click'>"
+        result += f"<i class='bi bi-person-fill-gear me-1'></i>{name}</a>"
         if record.email_address_status == "BAD":
             result += "<i class='bi bi-envelope-exclamation-fill text-danger ms-1' title='Unable to send email to this address'></i>"
         if record.email_address_status == "VALID":

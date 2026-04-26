@@ -7,6 +7,7 @@ from allauth.account.forms import ResetPasswordForm, SignupForm
 
 # from bootstrap_datepicker_plus import DateTimePickerInput
 from bootstrap_datepicker_plus.widgets import (
+    DatePickerInput,
     DateTimePickerInput,
 )  # https://github.com/monim67/django-bootstrap-datepicker-plus/issues/66
 from crispy_forms.bootstrap import Div, Field, PrependedAppendedText
@@ -3388,10 +3389,14 @@ class ClubEditForm(forms.ModelForm):
             "allow_joining",
             "allow_integrated_payments",
             "discord_server_id",
+            "description",
         ]
         help_texts = {
             "membership_annual_fee": "Leave blank if free",
             "discord_server_id": "Your Discord server ID for bot integration",
+        }
+        widgets = {
+            "description": SummernoteWidget(attrs={"summernote": {"width": "100%", "height": "300px"}}),
         }
 
     def __init__(self, *args, **kwargs):
@@ -3425,6 +3430,9 @@ class ClubMemberAdminForm(forms.ModelForm):
             "membership_last_paid",
             "roles",
         ]
+        widgets = {
+            "membership_last_paid": DatePickerInput(),
+        }
 
     def __init__(self, *args, post_url=None, **kwargs):
         super().__init__(*args, **kwargs)
