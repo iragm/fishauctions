@@ -604,14 +604,13 @@ class ClubPermission(models.Model):
 
 
 class ClubRole(models.Model):
-    """Roles within a club, each with a set of permissions"""
+    """Global roles that can be assigned to club members, shared across all clubs"""
 
-    club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="roles")
-    name = models.CharField(max_length=100)
+    name = models.CharField(max_length=100, unique=True)
     permissions = models.ManyToManyField(ClubPermission, blank=True)
 
     def __str__(self):
-        return f"{self.club} - {self.name}"
+        return self.name
 
 
 DEFAULT_CLUB_ROLES = [
@@ -622,10 +621,10 @@ DEFAULT_CLUB_ROLES = [
 ]
 
 
-def create_default_club_roles(club):
-    """Create the default roles for a club if they don't already exist."""
+def create_default_club_roles():
+    """Create the default global roles if they don't already exist."""
     for role_def in DEFAULT_CLUB_ROLES:
-        role, created = ClubRole.objects.get_or_create(club=club, name=role_def["name"])
+        role, created = ClubRole.objects.get_or_create(name=role_def["name"])
         if created:
             perms = ClubPermission.objects.filter(name__in=role_def["permissions"])
             role.permissions.set(perms)

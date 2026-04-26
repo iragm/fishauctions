@@ -13314,7 +13314,7 @@ class ClubModelTests(TestCase):
 
     def test_club_role_with_permissions(self):
         perm = ClubPermission.objects.get_or_create(name="permission_view", defaults={"description": "View members"})[0]
-        role = ClubRole.objects.create(club=self.club, name="Viewer")
+        role = ClubRole.objects.get_or_create(name="Viewer")[0]
         role.permissions.add(perm)
         self.assertEqual(role.permissions.count(), 1)
         self.assertIn(perm, role.permissions.all())
@@ -13347,7 +13347,7 @@ class ClubViewTests(TestCase):
         perm_admin = ClubPermission.objects.get_or_create(
             name="permission_admin", defaults={"description": "Full admin"}
         )[0]
-        self.admin_role = ClubRole.objects.create(club=self.club, name="Admin")
+        self.admin_role = ClubRole.objects.get_or_create(name="Admin")[0]
         self.admin_role.permissions.add(perm_admin)
         self.owner_member = ClubMember.objects.create(
             club=self.club,
@@ -13470,7 +13470,7 @@ class ClubViewTests(TestCase):
         """Regular member (no admin role) cannot access club admin"""
         perm_view = ClubPermission.objects.get_or_create(name="permission_view", defaults={"description": "View"})[0]
         # Create a non-admin role
-        viewer_role = ClubRole.objects.create(club=self.club, name="Viewer")
+        viewer_role = ClubRole.objects.get_or_create(name="Viewer")[0]
         viewer_role.permissions.add(perm_view)
         regular_user = User.objects.create_user(username="regular_member", password="testpass", email="reg@example.com")
         regular_member = ClubMember.objects.create(club=self.club, user=regular_user, first_name="Regular")
@@ -13532,7 +13532,7 @@ class ClubMemberUpdateTests(TestCase):
         perm_add_edit = ClubPermission.objects.get_or_create(
             name="permission_add_edit", defaults={"description": "Add/edit"}
         )[0]
-        role = ClubRole.objects.get_or_create(club=self.club, name="Importer")[0]
+        role = ClubRole.objects.get_or_create(name="Importer")[0]
         role.permissions.add(perm_add_edit)
         owner_member = ClubMember.objects.get_or_create(club=self.club, user=self.owner)[0]
         owner_member.roles.add(role)
@@ -13549,7 +13549,7 @@ class ClubMemberUpdateTests(TestCase):
         perm_add_edit = ClubPermission.objects.get_or_create(
             name="permission_add_edit", defaults={"description": "Add/edit"}
         )[0]
-        role = ClubRole.objects.get_or_create(club=self.club, name="Importer2")[0]
+        role = ClubRole.objects.get_or_create(name="Importer2")[0]
         role.permissions.add(perm_add_edit)
         owner_member = ClubMember.objects.get_or_create(club=self.club, user=self.owner)[0]
         owner_member.roles.add(role)
@@ -13582,7 +13582,7 @@ class ClubMemberUpdateTests(TestCase):
         perm_export = ClubPermission.objects.get_or_create(
             name="permission_export", defaults={"description": "Export"}
         )[0]
-        role = ClubRole.objects.get_or_create(club=self.club, name="Exporter")[0]
+        role = ClubRole.objects.get_or_create(name="Exporter")[0]
         role.permissions.add(perm_export)
         owner_member = ClubMember.objects.get_or_create(club=self.club, user=self.owner)[0]
         owner_member.roles.add(role)

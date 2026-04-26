@@ -22,9 +22,9 @@ FOLLOWUP_EMAIL_DELAY_HOURS = 24
 
 @receiver(post_save, sender="auctions.Club")
 def on_save_club(sender, instance, created, **kwargs):
-    """When a new club is created, set up default roles."""
+    """When a new club is created, ensure default global roles exist."""
     if created:
-        create_default_club_roles(instance)
+        create_default_club_roles()
 
 
 @receiver(pre_save, sender="auctions.Auction")
