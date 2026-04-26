@@ -776,8 +776,8 @@ class ClubMemberAdmin(admin.ModelAdmin):
 
 class ClubRoleAdmin(admin.ModelAdmin):
     model = ClubRole
-    list_display = ("name", "club")
-    search_fields = ("name", "club__name")
+    list_display = ("name",)
+    search_fields = ("name",)
 
 
 class ClubPermissionAdmin(admin.ModelAdmin):

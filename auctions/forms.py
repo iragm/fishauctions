@@ -3405,7 +3405,7 @@ class ClubMemberAdminForm(forms.ModelForm):
     """Form for club admins to edit a club member's details and roles."""
 
     roles = forms.ModelMultipleChoiceField(
-        queryset=ClubRole.objects.none(),
+        queryset=ClubRole.objects.all(),
         widget=forms.CheckboxSelectMultiple,
         required=False,
         label="Roles",
@@ -3426,10 +3426,29 @@ class ClubMemberAdminForm(forms.ModelForm):
             "roles",
         ]
 
-    def __init__(self, *args, club=None, **kwargs):
+    def __init__(self, *args, post_url=None, **kwargs):
         super().__init__(*args, **kwargs)
-        if club is not None:
-            self.fields["roles"].queryset = ClubRole.objects.filter(club=club)
         self.helper = FormHelper()
         self.helper.form_method = "post"
-        self.helper.add_input(Submit("submit", "Save", css_class="btn-primary"))
+        if post_url:
+            self.helper.layout = Layout(
+                "first_name",
+                "last_name",
+                "email",
+                "phone_number",
+                "address",
+                "contact_status",
+                "bap_points",
+                "hap_points",
+                "membership_last_paid",
+                "roles",
+                Div(
+                    HTML('<button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>'),
+                    HTML(
+                        f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn btn-primary">Save</button>'
+                    ),
+                    css_class="modal-footer",
+                ),
+            )
+        else:
+            self.helper.add_input(Submit("submit", "Save", css_class="btn-primary"))

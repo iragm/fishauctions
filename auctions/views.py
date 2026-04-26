@@ -11412,10 +11412,72 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterV
         return context
 
 
+class ClubMemberValidation(ClubViewMixin, APIPostView):
+    """Real-time validation for the club member add/edit form.
+
+    Returns JSON with tooltip messages for duplicate name/email detection and
+    auto-fill suggestions from existing club member records.
+    """
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        try:
+            pk = int(request.POST.get("pk") or 0) or None
+        except (ValueError, TypeError):
+            pk = None
+        first_name = request.POST.get("first_name", "").strip()
+        last_name = request.POST.get("last_name", "").strip()
+        email = request.POST.get("email", "").strip()
+        result = {
+            "id_first_name": "",
+            "id_last_name": "",
+            "id_email": "",
+            "id_phone_number": "",
+            "id_address": "",
+            "name_tooltip": "",
+            "email_tooltip": "",
+        }
+        base_qs = ClubMember.objects.filter(club=self.club, is_deleted=False)
+        if pk:
+            base_qs = base_qs.exclude(pk=pk)
+        # Auto-fill from AuctionTOS records when name typed without email
+        if (first_name or last_name) and not email and not pk:
+            # Look through AuctionTOS from auctions the requesting user created or is admin in,
+            # exactly like AuctionTOSValidation's auto-fill behaviour.
+            old_auctions = Auction.objects.filter(
+                Q(created_by=request.user) | Q(auctiontos__is_admin=True, auctiontos__user=request.user)
+            )
+            tos_qs = AuctionTOS.objects.filter(auction__in=old_auctions, email__isnull=False).order_by("-createdon")
+            full_name = f"{first_name} {last_name}".strip()
+            old_tos = AuctionTOSFilter.generic(None, tos_qs, full_name, match_names_only=True).first()
+            if old_tos:
+                # Split the single AuctionTOS name field into first/last
+                parts = old_tos.name.strip().split(" ", 1)
+                result["id_first_name"] = parts[0]
+                result["id_last_name"] = parts[1] if len(parts) > 1 else ""
+                result["id_email"] = old_tos.email
+                result["id_phone_number"] = old_tos.phone_number or ""
+                result["id_address"] = old_tos.address or ""
+        # Duplicate name check within this club
+        if first_name or last_name:
+            dup = base_qs.filter(first_name=first_name, last_name=last_name).first()
+            if dup:
+                result["name_tooltip"] = f"{dup} is already in this club"
+        # Duplicate email check within this club
+        if email:
+            dup = base_qs.filter(email=email).first()
+            if dup:
+                result["email_tooltip"] = "Email is already in this club"
+        return JsonResponse(result)
+
+
 class ClubMemberAdminView(APIView):
     """DRF-based HTMX view for editing a club member"""
 
-    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    authentication_classes = [TokenAuthentication, SessionAuthentication]
     permission_classes = [IsAuthenticated]
 
     def _get_member_and_check_permission(self, request, pk):
@@ -11427,20 +11489,135 @@ class ClubMemberAdminView(APIView):
             raise PermissionDenied()
         return member
 
-    def get(self, request, pk):
-        member = self._get_member_and_check_permission(request, pk)
-        form = ClubMemberAdminForm(instance=member, club=member.club)
-        context = {
+    def _build_context(self, request, member, form):
+        validation_url = reverse("clubmember_validation", kwargs={"slug": member.club.slug})
+        extra_script = self._get_validation_script(request, pk=member.pk, validation_url=validation_url)
+        return {
             "club": member.club,
             "club_member": member,
             "modal_title": str(member),
             "form": form,
+            "extra_script": mark_safe(extra_script),
         }
-        return render(request, "auctions/generic_admin_form.html", context)
+
+    @staticmethod
+    def _get_validation_script(request, pk, validation_url):
+        pk_js = f"var member_pk={pk};" if pk else "var member_pk=null;"
+        csrf = get_token(request)
+        return f"""<script>
+{pk_js}
+var clubmember_validation_url = '{validation_url}';
+var clubmember_csrf_token = '{csrf}';
+
+function cmSetFieldInvalid(fieldId, message, is_invalid) {{
+    var field = document.getElementById(fieldId);
+    if (!field) return;
+    var feedbackId = fieldId + "_feedback";
+    var feedback = document.getElementById(feedbackId);
+    if (is_invalid) {{
+        field.classList.add("is-invalid");
+        var existing_error = document.getElementById("error_1_" + fieldId);
+        if (existing_error) existing_error.remove();
+        if (feedback) feedback.remove();
+        feedback = document.createElement("div");
+        feedback.id = feedbackId;
+        feedback.className = "invalid-feedback";
+        field.parentNode.appendChild(feedback);
+        feedback.textContent = message;
+    }} else {{
+        field.classList.remove("is-invalid");
+        if (feedback) feedback.remove();
+    }}
+}}
+
+function cmShowAutocomplete(response, remove) {{
+    var feedback = document.getElementById('id_first_name_feedback');
+    if (feedback) feedback.remove();
+    if (remove) return;
+    feedback = document.createElement("div");
+    feedback.id = "id_first_name_feedback";
+    feedback.className = "valid-feedback d-block cursor-pointer";
+    var btn = document.createElement("button");
+    btn.role = "button";
+    btn.className = "btn btn-sm btn-info";
+    btn.id = "autocompleteMemberForm";
+    btn.textContent = "Click to fill in " + response.id_email;
+    feedback.appendChild(btn);
+    var autocomplete = response;
+    document.getElementById('id_first_name').parentNode.appendChild(feedback);
+    var link = document.getElementById('autocompleteMemberForm');
+    link.addEventListener('click', function(event) {{
+        event.preventDefault();
+        for (var key in autocomplete) {{
+            if (autocomplete.hasOwnProperty(key)) {{
+                var element = document.getElementById(key);
+                if (element && element.type !== "checkbox" && element.value === "") {{
+                    element.value = autocomplete[key] || '';
+                }}
+            }}
+        }}
+    }});
+    link.focus();
+}}
+
+function cmShowTooltip(element, message) {{
+    if (element._tooltipInstance) element._tooltipInstance.dispose();
+    element.setAttribute("data-bs-toggle", "tooltip");
+    element.setAttribute("data-bs-placement", "right");
+    element.setAttribute("title", message);
+    element._tooltipInstance = new bootstrap.Tooltip(element);
+    element._tooltipInstance.show();
+}}
+
+function cmHideTooltip(element) {{
+    if (element._tooltipInstance) {{
+        element._tooltipInstance.dispose();
+        element._tooltipInstance = null;
+    }}
+}}
+
+function cmValidateField() {{
+    var firstNameInput = document.getElementById("id_first_name");
+    var data = {{
+        pk: member_pk,
+        first_name: $("#id_first_name").val(),
+        last_name: $("#id_last_name").val(),
+        email: $("#id_email").val(),
+    }};
+    $.ajax({{
+        url: clubmember_validation_url,
+        type: "POST",
+        data: data,
+        headers: {{ "X-CSRFToken": clubmember_csrf_token }},
+        success: function(response) {{
+            if (response.name_tooltip) {{
+                cmShowTooltip(firstNameInput, response.name_tooltip);
+                cmShowAutocomplete(response, true);
+            }} else if (response.id_email) {{
+                cmShowAutocomplete(response);
+                cmHideTooltip(firstNameInput);
+            }} else {{
+                cmHideTooltip(firstNameInput);
+                cmShowAutocomplete(response, true);
+            }}
+            cmSetFieldInvalid("id_email", response.email_tooltip, !!response.email_tooltip);
+        }}
+    }});
+}}
+
+$("#id_first_name, #id_last_name, #id_email").on("blur", cmValidateField);
+</script>"""
+
+    def get(self, request, pk):
+        member = self._get_member_and_check_permission(request, pk)
+        post_url = reverse("clubmember_admin", kwargs={"pk": member.pk})
+        form = ClubMemberAdminForm(instance=member, post_url=post_url)
+        return render(request, "auctions/generic_admin_form.html", self._build_context(request, member, form))
 
     def post(self, request, pk):
         member = self._get_member_and_check_permission(request, pk)
-        form = ClubMemberAdminForm(request.POST, instance=member, club=member.club)
+        post_url = reverse("clubmember_admin", kwargs={"pk": member.pk})
+        form = ClubMemberAdminForm(request.POST, instance=member, post_url=post_url)
         if form.is_valid():
             saved = form.save()
             ClubHistory.objects.create(
@@ -11454,19 +11631,13 @@ class ClubMemberAdminView(APIView):
                 status=204,
                 headers={"HX-Trigger": "clubMemberListChanged"},
             )
-        context = {
-            "club": member.club,
-            "club_member": member,
-            "modal_title": str(member),
-            "form": form,
-        }
-        return render(request, "auctions/generic_admin_form.html", context)
+        return render(request, "auctions/generic_admin_form.html", self._build_context(request, member, form))
 
 
 class ClubMemberCreateView(APIView):
     """DRF-based HTMX view for creating a new club member"""
 
-    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    authentication_classes = [TokenAuthentication, SessionAuthentication]
     permission_classes = [IsAuthenticated]
 
     def _get_club_and_check_permission(self, request, slug):
@@ -11477,17 +11648,22 @@ class ClubMemberCreateView(APIView):
 
     def get(self, request, slug):
         club = self._get_club_and_check_permission(request, slug)
-        form = ClubMemberAdminForm(club=club)
+        post_url = reverse("clubmember_create", kwargs={"slug": slug})
+        validation_url = reverse("clubmember_validation", kwargs={"slug": slug})
+        form = ClubMemberAdminForm(post_url=post_url)
+        extra_script = ClubMemberAdminView._get_validation_script(request, pk=None, validation_url=validation_url)
         context = {
             "club": club,
             "modal_title": f"Add member to {club.name}",
             "form": form,
+            "extra_script": mark_safe(extra_script),
         }
         return render(request, "auctions/generic_admin_form.html", context)
 
     def post(self, request, slug):
         club = self._get_club_and_check_permission(request, slug)
-        form = ClubMemberAdminForm(request.POST, club=club)
+        post_url = reverse("clubmember_create", kwargs={"slug": slug})
+        form = ClubMemberAdminForm(request.POST, post_url=post_url)
         if form.is_valid():
             member = form.save(commit=False)
             member.club = club
@@ -11506,10 +11682,14 @@ class ClubMemberCreateView(APIView):
                 status=204,
                 headers={"HX-Trigger": "clubMemberListChanged"},
             )
+        extra_script = ClubMemberAdminView._get_validation_script(
+            request, pk=None, validation_url=reverse("clubmember_validation", kwargs={"slug": slug})
+        )
         context = {
             "club": club,
             "modal_title": f"Add member to {club.name}",
             "form": form,
+            "extra_script": mark_safe(extra_script),
         }
         return render(request, "auctions/generic_admin_form.html", context)
 
@@ -11755,7 +11935,7 @@ class ClubAPIViewMixin:
     """Shared mixin for club REST API views"""
 
     serializer_class = ClubMemberSerializer
-    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    authentication_classes = [TokenAuthentication, SessionAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get_club(self):
