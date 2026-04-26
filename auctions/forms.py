@@ -35,6 +35,7 @@ from .models import (
     ChatSubscription,
     Club,
     ClubMember,
+    ClubRole,
     InvoiceAdjustment,
     Lot,
     LotImage,
@@ -3398,3 +3399,37 @@ class ClubEditForm(forms.ModelForm):
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.add_input(Submit("submit", "Save settings", css_class="btn-primary"))
+
+
+class ClubMemberAdminForm(forms.ModelForm):
+    """Form for club admins to edit a club member's details and roles."""
+
+    roles = forms.ModelMultipleChoiceField(
+        queryset=ClubRole.objects.none(),
+        widget=forms.CheckboxSelectMultiple,
+        required=False,
+        label="Roles",
+    )
+
+    class Meta:
+        model = ClubMember
+        fields = [
+            "first_name",
+            "last_name",
+            "email",
+            "phone_number",
+            "address",
+            "contact_status",
+            "bap_points",
+            "hap_points",
+            "membership_last_paid",
+            "roles",
+        ]
+
+    def __init__(self, *args, club=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if club is not None:
+            self.fields["roles"].queryset = ClubRole.objects.filter(club=club)
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.add_input(Submit("submit", "Save", css_class="btn-primary"))

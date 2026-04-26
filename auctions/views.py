@@ -59,7 +59,7 @@ from django.http import (
     JsonResponse,
 )
 from django.middleware.csrf import get_token
-from django.shortcuts import get_object_or_404, redirect
+from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils import timezone
@@ -120,6 +120,7 @@ from .forms import (
     ChangeUsernameForm,
     ChangeUserPreferencesForm,
     ClubEditForm,
+    ClubMemberAdminForm,
     ClubMemberSelfServiceForm,
     CreateAuctionForm,
     CreateEditAuctionTOS,
@@ -11410,10 +11411,11 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterV
         return context
 
 
-class ClubMemberAdminView(LoginRequiredMixin, ClubViewMixin, TemplateView):
+class ClubMemberAdminView(LoginRequiredMixin, ClubViewMixin, TemplateView, FormMixin):
     """HTMX view for managing an individual club member"""
 
     template_name = "auctions/generic_admin_form.html"
+    form_class = ClubMemberAdminForm
 
     def dispatch(self, request, *args, **kwargs):
         pk = kwargs.get("pk")
@@ -11426,12 +11428,85 @@ class ClubMemberAdminView(LoginRequiredMixin, ClubViewMixin, TemplateView):
             raise PermissionDenied()
         return TemplateView.dispatch(self, request, *args, **kwargs)
 
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["instance"] = self.club_member
+        kwargs["club"] = self.club
+        return kwargs
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["club"] = self.club
         context["club_member"] = self.club_member
         context["modal_title"] = str(self.club_member)
         return context
+
+    def post(self, request, *args, **kwargs):
+        form = ClubMemberAdminForm(request.POST, instance=self.club_member, club=self.club)
+        if form.is_valid():
+            member = form.save()
+            ClubHistory.objects.create(
+                club=self.club,
+                user=request.user,
+                action=f"Updated member {member}",
+                applies_to="MEMBERS",
+            )
+            messages.success(request, f"{member} updated.")
+            return HttpResponse(
+                status=204,
+                headers={"HX-Trigger": "clubMemberListChanged"},
+            )
+        context = self.get_context_data()
+        context["form"] = form
+        return render(request, self.template_name, context)
+
+
+class ClubMemberCreateView(LoginRequiredMixin, ClubViewMixin, TemplateView, FormMixin):
+    """HTMX view for creating a new club member"""
+
+    template_name = "auctions/generic_admin_form.html"
+    form_class = ClubMemberAdminForm
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if not self.user_has_club_permission("permission_add_edit"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["club"] = self.club
+        return kwargs
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["club"] = self.club
+        context["modal_title"] = f"Add member to {self.club.name}"
+        return context
+
+    def post(self, request, *args, **kwargs):
+        form = ClubMemberAdminForm(request.POST, club=self.club)
+        if form.is_valid():
+            member = form.save(commit=False)
+            member.club = self.club
+            member.added_by = request.user
+            member.source = "manually_added"
+            member.save()
+            form.save_m2m()
+            ClubHistory.objects.create(
+                club=self.club,
+                user=request.user,
+                action=f"Added member {member}",
+                applies_to="MEMBERS",
+            )
+            messages.success(request, f"{member} added to {self.club.name}.")
+            return HttpResponse(
+                status=204,
+                headers={"HX-Trigger": "clubMemberListChanged"},
+            )
+        context = self.get_context_data()
+        context["form"] = form
+        return render(request, self.template_name, context)
 
 
 class ClubEditView(LoginRequiredMixin, ClubViewMixin, UpdateView):

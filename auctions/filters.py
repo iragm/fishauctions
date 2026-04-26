@@ -997,7 +997,7 @@ class ClubMemberFilter(django_filters.FilterSet):
         label="",
         widget=TextInput(
             attrs={
-                "placeholder": "Filter by name, email...",
+                "placeholder": "Filter by name, email, source...",
                 "hx-get": "",
                 "hx-target": "div.table-container",
                 "hx-trigger": "keyup changed delay:300ms",
@@ -1012,12 +1012,45 @@ class ClubMemberFilter(django_filters.FilterSet):
         fields = []
 
     def clubmember_search(self, queryset, name, value):
-        return queryset.filter(
-            Q(first_name__icontains=value)
-            | Q(last_name__icontains=value)
-            | Q(email__icontains=value)
-            | Q(user__email__icontains=value)
-        )
+        """Support text search including special tokens: discord, current, expired"""
+        tokens = value.lower().split()
+        source_filter = None
+        status_filter = None
+        remaining = []
+        for token in tokens:
+            if token == "discord":
+                source_filter = "discord"
+            elif token == "current":
+                status_filter = "current"
+            elif token == "expired":
+                status_filter = "expired"
+            elif token in ("joined", "website"):
+                source_filter = "joined"
+            elif token in ("manual", "manually_added"):
+                source_filter = "manually_added"
+            else:
+                remaining.append(token)
+
+        if source_filter:
+            queryset = queryset.filter(source=source_filter)
+        if status_filter in ("current", "expired"):
+            one_year_ago = timezone.now().date() - datetime.timedelta(days=365)
+            if status_filter == "current":
+                queryset = queryset.filter(membership_last_paid__gte=one_year_ago)
+            else:
+                queryset = queryset.filter(
+                    Q(membership_last_paid__lt=one_year_ago) | Q(membership_last_paid__isnull=True)
+                )
+
+        text = " ".join(remaining)
+        if text:
+            queryset = queryset.filter(
+                Q(first_name__icontains=text)
+                | Q(last_name__icontains=text)
+                | Q(email__icontains=text)
+                | Q(user__email__icontains=text)
+            )
+        return queryset
 
 
 class ClubHistoryFilter(django_filters.FilterSet):

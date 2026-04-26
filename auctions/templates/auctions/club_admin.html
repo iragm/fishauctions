@@ -8,9 +8,34 @@
 <div class="mb-3">
   <a href="{% url 'club_detail' club.slug %}" class="btn btn-sm btn-secondary"><i class="bi bi-arrow-left"></i> Back to club</a>
   {% if can_edit %}
-  <a href="{% url 'club_edit' club.slug %}" class="btn btn-sm btn-warning text-dark"><i class="bi bi-gear"></i> Edit club settings</a>
+  <a href="{% url 'club_edit' club.slug %}" class="btn btn-sm btn-warning text-dark"><i class="bi bi-gear"></i> Settings</a>
   {% endif %}
   <a href="{% url 'club_history' club.slug %}" class="btn btn-sm btn-info"><i class="bi bi-clock-history"></i> History</a>
+
+  {% if can_add_edit %}
+  <div class="btn-group">
+    <button class="btn btn-sm btn-primary"
+      hx-get="{% url 'clubmember_create' club.slug %}"
+      hx-target="#modals-here"
+      hx-trigger="click"
+      _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">
+      <i class="bi bi-person-fill-add"></i> Add user
+    </button>
+    <button type="button" class="btn btn-sm btn-primary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false">
+      <span class="visually-hidden">Toggle Dropdown</span>
+    </button>
+    <ul class="dropdown-menu">
+      <li>
+        <form method="post" enctype="multipart/form-data" action="{% url 'club_member_import' club.slug %}" style="margin:0">
+          {% csrf_token %}
+          <input type="file" name="csv_file" id="csv_import_file_club" accept=".csv" style="display:none" onchange="this.form.submit()">
+          <a href="#" class="dropdown-item" onclick="document.getElementById('csv_import_file_club').click(); return false;"><i class="bi bi-person-fill-up"></i> Import from CSV</a>
+        </form>
+      </li>
+    </ul>
+  </div>
+  {% endif %}
+
   {% if can_export %}
   <div class="dropdown d-inline">
     <button class="btn btn-sm btn-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
@@ -24,13 +49,10 @@
     </ul>
   </div>
   {% endif %}
-  {% if can_add_edit %}
-  <form method="post" enctype="multipart/form-data" action="{% url 'club_member_import' club.slug %}" class="d-inline">
-    {% csrf_token %}
-    <label class="btn btn-sm btn-secondary" for="csv_import_file"><i class="bi bi-upload"></i> Import CSV</label>
-    <input id="csv_import_file" type="file" name="csv_file" accept=".csv" style="display:none" onchange="this.form.submit()">
-  </form>
-  {% endif %}
+</div>
+
+<div class="mb-2">
+  <small class="text-muted">Click a name to edit. Filter by name, email, or type <code>discord</code>, <code>current</code>, or <code>expired</code> to filter by source/status.</small>
 </div>
 
 <form class="col-sm-12 mt-2">
@@ -42,4 +64,13 @@
 </div>
 
 <div id="modals-here"></div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.body.addEventListener("clubMemberListChanged", function() {
+  window.location.reload();
+});
+</script>
 {% endblock %}
