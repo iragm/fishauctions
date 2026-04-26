@@ -11421,6 +11421,8 @@ class ClubMemberValidation(ClubViewMixin, APIPostView):
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not check_club_permission(request.user, self.club, "permission_add_edit"):
+            raise PermissionDenied()
         return super().dispatch(request, *args, **kwargs)
 
     def post(self, request, *args, **kwargs):
@@ -11977,3 +11979,9 @@ class ClubMemberDetailAPIView(ClubAPIViewMixin, generics.RetrieveUpdateDestroyAP
         # Soft delete
         instance.is_deleted = True
         instance.save(update_fields=["is_deleted"])
+        ClubHistory.objects.create(
+            club=club,
+            user=self.request.user,
+            action=f"Deleted member {instance}",
+            applies_to="MEMBERS",
+        )

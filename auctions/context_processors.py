@@ -128,8 +128,9 @@ def site_config(request):
 
 def user_clubs(request):
     if request.user.is_authenticated:
-        from auctions.models import ClubMember
+        from auctions.models import Club, ClubMember
 
-        clubs = [m.club for m in ClubMember.objects.filter(user=request.user, is_deleted=False).select_related("club")]
+        club_ids = ClubMember.objects.filter(user=request.user, is_deleted=False).values_list("club_id", flat=True)
+        clubs = list(Club.objects.filter(pk__in=club_ids).order_by("name"))
         return {"user_clubs": clubs}
     return {"user_clubs": []}

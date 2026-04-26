@@ -3392,10 +3392,18 @@ class ClubEditForm(forms.ModelForm):
             "description",
         ]
         help_texts = {
-            "membership_annual_fee": "Leave blank if free",
-            "discord_server_id": "Your Discord server ID for bot integration",
+            "membership_system": (
+                "January 1st: all memberships expire on Jan 1 each year. "
+                "Rolling: memberships expire one year from the payment date."
+            ),
+            "membership_annual_fee": "Leave blank if free.",
+            "allow_joining": "Let members self-join via the public club page.",
+            "allow_integrated_payments": "Accept membership dues directly through the site.",
+            "discord_server_id": "18-digit number found in Discord server settings (required for bot integration).",
         }
         widgets = {
+            "homepage": forms.URLInput(attrs={"placeholder": "https://www.yourclub.org"}),
+            "facebook_page": forms.URLInput(attrs={"placeholder": "https://www.facebook.com/groups/yourclub"}),
             "description": SummernoteWidget(attrs={"summernote": {"width": "100%", "height": "300px"}}),
         }
 
@@ -3431,7 +3439,22 @@ class ClubMemberAdminForm(forms.ModelForm):
             "roles",
         ]
         widgets = {
+            "first_name": forms.TextInput(attrs={"placeholder": "First name"}),
+            "last_name": forms.TextInput(attrs={"placeholder": "Last name"}),
+            "email": forms.EmailInput(attrs={"placeholder": "email@example.com"}),
+            "phone_number": forms.TextInput(attrs={"placeholder": "(555) 555-1234"}),
+            "address": forms.TextInput(attrs={"placeholder": "123 Main St, City, State"}),
             "membership_last_paid": DatePickerInput(),
+        }
+        help_texts = {
+            "contact_status": (
+                "Contact normally: all emails. "
+                "No non-essential emails: only transactional messages. "
+                "Do not contact: no emails at all."
+            ),
+            "bap_points": "Breeders Award Program points accumulated by this member.",
+            "hap_points": "Horticultural Award Program points accumulated by this member.",
+            "membership_last_paid": "Date of the most recent membership payment.",
         }
 
     def __init__(self, *args, post_url=None, **kwargs):
