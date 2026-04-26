@@ -90,8 +90,9 @@ from reportlab.platypus import (
     Image as PImage,
 )
 from rest_framework import generics
-from rest_framework.authentication import TokenAuthentication
+from rest_framework.authentication import SessionAuthentication, TokenAuthentication
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.views import APIView
 from user_agents import parse
 from webpush import send_user_notification
 from webpush.models import PushInformation
@@ -11411,102 +11412,106 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterV
         return context
 
 
-class ClubMemberAdminView(LoginRequiredMixin, ClubViewMixin, TemplateView, FormMixin):
-    """HTMX view for managing an individual club member"""
+class ClubMemberAdminView(APIView):
+    """DRF-based HTMX view for editing a club member"""
 
-    template_name = "auctions/generic_admin_form.html"
-    form_class = ClubMemberAdminForm
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
-    def dispatch(self, request, *args, **kwargs):
-        pk = kwargs.get("pk")
+    def _get_member_and_check_permission(self, request, pk):
         try:
-            self.club_member = ClubMember.objects.get(pk=pk)
-            self.club = self.club_member.club
+            member = ClubMember.objects.get(pk=pk)
         except ClubMember.DoesNotExist:
             raise Http404
-        if not self.user_has_club_permission("permission_add_edit"):
+        if not check_club_permission(request.user, member.club, "permission_add_edit"):
             raise PermissionDenied()
-        return TemplateView.dispatch(self, request, *args, **kwargs)
+        return member
 
-    def get_form_kwargs(self):
-        kwargs = super().get_form_kwargs()
-        kwargs["instance"] = self.club_member
-        kwargs["club"] = self.club
-        return kwargs
+    def get(self, request, pk):
+        member = self._get_member_and_check_permission(request, pk)
+        form = ClubMemberAdminForm(instance=member, club=member.club)
+        context = {
+            "club": member.club,
+            "club_member": member,
+            "modal_title": str(member),
+            "form": form,
+        }
+        return render(request, "auctions/generic_admin_form.html", context)
 
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["club"] = self.club
-        context["club_member"] = self.club_member
-        context["modal_title"] = str(self.club_member)
-        return context
-
-    def post(self, request, *args, **kwargs):
-        form = ClubMemberAdminForm(request.POST, instance=self.club_member, club=self.club)
+    def post(self, request, pk):
+        member = self._get_member_and_check_permission(request, pk)
+        form = ClubMemberAdminForm(request.POST, instance=member, club=member.club)
         if form.is_valid():
-            member = form.save()
+            saved = form.save()
             ClubHistory.objects.create(
-                club=self.club,
+                club=member.club,
                 user=request.user,
-                action=f"Updated member {member}",
+                action=f"Updated member {saved}",
                 applies_to="MEMBERS",
             )
-            messages.success(request, f"{member} updated.")
+            messages.success(request, f"{saved} updated.")
             return HttpResponse(
                 status=204,
                 headers={"HX-Trigger": "clubMemberListChanged"},
             )
-        context = self.get_context_data()
-        context["form"] = form
-        return render(request, self.template_name, context)
+        context = {
+            "club": member.club,
+            "club_member": member,
+            "modal_title": str(member),
+            "form": form,
+        }
+        return render(request, "auctions/generic_admin_form.html", context)
 
 
-class ClubMemberCreateView(LoginRequiredMixin, ClubViewMixin, TemplateView, FormMixin):
-    """HTMX view for creating a new club member"""
+class ClubMemberCreateView(APIView):
+    """DRF-based HTMX view for creating a new club member"""
 
-    template_name = "auctions/generic_admin_form.html"
-    form_class = ClubMemberAdminForm
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
-    def dispatch(self, request, *args, **kwargs):
-        self.get_club(kwargs.get("slug", ""))
-        if not self.user_has_club_permission("permission_add_edit"):
+    def _get_club_and_check_permission(self, request, slug):
+        club = get_object_or_404(Club, slug=slug)
+        if not check_club_permission(request.user, club, "permission_add_edit"):
             raise PermissionDenied()
-        return super().dispatch(request, *args, **kwargs)
+        return club
 
-    def get_form_kwargs(self):
-        kwargs = super().get_form_kwargs()
-        kwargs["club"] = self.club
-        return kwargs
+    def get(self, request, slug):
+        club = self._get_club_and_check_permission(request, slug)
+        form = ClubMemberAdminForm(club=club)
+        context = {
+            "club": club,
+            "modal_title": f"Add member to {club.name}",
+            "form": form,
+        }
+        return render(request, "auctions/generic_admin_form.html", context)
 
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["club"] = self.club
-        context["modal_title"] = f"Add member to {self.club.name}"
-        return context
-
-    def post(self, request, *args, **kwargs):
-        form = ClubMemberAdminForm(request.POST, club=self.club)
+    def post(self, request, slug):
+        club = self._get_club_and_check_permission(request, slug)
+        form = ClubMemberAdminForm(request.POST, club=club)
         if form.is_valid():
             member = form.save(commit=False)
-            member.club = self.club
+            member.club = club
             member.added_by = request.user
             member.source = "manually_added"
             member.save()
             form.save_m2m()
             ClubHistory.objects.create(
-                club=self.club,
+                club=club,
                 user=request.user,
                 action=f"Added member {member}",
                 applies_to="MEMBERS",
             )
-            messages.success(request, f"{member} added to {self.club.name}.")
+            messages.success(request, f"{member} added to {club.name}.")
             return HttpResponse(
                 status=204,
                 headers={"HX-Trigger": "clubMemberListChanged"},
             )
-        context = self.get_context_data()
-        context["form"] = form
-        return render(request, self.template_name, context)
+        context = {
+            "club": club,
+            "modal_title": f"Add member to {club.name}",
+            "form": form,
+        }
+        return render(request, "auctions/generic_admin_form.html", context)
 
 
 class ClubEditView(LoginRequiredMixin, ClubViewMixin, UpdateView):
@@ -11750,7 +11755,7 @@ class ClubAPIViewMixin:
     """Shared mixin for club REST API views"""
 
     serializer_class = ClubMemberSerializer
-    authentication_classes = [TokenAuthentication]
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get_club(self):

@@ -10,12 +10,21 @@ from django.dispatch import receiver
 from django.utils import timezone
 from django_ses.signals import bounce_received, complaint_received
 
+from .models import create_default_club_roles
+
 logger = logging.getLogger(__name__)
 
 # Email timing constants (in hours)
 WELCOME_EMAIL_DELAY_HOURS = 24
 INVOICE_EMAIL_DELAY_HOURS = 1
 FOLLOWUP_EMAIL_DELAY_HOURS = 24
+
+
+@receiver(post_save, sender="auctions.Club")
+def on_save_club(sender, instance, created, **kwargs):
+    """When a new club is created, set up default roles."""
+    if created:
+        create_default_club_roles(instance)
 
 
 @receiver(pre_save, sender="auctions.Auction")

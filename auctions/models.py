@@ -614,6 +614,23 @@ class ClubRole(models.Model):
         return f"{self.club} - {self.name}"
 
 
+DEFAULT_CLUB_ROLES = [
+    {"name": "View club list", "permissions": ["permission_view"]},
+    {"name": "Update users", "permissions": ["permission_view", "permission_add_edit"]},
+    {"name": "Change club permissions", "permissions": ["permission_view", "permission_edit_club"]},
+    {"name": "Export", "permissions": ["permission_view", "permission_add_edit", "permission_export"]},
+]
+
+
+def create_default_club_roles(club):
+    """Create the default roles for a club if they don't already exist."""
+    for role_def in DEFAULT_CLUB_ROLES:
+        role, created = ClubRole.objects.get_or_create(club=club, name=role_def["name"])
+        if created:
+            perms = ClubPermission.objects.filter(name__in=role_def["permissions"])
+            role.permissions.set(perms)
+
+
 class ContactRecord(models.Model):
     """Abstract base class for contact records (shared between AuctionTOS and ClubMember)"""
 
