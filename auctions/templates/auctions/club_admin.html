@@ -8,7 +8,7 @@
 <div class="mb-3">
   <a href="{% url 'club_detail' club.slug %}" class="btn btn-sm btn-secondary"><i class="bi bi-arrow-left"></i> Back to club</a>
   {% if can_edit %}
-  <a href="{% url 'club_edit' club.slug %}" class="btn btn-sm btn-warning"><i class="bi bi-gear"></i> Edit club settings</a>
+  <a href="{% url 'club_edit' club.slug %}" class="btn btn-sm btn-warning text-dark"><i class="bi bi-gear"></i> Edit club settings</a>
   {% endif %}
   <a href="{% url 'club_history' club.slug %}" class="btn btn-sm btn-info"><i class="bi bi-clock-history"></i> History</a>
   {% if can_export %}

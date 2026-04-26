@@ -124,3 +124,12 @@ def site_config(request):
         "enable_help": settings.ENABLE_HELP,
         "enable_promo_page": settings.ENABLE_PROMO_PAGE,
     }
+
+
+def user_clubs(request):
+    if request.user.is_authenticated:
+        from auctions.models import ClubMember
+
+        clubs = [m.club for m in ClubMember.objects.filter(user=request.user, is_deleted=False).select_related("club")]
+        return {"user_clubs": clubs}
+    return {"user_clubs": []}

@@ -119,6 +119,7 @@ from .forms import (
     ChangeInvoiceStatusForm,
     ChangeUsernameForm,
     ChangeUserPreferencesForm,
+    ClubEditForm,
     ClubMemberSelfServiceForm,
     CreateAuctionForm,
     CreateEditAuctionTOS,
@@ -8487,6 +8488,29 @@ class UserLocationUpdate(UpdateView, SuccessMessageMixin):
                     applies_to="USERS",
                 )
 
+        for club_member in ClubMember.objects.filter(user=user, is_deleted=False).select_related("club"):
+            changes = []
+            if club_member.first_name != user.first_name:
+                changes.append(f"first name to '{user.first_name}'")
+                club_member.first_name = user.first_name
+            if club_member.last_name != user.last_name:
+                changes.append(f"last name to '{user.last_name}'")
+                club_member.last_name = user.last_name
+            if club_member.phone_number != new_phone:
+                changes.append(f"phone to '{new_phone}'")
+                club_member.phone_number = new_phone
+            if club_member.address != new_address:
+                changes.append(f"address to '{new_address}'")
+                club_member.address = new_address
+            if changes:
+                club_member.save()
+                ClubHistory.objects.create(
+                    club=club_member.club,
+                    user=user,
+                    action=f"Contact info updated for {user.get_full_name()}: " + ", ".join(changes),
+                    applies_to="MEMBERS",
+                )
+
         return super().form_valid(form)
 
     def get_context_data(self, **kwargs):
@@ -8501,6 +8525,18 @@ class UserLocationUpdate(UpdateView, SuccessMessageMixin):
             context["auctiontos_update_message"] = f"Updating your contact info will also update it in {tos.auction}"
         elif count > 1:
             context["auctiontos_update_message"] = f"Updating your contact info will also update it in {count} auctions"
+
+        club_memberships = ClubMember.objects.filter(user=self.request.user, is_deleted=False).select_related("club")
+        club_count = club_memberships.count()
+        if club_count == 1:
+            club = club_memberships.first().club
+            context["club_membership_message"] = (
+                f"Updating your contact info will also update your contact info in {club.name}"
+            )
+        elif club_count > 1:
+            context["club_membership_message"] = (
+                f"Updating your contact info will also update your contact info in {club_count} clubs"
+            )
 
         return context
 
@@ -11398,10 +11434,14 @@ class ClubMemberAdminView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         return context
 
 
-class ClubEditView(LoginRequiredMixin, ClubViewMixin, TemplateView):
+class ClubEditView(LoginRequiredMixin, ClubViewMixin, UpdateView):
     """Edit club info"""
 
     template_name = "auctions/club_edit.html"
+    form_class = ClubEditForm
+
+    def get_object(self):
+        return self.club
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
@@ -11409,10 +11449,24 @@ class ClubEditView(LoginRequiredMixin, ClubViewMixin, TemplateView):
             raise PermissionDenied()
         return super().dispatch(request, *args, **kwargs)
 
+    def get_success_url(self):
+        messages.success(self.request, "Club settings saved.")
+        return reverse("club_edit", kwargs={"slug": self.club.slug})
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["club"] = self.club
         return context
+
+    def form_valid(self, form):
+        result = super().form_valid(form)
+        ClubHistory.objects.create(
+            club=self.club,
+            user=self.request.user,
+            action="Updated club settings",
+            applies_to="SETTINGS",
+        )
+        return result
 
 
 class ClubHistoryView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterView):

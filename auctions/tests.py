@@ -13306,14 +13306,14 @@ class ClubModelTests(TestCase):
         self.assertIn("System", str(history))
 
     def test_club_permission_str(self):
-        perm = ClubPermission.objects.create(
+        perm = ClubPermission.objects.get_or_create(
             name="permission_admin",
-            description="Full admin access",
-        )
+            defaults={"description": "Full admin access"},
+        )[0]
         self.assertEqual(str(perm), "Full admin access")
 
     def test_club_role_with_permissions(self):
-        perm = ClubPermission.objects.create(name="permission_view", description="View members")
+        perm = ClubPermission.objects.get_or_create(name="permission_view", defaults={"description": "View members"})[0]
         role = ClubRole.objects.create(club=self.club, name="Viewer")
         role.permissions.add(perm)
         self.assertEqual(role.permissions.count(), 1)
@@ -13344,7 +13344,9 @@ class ClubViewTests(TestCase):
             allow_joining=True,
         )
         # Give owner the admin permission via a role
-        perm_admin = ClubPermission.objects.create(name="permission_admin", description="Full admin")
+        perm_admin = ClubPermission.objects.get_or_create(
+            name="permission_admin", defaults={"description": "Full admin"}
+        )[0]
         self.admin_role = ClubRole.objects.create(club=self.club, name="Admin")
         self.admin_role.permissions.add(perm_admin)
         self.owner_member = ClubMember.objects.create(
@@ -13392,7 +13394,9 @@ class ClubViewTests(TestCase):
 
     def test_club_edit_owner_can_access(self):
         """Club owner with edit_club permission can access edit page"""
-        perm_edit = ClubPermission.objects.create(name="permission_edit_club", description="Edit club settings")
+        perm_edit = ClubPermission.objects.get_or_create(
+            name="permission_edit_club", defaults={"description": "Edit club settings"}
+        )[0]
         self.admin_role.permissions.add(perm_edit)
         self.client.login(username="club_owner2", password="testpass")
         url = reverse("club_edit", kwargs={"slug": self.club.slug})

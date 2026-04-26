@@ -1,9 +1,83 @@
 {% extends "base.html" %}
+{% load crispy_forms_tags %}
 {% block title %}Edit {{ club.name }}{% endblock %}
 
 {% block content %}
 <h3><i class="bi bi-gear"></i> Edit {{ club.name }}</h3>
 <a href="{% url 'club_admin' club.slug %}" class="btn btn-sm btn-secondary mb-3"><i class="bi bi-arrow-left"></i> Back to admin</a>
-<p class="text-muted">Club settings can be managed through the <a href="{% url 'admin:auctions_club_change' club.pk %}">Django admin</a>.</p>
+
+{% crispy form %}
+
+<div class="mt-4">
+  <h5>Discord Bot Integration</h5>
+  <div class="accordion" id="discordAccordion">
+    <div class="accordion-item">
+      <h2 class="accordion-header" id="discordHeading">
+        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#discordCollapse">
+          <i class="bi bi-discord me-2"></i> Discord Bot Setup Instructions
+        </button>
+      </h2>
+      <div id="discordCollapse" class="accordion-collapse collapse" aria-labelledby="discordHeading">
+        <div class="accordion-body">
+          <p>Use the following boilerplate code to create a Discord bot that lets members register with their name and email.</p>
+          <p>Your club API endpoint: <code>https://{{ request.get_host }}/api/v1/clubs/{{ club.slug }}/members/</code></p>
+          <p>You will need an API token. Generate one for a club admin account in the <a href="/admin/authtoken/tokenproxy/">Django admin</a>.</p>
+          <pre class="bg-dark text-light p-3 rounded"><code>import discord
+from discord import app_commands
+import aiohttp
+
+API_URL = "https://{{ request.get_host }}/api/v1/clubs/{{ club.slug }}/members/"
+API_TOKEN = "YOUR_API_TOKEN_HERE"  # Set this to your admin user's token
+
+class RegistrationBot(discord.Client):
+    def __init__(self):
+        super().__init__(intents=discord.Intents.default())
+        self.tree = app_commands.CommandTree(self)
+
+    async def setup_hook(self):
+        await self.tree.sync()
+
+client = RegistrationBot()
+
+@client.tree.command(name="register", description="Register your membership")
+@app_commands.describe(
+    first_name="Your first name",
+    last_name="Your last name",
+    email="Your email address"
+)
+async def register(interaction: discord.Interaction, first_name: str, last_name: str, email: str):
+    """Register as a club member via Discord"""
+    await interaction.response.defer(ephemeral=True)
+
+    payload = {
+        "first_name": first_name,
+        "last_name": last_name,
+        "email": email,
+        "discord_id": str(interaction.user.id),
+        "source": "discord"
+    }
+    headers = {"Authorization": f"Token {API_TOKEN}"}
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(API_URL, json=payload, headers=headers) as resp:
+            if resp.status == 201:
+                await interaction.followup.send(
+                    f"✅ Welcome, {first_name}! You've been registered as a member.",
+                    ephemeral=True
+                )
+            elif resp.status == 400:
+                data = await resp.json()
+                await interaction.followup.send(f"❌ Registration failed: {data}", ephemeral=True)
+            else:
+                await interaction.followup.send("❌ An error occurred. Please try again later.", ephemeral=True)
+
+client.run("YOUR_BOT_TOKEN_HERE")</code></pre>
+          <p class="text-muted small">Save this as <code>bot.py</code> and install dependencies: <code>pip install discord.py aiohttp</code></p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div id="modals-here"></div>
 {% endblock %}

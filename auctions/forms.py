@@ -33,6 +33,7 @@ from .models import (
     Bid,
     Category,
     ChatSubscription,
+    Club,
     ClubMember,
     InvoiceAdjustment,
     Lot,
@@ -3370,3 +3371,30 @@ class ClubMemberSelfServiceForm(forms.ModelForm):
     class Meta:
         model = ClubMember
         fields = ["first_name", "last_name", "phone_number", "address"]
+
+
+class ClubEditForm(forms.ModelForm):
+    """Form for club admins to edit their club settings."""
+
+    class Meta:
+        model = Club
+        fields = [
+            "name",
+            "homepage",
+            "facebook_page",
+            "membership_system",
+            "membership_annual_fee",
+            "allow_joining",
+            "allow_integrated_payments",
+            "discord_server_id",
+        ]
+        help_texts = {
+            "membership_annual_fee": "Leave blank if free",
+            "discord_server_id": "Your Discord server ID for bot integration",
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.add_input(Submit("submit", "Save settings", css_class="btn-primary"))

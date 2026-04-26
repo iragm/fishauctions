@@ -308,8 +308,19 @@ window.onload = function() {
                       </div>
                   </li>
                   {% if enable_club_finder %}
-                  <li class="nav-item">
+                  <li class="nav-item {% if user_clubs %}dropdown{% endif %}">
+                    {% if user_clubs %}
+                    <a class="nav-link dropdown-toggle" data-bs-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">Clubs</a>
+                    <div class="dropdown-menu">
+                      <a class="dropdown-item" href="/clubs/">Find a club</a>
+                      <div class="dropdown-divider"></div>
+                      {% for club in user_clubs %}
+                      <a class="dropdown-item" href="{% url 'club_detail' club.slug %}">{{ club.name }}</a>
+                      {% endfor %}
+                    </div>
+                    {% else %}
                     <a class="nav-link" href="/clubs/">Clubs</a>
+                    {% endif %}
                   </li>
                   {% endif %}
                   {% if request.user.is_authenticated %}
