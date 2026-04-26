@@ -4,27 +4,40 @@ from django.db import migrations, models
 
 
 def consolidate_club_roles(apps, schema_editor):
-    """Merge per-club duplicate role names into a single global role."""
+    """Merge per-club duplicate role names into a single global role.
+
+    Before removing the club FK, each club had its own copy of the default
+    roles (e.g. every club had a 'View club list' role).  We keep the earliest
+    (lowest PK) role for each name, reassign all ClubMember.roles M2M
+    references that point to a duplicate using bulk_create, then delete the
+    duplicates so the subsequent unique constraint on 'name' can be applied.
+    """
     db_alias = schema_editor.connection.alias
     ClubRole = apps.get_model("auctions", "ClubRole")
     ClubMemberRoles = apps.get_model("auctions", "ClubMember").roles.through
 
-    seen = {}
+    seen = {}  # name -> canonical pk
     for role in ClubRole.objects.using(db_alias).order_by("name", "pk"):
         if role.name not in seen:
             seen[role.name] = role.pk
         else:
             canonical_pk = seen[role.name]
-            for link in ClubMemberRoles.objects.using(db_alias).filter(clubrole_id=role.pk):
-                ClubMemberRoles.objects.using(db_alias).get_or_create(
-                    clubmember_id=link.clubmember_id,
-                    clubrole_id=canonical_pk,
-                )
+            # Collect all member IDs that have this duplicate role
+            member_ids = list(
+                ClubMemberRoles.objects.using(db_alias)
+                .filter(clubrole_id=role.pk)
+                .values_list("clubmember_id", flat=True)
+            )
+            if member_ids:
+                # Bulk-insert canonical role assignments, ignoring rows that
+                # already exist (member already has the canonical role).
+                new_links = [ClubMemberRoles(clubmember_id=mid, clubrole_id=canonical_pk) for mid in member_ids]
+                ClubMemberRoles.objects.using(db_alias).bulk_create(new_links, ignore_conflicts=True)
             role.delete()
 
 
 def reverse_consolidate(apps, schema_editor):
-    pass
+    pass  # Irreversible - cannot restore per-club roles
 
 
 class Migration(migrations.Migration):
@@ -33,11 +46,14 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        # Step 1: consolidate duplicate role names before the unique constraint
         migrations.RunPython(consolidate_club_roles, reverse_consolidate),
+        # Step 2: drop the club FK
         migrations.RemoveField(
             model_name="clubrole",
             name="club",
         ),
+        # Step 3: make name unique now that duplicates are gone
         migrations.AlterField(
             model_name="clubrole",
             name="name",

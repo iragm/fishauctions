@@ -11450,8 +11450,19 @@ class ClubMemberValidation(ClubViewMixin, APIPostView):
                 name_filter |= Q(first_name__icontains=first_name)
             if last_name:
                 name_filter |= Q(last_name__icontains=last_name)
+            # Restrict auto-fill to clubs the requesting user owns or has add/edit permission in,
+            # to avoid leaking contact info across clubs they cannot access.
+            accessible_clubs = Club.objects.filter(
+                Q(owner=request.user)
+                | Q(
+                    clubmember__user=request.user,
+                    clubmember__is_deleted=False,
+                    clubmember__roles__permissions__name__in=["permission_add_edit", "permission_admin"],
+                )
+            ).distinct()
             existing = (
-                ClubMember.objects.filter(name_filter, is_deleted=False, email__isnull=False)
+                ClubMember.objects.filter(name_filter, club__in=accessible_clubs, is_deleted=False)
+                .exclude(email__isnull=True)
                 .exclude(email="")
                 .order_by("-createdon")
                 .first()
@@ -11538,7 +11549,12 @@ function cmShowAutocomplete(response, remove) {{
     feedback = document.createElement("div");
     feedback.id = "id_first_name_feedback";
     feedback.className = "valid-feedback d-block cursor-pointer";
-    feedback.innerHTML = "<button role='button' class='btn btn-sm btn-info' id='autocompleteMemberForm'>Click to fill in " + response.id_email + "</button>";
+    var btn = document.createElement("button");
+    btn.role = "button";
+    btn.className = "btn btn-sm btn-info";
+    btn.id = "autocompleteMemberForm";
+    btn.textContent = "Click to fill in " + response.id_email;
+    feedback.appendChild(btn);
     var autocomplete = response;
     document.getElementById('id_first_name').parentNode.appendChild(feedback);
     var link = document.getElementById('autocompleteMemberForm');

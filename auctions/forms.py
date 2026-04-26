@@ -3426,7 +3426,7 @@ class ClubMemberAdminForm(forms.ModelForm):
             "roles",
         ]
 
-    def __init__(self, *args, club=None, post_url=None, validation_url=None, **kwargs):
+    def __init__(self, *args, post_url=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "post"
