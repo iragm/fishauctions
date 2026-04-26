@@ -59,18 +59,13 @@
   {% crispy filter.form %}
 </form>
 
-<div class="table-container">
+<div class="table-container"
+     hx-get=""
+     hx-trigger="clubMemberListChanged from:body"
+     hx-swap="outerHTML">
   {% render_table table %}
 </div>
 
 <div id="modals-here"></div>
 
-{% endblock %}
-
-{% block extra_js %}
-<script>
-document.body.addEventListener("clubMemberListChanged", function() {
-  window.location.reload();
-});
-</script>
 {% endblock %}

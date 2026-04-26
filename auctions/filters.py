@@ -1033,8 +1033,9 @@ class ClubMemberFilter(django_filters.FilterSet):
 
         if source_filter:
             queryset = queryset.filter(source=source_filter)
+        membership_validity_days = 365
         if status_filter in ("current", "expired"):
-            one_year_ago = timezone.now().date() - datetime.timedelta(days=365)
+            one_year_ago = timezone.now().date() - datetime.timedelta(days=membership_validity_days)
             if status_filter == "current":
                 queryset = queryset.filter(membership_last_paid__gte=one_year_ago)
             else:
