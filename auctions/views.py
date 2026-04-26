@@ -11443,36 +11443,24 @@ class ClubMemberValidation(ClubViewMixin, APIPostView):
         base_qs = ClubMember.objects.filter(club=self.club, is_deleted=False)
         if pk:
             base_qs = base_qs.exclude(pk=pk)
-        # Auto-fill from previous records when name typed without email
+        # Auto-fill from AuctionTOS records when name typed without email
         if (first_name or last_name) and not email and not pk:
-            name_filter = Q()
-            if first_name:
-                name_filter |= Q(first_name__icontains=first_name)
-            if last_name:
-                name_filter |= Q(last_name__icontains=last_name)
-            # Restrict auto-fill to clubs the requesting user owns or has add/edit permission in,
-            # to avoid leaking contact info across clubs they cannot access.
-            accessible_clubs = Club.objects.filter(
-                Q(owner=request.user)
-                | Q(
-                    clubmember__user=request.user,
-                    clubmember__is_deleted=False,
-                    clubmember__roles__permissions__name__in=["permission_add_edit", "permission_admin"],
-                )
-            ).distinct()
-            existing = (
-                ClubMember.objects.filter(name_filter, club__in=accessible_clubs, is_deleted=False)
-                .exclude(email__isnull=True)
-                .exclude(email="")
-                .order_by("-createdon")
-                .first()
+            # Look through AuctionTOS from auctions the requesting user created or is admin in,
+            # exactly like AuctionTOSValidation's auto-fill behaviour.
+            old_auctions = Auction.objects.filter(
+                Q(created_by=request.user) | Q(auctiontos__is_admin=True, auctiontos__user=request.user)
             )
-            if existing:
-                result["id_first_name"] = existing.first_name
-                result["id_last_name"] = existing.last_name
-                result["id_email"] = existing.email
-                result["id_phone_number"] = existing.phone_number or ""
-                result["id_address"] = existing.address or ""
+            tos_qs = AuctionTOS.objects.filter(auction__in=old_auctions, email__isnull=False).order_by("-createdon")
+            full_name = f"{first_name} {last_name}".strip()
+            old_tos = AuctionTOSFilter.generic(None, tos_qs, full_name, match_names_only=True).first()
+            if old_tos:
+                # Split the single AuctionTOS name field into first/last
+                parts = old_tos.name.strip().split(" ", 1)
+                result["id_first_name"] = parts[0]
+                result["id_last_name"] = parts[1] if len(parts) > 1 else ""
+                result["id_email"] = old_tos.email
+                result["id_phone_number"] = old_tos.phone_number or ""
+                result["id_address"] = old_tos.address or ""
         # Duplicate name check within this club
         if first_name or last_name:
             dup = base_qs.filter(first_name=first_name, last_name=last_name).first()
