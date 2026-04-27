@@ -3457,11 +3457,30 @@ class ClubMemberAdminForm(forms.ModelForm):
             "membership_last_paid": "Date of the most recent membership payment.",
         }
 
-    def __init__(self, *args, post_url=None, **kwargs):
+    def __init__(self, *args, post_url=None, read_only=False, **kwargs):
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "post"
-        if post_url:
+        if read_only:
+            for field in self.fields.values():
+                field.disabled = True
+            self.helper.layout = Layout(
+                "first_name",
+                "last_name",
+                "email",
+                "phone_number",
+                "address",
+                "contact_status",
+                "bap_points",
+                "hap_points",
+                "membership_last_paid",
+                "roles",
+                Div(
+                    HTML('<button type="button" class="btn btn-secondary" onclick="closeModal()">Close</button>'),
+                    css_class="modal-footer",
+                ),
+            )
+        elif post_url:
             self.helper.layout = Layout(
                 "first_name",
                 "last_name",

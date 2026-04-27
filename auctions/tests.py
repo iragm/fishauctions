@@ -13573,7 +13573,7 @@ class ClubMemberUpdateTests(TestCase):
     def test_csv_export_requires_permission(self):
         """Non-admin user cannot export CSV"""
         self.client.login(username="cu_other", password="testpass")
-        url = reverse("club_member_export", kwargs={"slug": self.club.slug, "export_type": "all"})
+        url = reverse("club_member_export", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 403)
 
@@ -13587,13 +13587,56 @@ class ClubMemberUpdateTests(TestCase):
         owner_member = ClubMember.objects.get_or_create(club=self.club, user=self.owner)[0]
         owner_member.roles.add(role)
         self.client.login(username="cu_owner", password="testpass")
-        url = reverse("club_member_export", kwargs={"slug": self.club.slug, "export_type": "all"})
+        url = reverse("club_member_export", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response["Content-Type"], "text/csv")
         content = response.content.decode("utf-8")
         self.assertIn("First Name", content)
         self.assertIn("Jane", content)
+
+    def test_csv_export_respects_filter(self):
+        """Export with query filter only returns matching members"""
+        perm_export = ClubPermission.objects.get_or_create(
+            name="permission_export", defaults={"description": "Export"}
+        )[0]
+        role = ClubRole.objects.get_or_create(name="Exporter2")[0]
+        role.permissions.add(perm_export)
+        owner_member = ClubMember.objects.get_or_create(club=self.club, user=self.owner)[0]
+        owner_member.roles.add(role)
+        ClubMember.objects.create(club=self.club, first_name="Bob", last_name="Smith", email="bob@example.com")
+        self.client.login(username="cu_owner", password="testpass")
+        url = reverse("club_member_export", kwargs={"slug": self.club.slug})
+        response = self.client.get(url, {"query": "Jane"})
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode("utf-8")
+        self.assertIn("Jane", content)
+        self.assertNotIn("Bob", content)
+
+    def test_renew_membership_requires_permission(self):
+        """Non-admin user cannot renew membership"""
+        self.client.login(username="cu_other", password="testpass")
+        url = reverse("club_member_renew", kwargs={"pk": self.member.pk})
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_renew_membership_sets_today(self):
+        """Admin can renew membership and it sets membership_last_paid to today"""
+        perm_add_edit = ClubPermission.objects.get_or_create(
+            name="permission_add_edit", defaults={"description": "Add/edit"}
+        )[0]
+        role = ClubRole.objects.get_or_create(name="Renewer")[0]
+        role.permissions.add(perm_add_edit)
+        owner_member = ClubMember.objects.get_or_create(club=self.club, user=self.owner)[0]
+        owner_member.roles.add(role)
+        self.client.login(username="cu_owner", password="testpass")
+        url = reverse("club_member_renew", kwargs={"pk": self.member.pk})
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 204)
+        self.member.refresh_from_db()
+        from django.utils import timezone
+
+        self.assertEqual(self.member.membership_last_paid, timezone.now().date())
 
 
 class ClubAPITests(TestCase):

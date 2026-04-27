@@ -700,6 +700,11 @@ class ClubMember(ContactRecord):
             return self.email
         return f"Member #{self.pk}"
 
+    @property
+    def display_name(self):
+        """Name for display — always non-empty."""
+        return str(self)
+
     class Meta:
         ordering = ["last_name", "first_name"]
 

@@ -561,11 +561,12 @@ urlpatterns = [
     path("clubs/<slug:slug>/admin/history/", views.ClubHistoryView.as_view(), name="club_history"),
     path("clubs/<slug:slug>/admin/import/", views.ClubMemberCSVImportView.as_view(), name="club_member_import"),
     path(
-        "clubs/<slug:slug>/admin/export/<str:export_type>/",
+        "clubs/<slug:slug>/admin/export/",
         views.ClubMemberCSVExportView.as_view(),
         name="club_member_export",
     ),
     path("api/clubmember/<int:pk>/", views.ClubMemberAdminView.as_view(), name="clubmember_admin"),
+    path("api/clubmember/<int:pk>/renew/", views.ClubMemberRenewView.as_view(), name="club_member_renew"),
     path("api/clubmember/new/<slug:slug>/", views.ClubMemberCreateView.as_view(), name="clubmember_create"),
     path("api/clubmember-validation/<slug:slug>/", views.ClubMemberValidation.as_view(), name="clubmember_validation"),
     # REST API v1

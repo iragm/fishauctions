@@ -4,16 +4,25 @@
 
 {% block content %}
 <h3>{{ club.name }}</h3>
-{% if club.homepage %}
-<p><a href="{% if club.homepage|slice:':4' != 'http' %}https://{% endif %}{{ club.homepage }}" target="_blank" rel="noopener noreferrer"><i class="bi bi-house"></i> Website</a></p>
-{% endif %}
-{% if club.facebook_page %}
-<p><a href="{% if club.facebook_page|slice:':4' != 'http' %}https://{% endif %}{{ club.facebook_page }}" target="_blank" rel="noopener noreferrer"><i class="bi bi-facebook"></i> Facebook</a></p>
+
+{% if club.description %}
+<div class="mb-3">{{ club.description|safe }}</div>
 {% endif %}
 
-{% if is_club_admin %}
-<a href="{% url 'club_admin' club.slug %}" class="btn btn-sm btn-warning text-dark mb-3"><i class="bi bi-gear"></i> Admin panel</a>
-{% endif %}
+<div class="mb-3 d-flex flex-wrap gap-2 align-items-center">
+  {% if club.homepage %}
+  <a href="{% if club.homepage|slice:':4' != 'http' %}https://{% endif %}{{ club.homepage }}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-outline-secondary"><i class="bi bi-house"></i> Website</a>
+  {% endif %}
+  {% if club.facebook_page %}
+  <a href="{% if club.facebook_page|slice:':4' != 'http' %}https://{% endif %}{{ club.facebook_page }}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-outline-secondary"><i class="bi bi-facebook"></i> Facebook</a>
+  {% endif %}
+  {% if is_club_admin %}
+  <a href="{% url 'club_admin' club.slug %}" class="btn btn-sm btn-warning text-dark"><i class="bi bi-gear"></i> Admin panel</a>
+  {% endif %}
+  {% if can_edit_settings %}
+  <a href="{% url 'club_edit' club.slug %}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-sliders"></i> Settings</a>
+  {% endif %}
+</div>
 
 {% if member %}
   <div class="card mb-3">

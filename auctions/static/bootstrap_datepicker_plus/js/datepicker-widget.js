@@ -43,11 +43,15 @@
 
   document.addEventListener('DOMContentLoaded', function (event) {
     setTimeout(() => findAndProcessInputs(document));
-    document.addEventListener('DOMNodeInserted', function (event) {
-      setTimeout(() => {
-        if (event.target.querySelectorAll) findAndProcessInputs(event.target);
-      });
+    // Use MutationObserver to handle dynamically added content (e.g. HTMX modals)
+    const observer = new MutationObserver(function (mutations) {
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          if (node.querySelectorAll) setTimeout(() => findAndProcessInputs(node));
+        }
+      }
     });
+    observer.observe(document.body, { childList: true, subtree: true });
   });
 
   /**
@@ -55,7 +59,8 @@
    */
   function findAndProcessInputs(htmlElement) {
     /** @type {NodeListOf<HTMLInputElement>} */
-    const inputElements = htmlElement.querySelectorAll('[data-dbdp-config]:not([disabled])')
+    // Only process inputs that have not yet been initialized (still have their name attribute)
+    const inputElements = htmlElement.querySelectorAll('[data-dbdp-config][name]:not([disabled])')
     for (const inputElement of inputElements) {
       try {
         if (!jQuery) throw new DisplayError("You have to load jQuery before form.media");

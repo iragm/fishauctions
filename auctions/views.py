@@ -11343,7 +11343,10 @@ class ClubDetailView(LoginRequiredMixin, ClubViewMixin, TemplateView):
             context["hap_leaderboard"] = ClubMember.objects.filter(
                 club=self.club, is_deleted=False, hap_points__gt=0
             ).order_by("-hap_points")[:10]
-        context["is_club_admin"] = self.user_has_club_permission("permission_admin")
+        context["is_club_admin"] = self.user_has_club_permission("permission_admin") or self.user_has_club_permission(
+            "permission_view"
+        )
+        context["can_edit_settings"] = self.user_has_club_permission("permission_edit_club")
         return context
 
     def post(self, request, *args, **kwargs):
@@ -11410,6 +11413,11 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterV
         context["can_export"] = self.user_has_club_permission("permission_export")
         context["can_add_edit"] = self.user_has_club_permission("permission_add_edit")
         return context
+
+    def get_table_kwargs(self, **kwargs):
+        kwargs = super().get_table_kwargs(**kwargs)
+        kwargs["can_add_edit"] = self.user_has_club_permission("permission_add_edit")
+        return kwargs
 
 
 class ClubMemberValidation(ClubViewMixin, APIPostView):
@@ -11487,11 +11495,11 @@ class ClubMemberAdminView(APIView):
             member = ClubMember.objects.get(pk=pk)
         except ClubMember.DoesNotExist:
             raise Http404
-        if not check_club_permission(request.user, member.club, "permission_add_edit"):
+        if not check_club_permission(request.user, member.club, "permission_view"):
             raise PermissionDenied()
         return member
 
-    def _build_context(self, request, member, form):
+    def _build_context(self, request, member, form, read_only=False):
         validation_url = reverse("clubmember_validation", kwargs={"slug": member.club.slug})
         extra_script = self._get_validation_script(request, pk=member.pk, validation_url=validation_url)
         return {
@@ -11500,6 +11508,7 @@ class ClubMemberAdminView(APIView):
             "modal_title": str(member),
             "form": form,
             "extra_script": mark_safe(extra_script),
+            "read_only": read_only,
         }
 
     @staticmethod
@@ -11612,12 +11621,17 @@ $("#id_first_name, #id_last_name, #id_email").on("blur", cmValidateField);
 
     def get(self, request, pk):
         member = self._get_member_and_check_permission(request, pk)
-        post_url = reverse("clubmember_admin", kwargs={"pk": member.pk})
-        form = ClubMemberAdminForm(instance=member, post_url=post_url)
-        return render(request, "auctions/generic_admin_form.html", self._build_context(request, member, form))
+        read_only = not check_club_permission(request.user, member.club, "permission_add_edit")
+        post_url = None if read_only else reverse("clubmember_admin", kwargs={"pk": member.pk})
+        form = ClubMemberAdminForm(instance=member, post_url=post_url, read_only=read_only)
+        return render(
+            request, "auctions/generic_admin_form.html", self._build_context(request, member, form, read_only=read_only)
+        )
 
     def post(self, request, pk):
         member = self._get_member_and_check_permission(request, pk)
+        if not check_club_permission(request.user, member.club, "permission_add_edit"):
+            raise PermissionDenied()
         post_url = reverse("clubmember_admin", kwargs={"pk": member.pk})
         form = ClubMemberAdminForm(request.POST, instance=member, post_url=post_url)
         if form.is_valid():
@@ -11694,6 +11708,30 @@ class ClubMemberCreateView(APIView):
             "extra_script": mark_safe(extra_script),
         }
         return render(request, "auctions/generic_admin_form.html", context)
+
+
+class ClubMemberRenewView(APIView):
+    """Renew a club member's membership by setting membership_last_paid to today."""
+
+    authentication_classes = [TokenAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            member = ClubMember.objects.get(pk=pk)
+        except ClubMember.DoesNotExist:
+            raise Http404
+        if not check_club_permission(request.user, member.club, "permission_add_edit"):
+            raise PermissionDenied()
+        member.membership_last_paid = timezone.now().date()
+        member.save(update_fields=["membership_last_paid"])
+        ClubHistory.objects.create(
+            club=member.club,
+            user=request.user,
+            action=f"Renewed membership for {member}",
+            applies_to="MEMBERSHIP",
+        )
+        return HttpResponse(status=204, headers={"HX-Trigger": "clubMemberListChanged"})
 
 
 class ClubEditView(LoginRequiredMixin, ClubViewMixin, UpdateView):
@@ -11859,7 +11897,7 @@ class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubVie
 
 
 class ClubMemberCSVExportView(LoginRequiredMixin, ClubViewMixin, View):
-    """Export club members as CSV"""
+    """Export club members as CSV — applies the same filter query as the admin list view."""
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
@@ -11868,9 +11906,10 @@ class ClubMemberCSVExportView(LoginRequiredMixin, ClubViewMixin, View):
         return super().dispatch(request, *args, **kwargs)
 
     def get(self, request, *args, **kwargs):
-        export_type = kwargs.get("export_type", "all")
+        from .filters import ClubMemberFilter
+
         response = HttpResponse(content_type="text/csv")
-        response["Content-Disposition"] = f'attachment; filename="{self.club.slug}-members-{export_type}.csv"'
+        response["Content-Disposition"] = f'attachment; filename="{self.club.slug}-members.csv"'
         writer = csv.writer(response)
         writer.writerow(
             [
@@ -11889,23 +11928,9 @@ class ClubMemberCSVExportView(LoginRequiredMixin, ClubViewMixin, View):
                 "Memo",
             ]
         )
-        qs = ClubMember.objects.filter(club=self.club, is_deleted=False)
-        today = timezone.now().date()
-        if export_type == "current":
-            qs = qs.filter(membership_last_paid__isnull=False)
-            if self.club.membership_system == "rolling":
-                qs = qs.filter(membership_last_paid__gte=today - timedelta(days=365))
-            else:
-                qs = qs.filter(membership_last_paid__year=today.year)
-        elif export_type == "expired":
-            qs_paid = ClubMember.objects.filter(club=self.club, is_deleted=False, membership_last_paid__isnull=False)
-            if self.club.membership_system == "rolling":
-                qs_paid = qs_paid.exclude(membership_last_paid__gte=today - timedelta(days=365))
-            else:
-                qs_paid = qs_paid.exclude(membership_last_paid__year=today.year)
-            qs = qs_paid
-        elif export_type == "marketing":
-            qs = qs.exclude(contact_status="do_not_contact")
+        base_qs = ClubMember.objects.filter(club=self.club, is_deleted=False)
+        filterset = ClubMemberFilter(request.GET, queryset=base_qs)
+        qs = filterset.qs
         for member in qs:
             writer.writerow(
                 [
@@ -11924,10 +11949,11 @@ class ClubMemberCSVExportView(LoginRequiredMixin, ClubViewMixin, View):
                     member.memo,
                 ]
             )
+        query_desc = request.GET.get("query", "all")
         ClubHistory.objects.create(
             club=self.club,
             user=request.user,
-            action=f"Exported {export_type} member CSV",
+            action=f"Exported member CSV (filter: {query_desc})",
             applies_to="MEMBERS",
         )
         return response

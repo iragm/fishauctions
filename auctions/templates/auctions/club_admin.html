@@ -7,9 +7,6 @@
 <h3><i class="bi bi-people-fill"></i> {{ club.name }} &mdash; Members</h3>
 <div class="mb-3">
   <a href="{% url 'club_detail' club.slug %}" class="btn btn-sm btn-secondary"><i class="bi bi-arrow-left"></i> Back to club</a>
-  {% if can_edit %}
-  <a href="{% url 'club_edit' club.slug %}" class="btn btn-sm btn-warning text-dark"><i class="bi bi-gear"></i> Settings</a>
-  {% endif %}
   <a href="{% url 'club_history' club.slug %}" class="btn btn-sm btn-info"><i class="bi bi-clock-history"></i> History</a>
 
   {% if can_add_edit %}
@@ -37,25 +34,17 @@
   {% endif %}
 
   {% if can_export %}
-  <div class="dropdown d-inline">
-    <button class="btn btn-sm btn-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
-      <i class="bi bi-download"></i> Export
-    </button>
-    <ul class="dropdown-menu">
-      <li><a class="dropdown-item" href="{% url 'club_member_export' club.slug 'current' %}">Current members</a></li>
-      <li><a class="dropdown-item" href="{% url 'club_member_export' club.slug 'expired' %}">Expired members</a></li>
-      <li><a class="dropdown-item" href="{% url 'club_member_export' club.slug 'marketing' %}">Marketing list</a></li>
-      <li><a class="dropdown-item" href="{% url 'club_member_export' club.slug 'all' %}">All members</a></li>
-    </ul>
-  </div>
+  <a id="export-btn" class="btn btn-sm btn-secondary" href="{% url 'club_member_export' club.slug %}">
+    <i class="bi bi-download"></i> Export current view
+  </a>
+  {% endif %}
+
+  {% if can_edit %}
+  <a href="{% url 'club_edit' club.slug %}" class="btn btn-sm btn-warning text-dark"><i class="bi bi-gear"></i> Settings</a>
   {% endif %}
 </div>
 
-<div class="mb-2">
-  <small class="text-muted">Click a name to edit. Filter by name, email, or type <code>discord</code>, <code>current</code>, or <code>expired</code> to filter by source/status.</small>
-</div>
-
-<form class="col-sm-12 mt-2">
+<form id="filter-form" class="col-sm-12 mt-2" method="get">
   {% crispy filter.form %}
 </form>
 
@@ -67,5 +56,21 @@
 </div>
 
 <div id="modals-here"></div>
+
+<script>
+// Keep the export URL in sync with the current filter query
+(function () {
+  var filterInput = document.querySelector('[name="query"]');
+  var exportBtn = document.getElementById('export-btn');
+  if (!filterInput || !exportBtn) return;
+  var baseExportUrl = exportBtn.href.split('?')[0];
+  function updateExportUrl() {
+    var q = filterInput.value;
+    exportBtn.href = q ? baseExportUrl + '?query=' + encodeURIComponent(q) : baseExportUrl;
+  }
+  filterInput.addEventListener('input', updateExportUrl);
+  updateExportUrl();
+})();
+</script>
 
 {% endblock %}

@@ -390,7 +390,7 @@ class LotHTMxTableForUsers(tables.Table):
 
 class ClubMemberHTMxTable(tables.Table):
     hide_string = "d-md-table-cell d-none"
-    name = tables.Column(accessor="__str__", verbose_name="Name", orderable=False)
+    name = tables.Column(accessor="display_name", verbose_name="Name", orderable=False, empty_values=())
     email = tables.Column(accessor="email", verbose_name="Email", orderable=True)
     bap_points = tables.Column(
         accessor="bap_points",
@@ -410,25 +410,50 @@ class ClubMemberHTMxTable(tables.Table):
         orderable=True,
         attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}},
     )
+    actions = tables.Column(
+        accessor="pk",
+        verbose_name="",
+        orderable=False,
+    )
 
     def render_name(self, value, record):
-        name = str(record)
+        name = record.display_name
         url = reverse("clubmember_admin", kwargs={"pk": record.pk})
-        result = f"<a href='' hx-get='{url}' hx-target='#modals-here' hx-trigger='click'>"
-        result += f"<i class='bi bi-person-fill-gear me-1'></i>{name}</a>"
+        can_edit = self.can_add_edit
+        if can_edit:
+            result = f"<a href='' hx-get='{url}' hx-target='#modals-here' hx-trigger='click'>"
+            result += f"<i class='bi bi-person-fill-gear me-1'></i>{name}</a>"
+        else:
+            result = f"<a href='' hx-get='{url}' hx-target='#modals-here' hx-trigger='click'>"
+            result += f"<i class='bi bi-person-fill me-1'></i>{name}</a>"
         if record.email_address_status == "BAD":
             result += "<i class='bi bi-envelope-exclamation-fill text-danger ms-1' title='Unable to send email to this address'></i>"
         if record.email_address_status == "VALID":
             result += "<i class='bi bi-envelope-check-fill ms-1' title='Verified email'></i>"
         return mark_safe(result)
 
+    def render_actions(self, value, record):
+        renew_url = reverse("club_member_renew", kwargs={"pk": record.pk})
+        result = f"""<div class="dropdown">
+  <button type="button" class="btn btn-sm btn-secondary dropdown-toggle" data-bs-toggle="dropdown">Actions</button>
+  <ul class="dropdown-menu">
+    <li><a class="dropdown-item" href="#"
+      hx-post="{renew_url}"
+      hx-target="#modals-here"
+      hx-confirm="Mark membership as paid today?">
+      <i class="bi bi-calendar-check me-1"></i>Renew membership</a></li>
+  </ul>
+</div>"""
+        return mark_safe(result)
+
     class Meta:
         model = ClubMember
         template_name = "tables/bootstrap_htmx.html"
-        fields = ("name", "email", "bap_points", "hap_points", "source")
+        fields = ("name", "email", "bap_points", "hap_points", "source", "actions")
 
     def __init__(self, *args, **kwargs):
         self.request = kwargs.pop("request", None)
+        self.can_add_edit = kwargs.pop("can_add_edit", False)
         super().__init__(*args, **kwargs)
 
 
