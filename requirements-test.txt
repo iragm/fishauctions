@@ -8,7 +8,7 @@ attrs==26.1.0
     # via
     #   outcome
     #   trio
-certifi==2026.2.25
+certifi==2026.4.22
     # via selenium
 cfgv==3.5.0
     # via pre-commit
@@ -22,7 +22,7 @@ h11==0.16.0
     # via wsproto
 identify==2.6.19
     # via pre-commit
-idna==3.11
+idna==3.13
     # via trio
 nodeenv==1.10.0
     # via pre-commit
@@ -34,7 +34,7 @@ platformdirs==4.9.6
     # via
     #   python-discovery
     #   virtualenv
-pre-commit==4.5.1
+pre-commit==4.6.0
     # via -r requirements-test.in
 pysocks==1.7.1
     # via urllib3
@@ -42,7 +42,7 @@ python-discovery==1.2.2
     # via virtualenv
 pyyaml==6.0.3
     # via pre-commit
-ruff==0.15.11
+ruff==0.15.12
     # via -r requirements-test.in
 selenium==4.43.0
     # via -r requirements-test.in
