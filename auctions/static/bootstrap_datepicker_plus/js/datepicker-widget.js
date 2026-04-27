@@ -59,7 +59,9 @@
    */
   function findAndProcessInputs(htmlElement) {
     /** @type {NodeListOf<HTMLInputElement>} */
-    // Only process inputs that have not yet been initialized (still have their name attribute)
+    // Select only inputs that still have their `name` attribute — after processInputElement runs,
+    // it moves the name to a hidden input and sets data-name on the visible input, so already-
+    // initialized inputs no longer match [name] and won't be double-processed.
     const inputElements = htmlElement.querySelectorAll('[data-dbdp-config][name]:not([disabled])')
     for (const inputElement of inputElements) {
       try {

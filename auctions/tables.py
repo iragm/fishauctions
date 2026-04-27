@@ -433,9 +433,12 @@ class ClubMemberHTMxTable(tables.Table):
         return mark_safe(result)
 
     def render_actions(self, value, record):
+        if not self.can_add_edit:
+            return ""
+        name = record.display_name
         renew_url = reverse("club_member_renew", kwargs={"pk": record.pk})
         result = f"""<div class="dropdown">
-  <button type="button" class="btn btn-sm btn-secondary dropdown-toggle" data-bs-toggle="dropdown">Actions</button>
+  <button type="button" class="btn btn-sm btn-secondary dropdown-toggle" data-bs-toggle="dropdown" aria-label="Actions for {name}">Actions</button>
   <ul class="dropdown-menu">
     <li><a class="dropdown-item" href="#"
       hx-post="{renew_url}"

@@ -60,12 +60,12 @@
 <script>
 // Keep the export URL in sync with the current filter query
 (function () {
-  var filterInput = document.querySelector('[name="query"]');
-  var exportBtn = document.getElementById('export-btn');
+  const filterInput = document.querySelector('[name="query"]');
+  const exportBtn = document.getElementById('export-btn');
   if (!filterInput || !exportBtn) return;
-  var baseExportUrl = exportBtn.href.split('?')[0];
+  const baseExportUrl = exportBtn.href.split('?')[0];
   function updateExportUrl() {
-    var q = filterInput.value;
+    const q = filterInput.value;
     exportBtn.href = q ? baseExportUrl + '?query=' + encodeURIComponent(q) : baseExportUrl;
   }
   filterInput.addEventListener('input', updateExportUrl);

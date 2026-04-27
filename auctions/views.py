@@ -11343,9 +11343,9 @@ class ClubDetailView(LoginRequiredMixin, ClubViewMixin, TemplateView):
             context["hap_leaderboard"] = ClubMember.objects.filter(
                 club=self.club, is_deleted=False, hap_points__gt=0
             ).order_by("-hap_points")[:10]
-        context["is_club_admin"] = self.user_has_club_permission("permission_admin") or self.user_has_club_permission(
-            "permission_view"
-        )
+        context["can_access_admin"] = self.user_has_club_permission(
+            "permission_admin"
+        ) or self.user_has_club_permission("permission_view")
         context["can_edit_settings"] = self.user_has_club_permission("permission_edit_club")
         return context
 
@@ -11949,11 +11949,11 @@ class ClubMemberCSVExportView(LoginRequiredMixin, ClubViewMixin, View):
                     member.memo,
                 ]
             )
-        query_desc = request.GET.get("query", "all")
+        query_filter = request.GET.get("query", "all")
         ClubHistory.objects.create(
             club=self.club,
             user=request.user,
-            action=f"Exported member CSV (filter: {query_desc})",
+            action=f"Exported member CSV (filter: {query_filter})",
             applies_to="MEMBERS",
         )
         return response

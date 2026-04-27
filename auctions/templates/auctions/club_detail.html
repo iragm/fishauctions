@@ -16,7 +16,7 @@
   {% if club.facebook_page %}
   <a href="{% if club.facebook_page|slice:':4' != 'http' %}https://{% endif %}{{ club.facebook_page }}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-outline-secondary"><i class="bi bi-facebook"></i> Facebook</a>
   {% endif %}
-  {% if is_club_admin %}
+  {% if can_access_admin %}
   <a href="{% url 'club_admin' club.slug %}" class="btn btn-sm btn-warning text-dark"><i class="bi bi-gear"></i> Admin panel</a>
   {% endif %}
   {% if can_edit_settings %}
