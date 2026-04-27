@@ -9028,7 +9028,7 @@ class ClubMap(AdminEmailMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
-        context["clubs"] = Club.objects.filter(active=True, latitude__isnull=False)
+        context["clubs"] = Club.objects.filter(active=True, latitude__isnull=False, enable_club_page=True)
         context["location_message"] = "Set your location to see clubs near you"
         latitude_cookie = self.request.COOKIES.get("latitude")
         longitude_cookie = self.request.COOKIES.get("longitude")
@@ -11321,6 +11321,18 @@ class ClubDetailView(LoginRequiredMixin, ClubViewMixin, TemplateView):
     template_name = "auctions/club_detail.html"
     allow_non_admins = True
 
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        # Check enable_club_page only for authenticated non-admin users;
+        # unauthenticated users are handled by LoginRequiredMixin (redirect to login)
+        if request.user.is_authenticated:
+            has_admin_access = self.user_has_club_permission("permission_view") or self.user_has_club_permission(
+                "permission_admin"
+            )
+            if not self.club.enable_club_page and not has_admin_access:
+                raise Http404
+        return super().dispatch(request, *args, **kwargs)
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["club"] = self.club
@@ -11644,8 +11656,8 @@ $("#id_first_name, #id_last_name, #id_email").on("blur", cmValidateField);
             )
             messages.success(request, f"{saved} updated.")
             return HttpResponse(
-                status=204,
-                headers={"HX-Trigger": "clubMemberListChanged"},
+                "<script>closeModal(); htmx.trigger(document.body, 'clubMemberListChanged');</script>",
+                status=200,
             )
         return render(request, "auctions/generic_admin_form.html", self._build_context(request, member, form))
 
@@ -11695,8 +11707,8 @@ class ClubMemberCreateView(APIView):
             )
             messages.success(request, f"{member} added to {club.name}.")
             return HttpResponse(
-                status=204,
-                headers={"HX-Trigger": "clubMemberListChanged"},
+                "<script>closeModal(); htmx.trigger(document.body, 'clubMemberListChanged');</script>",
+                status=200,
             )
         extra_script = ClubMemberAdminView._get_validation_script(
             request, pk=None, validation_url=reverse("clubmember_validation", kwargs={"slug": slug})
@@ -11734,6 +11746,30 @@ class ClubMemberRenewView(APIView):
         return HttpResponse(status=204, headers={"HX-Trigger": "clubMemberListChanged"})
 
 
+class ClubMemberDeleteView(APIView):
+    """Soft-delete a club member."""
+
+    authentication_classes = [TokenAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            member = ClubMember.objects.get(pk=pk)
+        except ClubMember.DoesNotExist:
+            raise Http404
+        if not check_club_permission(request.user, member.club, "permission_add_edit"):
+            raise PermissionDenied()
+        member.is_deleted = True
+        member.save(update_fields=["is_deleted"])
+        ClubHistory.objects.create(
+            club=member.club,
+            user=request.user,
+            action=f"Removed member {member}",
+            applies_to="MEMBERS",
+        )
+        return HttpResponse(status=204, headers={"HX-Trigger": "clubMemberListChanged"})
+
+
 class ClubEditView(LoginRequiredMixin, ClubViewMixin, UpdateView):
     """Edit club info"""
 
@@ -11751,11 +11787,16 @@ class ClubEditView(LoginRequiredMixin, ClubViewMixin, UpdateView):
 
     def get_success_url(self):
         messages.success(self.request, "Club settings saved.")
-        return reverse("club_edit", kwargs={"slug": self.object.slug})
+        # Honour ?next= if present in POST or GET
+        next_url = self.request.POST.get("next") or self.request.GET.get("next")
+        if next_url:
+            return next_url
+        return reverse("club_detail", kwargs={"slug": self.object.slug})
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["club"] = self.club
+        context["next_url"] = self.request.GET.get("next", "")
         return context
 
     def form_valid(self, form):

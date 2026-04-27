@@ -13460,8 +13460,26 @@ class ClubViewTests(TestCase):
         self.assertEqual(response.status_code, 403)
 
     def test_club_detail_non_member_can_view(self):
-        """Non-member authenticated user can view club detail page"""
+        """Non-member authenticated user can view club detail page when enable_club_page=True"""
+        self.club.enable_club_page = True
+        self.club.save()
         self.client.login(username="other2", password="testpass")
+        url = reverse("club_detail", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_club_detail_disabled_returns_404(self):
+        """Non-admin user gets 404 when enable_club_page=False"""
+        self.assertFalse(self.club.enable_club_page)
+        self.client.login(username="other2", password="testpass")
+        url = reverse("club_detail", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
+
+    def test_club_detail_disabled_admin_can_view(self):
+        """Club admin can always view the club page even when enable_club_page=False"""
+        self.assertFalse(self.club.enable_club_page)
+        self.client.login(username="club_owner2", password="testpass")
         url = reverse("club_detail", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
@@ -13502,7 +13520,9 @@ class ClubMemberUpdateTests(TestCase):
         self.other_user = User.objects.create_user(
             username="cu_other", password="testpass", email="cu_other@example.com"
         )
-        self.club = Club.objects.create(name="Update Test Club", owner=self.owner, allow_joining=True)
+        self.club = Club.objects.create(
+            name="Update Test Club", owner=self.owner, allow_joining=True, enable_club_page=True
+        )
         self.member = ClubMember.objects.create(
             club=self.club, user=self.member_user, first_name="Jane", last_name="Doe", email="cu_member@example.com"
         )
@@ -13637,6 +13657,29 @@ class ClubMemberUpdateTests(TestCase):
         from django.utils import timezone
 
         self.assertEqual(self.member.membership_last_paid, timezone.now().date())
+
+    def test_delete_member_requires_permission(self):
+        """Non-admin user cannot delete a club member"""
+        self.client.login(username="cu_other", password="testpass")
+        url = reverse("club_member_delete", kwargs={"pk": self.member.pk})
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_delete_member_soft_deletes(self):
+        """Admin can soft-delete a club member"""
+        perm_add_edit = ClubPermission.objects.get_or_create(
+            name="permission_add_edit", defaults={"description": "Add/edit"}
+        )[0]
+        role = ClubRole.objects.get_or_create(name="Deleter")[0]
+        role.permissions.add(perm_add_edit)
+        owner_member = ClubMember.objects.get_or_create(club=self.club, user=self.owner)[0]
+        owner_member.roles.add(role)
+        self.client.login(username="cu_owner", password="testpass")
+        url = reverse("club_member_delete", kwargs={"pk": self.member.pk})
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 204)
+        self.member.refresh_from_db()
+        self.assertTrue(self.member.is_deleted)
 
 
 class ClubAPITests(TestCase):

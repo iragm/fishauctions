@@ -568,6 +568,11 @@ class Club(models.Model):
     allow_joining = models.BooleanField(default=False)
     allow_integrated_payments = models.BooleanField(default=False)
     description = models.TextField(verbose_name="About this club", default="", blank=True)
+    enable_club_page = models.BooleanField(
+        default=False,
+        verbose_name="Enable public club page",
+        help_text="When enabled, this club will appear on the club map and have a public detail page.",
+    )
 
     class Meta:
         ordering = ["name"]

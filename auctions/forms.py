@@ -3390,8 +3390,10 @@ class ClubEditForm(forms.ModelForm):
             "allow_integrated_payments",
             "discord_server_id",
             "description",
+            "enable_club_page",
         ]
         help_texts = {
+            "name": "Changing this will change the URL for your club's page.",
             "membership_system": (
                 "January 1st: all memberships expire on Jan 1 each year. "
                 "Rolling: memberships expire one year from the payment date."

@@ -437,6 +437,7 @@ class ClubMemberHTMxTable(tables.Table):
             return ""
         name = record.display_name
         renew_url = reverse("club_member_renew", kwargs={"pk": record.pk})
+        delete_url = reverse("club_member_delete", kwargs={"pk": record.pk})
         result = f"""<div class="dropdown">
   <button type="button" class="btn btn-sm btn-secondary dropdown-toggle" data-bs-toggle="dropdown" aria-label="Actions for {name}">Actions</button>
   <ul class="dropdown-menu">
@@ -445,6 +446,13 @@ class ClubMemberHTMxTable(tables.Table):
       hx-target="#modals-here"
       hx-confirm="Mark membership as paid today?">
       <i class="bi bi-calendar-check me-1"></i>Renew membership</a></li>
+    <li><hr class="dropdown-divider"></li>
+    <li><a class="dropdown-item text-danger" href="#"
+      hx-post="{delete_url}"
+      hx-confirm="Remove {name} from this club? This cannot be undone."
+      hx-target="closest tr"
+      hx-swap="outerHTML">
+      <i class="bi bi-person-dash me-1"></i>Remove member</a></li>
   </ul>
 </div>"""
         return mark_safe(result)
