@@ -54,8 +54,8 @@
     observer.observe(document.body, { childList: true, subtree: true });
   }
 
-  // If DOMContentLoaded has already fired (e.g. script loaded via HTMX into a modal),
-  // run immediately; otherwise wait for it.
+  // If DOMContentLoaded has already fired (e.g., script loaded via HTMX into a modal),
+  // run immediately; otherwise, wait for it.
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initDatepickerObserver);
   } else {

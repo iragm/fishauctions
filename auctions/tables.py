@@ -449,7 +449,7 @@ class ClubMemberHTMxTable(tables.Table):
     <li><hr class="dropdown-divider"></li>
     <li><a class="dropdown-item text-danger" href="#"
       hx-post="{delete_url}"
-      hx-confirm="Remove {name} from this club? This cannot be undone."
+      hx-confirm="Remove {name} from this club?"
       hx-target="closest tr"
       hx-swap="outerHTML">
       <i class="bi bi-person-dash me-1"></i>Remove member</a></li>
