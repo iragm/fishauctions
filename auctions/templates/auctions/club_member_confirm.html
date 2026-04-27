@@ -24,10 +24,13 @@ function closeModal() {
   var backdrop = document.getElementById("modal-backdrop");
   var modal = document.getElementById("modal");
   if (modal) modal.classList.remove("show");
-  if (backdrop) backdrop.classList.remove("show");
+  if (backdrop) {
+    backdrop.classList.remove("show");
+    backdrop.style.pointerEvents = "none";
+  }
   setTimeout(function() {
-    if (container && backdrop) container.removeChild(backdrop);
-    if (container && modal) container.removeChild(modal);
+    if (container && backdrop && backdrop.parentNode === container) container.removeChild(backdrop);
+    if (container && modal && modal.parentNode === container) container.removeChild(modal);
   }, 200);
 }
 </script>

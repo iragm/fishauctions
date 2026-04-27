@@ -13358,11 +13358,19 @@ class ClubViewTests(TestCase):
         self.owner_member.roles.add(self.admin_role)
 
     def test_club_detail_requires_login(self):
-        """Anonymous user should be redirected to login"""
+        """Anonymous user gets 404 when enable_club_page=False (default)"""
+        self.assertFalse(self.club.enable_club_page)
         url = reverse("club_detail", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
-        self.assertIn(response.status_code, [302, 301])
-        self.assertIn("/login", response["Location"])
+        self.assertEqual(response.status_code, 404)
+
+    def test_club_detail_anonymous_can_view_when_enabled(self):
+        """Anonymous user can view club detail page when enable_club_page=True"""
+        self.club.enable_club_page = True
+        self.club.save()
+        url = reverse("club_detail", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
 
     def test_club_admin_requires_login(self):
         """Anonymous user should be redirected or blocked"""

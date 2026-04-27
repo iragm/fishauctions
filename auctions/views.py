@@ -25,6 +25,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.models import User
+from django.contrib.auth.views import redirect_to_login
 from django.contrib.messages.views import SuccessMessageMixin
 from django.contrib.sites.models import Site
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
@@ -11315,7 +11316,7 @@ class QuickCheckoutHTMX(AuctionViewMixin, PayPalAPIMixin, SquareAPIMixin, Templa
 
 
 # Club management views
-class ClubDetailView(LoginRequiredMixin, ClubViewMixin, TemplateView):
+class ClubDetailView(ClubViewMixin, TemplateView):
     """User self-service page for a club"""
 
     template_name = "auctions/club_detail.html"
@@ -11323,13 +11324,12 @@ class ClubDetailView(LoginRequiredMixin, ClubViewMixin, TemplateView):
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
-        # Check enable_club_page only for authenticated non-admin users;
-        # unauthenticated users are handled by LoginRequiredMixin (redirect to login)
-        if request.user.is_authenticated:
-            has_admin_access = self.user_has_club_permission("permission_view") or self.user_has_club_permission(
-                "permission_admin"
+        if not self.club.enable_club_page:
+            # Page is disabled — only users with club roles may view it; everyone else gets 404
+            has_admin_access = request.user.is_authenticated and (
+                self.user_has_club_permission("permission_view") or self.user_has_club_permission("permission_admin")
             )
-            if not self.club.enable_club_page and not has_admin_access:
+            if not has_admin_access:
                 raise Http404
         return super().dispatch(request, *args, **kwargs)
 
@@ -11362,6 +11362,8 @@ class ClubDetailView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         return context
 
     def post(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return redirect_to_login(request.get_full_path())
         action = request.POST.get("action", "join")
         if action == "update":
             member = ClubMember.objects.filter(club=self.club, user=request.user, is_deleted=False).first()
@@ -11655,9 +11657,7 @@ $("#id_first_name, #id_last_name, #id_email").on("blur", cmValidateField);
                 applies_to="MEMBERS",
             )
             messages.success(request, f"{saved} updated.")
-            response = HttpResponse("<script>closeModal();</script>", status=200)
-            response["HX-Trigger"] = "clubMemberListChanged"
-            return response
+            return HttpResponse("", headers={"HX-Trigger": "clubMemberListChanged"})
         return render(request, "auctions/generic_admin_form.html", self._build_context(request, member, form))
 
 
@@ -11705,9 +11705,7 @@ class ClubMemberCreateView(APIView):
                 applies_to="MEMBERS",
             )
             messages.success(request, f"{member} added to {club.name}.")
-            response = HttpResponse("<script>closeModal();</script>", status=200)
-            response["HX-Trigger"] = "clubMemberListChanged"
-            return response
+            return HttpResponse("", headers={"HX-Trigger": "clubMemberListChanged"})
         extra_script = ClubMemberAdminView._get_validation_script(
             request, pk=None, validation_url=reverse("clubmember_validation", kwargs={"slug": slug})
         )

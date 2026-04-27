@@ -420,14 +420,14 @@ class ClubMemberHTMxTable(tables.Table):
         url = reverse("clubmember_admin", kwargs={"pk": record.pk})
         can_edit = self.can_add_edit
         if can_edit:
-            result = f"<a href='#' hx-get='{url}' hx-target='#modals-here' hx-trigger='click' onclick='return false;'>"
+            result = f"<a href='' hx-get='{url}' hx-target='#modals-here' hx-trigger='click'>"
             if record.possible_duplicate_id:
                 result += "<i class='text-warning bi bi-people-fill me-1' title='This member may be a duplicate'></i>"
             else:
                 result += "<i class='bi bi-person-fill-gear me-1'></i>"
             result += f"{name}</a>"
         else:
-            result = f"<a href='#' hx-get='{url}' hx-target='#modals-here' hx-trigger='click' onclick='return false;'>"
+            result = f"<a href='' hx-get='{url}' hx-target='#modals-here' hx-trigger='click'>"
             result += f"<i class='bi bi-person-fill me-1'></i>{name}</a>"
         if record.email_address_status == "BAD":
             result += "<i class='bi bi-envelope-exclamation-fill text-danger ms-1' title='Unable to send email to this address'></i>"
