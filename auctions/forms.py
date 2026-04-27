@@ -7,7 +7,6 @@ from allauth.account.forms import ResetPasswordForm, SignupForm
 
 # from bootstrap_datepicker_plus import DateTimePickerInput
 from bootstrap_datepicker_plus.widgets import (
-    DatePickerInput,
     DateTimePickerInput,
 )  # https://github.com/monim67/django-bootstrap-datepicker-plus/issues/66
 from crispy_forms.bootstrap import Div, Field, PrependedAppendedText
@@ -3437,7 +3436,6 @@ class ClubMemberAdminForm(forms.ModelForm):
             "contact_status",
             "bap_points",
             "hap_points",
-            "membership_last_paid",
             "roles",
         ]
         widgets = {
@@ -3446,7 +3444,6 @@ class ClubMemberAdminForm(forms.ModelForm):
             "email": forms.EmailInput(attrs={"placeholder": "email@example.com"}),
             "phone_number": forms.TextInput(attrs={"placeholder": "(555) 555-1234"}),
             "address": forms.TextInput(attrs={"placeholder": "123 Main St, City, State"}),
-            "membership_last_paid": DatePickerInput(),
         }
         help_texts = {
             "contact_status": (
@@ -3456,7 +3453,6 @@ class ClubMemberAdminForm(forms.ModelForm):
             ),
             "bap_points": "Breeders Award Program points accumulated by this member.",
             "hap_points": "Horticultural Award Program points accumulated by this member.",
-            "membership_last_paid": "Date of the most recent membership payment.",
         }
 
     def __init__(self, *args, post_url=None, read_only=False, **kwargs):
@@ -3475,7 +3471,6 @@ class ClubMemberAdminForm(forms.ModelForm):
                 "contact_status",
                 "bap_points",
                 "hap_points",
-                "membership_last_paid",
                 "roles",
                 Div(
                     HTML('<button type="button" class="btn btn-secondary" onclick="closeModal()">Close</button>'),
@@ -3492,7 +3487,6 @@ class ClubMemberAdminForm(forms.ModelForm):
                 "contact_status",
                 "bap_points",
                 "hap_points",
-                "membership_last_paid",
                 "roles",
                 Div(
                     HTML('<button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>'),

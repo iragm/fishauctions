@@ -391,7 +391,6 @@ class LotHTMxTableForUsers(tables.Table):
 class ClubMemberHTMxTable(tables.Table):
     hide_string = "d-md-table-cell d-none"
     name = tables.Column(accessor="display_name", verbose_name="Name", orderable=False, empty_values=())
-    email = tables.Column(accessor="email", verbose_name="Email", orderable=True)
     bap_points = tables.Column(
         accessor="bap_points",
         verbose_name="BAP",
@@ -421,10 +420,14 @@ class ClubMemberHTMxTable(tables.Table):
         url = reverse("clubmember_admin", kwargs={"pk": record.pk})
         can_edit = self.can_add_edit
         if can_edit:
-            result = f"<a href='' hx-get='{url}' hx-target='#modals-here' hx-trigger='click'>"
-            result += f"<i class='bi bi-person-fill-gear me-1'></i>{name}</a>"
+            result = f"<a href='#' hx-get='{url}' hx-target='#modals-here' hx-trigger='click' onclick='return false;'>"
+            if record.possible_duplicate_id:
+                result += "<i class='text-warning bi bi-people-fill me-1' title='This member may be a duplicate'></i>"
+            else:
+                result += "<i class='bi bi-person-fill-gear me-1'></i>"
+            result += f"{name}</a>"
         else:
-            result = f"<a href='' hx-get='{url}' hx-target='#modals-here' hx-trigger='click'>"
+            result = f"<a href='#' hx-get='{url}' hx-target='#modals-here' hx-trigger='click' onclick='return false;'>"
             result += f"<i class='bi bi-person-fill me-1'></i>{name}</a>"
         if record.email_address_status == "BAD":
             result += "<i class='bi bi-envelope-exclamation-fill text-danger ms-1' title='Unable to send email to this address'></i>"
@@ -436,22 +439,22 @@ class ClubMemberHTMxTable(tables.Table):
         if not self.can_add_edit:
             return ""
         name = record.display_name
-        renew_url = reverse("club_member_renew", kwargs={"pk": record.pk})
-        delete_url = reverse("club_member_delete", kwargs={"pk": record.pk})
+        renew_url = reverse("club_member_renew_page", kwargs={"slug": record.club.slug, "pk": record.pk})
+        confirm_delete_url = reverse("club_member_confirm", kwargs={"pk": record.pk, "action": "delete"})
+        merge_url = reverse("club_member_merge", kwargs={"slug": record.club.slug, "pk": record.pk})
+        email_item = ""
+        if record.email:
+            email_item = f"""<li><a class="dropdown-item" href="mailto:{record.email}"><i class="bi bi-envelope me-1"></i>Email</a></li>"""
         result = f"""<div class="dropdown">
   <button type="button" class="btn btn-sm btn-secondary dropdown-toggle" data-bs-toggle="dropdown" aria-label="Actions for {name}">Actions</button>
   <ul class="dropdown-menu">
-    <li><a class="dropdown-item" href="#"
-      hx-post="{renew_url}"
-      hx-target="#modals-here"
-      hx-confirm="Mark membership as paid today?">
-      <i class="bi bi-calendar-check me-1"></i>Renew membership</a></li>
+    <li><a class="dropdown-item" href="{renew_url}"><i class="bi bi-calendar-check me-1"></i>Renew membership</a></li>
+    <li><a class="dropdown-item" href="{merge_url}"><i class="bi bi-people me-1"></i>Merge with...</a></li>
+    {email_item}
     <li><hr class="dropdown-divider"></li>
     <li><a class="dropdown-item text-danger" href="#"
-      hx-post="{delete_url}"
-      hx-confirm="Remove {name} from this club?"
-      hx-target="closest tr"
-      hx-swap="outerHTML">
+      hx-get="{confirm_delete_url}"
+      hx-target="#modals-here">
       <i class="bi bi-person-dash me-1"></i>Remove member</a></li>
   </ul>
 </div>"""
@@ -460,7 +463,7 @@ class ClubMemberHTMxTable(tables.Table):
     class Meta:
         model = ClubMember
         template_name = "tables/bootstrap_htmx.html"
-        fields = ("name", "email", "bap_points", "hap_points", "source", "actions")
+        fields = ("name", "bap_points", "hap_points", "source", "actions")
 
     def __init__(self, *args, **kwargs):
         self.request = kwargs.pop("request", None)

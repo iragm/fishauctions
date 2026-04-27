@@ -11655,10 +11655,9 @@ $("#id_first_name, #id_last_name, #id_email").on("blur", cmValidateField);
                 applies_to="MEMBERS",
             )
             messages.success(request, f"{saved} updated.")
-            return HttpResponse(
-                "<script>closeModal(); htmx.trigger(document.body, 'clubMemberListChanged');</script>",
-                status=200,
-            )
+            response = HttpResponse("<script>closeModal();</script>", status=200)
+            response["HX-Trigger"] = "clubMemberListChanged"
+            return response
         return render(request, "auctions/generic_admin_form.html", self._build_context(request, member, form))
 
 
@@ -11706,10 +11705,9 @@ class ClubMemberCreateView(APIView):
                 applies_to="MEMBERS",
             )
             messages.success(request, f"{member} added to {club.name}.")
-            return HttpResponse(
-                "<script>closeModal(); htmx.trigger(document.body, 'clubMemberListChanged');</script>",
-                status=200,
-            )
+            response = HttpResponse("<script>closeModal();</script>", status=200)
+            response["HX-Trigger"] = "clubMemberListChanged"
+            return response
         extra_script = ClubMemberAdminView._get_validation_script(
             request, pk=None, validation_url=reverse("clubmember_validation", kwargs={"slug": slug})
         )
@@ -11768,6 +11766,141 @@ class ClubMemberDeleteView(APIView):
             applies_to="MEMBERS",
         )
         return HttpResponse(status=204, headers={"HX-Trigger": "clubMemberListChanged"})
+
+
+class ClubMemberConfirmView(APIView):
+    """Show a Bootstrap modal asking the user to confirm a destructive action (e.g. delete)."""
+
+    authentication_classes = [TokenAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk, action):
+        try:
+            member = ClubMember.objects.get(pk=pk)
+        except ClubMember.DoesNotExist:
+            raise Http404
+        if not check_club_permission(request.user, member.club, "permission_add_edit"):
+            raise PermissionDenied()
+        if action == "delete":
+            title = "Remove member"
+            body = f"Remove {member} from this club?"
+            action_url = reverse("club_member_delete", kwargs={"pk": pk})
+        else:
+            raise Http404
+        context = {
+            "title": title,
+            "body": body,
+            "action_url": action_url,
+        }
+        return render(request, "auctions/club_member_confirm.html", context)
+
+
+class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
+    """Dedicated page for renewing a club member's membership."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_add_edit"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def _get_member(self, pk):
+        member = get_object_or_404(ClubMember, pk=pk, club=self.club, is_deleted=False)
+        return member
+
+    def get(self, request, slug, pk):
+        member = self._get_member(pk)
+        default_date = timezone.now().date()
+        context = {
+            "club": self.club,
+            "member": member,
+            "default_date": default_date,
+        }
+        return render(request, "auctions/club_member_renew_page.html", context)
+
+    def post(self, request, slug, pk):
+        member = self._get_member(pk)
+        paid_date_str = request.POST.get("membership_last_paid", "")
+        try:
+            paid_date = datetime.strptime(paid_date_str, "%Y-%m-%d").replace(tzinfo=date_tz.utc).date()
+        except (ValueError, TypeError):
+            paid_date = timezone.now().date()
+        member.membership_last_paid = paid_date
+        member.save(update_fields=["membership_last_paid"])
+        ClubHistory.objects.create(
+            club=self.club,
+            user=request.user,
+            action=f"Renewed membership for {member} (paid {paid_date})",
+            applies_to="MEMBERSHIP",
+        )
+        messages.success(request, f"Membership renewed for {member}.")
+        return redirect(reverse("club_admin", kwargs={"slug": self.club.slug}))
+
+
+class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
+    """Merge two club members: keep target, soft-delete source, copy non-empty fields."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_add_edit"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def _get_member(self, pk):
+        return get_object_or_404(ClubMember, pk=pk, club=self.club, is_deleted=False)
+
+    def get(self, request, slug, pk):
+        source = self._get_member(pk)
+        others = (
+            ClubMember.objects.filter(club=self.club, is_deleted=False)
+            .exclude(pk=pk)
+            .order_by("last_name", "first_name")
+        )
+        context = {
+            "club": self.club,
+            "source": source,
+            "others": others,
+        }
+        return render(request, "auctions/club_member_merge.html", context)
+
+    def post(self, request, slug, pk):
+        source = self._get_member(pk)
+        target_pk = request.POST.get("target")
+        target = get_object_or_404(ClubMember, pk=target_pk, club=self.club, is_deleted=False)
+        if target.pk == source.pk:
+            messages.error(request, "Cannot merge a member with themselves.")
+            return redirect(reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": pk}))
+        # Copy non-empty fields from source to target where target field is empty
+        copy_fields = [
+            "first_name",
+            "last_name",
+            "email",
+            "phone_number",
+            "address",
+            "discord_id",
+            "bap_points",
+            "hap_points",
+            "membership_last_paid",
+        ]
+        for field in copy_fields:
+            source_val = getattr(source, field, None)
+            target_val = getattr(target, field, None)
+            if source_val is not None and not target_val:
+                setattr(target, field, source_val)
+        # Merge roles
+        for role in source.roles.all():
+            target.roles.add(role)
+        target.save()
+        source.is_deleted = True
+        source.save(update_fields=["is_deleted"])
+        ClubHistory.objects.create(
+            club=self.club,
+            user=request.user,
+            action=f"Merged member {source} into {target}",
+            applies_to="MEMBERS",
+        )
+        messages.success(request, f"Merged {source} into {target}.")
+        return redirect(reverse("club_admin", kwargs={"slug": self.club.slug}))
 
 
 class ClubEditView(LoginRequiredMixin, ClubViewMixin, UpdateView):

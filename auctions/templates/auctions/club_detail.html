@@ -11,18 +11,22 @@
 
 <div class="mb-3 d-flex flex-wrap gap-2 align-items-center">
   {% if club.homepage %}
-  <a href="{% if club.homepage|slice:':4' != 'http' %}https://{% endif %}{{ club.homepage }}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-primary text-light"><i class="bi bi-house"></i> Website</a>
+  <a href="{% if club.homepage|slice:':4' != 'http' %}https://{% endif %}{{ club.homepage }}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-primary"><i class="bi bi-house"></i> Website</a>
   {% endif %}
   {% if club.facebook_page %}
-  <a href="{% if club.facebook_page|slice:':4' != 'http' %}https://{% endif %}{{ club.facebook_page }}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-primary text-light"><i class="bi bi-facebook"></i> Facebook</a>
+  <a href="{% if club.facebook_page|slice:':4' != 'http' %}https://{% endif %}{{ club.facebook_page }}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-primary"><i class="bi bi-facebook"></i> Facebook</a>
   {% endif %}
   {% if can_access_admin %}
-  <a href="{% url 'club_admin' club.slug %}" class="btn btn-sm btn-primary text-light"><i class="bi bi-gear"></i> Admin panel</a>
+  <a href="{% url 'club_admin' club.slug %}" class="btn btn-sm btn-primary"><i class="bi bi-gear"></i> Manage membership</a>
   {% endif %}
   {% if can_edit_settings %}
-  <a href="{% url 'club_edit' club.slug %}" class="btn btn-sm btn-primary text-light"><i class="bi bi-sliders"></i> Settings</a>
+  <a href="{% url 'club_edit' club.slug %}" class="btn btn-sm btn-primary"><i class="bi bi-sliders"></i> Settings</a>
   {% endif %}
 </div>
+
+{% if not club.enable_club_page and can_access_admin %}
+<p class="text-muted small"><i class="bi bi-eye-slash"></i> This page is only visible to admins. <a href="{% url 'club_edit' club.slug %}">Enable it in settings</a> to make it public.</p>
+{% endif %}
 
 {% if member %}
   <div class="card mb-3">

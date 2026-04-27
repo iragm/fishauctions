@@ -696,6 +696,14 @@ class ClubMember(ContactRecord):
     )
     source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default="manually_added")
     roles = models.ManyToManyField(ClubRole, blank=True)
+    possible_duplicate = models.ForeignKey(
+        "ClubMember",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="duplicate_of",
+        help_text="Another club member with the same last name; may be a duplicate",
+    )
 
     def __str__(self):
         name = f"{self.first_name} {self.last_name}".strip()
@@ -712,6 +720,22 @@ class ClubMember(ContactRecord):
 
     class Meta:
         ordering = ["last_name", "first_name"]
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        if self.last_name:
+            duplicate = (
+                ClubMember.objects.filter(club=self.club, last_name=self.last_name, is_deleted=False)
+                .exclude(pk=self.pk)
+                .first()
+            )
+            if duplicate:
+                ClubMember.objects.filter(pk=self.pk).update(possible_duplicate=duplicate.pk)
+                ClubMember.objects.filter(pk=duplicate.pk).update(possible_duplicate=self.pk)
+            else:
+                if self.possible_duplicate_id:
+                    ClubMember.objects.filter(pk=self.possible_duplicate_id).update(possible_duplicate=None)
+                ClubMember.objects.filter(pk=self.pk).update(possible_duplicate=None)
 
 
 class ClubHistory(models.Model):

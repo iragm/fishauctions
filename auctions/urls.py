@@ -568,8 +568,19 @@ urlpatterns = [
     path("api/clubmember/<int:pk>/", views.ClubMemberAdminView.as_view(), name="clubmember_admin"),
     path("api/clubmember/<int:pk>/renew/", views.ClubMemberRenewView.as_view(), name="club_member_renew"),
     path("api/clubmember/<int:pk>/delete/", views.ClubMemberDeleteView.as_view(), name="club_member_delete"),
+    path(
+        "api/clubmember/<int:pk>/confirm/<str:action>/",
+        views.ClubMemberConfirmView.as_view(),
+        name="club_member_confirm",
+    ),
     path("api/clubmember/new/<slug:slug>/", views.ClubMemberCreateView.as_view(), name="clubmember_create"),
     path("api/clubmember-validation/<slug:slug>/", views.ClubMemberValidation.as_view(), name="clubmember_validation"),
+    path("clubs/<slug:slug>/admin/merge/<int:pk>/", views.ClubMemberMergeView.as_view(), name="club_member_merge"),
+    path(
+        "clubs/<slug:slug>/admin/member/<int:pk>/renew/",
+        views.ClubMemberRenewPageView.as_view(),
+        name="club_member_renew_page",
+    ),
     # REST API v1
     path("api/v1/clubs/<slug:slug>/members/", views.ClubMemberListCreateAPIView.as_view(), name="api_club_members"),
     path(
