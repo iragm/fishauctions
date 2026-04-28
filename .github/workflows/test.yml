@@ -5,40 +5,41 @@ on:
     branches: [master]
 
 jobs:
-  test:
-    name: Run tests
+  lint:
+    name: Lint (ruff via pre-commit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+      - uses: pre-commit/action@v3.0.1
+
+  django-tests:
+    name: Django tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - run: ./.github/scripts/prepare-ci.sh
-      - name: Build test container
-        run: docker compose --profile test build
-      - name: Start database and wait for health
+      - run: docker compose build
+
+      - name: Run Django tests in parallel
+        # Override entrypoint.sh — it ignores its args and unconditionally
+        # exec's uvicorn/gunicorn, which would never run the test command.
+        run: docker compose run --rm --entrypoint python3 web -u manage.py test --parallel auto
+
+      - name: Print service logs on failure
+        if: failure()
         run: |
-          docker compose up -d db
-          echo "Waiting for database to be healthy (up to 240 seconds)..."
-          for i in {1..80}; do
-            STATUS=$(docker inspect --format='{{.State.Health.Status}}' db 2>/dev/null || echo "not_found")
-            if [ "$STATUS" = "healthy" ]; then
-              echo "Database is healthy!"
-              exit 0
-            fi
-            echo "Database status: $STATUS (attempt $i/80)"
-            sleep 3
-          done
-          echo "ERROR: Database failed to become healthy"
-          docker compose logs db
-          exit 1
-      - name: Run tests
-        run: docker compose run --rm --no-deps test --ci --verbose
-  pre-commit:
-    name: pre-commit validation
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-python@v5
-    - uses: pre-commit/action@v3.0.1
-  selenium:
+          echo "=== docker compose ps ==="
+          docker compose ps -a || true
+          echo "=== db logs ==="
+          docker compose logs db || true
+          echo "=== web logs ==="
+          docker compose logs web || true
+
+      - run: docker compose down
+        if: always()
+
+  selenium-tests:
     name: Selenium browser tests
     runs-on: ubuntu-latest
     permissions:
@@ -75,7 +76,6 @@ jobs:
       - name: Wait for services to be ready
         run: |
           echo "Waiting for services to start..."
-          # Wait for web service to be healthy (up to 120 seconds)
           for i in {1..24}; do
             if docker exec django python3 -c "import django; django.setup()" 2>/dev/null; then
               echo "Django service is ready"
@@ -84,7 +84,6 @@ jobs:
             echo "Waiting for Django... ($i/24)"
             sleep 5
           done
-          # Wait for Selenium to be ready (up to 60 seconds)
           for i in {1..12}; do
             if docker exec selenium curl -sSL http://localhost:4444/status 2>/dev/null | grep -qE '"ready"[[:space:]]*:[[:space:]]*true'; then
               echo "Selenium service is ready"
