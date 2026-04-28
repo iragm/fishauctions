@@ -10733,6 +10733,16 @@ class ContextProcessorsTestCase(TestCase):
         context = add_tz(request)
         self.assertEqual(context["user_timezone"], "America/New_York")
 
+    def test_base_template_renders_without_context_processors(self):
+        """Django's default 500/404 views call template.render() with no RequestContext,
+        so context processors don't run and user_timezone is undefined. The base template
+        must still render -- otherwise the error page itself errors out with
+        `ValueError: ZoneInfo keys must be normalized relative paths, got: `."""
+        from django.template.loader import get_template
+
+        # Render with no context at all -- mirrors django.views.defaults.server_error.
+        get_template("500.html").render()
+
     def test_add_location_with_cookies(self):
         """Test add_location context processor with location cookies"""
         from django.contrib.auth.models import AnonymousUser
