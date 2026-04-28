@@ -69,6 +69,9 @@ RUN pip install -r requirements-test.txt
 # pull official base image
 FROM python:3.11.9-slim
 
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
 # create directory for the app user
 RUN mkdir -p /home/app
 
