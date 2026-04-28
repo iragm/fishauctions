@@ -15,6 +15,8 @@ import os
 from decimal import Decimal
 from pathlib import Path
 
+from fishauctions._env import parse_bool_env
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve(strict=True).parent.parent
 
@@ -28,10 +30,8 @@ ADMINS = [("Admin", os.environ.get("ADMIN_EMAIL", "admin@example.com"))]
 SECRET_KEY = os.environ.get("SECRET_KEY", "unsecure")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-if os.environ.get("DEBUG", "1") == "False":
-    DEBUG = False
-else:
-    DEBUG = True
+# Unset DEBUG defaults to True per `.env.example` ("leave unset for development").
+DEBUG = parse_bool_env(os.environ.get("DEBUG"), default=True)
 
 # Template string for undefined variables - empty string means silently ignore them
 TEMPLATE_STRING_IF_INVALID = ""

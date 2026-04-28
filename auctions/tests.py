@@ -18,6 +18,8 @@ from django.test.client import Client
 from django.urls import reverse
 from django.utils import timezone
 
+from fishauctions._env import parse_bool_env
+
 from .filters import LotAdminFilter
 from .forms import AuctionEditForm, ChangeUsernameForm, CreateLotForm
 from .models import (
@@ -13218,3 +13220,29 @@ class PayPalCSVExportTests(StandardTestCase):
         self.assertIsNotNone(row)
         self.assertLessEqual(len(row[2]), 20)
         self.assertEqual(row[2], "Longfellowtheeloquen")
+
+
+class ParseBoolEnvTests(TestCase):
+    """Cover fishauctions._env.parse_bool_env, which gates settings.DEBUG."""
+
+    def test_unset_returns_default(self) -> None:
+        self.assertTrue(parse_bool_env(None, default=True))
+        self.assertFalse(parse_bool_env(None, default=False))
+
+    def test_truthy_spellings(self) -> None:
+        for value in ("1", "true", "True", "TRUE", "yes", "on", "t", "y", "  true  "):
+            with self.subTest(value=value):
+                self.assertTrue(parse_bool_env(value, default=False))
+
+    def test_falsy_spellings(self) -> None:
+        # "False" is the legacy spelling in .env.example; "false" was the
+        # previously-broken case under the old `== "False"` check.
+        # "   " covers the whitespace-only path documented in _env.py.
+        for value in ("0", "false", "False", "FALSE", "no", "off", "f", "n", "", "   "):
+            with self.subTest(value=value):
+                self.assertFalse(parse_bool_env(value, default=True))
+
+    def test_unrecognized_value_raises(self) -> None:
+        # A typo in the env value must fail loudly, not silently default.
+        with self.assertRaises(ValueError):
+            parse_bool_env("maybe", default=False)
