@@ -20,19 +20,22 @@ Tests now run against a MariaDB database instead of SQLite to better match the p
 
 ## Upgrading Existing Development Systems
 
-If you're upgrading from a previous version and have an existing MariaDB volume, you may need to manually grant test database permissions:
+If you're upgrading from a previous version and have an existing MariaDB volume, you may need to manually grant test database permissions. (The init scripts in `db-init/` only run on first volume initialization, so changes to them do not apply to existing volumes.)
 
 ```bash
-# Option 1: Run the helper script from the repo root
+# Option 1: Run the helper script from the repo root. It detects and revokes
+#          any prior over-broad CREATE/DROP grant on *.* before applying the
+#          tightened pattern-scoped grant on test_%.* — safe to re-run.
 ./grant-test-permissions.sh
 
-# Option 2: Grant permissions manually
-docker exec -it db mariadb -uroot -p${DATABASE_ROOT_PASSWORD} -e "
-GRANT CREATE, DROP ON *.* TO 'mysqluser'@'%';
-GRANT ALL PRIVILEGES ON \`test_%\`.* TO 'mysqluser'@'%';
-FLUSH PRIVILEGES;
+# Option 2: Apply the same change manually
+docker exec -it db mariadb -uroot -p"${DATABASE_ROOT_PASSWORD}" -e "
+REVOKE CREATE, DROP ON *.* FROM 'mysqluser'@'%';
+GRANT ALL PRIVILEGES ON \`test\_%\`.* TO 'mysqluser'@'%';
 "
 ```
+
+The pattern-scoped grant restricts the test user to creating and dropping databases whose names start with `test_` (e.g. `test_auctions`, `test_auctions_1`...`test_auctions_N` for `--parallel`). They cannot create or drop any other database on the server, including the production `auctions` database.
 
 ## Running Tests
 
@@ -53,7 +56,7 @@ docker exec -it django python3 manage.py test --verbosity=2
 ## Requirements
 
 - The database container must be running and healthy (`docker compose up -d`)
-- The database user must have CREATE and DROP privileges (automatically configured via `db-init/01-grant-test-permissions.sql`)
+- The database user must have privileges on the `test_%` database name pattern (automatically configured via `db-init/01-grant-test-permissions.sql` on first volume initialization)
 
 ## Continuous Integration
 
