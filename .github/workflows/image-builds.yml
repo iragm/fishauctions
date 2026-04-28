@@ -15,7 +15,9 @@ jobs:
       - run: docker compose build
 
       - name: Run Django tests in parallel
-        run: docker compose run --rm web python3 manage.py test --parallel auto
+        # Override entrypoint.sh — it ignores its args and unconditionally
+        # exec's uvicorn/gunicorn, which would never run the test command.
+        run: docker compose run --rm --entrypoint python3 web -u manage.py test --parallel auto
 
       - name: Print service logs on failure
         if: failure()
