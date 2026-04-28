@@ -10,8 +10,8 @@ repos:
     -   id: check-yaml
     -   id: check-added-large-files
 - repo: https://github.com/astral-sh/ruff-pre-commit
-  # Ruff version.
-  rev: v0.14.3
+  # Ruff version. Keep in sync with `ruff` in requirements-test.txt.
+  rev: v0.15.11
   hooks:
     # Run the linter.
     - id: ruff
