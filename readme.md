@@ -39,6 +39,8 @@ docker compose up -d
 ```
 You should now be able to access a development site at 127.0.0.1 (Note: unlike most Django projects, you probably won't use port 8000)
 
+**`DEBUG` is fail-closed**: an unset `DEBUG` env var resolves to `False` (production mode). The `.env.example` sets `DEBUG='True'` so a fresh dev setup works out of the box. If you have an existing `.env` from before this change, add `DEBUG='True'` (or `DEBUG=1`) to keep dev mode; otherwise the app will start in production mode and route real email, hit the live PayPal API, etc.
+
 **Demo data**: In development mode (DEBUG=True), the system will automatically load demo data including 3 sample auctions, users, lots, and bids when starting with an empty database. This provides realistic examples to explore the application's features.
 
 One last thing to do is to create an admin.  Back in the shell, enter:

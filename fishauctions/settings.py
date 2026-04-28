@@ -30,8 +30,12 @@ ADMINS = [("Admin", os.environ.get("ADMIN_EMAIL", "admin@example.com"))]
 SECRET_KEY = os.environ.get("SECRET_KEY", "unsecure")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-# Unset DEBUG defaults to True per `.env.example` ("leave unset for development").
-DEBUG = parse_bool_env(os.environ.get("DEBUG"), default=True)
+# Default fail-closed: unset DEBUG => False. Dev environments must opt in
+# explicitly with DEBUG=true (see .env.example and docker-compose.yaml).
+# This protects against an env-var misconfiguration in production silently
+# leaving debug on, which also flips EMAIL_BACKEND, PAYPAL_API_BASE, and
+# SQUARE_ENVIRONMENT to non-production paths.
+DEBUG = parse_bool_env(os.environ.get("DEBUG"), default=False)
 
 # Template string for undefined variables - empty string means silently ignore them
 TEMPLATE_STRING_IF_INVALID = ""
