@@ -191,7 +191,7 @@ Directly related to this is a management command `change_standalone_lots` which 
 
 `WEBSITE_FOCUS` Plural, all-lowercase name of whatever your website is focused around.  For example, "fish", "birds", "items"...
 
-Most of the other options in the .env file are pretty self-explanatory.  Booleans (True or False) are case sensitive.
+Most of the other options in the .env file are pretty self-explanatory.
 Save and exit nano, then type:
 ```
 docker compose --profile "*" build
