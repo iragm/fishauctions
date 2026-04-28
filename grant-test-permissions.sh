@@ -13,24 +13,30 @@
 set -euo pipefail
 
 ROOT_PW="${DATABASE_ROOT_PASSWORD:-secret}"
+DB_USER="${DATABASE_USER:-mysqluser}"
 
 run_sql() {
     docker exec -i db mariadb -uroot -p"${ROOT_PW}" -e "$1"
 }
 
-echo "Inspecting current grants for mysqluser..."
-GRANTS="$(docker exec -i db mariadb -uroot -p"${ROOT_PW}" -BNe \
-    "SHOW GRANTS FOR 'mysqluser'@'%'" 2>/dev/null || true)"
+# MariaDB returns ERROR 1141 only when the user has no grant entry at all for
+# the scope; tolerate that case so the script is idempotent on already-
+# tightened systems. Any other error propagates.
+tolerate_no_such_grant() {
+    local stderr_file rc
+    stderr_file="$(mktemp)"
+    trap 'rm -f "${stderr_file}"' RETURN
+    if docker exec -i db mariadb -uroot -p"${ROOT_PW}" -e "$1" 2>"${stderr_file}"; then
+        return 0
+    fi
+    rc=$?
+    if grep -q "ERROR 1141" "${stderr_file}"; then
+        return 0
+    fi
+    cat "${stderr_file}" >&2
+    return "${rc}"
+}
 
-if echo "${GRANTS}" | grep -qE 'GRANT [A-Z, ]*(CREATE|DROP)[A-Z, ]* ON \*\.\*'; then
-    echo "Found over-broad CREATE/DROP grant on *.*; revoking..."
-    run_sql "REVOKE CREATE, DROP ON *.* FROM 'mysqluser'@'%';"
-fi
-
-echo "Granting pattern-scoped permissions on test_%.* ..."
-run_sql "GRANT ALL PRIVILEGES ON \`test\\_%\`.* TO 'mysqluser'@'%'; FLUSH PRIVILEGES;"
-
-echo "Final grants:"
-run_sql "SHOW GRANTS FOR 'mysqluser'@'%';"
-
+tolerate_no_such_grant "REVOKE CREATE, DROP ON *.* FROM '${DB_USER}'@'%';"
+run_sql "GRANT ALL PRIVILEGES ON \`test\\_%\`.* TO '${DB_USER}'@'%';"
 echo "✓ Permissions updated"

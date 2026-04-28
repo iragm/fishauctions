@@ -29,10 +29,9 @@ If you're upgrading from a previous version and have an existing MariaDB volume,
 ./grant-test-permissions.sh
 
 # Option 2: Apply the same change manually
-docker exec -it db mariadb -uroot -p${DATABASE_ROOT_PASSWORD} -e "
+docker exec -it db mariadb -uroot -p"${DATABASE_ROOT_PASSWORD}" -e "
 REVOKE CREATE, DROP ON *.* FROM 'mysqluser'@'%';
-GRANT ALL PRIVILEGES ON \`test_%\`.* TO 'mysqluser'@'%';
-FLUSH PRIVILEGES;
+GRANT ALL PRIVILEGES ON \`test\_%\`.* TO 'mysqluser'@'%';
 "
 ```
 
