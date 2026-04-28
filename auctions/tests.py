@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from django import forms
 from django.contrib.auth.models import User
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.test import TestCase, TransactionTestCase, override_settings
@@ -18,7 +18,7 @@ from django.test.client import Client
 from django.urls import reverse
 from django.utils import timezone
 
-from fishauctions._env import parse_bool_env
+from fishauctions._env import parse_bool_env, require_secure_prod_secrets
 
 from .filters import LotAdminFilter
 from .forms import AuctionEditForm, ChangeUsernameForm, CreateLotForm
@@ -9205,8 +9205,6 @@ class SquareWebhookSignatureValidationTests(StandardTestCase):
 
     def test_improperly_configured_in_production_without_webhook_key(self):
         """Test that ImproperlyConfigured is raised in production when Square is configured but webhook key is missing"""
-        from django.core.exceptions import ImproperlyConfigured
-
         url = reverse("square_webhook")
 
         # Simulate production mode (DEBUG=False) with Square configured but no webhook signature key
@@ -13246,3 +13244,39 @@ class ParseBoolEnvTests(TestCase):
         # A typo in the env value must fail loudly, not silently default.
         with self.assertRaises(ValueError):
             parse_bool_env("maybe", default=False)
+
+
+class RequireSecureProdSecretsTests(TestCase):
+    """Cover fishauctions._env.require_secure_prod_secrets."""
+
+    def test_all_secrets_set_passes(self) -> None:
+        require_secure_prod_secrets(
+            {
+                "SECRET_KEY": "a-real-secret-value",
+                "DATABASE_PASSWORD": "real-db-pw",
+                "REDIS_PASSWORD": "real-redis-pw",
+            }
+        )
+
+    def test_each_insecure_value_raises(self) -> None:
+        # None covers "env var unset"; "" and "unsecure" are the literal
+        # placeholders shipped in settings.py and docker-compose.yaml.
+        for value in (None, "", "unsecure"):
+            with self.subTest(value=value):
+                with self.assertRaises(ImproperlyConfigured) as ctx:
+                    require_secure_prod_secrets({"SECRET_KEY": value})
+                self.assertIn("SECRET_KEY", str(ctx.exception))
+
+    def test_multiple_offenders_reported_together(self) -> None:
+        with self.assertRaises(ImproperlyConfigured) as ctx:
+            require_secure_prod_secrets(
+                {
+                    "SECRET_KEY": "unsecure",
+                    "DATABASE_PASSWORD": None,
+                    "REDIS_PASSWORD": "real-redis-pw",
+                }
+            )
+        message = str(ctx.exception)
+        self.assertIn("SECRET_KEY", message)
+        self.assertIn("DATABASE_PASSWORD", message)
+        self.assertNotIn("REDIS_PASSWORD", message)

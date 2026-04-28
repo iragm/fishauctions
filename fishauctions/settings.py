@@ -15,7 +15,7 @@ import os
 from decimal import Decimal
 from pathlib import Path
 
-from fishauctions._env import parse_bool_env
+from fishauctions._env import parse_bool_env, require_secure_prod_secrets
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve(strict=True).parent.parent
@@ -36,6 +36,19 @@ SECRET_KEY = os.environ.get("SECRET_KEY", "unsecure")
 # leaving debug on, which also flips EMAIL_BACKEND, PAYPAL_API_BASE, and
 # SQUARE_ENVIRONMENT to non-production paths.
 DEBUG = parse_bool_env(os.environ.get("DEBUG"), default=False)
+
+# Fail fast on insecure defaults in production. The validated set is
+# intentionally narrow: feature-conditional secrets (PAYPAL_*, SQUARE_*,
+# AWS_*, RECAPTCHA_*) fail visibly at use time and forcing them at
+# startup would block deploys that don't use those features.
+if not DEBUG:
+    require_secure_prod_secrets(
+        {
+            "SECRET_KEY": SECRET_KEY,
+            "DATABASE_PASSWORD": os.environ.get("DATABASE_PASSWORD"),
+            "REDIS_PASSWORD": os.environ.get("REDIS_PASSWORD"),
+        }
+    )
 
 # Template string for undefined variables - empty string means silently ignore them
 TEMPLATE_STRING_IF_INVALID = ""
