@@ -4,8 +4,14 @@ Kept in its own module (instead of inline in settings.py) so it can be
 unit-tested without importing the full Django settings module.
 """
 
+from collections.abc import Mapping
+
+from django.core.exceptions import ImproperlyConfigured
+
 _TRUTHY = frozenset({"1", "true", "yes", "on", "t", "y"})
 _FALSY = frozenset({"0", "false", "no", "off", "f", "n", ""})
+
+INSECURE_SECRET_VALUES = frozenset({"", "unsecure"})
 
 
 def parse_bool_env(value: str | None, *, default: bool) -> bool:
@@ -29,3 +35,24 @@ def parse_bool_env(value: str | None, *, default: bool) -> bool:
         return False
     msg = f"Cannot parse {value!r} as a boolean env value"
     raise ValueError(msg)
+
+
+def require_secure_prod_secrets(secrets: Mapping[str, str | None]) -> None:
+    """Raise ``ImproperlyConfigured`` if any secret is unset or has a known-insecure default.
+
+    Intended to be called from ``settings.py`` only when ``DEBUG`` is False.
+    A value is considered insecure if it is ``None`` or in
+    ``INSECURE_SECRET_VALUES`` (the literal placeholders shipped as defaults
+    in this codebase). Every offender is reported in a single error message
+    so the operator sees the full picture in one startup pass.
+    """
+    bad = sorted(name for name, value in secrets.items() if value is None or value in INSECURE_SECRET_VALUES)
+    if not bad:
+        return
+    joined = ", ".join(bad)
+    msg = (
+        f"The following environment variables are unset or set to a known-insecure "
+        f"default but are required when DEBUG=False: {joined}. Set each one to a "
+        f"secure value before starting the application in production."
+    )
+    raise ImproperlyConfigured(msg)
