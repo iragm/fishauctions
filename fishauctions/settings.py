@@ -369,10 +369,7 @@ USE_SES_V2 = True
 AWS_SES_CONFIGURATION_SET = os.environ.get("AWS_SES_CONFIGURATION_SET", "")
 AWS_SES_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "user@example.com")
 
-if os.environ.get("EMAIL_USE_TLS", "True") == "True":
-    EMAIL_USE_TLS = True
-else:
-    EMAIL_USE_TLS = False
+EMAIL_USE_TLS = parse_bool_env(os.environ.get("EMAIL_USE_TLS") or None, default=True)
 EMAIL_HOST = os.environ.get("EMAIL_HOST", "smtp.gmail.com")
 EMAIL_PORT = os.environ.get("EMAIL_PORT", 587)
 EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "user@example.com")
@@ -483,35 +480,17 @@ COPYRIGHT_MESSAGE = os.environ.get(
     "bottom text",
 )
 I_BRED_THIS_FISH_LABEL = os.environ.get("I_BRED_THIS_FISH_LABEL", "I bred this fish/propagated this plant")
-if os.environ.get("ALLOW_USERS_TO_CREATE_AUCTIONS", "True") == "False":
-    ALLOW_USERS_TO_CREATE_AUCTIONS = False
-else:
-    ALLOW_USERS_TO_CREATE_AUCTIONS = True
-if os.environ.get("ALLOW_USERS_TO_CREATE_LOTS", "True") == "False":
-    ALLOW_USERS_TO_CREATE_LOTS = False
-else:
-    ALLOW_USERS_TO_CREATE_LOTS = True
-PAYPAL_ENABLED_FOR_USERS = os.environ.get("PAYPAL_ENABLED_FOR_USERS", "False") == "True"
-SQUARE_ENABLED_FOR_USERS = os.environ.get("SQUARE_ENABLED_FOR_USERS", "False") == "True"
-if os.environ.get("USERS_ARE_TRUSTED_BY_DEFAULT", "True") == "False":
-    USERS_ARE_TRUSTED_BY_DEFAULT = False
-else:
-    USERS_ARE_TRUSTED_BY_DEFAULT = True
+ALLOW_USERS_TO_CREATE_AUCTIONS = parse_bool_env(os.environ.get("ALLOW_USERS_TO_CREATE_AUCTIONS") or None, default=True)
+ALLOW_USERS_TO_CREATE_LOTS = parse_bool_env(os.environ.get("ALLOW_USERS_TO_CREATE_LOTS") or None, default=True)
+PAYPAL_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("PAYPAL_ENABLED_FOR_USERS") or None, default=False)
+SQUARE_ENABLED_FOR_USERS = parse_bool_env(os.environ.get("SQUARE_ENABLED_FOR_USERS") or None, default=False)
+USERS_ARE_TRUSTED_BY_DEFAULT = parse_bool_env(os.environ.get("USERS_ARE_TRUSTED_BY_DEFAULT") or None, default=True)
 UNTRUSTED_MESSAGE = os.environ.get(
     "UNTRUSTED_MESSAGE", "You cannot currently promote auctions.  Please contact the website administrator for access."
 )
-if os.environ.get("ENABLE_PROMO_PAGE", "True") == "False":
-    ENABLE_PROMO_PAGE = False
-else:
-    ENABLE_PROMO_PAGE = True
-if os.environ.get("ENABLE_CLUB_FINDER", "True") == "False":
-    ENABLE_CLUB_FINDER = False
-else:
-    ENABLE_CLUB_FINDER = True
-if os.environ.get("ENABLE_HELP", "True") == "False":
-    ENABLE_HELP = False
-else:
-    ENABLE_HELP = True
+ENABLE_PROMO_PAGE = parse_bool_env(os.environ.get("ENABLE_PROMO_PAGE") or None, default=True)
+ENABLE_CLUB_FINDER = parse_bool_env(os.environ.get("ENABLE_CLUB_FINDER") or None, default=True)
+ENABLE_HELP = parse_bool_env(os.environ.get("ENABLE_HELP") or None, default=True)
 MAILING_ADDRESS = os.environ.get("MAILING_ADDRESS", "No address configured")
 WEEKLY_PROMO_MESSAGE = os.environ.get("WEEKLY_PROMO_MESSAGE", "")
 
