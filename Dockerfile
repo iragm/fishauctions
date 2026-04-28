@@ -118,12 +118,6 @@ RUN pip install --upgrade pip
 RUN pip install --no-cache /wheels/*
 RUN pip install mysql-connector-python
 
-# Sometimes we need customizations made to python packages
-# List changes in the .sh script, making sure it fails gracefully
-COPY python_file_hack.sh /tmp/python_file_hack.sh
-RUN chmod +x /tmp/python_file_hack.sh
-RUN /tmp/python_file_hack.sh
-
 # volume instead
 #COPY . $APP_HOME
 

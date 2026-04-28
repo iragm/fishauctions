@@ -2002,10 +2002,6 @@ class LotLabelViewTestCase(StandardTestCase):
 
     def test_thermal_labels(self):
         """Test that a regular user can print their own labels."""
-        # If this test is failing, it's likely that the issue is not in this code, but in a library
-        # thermal labels cause a 'Paragraph' object has no attribute 'blPara' error
-        # See https://github.com/virantha/pypdfocr/issues/80
-        # This is the reason we are using a hacked version of platypus/paragraph.py in python_file_hack.sh
         user_label_prefs, created = UserLabelPrefs.objects.get_or_create(user=self.user)
         user_label_prefs.preset = "thermal_sm"
         user_label_prefs.save()
@@ -10703,6 +10699,39 @@ class ContextProcessorsTestCase(TestCase):
 
         context = add_tz(request)
         self.assertEqual(context["user_timezone"], "Europe/London")
+
+    def test_add_tz_rejects_invalid_cookie(self):
+        """Invalid tz cookie value falls back to the default and is not flagged as set."""
+        from django.contrib.auth.models import AnonymousUser
+        from django.test import RequestFactory
+
+        from auctions.context_processors import add_tz
+
+        factory = RequestFactory()
+        request = factory.get("/")
+        request.user = AnonymousUser()
+        request.COOKIES = {"user_timezone": "Not/A_Real_Zone"}
+
+        context = add_tz(request)
+        self.assertEqual(context["user_timezone"], "America/New_York")
+        self.assertFalse(context["user_timezone_set"])
+
+    def test_add_tz_rejects_invalid_userdata_timezone(self):
+        """Garbage userdata.timezone value falls back to the default."""
+        from django.test import RequestFactory
+
+        from auctions.context_processors import add_tz
+
+        factory = RequestFactory()
+        request = factory.get("/")
+        user = User.objects.create_user(username="bad_tz_user", password="testpass")
+        user.userdata.timezone = "Not/A_Real_Zone"
+        user.userdata.save()
+        request.user = user
+        request.COOKIES = {}
+
+        context = add_tz(request)
+        self.assertEqual(context["user_timezone"], "America/New_York")
 
     def test_add_location_with_cookies(self):
         """Test add_location context processor with location cookies"""
