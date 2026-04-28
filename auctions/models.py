@@ -723,10 +723,12 @@ class ClubMember(ContactRecord):
 
     def save(self, *args, **kwargs):
         if self.is_deleted:
-            # When soft-deleting, clear any existing duplicate link pointing at this member
+            # When soft-deleting, clear all duplicate links involving this member
             if self.possible_duplicate_id:
                 ClubMember.objects.filter(pk=self.possible_duplicate_id).update(possible_duplicate=None)
                 self.possible_duplicate_id = None
+            # Clear any other members that point to this member as a duplicate
+            ClubMember.objects.filter(possible_duplicate_id=self.pk).update(possible_duplicate=None)
             super().save(*args, **kwargs)
             return
         super().save(*args, **kwargs)

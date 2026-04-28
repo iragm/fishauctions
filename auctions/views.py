@@ -11504,6 +11504,13 @@ class ClubMemberAdminView(APIView):
     authentication_classes = [TokenAuthentication, SessionAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @staticmethod
+    def _redirect_to_club_admin(club):
+        """Return an HTMX full-page redirect response to the club admin page."""
+        response = HttpResponse(status=200)
+        response["HX-Redirect"] = reverse("club_admin", kwargs={"slug": club.slug})
+        return response
+
     def _get_member_and_check_permission(self, request, pk):
         try:
             member = ClubMember.objects.get(pk=pk)
@@ -11657,10 +11664,7 @@ $("#id_first_name, #id_last_name, #id_email").on("blur", cmValidateField);
                 applies_to="MEMBERS",
             )
             messages.success(request, f"{saved} updated.")
-            admin_url = reverse("club_admin", kwargs={"slug": member.club.slug})
-            response = HttpResponse(status=200)
-            response["HX-Redirect"] = admin_url
-            return response
+            return self._redirect_to_club_admin(member.club)
         return render(request, "auctions/generic_admin_form.html", self._build_context(request, member, form))
 
 
@@ -11708,10 +11712,7 @@ class ClubMemberCreateView(APIView):
                 applies_to="MEMBERS",
             )
             messages.success(request, f"{member} added to {club.name}.")
-            admin_url = reverse("club_admin", kwargs={"slug": club.slug})
-            response = HttpResponse(status=200)
-            response["HX-Redirect"] = admin_url
-            return response
+            return ClubMemberAdminView._redirect_to_club_admin(club)
         extra_script = ClubMemberAdminView._get_validation_script(
             request, pk=None, validation_url=reverse("clubmember_validation", kwargs={"slug": slug})
         )
