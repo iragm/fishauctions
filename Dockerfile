@@ -69,6 +69,9 @@ RUN pip install -r requirements-test.txt
 # pull official base image
 FROM python:3.11.9-slim
 
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
 # create directory for the app user
 RUN mkdir -p /home/app
 
@@ -99,6 +102,7 @@ RUN apt-get update && \
     build-essential \
     pkg-config \
     default-libmysqlclient-dev \
+    default-mysql-client \
     nano \
     # python3-pip \
     # python3-cffi \
