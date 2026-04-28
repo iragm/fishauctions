@@ -1,9 +1,6 @@
 line-length = 120
-[format]
-exclude = ["get-pip.py"]
 
 [lint]
-exclude = ["get-pip.py"]
 ignore = [
     "E501",
     "E722",
