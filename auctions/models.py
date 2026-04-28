@@ -722,6 +722,13 @@ class ClubMember(ContactRecord):
         ordering = ["last_name", "first_name"]
 
     def save(self, *args, **kwargs):
+        if self.is_deleted:
+            # When soft-deleting, clear any existing duplicate link pointing at this member
+            if self.possible_duplicate_id:
+                ClubMember.objects.filter(pk=self.possible_duplicate_id).update(possible_duplicate=None)
+                self.possible_duplicate_id = None
+            super().save(*args, **kwargs)
+            return
         super().save(*args, **kwargs)
         if self.last_name:
             duplicate = (

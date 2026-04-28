@@ -1,5 +1,6 @@
 import django_tables2 as tables
 from django.urls import reverse
+from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 
 from .models import Auction, AuctionHistory, AuctionTOS, ClubHistory, ClubMember, Lot
@@ -420,20 +421,27 @@ class ClubMemberHTMxTable(tables.Table):
         url = reverse("clubmember_admin", kwargs={"pk": record.pk})
         can_edit = self.can_add_edit
         if can_edit:
-            result = f"<a href='' hx-get='{url}' hx-target='#modals-here' hx-trigger='click'>"
             if record.possible_duplicate_id:
-                result += "<i class='text-warning bi bi-people-fill me-1' title='This member may be a duplicate'></i>"
+                icon = format_html(
+                    "<i class='text-warning bi bi-people-fill me-1' title='This member may be a duplicate'></i>"
+                )
             else:
-                result += "<i class='bi bi-person-fill-gear me-1'></i>"
-            result += f"{name}</a>"
+                icon = format_html("<i class='bi bi-person-fill-gear me-1'></i>")
         else:
-            result = f"<a href='' hx-get='{url}' hx-target='#modals-here' hx-trigger='click'>"
-            result += f"<i class='bi bi-person-fill me-1'></i>{name}</a>"
+            icon = format_html("<i class='bi bi-person-fill me-1'></i>")
+        result = format_html(
+            "<a href='' hx-get='{}' hx-target='#modals-here' hx-trigger='click'>{}{}</a>",
+            url,
+            icon,
+            name,
+        )
         if record.email_address_status == "BAD":
-            result += "<i class='bi bi-envelope-exclamation-fill text-danger ms-1' title='Unable to send email to this address'></i>"
+            result += format_html(
+                "<i class='bi bi-envelope-exclamation-fill text-danger ms-1' title='Unable to send email to this address'></i>"
+            )
         if record.email_address_status == "VALID":
-            result += "<i class='bi bi-envelope-check-fill ms-1' title='Verified email'></i>"
-        return mark_safe(result)
+            result += format_html("<i class='bi bi-envelope-check-fill ms-1' title='Verified email'></i>")
+        return result
 
     def render_actions(self, value, record):
         if not self.can_add_edit:
@@ -442,23 +450,39 @@ class ClubMemberHTMxTable(tables.Table):
         renew_url = reverse("club_member_renew_page", kwargs={"slug": record.club.slug, "pk": record.pk})
         confirm_delete_url = reverse("club_member_confirm", kwargs={"pk": record.pk, "action": "delete"})
         merge_url = reverse("club_member_merge", kwargs={"slug": record.club.slug, "pk": record.pk})
-        email_item = ""
+        email_item = format_html("")
         if record.email:
-            email_item = f"""<li><a class="dropdown-item" href="mailto:{record.email}"><i class="bi bi-envelope me-1"></i>Email</a></li>"""
-        result = f"""<div class="dropdown">
-  <button type="button" class="btn btn-sm btn-secondary dropdown-toggle" data-bs-toggle="dropdown" aria-label="Actions for {name}">Actions</button>
-  <ul class="dropdown-menu">
-    <li><a class="dropdown-item" href="{renew_url}"><i class="bi bi-calendar-check me-1"></i>Renew membership</a></li>
-    <li><a class="dropdown-item" href="{merge_url}"><i class="bi bi-people me-1"></i>Merge with...</a></li>
-    {email_item}
-    <li><hr class="dropdown-divider"></li>
-    <li><a class="dropdown-item text-danger" href="#"
-      hx-get="{confirm_delete_url}"
-      hx-target="#modals-here">
-      <i class="bi bi-person-dash me-1"></i>Remove member</a></li>
-  </ul>
-</div>"""
-        return mark_safe(result)
+            icon_class = "bi bi-envelope"
+            if record.email_address_status == "BAD":
+                icon_class = "bi bi-envelope-exclamation-fill text-danger"
+            elif record.email_address_status == "VALID":
+                icon_class = "bi bi-envelope-check-fill"
+            email_item = format_html(
+                '<li><a class="dropdown-item" href="mailto:{}"><i class="{} me-1"></i>Email</a></li>',
+                record.email,
+                icon_class,
+            )
+        return format_html(
+            '<div class="dropdown">'
+            '<button type="button" class="btn btn-sm btn-secondary dropdown-toggle"'
+            ' data-bs-toggle="dropdown" aria-label="Actions for {}">Actions</button>'
+            '<ul class="dropdown-menu">'
+            '<li><a class="dropdown-item" href="{}">'
+            '<i class="bi bi-calendar-check me-1"></i>Renew membership</a></li>'
+            '<li><a class="dropdown-item" href="{}">'
+            '<i class="bi bi-people me-1"></i>Merge with...</a></li>'
+            "{}"
+            '<li><hr class="dropdown-divider"></li>'
+            '<li><a class="dropdown-item text-danger" href="#"'
+            ' hx-get="{}" hx-target="#modals-here">'
+            '<i class="bi bi-person-dash me-1"></i>Remove member</a></li>'
+            "</ul></div>",
+            name,
+            renew_url,
+            merge_url,
+            email_item,
+            confirm_delete_url,
+        )
 
     class Meta:
         model = ClubMember

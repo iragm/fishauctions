@@ -2947,7 +2947,7 @@ class CSVContactImportMixin:
         """If a CSV file has been uploaded, parse it and redirect. Calls process_csv_data()."""
         try:
             csv_file.seek(0)
-            csv_reader = csv.DictReader(TextIOWrapper(csv_file.file))
+            csv_reader = csv.DictReader(TextIOWrapper(csv_file.file, encoding="utf-8-sig", newline=""))
             filename = getattr(csv_file, "name", None)
             return self.process_csv_data(csv_reader, filename=filename)
         except (UnicodeDecodeError, ValueError) as e:
@@ -11657,7 +11657,10 @@ $("#id_first_name, #id_last_name, #id_email").on("blur", cmValidateField);
                 applies_to="MEMBERS",
             )
             messages.success(request, f"{saved} updated.")
-            return HttpResponse("", headers={"HX-Trigger": "clubMemberListChanged"})
+            admin_url = reverse("club_admin", kwargs={"slug": member.club.slug})
+            response = HttpResponse(status=200)
+            response["HX-Redirect"] = admin_url
+            return response
         return render(request, "auctions/generic_admin_form.html", self._build_context(request, member, form))
 
 
@@ -11705,7 +11708,10 @@ class ClubMemberCreateView(APIView):
                 applies_to="MEMBERS",
             )
             messages.success(request, f"{member} added to {club.name}.")
-            return HttpResponse("", headers={"HX-Trigger": "clubMemberListChanged"})
+            admin_url = reverse("club_admin", kwargs={"slug": club.slug})
+            response = HttpResponse(status=200)
+            response["HX-Redirect"] = admin_url
+            return response
         extra_script = ClubMemberAdminView._get_validation_script(
             request, pk=None, validation_url=reverse("clubmember_validation", kwargs={"slug": slug})
         )
@@ -11918,9 +11924,9 @@ class ClubEditView(LoginRequiredMixin, ClubViewMixin, UpdateView):
 
     def get_success_url(self):
         messages.success(self.request, "Club settings saved.")
-        # Honour ?next= if present in POST or GET
+        # Honour ?next= if present in POST or GET — validate to prevent open redirects
         next_url = self.request.POST.get("next") or self.request.GET.get("next")
-        if next_url:
+        if next_url and url_has_allowed_host_and_scheme(next_url, allowed_hosts={self.request.get_host()}):
             return next_url
         return reverse("club_detail", kwargs={"slug": self.object.slug})
 
