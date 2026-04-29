@@ -1443,7 +1443,7 @@ class CheckUsernameAvailability(APIView):
     No authentication required (used on the public signup form).
     """
 
-    authentication_classes = []
+    authentication_classes = [SessionAuthentication]
     permission_classes = [AllowAny]
 
     def get(self, request, *args, **kwargs):
