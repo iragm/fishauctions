@@ -2227,9 +2227,9 @@ class UpdateLotPushNotificationsViewTestCase(StandardTestCase):
 
     def test_anonymous_user(self):
         response = self.client.get(self.get_url())
-        assert response.status_code == 302
+        assert response.status_code in [302, 401, 403]
         response = self.client.post(self.get_url())
-        assert response.status_code == 302
+        assert response.status_code in [302, 401, 403]
 
     def test_logged_in_user(self):
         self.client.login(username=self.user_who_does_not_join.username, password="testpassword")
@@ -5029,8 +5029,8 @@ class InvoiceStatusButtonTests(StandardTestCase):
         """Anonymous users cannot change invoice status"""
         url = f"/api/payinvoice/{self.invoice.pk}/PAID"
         response = self.client.post(url)
-        # Should redirect to login
-        assert response.status_code == 302
+        # DRF returns 401 for unauthenticated requests
+        assert response.status_code in [302, 401, 403]
 
 
 class QuickCheckoutHTMXTests(StandardTestCase):
@@ -5496,8 +5496,8 @@ class WatchViewTests(StandardTestCase):
         """Anonymous users cannot watch lots"""
         # watchOrUnwatch is a function-based view
         response = self.client.post(f"/api/watchitem/{self.lot.pk}/", data={"watch": "1"})
-        # Should redirect to login (302) or be denied (403)
-        assert response.status_code in [302, 403]
+        # Should redirect to login (302) or be denied (401/403)
+        assert response.status_code in [302, 401, 403]
 
     def test_watch_logged_in(self):
         """Logged in users can watch lots"""
@@ -6016,7 +6016,7 @@ class WatchOrUnwatchViewTests(StandardTestCase):
     def test_watch_anonymous_denied(self):
         """Anonymous users cannot watch lots"""
         response = self.client.post(f"/api/watchitem/{self.lot.pk}/", data={"watch": "true"})
-        self.assertIn(response.status_code, [302, 403])
+        self.assertIn(response.status_code, [302, 401, 403])
 
     def test_watch_logged_in(self):
         """Logged in users can watch lots"""

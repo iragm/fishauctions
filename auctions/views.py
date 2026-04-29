@@ -55,7 +55,6 @@ from django.http import (
     HttpResponse,
     HttpResponseBadRequest,
     HttpResponseForbidden,
-    HttpResponseNotAllowed,
     HttpResponseRedirect,
     JsonResponse,
 )
@@ -92,7 +91,7 @@ from reportlab.platypus import (
 )
 from rest_framework import generics
 from rest_framework.authentication import SessionAuthentication, TokenAuthentication
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.views import APIView
 from user_agents import parse
 from webpush import send_user_notification
@@ -825,8 +824,11 @@ class LotsByUser(LotListView):
         return context
 
 
-class WatchOrUnwatch(LoginRequiredMixin, View):
+class WatchOrUnwatch(APIView):
     """Watch or unwatch a lot - POST only"""
+
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request, pk):
         watch = request.POST.get("watch", "")
@@ -845,8 +847,11 @@ class WatchOrUnwatch(LoginRequiredMixin, View):
             return HttpResponse("Failure")
 
 
-class LotNotifications(LoginRequiredMixin, View):
+class LotNotifications(APIView):
     """Get count of new lot notifications - POST only"""
+
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
         user = request.user
@@ -860,8 +865,11 @@ class LotNotifications(LoginRequiredMixin, View):
         return JsonResponse(data={"new": new})
 
 
-class IgnoreAuction(LoginRequiredMixin, View):
+class IgnoreAuction(APIView):
     """Ignore an auction - POST only"""
+
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
         auction = request.POST.get("auction", "")
@@ -880,10 +888,13 @@ class IgnoreAuction(LoginRequiredMixin, View):
             return HttpResponse(f"Failure: {e}")
 
 
-class NoLotAuctions(LoginRequiredMixin, View):
+class NoLotAuctions(APIView):
     """POST-only method that returns an empty string if most recent auction you've used accepts lots
     or the name of the auction and the end date
     Used on the lot creation form"""
+
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
         result = ""
@@ -924,11 +935,14 @@ class NoLotAuctions(LoginRequiredMixin, View):
         )
 
 
-class AuctionNotifications(View):
+class AuctionNotifications(APIView):
     """
     POST-only method that will return a count of auctions as well as some info about the closest one.
     This is mostly a wrapper to go around models.nearby_auctions so that all info isn't accessible to anyone
     """
+
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [AllowAny]
 
     def post(self, request):
         new = 0
@@ -987,8 +1001,11 @@ class AuctionNotifications(View):
         )
 
 
-class SetCoordinates(LoginRequiredMixin, View):
+class SetCoordinates(APIView):
     """Set user location coordinates - POST only.  I don't think this is used anywhere any more"""
+
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
         request.user.userdata.location_coordinates = f"{request.POST['latitude']},{request.POST['longitude']}"
@@ -996,8 +1013,11 @@ class SetCoordinates(LoginRequiredMixin, View):
         return HttpResponse("Success")
 
 
-class CreateUserBan(LoginRequiredMixin, View):
+class CreateUserBan(APIView):
     """Ban a user - POST only"""
+
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request, pk):
         user = request.user
@@ -1033,8 +1053,11 @@ class CreateUserBan(LoginRequiredMixin, View):
         return redirect(reverse("userpage", kwargs={"slug": bannedUser.username}))
 
 
-class LotDeactivate(LoginRequiredMixin, View):
+class LotDeactivate(APIView):
     """Deactivate or activate a lot - POST only"""
+
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request, pk):
         lot = Lot.objects.get(pk=pk, is_deleted=False)
@@ -1060,8 +1083,11 @@ class LotDeactivate(LoginRequiredMixin, View):
         return HttpResponse("success")
 
 
-class UserUnban(LoginRequiredMixin, View):
+class UserUnban(APIView):
     """Unban a user - POST only"""
+
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request, pk):
         user = request.user
@@ -1075,11 +1101,14 @@ class UserUnban(LoginRequiredMixin, View):
         return redirect(reverse("userpage", kwargs={"slug": bannedUser.username}))
 
 
-class ImagesPrimary(LoginRequiredMixin, View):
+class ImagesPrimary(APIView):
     """Make the specified image the default image for the lot
     Takes pk of image as post param
     this does not check lot.can_add_images, which is deliberate (who cares if you rotate...)
     """
+
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
         try:
@@ -1095,10 +1124,13 @@ class ImagesPrimary(LoginRequiredMixin, View):
         return HttpResponse("Success")
 
 
-class ImagesRotate(LoginRequiredMixin, View):
+class ImagesRotate(APIView):
     """Rotate an image associated with a lot
     Takes pk of image and angle as post params
     """
+
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
         try:
@@ -1131,12 +1163,15 @@ class ImagesRotate(LoginRequiredMixin, View):
         return HttpResponse("Success")
 
 
-class Feedback(LoginRequiredMixin, View):
+class Feedback(APIView):
     """Leave feedback on a lot
     This can be done as a buyer or a seller
     api/feedback/lot_number/buyer
     api/feedback/lot_number/seller
     """
+
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request, pk, leave_as):
         data = request.POST
@@ -1209,8 +1244,11 @@ def clean_referrer(url):
     return url
 
 
-class PageViewCreate(View):
+class PageViewCreate(APIView):
     """Record page views"""
+
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [AllowAny]
 
     def post(self, request):
         data = request.POST
@@ -1326,10 +1364,11 @@ class PageViewCreate(View):
         return HttpResponse("Success")
 
 
-class InvoicePaid(LoginRequiredMixin, AuctionViewMixin, View):
+class InvoicePaid(APIView):
     """Mark an invoice as paid/ready/open - POST only"""
 
-    allow_non_admins = False
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def dispatch(self, request, *args, **kwargs):
         self.invoice = get_object_or_404(Invoice, pk=kwargs["pk"])
@@ -1361,11 +1400,11 @@ class InvoicePaid(LoginRequiredMixin, AuctionViewMixin, View):
         )
 
 
-class APIPostView(LoginRequiredMixin, View):
+class APIPostView(APIView):
     """POST only method to do stuff, logged in users only"""
 
-    def get(self, request, *args, **kwargs):
-        return HttpResponseNotAllowed(["POST"])
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
         raise NotImplementedError()
@@ -1399,10 +1438,13 @@ class LotPushTestNotificationView(APIPostView):
         return JsonResponse({"result": "success"})
 
 
-class CheckUsernameAvailability(View):
+class CheckUsernameAvailability(APIView):
     """GET /check-username/?username=foo — returns JSON for real-time signup validation.
     No authentication required (used on the public signup form).
     """
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
 
     def get(self, request, *args, **kwargs):
         username = request.GET.get("username", "").strip()
@@ -7127,8 +7169,11 @@ class SingleLotLabelView(LotLabelView):
         return View.dispatch(self, request, *args, **kwargs)
 
 
-class GetClubs(LoginRequiredMixin, View):
+class GetClubs(APIView):
     """Used for autocomplete on the contact info page"""
+
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
         search = request.POST["search"]
@@ -9065,38 +9110,41 @@ class IgnoreCategoriesView(TemplateView):
         return context
 
 
-class CreateUserIgnoreCategory(View):
+class CreateUserIgnoreCategory(APIView):
     """Add category with given pk to ignore list"""
 
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, *args, **kwargs):
-        if not self.request.user.is_authenticated:
-            messages.error(request, "Sign in to ignore categories")
-            return redirect("/")
-        pk = self.kwargs.get("pk", None)
+        pk = kwargs.get("pk", None)
         category = Category.objects.get(pk=pk)
-        result, created = UserIgnoreCategory.objects.update_or_create(category=category, user=self.request.user)
+        result, created = UserIgnoreCategory.objects.update_or_create(category=category, user=request.user)
         return JsonResponse(data={"pk": result.pk})
 
 
-class DeleteUserIgnoreCategory(View):
+class DeleteUserIgnoreCategory(APIView):
     """Allow users to see lots in a given category again."""
 
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, *args, **kwargs):
-        if not self.request.user.is_authenticated:
-            messages.error(request, "Sign in to show categories")
-            return redirect("/")
-        pk = self.kwargs.get("pk", None)
+        pk = kwargs.get("pk", None)
         category = Category.objects.get(pk=pk)
         try:
-            exists = UserIgnoreCategory.objects.get(category=category, user=self.request.user)
+            exists = UserIgnoreCategory.objects.get(category=category, user=request.user)
             exists.delete()
             return JsonResponse(data={"result": "deleted"})
         except Exception as e:
             return JsonResponse(data={"error": str(e)})
 
 
-class GetUserIgnoreCategory(LoginRequiredMixin, View):
+class GetUserIgnoreCategory(APIView):
     """Get a list of all user ignore categories for the request user"""
+
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request, *args, **kwargs):
         categories = Category.objects.all().order_by("name")
@@ -9107,7 +9155,7 @@ class GetUserIgnoreCategory(LoginRequiredMixin, View):
                 "text": category.name,
             }
             try:
-                UserIgnoreCategory.objects.get(user=self.request.user, category=category.pk)
+                UserIgnoreCategory.objects.get(user=request.user, category=category.pk)
                 item["selected"] = True
             except UserIgnoreCategory.DoesNotExist:
                 pass
@@ -10652,11 +10700,11 @@ class AddToCalendarView(LoginRequiredMixin, View):
         )
 
 
-class CategoryFinder(View, LoginRequiredMixin):
+class CategoryFinder(APIView):
     """API view which will return a category (or none) based on POST keyword lot_name"""
 
-    def get(self, request, *args, **kwargs):
-        return redirect("/")
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
         lot_name = request.POST["lot_name"]
@@ -10668,11 +10716,11 @@ class CategoryFinder(View, LoginRequiredMixin):
         return JsonResponse(result)
 
 
-class AuctionFinder(View, LoginRequiredMixin):
+class AuctionFinder(APIView):
     """API view which will return information about an auction based on POST keyword auction.  Expects a pk."""
 
-    def get(self, request, *args, **kwargs):
-        return redirect("/")
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
         try:
@@ -10708,11 +10756,11 @@ class AuctionFinder(View, LoginRequiredMixin):
         return JsonResponse(result)
 
 
-class LotChatSubscribe(View, LoginRequiredMixin):
+class LotChatSubscribe(APIView):
     """Called when a user sends a chat message about a lot to create a ChatSubscription model"""
 
-    def get(self, request, *args, **kwargs):
-        return redirect("/")
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
         try:
@@ -10755,8 +10803,11 @@ class ChatSubscriptions(LoginRequiredMixin, TemplateView):
         return context
 
 
-class AddTosMemo(View, LoginRequiredMixin, AuctionViewMixin):
+class AddTosMemo(APIView, AuctionViewMixin):
     """API view to update the memo field of an auctiontos"""
+
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def dispatch(self, request, *args, **kwargs):
         pk = kwargs.pop("pk")
@@ -10766,9 +10817,6 @@ class AddTosMemo(View, LoginRequiredMixin, AuctionViewMixin):
         self.auction = self.auctiontos.auction
         self.is_auction_admin
         return super().dispatch(request, *args, **kwargs)
-
-    def get(self, request, *args, **kwargs):
-        return redirect("/")
 
     def post(self, request, *args, **kwargs):
         memo = request.POST["memo"]
