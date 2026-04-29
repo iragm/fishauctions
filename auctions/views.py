@@ -5934,7 +5934,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 or check_club_permission(self.request.user, creator_club, "permission_manage_auctions")
             ):
                 auction.club = creator_club
-                Auction.objects.filter(pk=auction.pk).update(club=creator_club)
+                auction.save(update_fields=["club"])
                 auction.create_history(
                     applies_to="RULES",
                     action=f"Automatically associated with club '{creator_club}' based on auction creator's preferences.",
