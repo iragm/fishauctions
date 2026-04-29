@@ -556,12 +556,224 @@ class Club(models.Model):
     location = models.CharField(max_length=500, blank=True, null=True)
     location.help_text = "Search Google maps with this address"
     location_coordinates = PlainLocationField(based_fields=["location"], blank=True, null=True, verbose_name="Map")
+    owner = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="owned_clubs")
+    MEMBERSHIP_SYSTEM_CHOICES = (
+        ("january_first", "January 1st renewal"),
+        ("rolling", "Rolling annual membership"),
+    )
+    membership_system = models.CharField(max_length=20, choices=MEMBERSHIP_SYSTEM_CHOICES, default="january_first")
+    membership_annual_fee = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    discord_server_id = models.CharField(max_length=100, blank=True, null=True)
+    slug = AutoSlugField(populate_from="name", unique=True, always_update=True)
+    allow_joining = models.BooleanField(default=False)
+    allow_integrated_payments = models.BooleanField(default=False)
+    description = models.TextField(verbose_name="About this club", default="", blank=True)
+    enable_club_page = models.BooleanField(
+        default=False,
+        verbose_name="Enable public club page",
+        help_text="When enabled, this club will appear on the club map and have a public detail page.",
+    )
 
     class Meta:
         ordering = ["name"]
 
     def __str__(self):
         return str(self.name)
+
+
+class ClubDiscordRole(models.Model):
+    """Discord roles associated with a club"""
+
+    club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="discord_roles")
+    role_name = models.CharField(max_length=100)
+    createdon = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.club} - {self.role_name}"
+
+
+class ClubPermission(models.Model):
+    """Permission definitions for club roles"""
+
+    PERMISSION_CHOICES = (
+        ("permission_admin", "Full admin access"),
+        ("permission_view", "View members"),
+        ("permission_export", "Export member data"),
+        ("permission_add_edit", "Add and edit members"),
+        ("permission_edit_club", "Edit club settings"),
+    )
+    name = models.CharField(max_length=50, choices=PERMISSION_CHOICES, unique=True)
+    description = models.CharField(max_length=200)
+
+    def __str__(self):
+        return self.get_name_display()
+
+
+class ClubRole(models.Model):
+    """Global roles that can be assigned to club members, shared across all clubs"""
+
+    name = models.CharField(max_length=100, unique=True)
+    permissions = models.ManyToManyField(ClubPermission, blank=True)
+
+    def __str__(self):
+        return self.name
+
+
+DEFAULT_CLUB_ROLES = [
+    {"name": "View club list", "permissions": ["permission_view"]},
+    {"name": "Update users", "permissions": ["permission_view", "permission_add_edit"]},
+    {"name": "Change club permissions", "permissions": ["permission_view", "permission_edit_club"]},
+    {"name": "Export", "permissions": ["permission_view", "permission_add_edit", "permission_export"]},
+]
+
+
+def create_default_club_roles():
+    """Create the default global roles if they don't already exist."""
+    for role_def in DEFAULT_CLUB_ROLES:
+        role, created = ClubRole.objects.get_or_create(name=role_def["name"])
+        if created:
+            perms = ClubPermission.objects.filter(name__in=role_def["permissions"])
+            role.permissions.set(perms)
+
+
+class ContactRecord(models.Model):
+    """Abstract base class for contact records (shared between AuctionTOS and ClubMember)"""
+
+    email = models.EmailField(null=True, blank=True, db_index=True)
+    EMAIL_ADDRESS_STATUSES = (
+        ("BAD", "Invalid"),
+        ("UNKNOWN", "Unknown"),
+        ("VALID", "Verified"),
+    )
+    email_address_status = models.CharField(
+        max_length=20, choices=EMAIL_ADDRESS_STATUSES, default="UNKNOWN", blank=True
+    )
+    phone_number = models.CharField(max_length=20, blank=True, null=True)
+    address = models.CharField(max_length=500, blank=True)
+    memo = models.TextField(blank=True)
+
+    @property
+    def phone_as_string(self):
+        """Add proper dashes to phone"""
+        if not self.phone_number:
+            return ""
+        n = re.sub(r"\D", "", self.phone_number)
+        if len(n) == 10:
+            return f"{n[:3]}-{n[3:6]}-{n[6:]}"
+        return n
+
+    class Meta:
+        abstract = True
+
+
+class ClubMember(ContactRecord):
+    """A member of a club. Similar to AuctionTOS but for club membership."""
+
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="club_memberships")
+    club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="members")
+    first_name = models.CharField(max_length=100, blank=True)
+    last_name = models.CharField(max_length=100, blank=True)
+    discord_id = models.CharField(max_length=100, blank=True, null=True)
+    bap_points = models.PositiveIntegerField(default=0)
+    hap_points = models.PositiveIntegerField(default=0)
+    membership_last_paid = models.DateField(null=True, blank=True)
+    createdon = models.DateTimeField(auto_now_add=True, verbose_name="date joined")
+    added_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name="added_club_members"
+    )
+    CONTACT_STATUS_CHOICES = (
+        ("contact", "Contact normally"),
+        ("non_essential", "No non-essential emails"),
+        ("do_not_contact", "Do not contact"),
+    )
+    contact_status = models.CharField(max_length=20, choices=CONTACT_STATUS_CHOICES, default="contact")
+    discord_roles = models.TextField(blank=True)
+    is_deleted = models.BooleanField(default=False, db_index=True)
+    SOURCE_CHOICES = (
+        ("joined", "Joined via website"),
+        ("discord", "Added from Discord"),
+        ("manually_added", "Manually added"),
+    )
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default="manually_added")
+    roles = models.ManyToManyField(ClubRole, blank=True)
+    possible_duplicate = models.ForeignKey(
+        "ClubMember",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="duplicate_of",
+        help_text="Another club member with the same last name; may be a duplicate",
+    )
+
+    def __str__(self):
+        name = f"{self.first_name} {self.last_name}".strip()
+        if name:
+            return name
+        if self.email:
+            return self.email
+        return f"Member #{self.pk}"
+
+    @property
+    def display_name(self):
+        """Name for display — always non-empty."""
+        return str(self)
+
+    class Meta:
+        ordering = ["last_name", "first_name"]
+
+    def save(self, *args, **kwargs):
+        if self.is_deleted:
+            # When soft-deleting, clear all duplicate links involving this member
+            if self.possible_duplicate_id:
+                ClubMember.objects.filter(pk=self.possible_duplicate_id).update(possible_duplicate=None)
+                self.possible_duplicate_id = None
+            # Clear any other members that point to this member as a duplicate
+            ClubMember.objects.filter(possible_duplicate_id=self.pk).update(possible_duplicate=None)
+            super().save(*args, **kwargs)
+            return
+        super().save(*args, **kwargs)
+        if self.last_name:
+            duplicate = (
+                ClubMember.objects.filter(club=self.club, last_name=self.last_name, is_deleted=False)
+                .exclude(pk=self.pk)
+                .first()
+            )
+            if duplicate:
+                ClubMember.objects.filter(pk=self.pk).update(possible_duplicate=duplicate.pk)
+                ClubMember.objects.filter(pk=duplicate.pk).update(possible_duplicate=self.pk)
+            else:
+                if self.possible_duplicate_id:
+                    ClubMember.objects.filter(pk=self.possible_duplicate_id).update(possible_duplicate=None)
+                ClubMember.objects.filter(pk=self.pk).update(possible_duplicate=None)
+
+
+class ClubHistory(models.Model):
+    """Changelog of changes made to a club"""
+
+    club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="history")
+    user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+    action = models.CharField(max_length=800, blank=True, null=True)
+    timestamp = models.DateTimeField(auto_now_add=True)
+    applies_to = models.CharField(
+        max_length=20,
+        choices=(
+            ("RULES", "Rules"),
+            ("MEMBERS", "Members"),
+            ("MEMBERSHIP", "Membership"),
+            ("SETTINGS", "Settings"),
+        ),
+        blank=True,
+        null=True,
+    )
+
+    def __str__(self):
+        if self.user:
+            return f"{self.user.first_name} {self.user.last_name} {self.action}"
+        return f"System {self.action}"
+
+    class Meta:
+        ordering = ["-timestamp"]
+        verbose_name_plural = "Club history"
 
 
 class Category(models.Model):

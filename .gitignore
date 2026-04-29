@@ -1,6 +1,7 @@
 *.pyc
 .env
 db.sqlite3
+auctions/static/rest_framework/
 set_env.sh
 fishauctions/customsettings.py
 media/

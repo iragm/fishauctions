@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}Edit {{ club.name }}{% endblock %}
+
+{% block content %}
+{{ form.media }}
+<h3><i class="bi bi-gear"></i> Edit {{ club.name }}</h3>
+
+{% crispy form %}
+
+<div id="modals-here"></div>
+{% endblock %}

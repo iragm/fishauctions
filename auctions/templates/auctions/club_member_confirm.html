@@ -1,0 +1,36 @@
+<div id="modal-backdrop" class="modal-backdrop fade show" style="display:block;"></div>
+<div id="modal" class="modal fade show" tabindex="-1" style="display:block;">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">{{ title }}</h5>
+      </div>
+      <div class="modal-body">
+        <p>{{ body }}</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button type="button" class="btn btn-danger"
+          hx-post="{{ action_url }}"
+          hx-target="#modals-here"
+          hx-on::after-request="closeModal()">Confirm</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+function closeModal() {
+  var container = document.getElementById("modals-here");
+  var backdrop = document.getElementById("modal-backdrop");
+  var modal = document.getElementById("modal");
+  if (modal) modal.classList.remove("show");
+  if (backdrop) {
+    backdrop.classList.remove("show");
+    backdrop.style.pointerEvents = "none";
+  }
+  setTimeout(function() {
+    if (container && backdrop && backdrop.parentNode === container) container.removeChild(backdrop);
+    if (container && modal && modal.parentNode === container) container.removeChild(modal);
+  }, 200);
+}
+</script>

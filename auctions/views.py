@@ -25,6 +25,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.models import User
+from django.contrib.auth.views import redirect_to_login
 from django.contrib.messages.views import SuccessMessageMixin
 from django.contrib.sites.models import Site
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
@@ -59,7 +60,7 @@ from django.http import (
     JsonResponse,
 )
 from django.middleware.csrf import get_token
-from django.shortcuts import get_object_or_404, redirect
+from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils import timezone
@@ -89,6 +90,10 @@ from qr_code.qrcode.utils import QRCodeOptions
 from reportlab.platypus import (
     Image as PImage,
 )
+from rest_framework import generics
+from rest_framework.authentication import SessionAuthentication, TokenAuthentication
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.views import APIView
 from user_agents import parse
 from webpush import send_user_notification
 from webpush.models import PushInformation
@@ -97,6 +102,8 @@ from .filters import (
     AuctionFilter,
     AuctionHistoryFilter,
     AuctionTOSFilter,
+    ClubHistoryFilter,
+    ClubMemberFilter,
     LotAdminFilter,
     LotFilter,
     UserBidLotFilter,
@@ -114,6 +121,9 @@ from .forms import (
     ChangeInvoiceStatusForm,
     ChangeUsernameForm,
     ChangeUserPreferencesForm,
+    ClubEditForm,
+    ClubMemberAdminForm,
+    ClubMemberSelfServiceForm,
     CreateAuctionForm,
     CreateEditAuctionTOS,
     CreateImageForm,
@@ -151,6 +161,8 @@ from .models import (
     Category,
     ChatSubscription,
     Club,
+    ClubHistory,
+    ClubMember,
     Invoice,
     InvoiceAdjustment,
     InvoicePayment,
@@ -175,7 +187,16 @@ from .models import (
     median_value,
     nearby_auctions,
 )
-from .tables import AuctionHistoryHTMxTable, AuctionHTMxTable, AuctionTOSHTMxTable, LotHTMxTable, LotHTMxTableForUsers
+from .serializers import ClubMemberSerializer
+from .tables import (
+    AuctionHistoryHTMxTable,
+    AuctionHTMxTable,
+    AuctionTOSHTMxTable,
+    ClubHistoryHTMxTable,
+    ClubMemberHTMxTable,
+    LotHTMxTable,
+    LotHTMxTableForUsers,
+)
 from .tasks import cancel_invoice_notification, schedule_invoice_notification
 
 # Distance conversion constant
@@ -238,6 +259,47 @@ class AuctionViewMixin:
             # logger.debug("allowing user %s to view %s", self.request.user, self.auction)
             pass
         return result
+
+
+def check_club_permission(user, club, permission_name):
+    """Check if a user has a specific permission for a club.
+
+    Returns True if the user is a superuser, the club owner, or has a role with the required
+    permission. Note: 'permission_admin' is treated as a wildcard that grants all permissions —
+    any member with a role that includes 'permission_admin' can perform any action.
+    """
+    if not user.is_authenticated:
+        return False
+    if user.is_superuser:
+        return True
+    if club.owner == user:
+        return True
+    member = ClubMember.objects.filter(club=club, user=user, is_deleted=False).first()
+    if not member:
+        return False
+    # permission_admin is an explicit wildcard: having it grants all permissions
+    return member.roles.filter(permissions__name__in=[permission_name, "permission_admin"]).exists()
+
+
+class ClubViewMixin:
+    """For club permissions, similar to AuctionViewMixin"""
+
+    allow_non_admins = False
+    club = None
+
+    def get_club(self, slug):
+        if not self.club and slug:
+            self.club = Club.objects.filter(Q(slug=slug) | Q(abbreviation=slug)).order_by("pk").first()
+            if not self.club:
+                raise Http404
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        return super().dispatch(request, *args, **kwargs)
+
+    def user_has_club_permission(self, permission_name):
+        """Check if the current user has a specific permission for self.club"""
+        return check_club_permission(self.request.user, self.club, permission_name)
 
 
 class AdminOnlyViewMixin:
@@ -2832,7 +2894,70 @@ class AuctionUnsellLot(LoginRequiredMixin, AuctionViewMixin, View):
         return self.http_method_not_allowed
 
 
-class BulkAddUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView, ContextMixin):
+class CSVContactImportMixin:
+    """Mixin providing shared CSV parsing utilities for importing contact records.
+
+    Use this with views that need to import contacts (e.g., AuctionTOS or ClubMember)
+    from CSV files. Subclass and implement `process_csv_data(csv_reader, filename=None)`
+    to define how parsed rows are applied to your model.
+
+    Example usage in a view::
+
+        class MyImportView(LoginRequiredMixin, CSVContactImportMixin, View):
+            def post(self, request, *args, **kwargs):
+                csv_file = request.FILES.get("csv_file")
+                return self.handle_csv_upload(csv_file)
+
+            def process_csv_data(self, csv_reader, filename=None):
+                for row in csv_reader:
+                    email = self.extract_csv_field(row, self.EMAIL_FIELD_NAMES)
+                    ...
+    """
+
+    EMAIL_FIELD_NAMES = ["email", "e-mail", "email address", "e-mail address"]
+    NAME_FIELD_NAMES = ["name", "full name", "first name", "firstname"]
+    ADDRESS_FIELD_NAMES = ["address", "mailing address"]
+    PHONE_FIELD_NAMES = ["phone", "phone number", "telephone", "telephone number"]
+    MEMO_FIELD_NAMES = ["memo", "note", "notes"]
+    FIRST_NAME_FIELD_NAMES = ["first name", "firstname", "first"]
+    LAST_NAME_FIELD_NAMES = ["last name", "lastname", "last", "surname"]
+
+    @staticmethod
+    def extract_csv_field(row, field_name_list, default_response=""):
+        """Pass a row, and a lowercase list of field names.
+        Extract the first match found (case insensitive) and return the value from the row.
+        Empty string returned if the value is not found in the row."""
+        case_insensitive_row = {k.lower(): v for k, v in row.items()}
+        for name in field_name_list:
+            value = case_insensitive_row.get(name)
+            if value is not None:
+                return value
+        return default_response
+
+    @staticmethod
+    def csv_columns_exist(field_names, columns):
+        """Returns True if any value in the list `columns` exists in the file headers."""
+        case_insensitive_row = {k.lower() for k in field_names}
+        for column in columns:
+            if column in case_insensitive_row:
+                return True
+        return False
+
+    def handle_csv_upload(self, csv_file):
+        """If a CSV file has been uploaded, parse it and redirect. Calls process_csv_data()."""
+        try:
+            csv_file.seek(0)
+            csv_reader = csv.DictReader(TextIOWrapper(csv_file.file, encoding="utf-8-sig", newline=""))
+            filename = getattr(csv_file, "name", None)
+            return self.process_csv_data(csv_reader, filename=filename)
+        except (UnicodeDecodeError, ValueError) as e:
+            messages.error(
+                self.request, f"Unable to read file. Make sure this is a valid UTF-8 CSV file. Error was: {e}"
+            )
+            return None
+
+
+class BulkAddUsers(LoginRequiredMixin, CSVContactImportMixin, AuctionViewMixin, TemplateView, ContextMixin):
     """Add/edit lots of auctiontos"""
 
     template_name = "auctions/bulk_add_users.html"
@@ -2900,25 +3025,6 @@ class BulkAddUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView, ContextMi
     def process_csv_data(self, csv_reader, filename=None, *args, **kwargs):
         """Process CSV data from a DictReader object and add/update users"""
 
-        def extract_info(row, field_name_list, default_response=""):
-            """Pass a row, and a lowercase list of field names
-            extract the first match found (case insensitive) and return the value from the row
-            empty string returned if the value is not found in the row"""
-            case_insensitive_row = {k.lower(): v for k, v in row.items()}
-            for name in field_name_list:
-                value = case_insensitive_row.get(name)
-                if value is not None:
-                    return value
-            return default_response
-
-        def columns_exist(field_names, columns):
-            """returns True if any value in the list `columns` exists in the file"""
-            case_insensitive_row = {k.lower() for k in field_names}
-            for column in columns:
-                if column in case_insensitive_row:
-                    return True
-            return False
-
         email_field_names = ["email", "e-mail", "email address", "e-mail address"]
         bidder_number_fields = ["bidder number", "bidder", "membernumber", "tempguestnumber"]
         name_field_names = ["name", "full name", "first name", "firstname"]
@@ -2935,23 +3041,25 @@ class BulkAddUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView, ContextMi
         # so the error refers to the most important missing column
         try:
             # we're not going to error out for club member or bidding allowed missing columns, but track it for updating existing users
-            is_club_member_field_exists = columns_exist(csv_reader.fieldnames, is_club_member_fields)
-            is_bidding_allowed_fields_exists = columns_exist(csv_reader.fieldnames, is_bidding_allowed_field_names)
-            memo_field_exists = columns_exist(csv_reader.fieldnames, memo_field_names)
-            is_admin_field_exists = columns_exist(csv_reader.fieldnames, is_admin_field_names)
-            if not columns_exist(csv_reader.fieldnames, phone_field_names):
+            is_club_member_field_exists = self.csv_columns_exist(csv_reader.fieldnames, is_club_member_fields)
+            is_bidding_allowed_fields_exists = self.csv_columns_exist(
+                csv_reader.fieldnames, is_bidding_allowed_field_names
+            )
+            memo_field_exists = self.csv_columns_exist(csv_reader.fieldnames, memo_field_names)
+            is_admin_field_exists = self.csv_columns_exist(csv_reader.fieldnames, is_admin_field_names)
+            if not self.csv_columns_exist(csv_reader.fieldnames, phone_field_names):
                 error = "Warning: This file does not contain a phone column"
             else:
                 some_columns_exist = True
-            if not columns_exist(csv_reader.fieldnames, address_field_names):
+            if not self.csv_columns_exist(csv_reader.fieldnames, address_field_names):
                 error = "Warning: This file does not contain an address column"
             else:
                 some_columns_exist = True
-            if not columns_exist(csv_reader.fieldnames, name_field_names):
+            if not self.csv_columns_exist(csv_reader.fieldnames, name_field_names):
                 error = "Warning: This file does not contain a name column"
             else:
                 some_columns_exist = True
-            if not columns_exist(csv_reader.fieldnames, email_field_names):
+            if not self.csv_columns_exist(csv_reader.fieldnames, email_field_names):
                 error = "Warning: This file does not contain an email column"
             else:
                 some_columns_exist = True
@@ -2964,13 +3072,13 @@ class BulkAddUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView, ContextMi
             total_skipped = 0
             total_updated = 0
             for row in csv_reader:
-                bidder_number = extract_info(row, bidder_number_fields)
-                email = extract_info(row, email_field_names)
-                name = extract_info(row, name_field_names)
-                phone = extract_info(row, phone_field_names)
-                address = extract_info(row, address_field_names)
-                memo = extract_info(row, memo_field_names)
-                is_club_member = extract_info(row, is_club_member_fields)
+                bidder_number = self.extract_csv_field(row, bidder_number_fields)
+                email = self.extract_csv_field(row, email_field_names)
+                name = self.extract_csv_field(row, name_field_names)
+                phone = self.extract_csv_field(row, phone_field_names)
+                address = self.extract_csv_field(row, address_field_names)
+                memo = self.extract_csv_field(row, memo_field_names)
+                is_club_member = self.extract_csv_field(row, is_club_member_fields)
                 if is_club_member.lower() in [
                     "yes",
                     "true",
@@ -2981,12 +3089,12 @@ class BulkAddUsers(LoginRequiredMixin, AuctionViewMixin, TemplateView, ContextMi
                     is_club_member = True
                 else:
                     is_club_member = False
-                is_bidding_allowed = extract_info(row, is_bidding_allowed_field_names, "yes")
+                is_bidding_allowed = self.extract_csv_field(row, is_bidding_allowed_field_names, "yes")
                 if is_bidding_allowed.lower() in ["yes", "true"]:
                     bidding_allowed = True
                 else:
                     bidding_allowed = False
-                is_admin = extract_info(row, is_admin_field_names)
+                is_admin = self.extract_csv_field(row, is_admin_field_names)
                 if is_admin and is_admin.lower() in ["yes", "true", "1"]:
                     is_admin = True
                 else:
@@ -8383,6 +8491,29 @@ class UserLocationUpdate(UpdateView, SuccessMessageMixin):
                     applies_to="USERS",
                 )
 
+        for club_member in ClubMember.objects.filter(user=user, is_deleted=False).select_related("club"):
+            changes = []
+            if club_member.first_name != user.first_name:
+                changes.append(f"first name to '{user.first_name}'")
+                club_member.first_name = user.first_name
+            if club_member.last_name != user.last_name:
+                changes.append(f"last name to '{user.last_name}'")
+                club_member.last_name = user.last_name
+            if club_member.phone_number != new_phone:
+                changes.append(f"phone to '{new_phone}'")
+                club_member.phone_number = new_phone
+            if club_member.address != new_address:
+                changes.append(f"address to '{new_address}'")
+                club_member.address = new_address
+            if changes:
+                club_member.save()
+                ClubHistory.objects.create(
+                    club=club_member.club,
+                    user=user,
+                    action=f"Contact info updated for {user.get_full_name()}: " + ", ".join(changes),
+                    applies_to="MEMBERS",
+                )
+
         return super().form_valid(form)
 
     def get_context_data(self, **kwargs):
@@ -8397,6 +8528,18 @@ class UserLocationUpdate(UpdateView, SuccessMessageMixin):
             context["auctiontos_update_message"] = f"Updating your contact info will also update it in {tos.auction}"
         elif count > 1:
             context["auctiontos_update_message"] = f"Updating your contact info will also update it in {count} auctions"
+
+        club_memberships = ClubMember.objects.filter(user=self.request.user, is_deleted=False).select_related("club")
+        club_count = club_memberships.count()
+        if club_count == 1:
+            club = club_memberships.first().club
+            context["club_membership_message"] = (
+                f"Updating your contact info will also update your contact info in {club.name}"
+            )
+        elif club_count > 1:
+            context["club_membership_message"] = (
+                f"Updating your contact info will also update your contact info in {club_count} clubs"
+            )
 
         return context
 
@@ -8886,7 +9029,7 @@ class ClubMap(AdminEmailMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
-        context["clubs"] = Club.objects.filter(active=True, latitude__isnull=False)
+        context["clubs"] = Club.objects.filter(active=True, latitude__isnull=False, enable_club_page=True)
         context["location_message"] = "Set your location to see clubs near you"
         latitude_cookie = self.request.COOKIES.get("latitude")
         longitude_cookie = self.request.COOKIES.get("longitude")
@@ -11170,3 +11313,880 @@ class QuickCheckoutHTMX(AuctionViewMixin, PayPalAPIMixin, SquareAPIMixin, Templa
                             "Square payment link creation failed for invoice %s: %s", invoice.pk, error_message
                         )
         return context
+
+
+# Club management views
+class ClubDetailView(ClubViewMixin, TemplateView):
+    """User self-service page for a club"""
+
+    template_name = "auctions/club_detail.html"
+    allow_non_admins = True
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if not self.club.enable_club_page:
+            # Page is disabled — only users with club roles may view it; everyone else gets 404
+            has_admin_access = request.user.is_authenticated and (
+                self.user_has_club_permission("permission_view") or self.user_has_club_permission("permission_admin")
+            )
+            if not has_admin_access:
+                raise Http404
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["club"] = self.club
+        member = None
+        if self.request.user.is_authenticated:
+            member = ClubMember.objects.filter(club=self.club, user=self.request.user, is_deleted=False).first()
+        context["member"] = member
+        if member:
+            context["update_form"] = ClubMemberSelfServiceForm(instance=member)
+        has_points = (
+            ClubMember.objects.filter(club=self.club, is_deleted=False)
+            .filter(Q(bap_points__gt=0) | Q(hap_points__gt=0))
+            .exists()
+        )
+        context["has_points"] = has_points
+        if has_points:
+            context["bap_leaderboard"] = ClubMember.objects.filter(
+                club=self.club, is_deleted=False, bap_points__gt=0
+            ).order_by("-bap_points")[:10]
+            context["hap_leaderboard"] = ClubMember.objects.filter(
+                club=self.club, is_deleted=False, hap_points__gt=0
+            ).order_by("-hap_points")[:10]
+        context["can_access_admin"] = self.user_has_club_permission(
+            "permission_admin"
+        ) or self.user_has_club_permission("permission_view")
+        context["can_edit_settings"] = self.user_has_club_permission("permission_edit_club")
+        return context
+
+    def post(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return redirect_to_login(request.get_full_path())
+        action = request.POST.get("action", "join")
+        if action == "update":
+            member = ClubMember.objects.filter(club=self.club, user=request.user, is_deleted=False).first()
+            if member:
+                form = ClubMemberSelfServiceForm(request.POST, instance=member)
+                if form.is_valid():
+                    form.save()
+                    messages.success(request, "Your info has been updated.")
+            return redirect(reverse("club_detail", kwargs={"slug": self.club.slug}))
+        # join logic
+        if not self.club.allow_joining:
+            messages.error(request, "This club is not accepting new members right now.")
+            return redirect(reverse("club_detail", kwargs={"slug": self.club.slug}))
+        existing = ClubMember.objects.filter(club=self.club, user=request.user, is_deleted=False).first()
+        if existing:
+            messages.info(request, "You are already a member of this club.")
+        else:
+            ClubMember.objects.create(
+                club=self.club,
+                user=request.user,
+                first_name=request.user.first_name,
+                last_name=request.user.last_name,
+                email=request.user.email,
+                source="joined",
+            )
+            ClubHistory.objects.create(
+                club=self.club,
+                user=request.user,
+                action=f"{request.user.get_full_name()} joined the club",
+                applies_to="MEMBERS",
+            )
+            messages.success(request, f"You have joined {self.club.name}!")
+        return redirect(reverse("club_detail", kwargs={"slug": self.club.slug}))
+
+
+class ClubAdminView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterView):
+    """Admin panel for a club"""
+
+    model = ClubMember
+    table_class = ClubMemberHTMxTable
+    filterset_class = ClubMemberFilter
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_view"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_queryset(self):
+        return ClubMember.objects.filter(club=self.club, is_deleted=False).order_by("last_name", "first_name")
+
+    def get_template_names(self):
+        if self.request.htmx:
+            return "tables/table_generic.html"
+        return "auctions/club_admin.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["club"] = self.club
+        context["can_edit"] = self.user_has_club_permission("permission_edit_club")
+        context["can_export"] = self.user_has_club_permission("permission_export")
+        context["can_add_edit"] = self.user_has_club_permission("permission_add_edit")
+        return context
+
+    def get_table_kwargs(self, **kwargs):
+        kwargs = super().get_table_kwargs(**kwargs)
+        kwargs["can_add_edit"] = self.user_has_club_permission("permission_add_edit")
+        return kwargs
+
+
+class ClubMemberValidation(ClubViewMixin, APIPostView):
+    """Real-time validation for the club member add/edit form.
+
+    Returns JSON with tooltip messages for duplicate name/email detection and
+    auto-fill suggestions from existing club member records.
+    """
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not check_club_permission(request.user, self.club, "permission_add_edit"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        try:
+            pk = int(request.POST.get("pk") or 0) or None
+        except (ValueError, TypeError):
+            pk = None
+        first_name = request.POST.get("first_name", "").strip()
+        last_name = request.POST.get("last_name", "").strip()
+        email = request.POST.get("email", "").strip()
+        result = {
+            "id_first_name": "",
+            "id_last_name": "",
+            "id_email": "",
+            "id_phone_number": "",
+            "id_address": "",
+            "name_tooltip": "",
+            "email_tooltip": "",
+        }
+        base_qs = ClubMember.objects.filter(club=self.club, is_deleted=False)
+        if pk:
+            base_qs = base_qs.exclude(pk=pk)
+        # Auto-fill from AuctionTOS records when name typed without email
+        if (first_name or last_name) and not email and not pk:
+            # Look through AuctionTOS from auctions the requesting user created or is admin in,
+            # exactly like AuctionTOSValidation's auto-fill behaviour.
+            old_auctions = Auction.objects.filter(
+                Q(created_by=request.user) | Q(auctiontos__is_admin=True, auctiontos__user=request.user)
+            )
+            tos_qs = AuctionTOS.objects.filter(auction__in=old_auctions, email__isnull=False).order_by("-createdon")
+            full_name = f"{first_name} {last_name}".strip()
+            old_tos = AuctionTOSFilter.generic(None, tos_qs, full_name, match_names_only=True).first()
+            if old_tos:
+                # Split the single AuctionTOS name field into first/last
+                parts = old_tos.name.strip().split(" ", 1)
+                result["id_first_name"] = parts[0]
+                result["id_last_name"] = parts[1] if len(parts) > 1 else ""
+                result["id_email"] = old_tos.email
+                result["id_phone_number"] = old_tos.phone_number or ""
+                result["id_address"] = old_tos.address or ""
+        # Duplicate name check within this club
+        if first_name or last_name:
+            dup = base_qs.filter(first_name=first_name, last_name=last_name).first()
+            if dup:
+                result["name_tooltip"] = f"{dup} is already in this club"
+        # Duplicate email check within this club
+        if email:
+            dup = base_qs.filter(email=email).first()
+            if dup:
+                result["email_tooltip"] = "Email is already in this club"
+        return JsonResponse(result)
+
+
+class ClubMemberAdminView(APIView):
+    """DRF-based HTMX view for editing a club member"""
+
+    authentication_classes = [TokenAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    @staticmethod
+    def _redirect_to_club_admin(club):
+        """Return an HTMX full-page redirect response to the club admin page."""
+        response = HttpResponse(status=200)
+        response["HX-Redirect"] = reverse("club_admin", kwargs={"slug": club.slug})
+        return response
+
+    def _get_member_and_check_permission(self, request, pk):
+        try:
+            member = ClubMember.objects.get(pk=pk)
+        except ClubMember.DoesNotExist:
+            raise Http404
+        if not check_club_permission(request.user, member.club, "permission_view"):
+            raise PermissionDenied()
+        return member
+
+    def _build_context(self, request, member, form, read_only=False):
+        validation_url = reverse("clubmember_validation", kwargs={"slug": member.club.slug})
+        extra_script = self._get_validation_script(request, pk=member.pk, validation_url=validation_url)
+        return {
+            "club": member.club,
+            "club_member": member,
+            "modal_title": str(member),
+            "form": form,
+            "extra_script": mark_safe(extra_script),
+            "read_only": read_only,
+        }
+
+    @staticmethod
+    def _get_validation_script(request, pk, validation_url):
+        pk_js = f"var member_pk={pk};" if pk else "var member_pk=null;"
+        csrf = get_token(request)
+        return f"""<script>
+{pk_js}
+var clubmember_validation_url = '{validation_url}';
+var clubmember_csrf_token = '{csrf}';
+
+function cmSetFieldInvalid(fieldId, message, is_invalid) {{
+    var field = document.getElementById(fieldId);
+    if (!field) return;
+    var feedbackId = fieldId + "_feedback";
+    var feedback = document.getElementById(feedbackId);
+    if (is_invalid) {{
+        field.classList.add("is-invalid");
+        var existing_error = document.getElementById("error_1_" + fieldId);
+        if (existing_error) existing_error.remove();
+        if (feedback) feedback.remove();
+        feedback = document.createElement("div");
+        feedback.id = feedbackId;
+        feedback.className = "invalid-feedback";
+        field.parentNode.appendChild(feedback);
+        feedback.textContent = message;
+    }} else {{
+        field.classList.remove("is-invalid");
+        if (feedback) feedback.remove();
+    }}
+}}
+
+function cmShowAutocomplete(response, remove) {{
+    var feedback = document.getElementById('id_first_name_feedback');
+    if (feedback) feedback.remove();
+    if (remove) return;
+    feedback = document.createElement("div");
+    feedback.id = "id_first_name_feedback";
+    feedback.className = "valid-feedback d-block cursor-pointer";
+    var btn = document.createElement("button");
+    btn.role = "button";
+    btn.className = "btn btn-sm btn-info";
+    btn.id = "autocompleteMemberForm";
+    btn.textContent = "Click to fill in " + response.id_email;
+    feedback.appendChild(btn);
+    var autocomplete = response;
+    document.getElementById('id_first_name').parentNode.appendChild(feedback);
+    var link = document.getElementById('autocompleteMemberForm');
+    link.addEventListener('click', function(event) {{
+        event.preventDefault();
+        for (var key in autocomplete) {{
+            if (autocomplete.hasOwnProperty(key)) {{
+                var element = document.getElementById(key);
+                if (element && element.type !== "checkbox" && element.value === "") {{
+                    element.value = autocomplete[key] || '';
+                }}
+            }}
+        }}
+    }});
+    link.focus();
+}}
+
+function cmShowTooltip(element, message) {{
+    if (element._tooltipInstance) element._tooltipInstance.dispose();
+    element.setAttribute("data-bs-toggle", "tooltip");
+    element.setAttribute("data-bs-placement", "right");
+    element.setAttribute("title", message);
+    element._tooltipInstance = new bootstrap.Tooltip(element);
+    element._tooltipInstance.show();
+}}
+
+function cmHideTooltip(element) {{
+    if (element._tooltipInstance) {{
+        element._tooltipInstance.dispose();
+        element._tooltipInstance = null;
+    }}
+}}
+
+function cmValidateField() {{
+    var firstNameInput = document.getElementById("id_first_name");
+    var data = {{
+        pk: member_pk,
+        first_name: $("#id_first_name").val(),
+        last_name: $("#id_last_name").val(),
+        email: $("#id_email").val(),
+    }};
+    $.ajax({{
+        url: clubmember_validation_url,
+        type: "POST",
+        data: data,
+        headers: {{ "X-CSRFToken": clubmember_csrf_token }},
+        success: function(response) {{
+            if (response.name_tooltip) {{
+                cmShowTooltip(firstNameInput, response.name_tooltip);
+                cmShowAutocomplete(response, true);
+            }} else if (response.id_email) {{
+                cmShowAutocomplete(response);
+                cmHideTooltip(firstNameInput);
+            }} else {{
+                cmHideTooltip(firstNameInput);
+                cmShowAutocomplete(response, true);
+            }}
+            cmSetFieldInvalid("id_email", response.email_tooltip, !!response.email_tooltip);
+        }}
+    }});
+}}
+
+$("#id_first_name, #id_last_name, #id_email").on("blur", cmValidateField);
+</script>"""
+
+    def get(self, request, pk):
+        member = self._get_member_and_check_permission(request, pk)
+        read_only = not check_club_permission(request.user, member.club, "permission_add_edit")
+        post_url = None if read_only else reverse("clubmember_admin", kwargs={"pk": member.pk})
+        form = ClubMemberAdminForm(instance=member, post_url=post_url, read_only=read_only)
+        return render(
+            request, "auctions/generic_admin_form.html", self._build_context(request, member, form, read_only=read_only)
+        )
+
+    def post(self, request, pk):
+        member = self._get_member_and_check_permission(request, pk)
+        if not check_club_permission(request.user, member.club, "permission_add_edit"):
+            raise PermissionDenied()
+        post_url = reverse("clubmember_admin", kwargs={"pk": member.pk})
+        form = ClubMemberAdminForm(request.POST, instance=member, post_url=post_url)
+        if form.is_valid():
+            saved = form.save()
+            ClubHistory.objects.create(
+                club=member.club,
+                user=request.user,
+                action=f"Updated member {saved}",
+                applies_to="MEMBERS",
+            )
+            messages.success(request, f"{saved} updated.")
+            return self._redirect_to_club_admin(member.club)
+        return render(request, "auctions/generic_admin_form.html", self._build_context(request, member, form))
+
+
+class ClubMemberCreateView(APIView):
+    """DRF-based HTMX view for creating a new club member"""
+
+    authentication_classes = [TokenAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def _get_club_and_check_permission(self, request, slug):
+        club = get_object_or_404(Club, slug=slug)
+        if not check_club_permission(request.user, club, "permission_add_edit"):
+            raise PermissionDenied()
+        return club
+
+    def get(self, request, slug):
+        club = self._get_club_and_check_permission(request, slug)
+        post_url = reverse("clubmember_create", kwargs={"slug": slug})
+        validation_url = reverse("clubmember_validation", kwargs={"slug": slug})
+        form = ClubMemberAdminForm(post_url=post_url)
+        extra_script = ClubMemberAdminView._get_validation_script(request, pk=None, validation_url=validation_url)
+        context = {
+            "club": club,
+            "modal_title": f"Add member to {club.name}",
+            "form": form,
+            "extra_script": mark_safe(extra_script),
+        }
+        return render(request, "auctions/generic_admin_form.html", context)
+
+    def post(self, request, slug):
+        club = self._get_club_and_check_permission(request, slug)
+        post_url = reverse("clubmember_create", kwargs={"slug": slug})
+        form = ClubMemberAdminForm(request.POST, post_url=post_url)
+        if form.is_valid():
+            member = form.save(commit=False)
+            member.club = club
+            member.added_by = request.user
+            member.source = "manually_added"
+            member.save()
+            form.save_m2m()
+            ClubHistory.objects.create(
+                club=club,
+                user=request.user,
+                action=f"Added member {member}",
+                applies_to="MEMBERS",
+            )
+            messages.success(request, f"{member} added to {club.name}.")
+            return ClubMemberAdminView._redirect_to_club_admin(club)
+        extra_script = ClubMemberAdminView._get_validation_script(
+            request, pk=None, validation_url=reverse("clubmember_validation", kwargs={"slug": slug})
+        )
+        context = {
+            "club": club,
+            "modal_title": f"Add member to {club.name}",
+            "form": form,
+            "extra_script": mark_safe(extra_script),
+        }
+        return render(request, "auctions/generic_admin_form.html", context)
+
+
+class ClubMemberRenewView(APIView):
+    """Renew a club member's membership by setting membership_last_paid to today."""
+
+    authentication_classes = [TokenAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            member = ClubMember.objects.get(pk=pk)
+        except ClubMember.DoesNotExist:
+            raise Http404
+        if not check_club_permission(request.user, member.club, "permission_add_edit"):
+            raise PermissionDenied()
+        member.membership_last_paid = timezone.now().date()
+        member.save(update_fields=["membership_last_paid"])
+        ClubHistory.objects.create(
+            club=member.club,
+            user=request.user,
+            action=f"Renewed membership for {member}",
+            applies_to="MEMBERSHIP",
+        )
+        return HttpResponse(status=204, headers={"HX-Trigger": "clubMemberListChanged"})
+
+
+class ClubMemberDeleteView(APIView):
+    """Soft-delete a club member."""
+
+    authentication_classes = [TokenAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            member = ClubMember.objects.get(pk=pk)
+        except ClubMember.DoesNotExist:
+            raise Http404
+        if not check_club_permission(request.user, member.club, "permission_add_edit"):
+            raise PermissionDenied()
+        member.is_deleted = True
+        member.save(update_fields=["is_deleted"])
+        ClubHistory.objects.create(
+            club=member.club,
+            user=request.user,
+            action=f"Removed member {member}",
+            applies_to="MEMBERS",
+        )
+        return HttpResponse(status=204, headers={"HX-Trigger": "clubMemberListChanged"})
+
+
+class ClubMemberConfirmView(APIView):
+    """Show a Bootstrap modal asking the user to confirm a destructive action (e.g. delete)."""
+
+    authentication_classes = [TokenAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk, action):
+        try:
+            member = ClubMember.objects.get(pk=pk)
+        except ClubMember.DoesNotExist:
+            raise Http404
+        if not check_club_permission(request.user, member.club, "permission_add_edit"):
+            raise PermissionDenied()
+        if action == "delete":
+            title = "Remove member"
+            body = f"Remove {member} from this club?"
+            action_url = reverse("club_member_delete", kwargs={"pk": pk})
+        else:
+            raise Http404
+        context = {
+            "title": title,
+            "body": body,
+            "action_url": action_url,
+        }
+        return render(request, "auctions/club_member_confirm.html", context)
+
+
+class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
+    """Dedicated page for renewing a club member's membership."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_add_edit"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def _get_member(self, pk):
+        member = get_object_or_404(ClubMember, pk=pk, club=self.club, is_deleted=False)
+        return member
+
+    def get(self, request, slug, pk):
+        member = self._get_member(pk)
+        default_date = timezone.now().date()
+        context = {
+            "club": self.club,
+            "member": member,
+            "default_date": default_date,
+        }
+        return render(request, "auctions/club_member_renew_page.html", context)
+
+    def post(self, request, slug, pk):
+        member = self._get_member(pk)
+        paid_date_str = request.POST.get("membership_last_paid", "")
+        try:
+            paid_date = datetime.strptime(paid_date_str, "%Y-%m-%d").replace(tzinfo=date_tz.utc).date()
+        except (ValueError, TypeError):
+            paid_date = timezone.now().date()
+        member.membership_last_paid = paid_date
+        member.save(update_fields=["membership_last_paid"])
+        ClubHistory.objects.create(
+            club=self.club,
+            user=request.user,
+            action=f"Renewed membership for {member} (paid {paid_date})",
+            applies_to="MEMBERSHIP",
+        )
+        messages.success(request, f"Membership renewed for {member}.")
+        return redirect(reverse("club_admin", kwargs={"slug": self.club.slug}))
+
+
+class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
+    """Merge two club members: keep target, soft-delete source, copy non-empty fields."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_add_edit"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def _get_member(self, pk):
+        return get_object_or_404(ClubMember, pk=pk, club=self.club, is_deleted=False)
+
+    def get(self, request, slug, pk):
+        source = self._get_member(pk)
+        others = (
+            ClubMember.objects.filter(club=self.club, is_deleted=False)
+            .exclude(pk=pk)
+            .order_by("last_name", "first_name")
+        )
+        context = {
+            "club": self.club,
+            "source": source,
+            "others": others,
+        }
+        return render(request, "auctions/club_member_merge.html", context)
+
+    def post(self, request, slug, pk):
+        source = self._get_member(pk)
+        target_pk = request.POST.get("target")
+        target = get_object_or_404(ClubMember, pk=target_pk, club=self.club, is_deleted=False)
+        if target.pk == source.pk:
+            messages.error(request, "Cannot merge a member with themselves.")
+            return redirect(reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": pk}))
+        # Copy non-empty fields from source to target where target field is empty
+        copy_fields = [
+            "first_name",
+            "last_name",
+            "email",
+            "phone_number",
+            "address",
+            "discord_id",
+            "bap_points",
+            "hap_points",
+            "membership_last_paid",
+        ]
+        for field in copy_fields:
+            source_val = getattr(source, field, None)
+            target_val = getattr(target, field, None)
+            if source_val is not None and not target_val:
+                setattr(target, field, source_val)
+        # Merge roles
+        for role in source.roles.all():
+            target.roles.add(role)
+        target.save()
+        source.is_deleted = True
+        source.save(update_fields=["is_deleted"])
+        ClubHistory.objects.create(
+            club=self.club,
+            user=request.user,
+            action=f"Merged member {source} into {target}",
+            applies_to="MEMBERS",
+        )
+        messages.success(request, f"Merged {source} into {target}.")
+        return redirect(reverse("club_admin", kwargs={"slug": self.club.slug}))
+
+
+class ClubEditView(LoginRequiredMixin, ClubViewMixin, UpdateView):
+    """Edit club info"""
+
+    template_name = "auctions/club_edit.html"
+    form_class = ClubEditForm
+
+    def get_object(self):
+        return self.club
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_success_url(self):
+        messages.success(self.request, "Club settings saved.")
+        # Honour ?next= if present in POST or GET — validate to prevent open redirects
+        next_url = self.request.POST.get("next") or self.request.GET.get("next")
+        if next_url and url_has_allowed_host_and_scheme(next_url, allowed_hosts={self.request.get_host()}):
+            return next_url
+        return reverse("club_detail", kwargs={"slug": self.object.slug})
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["club"] = self.club
+        context["next_url"] = self.request.GET.get("next", "")
+        return context
+
+    def form_valid(self, form):
+        result = super().form_valid(form)
+        ClubHistory.objects.create(
+            club=self.club,
+            user=self.request.user,
+            action="Updated club settings",
+            applies_to="SETTINGS",
+        )
+        return result
+
+
+class ClubHistoryView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterView):
+    """History log for a club"""
+
+    model = ClubHistory
+    table_class = ClubHistoryHTMxTable
+    filterset_class = ClubHistoryFilter
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_view"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_queryset(self):
+        return ClubHistory.objects.filter(club=self.club).order_by("-timestamp")
+
+    def get_template_names(self):
+        if self.request.htmx:
+            return "tables/table_generic.html"
+        return "auctions/club_history.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["club"] = self.club
+        return context
+
+    def get_table_kwargs(self, **kwargs):
+        kwargs = super().get_table_kwargs(**kwargs)
+        kwargs["club"] = self.club
+        return kwargs
+
+
+class ClubMemberCSVImportView(LoginRequiredMixin, CSVContactImportMixin, ClubViewMixin, View):
+    """Import club members from a CSV file"""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not check_club_permission(request.user, self.club, "permission_add_edit"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        csv_file = request.FILES.get("csv_file")
+        if not csv_file:
+            messages.error(request, "No file uploaded.")
+            return redirect(reverse("club_admin", kwargs={"slug": self.club.slug}))
+        result = self.handle_csv_upload(csv_file)
+        if result is None:
+            return redirect(reverse("club_admin", kwargs={"slug": self.club.slug}))
+        return result
+
+    def process_csv_data(self, csv_reader, filename=None):
+        total_added = 0
+        total_updated = 0
+        total_skipped = 0
+        try:
+            for row in csv_reader:
+                email = self.extract_csv_field(row, self.EMAIL_FIELD_NAMES)
+                if not email:
+                    total_skipped += 1
+                    continue
+                first_name = self.extract_csv_field(row, self.FIRST_NAME_FIELD_NAMES)
+                last_name = self.extract_csv_field(row, self.LAST_NAME_FIELD_NAMES)
+                if not first_name and not last_name:
+                    full_name = self.extract_csv_field(row, self.NAME_FIELD_NAMES)
+                    if full_name:
+                        parts = full_name.split(" ", 1)
+                        first_name = parts[0]
+                        last_name = parts[1] if len(parts) > 1 else ""
+                phone = self.extract_csv_field(row, self.PHONE_FIELD_NAMES)
+                address = self.extract_csv_field(row, self.ADDRESS_FIELD_NAMES)
+                memo = self.extract_csv_field(row, self.MEMO_FIELD_NAMES)
+                existing = ClubMember.objects.filter(club=self.club, email=email, is_deleted=False).first()
+                if existing:
+                    changed = False
+                    if first_name and existing.first_name != first_name[:100]:
+                        existing.first_name = first_name[:100]
+                        changed = True
+                    if last_name and existing.last_name != last_name[:100]:
+                        existing.last_name = last_name[:100]
+                        changed = True
+                    if phone and existing.phone_number != phone[:20]:
+                        existing.phone_number = phone[:20]
+                        changed = True
+                    if address and existing.address != address[:500]:
+                        existing.address = address[:500]
+                        changed = True
+                    if changed:
+                        existing.save()
+                        total_updated += 1
+                else:
+                    ClubMember.objects.create(
+                        club=self.club,
+                        email=email[:254],
+                        first_name=first_name[:100] if first_name else "",
+                        last_name=last_name[:100] if last_name else "",
+                        phone_number=phone[:20] if phone else "",
+                        address=address[:500] if address else "",
+                        memo=memo[:500] if memo else "",
+                        source="manually_added",
+                        added_by=self.request.user,
+                    )
+                    total_added += 1
+
+            msg_parts = []
+            if total_added:
+                msg_parts.append(f"{total_added} members added")
+            if total_updated:
+                msg_parts.append(f"{total_updated} members updated")
+            if total_skipped:
+                msg_parts.append(f"{total_skipped} rows skipped (no email)")
+            if msg_parts:
+                messages.success(self.request, ", ".join(msg_parts))
+
+            if total_added > 0 or total_updated > 0:
+                ClubHistory.objects.create(
+                    club=self.club,
+                    user=self.request.user,
+                    action=f"CSV import: {', '.join(msg_parts)}" + (f" from {filename}" if filename else ""),
+                    applies_to="MEMBERS",
+                )
+        except Exception as e:
+            messages.error(self.request, f"Error processing CSV: {e}")
+
+        return redirect(reverse("club_admin", kwargs={"slug": self.club.slug}))
+
+
+class ClubMemberCSVExportView(LoginRequiredMixin, ClubViewMixin, View):
+    """Export club members as CSV — applies the same filter query as the admin list view."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not check_club_permission(request.user, self.club, "permission_export"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request, *args, **kwargs):
+        from .filters import ClubMemberFilter
+
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = f'attachment; filename="{self.club.slug}-members.csv"'
+        writer = csv.writer(response)
+        writer.writerow(
+            [
+                "First Name",
+                "Last Name",
+                "Email",
+                "Phone",
+                "Address",
+                "BAP Points",
+                "HAP Points",
+                "Membership Last Paid",
+                "Date Joined",
+                "Source",
+                "Contact Status",
+                "Discord ID",
+                "Memo",
+            ]
+        )
+        base_qs = ClubMember.objects.filter(club=self.club, is_deleted=False)
+        filterset = ClubMemberFilter(request.GET, queryset=base_qs)
+        qs = filterset.qs
+        for member in qs:
+            writer.writerow(
+                [
+                    member.first_name,
+                    member.last_name,
+                    member.email or "",
+                    member.phone_as_string,
+                    member.address,
+                    member.bap_points,
+                    member.hap_points,
+                    member.membership_last_paid or "",
+                    member.createdon.date(),
+                    member.source,
+                    member.contact_status,
+                    member.discord_id or "",
+                    member.memo,
+                ]
+            )
+        query_filter = request.GET.get("query", "all")
+        ClubHistory.objects.create(
+            club=self.club,
+            user=request.user,
+            action=f"Exported member CSV (filter: {query_filter})",
+            applies_to="MEMBERS",
+        )
+        return response
+
+
+class ClubAPIViewMixin:
+    """Shared mixin for club REST API views"""
+
+    serializer_class = ClubMemberSerializer
+    authentication_classes = [TokenAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get_club(self):
+        if not hasattr(self, "_club"):
+            slug = self.kwargs.get("slug")
+            self._club = get_object_or_404(Club, slug=slug)
+        return self._club
+
+    def get_queryset(self):
+        club = self.get_club()
+        if not check_club_permission(self.request.user, club, "permission_view"):
+            self.permission_denied(self.request, message="You do not have permission to view members of this club.")
+        return ClubMember.objects.filter(club=club, is_deleted=False)
+
+
+class ClubMemberListCreateAPIView(ClubAPIViewMixin, generics.ListCreateAPIView):
+    """List and create club members via REST API"""
+
+    def perform_create(self, serializer):
+        club = self.get_club()
+        if not check_club_permission(self.request.user, club, "permission_add_edit"):
+            self.permission_denied(self.request, message="You do not have permission to add members to this club.")
+        serializer.save(club=club, added_by=self.request.user)
+
+
+class ClubMemberDetailAPIView(ClubAPIViewMixin, generics.RetrieveUpdateDestroyAPIView):
+    """Retrieve, update, or delete a club member via REST API"""
+
+    def perform_update(self, serializer):
+        club = self.get_club()
+        if not check_club_permission(self.request.user, club, "permission_add_edit"):
+            self.permission_denied(self.request, message="You do not have permission to edit members of this club.")
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        club = self.get_club()
+        if not check_club_permission(self.request.user, club, "permission_add_edit"):
+            self.permission_denied(self.request, message="You do not have permission to delete members of this club.")
+        # Soft delete
+        instance.is_deleted = True
+        instance.save(update_fields=["is_deleted"])
+        ClubHistory.objects.create(
+            club=club,
+            user=self.request.user,
+            action=f"Deleted member {instance}",
+            applies_to="MEMBERS",
+        )

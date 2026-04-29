@@ -10,12 +10,21 @@ from django.dispatch import receiver
 from django.utils import timezone
 from django_ses.signals import bounce_received, complaint_received
 
+from .models import create_default_club_roles
+
 logger = logging.getLogger(__name__)
 
 # Email timing constants (in hours)
 WELCOME_EMAIL_DELAY_HOURS = 24
 INVOICE_EMAIL_DELAY_HOURS = 1
 FOLLOWUP_EMAIL_DELAY_HOURS = 24
+
+
+@receiver(post_save, sender="auctions.Club")
+def on_save_club(sender, instance, created, **kwargs):
+    """When a new club is created, ensure default global roles exist."""
+    if created:
+        create_default_club_roles()
 
 
 @receiver(pre_save, sender="auctions.Auction")
@@ -223,6 +232,11 @@ def user_logged_in_callback(sender, user, request, **kwargs):
             auctiontos.user = user
             auctiontos.save()
 
+    # Also link ClubMember records
+    from auctions.models import ClubMember
+
+    ClubMember.objects.filter(user__isnull=True, email=user.email, is_deleted=False).update(user=user)
+
 
 @receiver(post_save, sender=User)
 def create_user_userdata(sender, instance, created, **kwargs):
@@ -238,9 +252,10 @@ def bounce_handler(sender, mail_obj, bounce_obj, raw_message, *args, **kwargs):
     # message_id = mail_obj['messageId']
     recipient_list = mail_obj["destination"]
     email = recipient_list[0]
-    from auctions.models import AuctionTOS
+    from auctions.models import AuctionTOS, ClubMember
 
     AuctionTOS.objects.filter(email=email).update(email_address_status="BAD")
+    ClubMember.objects.filter(email=email, is_deleted=False).update(email_address_status="BAD")
 
 
 @receiver(complaint_received)

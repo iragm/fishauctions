@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% load render_table from django_tables2 %}
+{% load crispy_forms_tags %}
+{% block title %}Admin - {{ club.name }}{% endblock %}
+
+{% block content %}
+<h3><i class="bi bi-people-fill"></i> {{ club.name }} &mdash; Manage Membership</h3>
+<div class="mb-3">
+  <a href="{% url 'club_detail' club.slug %}" class="btn btn-sm btn-primary"><i class="bi bi-house"></i> Club page</a>
+  <a href="{% url 'club_history' club.slug %}" class="btn btn-sm btn-info"><i class="bi bi-clock-history"></i> History</a>
+
+  {% if can_add_edit %}
+  <div class="btn-group">
+    <button class="btn btn-sm btn-primary"
+      hx-get="{% url 'clubmember_create' club.slug %}"
+      hx-target="#modals-here"
+      hx-trigger="click"
+      _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">
+      <i class="bi bi-person-fill-add"></i> Add member
+    </button>
+    <button type="button" class="btn btn-sm btn-primary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false">
+      <span class="visually-hidden">Toggle Dropdown</span>
+    </button>
+    <ul class="dropdown-menu">
+      <li>
+        <form method="post" enctype="multipart/form-data" action="{% url 'club_member_import' club.slug %}" style="margin:0">
+          {% csrf_token %}
+          <input type="file" name="csv_file" id="csv_import_file_club" accept=".csv" style="display:none" onchange="this.form.submit()">
+          <a href="#" class="dropdown-item" onclick="document.getElementById('csv_import_file_club').click(); return false;"><i class="bi bi-person-fill-up"></i> Import from CSV</a>
+        </form>
+      </li>
+    </ul>
+  </div>
+  {% endif %}
+
+  {% if can_export %}
+  <a id="export-btn" class="btn btn-sm btn-secondary" href="{% url 'club_member_export' club.slug %}">
+    <i class="bi bi-download"></i> Export current view
+  </a>
+  {% endif %}
+
+  {% if can_edit %}
+  <a href="{% url 'club_edit' club.slug %}?next={% url 'club_admin' club.slug %}" class="btn btn-sm btn-primary"><i class="bi bi-gear"></i> Settings</a>
+  {% endif %}
+</div>
+
+<form id="filter-form" class="col-sm-12 mt-2" method="get">
+  {% crispy filter.form %}
+</form>
+
+<div class="table-container"
+     hx-get=""
+     hx-trigger="clubMemberListChanged from:body"
+     hx-swap="outerHTML">
+  {% render_table table %}
+</div>
+
+<div id="modals-here"></div>
+
+<script>
+// Keep the export URL in sync with the current filter query
+(function () {
+  const filterInput = document.querySelector('[name="query"]');
+  const exportBtn = document.getElementById('export-btn');
+  if (!filterInput || !exportBtn) return;
+  const baseExportUrl = exportBtn.href.split('?')[0];
+  function updateExportUrl() {
+    const q = filterInput.value;
+    exportBtn.href = q ? baseExportUrl + '?query=' + encodeURIComponent(q) : baseExportUrl;
+  }
+  filterInput.addEventListener('input', updateExportUrl);
+  updateExportUrl();
+})();
+</script>
+
+{% endblock %}

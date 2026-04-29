@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Renew Membership — {{ member }}{% endblock %}
+
+{% block content %}
+<h3><i class="bi bi-calendar-check"></i> Renew Membership</h3>
+<p class="text-muted">Club: <strong>{{ club.name }}</strong></p>
+
+<div class="card mb-4" style="max-width: 480px;">
+  <div class="card-body">
+    <h5 class="card-title">{{ member }}</h5>
+    {% if member.membership_last_paid %}
+    <p class="text-muted small">Last paid: {{ member.membership_last_paid|date:"N j, Y" }}</p>
+    {% else %}
+    <p class="text-muted small">No payment on record.</p>
+    {% endif %}
+
+    <form method="post">
+      {% csrf_token %}
+      <div class="mb-3">
+        <label for="membership_last_paid" class="form-label">Date of payment</label>
+        <input type="date" class="form-control" id="membership_last_paid" name="membership_last_paid"
+          value="{{ default_date|date:'Y-m-d' }}" required>
+        <div class="form-text">
+          {% if club.membership_system == "rolling" %}
+          Rolling annual membership — set to today to renew for one year from this date.
+          {% else %}
+          January 1st renewal — set to today to mark as paid for the current membership year.
+          {% endif %}
+        </div>
+      </div>
+      <div class="d-flex gap-2">
+        <a href="{% url 'club_admin' club.slug %}" class="btn btn-secondary">Cancel</a>
+        <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg me-1"></i>Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

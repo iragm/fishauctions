@@ -554,4 +554,38 @@ urlpatterns = [
     re_path(r"^webpush/", include("webpush.urls")),
     re_path(r"^paypal/webhook/$", views.PayPalWebhookView.as_view(), name="paypal-webhook"),
     re_path(r"^square/webhook/$", views.SquareWebhookView.as_view(), name="square_webhook"),
+    # Club management URLs
+    path("clubs/<slug:slug>/", views.ClubDetailView.as_view(), name="club_detail"),
+    path("clubs/<slug:slug>/admin/", views.ClubAdminView.as_view(), name="club_admin"),
+    path("clubs/<slug:slug>/edit/", views.ClubEditView.as_view(), name="club_edit"),
+    path("clubs/<slug:slug>/admin/history/", views.ClubHistoryView.as_view(), name="club_history"),
+    path("clubs/<slug:slug>/admin/import/", views.ClubMemberCSVImportView.as_view(), name="club_member_import"),
+    path(
+        "clubs/<slug:slug>/admin/export/",
+        views.ClubMemberCSVExportView.as_view(),
+        name="club_member_export",
+    ),
+    path("api/clubmember/<int:pk>/", views.ClubMemberAdminView.as_view(), name="clubmember_admin"),
+    path("api/clubmember/<int:pk>/renew/", views.ClubMemberRenewView.as_view(), name="club_member_renew"),
+    path("api/clubmember/<int:pk>/delete/", views.ClubMemberDeleteView.as_view(), name="club_member_delete"),
+    path(
+        "api/clubmember/<int:pk>/confirm/<str:action>/",
+        views.ClubMemberConfirmView.as_view(),
+        name="club_member_confirm",
+    ),
+    path("api/clubmember/new/<slug:slug>/", views.ClubMemberCreateView.as_view(), name="clubmember_create"),
+    path("api/clubmember-validation/<slug:slug>/", views.ClubMemberValidation.as_view(), name="clubmember_validation"),
+    path("clubs/<slug:slug>/admin/merge/<int:pk>/", views.ClubMemberMergeView.as_view(), name="club_member_merge"),
+    path(
+        "clubs/<slug:slug>/admin/member/<int:pk>/renew/",
+        views.ClubMemberRenewPageView.as_view(),
+        name="club_member_renew_page",
+    ),
+    # REST API v1
+    path("api/v1/clubs/<slug:slug>/members/", views.ClubMemberListCreateAPIView.as_view(), name="api_club_members"),
+    path(
+        "api/v1/clubs/<slug:slug>/members/<int:pk>/",
+        views.ClubMemberDetailAPIView.as_view(),
+        name="api_club_member_detail",
+    ),
 ]

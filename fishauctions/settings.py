@@ -207,6 +207,8 @@ INSTALLED_APPS = [
     "django_ses",
     "webpush",
     "django_celery_beat",
+    "rest_framework",
+    "rest_framework.authtoken",
 ]
 ASGI_APPLICATION = "fishauctions.asgi.application"
 MIDDLEWARE = [
@@ -243,6 +245,7 @@ TEMPLATES = [
                 "auctions.context_processors.dismissed_cookies_tos",
                 "auctions.context_processors.site_config",
                 "auctions.context_processors.add_tz",
+                "auctions.context_processors.user_clubs",
             ],
             "string_if_invalid": TEMPLATE_STRING_IF_INVALID,
         },

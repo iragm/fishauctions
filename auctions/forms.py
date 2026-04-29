@@ -33,6 +33,9 @@ from .models import (
     Bid,
     Category,
     ChatSubscription,
+    Club,
+    ClubMember,
+    ClubRole,
     InvoiceAdjustment,
     Lot,
     LotImage,
@@ -3361,3 +3364,137 @@ class LabelPrintFieldsForm(forms.Form):
         selected_fields = [field["value"] for field in self.available_fields if self.cleaned_data.get(field["value"])]
         self.auction.label_print_fields = ",".join(selected_fields)
         self.auction.save()
+
+
+class ClubMemberSelfServiceForm(forms.ModelForm):
+    """Form for club members to update their own contact info."""
+
+    class Meta:
+        model = ClubMember
+        fields = ["first_name", "last_name", "phone_number", "address"]
+
+
+class ClubEditForm(forms.ModelForm):
+    """Form for club admins to edit their club settings."""
+
+    class Meta:
+        model = Club
+        fields = [
+            "name",
+            "homepage",
+            "facebook_page",
+            "membership_system",
+            "membership_annual_fee",
+            "allow_joining",
+            "allow_integrated_payments",
+            "discord_server_id",
+            "description",
+            "enable_club_page",
+        ]
+        help_texts = {
+            "name": "Changing this will change the URL for your club's page.",
+            "membership_system": (
+                "January 1st: all memberships expire on Jan 1 each year. "
+                "Rolling: memberships expire one year from the payment date."
+            ),
+            "membership_annual_fee": "Leave blank if free.",
+            "allow_joining": "Let members self-join via the public club page.",
+            "allow_integrated_payments": "Accept membership dues directly through the site.",
+            "discord_server_id": "18-digit number found in Discord server settings (required for bot integration).",
+        }
+        widgets = {
+            "homepage": forms.URLInput(attrs={"placeholder": "https://www.yourclub.org"}),
+            "facebook_page": forms.URLInput(attrs={"placeholder": "https://www.facebook.com/groups/yourclub"}),
+            "description": SummernoteWidget(attrs={"summernote": {"width": "100%", "height": "300px"}}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.add_input(Submit("submit", "Save settings", css_class="btn-primary"))
+
+
+class ClubMemberAdminForm(forms.ModelForm):
+    """Form for club admins to edit a club member's details and roles."""
+
+    roles = forms.ModelMultipleChoiceField(
+        queryset=ClubRole.objects.all(),
+        widget=forms.CheckboxSelectMultiple,
+        required=False,
+        label="Roles",
+    )
+
+    class Meta:
+        model = ClubMember
+        fields = [
+            "first_name",
+            "last_name",
+            "email",
+            "phone_number",
+            "address",
+            "contact_status",
+            "bap_points",
+            "hap_points",
+            "roles",
+        ]
+        widgets = {
+            "first_name": forms.TextInput(attrs={"placeholder": "First name"}),
+            "last_name": forms.TextInput(attrs={"placeholder": "Last name"}),
+            "email": forms.EmailInput(attrs={"placeholder": "email@example.com"}),
+            "phone_number": forms.TextInput(attrs={"placeholder": "(555) 555-1234"}),
+            "address": forms.TextInput(attrs={"placeholder": "123 Main St, City, State"}),
+        }
+        help_texts = {
+            "contact_status": (
+                "Contact normally: all emails. "
+                "No non-essential emails: only transactional messages. "
+                "Do not contact: no emails at all."
+            ),
+            "bap_points": "Breeders Award Program points accumulated by this member.",
+            "hap_points": "Horticultural Award Program points accumulated by this member.",
+        }
+
+    def __init__(self, *args, post_url=None, read_only=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        if read_only:
+            for field in self.fields.values():
+                field.disabled = True
+            self.helper.layout = Layout(
+                "first_name",
+                "last_name",
+                "email",
+                "phone_number",
+                "address",
+                "contact_status",
+                "bap_points",
+                "hap_points",
+                "roles",
+                Div(
+                    HTML('<button type="button" class="btn btn-secondary" onclick="closeModal()">Close</button>'),
+                    css_class="modal-footer",
+                ),
+            )
+        elif post_url:
+            self.helper.layout = Layout(
+                "first_name",
+                "last_name",
+                "email",
+                "phone_number",
+                "address",
+                "contact_status",
+                "bap_points",
+                "hap_points",
+                "roles",
+                Div(
+                    HTML('<button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>'),
+                    HTML(
+                        f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn btn-primary">Save</button>'
+                    ),
+                    css_class="modal-footer",
+                ),
+            )
+        else:
+            self.helper.add_input(Submit("submit", "Save", css_class="btn-primary"))

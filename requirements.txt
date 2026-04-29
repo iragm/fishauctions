@@ -153,6 +153,7 @@ django==5.2.13
     #   django-tables2
     #   django-timezone-field
     #   django-weasyprint
+    #   djangorestframework
     #   easy-thumbnails
     #   jsonfield
 django-allauth==65.16.1
@@ -204,6 +205,8 @@ django-timezone-field==7.2.1
 django-weasyprint==2.5.0
     # via -r requirements.in
 django-webpush==0.3.6
+    # via -r requirements.in
+djangorestframework==3.17.1
     # via -r requirements.in
 easy-thumbnails==2.10.1
     # via -r requirements.in

@@ -24,6 +24,8 @@ from .models import (
     AuctionHistory,
     AuctionTOS,
     Category,
+    ClubHistory,
+    ClubMember,
     Location,
     Lot,
     UserInterestCategory,
@@ -985,3 +987,101 @@ def get_recommended_lots(
         keywords=keywords,
     ).qs
     return qs[:qty]
+
+
+class ClubMemberFilter(django_filters.FilterSet):
+    """Filter for club members admin view"""
+
+    query = django_filters.CharFilter(
+        method="clubmember_search",
+        label="",
+        widget=TextInput(
+            attrs={
+                "placeholder": "Filter by name, email, source...",
+                "hx-get": "",
+                "hx-target": "div.table-container",
+                "hx-trigger": "keyup changed delay:300ms",
+                "hx-swap": "outerHTML",
+                "hx-indicator": ".progress",
+            }
+        ),
+    )
+
+    class Meta:
+        model = ClubMember
+        fields = []
+
+    def clubmember_search(self, queryset, name, value):
+        """Support text search including special tokens: discord, current, expired"""
+        tokens = value.lower().split()
+        source_filter = None
+        status_filter = None
+        remaining = []
+        for token in tokens:
+            if token == "discord":
+                source_filter = "discord"
+            elif token == "current":
+                status_filter = "current"
+            elif token == "expired":
+                status_filter = "expired"
+            elif token in ("joined", "website"):
+                source_filter = "joined"
+            elif token in ("manual", "manually_added"):
+                source_filter = "manually_added"
+            else:
+                remaining.append(token)
+
+        if source_filter:
+            queryset = queryset.filter(source=source_filter)
+        membership_validity_days = 365
+        if status_filter in ("current", "expired"):
+            one_year_ago = timezone.now().date() - datetime.timedelta(days=membership_validity_days)
+            if status_filter == "current":
+                queryset = queryset.filter(membership_last_paid__gte=one_year_ago)
+            else:
+                queryset = queryset.filter(
+                    Q(membership_last_paid__lt=one_year_ago) | Q(membership_last_paid__isnull=True)
+                )
+
+        text = " ".join(remaining)
+        if text:
+            queryset = queryset.filter(
+                Q(first_name__icontains=text)
+                | Q(last_name__icontains=text)
+                | Q(email__icontains=text)
+                | Q(user__email__icontains=text)
+            )
+        return queryset
+
+
+class ClubHistoryFilter(django_filters.FilterSet):
+    """Filter club history by user, action, or date"""
+
+    query = django_filters.CharFilter(
+        method="club_history_search",
+        label="",
+        widget=TextInput(
+            attrs={
+                "placeholder": "Type to filter...",
+                "hx-get": "",
+                "hx-target": "div.table-container",
+                "hx-trigger": "keyup changed delay:300ms",
+                "hx-swap": "outerHTML",
+            }
+        ),
+    )
+
+    class Meta:
+        model = ClubHistory
+        fields = []
+
+    def generic(self, queryset, value):
+        return queryset.filter(
+            Q(user__first_name__icontains=value)
+            | Q(user__last_name__icontains=value)
+            | Q(action__icontains=value)
+            | Q(applies_to__icontains=value)
+        )
+
+    def club_history_search(self, queryset, name, value):
+        return self.generic(queryset, value)

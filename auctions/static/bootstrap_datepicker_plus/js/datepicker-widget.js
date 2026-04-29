@@ -41,21 +41,36 @@
     }
   }
 
-  document.addEventListener('DOMContentLoaded', function (event) {
+  function initDatepickerObserver() {
     setTimeout(() => findAndProcessInputs(document));
-    document.addEventListener('DOMNodeInserted', function (event) {
-      setTimeout(() => {
-        if (event.target.querySelectorAll) findAndProcessInputs(event.target);
-      });
+    // Use MutationObserver to handle dynamically added content (e.g. HTMX modals)
+    const observer = new MutationObserver(function (mutations) {
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          if (node.querySelectorAll) setTimeout(() => findAndProcessInputs(node));
+        }
+      }
     });
-  });
+    observer.observe(document.body, { childList: true, subtree: true });
+  }
+
+  // If DOMContentLoaded has already fired (e.g., script loaded via HTMX into a modal),
+  // run immediately; otherwise, wait for it.
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initDatepickerObserver);
+  } else {
+    initDatepickerObserver();
+  }
 
   /**
    * @param {HTMLElement} htmlElement
    */
   function findAndProcessInputs(htmlElement) {
     /** @type {NodeListOf<HTMLInputElement>} */
-    const inputElements = htmlElement.querySelectorAll('[data-dbdp-config]:not([disabled])')
+    // Select only inputs that still have their `name` attribute — after processInputElement runs,
+    // it moves the name to a hidden input and sets data-name on the visible input, so already-
+    // initialized inputs no longer match [name] and won't be double-processed.
+    const inputElements = htmlElement.querySelectorAll('[data-dbdp-config][name]:not([disabled])')
     for (const inputElement of inputElements) {
       try {
         if (!jQuery) throw new DisplayError("You have to load jQuery before form.media");
