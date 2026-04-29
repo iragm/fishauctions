@@ -5,7 +5,7 @@ import logging
 
 from django.contrib.auth.models import User
 from django.contrib.auth.signals import user_logged_in
-from django.db.models.signals import post_save, pre_save
+from django.db.models.signals import m2m_changed, post_save, pre_save
 from django.dispatch import receiver
 from django.utils import timezone
 from django_ses.signals import bounce_received, complaint_received
@@ -265,3 +265,38 @@ def complaint_handler(sender, mail_obj, complaint_obj, raw_message, *args, **kwa
     user = User.objects.filter(email=email).first()
     if user:
         user.userdata.unsubscribe_from_all
+
+
+@receiver(m2m_changed, sender="auctions.ClubMember_roles")
+def on_club_member_roles_changed(sender, instance, action, pk_set, **kwargs):
+    """When a club member's roles gain admin or manage_auctions permission, associate their
+    auctions with the club if the auction doesn't already have a club set."""
+    if action != "post_add":
+        return
+    if not pk_set:
+        return
+    from .models import Auction, AuctionHistory, ClubMember, ClubRole
+
+    # Check if any of the newly-added roles include admin or manage_auctions
+    new_roles_with_permission = ClubRole.objects.filter(
+        pk__in=pk_set,
+        permissions__name__in=["permission_admin", "permission_manage_auctions"],
+    ).exists()
+    if not new_roles_with_permission:
+        return
+    if not isinstance(instance, ClubMember):
+        return
+    member = instance
+    if not member.user:
+        return
+    club = member.club
+    # Find all auctions created by this user that don't already have a club
+    auctions_to_update = Auction.objects.filter(created_by=member.user, club__isnull=True, is_deleted=False)
+    for auction in auctions_to_update:
+        Auction.objects.filter(pk=auction.pk).update(club=club)
+        AuctionHistory.objects.create(
+            auction=auction,
+            user=None,
+            action=f"Automatically associated with club '{club}' because {member.display_name} was granted a club role.",
+            applies_to="RULES",
+        )

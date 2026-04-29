@@ -5710,6 +5710,8 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
             context["club"] = str(club)
             if club.abbreviation:
                 context["club"] = club.abbreviation
+        if settings.ENABLE_CLUB_FINDER and not club:
+            context["show_club_tip"] = True
         return context
 
     def get_form_kwargs(self, *args, **kwargs):
@@ -5923,6 +5925,53 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
             action=action,
             user=self.request.user,
         )
+        # Associate auction with the creator's club if they have admin or manage_auctions permission
+        if not auction.club:
+            creator_userdata = self.request.user.userdata
+            creator_club = creator_userdata.club
+            if creator_club and (
+                check_club_permission(self.request.user, creator_club, "permission_admin")
+                or check_club_permission(self.request.user, creator_club, "permission_manage_auctions")
+            ):
+                auction.club = creator_club
+                Auction.objects.filter(pk=auction.pk).update(club=creator_club)
+                auction.create_history(
+                    applies_to="RULES",
+                    action=f"Automatically associated with club '{creator_club}' based on auction creator's preferences.",
+                    user=None,
+                )
+                # Add any users with manage_auctions role in this club as auction admins
+                default_location = auction.location_qs.first()
+                if default_location:
+                    manage_auctions_members = (
+                        ClubMember.objects.filter(
+                            club=creator_club,
+                            is_deleted=False,
+                            roles__permissions__name__in=["permission_manage_auctions", "permission_admin"],
+                            user__isnull=False,
+                        )
+                        .exclude(user=self.request.user)
+                        .distinct()
+                    )
+                    for member in manage_auctions_members:
+                        existing_tos = AuctionTOS.objects.filter(auction=auction, user=member.user).first()
+                        if not existing_tos:
+                            AuctionTOS.objects.create(
+                                auction=auction,
+                                user=member.user,
+                                pickup_location=default_location,
+                                name=member.display_name,
+                                email=member.email or "",
+                                phone_number=member.phone_number or "",
+                                address=member.address or "",
+                                is_admin=True,
+                                manually_added=True,
+                            )
+                            auction.create_history(
+                                applies_to="USERS",
+                                action=f"Automatically added {member.display_name} as auction admin because of their club role in '{creator_club}'.",
+                                user=None,
+                            )
         return super().form_valid(form)
 
 
@@ -11359,6 +11408,9 @@ class ClubDetailView(ClubViewMixin, TemplateView):
             "permission_admin"
         ) or self.user_has_club_permission("permission_view")
         context["can_edit_settings"] = self.user_has_club_permission("permission_edit_club")
+        context["club_auctions"] = Auction.objects.filter(
+            club=self.club, promote_this_auction=True, is_deleted=False
+        ).order_by("date_start")
         return context
 
     def post(self, request, *args, **kwargs):

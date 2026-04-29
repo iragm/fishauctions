@@ -601,6 +601,7 @@ class ClubPermission(models.Model):
         ("permission_export", "Export member data"),
         ("permission_add_edit", "Add and edit members"),
         ("permission_edit_club", "Edit club settings"),
+        ("permission_manage_auctions", "Manage auctions"),
     )
     name = models.CharField(max_length=50, choices=PERMISSION_CHOICES, unique=True)
     description = models.CharField(max_length=200)
@@ -624,6 +625,7 @@ DEFAULT_CLUB_ROLES = [
     {"name": "Update users", "permissions": ["permission_view", "permission_add_edit"]},
     {"name": "Change club permissions", "permissions": ["permission_view", "permission_edit_club"]},
     {"name": "Export", "permissions": ["permission_view", "permission_add_edit", "permission_export"]},
+    {"name": "Manage auctions", "permissions": ["permission_manage_auctions"]},
 ]
 
 
@@ -862,6 +864,7 @@ class Auction(models.Model):
     watch_warning_email_sent = models.BooleanField(default=False)
     invoiced = models.BooleanField(default=False)
     created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+    club = models.ForeignKey("Club", null=True, blank=True, on_delete=models.SET_NULL, related_name="auctions")
     location = models.CharField(max_length=300, null=True, blank=True)
     location.help_text = "State or region of this auction"
     summernote_description = models.TextField(verbose_name="Rules", default="", blank=True)

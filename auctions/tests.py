@@ -13781,3 +13781,155 @@ class RequireSecureProdSecretsTests(TestCase):
         self.assertIn("SECRET_KEY", message)
         self.assertIn("DATABASE_PASSWORD", message)
         self.assertNotIn("REDIS_PASSWORD", message)
+
+
+class ClubAuctionIntegrationTests(TestCase):
+    """Tests for the club-auction integration feature"""
+
+    def setUp(self):
+        self.client = Client()
+        self.owner = User.objects.create_user(username="ca_owner", password="testpass", email="ca_owner@example.com")
+        self.club = Club.objects.create(
+            name="Auction Test Club",
+            owner=self.owner,
+            enable_club_page=True,
+        )
+        # Set up admin permission and role
+        self.perm_admin = ClubPermission.objects.get_or_create(
+            name="permission_admin", defaults={"description": "Full admin"}
+        )[0]
+        self.admin_role = ClubRole.objects.get_or_create(name="Admin")[0]
+        self.admin_role.permissions.add(self.perm_admin)
+        # Set up manage_auctions permission and role
+        self.perm_manage = ClubPermission.objects.get_or_create(
+            name="permission_manage_auctions", defaults={"description": "Manage auctions"}
+        )[0]
+        self.manage_role = ClubRole.objects.get_or_create(name="Manage auctions")[0]
+        self.manage_role.permissions.add(self.perm_manage)
+        # Set club on owner's userdata
+        self.owner.userdata.club = self.club
+        self.owner.userdata.save()
+        # Make owner a club member with admin role
+        self.owner_member = ClubMember.objects.create(
+            club=self.club, user=self.owner, first_name="Owner", last_name="User"
+        )
+        self.owner_member.roles.add(self.admin_role)
+
+    def _create_auction_via_view(self, user):
+        """Helper to create an auction via the create auction view."""
+        self.client.login(username=user.username, password="testpass")
+        from django.utils import timezone
+
+        start = timezone.now() + timezone.timedelta(days=7)
+        response = self.client.post(
+            reverse("create_auction") + "?online=true",
+            {
+                "title": "Test Auction",
+                "date_start": start.strftime("%Y-%m-%d %H:%M"),
+                "is_online": "true",
+                "cloned_from": "",
+            },
+        )
+        return response
+
+    def test_auction_associated_with_club_on_creation(self):
+        """Auction is automatically associated with club when creator has admin permission"""
+        response = self._create_auction_via_view(self.owner)
+        # Should redirect (success)
+        self.assertEqual(response.status_code, 302)
+        auction = Auction.objects.filter(created_by=self.owner).last()
+        self.assertIsNotNone(auction)
+        self.assertEqual(auction.club, self.club)
+
+    def test_auction_history_created_for_club_association(self):
+        """History note is created when auction is associated with club"""
+        self._create_auction_via_view(self.owner)
+        auction = Auction.objects.filter(created_by=self.owner).last()
+        history = AuctionHistory.objects.filter(auction=auction, applies_to="RULES").order_by("pk")
+        actions = [h.action for h in history]
+        self.assertTrue(any("Automatically associated with club" in a for a in actions))
+
+    def test_no_club_association_when_no_permission(self):
+        """Auction is not associated with club if user has no admin/manage_auctions permission"""
+        user_no_perm = User.objects.create_user(username="no_perm", password="testpass", email="no_perm@example.com")
+        user_no_perm.userdata.club = self.club
+        user_no_perm.userdata.save()
+        # Add as member with no relevant permissions
+        ClubMember.objects.create(club=self.club, user=user_no_perm, first_name="No", last_name="Perm")
+        response = self._create_auction_via_view(user_no_perm)
+        self.assertEqual(response.status_code, 302)
+        auction = Auction.objects.filter(created_by=user_no_perm).last()
+        self.assertIsNone(auction.club)
+
+    def test_club_detail_shows_promoted_auctions(self):
+        """Club detail page lists promoted auctions belonging to that club"""
+        auction = Auction.objects.create(
+            title="Club Promoted Auction",
+            date_start=timezone.now() + timezone.timedelta(days=7),
+            date_end=timezone.now() + timezone.timedelta(days=14),
+            created_by=self.owner,
+            club=self.club,
+            promote_this_auction=True,
+        )
+        url = reverse("club_detail", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(auction, response.context["club_auctions"])
+
+    def test_club_detail_does_not_show_unpromoted_auctions(self):
+        """Club detail page does not list unpromoted auctions"""
+        Auction.objects.create(
+            title="Unpromoted Auction",
+            date_start=timezone.now() + timezone.timedelta(days=7),
+            date_end=timezone.now() + timezone.timedelta(days=14),
+            created_by=self.owner,
+            club=self.club,
+            promote_this_auction=False,
+        )
+        url = reverse("club_detail", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(list(response.context["club_auctions"])), 0)
+
+    def test_role_assignment_fills_club_on_existing_auctions(self):
+        """When a member gains admin/manage_auctions role, existing auctions get club filled in"""
+        user2 = User.objects.create_user(username="role_assign", password="testpass", email="role_assign@example.com")
+        # Create auction without club
+        auction = Auction.objects.create(
+            title="No Club Auction",
+            date_start=timezone.now() + timezone.timedelta(days=7),
+            date_end=timezone.now() + timezone.timedelta(days=14),
+            created_by=user2,
+            club=None,
+        )
+        self.assertIsNone(auction.club)
+        # Create club member and assign role with manage_auctions permission
+        member = ClubMember.objects.create(club=self.club, user=user2, first_name="Role", last_name="Assign")
+        member.roles.add(self.manage_role)
+        # Auction should now have club set
+        auction.refresh_from_db()
+        self.assertEqual(auction.club, self.club)
+
+    def test_role_assignment_creates_history_notes(self):
+        """Auction history note is created when club is set via role assignment"""
+        user2 = User.objects.create_user(username="role_hist", password="testpass", email="role_hist@example.com")
+        auction = Auction.objects.create(
+            title="Role History Auction",
+            date_start=timezone.now() + timezone.timedelta(days=7),
+            date_end=timezone.now() + timezone.timedelta(days=14),
+            created_by=user2,
+            club=None,
+        )
+        member = ClubMember.objects.create(club=self.club, user=user2, first_name="Role", last_name="Hist")
+        member.roles.add(self.manage_role)
+        history = AuctionHistory.objects.filter(auction=auction, applies_to="RULES")
+        self.assertTrue(history.exists())
+        self.assertTrue(any("Automatically associated with club" in h.action for h in history))
+
+    def test_manage_auctions_permission_exists(self):
+        """permission_manage_auctions ClubPermission exists"""
+        self.assertTrue(ClubPermission.objects.filter(name="permission_manage_auctions").exists())
+
+    def test_manage_auctions_role_exists(self):
+        """'Manage auctions' ClubRole exists"""
+        self.assertTrue(ClubRole.objects.filter(name="Manage auctions").exists())

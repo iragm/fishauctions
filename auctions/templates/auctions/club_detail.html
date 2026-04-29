@@ -73,5 +73,17 @@
 </div>
 {% endif %}
 
+{% if club_auctions %}
+<h4 class="mt-4">Auctions</h4>
+<ul class="list-group">
+  {% for auction in club_auctions %}
+  <li class="list-group-item">
+    <a href="{{ auction.get_absolute_url }}">{{ auction.title }}</a>
+    <span class="text-muted ms-2">{{ auction.date_start|date:"N j, Y" }}</span>
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+
 <div id="modals-here"></div>
 {% endblock %}

@@ -67,6 +67,12 @@ $(".submit-button").click(function(event){
             <h4>{{ title }}</h4>{% if new %}<br><span class='text-muted'>
                 This will create a club auction that other people can add lots to.
                 If you are trying to sell a single lot, you should <a href='/lots/new'>create a new lot</a> instead.</span><br><br>{% endif %}
+            {% if show_club_tip %}
+            <div class="alert alert-info" role="alert">
+                <i class="bi bi-info-circle me-1"></i>
+                <strong>Tip:</strong> Make sure to pick your club in <a href="{% url 'contact_info' %}?next={{ request.path }}">preferences</a> so your auction can be associated with your club.
+            </div>
+            {% endif %}
             {% crispy form form.helper %}
         <!-- </div>
     </div>
