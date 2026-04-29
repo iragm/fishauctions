@@ -10,13 +10,15 @@ from unittest.mock import patch
 
 from django import forms
 from django.contrib.auth.models import User
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.test.client import Client
 from django.urls import reverse
 from django.utils import timezone
+
+from fishauctions._env import parse_bool_env, require_secure_prod_secrets
 
 from .filters import LotAdminFilter
 from .forms import AuctionEditForm, ChangeUsernameForm, CreateLotForm
@@ -9208,8 +9210,6 @@ class SquareWebhookSignatureValidationTests(StandardTestCase):
 
     def test_improperly_configured_in_production_without_webhook_key(self):
         """Test that ImproperlyConfigured is raised in production when Square is configured but webhook key is missing"""
-        from django.core.exceptions import ImproperlyConfigured
-
         url = reverse("square_webhook")
 
         # Simulate production mode (DEBUG=False) with Square configured but no webhook signature key
@@ -13719,3 +13719,65 @@ class ClubAPITests(TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertGreaterEqual(len(data), 1)
+
+
+class ParseBoolEnvTests(TestCase):
+    """Cover fishauctions._env.parse_bool_env, which gates settings.DEBUG."""
+
+    def test_unset_returns_default(self) -> None:
+        self.assertTrue(parse_bool_env(None, default=True))
+        self.assertFalse(parse_bool_env(None, default=False))
+
+    def test_truthy_spellings(self) -> None:
+        for value in ("1", "true", "True", "TRUE", "yes", "on", "t", "y", "  true  "):
+            with self.subTest(value=value):
+                self.assertTrue(parse_bool_env(value, default=False))
+
+    def test_falsy_spellings(self) -> None:
+        # "False" is the legacy spelling in .env.example; "false" was the
+        # previously-broken case under the old `== "False"` check.
+        # "   " covers the whitespace-only path documented in _env.py.
+        for value in ("0", "false", "False", "FALSE", "no", "off", "f", "n", "", "   "):
+            with self.subTest(value=value):
+                self.assertFalse(parse_bool_env(value, default=True))
+
+    def test_unrecognized_value_raises(self) -> None:
+        # A typo in the env value must fail loudly, not silently default.
+        with self.assertRaises(ValueError):
+            parse_bool_env("maybe", default=False)
+
+
+class RequireSecureProdSecretsTests(TestCase):
+    """Cover fishauctions._env.require_secure_prod_secrets."""
+
+    def test_all_secrets_set_passes(self) -> None:
+        require_secure_prod_secrets(
+            {
+                "SECRET_KEY": "a-real-secret-value",
+                "DATABASE_PASSWORD": "real-db-pw",
+                "REDIS_PASSWORD": "real-redis-pw",
+            }
+        )
+
+    def test_each_insecure_value_raises(self) -> None:
+        # None covers "env var unset"; "" and "unsecure" are the literal
+        # placeholders shipped in settings.py and docker-compose.yaml.
+        for value in (None, "", "unsecure"):
+            with self.subTest(value=value):
+                with self.assertRaises(ImproperlyConfigured) as ctx:
+                    require_secure_prod_secrets({"SECRET_KEY": value})
+                self.assertIn("SECRET_KEY", str(ctx.exception))
+
+    def test_multiple_offenders_reported_together(self) -> None:
+        with self.assertRaises(ImproperlyConfigured) as ctx:
+            require_secure_prod_secrets(
+                {
+                    "SECRET_KEY": "unsecure",
+                    "DATABASE_PASSWORD": None,
+                    "REDIS_PASSWORD": "real-redis-pw",
+                }
+            )
+        message = str(ctx.exception)
+        self.assertIn("SECRET_KEY", message)
+        self.assertIn("DATABASE_PASSWORD", message)
+        self.assertNotIn("REDIS_PASSWORD", message)

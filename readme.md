@@ -39,6 +39,8 @@ docker compose up -d
 ```
 You should now be able to access a development site at 127.0.0.1 (Note: unlike most Django projects, you probably won't use port 8000)
 
+**`DEBUG` is fail-closed**: an unset `DEBUG` env var resolves to `False` (production mode). The `.env.example` sets `DEBUG='True'` so a fresh dev setup works out of the box. If you have an existing `.env` from before this change, add `DEBUG='True'` (or `DEBUG=1`) to keep dev mode; otherwise the app will start in production mode and route real email, hit the live PayPal API, etc.
+
 **Demo data**: In development mode (DEBUG=True), the system will automatically load demo data including 3 sample auctions, users, lots, and bids when starting with an empty database. This provides realistic examples to explore the application's features.
 
 One last thing to do is to create an admin.  Back in the shell, enter:
@@ -169,11 +171,11 @@ A few other settings, and what they do:
 
 `MAILING_ADDRESS` Your physical mailing address, shown next to the unsubscribe link on promo emails.
 
-`ALLOW_USERS_TO_CREATE_AUCTIONS` Set this to False (case sensitive) to allow only admin users to create club auctions.  A closely related setting, `USERS_ARE_TRUSTED_BY_DEFAULT`, allows users to promote auctions, manage payments, and send invoice notifications.
+`ALLOW_USERS_TO_CREATE_AUCTIONS` Set this to False to allow only admin users to create club auctions.  A closely related setting, `USERS_ARE_TRUSTED_BY_DEFAULT`, allows users to promote auctions, manage payments, and send invoice notifications.
 
 If you plan to allow anyone to create auctions, set `ALLOW_USERS_TO_CREATE_AUCTIONS=True` and `USERS_ARE_TRUSTED_BY_DEFAULT=False`, which will let people create test auctions any time, and promoted auctions once an admin has marked them as trusted.  Setting both settings to True will allow anyone to create a promoted auction any time and is not recommended.
 
-`ALLOW_USERS_TO_CREATE_LOTS` Set this to False (case sensitive) to disable creating stand-alone lots not associated with any auction for newly created users.  Users will still be able to add lots to club auctions.
+`ALLOW_USERS_TO_CREATE_LOTS` Set this to False to disable creating stand-alone lots not associated with any auction for newly created users.  Users will still be able to add lots to club auctions.
 
 Directly related to this is a management command `change_standalone_lots` which can be used to enable/disable this for all existing users.  Example: `docker exec -it django python3 manage.py change_standalone_lots on` will allow users to create their own lots.
 
@@ -189,7 +191,7 @@ Directly related to this is a management command `change_standalone_lots` which 
 
 `WEBSITE_FOCUS` Plural, all-lowercase name of whatever your website is focused around.  For example, "fish", "birds", "items"...
 
-Most of the other options in the .env file are pretty self-explanatory.  Booleans (True or False) are case sensitive.
+Most of the other options in the .env file are pretty self-explanatory.
 Save and exit nano, then type:
 ```
 docker compose --profile "*" build

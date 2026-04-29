@@ -60,7 +60,6 @@ window.onload = function() {
         <script type="text/javascript" src="{% static 'js/vendor/bootstrap.bundle.min.js' %}"></script>
         {# Bootstrap bundle includes Popper.js, no need to load separately #}
         {% endblock %}
-        <script type="text/javascript" src="{% static 'js/auction_site.js' %}"></script>
         {% include 'base_page_view.html' %}
         {% if request.user.is_authenticated %}
         <script>
