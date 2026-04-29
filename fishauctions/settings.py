@@ -759,3 +759,7 @@ if not _encryption_key:
     msg = f"FIELD_ENCRYPTION_KEY environment variable is required. Add this to your .env file: {env_line}"
     raise ImproperlyConfigured(msg)
 FIELD_ENCRYPTION_KEY = _encryption_key
+
+# Discord bot integration settings
+DISCORD_PUBLIC_KEY = os.environ.get("DISCORD_PUBLIC_KEY", "")
+DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")

@@ -8,5 +8,14 @@
 
 {% crispy form %}
 
+{% if can_edit_discord %}
+<div hx-get="{% url 'club_discord_config' club.slug %}"
+     hx-trigger="load"
+     hx-target="this"
+     hx-swap="innerHTML">
+  <div class="text-muted small"><i class="bi bi-hourglass-split"></i> Loading Discord configuration…</div>
+</div>
+{% endif %}
+
 <div id="modals-here"></div>
 {% endblock %}

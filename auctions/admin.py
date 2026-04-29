@@ -787,8 +787,9 @@ class ClubPermissionAdmin(admin.ModelAdmin):
 
 class ClubDiscordRoleAdmin(admin.ModelAdmin):
     model = ClubDiscordRole
-    list_display = ("role_name", "club", "createdon")
-    search_fields = ("role_name", "club__name")
+    list_display = ("role_name", "role_id", "is_default", "club", "createdon")
+    list_filter = ("is_default", "club")
+    search_fields = ("role_name", "role_id", "club__name")
 
 
 class ClubHistoryAdmin(admin.ModelAdmin):

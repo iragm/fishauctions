@@ -585,7 +585,9 @@ class ClubDiscordRole(models.Model):
     """Discord roles associated with a club"""
 
     club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="discord_roles")
+    role_id = models.CharField(max_length=20, blank=True, help_text="Discord role snowflake ID")
     role_name = models.CharField(max_length=100)
+    is_default = models.BooleanField(default=False, help_text="Assign this role to users who register via Discord")
     createdon = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

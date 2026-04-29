@@ -161,6 +161,7 @@ from .models import (
     Category,
     ChatSubscription,
     Club,
+    ClubDiscordRole,
     ClubHistory,
     ClubMember,
     Invoice,
@@ -11935,6 +11936,7 @@ class ClubEditView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         context = super().get_context_data(**kwargs)
         context["club"] = self.club
         context["next_url"] = self.request.GET.get("next", "")
+        context["can_edit_discord"] = self.user_has_club_permission("permission_edit_club")
         return context
 
     def form_valid(self, form):
@@ -12190,3 +12192,341 @@ class ClubMemberDetailAPIView(ClubAPIViewMixin, generics.RetrieveUpdateDestroyAP
             action=f"Deleted member {instance}",
             applies_to="MEMBERS",
         )
+
+
+# ---------------------------------------------------------------------------
+# Discord integration helpers and views
+# ---------------------------------------------------------------------------
+
+# Discord interaction type constants
+_DISCORD_TYPE_PING = 1
+_DISCORD_TYPE_COMPONENT = 3
+_DISCORD_TYPE_MODAL_SUBMIT = 5
+_DISCORD_TYPE_CHANNEL_MESSAGE = 4
+_DISCORD_TYPE_MODAL = 9
+
+# Discord component type constants
+_DISCORD_COMPONENT_ACTION_ROW = 1
+_DISCORD_COMPONENT_TEXT_INPUT = 4
+
+# Discord message flag: ephemeral (only visible to the user who triggered it)
+_DISCORD_FLAG_EPHEMERAL = 64
+
+
+def verify_discord_signature(public_key_hex, signature_hex, timestamp, body):
+    """Verify a Discord interaction request signature using Ed25519.
+
+    Returns True if the signature is valid, False otherwise.
+    """
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+    try:
+        key = Ed25519PublicKey.from_public_bytes(bytes.fromhex(public_key_hex))
+        message = timestamp.encode() + (body if isinstance(body, bytes) else body.encode())
+        key.verify(bytes.fromhex(signature_hex), message)
+        return True
+    except (InvalidSignature, ValueError, TypeError):
+        return False
+
+
+def assign_discord_role(guild_id, user_id, role_id):
+    """Assign a Discord role to a guild member via the Discord REST API.
+
+    PUT /guilds/{guild_id}/members/{user_id}/roles/{role_id}
+    Returns True on success (204 No Content), False otherwise.
+    """
+    bot_token = getattr(settings, "DISCORD_BOT_TOKEN", "")
+    if not bot_token:
+        logger.warning("DISCORD_BOT_TOKEN not configured – cannot assign Discord role")
+        return False
+    url = f"https://discord.com/api/v10/guilds/{guild_id}/members/{user_id}/roles/{role_id}"
+    headers = {"Authorization": f"Bot {bot_token}"}
+    try:
+        resp = requests.put(url, headers=headers, timeout=10)
+        if resp.status_code == 204:
+            return True
+        logger.warning(
+            "Discord role assignment failed: guild=%s user=%s role=%s status=%s",
+            guild_id,
+            user_id,
+            role_id,
+            resp.status_code,
+        )
+        return False
+    except requests.RequestException as exc:
+        logger.exception("Error assigning Discord role: %s", exc)
+        return False
+
+
+class DiscordInteractionsView(View):
+    """Handle Discord interaction requests at /discord/interactions/.
+
+    Supports:
+      - Type 1 (PING)
+      - Type 3 (component / button click) with custom_id=join_button
+      - Type 5 (modal submit) with custom_id=join_modal
+    """
+
+    @method_decorator(csrf_exempt)
+    def dispatch(self, *args, **kwargs):
+        return super().dispatch(*args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        public_key = getattr(settings, "DISCORD_PUBLIC_KEY", "")
+        if not public_key:
+            logger.warning("DISCORD_PUBLIC_KEY not configured")
+            return HttpResponseForbidden("Discord integration not configured")
+
+        # Signature verification
+        signature = request.headers.get("X-Signature-Ed25519", "")
+        timestamp = request.headers.get("X-Signature-Timestamp", "")
+        body = request.body
+
+        if not signature or not timestamp:
+            return HttpResponseBadRequest("Missing signature headers")
+
+        if not verify_discord_signature(public_key, signature, timestamp, body):
+            return HttpResponseForbidden("Invalid request signature")
+
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            return HttpResponseBadRequest("Invalid JSON")
+
+        interaction_type = data.get("type")
+
+        # Type 1 – PING (required for Discord endpoint verification)
+        if interaction_type == _DISCORD_TYPE_PING:
+            return JsonResponse({"type": _DISCORD_TYPE_PING})
+
+        # Type 3 – Component interaction (button click)
+        if interaction_type == _DISCORD_TYPE_COMPONENT:
+            custom_id = data.get("data", {}).get("custom_id", "")
+            if custom_id == "join_button":
+                return JsonResponse(
+                    {
+                        "type": _DISCORD_TYPE_MODAL,
+                        "data": {
+                            "custom_id": "join_modal",
+                            "title": "Enter your contact information",
+                            "components": [
+                                {
+                                    "type": _DISCORD_COMPONENT_ACTION_ROW,
+                                    "components": [
+                                        {
+                                            "type": _DISCORD_COMPONENT_TEXT_INPUT,
+                                            "custom_id": "first_name",
+                                            "label": "First name",
+                                            "style": 1,
+                                            "required": True,
+                                        }
+                                    ],
+                                },
+                                {
+                                    "type": _DISCORD_COMPONENT_ACTION_ROW,
+                                    "components": [
+                                        {
+                                            "type": _DISCORD_COMPONENT_TEXT_INPUT,
+                                            "custom_id": "last_name",
+                                            "label": "Last name",
+                                            "style": 1,
+                                            "required": True,
+                                        }
+                                    ],
+                                },
+                                {
+                                    "type": _DISCORD_COMPONENT_ACTION_ROW,
+                                    "components": [
+                                        {
+                                            "type": _DISCORD_COMPONENT_TEXT_INPUT,
+                                            "custom_id": "email",
+                                            "label": "Email address",
+                                            "style": 1,
+                                            "required": True,
+                                        }
+                                    ],
+                                },
+                            ],
+                        },
+                    }
+                )
+            return JsonResponse({"type": _DISCORD_TYPE_PING})
+
+        # Type 5 – Modal submit
+        if interaction_type == _DISCORD_TYPE_MODAL_SUBMIT:
+            custom_id = data.get("data", {}).get("custom_id", "")
+            if custom_id == "join_modal":
+                return self._handle_join_modal(data)
+            return JsonResponse({"type": _DISCORD_TYPE_PING})
+
+        return JsonResponse({"type": _DISCORD_TYPE_PING})
+
+    def _handle_join_modal(self, data):
+        guild_id = data.get("guild_id", "")
+        member_data = data.get("member") or {}
+        user_data = member_data.get("user") or data.get("user") or {}
+        discord_id = user_data.get("id", "")
+
+        # Extract text inputs from modal components
+        fields = {}
+        for row in data.get("data", {}).get("components", []):
+            for comp in row.get("components", []):
+                fields[comp.get("custom_id", "")] = comp.get("value", "")
+
+        first_name = fields.get("first_name", "").strip()
+        last_name = fields.get("last_name", "").strip()
+        email = fields.get("email", "").strip()
+
+        def _ephemeral(content):
+            return JsonResponse(
+                {"type": _DISCORD_TYPE_CHANNEL_MESSAGE, "data": {"content": content, "flags": _DISCORD_FLAG_EPHEMERAL}}
+            )
+
+        if not guild_id or not discord_id:
+            return _ephemeral("❌ Unable to process your request. Please try again.")
+
+        club = Club.objects.filter(discord_server_id=guild_id).first()
+        if not club:
+            return _ephemeral("❌ No club is configured for this Discord server.")
+
+        # Already registered with this Discord ID?
+        existing = ClubMember.objects.filter(club=club, discord_id=discord_id, is_deleted=False).first()
+        if existing:
+            return _ephemeral("✅ You're already registered!")
+
+        default_role = ClubDiscordRole.objects.filter(club=club, is_default=True).first()
+
+        # Email match – link Discord ID and assign role
+        if email:
+            existing_by_email = ClubMember.objects.filter(club=club, email=email, is_deleted=False).first()
+            if existing_by_email:
+                existing_by_email.discord_id = discord_id
+                existing_by_email.save(update_fields=["discord_id"])
+                if default_role and default_role.role_id:
+                    assign_discord_role(guild_id, discord_id, default_role.role_id)
+                return _ephemeral("✅ You're in! Access unlocked.")
+
+        # Create a new club member
+        new_member = ClubMember(
+            club=club,
+            first_name=first_name,
+            last_name=last_name,
+            email=email or None,
+            discord_id=discord_id,
+            source="discord",
+        )
+        new_member.save()
+        if default_role and default_role.role_id:
+            assign_discord_role(guild_id, discord_id, default_role.role_id)
+        return _ephemeral("✅ You're in! Access unlocked.")
+
+
+class ClubDiscordConfigView(LoginRequiredMixin, ClubViewMixin, View):
+    """HTMX partial that renders the Discord configuration panel for a club."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request, *args, **kwargs):
+        roles = ClubDiscordRole.objects.filter(club=self.club).order_by("role_name")
+        interactions_url = request.build_absolute_uri("/discord/interactions/")
+        context = {
+            "club": self.club,
+            "roles": roles,
+            "interactions_url": interactions_url,
+        }
+        return render(request, "auctions/club_discord_config.html", context)
+
+
+class ClubDiscordFetchRolesView(LoginRequiredMixin, ClubViewMixin, View):
+    """Fetch roles from the Discord API and save them to the database."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        club = self.club
+        if not club.discord_server_id:
+            messages.error(request, "Save a Discord server ID first.")
+            return self._render(request)
+
+        bot_token = getattr(settings, "DISCORD_BOT_TOKEN", "")
+        if not bot_token:
+            messages.error(request, "DISCORD_BOT_TOKEN is not configured.")
+            return self._render(request)
+
+        url = f"https://discord.com/api/v10/guilds/{club.discord_server_id}/roles"
+        headers = {"Authorization": f"Bot {bot_token}"}
+        try:
+            resp = requests.get(url, headers=headers, timeout=10)
+        except requests.RequestException as exc:
+            logger.exception("Error fetching Discord roles: %s", exc)
+            messages.error(request, "Network error while fetching Discord roles.")
+            return self._render(request)
+
+        if resp.status_code != 200:
+            messages.error(request, f"Discord API error {resp.status_code}: could not fetch roles.")
+            return self._render(request)
+
+        roles_data = resp.json()
+        updated = 0
+        for role in roles_data:
+            role_id = role.get("id", "")
+            role_name = role.get("name", "")
+            # Skip @everyone (id == guild_id) and managed/bot roles
+            if role_id == club.discord_server_id or role.get("managed"):
+                continue
+            obj = ClubDiscordRole.objects.filter(club=club, role_id=role_id).first()
+            if obj:
+                if obj.role_name != role_name:
+                    obj.role_name = role_name
+                    obj.save(update_fields=["role_name"])
+            else:
+                ClubDiscordRole.objects.create(club=club, role_id=role_id, role_name=role_name)
+            updated += 1
+
+        messages.success(request, f"Fetched {updated} role(s) from Discord.")
+        return self._render(request)
+
+    def _render(self, request):
+        roles = ClubDiscordRole.objects.filter(club=self.club).order_by("role_name")
+        interactions_url = request.build_absolute_uri("/discord/interactions/")
+        context = {
+            "club": self.club,
+            "roles": roles,
+            "interactions_url": interactions_url,
+        }
+        return render(request, "auctions/club_discord_config.html", context)
+
+
+class ClubDiscordSetDefaultRoleView(LoginRequiredMixin, ClubViewMixin, View):
+    """Set a ClubDiscordRole as the default for new Discord registrations."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, slug, pk, *args, **kwargs):
+        role = get_object_or_404(ClubDiscordRole, pk=pk, club=self.club)
+        # Clear any existing default for this club
+        ClubDiscordRole.objects.filter(club=self.club, is_default=True).update(is_default=False)
+        role.is_default = True
+        role.save(update_fields=["is_default"])
+        messages.success(request, f'"{role.role_name}" set as the default role.')
+        roles = ClubDiscordRole.objects.filter(club=self.club).order_by("role_name")
+        interactions_url = request.build_absolute_uri("/discord/interactions/")
+        context = {
+            "club": self.club,
+            "roles": roles,
+            "interactions_url": interactions_url,
+        }
+        return render(request, "auctions/club_discord_config.html", context)

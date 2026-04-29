@@ -1,0 +1,115 @@
+{% load crispy_forms_tags %}
+{% if messages %}
+  {% for message in messages %}
+    <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags }}{% endif %} alert-dismissible fade show" role="alert">
+      {{ message }}
+      <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+  {% endfor %}
+{% endif %}
+
+<div class="card mb-3" id="discord-config-panel">
+  <div class="card-body">
+    <h5 class="card-title"><i class="bi bi-discord"></i> Discord Integration</h5>
+
+    <p>
+      Let members join your club directly from Discord. When a user clicks a button in your server,
+      they fill out a short form and are automatically added to your member list and granted a role.
+    </p>
+
+    <h6>Setup steps</h6>
+    <ol>
+      <li>
+        <strong>Create or invite your Discord bot</strong> to your server and give it the
+        <em>Manage Roles</em> permission. The bot role must be placed <em>above</em> the roles it
+        should assign.
+      </li>
+      <li>
+        <strong>Register the interactions endpoint</strong> with your Discord application:
+        <br>
+        Go to <a href="https://discord.com/developers/applications" target="_blank" rel="noopener">discord.com/developers/applications</a>
+        &rarr; your app &rarr; <em>Interactions Endpoint URL</em> and enter:
+        <br>
+        <code class="user-select-all">{{ interactions_url }}</code>
+      </li>
+      <li>
+        <strong>Set your Discord public key</strong> in your <code>.env</code> file
+        (<code>DISCORD_PUBLIC_KEY</code>) and restart the server.
+      </li>
+      <li>
+        <strong>Create a welcome channel</strong> that only your bot and admins can see, then post a
+        message there. Use the Discord developer portal or a slash command to add a button with
+        <code>custom_id = "join_button"</code> to that message.
+      </li>
+      <li>
+        <strong>Enter your Server ID</strong> below (Settings → Save) and click
+        <em>Fetch roles from Discord</em>.
+      </li>
+      <li>
+        <strong>Set the default role</strong> — this role will be assigned to members when they
+        verify via Discord.
+      </li>
+    </ol>
+
+    {% if club.discord_server_id %}
+      <div class="mb-3">
+        <form method="post"
+              action="{% url 'club_discord_fetch_roles' club.slug %}"
+              hx-post="{% url 'club_discord_fetch_roles' club.slug %}"
+              hx-target="#discord-config-panel"
+              hx-swap="outerHTML">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-sm btn-secondary">
+            <i class="bi bi-arrow-clockwise"></i> Fetch roles from Discord
+          </button>
+        </form>
+      </div>
+
+      {% if roles %}
+        <table class="table table-sm">
+          <thead>
+            <tr>
+              <th>Role name</th>
+              <th>Role ID</th>
+              <th>Default?</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for role in roles %}
+            <tr>
+              <td>{{ role.role_name }}</td>
+              <td><code>{{ role.role_id }}</code></td>
+              <td>
+                {% if role.is_default %}
+                  <span class="badge bg-success">Default</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if not role.is_default %}
+                <form method="post"
+                      action="{% url 'club_discord_set_default_role' club.slug role.pk %}"
+                      hx-post="{% url 'club_discord_set_default_role' club.slug role.pk %}"
+                      hx-target="#discord-config-panel"
+                      hx-swap="outerHTML">
+                  {% csrf_token %}
+                  <button type="submit" class="btn btn-sm btn-outline-primary">Set as default</button>
+                </form>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="text-muted small">No roles fetched yet. Click <em>Fetch roles from Discord</em> above.</p>
+      {% endif %}
+
+    {% else %}
+      <div class="alert alert-warning">
+        <i class="bi bi-exclamation-triangle"></i>
+        Enter and save your <strong>Discord Server ID</strong> (in the form above) to enable role management.
+      </div>
+    {% endif %}
+  </div>
+</div>
