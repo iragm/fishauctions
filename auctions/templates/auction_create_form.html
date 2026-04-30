@@ -70,7 +70,7 @@ $(".submit-button").click(function(event){
             {% if show_club_tip %}
             <div class="alert alert-info" role="alert">
                 <i class="bi bi-info-circle me-1"></i>
-                <strong>Tip:</strong> Make sure to pick your club in <a href="{% url 'contact_info' %}?next={{ request.path }}">preferences</a> so your auction can be associated with your club.
+                <strong>Tip:</strong> Make sure to pick your club in <a href="{% url 'contact_info' %}?next={{ request.get_full_path|urlencode }}">preferences</a> so your auction can be associated with your club.
             </div>
             {% endif %}
             {% crispy form form.helper %}
