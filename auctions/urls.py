@@ -601,4 +601,9 @@ urlpatterns = [
         views.ClubDiscordSetDefaultRoleView.as_view(),
         name="club_discord_set_default_role",
     ),
+    path(
+        "clubs/<slug:slug>/discord/send-join-message/",
+        views.ClubDiscordSendJoinMessageView.as_view(),
+        name="club_discord_send_join_message",
+    ),
 ]

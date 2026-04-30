@@ -318,6 +318,13 @@ class UserInline(admin.TabularInline):
     extra = 0
 
 
+class ClubDiscordRoleInline(admin.TabularInline):
+    model = ClubDiscordRole
+    extra = 0
+    fields = ("role_name", "role_id", "is_default", "createdon")
+    readonly_fields = ("createdon",)
+
+
 class ClubAdmin(admin.ModelAdmin):
     model = Club
     list_display = ("name", "contact_email", "date_contacted_for_in_person_auctions")
@@ -338,6 +345,7 @@ class ClubAdmin(admin.ModelAdmin):
     )
     inlines = [
         UserInline,
+        ClubDiscordRoleInline,
     ]
     actions = [export_to_csv]
 

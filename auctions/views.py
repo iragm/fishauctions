@@ -11936,7 +11936,6 @@ class ClubEditView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         context = super().get_context_data(**kwargs)
         context["club"] = self.club
         context["next_url"] = self.request.GET.get("next", "")
-        context["can_edit_discord"] = self.user_has_club_permission("permission_edit_club")
         return context
 
     def form_valid(self, form):
@@ -12208,6 +12207,10 @@ _DISCORD_TYPE_MODAL = 9
 # Discord component type constants
 _DISCORD_COMPONENT_ACTION_ROW = 1
 _DISCORD_COMPONENT_TEXT_INPUT = 4
+_DISCORD_COMPONENT_BUTTON = 2
+
+# Discord button styles
+_DISCORD_BUTTON_STYLE_PRIMARY = 1
 
 # Discord message flag: ephemeral (only visible to the user who triggered it)
 _DISCORD_FLAG_EPHEMERAL = 64
@@ -12423,7 +12426,7 @@ class DiscordInteractionsView(View):
 
 
 class ClubDiscordConfigView(LoginRequiredMixin, ClubViewMixin, View):
-    """HTMX partial that renders the Discord configuration panel for a club."""
+    """Full-page Discord settings for a club."""
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
@@ -12432,14 +12435,30 @@ class ClubDiscordConfigView(LoginRequiredMixin, ClubViewMixin, View):
         return super().dispatch(request, *args, **kwargs)
 
     def get(self, request, *args, **kwargs):
+        return render(request, "auctions/club_discord_settings.html", self._context(request))
+
+    def post(self, request, *args, **kwargs):
+        """Save the Discord server ID."""
+        server_id = request.POST.get("discord_server_id", "").strip()
+        self.club.discord_server_id = server_id or None
+        self.club.save(update_fields=["discord_server_id"])
+        messages.success(request, "Discord server ID saved.")
+        ClubHistory.objects.create(
+            club=self.club,
+            user=request.user,
+            action="Updated Discord server ID",
+            applies_to="SETTINGS",
+        )
+        return redirect(reverse("club_discord_config", kwargs={"slug": self.club.slug}))
+
+    def _context(self, request):
         roles = ClubDiscordRole.objects.filter(club=self.club).order_by("role_name")
         interactions_url = request.build_absolute_uri("/discord/interactions/")
-        context = {
+        return {
             "club": self.club,
             "roles": roles,
             "interactions_url": interactions_url,
         }
-        return render(request, "auctions/club_discord_config.html", context)
 
 
 class ClubDiscordFetchRolesView(LoginRequiredMixin, ClubViewMixin, View):
@@ -12455,12 +12474,12 @@ class ClubDiscordFetchRolesView(LoginRequiredMixin, ClubViewMixin, View):
         club = self.club
         if not club.discord_server_id:
             messages.error(request, "Save a Discord server ID first.")
-            return self._render(request)
+            return redirect(reverse("club_discord_config", kwargs={"slug": club.slug}))
 
         bot_token = getattr(settings, "DISCORD_BOT_TOKEN", "")
         if not bot_token:
             messages.error(request, "DISCORD_BOT_TOKEN is not configured.")
-            return self._render(request)
+            return redirect(reverse("club_discord_config", kwargs={"slug": club.slug}))
 
         url = f"https://discord.com/api/v10/guilds/{club.discord_server_id}/roles"
         headers = {"Authorization": f"Bot {bot_token}"}
@@ -12469,18 +12488,18 @@ class ClubDiscordFetchRolesView(LoginRequiredMixin, ClubViewMixin, View):
         except requests.RequestException as exc:
             logger.exception("Error fetching Discord roles: %s", exc)
             messages.error(request, "Network error while fetching Discord roles.")
-            return self._render(request)
+            return redirect(reverse("club_discord_config", kwargs={"slug": club.slug}))
 
         if resp.status_code != 200:
             messages.error(request, f"Discord API error {resp.status_code}: could not fetch roles.")
-            return self._render(request)
+            return redirect(reverse("club_discord_config", kwargs={"slug": club.slug}))
 
         roles_data = resp.json()
         updated = 0
         for role in roles_data:
             role_id = role.get("id", "")
             role_name = role.get("name", "")
-            # Skip @everyone (id == guild_id) and managed/bot roles
+            # Skip @everyone (its ID equals the guild ID) and bot-managed roles
             if role_id == club.discord_server_id or role.get("managed"):
                 continue
             obj = ClubDiscordRole.objects.filter(club=club, role_id=role_id).first()
@@ -12493,17 +12512,7 @@ class ClubDiscordFetchRolesView(LoginRequiredMixin, ClubViewMixin, View):
             updated += 1
 
         messages.success(request, f"Fetched {updated} role(s) from Discord.")
-        return self._render(request)
-
-    def _render(self, request):
-        roles = ClubDiscordRole.objects.filter(club=self.club).order_by("role_name")
-        interactions_url = request.build_absolute_uri("/discord/interactions/")
-        context = {
-            "club": self.club,
-            "roles": roles,
-            "interactions_url": interactions_url,
-        }
-        return render(request, "auctions/club_discord_config.html", context)
+        return redirect(reverse("club_discord_config", kwargs={"slug": club.slug}))
 
 
 class ClubDiscordSetDefaultRoleView(LoginRequiredMixin, ClubViewMixin, View):
@@ -12522,11 +12531,56 @@ class ClubDiscordSetDefaultRoleView(LoginRequiredMixin, ClubViewMixin, View):
         role.is_default = True
         role.save(update_fields=["is_default"])
         messages.success(request, f'"{role.role_name}" set as the default role.')
-        roles = ClubDiscordRole.objects.filter(club=self.club).order_by("role_name")
-        interactions_url = request.build_absolute_uri("/discord/interactions/")
-        context = {
-            "club": self.club,
-            "roles": roles,
-            "interactions_url": interactions_url,
+        return redirect(reverse("club_discord_config", kwargs={"slug": self.club.slug}))
+
+
+class ClubDiscordSendJoinMessageView(LoginRequiredMixin, ClubViewMixin, View):
+    """Send a welcome message with a join button to a Discord channel."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        channel_id = request.POST.get("channel_id", "").strip()
+        if not channel_id:
+            messages.error(request, "Please enter a channel ID.")
+            return redirect(reverse("club_discord_config", kwargs={"slug": self.club.slug}))
+
+        bot_token = getattr(settings, "DISCORD_BOT_TOKEN", "")
+        if not bot_token:
+            messages.error(request, "DISCORD_BOT_TOKEN is not configured.")
+            return redirect(reverse("club_discord_config", kwargs={"slug": self.club.slug}))
+
+        url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
+        headers = {"Authorization": f"Bot {bot_token}", "Content-Type": "application/json"}
+        payload = {
+            "content": f"Welcome to **{self.club.name}**! Click the button below to register and get access to the server.",
+            "components": [
+                {
+                    "type": _DISCORD_COMPONENT_ACTION_ROW,
+                    "components": [
+                        {
+                            "type": _DISCORD_COMPONENT_BUTTON,
+                            "custom_id": "join_button",
+                            "label": "Join our club",
+                            "style": _DISCORD_BUTTON_STYLE_PRIMARY,
+                        }
+                    ],
+                }
+            ],
         }
-        return render(request, "auctions/club_discord_config.html", context)
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=10)
+        except requests.RequestException as exc:
+            logger.exception("Error sending Discord join message: %s", exc)
+            messages.error(request, "Network error while sending join message.")
+            return redirect(reverse("club_discord_config", kwargs={"slug": self.club.slug}))
+
+        if resp.status_code == 200 or resp.status_code == 201:  # Discord returns 200 or 201 depending on version
+            messages.success(request, "Join message sent to the channel!")
+        else:
+            messages.error(request, f"Discord API error {resp.status_code}: could not send message.")
+        return redirect(reverse("club_discord_config", kwargs={"slug": self.club.slug}))

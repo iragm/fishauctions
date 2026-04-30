@@ -246,6 +246,34 @@ For PayPal payments, similar OAuth configuration is needed (see .env.example for
 If you have existing users, enable Square payments for them by running `docker exec -it django python3 manage.py  change_square on`.  `SQUARE_ENABLED_FOR_USERS` will determine if any newly created users will be able to link their account.
 
 
+#### Discord bot integration (optional)
+
+This feature lets club members join your Discord server and automatically receive a role and be added to your club member list.
+
+**One-time server-wide setup** (done by the site admin, not each club):
+
+1. Go to [discord.com/developers/applications](https://discord.com/developers/applications), create an application, and add a bot.
+2. Under the bot settings, enable the **Server Members Intent** (required to read guild member data).
+3. Copy the bot token and public key, then add them to your `.env` file:
+   ```
+   DISCORD_PUBLIC_KEY=your_application_public_key_here
+   DISCORD_BOT_TOKEN=your_bot_token_here
+   ```
+4. In your application's **General Information** tab, set the **Interactions Endpoint URL** to `https://yourdomain.com/discord/interactions/` (replace with your actual domain). Note that Discord requires a publicly accessible HTTPS URL — localhost will not work.
+5. Invite the bot to any Discord servers that will use it. The bot needs these permissions:
+   - **Manage Roles** — to assign roles to new members
+   - **Send Messages** — to post the join button message in a welcome channel
+   - The bot's role must be placed **above** any roles it will assign in the server's role hierarchy.
+
+**Per-club Discord setup** (done by each club admin through the UI):
+
+1. In your Discord server settings, enable **Developer Mode** (User Settings → Advanced → Developer Mode) so you can copy IDs by right-clicking.
+2. Go to your club's admin page → **Discord Settings** and enter your Discord Server ID (right-click your server name → Copy Server ID).
+3. Click **Fetch roles** to import your server's roles.
+4. Set a **default role** — this role will be granted to members who verify through the join modal.
+5. Click **Send join message** and enter a channel ID (right-click the welcome channel → Copy Channel ID) to post the onboarding button in that channel. The bot must have Send Messages permission in that channel.
+
+
 ### Post setup:
 If you didn't get any errors, shut down the containers with control+c and then restart them in detached mode (`docker compose up -d`).  Create a super user with `docker exec -it django python3 manage.py createsuperuser` and then browse to the website and try to log in with that user (if you don't get a verification email, you can use the steps in the development section above to create a super user with a verified email, but don't forget to change the password!).
 

@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title %}Discord Settings &mdash; {{ club.name }}{% endblock %}
+
+{% block content %}
+<h3><i class="bi bi-discord"></i> Discord Settings &mdash; {{ club.name }}</h3>
+
+<div class="mb-3">
+  <a href="{% url 'club_admin' club.slug %}" class="btn btn-sm btn-secondary">
+    <i class="bi bi-arrow-left"></i> Back to membership admin
+  </a>
+</div>
+
+{% if messages %}
+  {% for message in messages %}
+    <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags }}{% endif %} alert-dismissible fade show" role="alert">
+      {{ message }}
+      <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+  {% endfor %}
+{% endif %}
+
+<div class="card mb-4">
+  <div class="card-header">Discord Server</div>
+  <div class="card-body">
+    <p class="text-muted small">
+      Your Discord Server ID is the 18-digit number found by right-clicking your server name in Discord
+      (with Developer Mode enabled in User Settings → Advanced) and choosing <em>Copy Server ID</em>.
+    </p>
+    <form method="post" action="{% url 'club_discord_config' club.slug %}">
+      {% csrf_token %}
+      <div class="mb-3">
+        <label for="discord_server_id" class="form-label">Server ID</label>
+        <input type="text" class="form-control" id="discord_server_id" name="discord_server_id"
+               value="{{ club.discord_server_id|default:'' }}" placeholder="e.g. 123456789012345678">
+      </div>
+      <button type="submit" class="btn btn-primary">Save</button>
+    </form>
+  </div>
+</div>
+
+{% if club.discord_server_id %}
+
+<div class="card mb-4">
+  <div class="card-header">Interactions Endpoint</div>
+  <div class="card-body">
+    <p class="text-muted small">
+      Register this URL as the <strong>Interactions Endpoint URL</strong> in your Discord application's
+      General Information tab (at
+      <a href="https://discord.com/developers/applications" target="_blank" rel="noopener">discord.com/developers/applications</a>).
+    </p>
+    <code class="user-select-all d-block p-2 bg-light border rounded">{{ interactions_url }}</code>
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header">Send Join Message</div>
+  <div class="card-body">
+    <p class="text-muted small">
+      Post a welcome message with a <em>Join our club</em> button to a channel in your Discord server.
+      Users who click it will see a short form, and after submitting will be added to your member list
+      and granted the default role. The bot must have <strong>Send Messages</strong> permission in the
+      target channel.
+    </p>
+    <p class="text-muted small">
+      Find the channel ID by right-clicking the channel in Discord (Developer Mode must be on) and
+      choosing <em>Copy Channel ID</em>.
+    </p>
+    <form method="post" action="{% url 'club_discord_send_join_message' club.slug %}">
+      {% csrf_token %}
+      <div class="mb-3">
+        <label for="channel_id" class="form-label">Channel ID</label>
+        <input type="text" class="form-control" id="channel_id" name="channel_id"
+               placeholder="e.g. 987654321098765432">
+      </div>
+      <button type="submit" class="btn btn-primary">
+        <i class="bi bi-send"></i> Send join message
+      </button>
+    </form>
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header">Roles</div>
+  <div class="card-body">
+    <p class="text-muted small">
+      Fetch your server's roles, then mark one as the default. The default role is automatically
+      assigned to members who verify through the join modal. The bot's own role must be placed
+      <strong>above</strong> this role in the server's role hierarchy.
+    </p>
+    <form method="post" action="{% url 'club_discord_fetch_roles' club.slug %}" class="mb-3">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-secondary btn-sm">
+        <i class="bi bi-arrow-clockwise"></i> Fetch roles from Discord
+      </button>
+    </form>
+
+    {% if roles %}
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>Role name</th>
+            <th>Role ID</th>
+            <th>Default?</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for role in roles %}
+          <tr>
+            <td>{{ role.role_name }}</td>
+            <td><code>{{ role.role_id }}</code></td>
+            <td>
+              {% if role.is_default %}
+                <span class="badge bg-success">Default</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if not role.is_default %}
+              <form method="post" action="{% url 'club_discord_set_default_role' club.slug role.pk %}">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-sm btn-outline-primary">Set as default</button>
+              </form>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="text-muted small">No roles fetched yet. Click <em>Fetch roles from Discord</em> above.</p>
+    {% endif %}
+  </div>
+</div>
+
+{% else %}
+  <div class="alert alert-warning">
+    <i class="bi bi-exclamation-triangle"></i>
+    Enter and save your <strong>Discord Server ID</strong> above to unlock role management and join message features.
+  </div>
+{% endif %}
+
+{% endblock %}
