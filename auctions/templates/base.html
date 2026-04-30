@@ -246,7 +246,7 @@ window.onload = function() {
       {% endif %}
       <nav class="navbar navbar-expand-lg bg-primary bg-gradient bg-opacity-75" data-bs-theme="dark">
         <div class="container-fluid">
-          <a class="navbar-brand" href="/">{{ navbar_brand }}</a>
+          <a class="navbar-brand" href="{% url 'home' %}">{{ navbar_brand }}</a>
           <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#site_navbar" aria-controls="navbarColor02" aria-expanded="false" aria-label="Toggle navigation">
             <span class="navbar-toggler-icon"></span>
           </button>
@@ -267,12 +267,12 @@ window.onload = function() {
                     </div>
                   </li> -->
                   <li class="nav-item">
-                    <a class="nav-link" href="/auctions/">Auctions
+                    <a class="nav-link" href="{% url 'auctions' %}">Auctions
                       <span id="new_auctions" class="badge-pill badge bg-warning" style="color:black;font-weight:900"></span>
                     </a>
                   </li>
                   <li class="nav-item">
-                    <a class="nav-link" href="/lots/">Lots</a>
+                    <a class="nav-link" href="{% url 'allLots' %}">Lots</a>
                   </li>
                   <li class="nav-item">
                   <a class="nav-link" href="{% url 'selling' %}">Selling <span id="total_unread_lot_messages" class='badge-pill badge bg-warning' style='color:black;font-weight:900'></span></a>
@@ -300,10 +300,10 @@ window.onload = function() {
                     <a class="nav-link dropdown-toggle" data-bs-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">About</a>
                     <div class="dropdown-menu">
                       {% if enable_promo_page %}
-                      <a class="dropdown-item" href="/about/">About site</a>
+                      <a class="dropdown-item" href="{% url 'promo' %}">About site</a>
                       {% endif %}
-                      <a class="dropdown-item" href="/faq/">FAQ</a>
-                      <a class="dropdown-item" href="/tos/">Terms and Conditions</a>
+                      <a class="dropdown-item" href="{% url 'faq' %}">FAQ</a>
+                      <a class="dropdown-item" href="{% url 'tos' %}">Terms and Conditions</a>
                       </div>
                   </li>
                   {% if enable_club_finder %}
@@ -311,14 +311,14 @@ window.onload = function() {
                     {% if user_clubs %}
                     <a class="nav-link dropdown-toggle" data-bs-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">Clubs</a>
                     <div class="dropdown-menu">
-                      <a class="dropdown-item" href="/clubs/">Find a club</a>
+                      <a class="dropdown-item" href="{% url 'clubs' %}">Find a club</a>
                       <div class="dropdown-divider"></div>
                       {% for club in user_clubs %}
                       <a class="dropdown-item" href="{% url 'club_detail' club.slug %}">{{ club.name }}</a>
                       {% endfor %}
                     </div>
                     {% else %}
-                    <a class="nav-link" href="/clubs/">Clubs</a>
+                    <a class="nav-link" href="{% url 'clubs' %}">Clubs</a>
                     {% endif %}
                   </li>
                   {% endif %}
@@ -352,7 +352,7 @@ window.onload = function() {
                   </li>
                   {% else %}
                   <a href="{% url 'account_login' %}?next={% firstof request.path '/' %}" class='nav-link'>Sign in</a>
-                  <a href="/signup?next={% firstof request.path '/' %}" class='nav-link'>Create account</a>
+                  <a href="{% url 'account_signup' %}?next={% firstof request.path '/' %}" class='nav-link'>Create account</a>
                 {% endif %}
                 </ul>
               </div>
@@ -361,7 +361,7 @@ window.onload = function() {
         </nav>
         </span>
         {% if not hide_tos_banner %}
-        <div class="alert alert-primary mb-0" role="alert" style="position:fixed; bottom: 0px; width: 100%; z-index:9999;">By using this site, you accept our <a href="/tos/">use of cookies and our terms and conditions</a> <button class="btn btn-sm btn-dark" type="button" onclick="agreeTos()">Don't show again</button></button></div>
+        <div class="alert alert-primary mb-0" role="alert" style="position:fixed; bottom: 0px; width: 100%; z-index:9999;">By using this site, you accept our <a href="{% url 'tos' %}">use of cookies and our terms and conditions</a> <button class="btn btn-sm btn-dark" type="button" onclick="agreeTos()">Don't show again</button></button></div>
         <script>
           function agreeTos() {
             document.cookie = "hide_tos_banner=true; SameSite=Strict; path=/";

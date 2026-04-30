@@ -1043,11 +1043,11 @@ class LotDeactivate(LoginRequiredMixin, View):
         # Lots in auctions cannot be deactivated
         if lot.auction:
             messages.error(request, "Your account doesn't have permission to view this page")
-            return redirect("/")
+            return redirect(reverse("home"))
 
         if lot.user.pk != request.user.pk and not request.user.is_superuser:
             messages.error(request, "Your account doesn't have permission to view this page")
-            return redirect("/")
+            return redirect(reverse("home"))
 
         if lot.deactivated:
             lot.deactivated = False
@@ -1088,7 +1088,7 @@ class ImagesPrimary(LoginRequiredMixin, View):
             return HttpResponse("Image not found, specify a valid pk")
         if not lotImage.lot_number.image_permission_check(request.user):
             messages.error(request, "Only the lot creator can change images")
-            return redirect("/")
+            return redirect(reverse("home"))
         LotImage.objects.filter(lot_number=lotImage.lot_number.pk).update(is_primary=False)
         lotImage.is_primary = True
         lotImage.save()
@@ -1112,7 +1112,7 @@ class ImagesRotate(LoginRequiredMixin, View):
             return HttpResponse(f"Image {pk} not found")
         if not lotImage.lot_number.image_permission_check(request.user):
             messages.error(request, "Only the lot creator can rotate images")
-            return redirect("/")
+            return redirect(reverse("home"))
         if not lotImage.image:
             return HttpResponse("No image")
         temp_image = Image.open(BytesIO(lotImage.image.read()))
@@ -1187,7 +1187,7 @@ class Feedback(LoginRequiredMixin, View):
                 lot.save()
         if not winner_checks_pass and not seller_checks_pass:
             messages.error(request, "Only the seller or winner of a lot can leave feedback")
-            return redirect("/")
+            return redirect(reverse("home"))
         return HttpResponse("Success")
 
 
@@ -2470,7 +2470,7 @@ class AuctionHelp(LoginRequiredMixin, AdminEmailMixin, AuctionViewMixin, Templat
 
     def dispatch(self, request, *args, **kwargs):
         if not settings.ENABLE_HELP:
-            return redirect("/")
+            return redirect(reverse("home"))
         return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
@@ -3557,15 +3557,15 @@ class BulkAddLots(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         if not self.tos:
             messages.error(request, "You can't add lots until you join this auction")
             return redirect(
-                f"/auctions/{self.auction.slug}/?next={reverse('bulk_add_lots_auto_for_myself', kwargs={'slug': self.auction.slug})}"
+                f"{reverse('auction_main', kwargs={'slug': self.auction.slug})}?next={reverse('bulk_add_lots_auto_for_myself', kwargs={'slug': self.auction.slug})}"
             )
         else:
             if not self.tos.selling_allowed and not self.is_admin:
                 messages.error(request, "You don't have permission to add lots to this auction")
-                return redirect(f"/auctions/{self.auction.slug}/")
+                return redirect(reverse("auction_main", kwargs={"slug": self.auction.slug}))
         if not self.is_admin and not self.auction.can_submit_lots:
             messages.error(request, f"Lot submission has ended for {self.auction}")
-            return redirect(f"/auctions/{self.auction.slug}/")
+            return redirect(reverse("auction_main", kwargs={"slug": self.auction.slug}))
         if not self.is_admin and not self.auction.allow_bulk_adding_lots:
             messages.error(
                 request,
@@ -3679,11 +3679,11 @@ class BulkAddLotsAuto(LoginRequiredMixin, AuctionViewMixin, TemplateView):
             # Check admin status first
             if not self.is_auction_admin:
                 messages.error(request, "Only auction admins can add lots for other users")
-                return redirect(f"/auctions/{self.auction.slug}/")
+                return redirect(reverse("auction_main", kwargs={"slug": self.auction.slug}))
             self.tos = AuctionTOS.objects.filter(bidder_number=bidder_number, auction=self.auction).first()
             if not self.tos:
                 messages.error(request, "User not found in this auction")
-                return redirect(f"/auctions/{self.auction.slug}/users/")
+                return redirect(reverse("auction_tos_list", kwargs={"slug": self.auction.slug}))
 
         self.is_admin = self.is_auction_admin
 
@@ -3697,15 +3697,15 @@ class BulkAddLotsAuto(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         if not self.tos:
             messages.error(request, "You can't add lots until you join this auction")
             return redirect(
-                f"/auctions/{self.auction.slug}/?next={reverse('bulk_add_lots_auto_for_myself', kwargs={'slug': self.auction.slug})}"
+                f"{reverse('auction_main', kwargs={'slug': self.auction.slug})}?next={reverse('bulk_add_lots_auto_for_myself', kwargs={'slug': self.auction.slug})}"
             )
         else:
             if not self.tos.selling_allowed and not self.is_admin:
                 messages.error(request, "You don't have permission to add lots to this auction")
-                return redirect(f"/auctions/{self.auction.slug}/")
+                return redirect(reverse("auction_main", kwargs={"slug": self.auction.slug}))
         if not self.is_admin and not self.auction.can_submit_lots:
             messages.error(request, f"Lot submission has ended for {self.auction}")
-            return redirect(f"/auctions/{self.auction.slug}/")
+            return redirect(reverse("auction_main", kwargs={"slug": self.auction.slug}))
         if not self.is_admin and not self.auction.allow_bulk_adding_lots:
             messages.error(
                 request,
@@ -5035,10 +5035,10 @@ class LotUpdate(LotValidation, UpdateView):
     def dispatch(self, request, *args, **kwargs):
         if not (request.user.is_superuser or self.get_object().user == self.request.user):
             messages.error(request, "Only the lot creator can edit a lot")
-            return redirect("/")
+            return redirect(reverse("home"))
         if not self.get_object().can_be_edited:
             messages.error(request, self.get_object().cannot_be_edited_reason)
-            return redirect("/")
+            return redirect(reverse("home"))
         return super().dispatch(request, *args, **kwargs)
 
     def get_success_url(self):
@@ -5076,11 +5076,11 @@ class AuctionDelete(LoginRequiredMixin, AuctionViewMixin, DeleteView):
         # self.auction may not be set if LoginRequiredMixin redirected
         if hasattr(self, "auction") and self.auction and not self.auction.can_be_deleted:
             messages.error(request, "There are already lots in this auction, it can't be deleted")
-            return redirect("/")
+            return redirect(reverse("home"))
         return result
 
     def get_success_url(self):
-        return "/auctions/"
+        return reverse("auctions")
 
 
 class LotDelete(LoginRequiredMixin, DeleteView):
@@ -5089,10 +5089,10 @@ class LotDelete(LoginRequiredMixin, DeleteView):
     def dispatch(self, request, *args, **kwargs):
         if not self.get_object().can_be_deleted:
             messages.error(request, self.get_object().cannot_be_deleted_reason)
-            return redirect("/")
+            return redirect(reverse("home"))
         if not (request.user.is_superuser or self.get_object().user == self.request.user):
             messages.error(request, "Only the creator of a lot can delete it")
-            return redirect("/")
+            return redirect(reverse("home"))
         return super().dispatch(request, *args, **kwargs)
 
     def get_success_url(self):
@@ -5127,7 +5127,7 @@ class ImageDelete(LoginRequiredMixin, DeleteView):
             auth = True
         if not auth:
             messages.error(request, "You can't change this image")
-            return redirect(f"/lots/{self.get_object().lot_number.lot_number}/{self.get_object().lot_number.slug}/")
+            return redirect(self.get_object().lot_number.get_absolute_url())
         return super().dispatch(request, *args, **kwargs)
 
     def get_success_url(self):
@@ -5143,7 +5143,7 @@ class ImageDelete(LoginRequiredMixin, DeleteView):
                 newImage.save()
             except IndexError:
                 pass
-        return f"/lots/{self.get_object().lot_number.lot_number}/{self.get_object().lot_number.slug}/"
+        return self.get_object().lot_number.get_absolute_url()
 
 
 class BidDelete(LoginRequiredMixin, DeleteView):
@@ -5214,7 +5214,7 @@ class BidDelete(LoginRequiredMixin, DeleteView):
         return HttpResponseRedirect(success_url)
 
     def get_success_url(self):
-        return f"/lots/{self.get_object().lot_number.pk}/{self.get_object().lot_number.slug}/"
+        return self.get_object().lot_number.get_absolute_url()
 
 
 class LotAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
@@ -5685,7 +5685,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
         if self.request.user.is_superuser:
             auction_creation_allowed = True
         if not auction_creation_allowed:
-            return redirect("/")
+            return redirect(reverse("home"))
         return original_dispatch
 
     def get_success_url(self):
@@ -6102,7 +6102,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                     self.request,
                     "This auction requires a phone number before you can join",
                 )
-                return redirect(f"/contact_info?next={auction.get_absolute_url()}")
+                return redirect(f"{reverse('contact_info')}?next={auction.get_absolute_url()}")
             find_by_email = AuctionTOS.objects.filter(
                 email=self.request.user.email,
                 auction=auction,
@@ -6147,7 +6147,7 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                         self.request,
                         "You have to set your address before you can choose pickup by mail",
                     )
-                    return redirect(f"/contact_info?next={auction.get_absolute_url()}")
+                    return redirect(f"{reverse('contact_info')}?next={auction.get_absolute_url()}")
             if form.cleaned_data["time_spent_reading_rules"] > obj.time_spent_reading_rules:
                 obj.time_spent_reading_rules = form.cleaned_data["time_spent_reading_rules"]
             # even if an auctiontos was originally manually added, if the user clicked join, mark them as not manually added
@@ -6202,7 +6202,7 @@ class PromoSite(TemplateView):
 
     def dispatch(self, request, *args, **kwargs):
         if not settings.ENABLE_PROMO_PAGE:
-            return redirect("/")
+            return redirect(reverse("home"))
         return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
@@ -6266,9 +6266,9 @@ class ToDefaultLandingPage(View):
                 if invoice:
                     messages.info(
                         request,
-                        f'{auction} has ended.  <a href="/invoices/{invoice.pk}">View your invoice</a> or <a href="/feedback/">leave feedback</a> on lots you bought or sold',
+                        f'{auction} has ended.  <a href="{reverse("invoice_by_pk", kwargs={"pk": invoice.pk})}">View your invoice</a> or <a href="{reverse("feedback")}">leave feedback</a> on lots you bought or sold',
                     )
-                    return redirect("/lots/")
+                    return redirect(reverse("allLots"))
                 else:
                     # in progress online auctions get routed
                     if AuctionTOS.objects.filter(user=request.user, auction=auction, auction__is_online=True).exists():
@@ -6530,7 +6530,7 @@ class InvoiceCreateView(LoginRequiredMixin, View, AuctionViewMixin):
             auctiontos = AuctionTOS.objects.get(pk=auctiontos_pk)
         except AuctionTOS.DoesNotExist:
             messages.error(request, "User not found")
-            return redirect("/")
+            return redirect(reverse("home"))
 
         # Set auction for permission check
         self.auction = auctiontos.auction
@@ -6538,7 +6538,7 @@ class InvoiceCreateView(LoginRequiredMixin, View, AuctionViewMixin):
         # Check if user is auction admin
         if not self.is_auction_admin:
             messages.error(request, "You don't have permission to create invoices for this auction")
-            return redirect("/")
+            return redirect(reverse("home"))
 
         # Check for existing invoices - get the oldest one (first created)
         existing_invoice = (
@@ -6622,7 +6622,7 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
                 request,
                 "Your account doesn't have permission to view this invoice. Are you signed in with the correct account?",
             )
-            return redirect("/")
+            return redirect(reverse("home"))
         if mark_invoice_viewed_by_user:
             setattr(invoice, self.form_view, True)  # this will set printed or opened as appropriate
             invoice.save()
@@ -6849,7 +6849,7 @@ class LotLabelView(TemplateView, WeasyTemplateResponseMixin, AuctionViewMixin):
             return super().dispatch(request, *args, **kwargs)
         else:
             messages.error(request, "Your account doesn't have permission to view this page.")
-            return redirect("/")
+            return redirect(reverse("home"))
 
     def get_pdf_filename(self):
         label_name = re.sub(r"[^a-zA-Z0-9]", "_", (self.filename or "labels").lower())
@@ -7118,11 +7118,11 @@ class SingleLotLabelView(LotLabelView):
                     request,
                     "You can't print labels for other people's lots unless you are an admin",
                 )
-                return redirect("/")
+                return redirect(reverse("home"))
         if not self.lot.auctiontos_seller:
             if self.lot.user and self.lot.user is not request.user:
                 messages.error(request, "You can only print labels for your own lots")
-                return redirect("/")
+                return redirect(reverse("home"))
         # super() would try to find an auction
         return View.dispatch(self, request, *args, **kwargs)
 
@@ -7604,7 +7604,7 @@ class PayPalAPIMixin:
             # },
             "application_context": {
                 "brand_name": settings.NAVBAR_BRAND,
-                "return_url": self.request.build_absolute_uri("/paypal/success/"),
+                "return_url": self.request.build_absolute_uri(reverse("paypal_success")),
                 "cancel_url": self.request.build_absolute_uri(
                     reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link})
                 ),
@@ -7888,7 +7888,7 @@ class PayPalConnectView(LoginRequiredMixin, PayPalAPIMixin, View):
             "legal_consents": [{"type": "SHARE_DATA_CONSENT", "granted": True}],
             # take us to PayPalCallbackView when we are done
             "partner_config_override": {
-                "return_url": request.build_absolute_uri("/paypal/onboard/success/"),
+                "return_url": request.build_absolute_uri(reverse("paypal_callback")),
                 # "return_url_description": f"Continue on {settings.NAVBAR_BRAND}",
             },
         }
@@ -7899,7 +7899,7 @@ class PayPalConnectView(LoginRequiredMixin, PayPalAPIMixin, View):
         if not action_url:
             logger.exception("PayPal onboarding failed %s, debug_id %s", data, self.paypal_debug)
             messages.error(request, "Unable to start PayPal onboarding process, please try again later.")
-            return redirect("/")
+            return redirect(reverse("home"))
         # Redirect seller to PayPal to complete onboarding
         return redirect(action_url)
 
@@ -7908,7 +7908,7 @@ class PayPalCallbackView(LoginRequiredMixin, PayPalAPIMixin, View):
     """After onboarding, PayPal redirects here"""
 
     def get_success_url(self):
-        success_url = "/"
+        success_url = reverse("home")
         if self.request.user.userdata.last_auction_created:
             success_url = self.request.user.userdata.last_auction_created.get_absolute_url()
         if self.error:
@@ -8005,7 +8005,7 @@ class PayPalSuccessView(PayPalAPIMixin, View):
             messages.success(request, "Payment completed successfully. Thank you!")
         if invoice:
             return redirect(reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link}))
-        return redirect("/")
+        return redirect(reverse("home"))
 
 
 class PayPalInfoView(TemplateView):
@@ -8068,7 +8068,7 @@ class SquareConnectView(LoginRequiredMixin, View):
         )
 
         # Build redirect URI - must match what's configured in Square app and what we send in token exchange
-        redirect_uri = request.build_absolute_uri("/square/onboard/success/")
+        redirect_uri = request.build_absolute_uri(reverse("square_callback"))
         # Build OAuth parameters
         params = {
             "client_id": settings.SQUARE_APPLICATION_ID,
@@ -8095,16 +8095,16 @@ class SquareCallbackView(LoginRequiredMixin, View):
         error_description = request.GET.get("error_description")
         if error:
             messages.error(request, f"Square authorization failed: {error_description or error}")
-            return redirect("/square/")
+            return redirect(reverse("square_seller"))
 
         if not code or not state:
             messages.error(request, "Missing authorization code from Square")
-            return redirect("/square/")
+            return redirect(reverse("square_seller"))
 
         # Verify state matches user's unsubscribe_link for security
         if state != request.user.userdata.unsubscribe_link:
             messages.error(request, "Invalid state parameter - please try again")
-            return redirect("/square/")
+            return redirect(reverse("square_seller"))
 
         # Exchange authorization code for access token
         try:
@@ -8120,7 +8120,7 @@ class SquareCallbackView(LoginRequiredMixin, View):
             client = Square(environment=env)
 
             # Build redirect URI - must match what was sent in authorization request
-            redirect_uri = request.build_absolute_uri("/square/onboard/success/")
+            redirect_uri = request.build_absolute_uri(reverse("square_callback"))
 
             result = client.o_auth.obtain_token(
                 client_id=settings.SQUARE_APPLICATION_ID,
@@ -8140,7 +8140,7 @@ class SquareCallbackView(LoginRequiredMixin, View):
             if not access_token or not merchant_id:
                 logger.error("Square OAuth token exchange failed: Missing required fields in response")
                 messages.error(request, "Failed to connect Square account. Please try again.")
-                return redirect("/square/")
+                return redirect(reverse("square_seller"))
 
             merchant_client = Square(
                 environment=env,
@@ -8180,7 +8180,7 @@ class SquareCallbackView(LoginRequiredMixin, View):
                 return redirect(
                     request.user.userdata.last_auction_created.get_absolute_url() + "?enable_square_payments=True"
                 )
-            return redirect("/square/")
+            return redirect(reverse("square_seller"))
 
         except Exception as e:
             logger.exception("Error during Square OAuth: %s", e)
@@ -8194,7 +8194,7 @@ class SquareCallbackView(LoginRequiredMixin, View):
                 )
             else:
                 messages.error(request, "An error occurred connecting your Square account. Please try again.")
-            return redirect("/square/")
+            return redirect(reverse("square_seller"))
 
 
 class CreateSquarePaymentLinkView(SquareAPIMixin, View):
@@ -8235,7 +8235,7 @@ class SquareSuccessView(View):
 
         # Try to get invoice reference if available
         # Square may pass back custom data in query params depending on configuration
-        return redirect("/")
+        return redirect(reverse("home"))
 
 
 class SquareInfoView(TemplateView):
@@ -8322,7 +8322,7 @@ class UsernameUpdate(UpdateView, SuccessMessageMixin):
             auth = True
         if not auth:
             messages.error(request, "Your account doesn't have permission to view this page.")
-            return redirect("/")
+            return redirect(reverse("home"))
         return super().dispatch(request, *args, **kwargs)
 
     def get_success_url(self):
@@ -8384,7 +8384,7 @@ class UserPreferencesUpdate(UpdateView, SuccessMessageMixin):
             auth = True
         if not auth:
             messages.error(request, "Your account doesn't have permission to view this page.")
-            return redirect("/")
+            return redirect(reverse("home"))
         return super().dispatch(request, *args, **kwargs)
 
     def get_success_url(self):
@@ -8428,7 +8428,7 @@ class UserLocationUpdate(UpdateView, SuccessMessageMixin):
             auth = True
         if not auth:
             messages.error(request, "Your account doesn't have permission to view this page.")
-            return redirect("/")
+            return redirect(reverse("home"))
         return super().dispatch(request, *args, **kwargs)
 
     def get_success_url(self):
@@ -8588,7 +8588,7 @@ class UserChartView(View):
                 views.append(categories[item]["views"])
             return JsonResponse(data={"labels": labels, "bids": bids, "views": views})
         messages.error(request, "Your account doesn't have permission to view this page.")
-        return redirect("/")
+        return redirect(reverse("home"))
 
 
 class LotChartView(View):
@@ -8614,7 +8614,7 @@ class LotChartView(View):
                 }
             )
         messages.error(request, "Your account doesn't have permission to view this page.")
-        return redirect("/")
+        return redirect(reverse("home"))
 
 
 class AdminErrorPage(AdminOnlyViewMixin, TemplateView):
@@ -8988,7 +8988,7 @@ class UserMap(TemplateView):
     def dispatch(self, request, *args, **kwargs):
         if not self.request.user.is_superuser:
             messages.error(self.request, "Only admins can view the user map")
-            return redirect("/")
+            return redirect(reverse("home"))
         return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
@@ -9023,7 +9023,7 @@ class ClubMap(AdminEmailMixin, TemplateView):
 
     def dispatch(self, request, *args, **kwargs):
         if not settings.ENABLE_CLUB_FINDER:
-            return redirect("/")
+            return redirect(reverse("home"))
         return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
@@ -9071,7 +9071,7 @@ class CreateUserIgnoreCategory(View):
     def get(self, request, *args, **kwargs):
         if not self.request.user.is_authenticated:
             messages.error(request, "Sign in to ignore categories")
-            return redirect("/")
+            return redirect(reverse("home"))
         pk = self.kwargs.get("pk", None)
         category = Category.objects.get(pk=pk)
         result, created = UserIgnoreCategory.objects.update_or_create(category=category, user=self.request.user)
@@ -9084,7 +9084,7 @@ class DeleteUserIgnoreCategory(View):
     def get(self, request, *args, **kwargs):
         if not self.request.user.is_authenticated:
             messages.error(request, "Sign in to show categories")
-            return redirect("/")
+            return redirect(reverse("home"))
         pk = self.kwargs.get("pk", None)
         category = Category.objects.get(pk=pk)
         try:
@@ -9152,7 +9152,7 @@ class AuctionChartView(View, AuctionStatsPermissionsMixin):
     def dispatch(self, request, *args, **kwargs):
         self.auction = Auction.objects.get(slug=kwargs["slug"], is_deleted=False)
         if not self.is_auction_admin:
-            return redirect("/")
+            return redirect(reverse("home"))
         return super().dispatch(request, *args, **kwargs)
 
 
@@ -9299,7 +9299,7 @@ class AuctionStatsActivityJSONView(BaseLineChartView, AuctionStatsPermissionsMix
     def dispatch(self, request, *args, **kwargs):
         self.auction = Auction.objects.get(slug=kwargs["slug"], is_deleted=False)
         if not self.is_auction_admin:
-            return redirect("/")
+            return redirect(reverse("home"))
 
         # Load comparison auction if provided
         self.compare_auction = None
@@ -9411,7 +9411,7 @@ class AuctionStatsAttritionJSONView(BaseLineChartView, AuctionStatsPermissionsMi
     def dispatch(self, request, *args, **kwargs):
         self.auction = Auction.objects.get(slug=kwargs["slug"], is_deleted=False)
         if not self.is_auction_admin:
-            return redirect("/")
+            return redirect(reverse("home"))
 
         # Load comparison auction if provided
         self.compare_auction = None
@@ -9518,7 +9518,7 @@ class AuctionStatsBarChartJSONView(LoginRequiredMixin, AuctionViewMixin, BaseCol
     def dispatch(self, request, *args, **kwargs):
         self.auction = Auction.objects.get(slug=kwargs["slug"], is_deleted=False)
         if not self.is_auction_admin:
-            return redirect("/")
+            return redirect(reverse("home"))
 
         # Load comparison auction if provided
         self.compare_auction = None
@@ -10656,7 +10656,7 @@ class CategoryFinder(View, LoginRequiredMixin):
     """API view which will return a category (or none) based on POST keyword lot_name"""
 
     def get(self, request, *args, **kwargs):
-        return redirect("/")
+        return redirect(reverse("home"))
 
     def post(self, request, *args, **kwargs):
         lot_name = request.POST["lot_name"]
@@ -10672,7 +10672,7 @@ class AuctionFinder(View, LoginRequiredMixin):
     """API view which will return information about an auction based on POST keyword auction.  Expects a pk."""
 
     def get(self, request, *args, **kwargs):
-        return redirect("/")
+        return redirect(reverse("home"))
 
     def post(self, request, *args, **kwargs):
         try:
@@ -10712,7 +10712,7 @@ class LotChatSubscribe(View, LoginRequiredMixin):
     """Called when a user sends a chat message about a lot to create a ChatSubscription model"""
 
     def get(self, request, *args, **kwargs):
-        return redirect("/")
+        return redirect(reverse("home"))
 
     def post(self, request, *args, **kwargs):
         try:
@@ -10768,7 +10768,7 @@ class AddTosMemo(View, LoginRequiredMixin, AuctionViewMixin):
         return super().dispatch(request, *args, **kwargs)
 
     def get(self, request, *args, **kwargs):
-        return redirect("/")
+        return redirect(reverse("home"))
 
     def post(self, request, *args, **kwargs):
         memo = request.POST["memo"]

@@ -1414,11 +1414,11 @@ class Auction(models.Model):
         return self.url
 
     def get_edit_url(self):
-        return f"/auctions/{self.slug}/edit/"
+        return reverse("edit_auction", kwargs={"slug": self.slug})
 
     @property
     def url(self):
-        return f"/auctions/{self.slug}/"
+        return reverse("auction_main", kwargs={"slug": self.slug})
 
     @property
     def label_print_link(self):
@@ -1430,11 +1430,11 @@ class Auction(models.Model):
 
     @property
     def add_lot_link(self):
-        return f"/lots/new/?auction={self.slug}"
+        return f"{reverse('new_lot')}?auction={self.slug}"
 
     @property
     def view_lot_link(self):
-        return f"/lots/?auction={self.slug}&status=all"
+        return f"{reverse('allLots')}?auction={self.slug}&status=all"
 
     @property
     def user_admin_link(self):
@@ -4423,7 +4423,7 @@ class Lot(models.Model):
         """/invoices/123 for the auction/seller of this lot"""
         invoice = self.sellers_invoice
         if invoice:
-            return f"/invoices/{invoice.pk}"
+            return reverse("invoice_by_pk", kwargs={"pk": invoice.pk})
         return ""
 
     @property
@@ -4431,7 +4431,7 @@ class Lot(models.Model):
         """/invoices/123 for the auction/winner of this lot"""
         invoice = self.winner_invoice
         if invoice:
-            return f"/invoices/{invoice.pk}"
+            return reverse("invoice_by_pk", kwargs={"pk": invoice.pk})
         return ""
 
     @property
@@ -4442,7 +4442,7 @@ class Lot(models.Model):
             return False
         if AuctionTOS.objects.filter(user=self.user, auction=self.auction).exists():
             return False
-        return f"/auctions/{self.auction.slug}"
+        return self.auction.get_absolute_url()
 
     @property
     def winner_location(self):
@@ -5073,7 +5073,7 @@ class Lot(models.Model):
         return self.auto_image
 
     def get_absolute_url(self):
-        return f"/lots/{self.lot_number}/{self.slug}/"
+        return reverse("lot_by_pk_and_slug", kwargs={"pk": self.lot_number, "slug": self.slug})
 
     @property
     def lot_number_display(self):
@@ -5088,8 +5088,15 @@ class Lot(models.Model):
     def lot_link(self):
         """Simplest link to access this lot with"""
         if self.auction:
-            return f"/auctions/{self.auction.slug}/lots/{self.lot_number_display}/{self.slug}/"
-        return f"/lots/{self.lot_number}/{self.slug}/"
+            return reverse(
+                "lot_in_auction_with_slug",
+                kwargs={
+                    "slug": self.auction.slug,
+                    "custom_lot_number": self.lot_number_display,
+                    "lot_slug": self.slug,
+                },
+            )
+        return reverse("lot_by_pk_and_slug", kwargs={"pk": self.lot_number, "slug": self.slug})
 
     @property
     def full_lot_link(self):
@@ -5822,7 +5829,7 @@ class Invoice(models.Model):
         return f"{self.auctiontos_user.name}'s invoice for {self.auctiontos_user.auction}"
 
     def get_absolute_url(self):
-        return f"/invoices/{self.pk}/"
+        return reverse("invoice_by_pk", kwargs={"pk": self.pk})
 
     @property
     def is_online(self):

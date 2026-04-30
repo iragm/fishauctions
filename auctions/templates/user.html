@@ -29,7 +29,7 @@
                     </td>
                   </tr>
                   {% else %}
-                  <a href="/login/?next={% firstof request.path '/' %}">Sign in to see this user's info</a>
+                  <a href="{% url 'account_login' %}?next={% firstof request.path '/' %}">Sign in to see this user's info</a>
                   {% endif %}
                   <tr>
                     <td>Lots sold:<br>Feedback:</td>

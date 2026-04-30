@@ -178,7 +178,7 @@ document.addEventListener("DOMContentLoaded", function() {
   </div>
   <div class="col">
     {% if not is_admin %}
-      <a href="/feedback/" class="btn btn-primary ml-1 mr-1 ">Leave feedback</a>
+      <a href="{% url 'feedback' %}" class="btn btn-primary ml-1 mr-1 ">Leave feedback</a>
       {% if website_focus == "fish" %}
         <a href="/blog/transporting-fish/" class="btn btn-primary ml-1 mr-1 ">Info on transporting fish</a>
       {% endif %}

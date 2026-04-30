@@ -856,5 +856,5 @@ How many of your users are taking advantage of features on this webiste?
 </script>
 What websites are sending you traffic?
 
-<div><a href="/auctions/{{auction.slug}}/" class="btn btn-primary active">Back to rules</a></div>
+<div><a href="{% url 'auction_main' slug=auction.slug %}" class="btn btn-primary active">Back to rules</a></div>
 {% endblock %}
