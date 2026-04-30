@@ -8630,17 +8630,10 @@ class UserChartView(APIView):
         categories = {}
         for item in allBids:
             category = str(item.lot_number.species_category)
-            if category in categories:
-                categories[category]["bids"] += 1
-            else:
-                categories[category] = {"bids": 1, "views": 0}
+            categories.setdefault(category, {"bids": 0, "views": 0})["bids"] += 1
         for item in pageViews:
             category = str(item.lot_number.species_category)
-            if category in categories:
-                categories[category]["views"] += 1
-            else:
-                # brand new category
-                categories[category] = {"bids": 0, "views": 1}
+            categories.setdefault(category, {"bids": 0, "views": 0})["views"] += 1
         # sort the result
         sortedCategories = sorted(categories, key=lambda t: -categories[t]["views"])
         # sortedCategories = sorted(categories, key=lambda t: -categories[t]['bids'] )
@@ -8667,12 +8660,14 @@ class LotChartView(APIView):
             PageView.objects.filter(lot_number=lot_number)
             .exclude(user_id__isnull=True)
             .order_by("-total_time")
-            .values()[:20]
+            .values("user_id", "total_time")[:20]
         )
+        user_ids = [entry["user_id"] for entry in queryset]
+        users_by_id = User.objects.in_bulk(user_ids)
         labels = []
         data = []
         for entry in queryset:
-            labels.append(str(User.objects.get(pk=entry["user_id"])))
+            labels.append(str(users_by_id.get(entry["user_id"], entry["user_id"])))
             data.append(int(entry["total_time"]))
 
         return JsonResponse(
