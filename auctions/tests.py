@@ -5340,11 +5340,18 @@ class AdditionalAuctionPropertyTests(StandardTestCase):
 
     def test_auction_urls(self):
         """Test various URL properties"""
-        assert self.online_auction.url == f"/auctions/{self.online_auction.slug}/"
-        assert self.online_auction.add_lot_link == f"/lots/new/?auction={self.online_auction.slug}"
-        assert self.online_auction.view_lot_link == f"/lots/?auction={self.online_auction.slug}&status=all"
-        assert "/auctions/" in self.online_auction.label_print_link
-        assert "/auctions/" in self.online_auction.label_print_unprinted_link
+        assert self.online_auction.url == reverse("auction_main", kwargs={"slug": self.online_auction.slug})
+        assert self.online_auction.add_lot_link == f"{reverse('new_lot')}?auction={self.online_auction.slug}"
+        assert (
+            self.online_auction.view_lot_link == f"{reverse('allLots')}?auction={self.online_auction.slug}&status=all"
+        )
+        assert (
+            reverse("auction_main", kwargs={"slug": self.online_auction.slug}) in self.online_auction.label_print_link
+        )
+        assert (
+            reverse("auction_main", kwargs={"slug": self.online_auction.slug})
+            in self.online_auction.label_print_unprinted_link
+        )
 
     def test_template_status(self):
         """Test template_status property"""

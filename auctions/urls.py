@@ -136,7 +136,7 @@ urlpatterns = [
     path("selling/", login_required(views.MyLots.as_view()), name="selling"),
     path("lots/all/", views.AllLots.as_view(), name="allLots"),
     path("lots/user/", views.LotsByUser.as_view(), name="user_lots"),
-    path("lots/<int:pk>/<slug:slug>/", views.ViewLot.as_view()),
+    path("lots/<int:pk>/<slug:slug>/", views.ViewLot.as_view(), name="lot_by_pk_and_slug"),
     path("bids/", login_required(views.MyBids.as_view()), name="my_bids"),
     path("bids/delete/<int:pk>/", views.BidDelete.as_view(), name="delete_bid"),
     path("", views.ToDefaultLandingPage.as_view(), name="home"),
@@ -318,10 +318,11 @@ urlpatterns = [
         views.AuctionTOSValidation.as_view(),
         name="auctiontos_validation",
     ),
-    path("auctions/<slug:slug>/lots/<slug:custom_lot_number>/", views.ViewLot.as_view()),
+    path("auctions/<slug:slug>/lots/<slug:custom_lot_number>/", views.ViewLot.as_view(), name="lot_in_auction"),
     path(
         "auctions/<slug:slug>/lots/<slug:custom_lot_number>/<slug:lot_slug>/",
         views.ViewLot.as_view(),
+        name="lot_in_auction_with_slug",
     ),
     path(
         "auctions/<slug:slug>/lots/",

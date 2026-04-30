@@ -317,7 +317,7 @@ function initMap() {
                             {% endif %}
                             {% crispy form form.helper %}
                         {% else %}
-                            <p class="mb-0"><a href="/login/?next={% firstof request.path '/' %}" class="btn btn-primary">Please login to join the auction</a></p>
+                            <p class="mb-0"><a href="{% url 'account_login' %}?next={% firstof request.path '/' %}" class="btn btn-primary">Please login to join the auction</a></p>
                         {% endif %}
 
                         {# Single location details shown here #}
