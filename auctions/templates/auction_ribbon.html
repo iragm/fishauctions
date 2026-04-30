@@ -9,14 +9,14 @@
 <div class='mt-4 mb-4 p-2 bg-primary text-white rounded bg-gradient bg-opacity-50'><h5>Finish setting up</h5>
   <ul class="list-unstyled">
     <li><i class="bi bi-check-square-fill text-success"></i> Create your auction</li>
-    <li>{% if auction.admin_checklist_rules_updated %}<i class="bi bi-check-square-fill text-success"></i>{% else %}<i class="bi bi-exclamation-square-fill text-danger"></i>{%endif%} <a href="/auctions/{{auction.slug}}/edit">Edit the rules</a></li>
+    <li>{% if auction.admin_checklist_rules_updated %}<i class="bi bi-check-square-fill text-success"></i>{% else %}<i class="bi bi-exclamation-square-fill text-danger"></i>{%endif%} <a href="{% url 'edit_auction' slug=auction.slug %}">Edit the rules</a></li>
     <li>{% if auction.admin_checklist_location_set %}<i class="bi bi-check-square-fill text-success"></i>{% else %}<i class="bi bi-exclamation-square-fill text-danger"></i>{%endif%} {% if auction.set_location_link %}<a href='{{auction.set_location_link}}'>Set the location</a>{% else %}<a href='/auctions/{{auction.slug}}/locations'>Set the location</a>{% endif %}</li>
-    <li>{% if auction.admin_checklist_joined %}<i class="bi bi-check-square-fill text-success"></i>{% else %}<i class="bi bi-exclamation-square-fill text-danger"></i>{%endif%} Join this auction at the bottom <a href="/auctions/{{auction.slug}}/">of this page</a></li>
-    <li>{% if auction.admin_checklist_others_joined %}<i class="bi bi-check-square-fill text-success"></i>{% else %}<i class="bi bi-exclamation-square-fill text-danger"></i>{%endif%} Convince other people to join{% if not auction.is_online %}, or <a href="/auctions/{{auction.slug}}/users">manually add them here</a>{% endif %}</li>
-    <li>{% if auction.admin_checklist_lots_added %}<i class="bi bi-check-square-fill text-success"></i>{% else %}<i class="bi bi-exclamation-square-fill text-danger"></i>{%endif%} <a href="/lots/new/">Add lots</a>{% if not auction.is_online %} for yourself, or <a href="/auctions/{{auction.slug}}/users">for other users</a>{% endif %}</li>
+    <li>{% if auction.admin_checklist_joined %}<i class="bi bi-check-square-fill text-success"></i>{% else %}<i class="bi bi-exclamation-square-fill text-danger"></i>{%endif%} Join this auction at the bottom <a href="{% url 'auction_main' slug=auction.slug %}">of this page</a></li>
+    <li>{% if auction.admin_checklist_others_joined %}<i class="bi bi-check-square-fill text-success"></i>{% else %}<i class="bi bi-exclamation-square-fill text-danger"></i>{%endif%} Convince other people to join{% if not auction.is_online %}, or <a href="{% url 'auction_tos_list' slug=auction.slug %}">manually add them here</a>{% endif %}</li>
+    <li>{% if auction.admin_checklist_lots_added %}<i class="bi bi-check-square-fill text-success"></i>{% else %}<i class="bi bi-exclamation-square-fill text-danger"></i>{%endif%} <a href="{% url 'new_lot' %}">Add lots</a>{% if not auction.is_online %} for yourself, or <a href="{% url 'auction_tos_list' slug=auction.slug %}">for other users</a>{% endif %}</li>
     {% if not auction.is_online %}
     <li>{% if auction.admin_checklist_winner_set %}<i class="bi bi-check-square-fill text-success"></i>{% else %}<i class="bi bi-exclamation-square-fill text-danger"></i>{%endif%} <a href="{{ auction.set_lot_winners_link }}">Mark lots as sold</a></li>
-    <li>{% if auction.admin_checklist_additional_admin %}<i class="bi bi-check-square-fill text-success"></i>{% else %}<i class="bi bi-exclamation-square-fill text-danger"></i>{%endif%} Click a name to edit that user and <a href="/auctions/{{auction.slug}}/users">add an additional admin</a> to help you set lot winners</li>
+    <li>{% if auction.admin_checklist_additional_admin %}<i class="bi bi-check-square-fill text-success"></i>{% else %}<i class="bi bi-exclamation-square-fill text-danger"></i>{%endif%} Click a name to edit that user and <a href="{% url 'auction_tos_list' slug=auction.slug %}">add an additional admin</a> to help you set lot winners</li>
     {% endif %}
   </ul>
   {% if enable_help %}<div>Having trouble?  <a href='{% url "auction_help" slug=auction.slug %}'>Click here to get help</a></div>{% endif %}
@@ -86,23 +86,23 @@
       <a class="nav-link {% if active_tab == 'users'%}active{% endif %}" href='{% url "auction_tos_list" slug=auction.slug %}'><i class="bi bi-people-fill"></i><span class='d-none d-md-inline'> Users</span></a>
     </li>
     <li class="nav-item">
-      <a class="nav-link {% if active_tab == 'lots'%}active{% endif %}" href="/auctions/{{auction.slug}}/lots"><i class="bi bi-calendar"></i><span class='d-none d-md-inline'> Lots</span></a>
+      <a class="nav-link {% if active_tab == 'lots'%}active{% endif %}" href="{% url 'auction_lot_list' slug=auction.slug %}"><i class="bi bi-calendar"></i><span class='d-none d-md-inline'> Lots</span></a>
     </li>
     <li class="nav-item dropdown">
         <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false"><span class='d-none d-md-inline'>More</span></span></a>
         <ul class="dropdown-menu">
-          <a class="dropdown-item" href="/auctions/{{auction.slug}}/edit"><i class="bi bi-gear-fill"></i> Rules</a>
+          <a class="dropdown-item" href="{% url 'edit_auction' slug=auction.slug %}"><i class="bi bi-gear-fill"></i> Rules</a>
           <a class="dropdown-item" href="{% url 'edit_auction_custom_fields' slug=auction.slug %}"><i class="bi bi-ui-checks-grid"></i> Custom fields</a>
           <a class="dropdown-item" href="{{ auction.location_link }}"><i class="bi bi-geo-alt-fill"></i> Location{% if auction.location_qs|length > 1 %}s{% endif %}</a>
           {% if not auction.is_online %}<a class="dropdown-item" href="{{ auction.set_lot_winners_link }}"><i class="bi bi-calendar-check"></i> Set lot winners</a>{% endif %}
-          <a class="dropdown-item" href="/auctions/{{auction.slug}}/chat/"><i class="bi bi-chat-fill"></i> Chat messages</a>
+          <a class="dropdown-item" href="{% url 'auction_chat' slug=auction.slug %}"><i class="bi bi-chat-fill"></i> Chat messages</a>
           {% if enable_help %}<a class="dropdown-item" href='{% url "auction_help" slug=auction.slug %}'><i class="bi bi-question-circle-fill"></i> Help and Support</a>{% endif %}
           {% if not auction.is_online %}<a class="dropdown-item" href='{% url "auction_quick_checkout" slug=auction.slug %}'><i class="bi bi-bag-heart"></i> Quick checkout users</a>{% endif %}
-          <a class="dropdown-item" href="/auctions/new?copy={{auction.slug}}"><i class="bi bi-plus-circle"></i> Copy to new auction</a>
-          <a class="dropdown-item" href="/auctions/{{auction.slug}}/stats/"><i class="bi bi-graph-up"></i> Stats</a>
+          <a class="dropdown-item" href="{% url 'create_auction' %}?copy={{auction.slug}}"><i class="bi bi-plus-circle"></i> Copy to new auction</a>
+          <a class="dropdown-item" href="{% url 'auction_stats' slug=auction.slug %}"><i class="bi bi-graph-up"></i> Stats</a>
           {% if not auction.is_online %}<a class="dropdown-item" href='{% url "auction_printing" slug=auction.slug %}'><i class="bi bi-tags"></i> Print labels</a>{% endif %}
           <a class="dropdown-item" href="{% url 'auction_history' slug=auction.slug %}"><i class="bi bi-clock-history"></i> Admin history</a>
-          <a class="dropdown-item" href="/auctions/{{auction.slug}}/delete/"><i class="bi bi-x-circle"></i> Delete auction</a>
+          <a class="dropdown-item" href="{% url 'auction_delete' slug=auction.slug %}"><i class="bi bi-x-circle"></i> Delete auction</a>
 
         </ul>
     </li>

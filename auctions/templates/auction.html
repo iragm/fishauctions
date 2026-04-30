@@ -212,10 +212,10 @@ function initMap() {
                                 <a href="{{ auction.location_link }}" class="btn btn-primary btn-sm w-100"><i class="bi bi-geo-alt-fill"></i> Location{% if auction.location_qs|length > 1 %}s{% endif %}</a>
                             </div>
                             <div class="col-12 col-md-auto">
-                                <a href="/auctions/{{auction.slug}}/chat/" class="btn btn-primary btn-sm w-100"><i class="bi bi-chat-fill"></i> Chat messages</a>
+                                <a href="{% url 'auction_chat' slug=auction.slug %}" class="btn btn-primary btn-sm w-100"><i class="bi bi-chat-fill"></i> Chat messages</a>
                             </div>
                             <div class="col-12 col-md-auto">
-                                <a href="/auctions/new?copy={{auction.slug}}" class="btn btn-primary btn-sm w-100"><i class="bi bi-plus-circle"></i> Copy to new auction</a>
+                                <a href="{% url 'create_auction' %}?copy={{auction.slug}}" class="btn btn-primary btn-sm w-100"><i class="bi bi-plus-circle"></i> Copy to new auction</a>
                             </div>
                             {% if not auction.multi_location %}
                             {% for location in pickup_locations %}

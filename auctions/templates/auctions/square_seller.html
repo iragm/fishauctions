@@ -70,7 +70,7 @@
       Use filters on the Users page to quickly find who hasn’t paid.
       {% if auction %}
         For example:
-        <a href="/auctions/{{ auction.slug }}/users?query=+open+owes+club">
+        <a href="{% url 'auction_tos_list' slug=auction.slug %}?query=+open+owes+club">
           Here's the users in {{ auction }} with an open invoice who owe the club
         </a>.
       {% endif %}
