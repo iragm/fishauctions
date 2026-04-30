@@ -77,9 +77,14 @@
 <h4 class="mt-4">Auctions</h4>
 <ul class="list-group">
   {% for auction in club_auctions %}
-  <li class="list-group-item">
-    <a href="{{ auction.get_absolute_url }}">{{ auction.title }}</a>
-    <span class="text-muted ms-2">{{ auction.date_start|date:"N j, Y" }}</span>
+  <li class="list-group-item d-flex justify-content-between align-items-center">
+    <span>
+      <a href="{{ auction.get_absolute_url }}">{{ auction.title }}</a>
+      <span class="text-muted ms-2">{{ auction.date_start|date:"N j, Y" }}</span>
+    </span>
+    {% if can_manage_auctions and not auction.promote_this_auction %}
+    <span class="badge bg-secondary rounded-pill ms-2">Not promoted</span>
+    {% endif %}
   </li>
   {% endfor %}
 </ul>

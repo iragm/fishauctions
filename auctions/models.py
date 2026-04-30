@@ -580,6 +580,13 @@ class Club(models.Model):
     def __str__(self):
         return str(self.name)
 
+    def save(self, *args, **kwargs):
+        if not self.abbreviation and self.name:
+            # Auto-fill abbreviation from the initials of the club name
+            words = self.name.split()
+            self.abbreviation = "".join(w[0].upper() for w in words if w)
+        super().save(*args, **kwargs)
+
 
 class ClubDiscordRole(models.Model):
     """Discord roles associated with a club"""

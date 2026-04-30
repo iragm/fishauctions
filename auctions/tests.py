@@ -13894,6 +13894,9 @@ class ClubAuctionIntegrationTests(TestCase):
     def test_role_assignment_fills_club_on_existing_auctions(self):
         """When a member gains admin/manage_auctions role, existing auctions get club filled in"""
         user2 = User.objects.create_user(username="role_assign", password="testpass", email="role_assign@example.com")
+        # User must have the same club in preferences for the signal to associate
+        user2.userdata.club = self.club
+        user2.userdata.save()
         # Create auction without club
         auction = Auction.objects.create(
             title="No Club Auction",
@@ -13913,6 +13916,9 @@ class ClubAuctionIntegrationTests(TestCase):
     def test_role_assignment_creates_history_notes(self):
         """Auction history note is created when club is set via role assignment"""
         user2 = User.objects.create_user(username="role_hist", password="testpass", email="role_hist@example.com")
+        # User must have the same club in preferences for the signal to associate
+        user2.userdata.club = self.club
+        user2.userdata.save()
         auction = Auction.objects.create(
             title="Role History Auction",
             date_start=timezone.now() + timezone.timedelta(days=7),
@@ -13933,3 +13939,34 @@ class ClubAuctionIntegrationTests(TestCase):
     def test_manage_auctions_role_exists(self):
         """'Manage auctions' ClubRole exists"""
         self.assertTrue(ClubRole.objects.filter(name="Manage auctions").exists())
+
+    def test_role_assignment_no_effect_without_club_in_preferences(self):
+        """Role assignment does NOT fill club if user's preferences club differs"""
+        user3 = User.objects.create_user(username="role_nopref", password="testpass", email="role_nopref@example.com")
+        # user3 has no club in preferences (default is None)
+        auction = Auction.objects.create(
+            title="No Pref Auction",
+            date_start=timezone.now() + timezone.timedelta(days=7),
+            date_end=timezone.now() + timezone.timedelta(days=14),
+            created_by=user3,
+            club=None,
+        )
+        member = ClubMember.objects.create(club=self.club, user=user3, first_name="No", last_name="Pref")
+        member.roles.add(self.manage_role)
+        auction.refresh_from_db()
+        # club should remain None since user's preferences don't point to this club
+        self.assertIsNone(auction.club)
+
+    def test_club_abbreviation_auto_filled_on_save(self):
+        """Club abbreviation is auto-filled from initials when blank"""
+        from .models import Club as ClubModel  # noqa: PLC0415
+
+        club = ClubModel.objects.create(name="Greater Pacific Fish Society", owner=self.owner)
+        self.assertEqual(club.abbreviation, "GPFS")
+
+    def test_club_abbreviation_not_overwritten_if_set(self):
+        """Existing club abbreviation is not overwritten on save"""
+        from .models import Club as ClubModel  # noqa: PLC0415
+
+        club = ClubModel.objects.create(name="Greater Pacific Fish Society", owner=self.owner, abbreviation="CUSTOM")
+        self.assertEqual(club.abbreviation, "CUSTOM")

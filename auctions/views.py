@@ -5805,6 +5805,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "alternative_split_label",
                 "google_drive_link",
                 "only_whole_dollar_bids",
+                "club",
             ]
             for field in fields_to_clone:
                 setattr(auction, field, getattr(original_auction, field))
@@ -5948,13 +5949,17 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                             club=creator_club,
                             is_deleted=False,
                             roles__permissions__name__in=["permission_manage_auctions", "permission_admin"],
-                            user__isnull=False,
                         )
                         .exclude(user=self.request.user)
                         .distinct()
                     )
                     for member in manage_auctions_members:
-                        existing_tos = AuctionTOS.objects.filter(auction=auction, user=member.user).first()
+                        # Check for existing AuctionTOS by user or email
+                        existing_tos = None
+                        if member.user:
+                            existing_tos = AuctionTOS.objects.filter(auction=auction, user=member.user).first()
+                        if not existing_tos and member.email:
+                            existing_tos = AuctionTOS.objects.filter(auction=auction, email=member.email).first()
                         if not existing_tos:
                             AuctionTOS.objects.create(
                                 auction=auction,
@@ -5995,6 +6000,15 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                     self.auction.created_by.userdata.is_trusted = True
                     self.auction.created_by.userdata.save()
                     messages.success(request, f"{self.auction.created_by.username} is now trusted")
+                if str(request.GET.get("make_club_owner", "")).lower() in ("1", "true"):
+                    creator_club = getattr(self.auction.created_by.userdata, "club", None)
+                    if creator_club and not creator_club.owner:
+                        creator_club.owner = self.auction.created_by
+                        creator_club.save()
+                        messages.success(
+                            request,
+                            f"{self.auction.created_by.username} is now the owner of {creator_club.name}",
+                        )
             if self.auction.created_by.pk == request.user.pk:
                 if str(request.GET.get("enable_online_payments", "")).lower() in ("1", "true"):
                     self.auction.enable_online_payments = True
@@ -6068,6 +6082,12 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
         current_site = Site.objects.get_current()
         context["domain"] = current_site.domain
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
+        # Show "make club owner" button to superusers when auction creator has a club with no owner
+        if self.request.user.is_superuser and self.auction.created_by:
+            creator_club = getattr(self.auction.created_by.userdata, "club", None)
+            if creator_club and not creator_club.owner:
+                context["can_make_club_owner"] = True
+                context["creator_club"] = creator_club
         if self.auction.closed:
             context["ended"] = True
             messages.info(
@@ -11408,9 +11428,16 @@ class ClubDetailView(ClubViewMixin, TemplateView):
             "permission_admin"
         ) or self.user_has_club_permission("permission_view")
         context["can_edit_settings"] = self.user_has_club_permission("permission_edit_club")
-        context["club_auctions"] = Auction.objects.filter(
-            club=self.club, promote_this_auction=True, is_deleted=False
-        ).order_by("date_start")
+        can_manage_auctions = self.user_has_club_permission("permission_admin") or self.user_has_club_permission(
+            "permission_manage_auctions"
+        )
+        context["can_manage_auctions"] = can_manage_auctions
+        if can_manage_auctions:
+            context["club_auctions"] = Auction.objects.filter(club=self.club, is_deleted=False).order_by("date_start")
+        else:
+            context["club_auctions"] = Auction.objects.filter(
+                club=self.club, promote_this_auction=True, is_deleted=False
+            ).order_by("date_start")
         return context
 
     def post(self, request, *args, **kwargs):
@@ -11822,7 +11849,9 @@ class ClubMemberDeleteView(APIView):
             action=f"Removed member {member}",
             applies_to="MEMBERS",
         )
-        return HttpResponse(status=204, headers={"HX-Trigger": "clubMemberListChanged"})
+        response = HttpResponse("", status=200)
+        response["HX-Trigger"] = "clubMemberListChanged"
+        return response
 
 
 class ClubMemberConfirmView(APIView):
