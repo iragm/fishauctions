@@ -11868,9 +11868,7 @@ class ClubMemberDeleteView(APIView):
             action=f"Removed member {member}",
             applies_to="MEMBERS",
         )
-        response = HttpResponse("", status=200)
-        response["HX-Trigger"] = "clubMemberListChanged"
-        return response
+        return HttpResponse(status=204, headers={"HX-Trigger": "clubMemberListChanged"})
 
 
 class ClubMemberConfirmView(APIView):
