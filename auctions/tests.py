@@ -13970,3 +13970,66 @@ class ClubAuctionIntegrationTests(TestCase):
 
         club = ClubModel.objects.create(name="Greater Pacific Fish Society", owner=self.owner, abbreviation="CUSTOM")
         self.assertEqual(club.abbreviation, "CUSTOM")
+
+    def test_club_abbreviation_persisted_with_update_fields(self):
+        """Auto-filled abbreviation is saved even when update_fields is specified"""
+        from .models import Club as ClubModel  # noqa: PLC0415
+
+        club = ClubModel.objects.create(name="Pacific Fish Club", owner=self.owner)
+        # Clear abbreviation and resave with update_fields
+        ClubModel.objects.filter(pk=club.pk).update(abbreviation="")
+        club.refresh_from_db()
+        self.assertEqual(club.abbreviation, "")
+        club.save(update_fields=["name"])
+        club.refresh_from_db()
+        self.assertEqual(club.abbreviation, "PFC")
+
+    def test_club_detail_accessible_with_manage_auctions_role_when_page_disabled(self):
+        """Users with manage_auctions role can view club page even when enable_club_page=False"""
+        club_no_page = Club.objects.create(name="Private Club", enable_club_page=False)
+        user_manage = User.objects.create_user(username="manage_user", password="testpass", email="manage@example.com")
+        member = ClubMember.objects.create(club=club_no_page, user=user_manage)
+        manage_perm = ClubPermission.objects.get(name="permission_manage_auctions")
+        role = ClubRole.objects.get(name="Manage auctions")
+        role.permissions.add(manage_perm)
+        member.roles.add(role)
+        self.client.login(username="manage_user", password="testpass")
+        url = reverse("club_detail", kwargs={"slug": club_no_page.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_club_detail_not_accessible_anon_when_page_disabled(self):
+        """Anonymous users cannot view a club detail page when enable_club_page=False"""
+        club_no_page = Club.objects.create(name="Private Club 2", enable_club_page=False)
+        url = reverse("club_detail", kwargs={"slug": club_no_page.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
+
+    def test_club_admins_added_as_tos_on_pickup_location_create(self):
+        """When first pickup location is created for a club auction, club admin members get AuctionTOS"""
+        # Create a second user with manage_auctions role
+        user2 = User.objects.create_user(username="admin2_tos", password="testpass", email="admin2_tos@example.com")
+        member2 = ClubMember.objects.create(
+            club=self.club, user=user2, first_name="Admin", last_name="Two", email="admin2_tos@example.com"
+        )
+        member2.roles.add(self.manage_role)
+        # Create auction already associated with club (no location yet)
+        auction = Auction.objects.create(
+            title="Location Hook Auction",
+            date_start=timezone.now() + timezone.timedelta(days=7),
+            date_end=timezone.now() + timezone.timedelta(days=14),
+            created_by=self.owner,
+            club=self.club,
+        )
+        self.assertFalse(AuctionTOS.objects.filter(auction=auction, user=user2).exists())
+        # Create a pickup location via the view
+        self.client.login(username=self.owner.username, password="testpass")
+        response = self.client.post(
+            reverse("create_auction_pickup_location", kwargs={"slug": auction.slug}),
+            {
+                "name": "Main Location",
+                "pickup_time": (timezone.now() + timezone.timedelta(days=14)).strftime("%Y-%m-%d %H:%M"),
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(AuctionTOS.objects.filter(auction=auction, user=user2).exists())

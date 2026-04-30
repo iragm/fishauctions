@@ -585,6 +585,10 @@ class Club(models.Model):
             # Auto-fill abbreviation from the initials of the club name
             words = self.name.split()
             self.abbreviation = "".join(w[0].upper() for w in words if w)
+            # Ensure abbreviation is included in update_fields if caller specified them
+            update_fields = kwargs.get("update_fields")
+            if update_fields is not None and "abbreviation" not in update_fields:
+                kwargs["update_fields"] = list(update_fields) + ["abbreviation"]
         super().save(*args, **kwargs)
 
 

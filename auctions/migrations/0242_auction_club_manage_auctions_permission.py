@@ -12,9 +12,8 @@ def create_manage_auctions_permission_and_role(apps, schema_editor):
         name="permission_manage_auctions",
         defaults={"description": "Manage auctions"},
     )
-    role, created = ClubRole.objects.get_or_create(name="Manage auctions")
-    if created:
-        role.permissions.set([perm])
+    role, _ = ClubRole.objects.get_or_create(name="Manage auctions")
+    role.permissions.add(perm)
 
 
 def reverse_migration(apps, schema_editor):

@@ -2234,6 +2234,9 @@ class PickupLocationsCreate(LoginRequiredMixin, AuctionViewMixin, PickupLocation
             action=f"Added {self.object}",
             user=self.request.user,
         )
+        # If this auction is associated with a club, ensure club admin members have AuctionTOS records.
+        # This handles new auctions (first location created) and copied auctions with an inherited club.
+        _add_club_admins_as_auction_tos(self.auction, self.request.user)
         return form
 
 
@@ -5666,6 +5669,51 @@ class AuctionConfirmView(LoginRequiredMixin, TemplateView):
         return super().dispatch(request, *args, **kwargs)
 
 
+def _add_club_admins_as_auction_tos(auction, requesting_user):
+    """Create AuctionTOS admin records for club members with admin/manage_auctions permissions.
+
+    Only runs when the auction has a club and at least one pickup location.
+    Skips the requesting user (already an admin as the auction creator).
+    """
+    if not auction.club:
+        return
+    default_location = auction.location_qs.first()
+    if not default_location:
+        return
+    manage_auctions_members = (
+        ClubMember.objects.filter(
+            club=auction.club,
+            is_deleted=False,
+            roles__permissions__name__in=["permission_manage_auctions", "permission_admin"],
+        )
+        .exclude(user=requesting_user)
+        .distinct()
+    )
+    for member in manage_auctions_members:
+        existing_tos = None
+        if member.user:
+            existing_tos = AuctionTOS.objects.filter(auction=auction, user=member.user).first()
+        if not existing_tos and member.email:
+            existing_tos = AuctionTOS.objects.filter(auction=auction, email=member.email).first()
+        if not existing_tos:
+            AuctionTOS.objects.create(
+                auction=auction,
+                user=member.user,
+                pickup_location=default_location,
+                name=member.display_name,
+                email=member.email or "",
+                phone_number=member.phone_number or "",
+                address=member.address or "",
+                is_admin=True,
+                manually_added=True,
+            )
+            auction.create_history(
+                applies_to="USERS",
+                action=f"Automatically added {member.display_name} as auction admin because of their club role in '{auction.club}'.",
+                user=None,
+            )
+
+
 class AuctionCreateView(CreateView, LoginRequiredMixin):
     """
     Creating a new auction
@@ -5941,42 +5989,9 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                     action=f"Automatically associated with club '{creator_club}' based on auction creator's preferences.",
                     user=None,
                 )
-                # Add any users with manage_auctions role in this club as auction admins
-                default_location = auction.location_qs.first()
-                if default_location:
-                    manage_auctions_members = (
-                        ClubMember.objects.filter(
-                            club=creator_club,
-                            is_deleted=False,
-                            roles__permissions__name__in=["permission_manage_auctions", "permission_admin"],
-                        )
-                        .exclude(user=self.request.user)
-                        .distinct()
-                    )
-                    for member in manage_auctions_members:
-                        # Check for existing AuctionTOS by user or email
-                        existing_tos = None
-                        if member.user:
-                            existing_tos = AuctionTOS.objects.filter(auction=auction, user=member.user).first()
-                        if not existing_tos and member.email:
-                            existing_tos = AuctionTOS.objects.filter(auction=auction, email=member.email).first()
-                        if not existing_tos:
-                            AuctionTOS.objects.create(
-                                auction=auction,
-                                user=member.user,
-                                pickup_location=default_location,
-                                name=member.display_name,
-                                email=member.email or "",
-                                phone_number=member.phone_number or "",
-                                address=member.address or "",
-                                is_admin=True,
-                                manually_added=True,
-                            )
-                            auction.create_history(
-                                applies_to="USERS",
-                                action=f"Automatically added {member.display_name} as auction admin because of their club role in '{creator_club}'.",
-                                user=None,
-                            )
+        # Add club admin members as AuctionTOS admins (works for copied auctions with locations,
+        # and for new auctions once a pickup location exists — also called from PickupLocationsCreate)
+        _add_club_admins_as_auction_tos(auction, self.request.user)
         return super().form_valid(form)
 
 
@@ -11394,11 +11409,15 @@ class ClubDetailView(ClubViewMixin, TemplateView):
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
         if not self.club.enable_club_page:
-            # Page is disabled — only users with club roles may view it; everyone else gets 404
-            has_admin_access = request.user.is_authenticated and (
-                self.user_has_club_permission("permission_view") or self.user_has_club_permission("permission_admin")
+            # Page is disabled — only users with any club role may view it; everyone else gets 404
+            has_access = request.user.is_authenticated and (
+                request.user.is_superuser
+                or request.user == self.club.owner
+                or ClubMember.objects.filter(
+                    club=self.club, user=request.user, is_deleted=False, roles__isnull=False
+                ).exists()
             )
-            if not has_admin_access:
+            if not has_access:
                 raise Http404
         return super().dispatch(request, *args, **kwargs)
 
