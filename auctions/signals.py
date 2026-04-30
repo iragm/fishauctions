@@ -295,7 +295,7 @@ def on_club_member_roles_changed(sender, instance, action, pk_set, **kwargs):
     try:
         if member.user.userdata.club != club:
             return
-    except Exception:
+    except AttributeError:
         return
     # Find all auctions created by this user that don't already have a club
     auctions_to_update = Auction.objects.filter(created_by=member.user, club__isnull=True, is_deleted=False)
