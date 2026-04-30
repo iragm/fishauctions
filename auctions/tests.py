@@ -5032,6 +5032,27 @@ class InvoiceStatusButtonTests(StandardTestCase):
         # DRF returns 401 for unauthenticated requests
         assert response.status_code in [302, 401, 403]
 
+    def test_invoice_status_button_non_admin_denied(self):
+        """Non-admin users cannot change invoice status for an auction they don't administer"""
+        # self.user_with_no_lots has a TOS for online_auction but is not an admin
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        url = f"/api/payinvoice/{self.invoice.pk}/PAID"
+        response = self.client.post(url)
+        assert response.status_code == 403
+        # Invoice status should be unchanged
+        self.invoice.refresh_from_db()
+        assert self.invoice.status != "PAID"
+
+    def test_invoice_status_button_auction_creator_allowed(self):
+        """Auction creator can change invoice status"""
+        # self.user is the creator of self.online_auction
+        self.client.login(username=self.user.username, password="testpassword")
+        url = f"/api/payinvoice/{self.invoice.pk}/PAID"
+        response = self.client.post(url)
+        assert response.status_code == 200
+        self.invoice.refresh_from_db()
+        assert self.invoice.status == "PAID"
+
 
 class QuickCheckoutHTMXTests(StandardTestCase):
     def test_quick_checkout_shows_obvious_unsold_lot_warning(self):

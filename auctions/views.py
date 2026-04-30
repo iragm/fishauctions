@@ -941,8 +941,8 @@ class AuctionNotifications(APIView):
     This is mostly a wrapper to go around models.nearby_auctions so that all info isn't accessible to anyone
     """
 
-    authentication_classes = [SessionAuthentication]
-    permission_classes = [AllowAny]
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
         new = 0
@@ -1376,6 +1376,8 @@ class InvoicePaid(APIView):
         return super().dispatch(request, *args, **kwargs)
 
     def post(self, request, *args, **kwargs):
+        if not self.auction.permission_check(request.user):
+            raise PermissionDenied()
         new_status = kwargs["status"]
         self.invoice.status = new_status
         # Set or clear invoice_notification_due based on status change
@@ -2019,8 +2021,11 @@ class LeaveFeedbackView(LoginRequiredMixin, ListView):
         return context
 
 
-class FindImageIcon(LoginRequiredMixin, View):
+class FindImageIcon(APIView):
     """Return a handy little icon if the lot name will have an image associated with it"""
+
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def dispatch(self, request, *args, **kwargs):
         self.auction = get_object_or_404(Auction, slug=kwargs.pop("slug"), is_deleted=False)
@@ -2066,8 +2071,11 @@ class AuctionChats(AuctionViewMixin, LoginRequiredMixin, ListView):
         return context
 
 
-class AuctionChatDeleteUndelete(LoginRequiredMixin, AuctionViewMixin, View):
+class AuctionChatDeleteUndelete(APIView, AuctionViewMixin):
     """HTMX for auction admins only"""
+
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def dispatch(self, request, *args, **kwargs):
         pk = kwargs.get("pk")
@@ -2094,8 +2102,11 @@ class AuctionChatDeleteUndelete(LoginRequiredMixin, AuctionViewMixin, View):
         return HttpResponse(result)
 
 
-class AuctionShowHighBidder(LoginRequiredMixin, AuctionViewMixin, View):
+class AuctionShowHighBidder(APIView, AuctionViewMixin):
     """HTMX for auction admins only"""
+
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def dispatch(self, request, *args, **kwargs):
         pk = kwargs.get("pk")
@@ -2387,7 +2398,10 @@ class AuctionCustomFieldsUpdate(LoginRequiredMixin, AuctionViewMixin, UpdateView
         return super().form_valid(form)
 
 
-class AuctionDropdownOptionsAPI(LoginRequiredMixin, AuctionViewMixin, View):
+class AuctionDropdownOptionsAPI(APIView, AuctionViewMixin):
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, *args, **kwargs):
         options = list(
             AuctionDropdown.objects.filter(auction=self.auction)
@@ -3758,8 +3772,11 @@ class BulkAddLotsAuto(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         return super().dispatch(request, *args, **kwargs)
 
 
-class SaveLotAjax(LoginRequiredMixin, AuctionViewMixin, View):
+class SaveLotAjax(APIView, AuctionViewMixin):
     """AJAX endpoint to save a single lot"""
+
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
     allow_non_admins = True
 
@@ -8589,77 +8606,81 @@ class UserLocationUpdate(UpdateView, SuccessMessageMixin):
         return context
 
 
-class UserChartView(View):
+class UserChartView(APIView):
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, *args, **kwargs):
-        if request.user.is_superuser:
-            user = self.kwargs.get("pk", None)
-            allBids = (
-                Bid.objects.exclude(is_deleted=True)
-                .select_related("lot_number__species_category")
-                .filter(user=user, lot_number__species_category__isnull=False)
-            )
-            pageViews = PageView.objects.select_related("lot_number__species_category").filter(
-                user=user, lot_number__species_category__isnull=False
-            )
-            # This is extremely inefficient
-            # Almost all of it could be done in SQL with a more complex join and a count
-            # However, I keep changing attributes (views, view duration, bids) and sorting here
-            # This code is also only run for admins (and async of page load), so the server load is pretty low
+        if not request.user.is_superuser:
+            raise PermissionDenied()
+        user = kwargs.get("pk", None)
+        allBids = (
+            Bid.objects.exclude(is_deleted=True)
+            .select_related("lot_number__species_category")
+            .filter(user=user, lot_number__species_category__isnull=False)
+        )
+        pageViews = PageView.objects.select_related("lot_number__species_category").filter(
+            user=user, lot_number__species_category__isnull=False
+        )
+        # This is extremely inefficient
+        # Almost all of it could be done in SQL with a more complex join and a count
+        # However, I keep changing attributes (views, view duration, bids) and sorting here
+        # This code is also only run for admins (and async of page load), so the server load is pretty low
 
-            categories = {}
-            for item in allBids:
-                category = str(item.lot_number.species_category)
-                if category in categories:
-                    categories[category]["bids"] += 1
-                else:
-                    categories[category] = {"bids": 1, "views": 0}
-            for item in pageViews:
-                category = str(item.lot_number.species_category)
-                if category in categories:
-                    categories[category]["views"] += 1
-                else:
-                    # brand new category
-                    categories[category] = {"bids": 0, "views": 1}
-            # sort the result
-            sortedCategories = sorted(categories, key=lambda t: -categories[t]["views"])
-            # sortedCategories = sorted(categories, key=lambda t: -categories[t]['bids'] )
-            # format for chart.js
-            labels = []
-            bids = []
-            views = []
-            for item in sortedCategories:
-                labels.append(item)
-                bids.append(categories[item]["bids"])
-                views.append(categories[item]["views"])
-            return JsonResponse(data={"labels": labels, "bids": bids, "views": views})
-        messages.error(request, "Your account doesn't have permission to view this page.")
-        return redirect("/")
+        categories = {}
+        for item in allBids:
+            category = str(item.lot_number.species_category)
+            if category in categories:
+                categories[category]["bids"] += 1
+            else:
+                categories[category] = {"bids": 1, "views": 0}
+        for item in pageViews:
+            category = str(item.lot_number.species_category)
+            if category in categories:
+                categories[category]["views"] += 1
+            else:
+                # brand new category
+                categories[category] = {"bids": 0, "views": 1}
+        # sort the result
+        sortedCategories = sorted(categories, key=lambda t: -categories[t]["views"])
+        # sortedCategories = sorted(categories, key=lambda t: -categories[t]['bids'] )
+        # format for chart.js
+        labels = []
+        bids = []
+        views = []
+        for item in sortedCategories:
+            labels.append(item)
+            bids.append(categories[item]["bids"])
+            views.append(categories[item]["views"])
+        return JsonResponse(data={"labels": labels, "bids": bids, "views": views})
 
 
-class LotChartView(View):
+class LotChartView(APIView):
+    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, *args, **kwargs):
-        if request.user.is_superuser:
-            lot_number = self.kwargs.get("pk", None)
-            queryset = (
-                PageView.objects.filter(lot_number=lot_number)
-                .exclude(user_id__isnull=True)
-                .order_by("-total_time")
-                .values()[:20]
-            )
-            labels = []
-            data = []
-            for entry in queryset:
-                labels.append(str(User.objects.get(pk=entry["user_id"])))
-                data.append(int(entry["total_time"]))
+        if not request.user.is_superuser:
+            raise PermissionDenied()
+        lot_number = kwargs.get("pk", None)
+        queryset = (
+            PageView.objects.filter(lot_number=lot_number)
+            .exclude(user_id__isnull=True)
+            .order_by("-total_time")
+            .values()[:20]
+        )
+        labels = []
+        data = []
+        for entry in queryset:
+            labels.append(str(User.objects.get(pk=entry["user_id"])))
+            data.append(int(entry["total_time"]))
 
-            return JsonResponse(
-                data={
-                    "labels": labels,
-                    "data": data,
-                }
-            )
-        messages.error(request, "Your account doesn't have permission to view this page.")
-        return redirect("/")
+        return JsonResponse(
+            data={
+                "labels": labels,
+                "data": data,
+            }
+        )
 
 
 class AdminErrorPage(AdminOnlyViewMixin, TemplateView):
