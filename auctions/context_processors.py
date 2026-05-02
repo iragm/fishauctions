@@ -1,4 +1,21 @@
+import zoneinfo
+
 from django.conf import settings  # import the settings file
+
+DEFAULT_USER_TIMEZONE = "America/New_York"
+
+
+def _safe_timezone(value: str | None) -> str | None:
+    """Return value if it's a known IANA tz name, else None.
+
+    The user_timezone cookie is client-controllable and userdata.timezone is
+    a free-text CharField. An invalid value would otherwise blow up
+    `{% timezone user_timezone %}` in base.html and 500 every page (Django
+    ticket #33674).
+    """
+    if value and value in zoneinfo.available_timezones():
+        return value
+    return None
 
 
 def google_analytics(request):
@@ -33,16 +50,17 @@ def add_tz(request):
     """
     user_timezone = ""
     user_timezone_set = False
-    cookie_timezone = request.COOKIES.get("user_timezone")
+    cookie_timezone = _safe_timezone(request.COOKIES.get("user_timezone"))
     if cookie_timezone:
         user_timezone = cookie_timezone
         user_timezone_set = True
     if not user_timezone:
-        user_timezone = "America/New_York"  # default timezone if not set
+        user_timezone = DEFAULT_USER_TIMEZONE
         if request.user.is_authenticated:
             # UserData is auto-created when user is saved
-            if request.user.userdata.timezone:
-                user_timezone = request.user.userdata.timezone
+            saved = _safe_timezone(request.user.userdata.timezone)
+            if saved:
+                user_timezone = saved
                 # user_timezone_set = True # don't set this to true, we want to make it current with js
     return {"user_timezone": user_timezone, "user_timezone_set": user_timezone_set}
 
@@ -88,7 +106,7 @@ def add_location(request):
                 # Invalid cookie values, skip update
                 pass
 
-        timezone_cookie = request.COOKIES.get("user_timezone")
+        timezone_cookie = _safe_timezone(request.COOKIES.get("user_timezone"))
         if timezone_cookie and request.user.userdata.timezone != timezone_cookie:
             request.user.userdata.timezone = timezone_cookie
             needs_save = True
