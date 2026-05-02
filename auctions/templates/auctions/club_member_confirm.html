@@ -13,7 +13,7 @@
         <button type="button" class="btn btn-danger"
           hx-post="{{ action_url }}"
           hx-target="#modals-here"
-          hx-on::after-request="closeModal()">Confirm</button>
+          hx-swap="innerHTML">Confirm</button>
       </div>
     </div>
   </div>
