@@ -2483,7 +2483,8 @@ class CreateLotForm(forms.ModelForm):
         selected_auction = self.instance.auction or self.auction
         part_of_auction_selected = str(self.data.get("part_of_auction", "")).lower() in {"true", "1", "on"}
         if self.is_bound and part_of_auction_selected:
-            selected_auction = self.fields["auction"].queryset.filter(pk=self.data.get("auction")).first()
+            auction_pk = self.data.get("auction")
+            selected_auction = self.fields["auction"].queryset.filter(pk=auction_pk).first() if auction_pk else None
         elif self.is_bound:
             selected_auction = None
         if not selected_auction and not self.is_bound:
