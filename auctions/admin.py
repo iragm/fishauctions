@@ -347,6 +347,7 @@ class ClubAdmin(admin.ModelAdmin):
         UserInline,
         ClubDiscordRoleInline,
     ]
+    readonly_fields = ("owner",)
     actions = [export_to_csv]
 
 
