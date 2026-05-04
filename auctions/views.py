@@ -11883,7 +11883,7 @@ class ClubMemberDeleteView(APIView):
             action=f"Removed member {member}",
             applies_to="MEMBERS",
         )
-        return ClubMemberAdminView._redirect_to_club_admin(member.club)
+        return HttpResponse(status=204, headers={"HX-Trigger": "clubMemberListChanged"})
 
 
 class ClubMemberConfirmView(APIView):
