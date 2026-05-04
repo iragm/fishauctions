@@ -23,9 +23,14 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name="club",
             name="uuid",
-            field=models.UUIDField(db_index=True, default=uuid.uuid4, editable=False, unique=True),
+            field=models.UUIDField(db_index=True, editable=False, null=True),
         ),
         migrations.RunPython(generate_club_uuids, migrations.RunPython.noop),
+        migrations.AlterField(
+            model_name="club",
+            name="uuid",
+            field=models.UUIDField(db_index=True, default=uuid.uuid4, editable=False, unique=True),
+        ),
         migrations.AddField(
             model_name="clubdiscordrole",
             name="bap_points_for_role",
