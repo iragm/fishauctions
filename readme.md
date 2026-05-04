@@ -278,7 +278,6 @@ This registers the `/connect` slash command with Discord globally. It must be ru
 
 1. Find your club's UUID on the Discord settings page, then in the Discord channel where you want the join button to appear, run `/connect club_uuid:<uuid>`. This links the server to the club, syncs roles, and posts the join button in that channel.
 2. Click **Fetch roles** on the settings page any time you want to re-sync role names from Discord, then configure paid/unpaid role flags and BAP/HAP point thresholds.
-3. Alternatively, use the **Send join message** form to post the join button to a specific channel without using the slash command.
 
 
 ### Post setup:

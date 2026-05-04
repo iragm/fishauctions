@@ -11777,6 +11777,12 @@ $("#id_first_name, #id_last_name, #id_email").on("blur", cmValidateField);
                 applies_to="MEMBERS",
             )
             messages.success(request, f"{saved} updated.")
+            # Reassign Discord role whenever the record is saved from the admin UI
+            if saved.discord_id and saved.club.discord_server_id:
+                role = saved.discord_role
+                if role and role.role_id:
+                    if not assign_discord_role(saved.club.discord_server_id, saved.discord_id, role.role_id):
+                        messages.warning(request, f"{saved} updated but Discord role assignment failed.")
             return self._redirect_to_club_admin(member.club)
         return render(request, "auctions/generic_admin_form.html", self._build_context(request, member, form))
 
@@ -12397,11 +12403,13 @@ def _sync_discord_roles(club, bot_token):
         logger.warning("Discord roles fetch failed: status=%s response=%s", resp.status_code, resp.text)
         return None
     updated = 0
+    fetched_role_ids = set()
     for role in resp.json():
         role_id = role.get("id", "")
         role_name = role.get("name", "")
         if role_id == club.discord_server_id or role.get("managed"):
             continue
+        fetched_role_ids.add(role_id)
         obj = ClubDiscordRole.objects.filter(club=club, role_id=role_id).first()
         if obj:
             if obj.role_name != role_name:
@@ -12410,6 +12418,9 @@ def _sync_discord_roles(club, bot_token):
         else:
             ClubDiscordRole.objects.create(club=club, role_id=role_id, role_name=role_name)
         updated += 1
+    # Remove roles that no longer exist in Discord (only those with a non-empty role_id;
+    # preserve placeholder rows without a Discord ID)
+    ClubDiscordRole.objects.filter(club=club).exclude(role_id__in=fetched_role_ids).exclude(role_id="").delete()
     return updated
 
 
@@ -12435,12 +12446,14 @@ class DiscordInteractionsView(View):
         # Signature verification
         signature = request.headers.get("X-Signature-Ed25519", "")
         timestamp = request.headers.get("X-Signature-Timestamp", "")
-        if abs(time() - int(timestamp)) > 300:
-            return HttpResponseForbidden("Stale request")
-        body = request.body
-
         if not signature or not timestamp:
             return HttpResponseBadRequest("Missing signature headers")
+        try:
+            if abs(time() - int(timestamp)) > 300:
+                return HttpResponseForbidden("Stale request")
+        except (ValueError, TypeError):
+            return HttpResponseBadRequest("Invalid timestamp")
+        body = request.body
 
         if not verify_discord_signature(public_key, signature, timestamp, body):
             return HttpResponseForbidden("Invalid request signature")
@@ -12598,6 +12611,9 @@ class DiscordInteractionsView(View):
             return _discord_ephemeral("❌ Unknown command.")
 
         guild_id = data.get("guild_id", "")
+        member_data = data.get("member") or {}
+        user_data = member_data.get("user") or data.get("user") or {}
+        caller_discord_id = user_data.get("id", "")
         options = {o["name"]: o["value"] for o in data.get("data", {}).get("options", [])}
         club_uuid = options.get("club_uuid", "").strip()
 
@@ -12608,6 +12624,22 @@ class DiscordInteractionsView(View):
             club = Club.objects.get(uuid=club_uuid)
         except (Club.DoesNotExist, ValueError):
             return _discord_ephemeral("❌ No club found with that UUID.")
+
+        # If the club is already connected to a Discord server, require the caller to be
+        # a club member with admin permissions (looked up by their Discord ID).
+        if club.discord_server_id:
+            caller_member = ClubMember.objects.filter(club=club, discord_id=caller_discord_id, is_deleted=False).first()
+            if (
+                not caller_member
+                or not caller_member.roles.filter(
+                    permissions__name__in=["permission_admin", "permission_edit_club"]
+                ).exists()
+            ):
+                return _discord_ephemeral("❌ You must be a club admin to reconnect this server.")
+
+        # Reject if another club already owns this guild
+        if Club.objects.filter(discord_server_id=guild_id).exclude(pk=club.pk).exists():
+            return _discord_ephemeral("❌ This Discord server is already connected to another club.")
 
         club.discord_server_id = guild_id
         club.save(update_fields=["discord_server_id"])
