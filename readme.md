@@ -248,30 +248,29 @@ If you have existing users, enable Square payments for them by running `docker e
 
 #### Discord bot integration (optional)
 
-This feature lets club members join your Discord server and automatically receive a role and be added to your club member list.
+This feature lets club members join a Discord server and automatically receive a role and be added to the club member list.
 
-**One-time server-wide setup** (done by the site admin, not each club):
+**One-time server-wide setup** (done by the site admin):
 
 1. Go to [discord.com/developers/applications](https://discord.com/developers/applications), create an application, and add a bot.
-2. Under the bot settings, enable the **Server Members Intent** (required to read guild member data).
-3. Copy the bot token and public key, then add them to your `.env` file:
+2. Under the bot settings, enable the **Server Members Intent**.
+3. Copy the bot token, public key, and client ID, then add them to your `.env` file:
    ```
    DISCORD_PUBLIC_KEY=your_application_public_key_here
    DISCORD_BOT_TOKEN=your_bot_token_here
+   DISCORD_BOT_CLIENT_ID=your_application_client_id_here
    ```
-4. In your application's **General Information** tab, set the **Interactions Endpoint URL** to `https://yourdomain.com/discord/interactions/` (replace with your actual domain). Note that Discord requires a publicly accessible HTTPS URL — localhost will not work.
-5. Invite the bot to any Discord servers that will use it. The bot needs these permissions:
+4. In your application's **General Information** tab, set the **Interactions Endpoint URL** to `https://yourdomain.com/discord/interactions/`. Discord requires a publicly accessible HTTPS URL — localhost will not work.
+5. The bot needs these permissions when added to a server:
    - **Manage Roles** — to assign roles to new members
    - **Send Messages** — to post the join button message in a welcome channel
    - The bot's role must be placed **above** any roles it will assign in the server's role hierarchy.
 
-**Per-club Discord setup** (done by each club admin through the UI):
+**Per-club Discord setup** (done by each club admin through the UI at `/clubs/<slug>/discord/`):
 
-1. In your Discord server settings, enable **Developer Mode** (User Settings → Advanced → Developer Mode) so you can copy IDs by right-clicking.
-2. Go to your club's admin page → **Discord Settings** and enter your Discord Server ID (right-click your server name → Copy Server ID).
-3. Click **Fetch roles** to import your server's roles.
-4. Set a **default role** — this role will be granted to members who verify through the join modal.
-5. Click **Send join message** and enter a channel ID (right-click the welcome channel → Copy Channel ID) to post the onboarding button in that channel. The bot must have Send Messages permission in that channel.
+1. Click **Connect Discord server** to add the bot to your server via OAuth.
+2. Click **Fetch roles** to import your server's roles, then configure paid/unpaid role flags and BAP/HAP point thresholds.
+3. In the channel where you want the join button, paste the slash command shown on the page (e.g. `/join club_id:<uuid>`), or use the **Send join message** form to have the bot post a button directly.
 
 
 ### Post setup:

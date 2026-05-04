@@ -3388,7 +3388,6 @@ class ClubEditForm(forms.ModelForm):
             "membership_annual_fee",
             "allow_joining",
             "allow_integrated_payments",
-            "discord_server_id",
             "description",
             "enable_club_page",
         ]
@@ -3401,7 +3400,6 @@ class ClubEditForm(forms.ModelForm):
             "membership_annual_fee": "Leave blank if free.",
             "allow_joining": "Let members self-join via the public club page.",
             "allow_integrated_payments": "Accept membership dues directly through the site.",
-            "discord_server_id": "18-digit number found in Discord server settings (required for bot integration).",
         }
         widgets = {
             "homepage": forms.URLInput(attrs={"placeholder": "https://www.yourclub.org"}),
@@ -3437,6 +3435,8 @@ class ClubMemberAdminForm(forms.ModelForm):
             "contact_status",
             "bap_points",
             "hap_points",
+            "discord_role_auto_managed",
+            "discord_role_override",
             "roles",
         ]
         widgets = {
@@ -3456,22 +3456,44 @@ class ClubMemberAdminForm(forms.ModelForm):
             "hap_points": "Horticultural Award Program points accumulated by this member.",
         }
 
-    def __init__(self, *args, post_url=None, read_only=False, **kwargs):
+    def __init__(self, *args, post_url=None, read_only=False, club=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "post"
+
+        # Restrict discord_role_override queryset to this club's roles
+        has_discord = bool(club and club.discord_server_id and club.discord_roles.exists())
+        if club:
+            self.fields["discord_role_override"].queryset = club.discord_roles.all()
+
+        # Hide Discord role fields when the club has no Discord server
+        discord_fields = []
+        if has_discord:
+            discord_fields = [
+                "discord_role_auto_managed",
+                Field(
+                    "discord_role_override",
+                    wrapper_class="discord-role-override-field",
+                ),
+            ]
+
+        base_fields = [
+            "first_name",
+            "last_name",
+            "email",
+            "phone_number",
+            "address",
+            "contact_status",
+            "bap_points",
+            "hap_points",
+        ]
+
         if read_only:
             for field in self.fields.values():
                 field.disabled = True
             self.helper.layout = Layout(
-                "first_name",
-                "last_name",
-                "email",
-                "phone_number",
-                "address",
-                "contact_status",
-                "bap_points",
-                "hap_points",
+                *base_fields,
+                *discord_fields,
                 "roles",
                 Div(
                     HTML('<button type="button" class="btn btn-secondary" onclick="closeModal()">Close</button>'),
@@ -3480,14 +3502,8 @@ class ClubMemberAdminForm(forms.ModelForm):
             )
         elif post_url:
             self.helper.layout = Layout(
-                "first_name",
-                "last_name",
-                "email",
-                "phone_number",
-                "address",
-                "contact_status",
-                "bap_points",
-                "hap_points",
+                *base_fields,
+                *discord_fields,
                 "roles",
                 Div(
                     HTML('<button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>'),
@@ -3498,4 +3514,9 @@ class ClubMemberAdminForm(forms.ModelForm):
                 ),
             )
         else:
+            self.helper.layout = Layout(
+                *base_fields,
+                *discord_fields,
+                "roles",
+            )
             self.helper.add_input(Submit("submit", "Save", css_class="btn-primary"))

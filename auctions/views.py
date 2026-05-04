@@ -11744,7 +11744,7 @@ $("#id_first_name, #id_last_name, #id_email").on("blur", cmValidateField);
         member = self._get_member_and_check_permission(request, pk)
         read_only = not check_club_permission(request.user, member.club, "permission_add_edit")
         post_url = None if read_only else reverse("clubmember_admin", kwargs={"pk": member.pk})
-        form = ClubMemberAdminForm(instance=member, post_url=post_url, read_only=read_only)
+        form = ClubMemberAdminForm(instance=member, post_url=post_url, read_only=read_only, club=member.club)
         return render(
             request, "auctions/generic_admin_form.html", self._build_context(request, member, form, read_only=read_only)
         )
@@ -11754,7 +11754,7 @@ $("#id_first_name, #id_last_name, #id_email").on("blur", cmValidateField);
         if not check_club_permission(request.user, member.club, "permission_add_edit"):
             raise PermissionDenied()
         post_url = reverse("clubmember_admin", kwargs={"pk": member.pk})
-        form = ClubMemberAdminForm(request.POST, instance=member, post_url=post_url)
+        form = ClubMemberAdminForm(request.POST, instance=member, post_url=post_url, club=member.club)
         if form.is_valid():
             saved = form.save()
             ClubHistory.objects.create(
@@ -11784,7 +11784,7 @@ class ClubMemberCreateView(APIView):
         club = self._get_club_and_check_permission(request, slug)
         post_url = reverse("clubmember_create", kwargs={"slug": slug})
         validation_url = reverse("clubmember_validation", kwargs={"slug": slug})
-        form = ClubMemberAdminForm(post_url=post_url)
+        form = ClubMemberAdminForm(post_url=post_url, club=club)
         extra_script = ClubMemberAdminView._get_validation_script(request, pk=None, validation_url=validation_url)
         context = {
             "club": club,
@@ -11797,7 +11797,7 @@ class ClubMemberCreateView(APIView):
     def post(self, request, slug):
         club = self._get_club_and_check_permission(request, slug)
         post_url = reverse("clubmember_create", kwargs={"slug": slug})
-        form = ClubMemberAdminForm(request.POST, post_url=post_url)
+        form = ClubMemberAdminForm(request.POST, post_url=post_url, club=club)
         if form.is_valid():
             member = form.save(commit=False)
             member.club = club
@@ -12472,6 +12472,7 @@ class DiscordInteractionsView(View):
         member_data = data.get("member") or {}
         user_data = member_data.get("user") or data.get("user") or {}
         discord_id = user_data.get("id", "")
+        discord_username = user_data.get("username", "") or user_data.get("global_name", "") or ""
 
         # Extract text inputs from modal components
         fields = {}
@@ -12500,8 +12501,6 @@ class DiscordInteractionsView(View):
         if existing:
             return _ephemeral("✅ You're already registered!")
 
-        default_role = ClubDiscordRole.objects.filter(club=club, is_default=True).first()
-
         # Email match – link Discord ID and assign role
         if email:
             # note that we do not verify email anywhere
@@ -12516,10 +12515,15 @@ class DiscordInteractionsView(View):
             if existing_by_email:
                 if existing_by_email.discord_id and existing_by_email.discord_id != discord_id:
                     return _ephemeral("❌ This email is already linked to another Discord account.")
+                update_fields = ["discord_id"]
                 existing_by_email.discord_id = discord_id
-                existing_by_email.save(update_fields=["discord_id"])
-                if default_role and default_role.role_id:
-                    assign_discord_role(guild_id, discord_id, default_role.role_id)
+                if discord_username:
+                    existing_by_email.discord_username = discord_username
+                    update_fields.append("discord_username")
+                existing_by_email.save(update_fields=update_fields)
+                role = existing_by_email.discord_role
+                if role and role.role_id:
+                    assign_discord_role(guild_id, discord_id, role.role_id)
                 return _ephemeral("✅ You're in! Access unlocked.")
 
         # Create a new club member
@@ -12529,11 +12533,13 @@ class DiscordInteractionsView(View):
             last_name=last_name,
             email=email or None,
             discord_id=discord_id,
+            discord_username=discord_username or None,
             source="discord",
         )
         new_member.save()
-        if default_role and default_role.role_id:
-            assign_discord_role(guild_id, discord_id, default_role.role_id)
+        role = new_member.discord_role
+        if role and role.role_id:
+            assign_discord_role(guild_id, discord_id, role.role_id)
         return _ephemeral("✅ You're in! Access unlocked.")
 
 
@@ -12549,27 +12555,22 @@ class ClubDiscordConfigView(LoginRequiredMixin, ClubViewMixin, View):
     def get(self, request, *args, **kwargs):
         return render(request, "auctions/club_discord_settings.html", self._context(request))
 
-    def post(self, request, *args, **kwargs):
-        """Save the Discord server ID."""
-        server_id = request.POST.get("discord_server_id", "").strip()
-        self.club.discord_server_id = server_id or None
-        self.club.save(update_fields=["discord_server_id"])
-        messages.success(request, "Discord server ID saved.")
-        ClubHistory.objects.create(
-            club=self.club,
-            user=request.user,
-            action="Updated Discord server ID",
-            applies_to="SETTINGS",
-        )
-        return redirect(reverse("club_discord_config", kwargs={"slug": self.club.slug}))
-
     def _context(self, request):
         roles = ClubDiscordRole.objects.filter(club=self.club).order_by("role_name")
-        interactions_url = request.build_absolute_uri("/discord/interactions/")
+        client_id = getattr(settings, "DISCORD_BOT_CLIENT_ID", "")
+        oauth_url = (
+            f"https://discord.com/oauth2/authorize?client_id={client_id}"
+            "&scope=bot%20applications.commands&permissions=2415921152"
+            if client_id
+            else ""
+        )
+        # Build the UUID-based join command that club admins paste into Discord
+        club_uuid = str(self.club.uuid)
         return {
             "club": self.club,
             "roles": roles,
-            "interactions_url": interactions_url,
+            "oauth_url": oauth_url,
+            "club_uuid": club_uuid,
         }
 
 
