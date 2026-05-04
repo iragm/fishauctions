@@ -588,4 +588,22 @@ urlpatterns = [
         views.ClubMemberDetailAPIView.as_view(),
         name="api_club_member_detail",
     ),
+    # Discord integration
+    path("discord/interactions/", views.DiscordInteractionsView.as_view(), name="discord_interactions"),
+    path("clubs/<slug:slug>/discord/", views.ClubDiscordConfigView.as_view(), name="club_discord_config"),
+    path(
+        "clubs/<slug:slug>/discord/fetch-roles/",
+        views.ClubDiscordFetchRolesView.as_view(),
+        name="club_discord_fetch_roles",
+    ),
+    path(
+        "clubs/<slug:slug>/discord/set-default-role/<int:pk>/",
+        views.ClubDiscordSetDefaultRoleView.as_view(),
+        name="club_discord_set_default_role",
+    ),
+    path(
+        "clubs/<slug:slug>/discord/send-join-message/",
+        views.ClubDiscordSendJoinMessageView.as_view(),
+        name="club_discord_send_join_message",
+    ),
 ]

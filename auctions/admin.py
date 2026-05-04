@@ -318,6 +318,22 @@ class UserInline(admin.TabularInline):
     extra = 0
 
 
+class ClubDiscordRoleInline(admin.TabularInline):
+    model = ClubDiscordRole
+    extra = 0
+    fields = (
+        "role_name",
+        "role_id",
+        "is_default",
+        "is_paid_role",
+        "is_unpaid_role",
+        "bap_points_for_role",
+        "hap_points_for_role",
+        "createdon",
+    )
+    readonly_fields = ("createdon",)
+
+
 class ClubAdmin(admin.ModelAdmin):
     model = Club
     list_display = ("name", "contact_email", "date_contacted_for_in_person_auctions")
@@ -338,7 +354,9 @@ class ClubAdmin(admin.ModelAdmin):
     )
     inlines = [
         UserInline,
+        ClubDiscordRoleInline,
     ]
+    readonly_fields = ("owner",)
     actions = [export_to_csv]
 
 
@@ -787,8 +805,19 @@ class ClubPermissionAdmin(admin.ModelAdmin):
 
 class ClubDiscordRoleAdmin(admin.ModelAdmin):
     model = ClubDiscordRole
-    list_display = ("role_name", "club", "createdon")
-    search_fields = ("role_name", "club__name")
+    list_display = (
+        "role_name",
+        "role_id",
+        "is_default",
+        "is_paid_role",
+        "is_unpaid_role",
+        "bap_points_for_role",
+        "hap_points_for_role",
+        "club",
+        "createdon",
+    )
+    list_filter = ("is_default", "is_paid_role", "is_unpaid_role", "club")
+    search_fields = ("role_name", "role_id", "club__name")
 
 
 class ClubHistoryAdmin(admin.ModelAdmin):
