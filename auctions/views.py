@@ -11,6 +11,7 @@ from decimal import Decimal, InvalidOperation
 from io import BytesIO, TextIOWrapper
 from pathlib import Path
 from random import choice, randint, sample, uniform
+from time import time
 from urllib.parse import quote_plus, unquote, urlencode, urlparse
 
 import channels.layers
@@ -12348,11 +12349,12 @@ def assign_discord_role(guild_id, user_id, role_id):
         if resp.status_code == 204:
             return True
         logger.warning(
-            "Discord role assignment failed: guild=%s user=%s role=%s status=%s",
+            "Discord role assignment failed: guild=%s user=%s role=%s status=%s response=%s",
             guild_id,
             user_id,
             role_id,
             resp.status_code,
+            resp.text,
         )
         return False
     except requests.RequestException as exc:
@@ -12382,6 +12384,8 @@ class DiscordInteractionsView(View):
         # Signature verification
         signature = request.headers.get("X-Signature-Ed25519", "")
         timestamp = request.headers.get("X-Signature-Timestamp", "")
+        if abs(time() - int(timestamp)) > 300:
+            return HttpResponseForbidden("Stale request")
         body = request.body
 
         if not signature or not timestamp:
@@ -12452,16 +12456,16 @@ class DiscordInteractionsView(View):
                         },
                     }
                 )
-            return JsonResponse({"type": _DISCORD_TYPE_PING})
+            return JsonResponse({"type": 4, "data": {"content": "Unsupported interaction", "flags": 64}})
 
         # Type 5 – Modal submit
         if interaction_type == _DISCORD_TYPE_MODAL_SUBMIT:
             custom_id = data.get("data", {}).get("custom_id", "")
             if custom_id == "join_modal":
                 return self._handle_join_modal(data)
-            return JsonResponse({"type": _DISCORD_TYPE_PING})
+            return JsonResponse({"type": 4, "data": {"content": "Unsupported interaction", "flags": 64}})
 
-        return JsonResponse({"type": _DISCORD_TYPE_PING})
+        return JsonResponse({"type": 4, "data": {"content": "Unsupported interaction", "flags": 64}})
 
     def _handle_join_modal(self, data):
         guild_id = data.get("guild_id", "")
@@ -12500,8 +12504,18 @@ class DiscordInteractionsView(View):
 
         # Email match – link Discord ID and assign role
         if email:
+            # note that we do not verify email anywhere
+            # this means that anyone can claim any email address by entering it in the modal
+            # under no circumstances should the club member expose any information,
+            # not even name, to anyone who hasn't been specifically granted a role in the club
+            # and anything on discord needs to reflect this, too
+            # the user model has an email that can be assumed valid
+            if len(email) < 5 or "@" not in email:
+                return _ephemeral("❌ Please enter a valid email address.")
             existing_by_email = ClubMember.objects.filter(club=club, email=email, is_deleted=False).first()
             if existing_by_email:
+                if existing_by_email.discord_id and existing_by_email.discord_id != discord_id:
+                    return _ephemeral("❌ This email is already linked to another Discord account.")
                 existing_by_email.discord_id = discord_id
                 existing_by_email.save(update_fields=["discord_id"])
                 if default_role and default_role.role_id:
