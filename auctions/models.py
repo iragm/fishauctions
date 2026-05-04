@@ -615,7 +615,7 @@ class ClubDiscordRole(models.Model):
     createdon = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"{self.club} - {self.role_name}"
+        return f"{self.role_name}"
 
 
 class ClubPermission(models.Model):
