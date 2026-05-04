@@ -10,16 +10,6 @@
   </a>
 </div>
 
-{% if messages %}
-  {% for message in messages %}
-    <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags }}{% endif %} alert-dismissible fade show" role="alert">
-      {{ message }}
-      <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-    </div>
-  {% endfor %}
-{% endif %}
-
-{# ── Step 1: Connect the bot ─────────────────────────────────────────────── #}
 <div class="card mb-4">
   <div class="card-header">Step 1 &mdash; Connect Discord server</div>
   <div class="card-body">
@@ -46,21 +36,10 @@
       </div>
     {% endif %}
 
-    <p class="text-muted small mb-1">
-      Once the bot is in your server, run this command in any channel to link it to this club:
-    </p>
-    <div class="input-group mb-2">
-      <input type="text" class="form-control font-monospace" id="connectCommand" value="/connect club_uuid:{{ club_uuid }}" readonly>
-      <button class="btn btn-outline-secondary" type="button"
-              onclick="navigator.clipboard.writeText(document.getElementById('connectCommand').value)">
-        <i class="bi bi-clipboard"></i> Copy
-      </button>
-    </div>
-
     {% if not club.discord_server_id %}
       <div class="alert alert-info mb-0">
         <i class="bi bi-info-circle"></i>
-        Connect a Discord server (run the command above) to unlock role management and join message features.
+        Connect a Discord server (run the command above) and reload this page to unlock role management and join message features.
       </div>
     {% endif %}
   </div>
@@ -68,14 +47,29 @@
 
 {% if club.discord_server_id %}
 
-{# ── Step 2: Roles ────────────────────────────────────────────────────────── #}
 <div class="card mb-4">
-  <div class="card-header">Step 2 &mdash; Configure roles</div>
+  <div class="card-header">Step 2 &mdash; Post the join button</div>
   <div class="card-body">
     <p class="text-muted small">
-      Give the bot a role that is placed <strong>above</strong> any roles it needs to manage in your
-      server's role hierarchy. Then fetch your server's roles here and configure which role is assigned
-      to each membership status / point threshold.
+      Once you've added the bot to your server and given it a role above the ones it manages,
+      go to the channel where you want the join button to appear and paste this slash command:
+    </p>
+    <div class="input-group mb-2">
+      <input type="text" class="form-control font-monospace" id="joinCommand" value="/join club_id:{{ club_uuid }}" readonly>
+      <button class="btn btn-outline-secondary" type="button"
+              onclick="navigator.clipboard.writeText(document.getElementById('joinCommand').value)">
+        <i class="bi bi-clipboard"></i> Copy
+      </button>
+    </div>
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header">Step 3 &mdash; Configure roles</div>
+  <div class="card-body">
+    <p class="text-muted small">
+      Note that the bot needs a role that is placed <strong>above</strong> any roles it needs to manage in your
+      server's role hierarchy.
     </p>
     <form method="post" action="{% url 'club_discord_fetch_roles' club.slug %}" class="mb-3">
       {% csrf_token %}
@@ -122,27 +116,6 @@
     {% else %}
       <p class="text-muted small">No roles fetched yet. Click <em>Fetch roles from Discord</em> above.</p>
     {% endif %}
-  </div>
-</div>
-
-{# ── Step 3: Post the join button ─────────────────────────────────────────── #}
-<div class="card mb-4">
-  <div class="card-header">Step 3 &mdash; Post the join button</div>
-  <div class="card-body">
-    <p class="text-muted small">
-      Once you've added the bot to your server and given it a role above the ones it manages,
-      go to the channel where you want the join button to appear and paste this slash command:
-    </p>
-    <div class="input-group mb-2">
-      <input type="text" class="form-control font-monospace" id="joinCommand" value="/join club_id:{{ club_uuid }}" readonly>
-      <button class="btn btn-outline-secondary" type="button"
-              onclick="navigator.clipboard.writeText(document.getElementById('joinCommand').value)">
-        <i class="bi bi-clipboard"></i> Copy
-      </button>
-    </div>
-    <p class="text-muted small mb-0">
-      Your unique club identifier is <code>{{ club_uuid }}</code>.
-    </p>
   </div>
 </div>
 
