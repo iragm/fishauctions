@@ -820,6 +820,7 @@ class ClubMember(ContactRecord):
 
         return None
 
+    @property
     def display_name(self):
         """Name for display — always non-empty."""
         return str(self)

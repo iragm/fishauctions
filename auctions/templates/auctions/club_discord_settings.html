@@ -28,24 +28,39 @@
         <i class="bi bi-check-circle-fill"></i>
         Discord server connected.
       </p>
-      <p class="text-muted small mb-2">
-        To reconnect or update the server, click the button below to re-authorise the bot.
-      </p>
     {% else %}
       <p class="text-muted small">
-        Click the button below to add the bot to your Discord server.
-        You will be redirected to Discord to choose the server and approve the required permissions.
+        Add the bot to your Discord server by clicking the button below, then run the
+        <code>/connect</code> command in your server to link it to this club.
       </p>
     {% endif %}
     {% if oauth_url %}
-      <a href="{{ oauth_url }}" target="_blank" rel="noopener" class="btn btn-primary">
+      <a href="{{ oauth_url }}" target="_blank" rel="noopener" class="btn btn-primary mb-3">
         <i class="bi bi-discord"></i> Connect Discord server
       </a>
     {% else %}
-      <div class="alert alert-warning mb-0">
+      <div class="alert alert-warning mb-3">
         <i class="bi bi-exclamation-triangle"></i>
         <code>DISCORD_BOT_CLIENT_ID</code> is not configured on this server.
         Contact your site administrator.
+      </div>
+    {% endif %}
+
+    <p class="text-muted small mb-1">
+      Once the bot is in your server, run this command in any channel to link it to this club:
+    </p>
+    <div class="input-group mb-2">
+      <input type="text" class="form-control font-monospace" id="connectCommand" value="/connect club_uuid:{{ club_uuid }}" readonly>
+      <button class="btn btn-outline-secondary" type="button"
+              onclick="navigator.clipboard.writeText(document.getElementById('connectCommand').value)">
+        <i class="bi bi-clipboard"></i> Copy
+      </button>
+    </div>
+
+    {% if not club.discord_server_id %}
+      <div class="alert alert-info mb-0">
+        <i class="bi bi-info-circle"></i>
+        Connect a Discord server (run the command above) to unlock role management and join message features.
       </div>
     {% endif %}
   </div>
@@ -118,43 +133,19 @@
       Once you've added the bot to your server and given it a role above the ones it manages,
       go to the channel where you want the join button to appear and paste this slash command:
     </p>
-    <div class="input-group mb-3">
-      <input type="text" class="form-control font-monospace" id="joinCommand" value="/connect club_uuid:{{ club_uuid }}" readonly>
+    <div class="input-group mb-2">
+      <input type="text" class="form-control font-monospace" id="joinCommand" value="/join club_id:{{ club_uuid }}" readonly>
       <button class="btn btn-outline-secondary" type="button"
               onclick="navigator.clipboard.writeText(document.getElementById('joinCommand').value)">
         <i class="bi bi-clipboard"></i> Copy
       </button>
     </div>
-  </div>
-</div>
-
-{# ── Send join message (channel bot post) ─────────────────────────────────── #}
-<div class="card mb-4">
-  <div class="card-header">Or: send join message via bot</div>
-  <div class="card-body">
-    <p class="text-muted small">
-      Have the bot post a welcome message with a <em>Join our club</em> button directly to a channel.
-      Enter the channel ID (right-click the channel in Discord with Developer Mode on → Copy Channel ID).
+    <p class="text-muted small mb-0">
+      Your unique club identifier is <code>{{ club_uuid }}</code>.
     </p>
-    <form method="post" action="{% url 'club_discord_send_join_message' club.slug %}">
-      {% csrf_token %}
-      <div class="mb-3">
-        <label for="channel_id" class="form-label">Channel ID</label>
-        <input type="text" class="form-control" id="channel_id" name="channel_id"
-               placeholder="e.g. 987654321098765432">
-      </div>
-      <button type="submit" class="btn btn-primary btn-sm">
-        <i class="bi bi-send"></i> Send join message
-      </button>
-    </form>
   </div>
 </div>
 
-{% else %}
-  <div class="alert alert-info">
-    <i class="bi bi-info-circle"></i>
-    Connect a Discord server (Step 1) to unlock role management and join message features.
-  </div>
 {% endif %}
 
 {% endblock %}

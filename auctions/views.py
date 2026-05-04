@@ -12601,7 +12601,9 @@ class DiscordInteractionsView(View):
 
         bot_token = getattr(settings, "DISCORD_BOT_TOKEN", "")
         roles_synced = _sync_discord_roles(club, bot_token) if bot_token else None
-        roles_note = f"{roles_synced} role(s) synced." if roles_synced is not None else "Role sync failed — check bot token."
+        roles_note = (
+            f"{roles_synced} role(s) synced." if roles_synced is not None else "Role sync failed — check bot token."
+        )
 
         return JsonResponse(
             {
