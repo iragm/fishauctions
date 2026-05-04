@@ -266,11 +266,19 @@ This feature lets club members join a Discord server and automatically receive a
    - **Send Messages** — to post the join button message in a welcome channel
    - The bot's role must be placed **above** any roles it will assign in the server's role hierarchy.
 
+**Register the `/connect` slash command** (one-time, after bot setup):
+
+```
+docker exec -it django python3 manage.py register_discord_commands
+```
+
+This registers the `/connect` slash command with Discord globally. It must be run at least once — the command will not appear in Discord until you do. Note that global command registration can take up to an hour to propagate; for instant availability during testing, register it as a guild command instead via the Discord developer portal.
+
 **Per-club Discord setup** (done by each club admin through the UI at `/clubs/<slug>/discord/`):
 
-1. Click **Connect Discord server** to add the bot to your server via OAuth.
-2. Click **Fetch roles** to import your server's roles, then configure paid/unpaid role flags and BAP/HAP point thresholds.
-3. In the channel where you want the join button, paste the slash command shown on the page (e.g. `/join club_id:<uuid>`), or use the **Send join message** form to have the bot post a button directly.
+1. Find your club's UUID on the Discord settings page, then in the Discord channel where you want the join button to appear, run `/connect club_uuid:<uuid>`. This links the server to the club, syncs roles, and posts the join button in that channel.
+2. Click **Fetch roles** on the settings page any time you want to re-sync role names from Discord, then configure paid/unpaid role flags and BAP/HAP point thresholds.
+3. Alternatively, use the **Send join message** form to post the join button to a specific channel without using the slash command.
 
 
 ### Post setup:

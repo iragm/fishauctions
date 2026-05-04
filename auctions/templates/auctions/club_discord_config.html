@@ -1,13 +1,4 @@
 {% load crispy_forms_tags %}
-{% if messages %}
-  {% for message in messages %}
-    <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags }}{% endif %} alert-dismissible fade show" role="alert">
-      {{ message }}
-      <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-    </div>
-  {% endfor %}
-{% endif %}
-
 <div class="card mb-3" id="discord-config-panel">
   <div class="card-body">
     <h5 class="card-title"><i class="bi bi-discord"></i> Discord Integration</h5>

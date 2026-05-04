@@ -799,12 +799,19 @@ class ClubMember(ContactRecord):
             return None
 
         # Point-based roles: find the highest threshold ≤ member's points
-        bap_roles = [r for r in roles_qs if r.bap_points_for_role > 0 and r.bap_points_for_role <= self.bap_points]
-        hap_roles = [r for r in roles_qs if r.hap_points_for_role > 0 and r.hap_points_for_role <= self.hap_points]
+        bap_roles = [
+            (r, r.bap_points_for_role)
+            for r in roles_qs
+            if r.bap_points_for_role > 0 and r.bap_points_for_role <= self.bap_points
+        ]
+        hap_roles = [
+            (r, r.hap_points_for_role)
+            for r in roles_qs
+            if r.hap_points_for_role > 0 and r.hap_points_for_role <= self.hap_points
+        ]
         point_roles = bap_roles + hap_roles
         if point_roles:
-            # Return the role with the highest threshold
-            return max(point_roles, key=lambda r: max(r.bap_points_for_role, r.hap_points_for_role))
+            return max(point_roles, key=lambda pair: pair[1])[0]
 
         # Paid membership role
         paid_role = next((r for r in roles_qs if r.is_paid_role), None)

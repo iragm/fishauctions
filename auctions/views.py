@@ -12298,9 +12298,10 @@ class ClubMemberDetailAPIView(ClubAPIViewMixin, generics.RetrieveUpdateDestroyAP
 
 # Discord interaction type constants
 _DISCORD_TYPE_PING = 1
+_DISCORD_TYPE_APPLICATION_COMMAND = 2
 _DISCORD_TYPE_COMPONENT = 3
-_DISCORD_TYPE_MODAL_SUBMIT = 5
 _DISCORD_TYPE_CHANNEL_MESSAGE = 4
+_DISCORD_TYPE_MODAL_SUBMIT = 5
 _DISCORD_TYPE_MODAL = 9
 
 # Discord component type constants
@@ -12360,6 +12361,43 @@ def assign_discord_role(guild_id, user_id, role_id):
     except requests.RequestException as exc:
         logger.exception("Error assigning Discord role: %s", exc)
         return False
+
+
+def _discord_ephemeral(content):
+    return JsonResponse(
+        {"type": _DISCORD_TYPE_CHANNEL_MESSAGE, "data": {"content": content, "flags": _DISCORD_FLAG_EPHEMERAL}}
+    )
+
+
+def _sync_discord_roles(club, bot_token):
+    """Fetch roles from Discord and upsert ClubDiscordRole objects.
+
+    Returns the number of roles synced, or None if the API call failed.
+    """
+    url = f"https://discord.com/api/v10/guilds/{club.discord_server_id}/roles"
+    try:
+        resp = requests.get(url, headers={"Authorization": f"Bot {bot_token}"}, timeout=10)
+    except requests.RequestException as exc:
+        logger.exception("Error fetching Discord roles: %s", exc)
+        return None
+    if resp.status_code != 200:
+        logger.warning("Discord roles fetch failed: status=%s response=%s", resp.status_code, resp.text)
+        return None
+    updated = 0
+    for role in resp.json():
+        role_id = role.get("id", "")
+        role_name = role.get("name", "")
+        if role_id == club.discord_server_id or role.get("managed"):
+            continue
+        obj = ClubDiscordRole.objects.filter(club=club, role_id=role_id).first()
+        if obj:
+            if obj.role_name != role_name:
+                obj.role_name = role_name
+                obj.save(update_fields=["role_name"])
+        else:
+            ClubDiscordRole.objects.create(club=club, role_id=role_id, role_name=role_name)
+        updated += 1
+    return updated
 
 
 class DiscordInteractionsView(View):
@@ -12456,16 +12494,20 @@ class DiscordInteractionsView(View):
                         },
                     }
                 )
-            return JsonResponse({"type": 4, "data": {"content": "Unsupported interaction", "flags": 64}})
+            return _discord_ephemeral("Unsupported interaction")
+
+        # Type 2 – Application command (slash command)
+        if interaction_type == _DISCORD_TYPE_APPLICATION_COMMAND:
+            return self._handle_connect_command(data)
 
         # Type 5 – Modal submit
         if interaction_type == _DISCORD_TYPE_MODAL_SUBMIT:
             custom_id = data.get("data", {}).get("custom_id", "")
             if custom_id == "join_modal":
                 return self._handle_join_modal(data)
-            return JsonResponse({"type": 4, "data": {"content": "Unsupported interaction", "flags": 64}})
+            return _discord_ephemeral("Unsupported interaction")
 
-        return JsonResponse({"type": 4, "data": {"content": "Unsupported interaction", "flags": 64}})
+        return _discord_ephemeral("Unsupported interaction")
 
     def _handle_join_modal(self, data):
         guild_id = data.get("guild_id", "")
@@ -12484,22 +12526,17 @@ class DiscordInteractionsView(View):
         last_name = fields.get("last_name", "").strip()
         email = fields.get("email", "").strip()
 
-        def _ephemeral(content):
-            return JsonResponse(
-                {"type": _DISCORD_TYPE_CHANNEL_MESSAGE, "data": {"content": content, "flags": _DISCORD_FLAG_EPHEMERAL}}
-            )
-
         if not guild_id or not discord_id:
-            return _ephemeral("❌ Unable to process your request. Please try again.")
+            return _discord_ephemeral("❌ Unable to process your request. Please try again.")
 
         club = Club.objects.filter(discord_server_id=guild_id).first()
         if not club:
-            return _ephemeral("❌ No club is configured for this Discord server.")
+            return _discord_ephemeral("❌ No club is configured for this Discord server.")
 
         # Already registered with this Discord ID?
         existing = ClubMember.objects.filter(club=club, discord_id=discord_id, is_deleted=False).first()
         if existing:
-            return _ephemeral("✅ You're already registered!")
+            return _discord_ephemeral("✅ You're already registered!")
 
         # Email match – link Discord ID and assign role
         if email:
@@ -12510,11 +12547,11 @@ class DiscordInteractionsView(View):
             # and anything on discord needs to reflect this, too
             # the user model has an email that can be assumed valid
             if len(email) < 5 or "@" not in email:
-                return _ephemeral("❌ Please enter a valid email address.")
+                return _discord_ephemeral("❌ Please enter a valid email address.")
             existing_by_email = ClubMember.objects.filter(club=club, email=email, is_deleted=False).first()
             if existing_by_email:
                 if existing_by_email.discord_id and existing_by_email.discord_id != discord_id:
-                    return _ephemeral("❌ This email is already linked to another Discord account.")
+                    return _discord_ephemeral("❌ This email is already linked to another Discord account.")
                 update_fields = ["discord_id"]
                 existing_by_email.discord_id = discord_id
                 if discord_username:
@@ -12524,7 +12561,7 @@ class DiscordInteractionsView(View):
                 role = existing_by_email.discord_role
                 if role and role.role_id:
                     assign_discord_role(guild_id, discord_id, role.role_id)
-                return _ephemeral("✅ You're in! Access unlocked.")
+                return _discord_ephemeral("✅ You're in! Access unlocked.")
 
         # Create a new club member
         new_member = ClubMember(
@@ -12540,7 +12577,56 @@ class DiscordInteractionsView(View):
         role = new_member.discord_role
         if role and role.role_id:
             assign_discord_role(guild_id, discord_id, role.role_id)
-        return _ephemeral("✅ You're in! Access unlocked.")
+        return _discord_ephemeral("✅ You're in! Access unlocked.")
+
+    def _handle_connect_command(self, data):
+        command_name = data.get("data", {}).get("name", "")
+        if command_name != "connect":
+            return _discord_ephemeral("❌ Unknown command.")
+
+        guild_id = data.get("guild_id", "")
+        options = {o["name"]: o["value"] for o in data.get("data", {}).get("options", [])}
+        club_uuid = options.get("club_uuid", "").strip()
+
+        if not guild_id or not club_uuid:
+            return _discord_ephemeral("❌ Missing guild ID or club UUID.")
+
+        try:
+            club = Club.objects.get(uuid=club_uuid)
+        except (Club.DoesNotExist, ValueError):
+            return _discord_ephemeral("❌ No club found with that UUID.")
+
+        club.discord_server_id = guild_id
+        club.save(update_fields=["discord_server_id"])
+
+        bot_token = getattr(settings, "DISCORD_BOT_TOKEN", "")
+        roles_synced = _sync_discord_roles(club, bot_token) if bot_token else None
+        roles_note = f"{roles_synced} role(s) synced." if roles_synced is not None else "Role sync failed — check bot token."
+
+        return JsonResponse(
+            {
+                "type": _DISCORD_TYPE_CHANNEL_MESSAGE,
+                "data": {
+                    "content": (
+                        f"Welcome to **{club.name}**! Click the button below to register and get "
+                        f"access to the server. ({roles_note})"
+                    ),
+                    "components": [
+                        {
+                            "type": _DISCORD_COMPONENT_ACTION_ROW,
+                            "components": [
+                                {
+                                    "type": _DISCORD_COMPONENT_BUTTON,
+                                    "custom_id": "join_button",
+                                    "label": "Join our club",
+                                    "style": _DISCORD_BUTTON_STYLE_PRIMARY,
+                                }
+                            ],
+                        }
+                    ],
+                },
+            }
+        )
 
 
 class ClubDiscordConfigView(LoginRequiredMixin, ClubViewMixin, View):
@@ -12594,37 +12680,11 @@ class ClubDiscordFetchRolesView(LoginRequiredMixin, ClubViewMixin, View):
             messages.error(request, "DISCORD_BOT_TOKEN is not configured.")
             return redirect(reverse("club_discord_config", kwargs={"slug": club.slug}))
 
-        url = f"https://discord.com/api/v10/guilds/{club.discord_server_id}/roles"
-        headers = {"Authorization": f"Bot {bot_token}"}
-        try:
-            resp = requests.get(url, headers=headers, timeout=10)
-        except requests.RequestException as exc:
-            logger.exception("Error fetching Discord roles: %s", exc)
-            messages.error(request, "Network error while fetching Discord roles.")
-            return redirect(reverse("club_discord_config", kwargs={"slug": club.slug}))
-
-        if resp.status_code != 200:
-            messages.error(request, f"Discord API error {resp.status_code}: could not fetch roles.")
-            return redirect(reverse("club_discord_config", kwargs={"slug": club.slug}))
-
-        roles_data = resp.json()
-        updated = 0
-        for role in roles_data:
-            role_id = role.get("id", "")
-            role_name = role.get("name", "")
-            # Skip @everyone (its ID equals the guild ID) and bot-managed roles
-            if role_id == club.discord_server_id or role.get("managed"):
-                continue
-            obj = ClubDiscordRole.objects.filter(club=club, role_id=role_id).first()
-            if obj:
-                if obj.role_name != role_name:
-                    obj.role_name = role_name
-                    obj.save(update_fields=["role_name"])
-            else:
-                ClubDiscordRole.objects.create(club=club, role_id=role_id, role_name=role_name)
-            updated += 1
-
-        messages.success(request, f"Fetched {updated} role(s) from Discord.")
+        updated = _sync_discord_roles(club, bot_token)
+        if updated is None:
+            messages.error(request, "Could not fetch roles from Discord. Check your bot token and server ID.")
+        else:
+            messages.success(request, f"Fetched {updated} role(s) from Discord.")
         return redirect(reverse("club_discord_config", kwargs={"slug": club.slug}))
 
 
