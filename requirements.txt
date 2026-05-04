@@ -370,7 +370,7 @@ python-dotenv==1.2.2
     #   uvicorn
 python3-openid==3.2.0
     # via -r requirements.in
-pytz==2026.1.post1
+pytz==2026.2
     # via -r requirements.in
 pywebpush==2.3.0
     # via django-webpush
@@ -481,7 +481,7 @@ vine==5.1.0
     #   kombu
 watchfiles==1.1.1
     # via uvicorn
-wcwidth==0.6.0
+wcwidth==0.7.0
     # via prompt-toolkit
 weasyprint==68.1
     # via django-weasyprint
