@@ -597,6 +597,11 @@ urlpatterns = [
         name="club_discord_fetch_roles",
     ),
     path(
+        "clubs/<slug:slug>/discord/roles/<int:pk>/edit/",
+        views.ClubDiscordEditRoleView.as_view(),
+        name="club_discord_edit_role",
+    ),
+    path(
         "clubs/<slug:slug>/discord/set-default-role/<int:pk>/",
         views.ClubDiscordSetDefaultRoleView.as_view(),
         name="club_discord_set_default_role",

@@ -83,31 +83,17 @@
         <thead>
           <tr>
             <th>Role name</th>
-            <th>Paid role</th>
-            <th>Unpaid role</th>
-            <th>BAP pts</th>
-            <th>HAP pts</th>
-            <th></th>
           </tr>
         </thead>
         <tbody>
           {% for role in roles %}
           <tr>
             <td>
-              {{ role.role_name }}
-              {% if role.is_default %}<span class="badge bg-success ms-1">Default</span>{% endif %}
-            </td>
-            <td>{% if role.is_paid_role %}<i class="bi bi-check-circle-fill text-success"></i>{% endif %}</td>
-            <td>{% if role.is_unpaid_role %}<i class="bi bi-check-circle-fill text-warning"></i>{% endif %}</td>
-            <td>{% if role.bap_points_for_role %}{{ role.bap_points_for_role }}{% else %}&mdash;{% endif %}</td>
-            <td>{% if role.hap_points_for_role %}{{ role.hap_points_for_role }}{% else %}&mdash;{% endif %}</td>
-            <td>
-              {% if not role.is_default %}
-              <form method="post" action="{% url 'club_discord_set_default_role' club.slug role.pk %}">
-                {% csrf_token %}
-                <button type="submit" class="btn btn-sm btn-outline-primary">Set as default</button>
-              </form>
-              {% endif %}
+              <a href="{% url 'club_discord_edit_role' club.slug role.pk %}">{{ role.role_name }}</a>
+              {% if role.is_paid_role %}<span class="badge bg-success ms-1">Paid</span>{% endif %}
+              {% if role.is_unpaid_role %}<span class="badge bg-warning text-dark ms-1">Unpaid</span>{% endif %}
+              {% if role.bap_points_for_role %}<span class="badge bg-info text-dark ms-1">BAP &ge; {{ role.bap_points_for_role }}</span>{% endif %}
+              {% if role.hap_points_for_role %}<span class="badge bg-info text-dark ms-1">HAP &ge; {{ role.hap_points_for_role }}</span>{% endif %}
             </td>
           </tr>
           {% endfor %}

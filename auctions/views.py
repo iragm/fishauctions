@@ -31,6 +31,7 @@ from django.contrib.messages.views import SuccessMessageMixin
 from django.contrib.sites.models import Site
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.core.files.base import ContentFile
+from django.db import transaction
 from django.db.models import (
     Avg,
     Case,
@@ -11738,6 +11739,18 @@ function cmValidateField() {{
 }}
 
 $("#id_first_name, #id_last_name, #id_email").on("blur", cmValidateField);
+
+(function() {{
+    var autoCheckbox = document.getElementById('id_discord_role_auto_managed');
+    var overrideWrapper = document.querySelector('.discord-role-override-field');
+    if (autoCheckbox && overrideWrapper) {{
+        function updateDiscordRoleOverride() {{
+            overrideWrapper.style.display = autoCheckbox.checked ? 'none' : '';
+        }}
+        updateDiscordRoleOverride();
+        autoCheckbox.addEventListener('change', updateDiscordRoleOverride);
+    }}
+}})();
 </script>"""
 
     def get(self, request, pk):
@@ -12688,6 +12701,51 @@ class ClubDiscordFetchRolesView(LoginRequiredMixin, ClubViewMixin, View):
         else:
             messages.success(request, f"Fetched {updated} role(s) from Discord.")
         return redirect(reverse("club_discord_config", kwargs={"slug": club.slug}))
+
+
+class ClubDiscordEditRoleView(LoginRequiredMixin, ClubViewMixin, View):
+    """Edit a single ClubDiscordRole's BAP/HAP thresholds and paid/unpaid flags."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request, slug, pk, *args, **kwargs):
+        role = get_object_or_404(ClubDiscordRole, pk=pk, club=self.club)
+        return render(request, "auctions/club_discord_role_edit.html", {"club": self.club, "role": role})
+
+    def post(self, request, slug, pk, *args, **kwargs):
+        role = get_object_or_404(ClubDiscordRole, pk=pk, club=self.club)
+        is_paid = "is_paid_role" in request.POST
+        is_unpaid = "is_unpaid_role" in request.POST
+        try:
+            bap = max(0, int(request.POST.get("bap_points_for_role", 0)))
+        except (TypeError, ValueError):
+            bap = 0
+        try:
+            hap = max(0, int(request.POST.get("hap_points_for_role", 0)))
+        except (TypeError, ValueError):
+            hap = 0
+
+        with transaction.atomic():
+            # Enforce exclusivity: each club can have at most one paid and one unpaid role
+            if is_paid:
+                ClubDiscordRole.objects.filter(club=self.club, is_paid_role=True).exclude(pk=pk).update(
+                    is_paid_role=False
+                )
+            if is_unpaid:
+                ClubDiscordRole.objects.filter(club=self.club, is_unpaid_role=True).exclude(pk=pk).update(
+                    is_unpaid_role=False
+                )
+            role.is_paid_role = is_paid
+            role.is_unpaid_role = is_unpaid
+            role.bap_points_for_role = bap
+            role.hap_points_for_role = hap
+            role.save(update_fields=["is_paid_role", "is_unpaid_role", "bap_points_for_role", "hap_points_for_role"])
+        messages.success(request, f'Role "{role.role_name}" updated.')
+        return redirect(reverse("club_discord_config", kwargs={"slug": self.club.slug}))
 
 
 class ClubDiscordSetDefaultRoleView(LoginRequiredMixin, ClubViewMixin, View):

@@ -324,7 +324,6 @@ class ClubDiscordRoleInline(admin.TabularInline):
     fields = (
         "role_name",
         "role_id",
-        "is_default",
         "is_paid_role",
         "is_unpaid_role",
         "bap_points_for_role",
@@ -808,7 +807,6 @@ class ClubDiscordRoleAdmin(admin.ModelAdmin):
     list_display = (
         "role_name",
         "role_id",
-        "is_default",
         "is_paid_role",
         "is_unpaid_role",
         "bap_points_for_role",
@@ -816,7 +814,7 @@ class ClubDiscordRoleAdmin(admin.ModelAdmin):
         "club",
         "createdon",
     )
-    list_filter = ("is_default", "is_paid_role", "is_unpaid_role", "club")
+    list_filter = ("is_paid_role", "is_unpaid_role", "club")
     search_fields = ("role_name", "role_id", "club__name")
 
 
