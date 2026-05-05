@@ -1,7 +1,7 @@
 import datetime
 import logging
 import re
-import uuid
+import uuid as uuid_module
 from datetime import time
 from decimal import ROUND_HALF_UP, Decimal
 from random import randint
@@ -564,6 +564,7 @@ class Club(models.Model):
     membership_system = models.CharField(max_length=20, choices=MEMBERSHIP_SYSTEM_CHOICES, default="january_first")
     membership_annual_fee = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     discord_server_id = models.CharField(max_length=100, blank=True, null=True)
+    uuid = models.UUIDField(default=uuid_module.uuid4, unique=True, editable=False, db_index=True)
     slug = AutoSlugField(populate_from="name", unique=True, always_update=True)
     allow_joining = models.BooleanField(default=False)
     allow_integrated_payments = models.BooleanField(default=False)
@@ -580,16 +581,41 @@ class Club(models.Model):
     def __str__(self):
         return str(self.name)
 
+    def save(self, *args, **kwargs):
+        if not self.abbreviation and self.name:
+            # Auto-fill abbreviation from the initials of the club name
+            words = self.name.split()
+            self.abbreviation = "".join(w[0].upper() for w in words if w)
+            # Ensure abbreviation is included in update_fields if caller specified them
+            update_fields = kwargs.get("update_fields")
+            if update_fields is not None and "abbreviation" not in update_fields:
+                kwargs["update_fields"] = list(update_fields) + ["abbreviation"]
+        super().save(*args, **kwargs)
+
 
 class ClubDiscordRole(models.Model):
     """Discord roles associated with a club"""
 
     club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="discord_roles")
+    role_id = models.CharField(max_length=20, blank=True, help_text="Discord role snowflake ID")
     role_name = models.CharField(max_length=100)
+    is_default = models.BooleanField(default=False, help_text="Assign this role to users who register via Discord")
+    bap_points_for_role = models.PositiveIntegerField(
+        default=0, help_text="Assign this role when a member reaches this many BAP points (0 = not used)"
+    )
+    hap_points_for_role = models.PositiveIntegerField(
+        default=0, help_text="Assign this role when a member reaches this many HAP points (0 = not used)"
+    )
+    is_unpaid_role = models.BooleanField(
+        default=False, help_text="Assign this role to members with an expired membership"
+    )
+    is_paid_role = models.BooleanField(
+        default=False, help_text="Assign this role to members with a current paid membership"
+    )
     createdon = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"{self.club} - {self.role_name}"
+        return f"{self.role_name}"
 
 
 class ClubPermission(models.Model):
@@ -601,6 +627,7 @@ class ClubPermission(models.Model):
         ("permission_export", "Export member data"),
         ("permission_add_edit", "Add and edit members"),
         ("permission_edit_club", "Edit club settings"),
+        ("permission_manage_auctions", "Manage auctions"),
     )
     name = models.CharField(max_length=50, choices=PERMISSION_CHOICES, unique=True)
     description = models.CharField(max_length=200)
@@ -624,6 +651,7 @@ DEFAULT_CLUB_ROLES = [
     {"name": "Update users", "permissions": ["permission_view", "permission_add_edit"]},
     {"name": "Change club permissions", "permissions": ["permission_view", "permission_edit_club"]},
     {"name": "Export", "permissions": ["permission_view", "permission_add_edit", "permission_export"]},
+    {"name": "Manage auctions", "permissions": ["permission_manage_auctions"]},
 ]
 
 
@@ -674,6 +702,23 @@ class ClubMember(ContactRecord):
     first_name = models.CharField(max_length=100, blank=True)
     last_name = models.CharField(max_length=100, blank=True)
     discord_id = models.CharField(max_length=100, blank=True, null=True)
+    discord_username = models.CharField(
+        max_length=100, blank=True, null=True, help_text="Discord username (e.g. cooluser)"
+    )
+    discord_role_auto_managed = models.BooleanField(
+        default=True,
+        verbose_name="Automatically manage Discord role",
+        help_text="When checked, the Discord role is assigned automatically based on membership status and BAP/HAP points.",
+    )
+    discord_role_override = models.ForeignKey(
+        "ClubDiscordRole",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="manually_assigned_members",
+        verbose_name="Discord role (manual override)",
+        help_text="Only used when automatic role management is disabled.",
+    )
     bap_points = models.PositiveIntegerField(default=0)
     hap_points = models.PositiveIntegerField(default=0)
     membership_last_paid = models.DateField(null=True, blank=True)
@@ -712,6 +757,68 @@ class ClubMember(ContactRecord):
         if self.email:
             return self.email
         return f"Member #{self.pk}"
+
+    @property
+    def discord_role(self):
+        """Return the ClubDiscordRole that should be assigned to this member.
+
+        Rules (evaluated in order):
+        1. If not auto-managed and has a manual override → return that role.
+        2. If the club has no Discord server ID → None.
+        3. If the club has no Discord roles → None.
+        4. If membership is expired (or never paid) → unpaid membership role.
+        5. Among BAP/HAP point-based roles, find the highest threshold ≤ this
+           member's point total (using the greater of BAP/HAP).
+        6. Paid membership role (if any).
+        7. None.
+        """
+        if not self.discord_role_auto_managed:
+            return self.discord_role_override
+
+        if not self.club.discord_server_id:
+            return None
+
+        roles_qs = list(self.club.discord_roles.all())
+        if not roles_qs:
+            return None
+
+        # Determine membership status
+        membership_valid = False
+        if self.membership_last_paid:
+            club = self.club
+            today = timezone.now().date()
+            if club.membership_system == "january_first":
+                membership_valid = self.membership_last_paid >= datetime.date(today.year, 1, 1)
+            else:  # rolling
+                membership_valid = self.membership_last_paid >= today - datetime.timedelta(days=365)
+
+        if not membership_valid:
+            unpaid_role = next((r for r in roles_qs if r.is_unpaid_role), None)
+            if unpaid_role:
+                return unpaid_role
+            return None
+
+        # Point-based roles: find the highest threshold ≤ member's points
+        bap_roles = [
+            (r, r.bap_points_for_role)
+            for r in roles_qs
+            if r.bap_points_for_role > 0 and r.bap_points_for_role <= self.bap_points
+        ]
+        hap_roles = [
+            (r, r.hap_points_for_role)
+            for r in roles_qs
+            if r.hap_points_for_role > 0 and r.hap_points_for_role <= self.hap_points
+        ]
+        point_roles = bap_roles + hap_roles
+        if point_roles:
+            return max(point_roles, key=lambda pair: pair[1])[0]
+
+        # Paid membership role
+        paid_role = next((r for r in roles_qs if r.is_paid_role), None)
+        if paid_role:
+            return paid_role
+
+        return None
 
     @property
     def display_name(self):
@@ -862,6 +969,7 @@ class Auction(models.Model):
     watch_warning_email_sent = models.BooleanField(default=False)
     invoiced = models.BooleanField(default=False)
     created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+    club = models.ForeignKey("Club", null=True, blank=True, on_delete=models.SET_NULL, related_name="auctions")
     location = models.CharField(max_length=300, null=True, blank=True)
     location.help_text = "State or region of this auction"
     summernote_description = models.TextField(verbose_name="Rules", default="", blank=True)
@@ -5317,7 +5425,7 @@ class Invoice(models.Model):
     )
     no_login_link = models.CharField(
         max_length=255,
-        default=uuid.uuid4,
+        default=uuid_module.uuid4,
         blank=True,
         verbose_name="This link will be emailed to the user, allowing them to view their invoice directly without logging in",
     )
@@ -6280,7 +6388,7 @@ class UserData(models.Model):
     )
     paypal_email_address = models.CharField(max_length=200, blank=True, null=True, verbose_name="PayPal Address")
     paypal_email_address.help_text = "If different from your email address"
-    unsubscribe_link = models.CharField(max_length=255, default=uuid.uuid4, blank=True)
+    unsubscribe_link = models.CharField(max_length=255, default=uuid_module.uuid4, blank=True)
     has_unsubscribed = models.BooleanField(default=False, blank=True)
     banned_from_chat_until = models.DateTimeField(null=True, blank=True)
     banned_from_chat_until.help_text = (
@@ -6901,8 +7009,6 @@ class SquareSeller(models.Model):
             return None, "Invalid payment amount"
 
         try:
-            import uuid
-
             from django.urls import reverse
 
             payment_note = f"Bidder {invoice.auctiontos_user.bidder_number} in {invoice.auction.title}"[:500]
@@ -6950,7 +7056,7 @@ class SquareSeller(models.Model):
                     }
 
             link_resp = client.checkout.payment_links.create(
-                idempotency_key=str(uuid.uuid4()),
+                idempotency_key=str(uuid_module.uuid4()),
                 checkout_options={
                     "redirect_url": request.build_absolute_uri(
                         reverse("square_payment_success", kwargs={"uuid": invoice.no_login_link})
@@ -7008,7 +7114,6 @@ class SquareSeller(models.Model):
             return "Failed to initialize Square client"
 
         try:
-            import uuid
             from decimal import Decimal
 
             # Convert amount to cents
@@ -7016,7 +7121,7 @@ class SquareSeller(models.Model):
 
             client.refunds.refund_payment(
                 payment_id=payment.external_id,
-                idempotency_key=str(uuid.uuid4()),
+                idempotency_key=str(uuid_module.uuid4()),
                 amount_money={
                     "amount": refund_amount_cents,
                     "currency": payment.currency,
@@ -7213,7 +7318,7 @@ class AdCampaign(models.Model):
 
 class AdCampaignResponse(models.Model):
     campaign = models.ForeignKey(AdCampaign, on_delete=models.CASCADE)
-    responseid = models.CharField(max_length=255, default=uuid.uuid4, blank=True)
+    responseid = models.CharField(max_length=255, default=uuid_module.uuid4, blank=True)
     user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     session = models.CharField(max_length=250, blank=True, null=True)
     text = models.CharField(max_length=250, blank=True, null=True)
@@ -7234,7 +7339,7 @@ class AdCampaignResponse(models.Model):
 
 class AuctionCampaign(models.Model):
     auction = models.ForeignKey(Auction, null=True, blank=True, on_delete=models.SET_NULL)
-    uuid = models.CharField(max_length=255, default=uuid.uuid4, blank=True)
+    uuid = models.CharField(max_length=255, default=uuid_module.uuid4, blank=True)
     user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     email = models.CharField(max_length=255, default="", blank=True)
     timestamp = models.DateTimeField(auto_now_add=True)

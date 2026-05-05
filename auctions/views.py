@@ -11,6 +11,7 @@ from decimal import Decimal, InvalidOperation
 from io import BytesIO, TextIOWrapper
 from pathlib import Path
 from random import choice, randint, sample, uniform
+from time import time
 from urllib.parse import quote_plus, unquote, urlencode, urlparse
 
 import channels.layers
@@ -30,6 +31,7 @@ from django.contrib.messages.views import SuccessMessageMixin
 from django.contrib.sites.models import Site
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.core.files.base import ContentFile
+from django.db import transaction
 from django.db.models import (
     Avg,
     Case,
@@ -161,6 +163,7 @@ from .models import (
     Category,
     ChatSubscription,
     Club,
+    ClubDiscordRole,
     ClubHistory,
     ClubMember,
     Invoice,
@@ -2234,6 +2237,9 @@ class PickupLocationsCreate(LoginRequiredMixin, AuctionViewMixin, PickupLocation
             action=f"Added {self.object}",
             user=self.request.user,
         )
+        # If this auction is associated with a club, ensure club admin members have AuctionTOS records.
+        # This handles new auctions (first location created) and copied auctions with an inherited club.
+        _add_club_admins_as_auction_tos(self.auction, self.request.user)
         return form
 
 
@@ -5666,6 +5672,51 @@ class AuctionConfirmView(LoginRequiredMixin, TemplateView):
         return super().dispatch(request, *args, **kwargs)
 
 
+def _add_club_admins_as_auction_tos(auction, requesting_user):
+    """Create AuctionTOS admin records for club members with admin/manage_auctions permissions.
+
+    Only runs when the auction has a club and at least one pickup location.
+    Skips the requesting user (already an admin as the auction creator).
+    """
+    if not auction.club:
+        return
+    default_location = auction.location_qs.first()
+    if not default_location:
+        return
+    manage_auctions_members = (
+        ClubMember.objects.filter(
+            club=auction.club,
+            is_deleted=False,
+            roles__permissions__name__in=["permission_manage_auctions", "permission_admin"],
+        )
+        .exclude(user=requesting_user)
+        .distinct()
+    )
+    for member in manage_auctions_members:
+        existing_tos = None
+        if member.user:
+            existing_tos = AuctionTOS.objects.filter(auction=auction, user=member.user).first()
+        if not existing_tos and member.email:
+            existing_tos = AuctionTOS.objects.filter(auction=auction, email=member.email).first()
+        if not existing_tos:
+            AuctionTOS.objects.create(
+                auction=auction,
+                user=member.user,
+                pickup_location=default_location,
+                name=member.display_name,
+                email=member.email or "",
+                phone_number=member.phone_number or "",
+                address=member.address or "",
+                is_admin=True,
+                manually_added=True,
+            )
+            auction.create_history(
+                applies_to="USERS",
+                action=f"Automatically added {member.display_name} as auction admin because of their club role in '{auction.club}'.",
+                user=None,
+            )
+
+
 class AuctionCreateView(CreateView, LoginRequiredMixin):
     """
     Creating a new auction
@@ -5710,6 +5761,8 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
             context["club"] = str(club)
             if club.abbreviation:
                 context["club"] = club.abbreviation
+        if settings.ENABLE_CLUB_FINDER and not club:
+            context["show_club_tip"] = True
         return context
 
     def get_form_kwargs(self, *args, **kwargs):
@@ -5803,6 +5856,7 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "alternative_split_label",
                 "google_drive_link",
                 "only_whole_dollar_bids",
+                "club",
             ]
             for field in fields_to_clone:
                 setattr(auction, field, getattr(original_auction, field))
@@ -5923,6 +5977,24 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
             action=action,
             user=self.request.user,
         )
+        # Associate auction with the creator's club if they have admin or manage_auctions permission
+        if not auction.club:
+            creator_userdata = self.request.user.userdata
+            creator_club = creator_userdata.club
+            if creator_club and (
+                check_club_permission(self.request.user, creator_club, "permission_admin")
+                or check_club_permission(self.request.user, creator_club, "permission_manage_auctions")
+            ):
+                auction.club = creator_club
+                auction.save(update_fields=["club"])
+                auction.create_history(
+                    applies_to="RULES",
+                    action=f"Automatically associated with club '{creator_club}' based on auction creator's preferences.",
+                    user=None,
+                )
+        # Add club admin members as AuctionTOS admins (works for copied auctions with locations,
+        # and for new auctions once a pickup location exists — also called from PickupLocationsCreate)
+        _add_club_admins_as_auction_tos(auction, self.request.user)
         return super().form_valid(form)
 
 
@@ -5946,6 +6018,15 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                     self.auction.created_by.userdata.is_trusted = True
                     self.auction.created_by.userdata.save()
                     messages.success(request, f"{self.auction.created_by.username} is now trusted")
+                if str(request.GET.get("make_club_owner", "")).lower() in ("1", "true"):
+                    creator_club = getattr(self.auction.created_by.userdata, "club", None)
+                    if creator_club and not creator_club.owner:
+                        creator_club.owner = self.auction.created_by
+                        creator_club.save()
+                        messages.success(
+                            request,
+                            f"{self.auction.created_by.username} is now the owner of {creator_club.name}",
+                        )
             if self.auction.created_by.pk == request.user.pk:
                 if str(request.GET.get("enable_online_payments", "")).lower() in ("1", "true"):
                     self.auction.enable_online_payments = True
@@ -6019,6 +6100,12 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
         current_site = Site.objects.get_current()
         context["domain"] = current_site.domain
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
+        # Show "make club owner" button to superusers when auction creator has a club with no owner
+        if self.request.user.is_superuser and self.auction.created_by:
+            creator_club = getattr(self.auction.created_by.userdata, "club", None)
+            if creator_club and not creator_club.owner:
+                context["can_make_club_owner"] = True
+                context["creator_club"] = creator_club
         if self.auction.closed:
             context["ended"] = True
             messages.info(
@@ -11325,11 +11412,15 @@ class ClubDetailView(ClubViewMixin, TemplateView):
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
         if not self.club.enable_club_page:
-            # Page is disabled — only users with club roles may view it; everyone else gets 404
-            has_admin_access = request.user.is_authenticated and (
-                self.user_has_club_permission("permission_view") or self.user_has_club_permission("permission_admin")
+            # Page is disabled — only users with any club role may view it; everyone else gets 404
+            has_access = request.user.is_authenticated and (
+                request.user.is_superuser
+                or request.user == self.club.owner
+                or ClubMember.objects.filter(
+                    club=self.club, user=request.user, is_deleted=False, roles__isnull=False
+                ).exists()
             )
-            if not has_admin_access:
+            if not has_access:
                 raise Http404
         return super().dispatch(request, *args, **kwargs)
 
@@ -11359,6 +11450,16 @@ class ClubDetailView(ClubViewMixin, TemplateView):
             "permission_admin"
         ) or self.user_has_club_permission("permission_view")
         context["can_edit_settings"] = self.user_has_club_permission("permission_edit_club")
+        can_manage_auctions = self.user_has_club_permission("permission_admin") or self.user_has_club_permission(
+            "permission_manage_auctions"
+        )
+        context["can_manage_auctions"] = can_manage_auctions
+        if can_manage_auctions:
+            context["club_auctions"] = Auction.objects.filter(club=self.club, is_deleted=False).order_by("date_start")
+        else:
+            context["club_auctions"] = Auction.objects.filter(
+                club=self.club, promote_this_auction=True, is_deleted=False
+            ).order_by("date_start")
         return context
 
     def post(self, request, *args, **kwargs):
@@ -11638,13 +11739,25 @@ function cmValidateField() {{
 }}
 
 $("#id_first_name, #id_last_name, #id_email").on("blur", cmValidateField);
+
+(function() {{
+    var autoCheckbox = document.getElementById('id_discord_role_auto_managed');
+    var overrideWrapper = document.querySelector('.discord-role-override-field');
+    if (autoCheckbox && overrideWrapper) {{
+        function updateDiscordRoleOverride() {{
+            overrideWrapper.style.display = autoCheckbox.checked ? 'none' : '';
+        }}
+        updateDiscordRoleOverride();
+        autoCheckbox.addEventListener('change', updateDiscordRoleOverride);
+    }}
+}})();
 </script>"""
 
     def get(self, request, pk):
         member = self._get_member_and_check_permission(request, pk)
         read_only = not check_club_permission(request.user, member.club, "permission_add_edit")
         post_url = None if read_only else reverse("clubmember_admin", kwargs={"pk": member.pk})
-        form = ClubMemberAdminForm(instance=member, post_url=post_url, read_only=read_only)
+        form = ClubMemberAdminForm(instance=member, post_url=post_url, read_only=read_only, club=member.club)
         return render(
             request, "auctions/generic_admin_form.html", self._build_context(request, member, form, read_only=read_only)
         )
@@ -11654,7 +11767,7 @@ $("#id_first_name, #id_last_name, #id_email").on("blur", cmValidateField);
         if not check_club_permission(request.user, member.club, "permission_add_edit"):
             raise PermissionDenied()
         post_url = reverse("clubmember_admin", kwargs={"pk": member.pk})
-        form = ClubMemberAdminForm(request.POST, instance=member, post_url=post_url)
+        form = ClubMemberAdminForm(request.POST, instance=member, post_url=post_url, club=member.club)
         if form.is_valid():
             saved = form.save()
             ClubHistory.objects.create(
@@ -11664,6 +11777,12 @@ $("#id_first_name, #id_last_name, #id_email").on("blur", cmValidateField);
                 applies_to="MEMBERS",
             )
             messages.success(request, f"{saved} updated.")
+            # Reassign Discord role whenever the record is saved from the admin UI
+            if saved.discord_id and saved.club.discord_server_id:
+                role = saved.discord_role
+                if role and role.role_id:
+                    if not assign_discord_role(saved.club.discord_server_id, saved.discord_id, role.role_id):
+                        messages.warning(request, f"{saved} updated but Discord role assignment failed.")
             return self._redirect_to_club_admin(member.club)
         return render(request, "auctions/generic_admin_form.html", self._build_context(request, member, form))
 
@@ -11684,7 +11803,7 @@ class ClubMemberCreateView(APIView):
         club = self._get_club_and_check_permission(request, slug)
         post_url = reverse("clubmember_create", kwargs={"slug": slug})
         validation_url = reverse("clubmember_validation", kwargs={"slug": slug})
-        form = ClubMemberAdminForm(post_url=post_url)
+        form = ClubMemberAdminForm(post_url=post_url, club=club)
         extra_script = ClubMemberAdminView._get_validation_script(request, pk=None, validation_url=validation_url)
         context = {
             "club": club,
@@ -11697,7 +11816,7 @@ class ClubMemberCreateView(APIView):
     def post(self, request, slug):
         club = self._get_club_and_check_permission(request, slug)
         post_url = reverse("clubmember_create", kwargs={"slug": slug})
-        form = ClubMemberAdminForm(request.POST, post_url=post_url)
+        form = ClubMemberAdminForm(request.POST, post_url=post_url, club=club)
         if form.is_valid():
             member = form.save(commit=False)
             member.club = club
@@ -12190,3 +12309,543 @@ class ClubMemberDetailAPIView(ClubAPIViewMixin, generics.RetrieveUpdateDestroyAP
             action=f"Deleted member {instance}",
             applies_to="MEMBERS",
         )
+
+
+# ---------------------------------------------------------------------------
+# Discord integration helpers and views
+# ---------------------------------------------------------------------------
+
+# Discord interaction type constants
+_DISCORD_TYPE_PING = 1
+_DISCORD_TYPE_APPLICATION_COMMAND = 2
+_DISCORD_TYPE_COMPONENT = 3
+_DISCORD_TYPE_CHANNEL_MESSAGE = 4
+_DISCORD_TYPE_MODAL_SUBMIT = 5
+_DISCORD_TYPE_MODAL = 9
+
+# Discord component type constants
+_DISCORD_COMPONENT_ACTION_ROW = 1
+_DISCORD_COMPONENT_TEXT_INPUT = 4
+_DISCORD_COMPONENT_BUTTON = 2
+
+# Discord button styles
+_DISCORD_BUTTON_STYLE_PRIMARY = 1
+
+# Discord message flag: ephemeral (only visible to the user who triggered it)
+_DISCORD_FLAG_EPHEMERAL = 64
+
+
+def verify_discord_signature(public_key_hex, signature_hex, timestamp, body):
+    """Verify a Discord interaction request signature using Ed25519.
+
+    Returns True if the signature is valid, False otherwise.
+    """
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+    try:
+        key = Ed25519PublicKey.from_public_bytes(bytes.fromhex(public_key_hex))
+        message = timestamp.encode() + (body if isinstance(body, bytes) else body.encode())
+        key.verify(bytes.fromhex(signature_hex), message)
+        return True
+    except (InvalidSignature, ValueError, TypeError):
+        return False
+
+
+def assign_discord_role(guild_id, user_id, role_id):
+    """Assign a Discord role to a guild member via the Discord REST API.
+
+    PUT /guilds/{guild_id}/members/{user_id}/roles/{role_id}
+    Returns True on success (204 No Content), False otherwise.
+    """
+    bot_token = getattr(settings, "DISCORD_BOT_TOKEN", "")
+    if not bot_token:
+        logger.warning("DISCORD_BOT_TOKEN not configured – cannot assign Discord role")
+        return False
+    url = f"https://discord.com/api/v10/guilds/{guild_id}/members/{user_id}/roles/{role_id}"
+    headers = {"Authorization": f"Bot {bot_token}"}
+    try:
+        resp = requests.put(url, headers=headers, timeout=10)
+        if resp.status_code == 204:
+            return True
+        logger.warning(
+            "Discord role assignment failed: guild=%s user=%s role=%s status=%s response=%s",
+            guild_id,
+            user_id,
+            role_id,
+            resp.status_code,
+            resp.text,
+        )
+        return False
+    except requests.RequestException as exc:
+        logger.exception("Error assigning Discord role: %s", exc)
+        return False
+
+
+def _discord_ephemeral(content):
+    return JsonResponse(
+        {"type": _DISCORD_TYPE_CHANNEL_MESSAGE, "data": {"content": content, "flags": _DISCORD_FLAG_EPHEMERAL}}
+    )
+
+
+def _sync_discord_roles(club, bot_token):
+    """Fetch roles from Discord and upsert ClubDiscordRole objects.
+
+    Returns the number of roles synced, or None if the API call failed.
+    """
+    url = f"https://discord.com/api/v10/guilds/{club.discord_server_id}/roles"
+    try:
+        resp = requests.get(url, headers={"Authorization": f"Bot {bot_token}"}, timeout=10)
+    except requests.RequestException as exc:
+        logger.exception("Error fetching Discord roles: %s", exc)
+        return None
+    if resp.status_code != 200:
+        logger.warning("Discord roles fetch failed: status=%s response=%s", resp.status_code, resp.text)
+        return None
+    updated = 0
+    fetched_role_ids = set()
+    for role in resp.json():
+        role_id = role.get("id", "")
+        role_name = role.get("name", "")
+        if role_id == club.discord_server_id or role.get("managed"):
+            continue
+        fetched_role_ids.add(role_id)
+        obj = ClubDiscordRole.objects.filter(club=club, role_id=role_id).first()
+        if obj:
+            if obj.role_name != role_name:
+                obj.role_name = role_name
+                obj.save(update_fields=["role_name"])
+        else:
+            ClubDiscordRole.objects.create(club=club, role_id=role_id, role_name=role_name)
+        updated += 1
+    # Remove roles that no longer exist in Discord (only those with a non-empty role_id;
+    # preserve placeholder rows without a Discord ID)
+    ClubDiscordRole.objects.filter(club=club).exclude(role_id__in=fetched_role_ids).exclude(role_id="").delete()
+    return updated
+
+
+class DiscordInteractionsView(View):
+    """Handle Discord interaction requests at /discord/interactions/.
+
+    Supports:
+      - Type 1 (PING)
+      - Type 3 (component / button click) with custom_id=join_button
+      - Type 5 (modal submit) with custom_id=join_modal
+    """
+
+    @method_decorator(csrf_exempt)
+    def dispatch(self, *args, **kwargs):
+        return super().dispatch(*args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        public_key = getattr(settings, "DISCORD_PUBLIC_KEY", "")
+        if not public_key:
+            logger.warning("DISCORD_PUBLIC_KEY not configured")
+            return HttpResponseForbidden("Discord integration not configured")
+
+        # Signature verification
+        signature = request.headers.get("X-Signature-Ed25519", "")
+        timestamp = request.headers.get("X-Signature-Timestamp", "")
+        if not signature or not timestamp:
+            return HttpResponseBadRequest("Missing signature headers")
+        try:
+            if abs(time() - int(timestamp)) > 300:
+                return HttpResponseForbidden("Stale request")
+        except (ValueError, TypeError):
+            return HttpResponseBadRequest("Invalid timestamp")
+        body = request.body
+
+        if not verify_discord_signature(public_key, signature, timestamp, body):
+            return HttpResponseForbidden("Invalid request signature")
+
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            return HttpResponseBadRequest("Invalid JSON")
+
+        interaction_type = data.get("type")
+
+        # Type 1 – PING (required for Discord endpoint verification)
+        if interaction_type == _DISCORD_TYPE_PING:
+            return JsonResponse({"type": _DISCORD_TYPE_PING})
+
+        # Type 3 – Component interaction (button click)
+        if interaction_type == _DISCORD_TYPE_COMPONENT:
+            custom_id = data.get("data", {}).get("custom_id", "")
+            if custom_id == "join_button":
+                return JsonResponse(
+                    {
+                        "type": _DISCORD_TYPE_MODAL,
+                        "data": {
+                            "custom_id": "join_modal",
+                            "title": "Enter your contact information",
+                            "components": [
+                                {
+                                    "type": _DISCORD_COMPONENT_ACTION_ROW,
+                                    "components": [
+                                        {
+                                            "type": _DISCORD_COMPONENT_TEXT_INPUT,
+                                            "custom_id": "first_name",
+                                            "label": "First name",
+                                            "style": 1,
+                                            "required": True,
+                                        }
+                                    ],
+                                },
+                                {
+                                    "type": _DISCORD_COMPONENT_ACTION_ROW,
+                                    "components": [
+                                        {
+                                            "type": _DISCORD_COMPONENT_TEXT_INPUT,
+                                            "custom_id": "last_name",
+                                            "label": "Last name",
+                                            "style": 1,
+                                            "required": True,
+                                        }
+                                    ],
+                                },
+                                {
+                                    "type": _DISCORD_COMPONENT_ACTION_ROW,
+                                    "components": [
+                                        {
+                                            "type": _DISCORD_COMPONENT_TEXT_INPUT,
+                                            "custom_id": "email",
+                                            "label": "Email address",
+                                            "style": 1,
+                                            "required": True,
+                                        }
+                                    ],
+                                },
+                            ],
+                        },
+                    }
+                )
+            return _discord_ephemeral("Unsupported interaction")
+
+        # Type 2 – Application command (slash command)
+        if interaction_type == _DISCORD_TYPE_APPLICATION_COMMAND:
+            return self._handle_connect_command(data)
+
+        # Type 5 – Modal submit
+        if interaction_type == _DISCORD_TYPE_MODAL_SUBMIT:
+            custom_id = data.get("data", {}).get("custom_id", "")
+            if custom_id == "join_modal":
+                return self._handle_join_modal(data)
+            return _discord_ephemeral("Unsupported interaction")
+
+        return _discord_ephemeral("Unsupported interaction")
+
+    def _handle_join_modal(self, data):
+        guild_id = data.get("guild_id", "")
+        member_data = data.get("member") or {}
+        user_data = member_data.get("user") or data.get("user") or {}
+        discord_id = user_data.get("id", "")
+        discord_username = user_data.get("username", "") or user_data.get("global_name", "") or ""
+
+        # Extract text inputs from modal components
+        fields = {}
+        for row in data.get("data", {}).get("components", []):
+            for comp in row.get("components", []):
+                fields[comp.get("custom_id", "")] = comp.get("value", "")
+
+        first_name = fields.get("first_name", "").strip()
+        last_name = fields.get("last_name", "").strip()
+        email = fields.get("email", "").strip()
+
+        if not guild_id or not discord_id:
+            return _discord_ephemeral("❌ Unable to process your request. Please try again.")
+
+        club = Club.objects.filter(discord_server_id=guild_id).first()
+        if not club:
+            return _discord_ephemeral("❌ No club is configured for this Discord server.")
+
+        # Already registered with this Discord ID?
+        existing = ClubMember.objects.filter(club=club, discord_id=discord_id, is_deleted=False).first()
+        if existing:
+            return _discord_ephemeral("✅ You're already registered!")
+
+        # Email match – link Discord ID and assign role
+        if email:
+            # note that we do not verify email anywhere
+            # this means that anyone can claim any email address by entering it in the modal
+            # under no circumstances should the club member expose any information,
+            # not even name, to anyone who hasn't been specifically granted a role in the club
+            # and anything on discord needs to reflect this, too
+            # the user model has an email that can be assumed valid
+            if len(email) < 5 or "@" not in email:
+                return _discord_ephemeral("❌ Please enter a valid email address.")
+            existing_by_email = ClubMember.objects.filter(club=club, email=email, is_deleted=False).first()
+            if existing_by_email:
+                if existing_by_email.discord_id and existing_by_email.discord_id != discord_id:
+                    return _discord_ephemeral("❌ This email is already linked to another Discord account.")
+                update_fields = ["discord_id"]
+                existing_by_email.discord_id = discord_id
+                if discord_username:
+                    existing_by_email.discord_username = discord_username
+                    update_fields.append("discord_username")
+                existing_by_email.save(update_fields=update_fields)
+                role = existing_by_email.discord_role
+                if role and role.role_id:
+                    assign_discord_role(guild_id, discord_id, role.role_id)
+                return _discord_ephemeral("✅ You're in! Access unlocked.")
+
+        # Create a new club member
+        new_member = ClubMember(
+            club=club,
+            first_name=first_name,
+            last_name=last_name,
+            email=email or None,
+            discord_id=discord_id,
+            discord_username=discord_username or None,
+            source="discord",
+        )
+        new_member.save()
+        role = new_member.discord_role
+        if role and role.role_id:
+            assign_discord_role(guild_id, discord_id, role.role_id)
+        return _discord_ephemeral("✅ You're in! Access unlocked.")
+
+    def _handle_connect_command(self, data):
+        command_name = data.get("data", {}).get("name", "")
+        if command_name != "connect":
+            return _discord_ephemeral("❌ Unknown command.")
+
+        guild_id = data.get("guild_id", "")
+        member_data = data.get("member") or {}
+        user_data = member_data.get("user") or data.get("user") or {}
+        caller_discord_id = user_data.get("id", "")
+        options = {o["name"]: o["value"] for o in data.get("data", {}).get("options", [])}
+        club_uuid = options.get("club_uuid", "").strip()
+
+        if not guild_id or not club_uuid:
+            return _discord_ephemeral("❌ Missing guild ID or club UUID.")
+
+        try:
+            club = Club.objects.get(uuid=club_uuid)
+        except (Club.DoesNotExist, ValueError):
+            return _discord_ephemeral("❌ No club found with that UUID.")
+
+        # If the club is already connected to a Discord server, require the caller to be
+        # a club member with admin permissions (looked up by their Discord ID).
+        if club.discord_server_id:
+            caller_member = ClubMember.objects.filter(club=club, discord_id=caller_discord_id, is_deleted=False).first()
+            if (
+                not caller_member
+                or not caller_member.roles.filter(
+                    permissions__name__in=["permission_admin", "permission_edit_club"]
+                ).exists()
+            ):
+                return _discord_ephemeral("❌ You must be a club admin to reconnect this server.")
+
+        # Reject if another club already owns this guild
+        if Club.objects.filter(discord_server_id=guild_id).exclude(pk=club.pk).exists():
+            return _discord_ephemeral("❌ This Discord server is already connected to another club.")
+
+        club.discord_server_id = guild_id
+        club.save(update_fields=["discord_server_id"])
+
+        bot_token = getattr(settings, "DISCORD_BOT_TOKEN", "")
+        roles_synced = _sync_discord_roles(club, bot_token) if bot_token else None
+        roles_note = (
+            f"{roles_synced} role(s) synced." if roles_synced is not None else "Role sync failed — check bot token."
+        )
+
+        return JsonResponse(
+            {
+                "type": _DISCORD_TYPE_CHANNEL_MESSAGE,
+                "data": {
+                    "content": (
+                        f"Welcome to **{club.name}**! Click the button below to register and get "
+                        f"access to the server. ({roles_note})"
+                    ),
+                    "components": [
+                        {
+                            "type": _DISCORD_COMPONENT_ACTION_ROW,
+                            "components": [
+                                {
+                                    "type": _DISCORD_COMPONENT_BUTTON,
+                                    "custom_id": "join_button",
+                                    "label": "Join our club",
+                                    "style": _DISCORD_BUTTON_STYLE_PRIMARY,
+                                }
+                            ],
+                        }
+                    ],
+                },
+            }
+        )
+
+
+class ClubDiscordConfigView(LoginRequiredMixin, ClubViewMixin, View):
+    """Full-page Discord settings for a club."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request, *args, **kwargs):
+        return render(request, "auctions/club_discord_settings.html", self._context(request))
+
+    def _context(self, request):
+        roles = ClubDiscordRole.objects.filter(club=self.club).order_by("role_name")
+        client_id = getattr(settings, "DISCORD_BOT_CLIENT_ID", "")
+        oauth_url = (
+            f"https://discord.com/oauth2/authorize?client_id={client_id}"
+            "&scope=bot%20applications.commands&permissions=2415921152"
+            if client_id
+            else ""
+        )
+        # Build the UUID-based join command that club admins paste into Discord
+        club_uuid = str(self.club.uuid)
+        return {
+            "club": self.club,
+            "roles": roles,
+            "oauth_url": oauth_url,
+            "club_uuid": club_uuid,
+        }
+
+
+class ClubDiscordFetchRolesView(LoginRequiredMixin, ClubViewMixin, View):
+    """Fetch roles from the Discord API and save them to the database."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        club = self.club
+        if not club.discord_server_id:
+            messages.error(request, "Save a Discord server ID first.")
+            return redirect(reverse("club_discord_config", kwargs={"slug": club.slug}))
+
+        bot_token = getattr(settings, "DISCORD_BOT_TOKEN", "")
+        if not bot_token:
+            messages.error(request, "DISCORD_BOT_TOKEN is not configured.")
+            return redirect(reverse("club_discord_config", kwargs={"slug": club.slug}))
+
+        updated = _sync_discord_roles(club, bot_token)
+        if updated is None:
+            messages.error(request, "Could not fetch roles from Discord. Check your bot token and server ID.")
+        else:
+            messages.success(request, f"Fetched {updated} role(s) from Discord.")
+        return redirect(reverse("club_discord_config", kwargs={"slug": club.slug}))
+
+
+class ClubDiscordEditRoleView(LoginRequiredMixin, ClubViewMixin, View):
+    """Edit a single ClubDiscordRole's BAP/HAP thresholds and paid/unpaid flags."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request, slug, pk, *args, **kwargs):
+        role = get_object_or_404(ClubDiscordRole, pk=pk, club=self.club)
+        return render(request, "auctions/club_discord_role_edit.html", {"club": self.club, "role": role})
+
+    def post(self, request, slug, pk, *args, **kwargs):
+        role = get_object_or_404(ClubDiscordRole, pk=pk, club=self.club)
+        is_paid = "is_paid_role" in request.POST
+        is_unpaid = "is_unpaid_role" in request.POST
+        try:
+            bap = max(0, int(request.POST.get("bap_points_for_role", 0)))
+        except (TypeError, ValueError):
+            bap = 0
+        try:
+            hap = max(0, int(request.POST.get("hap_points_for_role", 0)))
+        except (TypeError, ValueError):
+            hap = 0
+
+        with transaction.atomic():
+            # Enforce exclusivity: each club can have at most one paid and one unpaid role
+            if is_paid:
+                ClubDiscordRole.objects.filter(club=self.club, is_paid_role=True).exclude(pk=pk).update(
+                    is_paid_role=False
+                )
+            if is_unpaid:
+                ClubDiscordRole.objects.filter(club=self.club, is_unpaid_role=True).exclude(pk=pk).update(
+                    is_unpaid_role=False
+                )
+            role.is_paid_role = is_paid
+            role.is_unpaid_role = is_unpaid
+            role.bap_points_for_role = bap
+            role.hap_points_for_role = hap
+            role.save(update_fields=["is_paid_role", "is_unpaid_role", "bap_points_for_role", "hap_points_for_role"])
+        messages.success(request, f'Role "{role.role_name}" updated.')
+        return redirect(reverse("club_discord_config", kwargs={"slug": self.club.slug}))
+
+
+class ClubDiscordSetDefaultRoleView(LoginRequiredMixin, ClubViewMixin, View):
+    """Set a ClubDiscordRole as the default for new Discord registrations."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, slug, pk, *args, **kwargs):
+        role = get_object_or_404(ClubDiscordRole, pk=pk, club=self.club)
+        # Clear any existing default for this club
+        ClubDiscordRole.objects.filter(club=self.club, is_default=True).update(is_default=False)
+        role.is_default = True
+        role.save(update_fields=["is_default"])
+        messages.success(request, f'"{role.role_name}" set as the default role.')
+        return redirect(reverse("club_discord_config", kwargs={"slug": self.club.slug}))
+
+
+class ClubDiscordSendJoinMessageView(LoginRequiredMixin, ClubViewMixin, View):
+    """Send a welcome message with a join button to a Discord channel."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        channel_id = request.POST.get("channel_id", "").strip()
+        if not channel_id:
+            messages.error(request, "Please enter a channel ID.")
+            return redirect(reverse("club_discord_config", kwargs={"slug": self.club.slug}))
+
+        bot_token = getattr(settings, "DISCORD_BOT_TOKEN", "")
+        if not bot_token:
+            messages.error(request, "DISCORD_BOT_TOKEN is not configured.")
+            return redirect(reverse("club_discord_config", kwargs={"slug": self.club.slug}))
+
+        url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
+        headers = {"Authorization": f"Bot {bot_token}", "Content-Type": "application/json"}
+        payload = {
+            "content": f"Welcome to **{self.club.name}**! Click the button below to register and get access to the server.",
+            "components": [
+                {
+                    "type": _DISCORD_COMPONENT_ACTION_ROW,
+                    "components": [
+                        {
+                            "type": _DISCORD_COMPONENT_BUTTON,
+                            "custom_id": "join_button",
+                            "label": "Join our club",
+                            "style": _DISCORD_BUTTON_STYLE_PRIMARY,
+                        }
+                    ],
+                }
+            ],
+        }
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=10)
+        except requests.RequestException as exc:
+            logger.exception("Error sending Discord join message: %s", exc)
+            messages.error(request, "Network error while sending join message.")
+            return redirect(reverse("club_discord_config", kwargs={"slug": self.club.slug}))
+
+        if resp.status_code == 200 or resp.status_code == 201:  # Discord returns 200 or 201 depending on version
+            messages.success(request, "Join message sent to the channel!")
+        else:
+            messages.error(request, f"Discord API error {resp.status_code}: could not send message.")
+        return redirect(reverse("club_discord_config", kwargs={"slug": self.club.slug}))

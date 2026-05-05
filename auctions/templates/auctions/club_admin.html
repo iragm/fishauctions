@@ -7,18 +7,18 @@
 <h3><i class="bi bi-people-fill"></i> {{ club.name }} &mdash; Manage Membership</h3>
 <div class="mb-3">
   <a href="{% url 'club_detail' club.slug %}" class="btn btn-sm btn-primary"><i class="bi bi-house"></i> Club page</a>
-  <a href="{% url 'club_history' club.slug %}" class="btn btn-sm btn-info"><i class="bi bi-clock-history"></i> History</a>
+  <a href="{% url 'club_history' club.slug %}" class="btn btn-sm btn-primary"><i class="bi bi-clock-history"></i> History</a>
 
   {% if can_add_edit %}
   <div class="btn-group">
-    <button class="btn btn-sm btn-primary"
+    <button class="btn btn-sm btn-info"
       hx-get="{% url 'clubmember_create' club.slug %}"
       hx-target="#modals-here"
       hx-trigger="click"
       _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">
       <i class="bi bi-person-fill-add"></i> Add member
     </button>
-    <button type="button" class="btn btn-sm btn-primary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false">
+    <button type="button" class="btn btn-sm btn-info dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false">
       <span class="visually-hidden">Toggle Dropdown</span>
     </button>
     <ul class="dropdown-menu">
@@ -41,6 +41,7 @@
 
   {% if can_edit %}
   <a href="{% url 'club_edit' club.slug %}?next={% url 'club_admin' club.slug %}" class="btn btn-sm btn-primary"><i class="bi bi-gear"></i> Settings</a>
+  <a href="{% url 'club_discord_config' club.slug %}" class="btn btn-sm btn-primary"><i class="bi bi-discord"></i> Discord</a>
   {% endif %}
 </div>
 

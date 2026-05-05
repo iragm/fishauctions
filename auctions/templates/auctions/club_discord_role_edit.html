@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Edit Role &mdash; {{ role.role_name }}{% endblock %}
+
+{% block content %}
+<h3><i class="bi bi-discord"></i> Edit Role &mdash; {{ role.role_name }}</h3>
+
+<div class="mb-3">
+  <a href="{% url 'club_discord_config' club.slug %}" class="btn btn-sm btn-secondary">
+    <i class="bi bi-arrow-left"></i> Back to Discord settings
+  </a>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header">Settings for &ldquo;{{ role.role_name }}&rdquo;</div>
+  <div class="card-body">
+    <form method="post">
+      {% csrf_token %}
+
+      <div class="mb-3">
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" id="is_paid_role" name="is_paid_role"
+                 {% if role.is_paid_role %}checked{% endif %}>
+          <label class="form-check-label fw-semibold" for="is_paid_role">Paid membership role</label>
+          <div class="form-text">
+            Assign this role to members with a current paid membership.
+            Only one role per club can be the paid role &mdash; saving this will clear the flag on any other role.
+          </div>
+        </div>
+      </div>
+
+      <div class="mb-3">
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" id="is_unpaid_role" name="is_unpaid_role"
+                 {% if role.is_unpaid_role %}checked{% endif %}>
+          <label class="form-check-label fw-semibold" for="is_unpaid_role">Unpaid / expired membership role</label>
+          <div class="form-text">
+            Assign this role to members whose membership has expired or who have never paid.
+            Only one role per club can be the unpaid role &mdash; saving this will clear the flag on any other role.
+          </div>
+        </div>
+      </div>
+
+      <div class="mb-3">
+        <label for="bap_points_for_role" class="form-label fw-semibold">BAP points threshold</label>
+        <input type="number" class="form-control" id="bap_points_for_role" name="bap_points_for_role"
+               value="{{ role.bap_points_for_role }}" min="0" style="max-width:160px">
+        <div class="form-text">
+          Assign this role when a member&rsquo;s BAP points reach this value. Set to&nbsp;0 to disable.
+        </div>
+      </div>
+
+      <div class="mb-3">
+        <label for="hap_points_for_role" class="form-label fw-semibold">HAP points threshold</label>
+        <input type="number" class="form-control" id="hap_points_for_role" name="hap_points_for_role"
+               value="{{ role.hap_points_for_role }}" min="0" style="max-width:160px">
+        <div class="form-text">
+          Assign this role when a member&rsquo;s HAP points reach this value. Set to&nbsp;0 to disable.
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn-primary">Save</button>
+      <a href="{% url 'club_discord_config' club.slug %}" class="btn btn-secondary ms-2">Cancel</a>
+    </form>
+  </div>
+</div>
+{% endblock %}
