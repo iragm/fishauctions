@@ -1370,34 +1370,31 @@ class InvoicePaid(APIView):
     authentication_classes = [SessionAuthentication, TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
-    def dispatch(self, request, *args, **kwargs):
-        self.invoice = get_object_or_404(Invoice, pk=kwargs["pk"])
-        self.auction = self.invoice.auction
-        return super().dispatch(request, *args, **kwargs)
-
     def post(self, request, *args, **kwargs):
-        if not self.auction.permission_check(request.user):
+        invoice = get_object_or_404(Invoice, pk=kwargs["pk"])
+        auction = invoice.auction
+        if not auction.permission_check(request.user):
             raise PermissionDenied()
         new_status = kwargs["status"]
-        self.invoice.status = new_status
+        invoice.status = new_status
         # Set or clear invoice_notification_due based on status change
         if new_status in ("UNPAID", "PAID"):
             # Schedule notification in the future to allow for undo
             run_at = timezone.now() + timedelta(seconds=INVOICE_NOTIFICATION_DELAY_SECONDS)
-            self.invoice.invoice_notification_due = run_at
-            schedule_invoice_notification(self.invoice.pk, run_at)
+            invoice.invoice_notification_due = run_at
+            schedule_invoice_notification(invoice.pk, run_at)
         elif new_status == "DRAFT":
             # Cancel scheduled notification when setting to open
-            self.invoice.invoice_notification_due = None
-            cancel_invoice_notification(self.invoice.pk)
-        self.invoice.save()
-        self.auction.create_history(
+            invoice.invoice_notification_due = None
+            cancel_invoice_notification(invoice.pk)
+        invoice.save()
+        auction.create_history(
             applies_to="INVOICES",
-            action=f"Set invoice for {self.invoice.auctiontos_user.name} to {self.invoice.get_status_display()}",
+            action=f"Set invoice for {invoice.auctiontos_user.name} to {invoice.get_status_display()}",
             user=request.user,
         )
         return HttpResponse(
-            render_to_string("invoice_buttons.html", {"invoice": self.invoice}),
+            render_to_string("invoice_buttons.html", {"invoice": invoice}),
             status=200,
         )
 
