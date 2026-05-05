@@ -5026,10 +5026,10 @@ class InvoiceStatusButtonTests(StandardTestCase):
         assert "btn-info" in content  # Open button should be info when active
 
     def test_invoice_status_button_anonymous_denied(self):
-        """Anonymous users cannot change invoice status"""
+        """Anonymous users cannot change invoice status via the pk-based endpoint"""
         url = f"/api/payinvoice/{self.invoice.pk}/PAID"
         response = self.client.post(url)
-        # DRF returns 401 for unauthenticated requests
+        # DRF returns 401 for unauthenticated requests (TokenAuthentication is first)
         assert response.status_code == 401
 
     def test_invoice_status_button_non_admin_denied(self):
@@ -5052,6 +5052,22 @@ class InvoiceStatusButtonTests(StandardTestCase):
         assert response.status_code == 200
         self.invoice.refresh_from_db()
         assert self.invoice.status == "PAID"
+
+    def test_invoice_status_button_uuid_allowed(self):
+        """Unauthenticated callers with the invoice no-login UUID can update invoice status"""
+        url = f"/api/payinvoice/{self.invoice.no_login_link}/PAID"
+        response = self.client.post(url)
+        assert response.status_code == 200
+        self.invoice.refresh_from_db()
+        assert self.invoice.status == "PAID"
+
+    def test_invoice_status_button_uuid_wrong_uuid_denied(self):
+        """A bogus UUID returns 404"""
+        import uuid  # noqa: PLC0415
+
+        url = f"/api/payinvoice/{uuid.uuid4()}/PAID"
+        response = self.client.post(url)
+        assert response.status_code == 404
 
 
 class QuickCheckoutHTMXTests(StandardTestCase):

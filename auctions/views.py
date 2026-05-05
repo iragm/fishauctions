@@ -91,6 +91,7 @@ from reportlab.platypus import (
 )
 from rest_framework import generics
 from rest_framework.authentication import SessionAuthentication, TokenAuthentication
+from rest_framework.exceptions import NotAuthenticated
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.views import APIView
 from user_agents import parse
@@ -1365,16 +1366,29 @@ class PageViewCreate(APIView):
 
 
 class InvoicePaid(APIView):
-    """Mark an invoice as paid/ready/open - POST only"""
+    """Mark an invoice as paid/ready/open - POST only
 
-    authentication_classes = [SessionAuthentication, TokenAuthentication]
-    permission_classes = [IsAuthenticated]
+    Accessible via two URL patterns:
+    - /api/payinvoice/<int:pk>/<str:status>: requires an authenticated auction admin
+    - /api/payinvoice/<uuid:uuid>/<str:status>: accepts the invoice's no-login UUID, no login required
+    """
+
+    authentication_classes = [TokenAuthentication, SessionAuthentication]
+    permission_classes = [AllowAny]  # Auth is enforced manually in post()
 
     def post(self, request, *args, **kwargs):
-        invoice = get_object_or_404(Invoice, pk=kwargs["pk"])
-        auction = invoice.auction
-        if not auction.permission_check(request.user):
-            raise PermissionDenied()
+        if "uuid" in kwargs:
+            # UUID-based access: anyone with the invoice's no-login link may update status
+            invoice = get_object_or_404(Invoice, no_login_link=kwargs["uuid"])
+            auction = invoice.auction
+        else:
+            # PK-based access: requires an authenticated auction admin
+            if not request.user.is_authenticated:
+                raise NotAuthenticated()
+            invoice = get_object_or_404(Invoice, pk=kwargs["pk"])
+            auction = invoice.auction
+            if not auction.permission_check(request.user):
+                raise PermissionDenied()
         new_status = kwargs["status"]
         invoice.status = new_status
         # Set or clear invoice_notification_due based on status change
@@ -1388,10 +1402,11 @@ class InvoicePaid(APIView):
             invoice.invoice_notification_due = None
             cancel_invoice_notification(invoice.pk)
         invoice.save()
+        user = request.user if request.user.is_authenticated else None
         auction.create_history(
             applies_to="INVOICES",
             action=f"Set invoice for {invoice.auctiontos_user.name} to {invoice.get_status_display()}",
-            user=request.user,
+            user=user,
         )
         return HttpResponse(
             render_to_string("invoice_buttons.html", {"invoice": invoice}),
@@ -1402,7 +1417,7 @@ class InvoicePaid(APIView):
 class APIPostView(APIView):
     """POST only method to do stuff, logged in users only"""
 
-    authentication_classes = [SessionAuthentication, TokenAuthentication]
+    authentication_classes = [TokenAuthentication, SessionAuthentication]
     permission_classes = [IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
