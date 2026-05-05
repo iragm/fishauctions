@@ -2009,10 +2009,6 @@ class LotLabelViewTestCase(StandardTestCase):
 
     def test_thermal_labels(self):
         """Test that a regular user can print their own labels."""
-        # If this test is failing, it's likely that the issue is not in this code, but in a library
-        # thermal labels cause a 'Paragraph' object has no attribute 'blPara' error
-        # See https://github.com/virantha/pypdfocr/issues/80
-        # This is the reason we are using a hacked version of platypus/paragraph.py in python_file_hack.sh
         user_label_prefs, created = UserLabelPrefs.objects.get_or_create(user=self.user)
         user_label_prefs.preset = "thermal_sm"
         user_label_prefs.save()
@@ -2227,9 +2223,9 @@ class UpdateLotPushNotificationsViewTestCase(StandardTestCase):
 
     def test_anonymous_user(self):
         response = self.client.get(self.get_url())
-        assert response.status_code == 302
+        assert response.status_code == 401
         response = self.client.post(self.get_url())
-        assert response.status_code == 302
+        assert response.status_code == 401
 
     def test_logged_in_user(self):
         self.client.login(username=self.user_who_does_not_join.username, password="testpassword")
@@ -5026,11 +5022,48 @@ class InvoiceStatusButtonTests(StandardTestCase):
         assert "btn-info" in content  # Open button should be info when active
 
     def test_invoice_status_button_anonymous_denied(self):
-        """Anonymous users cannot change invoice status"""
+        """Anonymous users cannot change invoice status via the pk-based endpoint"""
         url = f"/api/payinvoice/{self.invoice.pk}/PAID"
         response = self.client.post(url)
-        # Should redirect to login
-        assert response.status_code == 302
+        # DRF returns 401 for unauthenticated requests (TokenAuthentication is first)
+        assert response.status_code == 401
+
+    def test_invoice_status_button_non_admin_denied(self):
+        """Non-admin users cannot change invoice status for an auction they don't administer"""
+        # self.user_with_no_lots has a TOS for online_auction but is not an admin
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        url = f"/api/payinvoice/{self.invoice.pk}/PAID"
+        response = self.client.post(url)
+        assert response.status_code == 403
+        # Invoice status should be unchanged
+        self.invoice.refresh_from_db()
+        assert self.invoice.status != "PAID"
+
+    def test_invoice_status_button_auction_creator_allowed(self):
+        """Auction creator can change invoice status"""
+        # self.user is the creator of self.online_auction
+        self.client.login(username=self.user.username, password="testpassword")
+        url = f"/api/payinvoice/{self.invoice.pk}/PAID"
+        response = self.client.post(url)
+        assert response.status_code == 200
+        self.invoice.refresh_from_db()
+        assert self.invoice.status == "PAID"
+
+    def test_invoice_status_button_uuid_allowed(self):
+        """Unauthenticated callers with the invoice no-login UUID can update invoice status"""
+        url = f"/api/payinvoice/{self.invoice.no_login_link}/PAID"
+        response = self.client.post(url)
+        assert response.status_code == 200
+        self.invoice.refresh_from_db()
+        assert self.invoice.status == "PAID"
+
+    def test_invoice_status_button_uuid_wrong_uuid_denied(self):
+        """A bogus UUID returns 404"""
+        import uuid  # noqa: PLC0415
+
+        url = f"/api/payinvoice/{uuid.uuid4()}/PAID"
+        response = self.client.post(url)
+        assert response.status_code == 404
 
 
 class QuickCheckoutHTMXTests(StandardTestCase):
@@ -5503,8 +5536,8 @@ class WatchViewTests(StandardTestCase):
         """Anonymous users cannot watch lots"""
         # watchOrUnwatch is a function-based view
         response = self.client.post(f"/api/watchitem/{self.lot.pk}/", data={"watch": "1"})
-        # Should redirect to login (302) or be denied (403)
-        assert response.status_code in [302, 403]
+        # Should be denied (401/403) - DRF APIView does not redirect
+        assert response.status_code in [401, 403]
 
     def test_watch_logged_in(self):
         """Logged in users can watch lots"""
@@ -6023,7 +6056,7 @@ class WatchOrUnwatchViewTests(StandardTestCase):
     def test_watch_anonymous_denied(self):
         """Anonymous users cannot watch lots"""
         response = self.client.post(f"/api/watchitem/{self.lot.pk}/", data={"watch": "true"})
-        self.assertIn(response.status_code, [302, 403])
+        self.assertIn(response.status_code, [401, 403])
 
     def test_watch_logged_in(self):
         """Logged in users can watch lots"""
@@ -10715,6 +10748,49 @@ class ContextProcessorsTestCase(TestCase):
 
         context = add_tz(request)
         self.assertEqual(context["user_timezone"], "Europe/London")
+
+    def test_add_tz_rejects_invalid_cookie(self):
+        """Invalid tz cookie value falls back to the default and is not flagged as set."""
+        from django.contrib.auth.models import AnonymousUser
+        from django.test import RequestFactory
+
+        from auctions.context_processors import add_tz
+
+        factory = RequestFactory()
+        request = factory.get("/")
+        request.user = AnonymousUser()
+        request.COOKIES = {"user_timezone": "Not/A_Real_Zone"}
+
+        context = add_tz(request)
+        self.assertEqual(context["user_timezone"], "America/New_York")
+        self.assertFalse(context["user_timezone_set"])
+
+    def test_add_tz_rejects_invalid_userdata_timezone(self):
+        """Garbage userdata.timezone value falls back to the default."""
+        from django.test import RequestFactory
+
+        from auctions.context_processors import add_tz
+
+        factory = RequestFactory()
+        request = factory.get("/")
+        user = User.objects.create_user(username="bad_tz_user", password="testpass")
+        user.userdata.timezone = "Not/A_Real_Zone"
+        user.userdata.save()
+        request.user = user
+        request.COOKIES = {}
+
+        context = add_tz(request)
+        self.assertEqual(context["user_timezone"], "America/New_York")
+
+    def test_base_template_renders_without_context_processors(self):
+        """Django's default 500/404 views call template.render() with no RequestContext,
+        so context processors don't run and user_timezone is undefined. The base template
+        must still render -- otherwise the error page itself errors out with
+        `ValueError: ZoneInfo keys must be normalized relative paths, got: `."""
+        from django.template.loader import get_template
+
+        # Render with no context at all -- mirrors django.views.defaults.server_error.
+        get_template("500.html").render()
 
     def test_add_location_with_cookies(self):
         """Test add_location context processor with location cookies"""
