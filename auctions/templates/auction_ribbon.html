@@ -35,7 +35,7 @@
     {% endif %}
     <div>
       {% if auction.created_by.userdata.is_trusted %}
-      <a href='/auctions/{{auction.slug}}/edit' class="btn btn-info btn-sm mt-2">Edit the rules and check promote this auction</a>
+      <a href="{% url 'edit_auction' slug=auction.slug %}" class="btn btn-info btn-sm mt-2">Edit the rules and check promote this auction</a>
       {% else %}
         <a href="mailto:{{ auction.promotion_request_mailto_query }}"
           class="btn btn-info btn-sm mt-2">
