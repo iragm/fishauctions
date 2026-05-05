@@ -1,6 +1,7 @@
 {% load tz %}
 {% load l10n %}
-{% timezone user_timezone %}
+{# Default guards templates rendered without context processors (e.g. default 500/404 views). #}
+{% timezone user_timezone|default:"America/New_York" %}
 {% load static %}
 {% load django_htmx %}
 <!DOCTYPE html>
