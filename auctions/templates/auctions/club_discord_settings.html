@@ -20,10 +20,8 @@
       </p>
     {% else %}
       <p class="text-muted small">
-        Add the bot to your Discord server, then go to the channel where you want the
-        join button to appear and run the <code>/connect</code> command below.
-        This will link the server to this club <strong>and</strong> post the join button
-        in that channel.
+        Add the bot to your Discord server by clicking the button below, then run the
+        <code>/connect</code> command in your server to link it to this club.
       </p>
     {% endif %}
     {% if oauth_url %}
@@ -38,25 +36,10 @@
       </div>
     {% endif %}
 
-    <p class="mb-1 small">Once the bot is in your server, go to the channel where you want the join button and run:</p>
-    <div class="input-group mb-2">
-      <input type="text" class="form-control font-monospace" id="connectCommand"
-             aria-label="Discord connect command"
-             value="/connect club_uuid:{{ club_uuid }}" readonly>
-      <button class="btn btn-outline-secondary" type="button" id="copyConnectBtn"
-              onclick="navigator.clipboard.writeText(document.getElementById('connectCommand').value).then(function(){
-                var btn = document.getElementById('copyConnectBtn');
-                btn.innerHTML = '<i class=\'bi bi-check\'></i> Copied!';
-                setTimeout(function(){ btn.innerHTML = '<i class=\'bi bi-clipboard\'></i> Copy'; }, 2000);
-              })">
-        <i class="bi bi-clipboard"></i> Copy
-      </button>
-    </div>
-
     {% if not club.discord_server_id %}
       <div class="alert alert-info mb-0">
         <i class="bi bi-info-circle"></i>
-        Connect a Discord server (run the command above) and reload this page to unlock role management.
+        Connect a Discord server (run the command above) and reload this page to unlock role management and join message features.
       </div>
     {% endif %}
   </div>
@@ -65,7 +48,24 @@
 {% if club.discord_server_id %}
 
 <div class="card mb-4">
-  <div class="card-header">Step 2 &mdash; Configure roles</div>
+  <div class="card-header">Step 2 &mdash; Post the join button</div>
+  <div class="card-body">
+    <p class="text-muted small">
+      Once you've added the bot to your server and given it a role above the ones it manages,
+      go to the channel where you want the join button to appear and paste this slash command:
+    </p>
+    <div class="input-group mb-2">
+      <input type="text" class="form-control font-monospace" id="joinCommand" value="/join club_id:{{ club_uuid }}" readonly>
+      <button class="btn btn-outline-secondary" type="button"
+              onclick="navigator.clipboard.writeText(document.getElementById('joinCommand').value)">
+        <i class="bi bi-clipboard"></i> Copy
+      </button>
+    </div>
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header">Step 3 &mdash; Configure roles</div>
   <div class="card-body">
     <p class="text-muted small">
       Note that the bot needs a role that is placed <strong>above</strong> any roles it needs to manage in your
