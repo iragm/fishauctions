@@ -515,8 +515,7 @@ class ClubHistoryHTMxTable(tables.Table):
 
     def render_name(self, value, record):
         if record.user:
-            result = record.user.get_full_name()
-            return mark_safe(result)
+            return record.user.get_full_name() or record.user.username
         return "System"
 
     class Meta:

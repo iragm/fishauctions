@@ -11,9 +11,7 @@
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
         <button type="button" class="btn btn-danger"
-          hx-post="{{ action_url }}"
-          hx-target="#modals-here"
-          hx-swap="innerHTML">Confirm</button>
+          hx-post="{{ action_url }}">Confirm</button>
       </div>
     </div>
   </div>
@@ -23,14 +21,16 @@ function closeModal() {
   var container = document.getElementById("modals-here");
   var backdrop = document.getElementById("modal-backdrop");
   var modal = document.getElementById("modal");
-  if (modal) modal.classList.remove("show");
+  if (modal) {
+    modal.classList.remove("show");
+    modal.style.pointerEvents = "none";
+  }
   if (backdrop) {
     backdrop.classList.remove("show");
     backdrop.style.pointerEvents = "none";
   }
   setTimeout(function() {
-    if (container && backdrop && backdrop.parentNode === container) container.removeChild(backdrop);
-    if (container && modal && modal.parentNode === container) container.removeChild(modal);
-  }, 200);
+    if (container) container.innerHTML = "";
+  }, 300);
 }
 </script>

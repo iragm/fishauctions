@@ -1050,6 +1050,7 @@ class ClubMemberFilter(django_filters.FilterSet):
                 | Q(last_name__icontains=text)
                 | Q(email__icontains=text)
                 | Q(user__email__icontains=text)
+                | Q(discord_username__icontains=text)
             )
         return queryset
 

@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}Discord Settings &mdash; {{ club.name }}{% endblock %}
+
+{% block content %}
+<h3><i class="bi bi-discord"></i> Discord Settings &mdash; {{ club.name }}</h3>
+
+<div class="mb-3">
+  <a href="{% url 'club_admin' club.slug %}" class="btn btn-sm btn-secondary">
+    <i class="bi bi-arrow-left"></i> Back to membership admin
+  </a>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header">Step 1 &mdash; Connect Discord server</div>
+  <div class="card-body">
+    {% if club.discord_server_id %}
+      <p class="text-success mb-2">
+        <i class="bi bi-check-circle-fill"></i>
+        Discord server connected.
+      </p>
+    {% else %}
+      <p class="text-muted small">
+        Add the bot to your Discord server by clicking the button below, then run the
+        <code>/connect</code> command in your server to link it to this club.
+      </p>
+    {% endif %}
+    {% if oauth_url %}
+      <a href="{{ oauth_url }}" target="_blank" rel="noopener" class="btn btn-primary mb-3">
+        <i class="bi bi-discord"></i> Connect Discord server
+      </a>
+    {% else %}
+      <div class="alert alert-warning mb-3">
+        <i class="bi bi-exclamation-triangle"></i>
+        <code>DISCORD_BOT_CLIENT_ID</code> is not configured on this server.
+        Contact your site administrator.
+      </div>
+    {% endif %}
+
+    {% if not club.discord_server_id %}
+      <div class="alert alert-info mb-0">
+        <i class="bi bi-info-circle"></i>
+        Connect a Discord server (run the command above) and reload this page to unlock role management and join message features.
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+{% if club.discord_server_id %}
+
+<div class="card mb-4">
+  <div class="card-header">Step 2 &mdash; Post the join button</div>
+  <div class="card-body">
+    <p class="text-muted small">
+      Once you've added the bot to your server and given it a role above the ones it manages,
+      go to the channel where you want the join button to appear and paste this slash command:
+    </p>
+    <div class="input-group mb-2">
+      <input type="text" class="form-control font-monospace" id="joinCommand" value="/connect club_id:{{ club_uuid }}" readonly>
+      <button class="btn btn-outline-secondary" type="button"
+              onclick="navigator.clipboard.writeText(document.getElementById('joinCommand').value)">
+        <i class="bi bi-clipboard"></i> Copy
+      </button>
+    </div>
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header">Step 3 &mdash; Configure roles</div>
+  <div class="card-body">
+    <p class="text-muted small">
+      Note that the bot needs a role that is placed <strong>above</strong> any roles it needs to manage in your
+      server's role hierarchy.
+    </p>
+    <form method="post" action="{% url 'club_discord_fetch_roles' club.slug %}" class="mb-3">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-secondary btn-sm">
+        <i class="bi bi-arrow-clockwise"></i> Fetch roles from Discord
+      </button>
+    </form>
+
+    {% if roles %}
+      <table class="table table-sm align-middle">
+        <thead>
+          <tr>
+            <th>Role name</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for role in roles %}
+          <tr>
+            <td>
+              <a href="{% url 'club_discord_edit_role' club.slug role.pk %}">{{ role.role_name }}</a>
+              {% if role.is_paid_role %}<span class="badge bg-success ms-1">Paid</span>{% endif %}
+              {% if role.is_unpaid_role %}<span class="badge bg-warning text-dark ms-1">Unpaid</span>{% endif %}
+              {% if role.bap_points_for_role %}<span class="badge bg-info text-dark ms-1">BAP &ge; {{ role.bap_points_for_role }}</span>{% endif %}
+              {% if role.hap_points_for_role %}<span class="badge bg-info text-dark ms-1">HAP &ge; {{ role.hap_points_for_role }}</span>{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="text-muted small">No roles fetched yet. Click <em>Fetch roles from Discord</em> above.</p>
+    {% endif %}
+  </div>
+</div>
+
+{% endif %}
+
+{% endblock %}
