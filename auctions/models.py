@@ -574,6 +574,28 @@ class Club(models.Model):
         verbose_name="Enable public club page",
         help_text="When enabled, this club will appear on the club map and have a public detail page.",
     )
+    days_between_same_name_lots = models.IntegerField(
+        default=0,
+        help_text="Minimum days between awarding BAP points for lots with the same name. Leave at 0 to allow points every time.",
+    )
+    points_per_lot = models.IntegerField(
+        default=0,
+        help_text="Fixed BAP points per eligible lot. Leave at 0 to use per-category points based on difficulty.",
+    )
+    separate_hap = models.BooleanField(default=False, help_text="Track HAP (Horticultural Award Program) separately from BAP.")
+    separate_cap = models.BooleanField(default=False, help_text="Track Culture Award Program separately.")
+    auto_add_points = models.BooleanField(
+        default=True,
+        help_text="Automatically award BAP points when a lot sells. Uncheck to require admin approval before awarding points.",
+    )
+    only_active_members_can_participate = models.BooleanField(
+        default=False,
+        help_text="Only club members with an active (paid) membership can earn BAP points.",
+    )
+    min_quantity = models.IntegerField(
+        default=5,
+        help_text="Minimum quantity in a lot to be eligible for BAP points.",
+    )
 
     class Meta:
         ordering = ["name"]
@@ -628,6 +650,7 @@ class ClubPermission(models.Model):
         ("permission_add_edit", "Add and edit members"),
         ("permission_edit_club", "Edit club settings"),
         ("permission_manage_auctions", "Manage auctions"),
+        ("permission_manage_bap", "Manage BAP points"),
     )
     name = models.CharField(max_length=50, choices=PERMISSION_CHOICES, unique=True)
     description = models.CharField(max_length=200)
@@ -652,6 +675,7 @@ DEFAULT_CLUB_ROLES = [
     {"name": "Change club permissions", "permissions": ["permission_view", "permission_edit_club"]},
     {"name": "Export", "permissions": ["permission_view", "permission_add_edit", "permission_export"]},
     {"name": "Manage auctions", "permissions": ["permission_manage_auctions"]},
+    {"name": "Manage BAP", "permissions": ["permission_view", "permission_manage_bap"]},
 ]
 
 
@@ -888,6 +912,10 @@ class Category(models.Model):
 
     name = models.CharField(max_length=255)
     name_on_label = models.CharField(max_length=255, default="")
+    bap_points = models.PositiveIntegerField(
+        default=5,
+        help_text="BAP points awarded for a sold lot in this category. Set to 0 to make this category ineligible.",
+    )
 
     def __str__(self):
         return str(self.name)
@@ -3947,6 +3975,18 @@ class Lot(models.Model):
     )
     image_url = models.URLField(blank=True, null=True)
     image_url.help_text = "If filled out, an image will be added to this lot using this URL when saving"
+    bap_points_awarded = models.IntegerField(default=0)
+    BAP_REASON_CHOICES = (
+        ("not_long_enough", "Not long enough since last submission"),
+        ("category_not_eligible", "Category not eligible (BAP points = 0)"),
+        ("not_club_member", "Not a club member"),
+        ("not_bred", "Didn't breed this fish"),
+        ("not_active_member", "Not an active club member"),
+        ("not_sold", "Not sold"),
+        ("low_quantity", "Quantity below club minimum"),
+    )
+    bap_auto_reason = models.CharField(max_length=30, choices=BAP_REASON_CHOICES, blank=True, default="")
+    manually_approved = models.BooleanField(default=False)
 
     def save(self, *args, **kwargs):
         from django.db import transaction
@@ -4713,6 +4753,77 @@ class Lot(models.Model):
             if self.winning_price:
                 return True
         return False
+
+    @property
+    def unsold_lot_no_bap_reason(self):
+        """Return a BAP_REASON_CHOICES key if this lot is ineligible for BAP points, or None if eligible.
+        Ignores whether the lot has sold — use sold_lot_no_bap_reason for that check."""
+        if not self.auction or not self.auction.club:
+            return "not_club_member"
+        club = self.auction.club
+        if not self.i_bred_this_fish:
+            return "not_bred"
+        if self.quantity < club.min_quantity:
+            return "low_quantity"
+        if not self.species_category or self.species_category.bap_points == 0:
+            return "category_not_eligible"
+        seller_user = self.user or (self.auctiontos_seller.user if self.auctiontos_seller else None)
+        if not seller_user:
+            return "not_club_member"
+        member = ClubMember.objects.filter(club=club, user=seller_user, is_deleted=False).first()
+        if not member:
+            return "not_club_member"
+        if club.only_active_members_can_participate:
+            today = timezone.now().date()
+            if not member.membership_last_paid:
+                return "not_active_member"
+            if club.membership_system == "january_first":
+                valid = member.membership_last_paid >= datetime.date(today.year, 1, 1)
+            else:
+                valid = member.membership_last_paid >= today - datetime.timedelta(days=365)
+            if not valid:
+                return "not_active_member"
+        if club.days_between_same_name_lots > 0:
+            cutoff = timezone.now() - datetime.timedelta(days=club.days_between_same_name_lots)
+            prior = (
+                Lot.objects.filter(
+                    auction__club=club,
+                    user=seller_user,
+                    lot_name=self.lot_name,
+                    bap_points_awarded__gt=0,
+                    date_end__gte=cutoff,
+                )
+                .exclude(pk=self.pk)
+                .exists()
+            )
+            if prior:
+                return "not_long_enough"
+        return None
+
+    @property
+    def sold_lot_no_bap_reason(self):
+        """Return a BAP_REASON_CHOICES key if ineligible for awarded points, or None if eligible."""
+        if not self.sold:
+            return "not_sold"
+        return self.unsold_lot_no_bap_reason
+
+    def auto_award_bap_points(self):
+        """Set bap_points_awarded and bap_auto_reason based on club rules. Call after auction ends."""
+        reason = self.sold_lot_no_bap_reason
+        if reason:
+            self.bap_auto_reason = reason
+            self.bap_points_awarded = 0
+            self.save(update_fields=["bap_auto_reason", "bap_points_awarded"])
+            return
+        club = self.auction.club
+        if club.auto_add_points:
+            if club.points_per_lot > 0:
+                points = club.points_per_lot
+            else:
+                points = self.species_category.bap_points if self.species_category else 5
+            self.bap_points_awarded = points
+        self.bap_auto_reason = ""
+        self.save(update_fields=["bap_auto_reason", "bap_points_awarded"])
 
     @property
     def pre_registered(self):

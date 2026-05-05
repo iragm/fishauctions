@@ -11,7 +11,7 @@ from bootstrap_datepicker_plus.widgets import (
 )  # https://github.com/monim67/django-bootstrap-datepicker-plus/issues/66
 from crispy_forms.bootstrap import Div, Field, PrependedAppendedText
 from crispy_forms.helper import FormHelper
-from crispy_forms.layout import HTML, Layout, Submit
+from crispy_forms.layout import HTML, Fieldset, Layout, Submit
 from dal import autocomplete
 from django import forms
 from django.conf import settings
@@ -3390,6 +3390,13 @@ class ClubEditForm(forms.ModelForm):
             "allow_integrated_payments",
             "description",
             "enable_club_page",
+            "days_between_same_name_lots",
+            "points_per_lot",
+            "separate_hap",
+            "separate_cap",
+            "auto_add_points",
+            "only_active_members_can_participate",
+            "min_quantity",
         ]
         help_texts = {
             "name": "Changing this will change the URL for your club's page.",
@@ -3411,6 +3418,27 @@ class ClubEditForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "post"
+        self.helper.layout = Layout(
+            "name",
+            "homepage",
+            "facebook_page",
+            "membership_system",
+            "membership_annual_fee",
+            "allow_joining",
+            "allow_integrated_payments",
+            "description",
+            "enable_club_page",
+            Fieldset(
+                "BAP Settings",
+                "days_between_same_name_lots",
+                "points_per_lot",
+                "separate_hap",
+                "separate_cap",
+                "auto_add_points",
+                "only_active_members_can_participate",
+                "min_quantity",
+            ),
+        )
         self.helper.add_input(Submit("submit", "Save settings", css_class="btn-primary"))
 
 

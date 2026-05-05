@@ -4608,6 +4608,25 @@ class ViewLot(DetailView):
             if context["is_auction_admin"] or self.request.user == lot.user:
                 context["show_exchange_info"] = True
         context["show_image_add_button"] = lot.image_permission_check(self.request.user)
+        context["show_bap_badge"] = False
+        context["bap_eligible_reason"] = None
+        context["bap_eligible_reason_display"] = None
+        if lot.auction and lot.auction.club:
+            seller_user = lot.user or (lot.auctiontos_seller.user if lot.auctiontos_seller else None)
+            viewer = self.request.user
+            viewer_is_seller = viewer.is_authenticated and seller_user and viewer == seller_user
+            viewer_has_bap = viewer.is_authenticated and check_club_permission(
+                viewer, lot.auction.club, "permission_manage_bap"
+            )
+            if viewer_is_seller or viewer_has_bap:
+                context["show_bap_badge"] = True
+                if lot.ended and not lot.sold:
+                    reason = "not_sold"
+                else:
+                    reason = lot.unsold_lot_no_bap_reason
+                context["bap_eligible_reason"] = reason
+                if reason:
+                    context["bap_eligible_reason_display"] = dict(lot.BAP_REASON_CHOICES).get(reason, reason)
         if lot.use_images_from and self.request.user.is_authenticated:
             is_lot_creator = (lot.user and lot.user == self.request.user) or (
                 lot.auctiontos_seller and lot.auctiontos_seller.user == self.request.user
@@ -6817,6 +6836,10 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
             )
         context["is_auction_admin"] = self.is_auction_admin
         context["website_focus"] = settings.WEBSITE_FOCUS
+        club = invoice.auction.club if invoice.auction else None
+        context["viewer_has_bap"] = club is not None and check_club_permission(
+            self.request.user, club, "permission_manage_bap"
+        )
         return context
 
     def get_success_url(self):
@@ -12750,6 +12773,31 @@ class DiscordInteractionsView(View):
                 },
             }
         )
+
+
+class LotBapPointsView(LoginRequiredMixin, View):
+    """AJAX endpoint to update BAP points awarded for a lot. BAP admins only."""
+
+    def post(self, request, pk):
+        lot = get_object_or_404(Lot, pk=pk)
+        club = lot.auction.club if lot.auction else None
+        if not club or not check_club_permission(request.user, club, "permission_manage_bap"):
+            return HttpResponse(status=403)
+        try:
+            points = int(request.POST.get("bap_points_awarded", 0))
+        except (ValueError, TypeError):
+            return HttpResponse(status=400)
+        lot.bap_points_awarded = points
+        lot.manually_approved = True
+        lot.bap_auto_reason = ""
+        lot.save(update_fields=["bap_points_awarded", "manually_approved", "bap_auto_reason"])
+        ClubHistory.objects.create(
+            club=club,
+            user=request.user,
+            action=f"BAP points set to {points} for lot '{lot.lot_name}' (lot #{lot.pk})",
+            applies_to="MEMBERS",
+        )
+        return HttpResponse(status=204)
 
 
 class ClubDiscordConfigView(LoginRequiredMixin, ClubViewMixin, View):

@@ -46,6 +46,9 @@ def declare_winners_on_lots(lots):
 
                 if relist:
                     lot.relist_lot()
+
+                if lot.auction and lot.auction.club and not lot.bap_points_awarded and not lot.manually_approved:
+                    lot.auto_award_bap_points()
             except Exception as e:
                 logger.warning('Unable to set winner on "%s":', lot)
                 logger.exception(e)

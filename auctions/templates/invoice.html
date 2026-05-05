@@ -92,6 +92,20 @@ document.addEventListener("DOMContentLoaded", function() {
   }
 });
 </script>
+{% if viewer_has_bap %}
+<script>
+function saveBapPoints(el) {
+    $.ajax({
+        type: "POST",
+        beforeSend: function(req) { req.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}"); },
+        url: "/api/lot/" + el.dataset.lotPk + "/bap/",
+        data: { bap_points_awarded: el.value },
+        success: function() { $(el).addClass("is-valid").removeClass("is-invalid"); },
+        error: function() { $(el).addClass("is-invalid").removeClass("is-valid"); },
+    });
+}
+</script>
+{% endif %}
 {% endblock %}
 
 {% block content %}
@@ -341,6 +355,8 @@ document.addEventListener("DOMContentLoaded", function() {
             {{ lot.lot_name }}
           {% endif%}
           {% if lot.partial_refund_percent %}<small>({{ lot.partial_refund_percent }}% refund)</small>{% endif %}
+          {% if lot.bap_points_awarded %}<span class="badge bg-success ms-1">Breeder points: {{ lot.bap_points_awarded }}</span>{% endif %}
+          {% if viewer_has_bap and show_links %}<input type="number" min="0" value="{{ lot.bap_points_awarded }}" class="form-control form-control-sm d-inline-block ms-1" style="width:70px;" data-lot-pk="{{ lot.pk }}" onchange="saveBapPoints(this)" title="BAP points">{% endif %}
         </td>
         <td>
           {% if lot.winning_price %}

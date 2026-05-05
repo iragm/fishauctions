@@ -667,7 +667,7 @@ class ChatAdmin(admin.ModelAdmin):
 class CategoryAdmin(admin.ModelAdmin):
     model = Category
     menu_label = "Categories"
-    list_display = ("name",)
+    list_display = ("name", "bap_points")
     # list_filter = ()
     search_fields = ("name",)
 

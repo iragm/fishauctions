@@ -47,6 +47,7 @@ urlpatterns = [
     path("api/get_category/", views.CategoryFinder.as_view(), name="guess_category"),
     path("api/get_auction_info/", views.AuctionFinder.as_view(), name="get_auction_info"),
     path("api/lot/<int:pk>/", views.LotAdmin.as_view(), name="auctionlotadmin"),
+    path("api/lot/<int:pk>/bap/", views.LotBapPointsView.as_view(), name="lot_bap_points"),
     path(
         "api/auctions/<slug:slug>/custom-dropdown-options/",
         views.AuctionDropdownOptionsAPI.as_view(),
