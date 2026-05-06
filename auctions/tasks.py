@@ -427,3 +427,133 @@ def update_auction_stats(self):
             "No auctions need stats update, checking again at %s", fallback_time.strftime("%Y-%m-%d %H:%M:%S %Z")
         )
         schedule_auction_stats_update(fallback_time)
+
+
+# Constants for BAP recalculation scheduling
+BAP_RECALCULATION_TASK_PREFIX = "bap_recalculate_club_"
+BAP_RECALCULATION_INTERVAL_DAYS = 30
+
+
+def schedule_bap_recalculation(club_pk, run_at=None):
+    """Schedule a one-off BAP points recalculation task for a specific club.
+
+    Each club gets its own named PeriodicTask so schedules are independent.
+    Uses the same atomic delete-and-recreate pattern as schedule_auction_stats_update.
+    """
+
+    from django.db import transaction
+    from django.utils import timezone
+
+    if run_at is None:
+        run_at = timezone.now()
+
+    task_name = f"{BAP_RECALCULATION_TASK_PREFIX}{club_pk}"
+
+    with transaction.atomic():
+        schedule, _ = ClockedSchedule.objects.get_or_create(clocked_time=run_at)
+        old_tasks = PeriodicTask.objects.filter(name=task_name)
+        old_schedule_ids = [t.clocked_id for t in old_tasks if t.clocked_id]
+        old_tasks.delete()
+        if old_schedule_ids:
+            ClockedSchedule.objects.filter(id__in=old_schedule_ids).delete()
+        task = PeriodicTask.objects.create(
+            name=task_name,
+            task="auctions.tasks.recalculate_club_bap_points",
+            clocked=schedule,
+            one_off=True,
+            enabled=True,
+            kwargs=json.dumps({"club_pk": club_pk}),
+        )
+
+    logger.info("Scheduled BAP recalculation for club %s (task id=%s) at %s", club_pk, task.id, run_at)
+
+
+@shared_task(bind=True, ignore_result=True)
+def recalculate_club_bap_points(self, club_pk):
+    """Recalculate BAP, HAP, and Culture points for all members of a club.
+
+    Iterates all lots with bap_points_awarded > 0 in this club's auctions,
+    resolves the seller to a ClubMember by user or email, and accumulates
+    totals (all-time and year-to-date) into the appropriate fields.
+    After saving, assigns Discord roles where applicable.
+    Self-schedules to run again in BAP_RECALCULATION_INTERVAL_DAYS days.
+    """
+    import datetime
+
+    from django.utils import timezone
+
+    from auctions.models import Club, ClubMember, Lot
+
+    logger.info("BAP recalculation started for club pk=%s", club_pk)
+
+    try:
+        club = Club.objects.get(pk=club_pk)
+    except Club.DoesNotExist:
+        logger.warning("BAP recalculation: club pk=%s not found, skipping", club_pk)
+        return
+
+    this_year = timezone.now().year
+
+    members = list(ClubMember.objects.filter(club=club, is_deleted=False).select_related("club"))
+    for m in members:
+        m.bap_points = 0
+        m.hap_points = 0
+        m.culture_points = 0
+        m.bap_points_ytd = 0
+        m.hap_points_ytd = 0
+        m.culture_points_ytd = 0
+
+    user_map = {m.user_id: m for m in members if m.user_id}
+    email_map = {m.email.lower(): m for m in members if m.email}
+
+    lots = Lot.objects.filter(auction__club=club, bap_points_awarded__gt=0).select_related(
+        "auctiontos_seller__user", "species_category", "auction__club"
+    )
+
+    for lot in lots:
+        seller_user = lot.user or (lot.auctiontos_seller.user if lot.auctiontos_seller else None)
+        seller_email = (lot.auctiontos_seller.email if lot.auctiontos_seller else None) or ""
+
+        member = None
+        if seller_user and seller_user.pk in user_map:
+            member = user_map[seller_user.pk]
+        elif seller_email.lower() in email_map:
+            member = email_map[seller_email.lower()]
+        if not member:
+            continue
+
+        pts = lot.bap_points_awarded
+        program = lot.bap_placeholder  # "BAP", "HAP", or "Culture"
+        is_ytd = bool(lot.date_end and lot.date_end.year == this_year)
+
+        if program == "Culture":
+            member.culture_points += pts
+            if is_ytd:
+                member.culture_points_ytd += pts
+        elif program == "HAP":
+            member.hap_points += pts
+            if is_ytd:
+                member.hap_points_ytd += pts
+        else:
+            member.bap_points += pts
+            if is_ytd:
+                member.bap_points_ytd += pts
+
+    update_fields = [
+        "bap_points",
+        "hap_points",
+        "culture_points",
+        "bap_points_ytd",
+        "hap_points_ytd",
+        "culture_points_ytd",
+    ]
+    for m in members:
+        m.save(update_fields=update_fields)
+        m.maybe_assign_discord_role()
+
+    now = timezone.now()
+    next_run = now + datetime.timedelta(days=BAP_RECALCULATION_INTERVAL_DAYS)
+    Club.objects.filter(pk=club_pk).update(last_bap_recalculation=now, next_bap_recalculation=next_run)
+
+    logger.info("BAP recalculation complete for club pk=%s, next run at %s", club_pk, next_run)
+    schedule_bap_recalculation(club_pk, run_at=next_run)

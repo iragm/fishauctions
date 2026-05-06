@@ -104,6 +104,7 @@ from .filters import (
     AuctionFilter,
     AuctionHistoryFilter,
     AuctionTOSFilter,
+    ClubBapLotFilter,
     ClubHistoryFilter,
     ClubMemberFilter,
     LotAdminFilter,
@@ -196,6 +197,7 @@ from .tables import (
     AuctionHistoryHTMxTable,
     AuctionHTMxTable,
     AuctionTOSHTMxTable,
+    ClubBapLotHTMxTable,
     ClubHistoryHTMxTable,
     ClubMemberHTMxTable,
     LotHTMxTable,
@@ -283,6 +285,23 @@ def check_club_permission(user, club, permission_name):
         return False
     # permission_admin is an explicit wildcard: having it grants all permissions
     return member.roles.filter(permissions__name__in=[permission_name, "permission_admin"]).exists()
+
+
+def _bap_leaderboard(club, field, current_member):
+    """Return a leaderboard list for display on the club detail page.
+
+    Each entry is a (rank, member, is_current_user) tuple.
+    Top 10 are always included; if current_member is not in the top 10,
+    they are appended at the end with their actual rank.
+    Only members with points > 0 are ranked.
+    """
+    qs = ClubMember.objects.filter(club=club, is_deleted=False, **{f"{field}__gt": 0}).order_by(f"-{field}")
+    top10 = list(qs[:10])
+    result = [(i + 1, m, m == current_member) for i, m in enumerate(top10)]
+    if current_member and current_member not in top10 and getattr(current_member, field, 0) > 0:
+        rank = qs.filter(**{f"{field}__gt": getattr(current_member, field)}).count() + 1
+        result.append((rank, current_member, True))
+    return result
 
 
 class ClubViewMixin:
@@ -11537,19 +11556,38 @@ class ClubDetailView(ClubViewMixin, TemplateView):
         context["member"] = member
         if member:
             context["update_form"] = ClubMemberSelfServiceForm(instance=member)
-        has_points = (
-            ClubMember.objects.filter(club=self.club, is_deleted=False)
-            .filter(Q(bap_points__gt=0) | Q(hap_points__gt=0))
-            .exists()
-        )
-        context["has_points"] = has_points
-        if has_points:
-            context["bap_leaderboard"] = ClubMember.objects.filter(
-                club=self.club, is_deleted=False, bap_points__gt=0
-            ).order_by("-bap_points")[:10]
-            context["hap_leaderboard"] = ClubMember.objects.filter(
-                club=self.club, is_deleted=False, hap_points__gt=0
-            ).order_by("-hap_points")[:10]
+        club = self.club
+        if club.enable_breeder_award_program:
+            context["show_bap_tabs"] = True
+            context["bap_leaderboard"] = _bap_leaderboard(club, "bap_points", member)
+            context["bap_leaderboard_ytd"] = _bap_leaderboard(club, "bap_points_ytd", member)
+            context["hap_leaderboard"] = _bap_leaderboard(club, "hap_points", member) if club.separate_hap else []
+            context["hap_leaderboard_ytd"] = (
+                _bap_leaderboard(club, "hap_points_ytd", member) if club.separate_hap else []
+            )
+            context["culture_leaderboard"] = (
+                _bap_leaderboard(club, "culture_points", member) if club.separate_cap else []
+            )
+            context["culture_leaderboard_ytd"] = (
+                _bap_leaderboard(club, "culture_points_ytd", member) if club.separate_cap else []
+            )
+            context["can_manage_bap"] = self.user_has_club_permission("permission_manage_bap")
+        else:
+            context["show_bap_tabs"] = False
+            # Legacy flat leaderboard for clubs without BAP enabled
+            has_points = (
+                ClubMember.objects.filter(club=club, is_deleted=False)
+                .filter(Q(bap_points__gt=0) | Q(hap_points__gt=0))
+                .exists()
+            )
+            context["has_points"] = has_points
+            if has_points:
+                context["bap_leaderboard"] = ClubMember.objects.filter(
+                    club=club, is_deleted=False, bap_points__gt=0
+                ).order_by("-bap_points")[:10]
+                context["hap_leaderboard"] = ClubMember.objects.filter(
+                    club=club, is_deleted=False, hap_points__gt=0
+                ).order_by("-hap_points")[:10]
         context["can_access_admin"] = self.user_has_club_permission(
             "permission_admin"
         ) or self.user_has_club_permission("permission_view")
@@ -12205,6 +12243,63 @@ class ClubBapSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
             applies_to="BAP",
         )
         return result
+
+
+class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterView):
+    """HTMx table of lots from this club's auctions for BAP admins to review and approve."""
+
+    model = Lot
+    table_class = ClubBapLotHTMxTable
+    filterset_class = ClubBapLotFilter
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_manage_bap"):
+            raise PermissionDenied()
+        if not self.club.enable_breeder_award_program:
+            raise Http404
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_queryset(self):
+        cutoff = timezone.now() - datetime.timedelta(days=365)
+        return (
+            Lot.objects.filter(auction__club=self.club, date_end__gte=cutoff, is_deleted=False)
+            .select_related("auctiontos_seller__user", "auction", "species_category")
+            .order_by("-date_end")
+        )
+
+    def get_template_names(self):
+        if self.request.htmx:
+            return "tables/table_generic.html"
+        return "auctions/club_bap_lots.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["club"] = self.club
+        context["last_run"] = self.club.last_bap_recalculation
+        context["next_run"] = self.club.next_bap_recalculation
+        return context
+
+    def get_table_kwargs(self, **kwargs):
+        kwargs = super().get_table_kwargs(**kwargs)
+        kwargs["club"] = self.club
+        return kwargs
+
+
+class ClubBapRecalculateView(LoginRequiredMixin, ClubViewMixin, View):
+    """POST-only endpoint to trigger a BAP points recalculation Celery task for a club."""
+
+    def post(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if not self.user_has_club_permission("permission_manage_bap"):
+            return HttpResponse(status=403)
+        if not self.club.enable_breeder_award_program:
+            raise Http404
+        from auctions.tasks import schedule_bap_recalculation
+
+        schedule_bap_recalculation(self.club.pk)
+        messages.success(request, "Points recalculation scheduled.")
+        return redirect(reverse("club_bap_lots", kwargs={"slug": self.club.slug}))
 
 
 class ClubHistoryView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterView):

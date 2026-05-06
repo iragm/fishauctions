@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% load render_table from django_tables2 %}
+{% load crispy_forms_tags %}
+{% block title %}BAP Lots &mdash; {{ club.name }}{% endblock %}
+
+{% block content %}
+<h3><i class="bi bi-award"></i> {{ club.name }} &mdash; BAP Lot Review</h3>
+
+<div class="mb-3 d-flex flex-wrap gap-2 align-items-center">
+  <a href="{% url 'club_admin' club.slug %}" class="btn btn-sm btn-secondary"><i class="bi bi-arrow-left"></i> Back to members</a>
+  <a href="{% url 'club_detail' club.slug %}" class="btn btn-sm btn-secondary"><i class="bi bi-house"></i> Club page</a>
+
+  <form method="post" action="{% url 'club_bap_recalculate' club.slug %}" class="d-inline">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-sm btn-warning"><i class="bi bi-arrow-repeat"></i> Recalculate all points</button>
+  </form>
+  <small class="text-muted">
+    {% if last_run %}Last run: {{ last_run|date:"N j, Y g:i a" }}.{% else %}Never run.{% endif %}
+    {% if next_run %} Next scheduled: {{ next_run|date:"N j, Y g:i a" }}.{% endif %}
+  </small>
+</div>
+
+<form id="filter-form" class="col-sm-12 mt-2" method="get">
+  {% crispy filter.form %}
+</form>
+
+<div class="table-container"
+     hx-get=""
+     hx-trigger="bapLotListChanged from:body"
+     hx-swap="outerHTML">
+  {% render_table table %}
+</div>
+
+<div id="modals-here"></div>
+
+{% block extra_js %}
+<script>
+function saveBapPoints(el) {
+  $.ajax({
+    type: "POST",
+    beforeSend: function(req) { req.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}"); },
+    url: el.dataset.url,
+    data: { bap_points_awarded: el.value },
+    success: function() {
+      $(el).removeClass("is-invalid").addClass("is-valid");
+    },
+    error: function() {
+      $(el).removeClass("is-valid").addClass("is-invalid");
+    },
+  });
+}
+</script>
+{% endblock %}
+{% endblock %}

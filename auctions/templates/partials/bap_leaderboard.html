@@ -1,0 +1,14 @@
+{# entries: list of (rank, member, is_current_user) tuples; points_attr: field name string #}
+{% if entries %}
+<ol class="list-unstyled mb-0">
+  {% for rank, m, is_me in entries %}
+  <li class="d-flex align-items-center py-1 {% if not forloop.last %}border-bottom{% endif %}">
+    <span class="text-muted me-2" style="min-width:2em">{{ rank }}.</span>
+    <span class="flex-grow-1 {% if is_me %}text-success fw-bold{% endif %}">{{ m }}</span>
+    <span class="badge {% if is_me %}bg-success{% else %}bg-secondary{% endif %} ms-2">{{ m|get_attr:points_attr }} pts</span>
+  </li>
+  {% endfor %}
+</ol>
+{% else %}
+<p class="text-muted mb-0">No points recorded yet.</p>
+{% endif %}

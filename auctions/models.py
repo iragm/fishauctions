@@ -608,6 +608,8 @@ class Club(models.Model):
         default=5,
         help_text="Minimum quantity in a lot to be eligible for BAP points.",
     )
+    last_bap_recalculation = models.DateTimeField(null=True, blank=True)
+    next_bap_recalculation = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["name"]
@@ -757,6 +759,10 @@ class ClubMember(ContactRecord):
     )
     bap_points = models.PositiveIntegerField(default=0)
     hap_points = models.PositiveIntegerField(default=0)
+    culture_points = models.PositiveIntegerField(default=0, help_text="Culture Award Program points.")
+    bap_points_ytd = models.PositiveIntegerField(default=0, help_text="BAP points earned this calendar year.")
+    hap_points_ytd = models.PositiveIntegerField(default=0, help_text="HAP points earned this calendar year.")
+    culture_points_ytd = models.PositiveIntegerField(default=0, help_text="Culture points earned this calendar year.")
     membership_last_paid = models.DateField(null=True, blank=True)
     createdon = models.DateTimeField(auto_now_add=True, verbose_name="date joined")
     added_by = models.ForeignKey(
@@ -855,6 +861,26 @@ class ClubMember(ContactRecord):
             return paid_role
 
         return None
+
+    def maybe_assign_discord_role(self):
+        """Compute the correct Discord role and assign it via the API if auto-managed and credentials are set."""
+        import requests as _requests
+        from django.conf import settings as _settings
+
+        role = self.discord_role
+        if not role or not self.discord_id or not self.club.discord_server_id:
+            return
+        bot_token = getattr(_settings, "DISCORD_BOT_TOKEN", "")
+        if not bot_token:
+            return
+        url = (
+            f"https://discord.com/api/v10/guilds/{self.club.discord_server_id}"
+            f"/members/{self.discord_id}/roles/{role.role_id}"
+        )
+        try:
+            _requests.put(url, headers={"Authorization": f"Bot {bot_token}"}, timeout=10)
+        except Exception:
+            pass
 
     @property
     def display_name(self):
