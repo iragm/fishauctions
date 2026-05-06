@@ -14412,14 +14412,14 @@ class ClubBapRecalculateViewTests(TestCase):
         response = self.client.post(self.url)
         self.assertEqual(response.status_code, 404)
 
-    @patch("auctions.views.schedule_bap_recalculation")
+    @patch("auctions.tasks.schedule_bap_recalculation")
     def test_bap_admin_can_trigger_recalculate(self, mock_schedule):
         self.client.login(username="bap_recalc_user", password="testpass")
         response = self.client.post(self.url)
         self.assertEqual(response.status_code, 302)
         mock_schedule.assert_called_once_with(self.club.pk)
 
-    @patch("auctions.views.schedule_bap_recalculation")
+    @patch("auctions.tasks.schedule_bap_recalculation")
     def test_redirects_to_bap_lots_after_recalculate(self, mock_schedule):
         self.client.login(username="bap_recalc_user", password="testpass")
         response = self.client.post(self.url)
