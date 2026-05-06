@@ -582,7 +582,9 @@ class Club(models.Model):
         default=0,
         help_text="Fixed BAP points per eligible lot. Leave at 0 to use per-category points based on difficulty.",
     )
-    separate_hap = models.BooleanField(default=False, help_text="Track HAP (Horticultural Award Program) separately from BAP.")
+    separate_hap = models.BooleanField(
+        default=False, help_text="Track HAP (Horticultural Award Program) separately from BAP."
+    )
     separate_cap = models.BooleanField(default=False, help_text="Track Culture Award Program separately.")
     auto_add_points = models.BooleanField(
         default=True,
@@ -4809,21 +4811,22 @@ class Lot(models.Model):
 
     def auto_award_bap_points(self):
         """Set bap_points_awarded and bap_auto_reason based on club rules. Call after auction ends."""
-        reason = self.sold_lot_no_bap_reason
-        if reason:
-            self.bap_auto_reason = reason
-            self.bap_points_awarded = 0
+        if self.auction and self.auction.club and not self.bap_points_awarded and not self.manually_approved:
+            reason = self.sold_lot_no_bap_reason
+            if reason:
+                self.bap_auto_reason = reason
+                self.bap_points_awarded = 0
+                self.save(update_fields=["bap_auto_reason", "bap_points_awarded"])
+                return
+            club = self.auction.club
+            if club.auto_add_points:
+                if club.points_per_lot > 0:
+                    points = club.points_per_lot
+                else:
+                    points = self.species_category.bap_points if self.species_category else 5
+                self.bap_points_awarded = points
+            self.bap_auto_reason = ""
             self.save(update_fields=["bap_auto_reason", "bap_points_awarded"])
-            return
-        club = self.auction.club
-        if club.auto_add_points:
-            if club.points_per_lot > 0:
-                points = club.points_per_lot
-            else:
-                points = self.species_category.bap_points if self.species_category else 5
-            self.bap_points_awarded = points
-        self.bap_auto_reason = ""
-        self.save(update_fields=["bap_auto_reason", "bap_points_awarded"])
 
     @property
     def pre_registered(self):

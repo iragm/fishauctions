@@ -2822,6 +2822,8 @@ class DynamicSetLotWinner(LoginRequiredMixin, AuctionViewMixin, TemplateView):
         lot.active = False
         lot.save()
         lot.add_winner_message(self.request.user, winning_tos, winning_price)
+        if lot.auction and lot.auction.club and not lot.bap_points_awarded and not lot.manually_approved:
+            lot.auto_award_bap_points()
         return f"Bidder {winning_tos.bidder_number} is now the winner of lot {lot.lot_number_display}"
 
     def post(self, request, *args, **kwargs):
@@ -5409,6 +5411,8 @@ class LotAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMixin):
                         obj.date_end = timezone.now()
                         obj.active = False
                         obj.save()
+                    if obj.auction and obj.auction.club and not obj.bap_points_awarded and not obj.manually_approved:
+                        obj.auto_award_bap_points()
             return HttpResponse("<script>location.reload();</script>", status=200)
             # return HttpResponse("<script>closeModal();</script>", status=200)
         else:
