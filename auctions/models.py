@@ -4757,6 +4757,17 @@ class Lot(models.Model):
         return False
 
     @property
+    def bap_placeholder(self):
+        """Label for the points field: Culture, HAP, or BAP depending on club settings and category."""
+        if self.auction and self.auction.club:
+            club = self.auction.club
+            if club.separate_cap and self.species_category and self.species_category.name == "Live food cultures":
+                return "Culture"
+            if club.separate_hap and self.species_category and self.species_category.name == "Aquatic plants":
+                return "HAP"
+        return "BAP"
+
+    @property
     def unsold_lot_no_bap_reason(self):
         """Return a BAP_REASON_CHOICES key if this lot is ineligible for BAP points, or None if eligible.
         Ignores whether the lot has sold — use sold_lot_no_bap_reason for that check."""

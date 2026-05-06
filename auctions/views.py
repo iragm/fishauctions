@@ -12789,6 +12789,8 @@ class LotBapPointsView(LoginRequiredMixin, View):
             return HttpResponse(status=403)
         try:
             points = int(request.POST.get("bap_points_awarded", 0))
+            if points < 0:
+                raise ValueError
         except (ValueError, TypeError):
             return HttpResponse(status=400)
         lot.bap_points_awarded = points
