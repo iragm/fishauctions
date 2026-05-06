@@ -5181,7 +5181,9 @@ class Lot(models.Model):
         return self.auto_image
 
     def get_absolute_url(self):
-        return reverse("lot_by_pk_and_slug", kwargs={"pk": self.lot_number, "slug": self.slug})
+        if self.slug:
+            return reverse("lot_by_pk_and_slug", kwargs={"pk": self.lot_number, "slug": self.slug})
+        return reverse("lot_by_pk", kwargs={"pk": self.lot_number})
 
     @property
     def lot_number_display(self):
@@ -5196,15 +5198,25 @@ class Lot(models.Model):
     def lot_link(self):
         """Simplest link to access this lot with"""
         if self.auction:
+            if self.slug:
+                return reverse(
+                    "lot_in_auction_with_slug",
+                    kwargs={
+                        "slug": self.auction.slug,
+                        "custom_lot_number": self.lot_number_display,
+                        "lot_slug": self.slug,
+                    },
+                )
             return reverse(
-                "lot_in_auction_with_slug",
+                "lot_in_auction",
                 kwargs={
                     "slug": self.auction.slug,
                     "custom_lot_number": self.lot_number_display,
-                    "lot_slug": self.slug,
                 },
             )
-        return reverse("lot_by_pk_and_slug", kwargs={"pk": self.lot_number, "slug": self.slug})
+        if self.slug:
+            return reverse("lot_by_pk_and_slug", kwargs={"pk": self.lot_number, "slug": self.slug})
+        return reverse("lot_by_pk", kwargs={"pk": self.lot_number})
 
     @property
     def full_lot_link(self):

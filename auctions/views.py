@@ -10839,11 +10839,12 @@ class CategoryFinder(APIView):
 
 class AuctionFinder(APIView):
     """API view which will return information about an auction based on POST keyword auction.  Expects a pk."""
+
     authentication_classes = [SessionAuthentication, TokenAuthentication]
     permission_classes = [IsAuthenticated]
+
     def get(self, request, *args, **kwargs):
         return redirect(reverse("home"))
-
 
     def post(self, request, *args, **kwargs):
         try:
@@ -10881,9 +10882,10 @@ class AuctionFinder(APIView):
 
 class LotChatSubscribe(APIView):
     """Called when a user sends a chat message about a lot to create a ChatSubscription model"""
+
     authentication_classes = [SessionAuthentication, TokenAuthentication]
     permission_classes = [IsAuthenticated]
-    
+
     def get(self, request, *args, **kwargs):
         return redirect(reverse("home"))
 
