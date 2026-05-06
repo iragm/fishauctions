@@ -14109,3 +14109,306 @@ class ClubAuctionIntegrationTests(TestCase):
         )
         self.assertEqual(response.status_code, 302)
         self.assertTrue(AuctionTOS.objects.filter(auction=auction, user=user2).exists())
+
+
+class ValidatorsTestCase(TestCase):
+    """Test cases for validators module"""
+
+    def test_validate_username_no_at_symbol_valid(self):
+        """Test that usernames without @ symbol are valid"""
+        from auctions.validators import validate_username_no_at_symbol
+
+        # Should not raise
+        result = validate_username_no_at_symbol("validuser")
+        self.assertIsNone(result)
+
+    def test_validate_username_no_at_symbol_invalid(self):
+        """Test that usernames with @ symbol raise ValidationError"""
+        from django.core.exceptions import ValidationError
+
+        from auctions.validators import validate_username_no_at_symbol
+
+        with self.assertRaises(ValidationError) as context:
+            validate_username_no_at_symbol("invalid@user")
+        self.assertIn("Usernames cannot contain the @ symbol.", str(context.exception))
+
+    def test_username_validators_list(self):
+        """Test that USERNAME_VALIDATORS includes expected validators"""
+        from auctions.validators import USERNAME_VALIDATORS
+
+        # Should have 3 validators
+        self.assertEqual(len(USERNAME_VALIDATORS), 3)
+
+
+class MiddlewareAdditionalTestCase(TestCase):
+    """Additional test cases for middleware module"""
+
+    def test_cross_origin_isolation_needs_voice_recognition(self):
+        """Test that cross-origin isolation is needed for lot winner page"""
+        from django.test import RequestFactory
+
+        from auctions.middleware import CrossOriginIsolationMiddleware
+
+        factory = RequestFactory()
+        request = factory.get("/auctions/foo/lots/set-winners/")
+        request.path = "/auctions/foo/lots/set-winners/"
+
+        middleware = CrossOriginIsolationMiddleware(lambda r: type("Response", (), {"status_code": 200})())
+        self.assertTrue(middleware._needs_cross_origin_isolation(request))
+
+    def test_cross_origin_isolation_not_needed_for_other_pages(self):
+        """Test that cross-origin isolation is not needed for other pages"""
+        from django.test import RequestFactory
+
+        from auctions.middleware import CrossOriginIsolationMiddleware
+
+        factory = RequestFactory()
+        request = factory.get("/auctions/foo/lots/")
+        request.path = "/auctions/foo/lots/"
+
+        middleware = CrossOriginIsolationMiddleware(lambda r: type("Response", (), {"status_code": 200})())
+        self.assertFalse(middleware._needs_cross_origin_isolation(request))
+
+    def test_cross_origin_isolation_not_needed_for_undo(self):
+        """Test that cross-origin isolation is not needed for /lots/set-winners/undo/"""
+        from django.test import RequestFactory
+
+        from auctions.middleware import CrossOriginIsolationMiddleware
+
+        factory = RequestFactory()
+        request = factory.get("/auctions/foo/lots/set-winners/undo/")
+        request.path = "/auctions/foo/lots/set-winners/undo/"
+
+        middleware = CrossOriginIsolationMiddleware(lambda r: type("Response", (), {"status_code": 200})())
+        self.assertFalse(middleware._needs_cross_origin_isolation(request))
+
+    def test_cross_origin_isolation_headers_added(self):
+        """Test that COOP/COEP headers are added when needed"""
+        from django.test import RequestFactory
+
+        from auctions.middleware import CrossOriginIsolationMiddleware
+
+        factory = RequestFactory()
+        request = factory.get("/auctions/foo/lots/set-winners/")
+
+        # Create mock response
+        class MockResponse:
+            def __init__(self):
+                self.status_code = 200
+                self.headers = {}
+
+            def __setitem__(self, key, value):
+                self.headers[key] = value
+
+            def __getitem__(self, key):
+                return self.headers[key]
+
+        def get_response(r):
+            return MockResponse()
+
+        middleware = CrossOriginIsolationMiddleware(get_response)
+        response = middleware(request)
+
+        self.assertEqual(response.headers.get("Cross-Origin-Opener-Policy"), "same-origin-allow-popups")
+        self.assertEqual(response.headers.get("Cross-Origin-Embedder-Policy"), "require-corp")
+        self.assertEqual(response.headers.get("Cross-Origin-Resource-Policy"), "cross-origin")
+
+    def test_cross_origin_isolation_headers_not_added_for_other_pages(self):
+        """Test that COOP/COEP headers are not added for other pages"""
+        from django.test import RequestFactory
+
+        from auctions.middleware import CrossOriginIsolationMiddleware
+
+        factory = RequestFactory()
+        request = factory.get("/auctions/foo/lots/")
+
+        # Create mock response
+        class MockResponse:
+            def __init__(self):
+                self.status_code = 200
+                self.headers = {}
+
+            def __setitem__(self, key, value):
+                self.headers[key] = value
+
+            def __getitem__(self, key):
+                return self.headers[key]
+
+        def get_response(r):
+            return MockResponse()
+
+        middleware = CrossOriginIsolationMiddleware(get_response)
+        response = middleware(request)
+
+        # Headers should not be added
+        self.assertNotIn("Cross-Origin-Opener-Policy", response.headers)
+        self.assertNotIn("Cross-Origin-Embedder-Policy", response.headers)
+
+
+class HelperFunctionsAdditionalTestCase(TestCase):
+    """Additional test cases for helper_functions module - extends existing tests"""
+
+    def test_get_currency_symbol_usd(self):
+        """Test USD currency symbol"""
+        from auctions.helper_functions import get_currency_symbol
+
+        result = get_currency_symbol("USD")
+        self.assertEqual(result, "$")
+
+    def test_get_currency_symbol_gbp(self):
+        """Test GBP currency symbol"""
+        from auctions.helper_functions import get_currency_symbol
+
+        result = get_currency_symbol("GBP")
+        self.assertEqual(result, "£")
+
+    def test_get_currency_symbol_eur(self):
+        """Test EUR currency symbol"""
+        from auctions.helper_functions import get_currency_symbol
+
+        result = get_currency_symbol("EUR")
+        self.assertEqual(result, "€")
+
+    def test_get_currency_symbol_jpy(self):
+        """Test JPY currency symbol"""
+        from auctions.helper_functions import get_currency_symbol
+
+        result = get_currency_symbol("JPY")
+        self.assertEqual(result, "¥")
+
+    def test_get_currency_symbol_chf(self):
+        """Test CHF currency symbol"""
+        from auctions.helper_functions import get_currency_symbol
+
+        result = get_currency_symbol("CHF")
+        self.assertEqual(result, "CHF")
+
+    def test_get_currency_symbol_unknown(self):
+        """Test unknown currency returns default $"""
+        from auctions.helper_functions import get_currency_symbol
+
+        result = get_currency_symbol("XXX")
+        self.assertEqual(result, "$")
+
+    def test_get_currency_symbol_lowercase(self):
+        """Test lowercase currency code"""
+        from auctions.helper_functions import get_currency_symbol
+
+        result = get_currency_symbol("usd")
+        self.assertEqual(result, "$")
+
+    def test_bin_data_basic(self):
+        """Test bin_data with basic integer values"""
+        from django.contrib.auth.models import User
+        from django.utils import timezone
+
+        from auctions.helper_functions import bin_data
+
+        time = timezone.now()
+        user = User.objects.create_user(username="testuser", password="testpass")
+        _ = Auction.objects.create(
+            created_by=user,
+            title="Test Auction",
+            date_start=time,
+            date_end=time + timezone.timedelta(days=1),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=25,
+        )
+
+        # Test that it raises ValueError when queryset can't be ordered
+        from auctions.models import Lot
+
+        with self.assertRaises(ValueError):
+            bin_data(Lot.objects.all(), "nonexistent_field", 5)
+
+    def test_bin_data_with_date_field(self):
+        """Test bin_data with datetime values"""
+        from django.contrib.auth.models import User
+        from django.utils import timezone
+
+        from auctions.helper_functions import bin_data
+
+        time = timezone.now()
+        user = User.objects.create_user(username="testuser2", password="testpass")
+        # Create auctions with different date_start values to avoid "equal bins" issue
+        # Using _ = to satisfy lint that variable is used
+        _ = Auction.objects.create(
+            created_by=user,
+            title="Test Auction 2a",
+            date_start=time - timezone.timedelta(days=7),
+            date_end=time - timezone.timedelta(days=5),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=25,
+        )
+        _ = Auction.objects.create(
+            created_by=user,
+            title="Test Auction 2b",
+            date_start=time - timezone.timedelta(days=3),
+            date_end=time - timezone.timedelta(days=1),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=25,
+        )
+
+        # Test binning with dates - this should work since start != end (different dates)
+        qs = Auction.objects.all()
+        result = bin_data(qs, "date_start", 2)
+        self.assertIsInstance(result, list)
+
+    def test_bin_data_with_labels(self):
+        """Test bin_data generates labels"""
+        from django.contrib.auth.models import User
+        from django.utils import timezone
+
+        from auctions.helper_functions import bin_data
+
+        time = timezone.now()
+        user = User.objects.create_user(username="testuser3", password="testpass")
+        _ = Auction.objects.create(
+            created_by=user,
+            title="Test Auction 3",
+            date_start=time - timezone.timedelta(days=7),
+            date_end=time - timezone.timedelta(days=1),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=25,
+        )
+
+        qs = Auction.objects.all()
+        # Use integer values for labels test to avoid datetime formatting issue
+        labels, counts = bin_data(qs, "winning_bid_percent_to_club", 2, generate_labels=True, start_bin=0, end_bin=50)
+        self.assertIsInstance(labels, list)
+        self.assertIsInstance(counts, list)
+        self.assertEqual(len(labels), 2)
+        self.assertEqual(len(counts), 2)
+
+    def test_bin_data_zero_range_raises_error(self):
+        """Test bin_data raises error on zero range"""
+        from django.contrib.auth.models import User
+        from django.utils import timezone
+
+        from auctions.helper_functions import bin_data
+
+        time = timezone.now()
+        user = User.objects.create_user(username="testuser4", password="testpass")
+        _ = Auction.objects.create(
+            created_by=user,
+            title="Test Auction 4",
+            date_start=time,
+            date_end=time + timezone.timedelta(days=7),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=25,
+        )
+
+        qs = Auction.objects.all()
+        # With equal start and end, should raise ValueError
+        with self.assertRaises(ValueError):
+            bin_data(qs, "date_start", 2, start_bin=time, end_bin=time)
