@@ -19,8 +19,28 @@
   {% if can_access_admin %}
   <a href="{% url 'club_admin' club.slug %}" class="btn btn-sm btn-primary"><i class="bi bi-gear"></i> Manage membership</a>
   {% endif %}
-  {% if can_edit_settings %}
-  <a href="{% url 'club_edit' club.slug %}" class="btn btn-sm btn-primary"><i class="bi bi-sliders"></i> Settings</a>
+  {% if can_manage_bap and club.enable_breeder_award_program %}
+  <a href="{% url 'club_bap_lots' club.slug %}" class="btn btn-sm btn-primary"><i class="bi bi-award"></i> BAP Admin</a>
+  {% endif %}
+  {% if can_edit_settings or can_manage_bap or can_access_admin %}
+  <div class="dropdown">
+    <button class="btn btn-sm btn-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+      <i class="bi bi-sliders"></i> Setup
+    </button>
+    <ul class="dropdown-menu">
+      {% if can_edit_settings %}
+      <li><a class="dropdown-item" href="{% url 'club_edit' club.slug %}"><i class="bi bi-gear"></i> Club Setup</a></li>
+      <li><a class="dropdown-item" href="{% url 'club_discord_config' club.slug %}"><i class="bi bi-discord"></i> Discord Setup</a></li>
+      {% endif %}
+      {% if can_manage_bap %}
+      <li><a class="dropdown-item" href="{% url 'club_bap_settings' club.slug %}"><i class="bi bi-award"></i> BAP Setup</a></li>
+      {% endif %}
+      {% if can_access_admin %}
+      {% if can_edit_settings or can_manage_bap %}<li><hr class="dropdown-divider"></li>{% endif %}
+      <li><a class="dropdown-item" href="{% url 'club_history' club.slug %}"><i class="bi bi-clock-history"></i> History</a></li>
+      {% endif %}
+    </ul>
+  </div>
   {% endif %}
 </div>
 
@@ -74,11 +94,6 @@
   {% if club.separate_cap %}
   <li class="nav-item" role="presentation">
     <button class="nav-link" id="culture-tab-btn" data-bs-toggle="tab" data-bs-target="#culture-tab" type="button" role="tab">Culture</button>
-  </li>
-  {% endif %}
-  {% if can_manage_bap %}
-  <li class="nav-item ms-auto" role="presentation">
-    <a href="{% url 'club_bap_lots' club.slug %}" class="nav-link"><i class="bi bi-award"></i> BAP Admin</a>
   </li>
   {% endif %}
 </ul>
@@ -202,8 +217,10 @@
 
 <div id="modals-here"></div>
 
-{% if show_bap_tabs %}
+{% endblock %}
+
 {% block extra_js %}
+{% if show_bap_tabs %}
 <script>
 (function () {
   function wireToggle(toggleId, ytdId, alltimeId) {
@@ -219,7 +236,5 @@
   wireToggle('ytd-toggle-culture', 'culture-ytd', 'culture-alltime');
 })();
 </script>
-{% endblock %}
 {% endif %}
-
 {% endblock %}

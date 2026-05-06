@@ -5,9 +5,8 @@
 
 {% block content %}
 <h3><i class="bi bi-people-fill"></i> {{ club.name }} &mdash; Manage Membership</h3>
-<div class="mb-3">
+<div class="mb-3 d-flex flex-wrap gap-2 align-items-center">
   <a href="{% url 'club_detail' club.slug %}" class="btn btn-sm btn-primary"><i class="bi bi-house"></i> Club page</a>
-  <a href="{% url 'club_history' club.slug %}" class="btn btn-sm btn-primary"><i class="bi bi-clock-history"></i> History</a>
 
   {% if can_add_edit %}
   <div class="btn-group">
@@ -39,13 +38,7 @@
   </a>
   {% endif %}
 
-  {% if can_edit %}
-  <a href="{% url 'club_edit' club.slug %}?next={% url 'club_admin' club.slug %}" class="btn btn-sm btn-primary"><i class="bi bi-gear"></i> Settings</a>
-  <a href="{% url 'club_discord_config' club.slug %}" class="btn btn-sm btn-primary"><i class="bi bi-discord"></i> Discord</a>
-  {% endif %}
-  {% if can_edit_bap %}
-  <a href="{% url 'club_bap_settings' club.slug %}" class="btn btn-sm btn-primary"><i class="bi bi-award"></i> BAP Settings</a>
-  {% endif %}
+  <a href="{% url 'club_history' club.slug %}" class="btn btn-sm btn-primary ms-auto"><i class="bi bi-clock-history"></i> History</a>
 </div>
 
 <form id="filter-form" class="col-sm-12 mt-2" method="get">

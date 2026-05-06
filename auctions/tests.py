@@ -14305,3 +14305,122 @@ class LotBapEligibilityTests(TestCase):
         lot.auto_award_bap_points()
         lot.refresh_from_db()
         self.assertEqual(lot.bap_points_awarded, 12)
+
+
+class ClubBapLotsViewTests(TestCase):
+    """Permission and basic access tests for ClubBapLotsView."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(
+            username="bap_lots_owner", password="testpass", email="bap_lots_owner@example.com"
+        )
+        self.club = Club.objects.create(name="BAP Lots Club", owner=self.owner, enable_breeder_award_program=True)
+        self.bap_perm, _ = ClubPermission.objects.get_or_create(
+            name="permission_manage_bap", defaults={"description": "Manage BAP points"}
+        )
+        self.bap_role, _ = ClubRole.objects.get_or_create(name="BAP Lots Manager")
+        self.bap_role.permissions.add(self.bap_perm)
+        self.bap_user = User.objects.create_user(
+            username="bap_lots_user", password="testpass", email="bap_lots_user@example.com"
+        )
+        self.bap_member = ClubMember.objects.create(club=self.club, user=self.bap_user)
+        self.bap_member.roles.add(self.bap_role)
+        self.plain_user = User.objects.create_user(
+            username="bap_lots_plain", password="testpass", email="bap_lots_plain@example.com"
+        )
+        ClubMember.objects.create(club=self.club, user=self.plain_user)
+        self.url = reverse("club_bap_lots", kwargs={"slug": self.club.slug})
+
+    def test_anon_redirected_to_login(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("login", response["Location"])
+
+    def test_plain_member_gets_403(self):
+        self.client.login(username="bap_lots_plain", password="testpass")
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_bap_admin_can_access(self):
+        self.client.login(username="bap_lots_user", password="testpass")
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_bap_disabled_returns_404(self):
+        self.club.enable_breeder_award_program = False
+        self.club.save()
+        self.client.login(username="bap_lots_user", password="testpass")
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 404)
+
+    def test_query_pending_filter(self):
+        """Pending filter shows only sold lots without manually_approved=True."""
+        self.client.login(username="bap_lots_user", password="testpass")
+        response = self.client.get(self.url, {"query": "pending"})
+        self.assertEqual(response.status_code, 200)
+
+    def test_query_approved_filter(self):
+        self.client.login(username="bap_lots_user", password="testpass")
+        response = self.client.get(self.url, {"query": "approved"})
+        self.assertEqual(response.status_code, 200)
+
+    def test_default_shows_pending_without_query(self):
+        """No query param should still return 200 (defaults to pending filter)."""
+        self.client.login(username="bap_lots_user", password="testpass")
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+
+
+class ClubBapRecalculateViewTests(TestCase):
+    """Tests for ClubBapRecalculateView (POST-only, triggers Celery task scheduling)."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(
+            username="bap_recalc_owner", password="testpass", email="bap_recalc_owner@example.com"
+        )
+        self.club = Club.objects.create(name="BAP Recalc Club", owner=self.owner, enable_breeder_award_program=True)
+        self.bap_perm, _ = ClubPermission.objects.get_or_create(
+            name="permission_manage_bap", defaults={"description": "Manage BAP points"}
+        )
+        self.bap_role, _ = ClubRole.objects.get_or_create(name="BAP Recalc Manager")
+        self.bap_role.permissions.add(self.bap_perm)
+        self.bap_user = User.objects.create_user(
+            username="bap_recalc_user", password="testpass", email="bap_recalc_user@example.com"
+        )
+        self.bap_member = ClubMember.objects.create(club=self.club, user=self.bap_user)
+        self.bap_member.roles.add(self.bap_role)
+        self.plain_user = User.objects.create_user(
+            username="bap_recalc_plain", password="testpass", email="bap_recalc_plain@example.com"
+        )
+        ClubMember.objects.create(club=self.club, user=self.plain_user)
+        self.url = reverse("club_bap_recalculate", kwargs={"slug": self.club.slug})
+
+    def test_anon_redirected_to_login(self):
+        response = self.client.post(self.url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("login", response["Location"])
+
+    def test_plain_member_gets_403(self):
+        self.client.login(username="bap_recalc_plain", password="testpass")
+        response = self.client.post(self.url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_bap_disabled_returns_404(self):
+        self.club.enable_breeder_award_program = False
+        self.club.save()
+        self.client.login(username="bap_recalc_user", password="testpass")
+        response = self.client.post(self.url)
+        self.assertEqual(response.status_code, 404)
+
+    @patch("auctions.views.schedule_bap_recalculation")
+    def test_bap_admin_can_trigger_recalculate(self, mock_schedule):
+        self.client.login(username="bap_recalc_user", password="testpass")
+        response = self.client.post(self.url)
+        self.assertEqual(response.status_code, 302)
+        mock_schedule.assert_called_once_with(self.club.pk)
+
+    @patch("auctions.views.schedule_bap_recalculation")
+    def test_redirects_to_bap_lots_after_recalculate(self, mock_schedule):
+        self.client.login(username="bap_recalc_user", password="testpass")
+        response = self.client.post(self.url)
+        self.assertRedirects(response, reverse("club_bap_lots", kwargs={"slug": self.club.slug}))

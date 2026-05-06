@@ -1089,38 +1089,24 @@ class ClubHistoryFilter(django_filters.FilterSet):
 
 
 class ClubBapLotFilter(django_filters.FilterSet):
-    """Filter for the BAP lot review table (club admin, permission_manage_bap only)."""
+    """Filter for the BAP lot review table (club admin, permission_manage_bap only).
 
-    HTMX_ATTRS = {
-        "hx-get": "",
-        "hx-target": "div.table-container",
-        "hx-trigger": "keyup changed delay:300ms",
-        "hx-swap": "outerHTML",
-    }
+    Single query input; keywords "pending" / "approved" control status; remaining text
+    searches lot name and seller. No keyword = all sold lots. Default: "pending".
+    """
 
-    STATUS_CHOICES = [
-        ("pending", "Pending approval"),
-        ("approved", "Approved"),
-        ("all", "All sold lots"),
-    ]
-
-    status = django_filters.ChoiceFilter(
-        choices=STATUS_CHOICES,
-        label="Status",
-        empty_label=None,
-        method="filter_status",
-        widget=Select(attrs={**HTMX_ATTRS, "hx-trigger": "change"}),
-    )
-    lot_name = django_filters.CharFilter(
-        field_name="lot_name",
-        lookup_expr="icontains",
-        label="Lot name",
-        widget=TextInput(attrs={**HTMX_ATTRS, "placeholder": "Filter by lot name..."}),
-    )
-    seller = django_filters.CharFilter(
-        method="filter_seller",
-        label="Seller",
-        widget=TextInput(attrs={**HTMX_ATTRS, "placeholder": "Filter by seller name or email..."}),
+    query = django_filters.CharFilter(
+        method="filter_query",
+        label="",
+        widget=TextInput(
+            attrs={
+                "placeholder": "Filter by lot name or seller...",
+                "hx-get": "",
+                "hx-target": "div.table-container",
+                "hx-trigger": "keyup changed delay:300ms",
+                "hx-swap": "outerHTML",
+            }
+        ),
     )
 
     class Meta:
@@ -1132,18 +1118,36 @@ class ClubBapLotFilter(django_filters.FilterSet):
         self.helper = FormHelper()
         self.helper.form_method = "get"
         self.helper.form_id = "filter-form"
-        # Default status to "pending" when no data submitted
-        if not self.data:
-            self.form.initial["status"] = "pending"
+        if not self.data.get("query"):
+            self.form.initial["query"] = "pending"
 
-    def filter_status(self, queryset, name, value):
-        if value == "pending":
-            return queryset.filter(active=False, auctiontos_winner__isnull=False, manually_approved=False)
-        if value == "approved":
-            return queryset.filter(bap_points_awarded__gt=0)
-        return queryset.filter(active=False, auctiontos_winner__isnull=False)
+    def filter_queryset(self, queryset):
+        # When no query submitted apply the pending default without going through CharField
+        if not self.data.get("query"):
+            return self._apply_query(queryset, "pending")
+        return super().filter_queryset(queryset)
 
-    def filter_seller(self, queryset, name, value):
-        return queryset.filter(
-            Q(auctiontos_seller__name__icontains=value) | Q(auctiontos_seller__email__icontains=value)
-        )
+    def filter_query(self, queryset, name, value):
+        return self._apply_query(queryset, value)
+
+    def _apply_query(self, queryset, value):
+        tokens = value.lower().split()
+        status_keywords = {"pending", "approved"}
+        status = next((t for t in tokens if t in status_keywords), None)
+        search_tokens = [t for t in tokens if t not in status_keywords]
+        search = " ".join(search_tokens)
+
+        if status == "pending":
+            queryset = queryset.filter(active=False, auctiontos_winner__isnull=False, manually_approved=False)
+        elif status == "approved":
+            queryset = queryset.filter(bap_points_awarded__gt=0)
+        else:
+            queryset = queryset.filter(active=False, auctiontos_winner__isnull=False)
+
+        if search:
+            queryset = queryset.filter(
+                Q(lot_name__icontains=search)
+                | Q(auctiontos_seller__name__icontains=search)
+                | Q(auctiontos_seller__email__icontains=search)
+            )
+        return queryset

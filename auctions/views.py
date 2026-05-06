@@ -12261,7 +12261,7 @@ class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, Filte
         return super().dispatch(request, *args, **kwargs)
 
     def get_queryset(self):
-        cutoff = timezone.now() - datetime.timedelta(days=365)
+        cutoff = timezone.now() - timedelta(days=365)
         return (
             Lot.objects.filter(auction__club=self.club, date_end__gte=cutoff, is_deleted=False)
             .select_related("auctiontos_seller__user", "auction", "species_category")
