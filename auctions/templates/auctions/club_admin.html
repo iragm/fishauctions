@@ -43,6 +43,9 @@
   <a href="{% url 'club_edit' club.slug %}?next={% url 'club_admin' club.slug %}" class="btn btn-sm btn-primary"><i class="bi bi-gear"></i> Settings</a>
   <a href="{% url 'club_discord_config' club.slug %}" class="btn btn-sm btn-primary"><i class="bi bi-discord"></i> Discord</a>
   {% endif %}
+  {% if can_edit_bap %}
+  <a href="{% url 'club_bap_settings' club.slug %}" class="btn btn-sm btn-primary"><i class="bi bi-award"></i> BAP Settings</a>
+  {% endif %}
 </div>
 
 <form id="filter-form" class="col-sm-12 mt-2" method="get">

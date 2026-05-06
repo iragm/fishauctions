@@ -123,6 +123,7 @@ from .forms import (
     ChangeInvoiceStatusForm,
     ChangeUsernameForm,
     ChangeUserPreferencesForm,
+    ClubBapSettingsForm,
     ClubEditForm,
     ClubMemberAdminForm,
     ClubMemberSelfServiceForm,
@@ -11630,6 +11631,7 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterV
         context["can_edit"] = self.user_has_club_permission("permission_edit_club")
         context["can_export"] = self.user_has_club_permission("permission_export")
         context["can_add_edit"] = self.user_has_club_permission("permission_add_edit")
+        context["can_edit_bap"] = self.user_has_club_permission("permission_manage_bap")
         return context
 
     def get_table_kwargs(self, **kwargs):
@@ -12166,6 +12168,41 @@ class ClubEditView(LoginRequiredMixin, ClubViewMixin, UpdateView):
             user=self.request.user,
             action="Updated club settings",
             applies_to="SETTINGS",
+        )
+        return result
+
+
+class ClubBapSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
+    """Edit BAP (Breeder Award Program) settings for a club. Requires permission_manage_bap."""
+
+    template_name = "auctions/club_bap_settings.html"
+    form_class = ClubBapSettingsForm
+
+    def get_object(self):
+        return self.club
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_manage_bap"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_success_url(self):
+        messages.success(self.request, "BAP settings saved.")
+        return reverse("club_admin", kwargs={"slug": self.object.slug})
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["club"] = self.club
+        return context
+
+    def form_valid(self, form):
+        result = super().form_valid(form)
+        ClubHistory.objects.create(
+            club=self.club,
+            user=self.request.user,
+            action="Updated BAP settings",
+            applies_to="BAP",
         )
         return result
 

@@ -3390,13 +3390,8 @@ class ClubEditForm(forms.ModelForm):
             "allow_integrated_payments",
             "description",
             "enable_club_page",
-            "days_between_same_name_lots",
-            "points_per_lot",
-            "separate_hap",
-            "separate_cap",
-            "auto_add_points",
-            "only_active_members_can_participate",
-            "min_quantity",
+            "location",
+            "location_coordinates",
         ]
         help_texts = {
             "name": "Changing this will change the URL for your club's page.",
@@ -3412,6 +3407,7 @@ class ClubEditForm(forms.ModelForm):
             "homepage": forms.URLInput(attrs={"placeholder": "https://www.yourclub.org"}),
             "facebook_page": forms.URLInput(attrs={"placeholder": "https://www.facebook.com/groups/yourclub"}),
             "description": SummernoteWidget(attrs={"summernote": {"width": "100%", "height": "300px"}}),
+            "location": forms.TextInput(attrs={"placeholder": "Search for your club's location"}),
         }
 
     def __init__(self, *args, **kwargs):
@@ -3429,17 +3425,48 @@ class ClubEditForm(forms.ModelForm):
             "description",
             "enable_club_page",
             Fieldset(
-                "BAP Settings",
-                "days_between_same_name_lots",
-                "points_per_lot",
-                "separate_hap",
-                "separate_cap",
-                "auto_add_points",
-                "only_active_members_can_participate",
-                "min_quantity",
+                "Location",
+                "location",
+                "location_coordinates",
             ),
         )
         self.helper.add_input(Submit("submit", "Save settings", css_class="btn-primary"))
+
+
+class ClubBapSettingsForm(forms.ModelForm):
+    """Form for BAP admins to configure Breeder Award Program settings for a club."""
+
+    class Meta:
+        model = Club
+        fields = [
+            "enable_breeder_award_program",
+            "auto_add_points",
+            "points_per_lot",
+            "min_quantity",
+            "days_between_same_name_lots",
+            "only_active_members_can_participate",
+            "separate_hap",
+            "separate_cap",
+        ]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.layout = Layout(
+            "enable_breeder_award_program",
+            Fieldset(
+                "Point rules",
+                "auto_add_points",
+                "points_per_lot",
+                "min_quantity",
+                "days_between_same_name_lots",
+                "only_active_members_can_participate",
+                "separate_hap",
+                "separate_cap",
+            ),
+        )
+        self.helper.add_input(Submit("submit", "Save BAP settings", css_class="btn-primary"))
 
 
 class ClubMemberAdminForm(forms.ModelForm):

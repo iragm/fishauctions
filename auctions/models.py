@@ -574,18 +574,28 @@ class Club(models.Model):
         verbose_name="Enable public club page",
         help_text="When enabled, this club will appear on the club map and have a public detail page.",
     )
+    enable_breeder_award_program = models.BooleanField(
+        default=False,
+        help_text="Track when users breed fish and show a leaderboard of top breeders.",
+    )
     days_between_same_name_lots = models.IntegerField(
         default=0,
         help_text="Minimum days between awarding BAP points for lots with the same name. Leave at 0 to allow points every time.",
     )
     points_per_lot = models.IntegerField(
         default=0,
-        help_text="Fixed BAP points per eligible lot. Leave at 0 to use per-category points based on difficulty.",
+        help_text="Fixed BAP points per eligible lot. Leave at 0 to use pre-assigned per-category points based on difficulty.",
     )
     separate_hap = models.BooleanField(
-        default=False, help_text="Track HAP (Horticultural Award Program) separately from BAP."
+        default=False,
+        help_text="Track HAP (Horticultural Award Program) points separately from BAP.",
+        verbose_name="Separate Horticultural Award Program (HAP)",
     )
-    separate_cap = models.BooleanField(default=False, help_text="Track Culture Award Program separately.")
+    separate_cap = models.BooleanField(
+        default=False,
+        help_text="Track CAP (Culture Award Program) points separately from BAP.",
+        verbose_name="Separate Live Food Culture Award Program (CAP)",
+    )
     auto_add_points = models.BooleanField(
         default=True,
         help_text="Automatically award BAP points when a lot sells. Uncheck to require admin approval before awarding points.",
@@ -894,6 +904,7 @@ class ClubHistory(models.Model):
             ("MEMBERS", "Members"),
             ("MEMBERSHIP", "Membership"),
             ("SETTINGS", "Settings"),
+            ("BAP", "BAP"),
         ),
         blank=True,
         null=True,
@@ -3979,6 +3990,7 @@ class Lot(models.Model):
     image_url.help_text = "If filled out, an image will be added to this lot using this URL when saving"
     bap_points_awarded = models.IntegerField(default=0)
     BAP_REASON_CHOICES = (
+        ("not_eligible", "Not eligible"),
         ("not_long_enough", "Not long enough since last submission"),
         ("category_not_eligible", "Category not eligible (BAP points = 0)"),
         ("not_club_member", "Not a club member"),
@@ -4772,8 +4784,10 @@ class Lot(models.Model):
         """Return a BAP_REASON_CHOICES key if this lot is ineligible for BAP points, or None if eligible.
         Ignores whether the lot has sold — use sold_lot_no_bap_reason for that check."""
         if not self.auction or not self.auction.club:
-            return "not_club_member"
+            return "not_eligible"
         club = self.auction.club
+        if not club.enable_breeder_award_program:
+            return "not_eligible"
         if not self.i_bred_this_fish:
             return "not_bred"
         if self.quantity < club.min_quantity:

@@ -14109,3 +14109,199 @@ class ClubAuctionIntegrationTests(TestCase):
         )
         self.assertEqual(response.status_code, 302)
         self.assertTrue(AuctionTOS.objects.filter(auction=auction, user=user2).exists())
+
+
+class ClubBapSettingsViewTests(TestCase):
+    """Permission and basic access tests for ClubBapSettingsView."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="bap_owner", password="testpass", email="bap_owner@example.com")
+        self.club = Club.objects.create(name="BAP Test Club", owner=self.owner, enable_breeder_award_program=True)
+        self.bap_perm, _ = ClubPermission.objects.get_or_create(
+            name="permission_manage_bap", defaults={"description": "Manage BAP points"}
+        )
+        self.bap_role, _ = ClubRole.objects.get_or_create(name="Manage BAP")
+        self.bap_role.permissions.add(self.bap_perm)
+        self.bap_user = User.objects.create_user(username="bap_user", password="testpass", email="bap_user@example.com")
+        self.bap_member = ClubMember.objects.create(club=self.club, user=self.bap_user)
+        self.bap_member.roles.add(self.bap_role)
+        self.plain_user = User.objects.create_user(
+            username="plain_user", password="testpass", email="plain@example.com"
+        )
+        ClubMember.objects.create(club=self.club, user=self.plain_user)
+        self.url = reverse("club_bap_settings", kwargs={"slug": self.club.slug})
+
+    def test_anon_redirected_to_login(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("login", response["Location"])
+
+    def test_member_without_bap_permission_gets_403(self):
+        self.client.login(username="plain_user", password="testpass")
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_bap_admin_can_access(self):
+        self.client.login(username="bap_user", password="testpass")
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_bap_admin_can_save_settings(self):
+        self.client.login(username="bap_user", password="testpass")
+        response = self.client.post(
+            self.url,
+            {
+                "enable_breeder_award_program": True,
+                "auto_add_points": True,
+                "points_per_lot": 0,
+                "min_quantity": 3,
+                "days_between_same_name_lots": 0,
+                "only_active_members_can_participate": False,
+                "separate_hap": False,
+                "separate_cap": False,
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.club.refresh_from_db()
+        self.assertEqual(self.club.min_quantity, 3)
+
+    def test_form_save_creates_bap_history(self):
+        self.client.login(username="bap_user", password="testpass")
+        self.client.post(
+            self.url,
+            {
+                "enable_breeder_award_program": True,
+                "auto_add_points": True,
+                "points_per_lot": 0,
+                "min_quantity": 5,
+                "days_between_same_name_lots": 0,
+                "only_active_members_can_participate": False,
+                "separate_hap": False,
+                "separate_cap": False,
+            },
+        )
+        history = ClubHistory.objects.filter(club=self.club, applies_to="BAP").first()
+        self.assertIsNotNone(history)
+        self.assertEqual(history.user, self.bap_user)
+
+    def test_club_admin_without_bap_role_gets_403(self):
+        """permission_edit_club alone does not grant access to BAP settings."""
+        edit_perm, _ = ClubPermission.objects.get_or_create(
+            name="permission_edit_club", defaults={"description": "Edit club settings"}
+        )
+        edit_role, _ = ClubRole.objects.get_or_create(name="Change club permissions")
+        edit_role.permissions.add(edit_perm)
+        settings_user = User.objects.create_user(
+            username="settings_user", password="testpass", email="settings@example.com"
+        )
+        settings_member = ClubMember.objects.create(club=self.club, user=settings_user)
+        settings_member.roles.add(edit_role)
+        self.client.login(username="settings_user", password="testpass")
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 403)
+
+
+class LotBapEligibilityTests(TestCase):
+    """Tests for unsold_lot_no_bap_reason and auto_award_bap_points."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="bap_seller", password="testpass", email="seller@example.com")
+        self.club = Club.objects.create(
+            name="BAP Eligibility Club",
+            enable_breeder_award_program=True,
+            auto_add_points=True,
+            min_quantity=1,
+        )
+        self.category = Category.objects.create(name="Livebearers", bap_points=5)
+        self.auction = Auction.objects.create(
+            title="BAP Auction",
+            created_by=self.user,
+            club=self.club,
+            date_start=timezone.now() - datetime.timedelta(days=3),
+            date_end=timezone.now() - datetime.timedelta(days=1),
+        )
+        self.member = ClubMember.objects.create(club=self.club, user=self.user)
+        self.location = PickupLocation.objects.create(
+            name="Test Location",
+            auction=self.auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=7),
+        )
+        self.tos = AuctionTOS.objects.create(user=self.user, auction=self.auction, pickup_location=self.location)
+
+    def _make_lot(self, **kwargs):
+        defaults = {
+            "lot_name": "Fancy Guppies",
+            "auction": self.auction,
+            "auctiontos_seller": self.tos,
+            "quantity": 5,
+            "i_bred_this_fish": True,
+            "species_category": self.category,
+            "active": False,
+            "winning_price": 10,
+            "auctiontos_winner": self.tos,
+        }
+        defaults.update(kwargs)
+        return Lot.objects.create(**defaults)
+
+    def test_not_eligible_when_bap_disabled(self):
+        self.club.enable_breeder_award_program = False
+        self.club.save()
+        lot = self._make_lot()
+        self.assertEqual(lot.unsold_lot_no_bap_reason, "not_eligible")
+
+    def test_not_eligible_when_no_auction(self):
+        lot = self._make_lot(auction=None, auctiontos_seller=None)
+        self.assertEqual(lot.unsold_lot_no_bap_reason, "not_eligible")
+
+    def test_not_bred_returned_when_not_bred(self):
+        lot = self._make_lot(i_bred_this_fish=False)
+        self.assertEqual(lot.unsold_lot_no_bap_reason, "not_bred")
+
+    def test_low_quantity_returned(self):
+        self.club.min_quantity = 10
+        self.club.save()
+        lot = self._make_lot(quantity=3)
+        self.assertEqual(lot.unsold_lot_no_bap_reason, "low_quantity")
+
+    def test_category_not_eligible_when_bap_points_zero(self):
+        zero_cat = Category.objects.create(name="Ineligible", bap_points=0)
+        lot = self._make_lot(species_category=zero_cat)
+        self.assertEqual(lot.unsold_lot_no_bap_reason, "category_not_eligible")
+
+    def test_not_club_member_when_user_not_member(self):
+        outsider = User.objects.create_user(username="outsider", password="tp", email="out@example.com")
+        outsider_tos = AuctionTOS.objects.create(user=outsider, auction=self.auction, pickup_location=self.location)
+        lot = self._make_lot(auctiontos_seller=outsider_tos)
+        self.assertEqual(lot.unsold_lot_no_bap_reason, "not_club_member")
+
+    def test_eligible_returns_none(self):
+        lot = self._make_lot()
+        self.assertIsNone(lot.unsold_lot_no_bap_reason)
+
+    def test_sold_lot_no_bap_reason_not_sold(self):
+        lot = self._make_lot(winning_price=None, auctiontos_winner=None)
+        self.assertEqual(lot.sold_lot_no_bap_reason, "not_sold")
+
+    def test_auto_award_bap_points_awards_category_points(self):
+        lot = self._make_lot()
+        lot.auto_award_bap_points()
+        lot.refresh_from_db()
+        self.assertEqual(lot.bap_points_awarded, self.category.bap_points)
+        self.assertEqual(lot.bap_auto_reason, "")
+
+    def test_auto_award_bap_points_skipped_when_bap_disabled(self):
+        self.club.enable_breeder_award_program = False
+        self.club.save()
+        lot = self._make_lot()
+        lot.auto_award_bap_points()
+        lot.refresh_from_db()
+        self.assertEqual(lot.bap_points_awarded, 0)
+        self.assertEqual(lot.bap_auto_reason, "not_eligible")
+
+    def test_auto_award_uses_club_points_per_lot_when_set(self):
+        self.club.points_per_lot = 12
+        self.club.save()
+        lot = self._make_lot()
+        lot.auto_award_bap_points()
+        lot.refresh_from_db()
+        self.assertEqual(lot.bap_points_awarded, 12)

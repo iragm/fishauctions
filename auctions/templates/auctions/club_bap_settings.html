@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}BAP Settings - {{ club.name }}{% endblock %}
+
+{% block content %}
+{{ form.media }}
+<h3><i class="bi bi-award"></i> BAP Settings &mdash; {{ club.name }}</h3>
+
+{% crispy form %}
+
+<div id="modals-here"></div>
+{% endblock %}
