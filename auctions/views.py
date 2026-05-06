@@ -12837,8 +12837,8 @@ class LotBapPointsView(LoginRequiredMixin, View):
         ClubHistory.objects.create(
             club=club,
             user=request.user,
-            action=f"BAP points set to {points} for lot '{lot.lot_name}' (lot #{lot.pk})",
-            applies_to="MEMBERS",
+            action=f"Awarded {points} BAP point(s) for lot {lot.lot_name}",
+            applies_to="BAP",
         )
         return HttpResponse(status=204)
 
