@@ -3488,8 +3488,6 @@ class ClubMemberAdminForm(forms.ModelForm):
             "phone_number",
             "address",
             "contact_status",
-            "bap_points",
-            "hap_points",
             "discord_role_auto_managed",
             "discord_role_override",
             "roles",
@@ -3507,8 +3505,6 @@ class ClubMemberAdminForm(forms.ModelForm):
                 "No non-essential emails: only transactional messages. "
                 "Do not contact: no emails at all."
             ),
-            "bap_points": "Breeders Award Program points accumulated by this member.",
-            "hap_points": "Horticultural Award Program points accumulated by this member.",
         }
 
     def __init__(self, *args, post_url=None, read_only=False, club=None, **kwargs):
@@ -3539,8 +3535,6 @@ class ClubMemberAdminForm(forms.ModelForm):
             "phone_number",
             "address",
             "contact_status",
-            "bap_points",
-            "hap_points",
         ]
 
         if read_only:

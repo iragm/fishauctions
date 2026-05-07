@@ -260,11 +260,25 @@ def bounce_handler(sender, mail_obj, bounce_obj, raw_message, *args, **kwargs):
 
 @receiver(complaint_received)
 def complaint_handler(sender, mail_obj, complaint_obj, raw_message, *args, **kwargs):
+    from .models import ClubHistory, ClubMember
+
     recipient_list = mail_obj["destination"]
     email = recipient_list[0]
+
     user = User.objects.filter(email=email).first()
     if user:
         user.userdata.unsubscribe_from_all
+
+    members = ClubMember.objects.filter(email=email, is_deleted=False, contact_status="contact")
+    for member in members:
+        member.contact_status = "non_essential"
+        member.save(update_fields=["contact_status"])
+        ClubHistory.objects.create(
+            club=member.club,
+            user=None,
+            action=f"{member} has requested to be unsubscribed",
+            applies_to="MEMBERS",
+        )
 
 
 @receiver(m2m_changed, sender="auctions.ClubMember_roles")
