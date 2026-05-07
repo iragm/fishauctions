@@ -44,7 +44,7 @@
 <p>{% trans 'You currently have no social network accounts connected to this account.' %}</p>
 {% endif %}
 <br><br>
-<a class='btn btn-success' href='/google/login/?process=connect'>Connect a Google account to your account</a>
+<a class='btn btn-success' href='{% url "google_login" %}?process=connect'>Connect a Google account to your account</a>
 {% include "socialaccount/snippets/login_extra.html" %}
 </div>
 </div>
