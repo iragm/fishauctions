@@ -12341,10 +12341,15 @@ class ClubMemberIngestAPIView(APIView):
         mapped = map_fields(dict(request.data), api_key)
         serializer = ClubMemberIngestSerializer(data=mapped)
         if not serializer.is_valid():
+            received_fields = ", ".join(mapped.keys()) if mapped else "none"
             ClubHistory.objects.create(
                 club=club,
                 user=None,
-                action=f"API ingest rejected ({api_key.name}): {serializer.errors}",
+                action=(
+                    f"API ingest rejected [{api_key.prefix}] ({api_key.name}): {serializer.errors} "
+                    f"— received fields: {received_fields}. "
+                    f"Set up field mapping on this key to resolve this issue."
+                ),
                 applies_to="MEMBERS",
             )
             return Response({"status": "error", "errors": serializer.errors}, status=400)
@@ -12407,7 +12412,7 @@ class ClubAPIKeyCreateView(LoginRequiredMixin, ClubViewMixin, View):
         ClubHistory.objects.create(
             club=self.club,
             user=request.user,
-            action=f"Created API key '{name}' ({prefix})",
+            action=f"Created API key [{prefix}] '{name}'",
             applies_to="SETTINGS",
         )
         request.session[f"new_api_key_{api_key.pk}"] = raw_key
@@ -12435,6 +12440,7 @@ class ClubAPIKeyDetailView(LoginRequiredMixin, ClubViewMixin, TemplateView):
         ctx["field_mappings"] = api_key.field_mappings.order_by("external_field")
         ctx["new_raw_key"] = new_raw_key
         ctx["available_fields"] = sorted(INGEST_ALLOWED_FIELDS)
+        ctx["site_domain"] = Site.objects.get_current().domain
         return ctx
 
 
@@ -12458,7 +12464,7 @@ class ClubAPIKeyRevokeView(LoginRequiredMixin, ClubViewMixin, View):
         ClubHistory.objects.create(
             club=self.club,
             user=request.user,
-            action=f"Revoked API key '{api_key.name}' ({api_key.prefix})",
+            action=f"Revoked API key [{api_key.prefix}] '{api_key.name}'",
             applies_to="SETTINGS",
         )
         messages.success(request, f"API key '{api_key.name}' has been revoked.")
@@ -12478,7 +12484,7 @@ class ClubAPIKeyFieldMapCreateView(LoginRequiredMixin, ClubViewMixin, View):
         api_key = get_object_or_404(ClubAPIKey, pk=pk, club=self.club)
         external_field = request.POST.get("external_field", "").strip()
         internal_field = request.POST.get("internal_field", "").strip()
-        if external_field and internal_field and internal_field in INGEST_ALLOWED_FIELDS:
+        if external_field and internal_field and (internal_field == "name" or internal_field in INGEST_ALLOWED_FIELDS):
             ClubAPIKeyFieldMap.objects.get_or_create(
                 api_key=api_key,
                 external_field=external_field,

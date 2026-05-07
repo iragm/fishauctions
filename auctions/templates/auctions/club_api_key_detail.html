@@ -18,12 +18,13 @@
     <code id="raw-key" class="fs-6 p-2 bg-light rounded border text-dark">{{ new_raw_key }}</code>
     <button type="button" class="btn btn-sm btn-outline-dark" onclick="navigator.clipboard.writeText(document.getElementById('raw-key').textContent).then(()=>{this.textContent='Copied!';setTimeout(()=>{this.textContent='Copy'},1500)})">Copy</button>
   </div>
-  <div class="mt-2 small">
-    Send this key in the <code class="text-dark bg-light rounded px-1">X-API-Key</code> header (or <code class="text-dark bg-light rounded px-1">Authorization: Api-Key &lt;key&gt;</code>).<br>
-    Endpoint: <code class="text-dark bg-light rounded px-1">POST /api/v1/clubs/{{ club.slug }}/members/ingest/</code>
-  </div>
 </div>
 {% endif %}
+
+<div class="mb-4 small text-muted">
+  Send this key in the <code>X-API-Key</code> header (or <code>Authorization: Api-Key &lt;key&gt;</code>).<br>
+  Endpoint: <code>POST https://{{ site_domain }}/api/v1/clubs/{{ club.slug }}/members/ingest/</code>
+</div>
 
 <div class="row mb-4">
   <div class="col-md-6">
@@ -33,6 +34,7 @@
       <tr><th class="text-muted">Created</th><td>{{ api_key.created_at|date:"N j, Y g:i a" }}</td></tr>
       <tr><th class="text-muted">Last used</th><td>{{ api_key.last_used_at|date:"N j, Y g:i a"|default:"Never" }}</td></tr>
     </table>
+    <p class="small text-muted"><i class="bi bi-clock-history"></i> Track activity for this key in <a href="{% url 'club_history' club.slug %}?query={{ api_key.prefix }}">club history</a> — search for <code>{{ api_key.prefix }}</code>.</p>
   </div>
 </div>
 

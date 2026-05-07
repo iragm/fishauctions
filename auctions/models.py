@@ -777,13 +777,7 @@ class ClubMember(ContactRecord):
     contact_status = models.CharField(max_length=20, choices=CONTACT_STATUS_CHOICES, default="contact")
     discord_roles = models.TextField(blank=True)
     is_deleted = models.BooleanField(default=False, db_index=True)
-    SOURCE_CHOICES = (
-        ("joined", "Joined via website"),
-        ("discord", "Added from Discord"),
-        ("manually_added", "Manually added"),
-        ("api", "Added via API"),
-    )
-    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default="manually_added")
+    source = models.CharField(max_length=200, default="manually_added")
     roles = models.ManyToManyField(ClubRole, blank=True)
     possible_duplicate = models.ForeignKey(
         "ClubMember",

@@ -1,8 +1,10 @@
 from django.utils import timezone
 
 from .models import ClubHistory, ClubMember
+from .serializers import ClubMemberIngestSerializer
 
-INGEST_ALLOWED_FIELDS = {"first_name", "last_name", "email", "phone_number", "address", "memo"}
+# Derived from the serializer so there's one source of truth for which fields are accepted.
+INGEST_ALLOWED_FIELDS = frozenset(ClubMemberIngestSerializer().fields.keys())
 
 
 def map_fields(data: dict, api_key) -> dict:
@@ -39,7 +41,7 @@ def create_club_member_from_api(validated_data: dict, club, api_key):
 
     created = member is None
     if created:
-        member = ClubMember(club=club, source="api", added_by=None)
+        member = ClubMember(club=club, source=api_key.name, added_by=None)
         for field, value in validated_data.items():
             if field in INGEST_ALLOWED_FIELDS:
                 setattr(member, field, value)
@@ -49,7 +51,7 @@ def create_club_member_from_api(validated_data: dict, club, api_key):
     ClubHistory.objects.create(
         club=club,
         user=None,
-        action=f"{label} member via API ({api_key.name}): {member}",
+        action=f"{label} member via API [{api_key.prefix}] ({api_key.name}): {member}",
         applies_to="MEMBERS",
     )
 
