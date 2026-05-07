@@ -7588,7 +7588,15 @@ class LotRefundDialog(LoginRequiredMixin, DetailView, FormMixin, AuctionViewMixi
 
 
 class PayPalAPIMixin:
-    """Couple API methods for PayPal stuff"""
+    """PayPal API methods for platform partner integration.
+
+    Required settings:
+      - PAYPAL_API_BASE: API base URL (sandbox or live)
+      - PAYPAL_CLIENT_ID, PAYPAL_SECRET: OAuth credentials
+      - PARTNER_MERCHANT_ID: Platform's PayPal merchant ID
+      - PAYPAL_BN_CODE: Partner attribution code (for revenue tracking)
+      - PAYPAL_WEBHOOK_ID: Registered webhook ID (for webhook verification)
+    """
 
     def _get_access_token(self):
         token_resp = requests.post(
@@ -11080,7 +11088,12 @@ class PayPalWebhookView(PayPalAPIMixin, View):
         cert_url = hdr("PayPal-Cert-Url")
         auth_algo = hdr("PayPal-Auth-Algo")
         transmission_sig = hdr("PayPal-Transmission-Sig")
-        # webhook_id = getattr(settings, "PAYPAL_WEBHOOK_ID", None)
+
+        # Check webhook_id is configured
+        webhook_id = getattr(settings, "PAYPAL_WEBHOOK_ID", None)
+        if not webhook_id:
+            logger.warning("PAYPAL_WEBHOOK_ID not configured, rejecting webhook")
+            return HttpResponseBadRequest("webhook not configured")
 
         if not all([transmission_id, transmission_time, cert_url, auth_algo, transmission_sig]):
             logger.warning(
@@ -11098,35 +11111,40 @@ class PayPalWebhookView(PayPalAPIMixin, View):
             )
             return HttpResponseBadRequest("missing verification headers or webhook_id")
 
-        # Build verification payload
+        # Build verification payload with webhook_id
         verify_payload = {
-            "transmission_id": transmission_id,
-            "transmission_time": transmission_time,
-            "cert_url": cert_url,
             "auth_algo": auth_algo,
+            "cert_url": cert_url,
+            "transmission_id": transmission_id,
             "transmission_sig": transmission_sig,
-            # "webhook_id": webhook_id,
+            "transmission_time": transmission_time,
+            "webhook_id": webhook_id,
             "webhook_event": event,
         }
 
-        # Get platform token using client credentials
-        response = self.post_to_paypal("/v1/oauth2/token", payload=verify_payload)
-        platform_token = response.get("access_token", None)
-        if not platform_token:
-            logger.error(
-                "Failed to obtain PayPal platform access token for webhook verification, debug_id %s", self.paypal_debug
-            )
+        # Get access token using client credentials (for webhook verification)
+        try:
+            access_token = self._get_access_token()
+        except Exception as exc:
+            logger.error("Failed to obtain PayPal access token for webhook verification: %s", exc)
             return HttpResponse(status=500)
 
-        # Call PayPal verify endpoint
-        verify_data = self.post_to_paypal("/v1/notifications/verify-webhook-signature", payload={})
+        # Call PayPal verify webhook signature endpoint
+        verify_resp = requests.post(
+            f"{settings.PAYPAL_API_BASE}/v1/notifications/verify-webhook-signature",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+            json=verify_payload,
+        )
+        verify_data = verify_resp.json()
         verification_status = verify_data.get("verification_status")
         if verification_status != "SUCCESS":
             logger.warning(
-                "PayPal webhook signature verification failed: %s (verify_resp=%s) debug_id=%s",
+                "PayPal webhook signature verification failed: status=%s response=%s",
                 verification_status,
                 verify_data,
-                self.paypal_debug,
             )
             return HttpResponseBadRequest("webhook verification failed")
 
