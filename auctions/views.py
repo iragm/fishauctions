@@ -95,11 +95,13 @@ from rest_framework import generics
 from rest_framework.authentication import SessionAuthentication, TokenAuthentication
 from rest_framework.exceptions import NotAuthenticated
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
 from rest_framework.views import APIView
 from user_agents import parse
 from webpush import send_user_notification
 from webpush.models import PushInformation
 
+from .authentication import APIKeyAuthentication, ApiKeyThrottle
 from .filters import (
     AuctionFilter,
     AuctionHistoryFilter,
@@ -165,6 +167,8 @@ from .models import (
     Category,
     ChatSubscription,
     Club,
+    ClubAPIKey,
+    ClubAPIKeyFieldMap,
     ClubDiscordRole,
     ClubHistory,
     ClubMember,
@@ -192,7 +196,8 @@ from .models import (
     median_value,
     nearby_auctions,
 )
-from .serializers import ClubMemberSerializer
+from .serializers import ClubMemberIngestSerializer, ClubMemberSerializer
+from .services import INGEST_ALLOWED_FIELDS, create_club_member_from_api, map_fields
 from .tables import (
     AuctionHistoryHTMxTable,
     AuctionHTMxTable,
@@ -12300,6 +12305,178 @@ class ClubBapRecalculateView(LoginRequiredMixin, ClubViewMixin, View):
         schedule_bap_recalculation(self.club.pk)
         messages.success(request, "Points recalculation scheduled.")
         return redirect(reverse("club_bap_lots", kwargs={"slug": self.club.slug}))
+
+
+class ClubMemberIngestAPIView(APIView):
+    """API key-authenticated endpoint for external services to create ClubMember records."""
+
+    authentication_classes = [APIKeyAuthentication]
+    permission_classes = []
+    throttle_classes = [ApiKeyThrottle]
+
+    def post(self, request, slug=None):
+        api_key = getattr(request, "api_key", None)
+        if not api_key:
+            return Response({"error": "Authentication required."}, status=401)
+        club = request.club
+        mapped = map_fields(dict(request.data), api_key)
+        serializer = ClubMemberIngestSerializer(data=mapped)
+        if not serializer.is_valid():
+            ClubHistory.objects.create(
+                club=club,
+                user=None,
+                action=f"API ingest rejected ({api_key.name}): {serializer.errors}",
+                applies_to="MEMBERS",
+            )
+            return Response({"status": "error", "errors": serializer.errors}, status=400)
+        member, created = create_club_member_from_api(serializer.validated_data, club, api_key)
+        return Response(
+            {"status": "created" if created else "duplicate", "member_id": member.pk},
+            status=201 if created else 200,
+        )
+
+
+class ClubAPIKeyListView(LoginRequiredMixin, ClubViewMixin, TemplateView):
+    """List all API keys for a club (requires permission_edit_club)."""
+
+    template_name = "auctions/club_api_keys.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["club"] = self.club
+        ctx["api_keys"] = self.club.api_keys.order_by("-created_at")
+        return ctx
+
+
+class ClubAPIKeyCreateView(LoginRequiredMixin, ClubViewMixin, View):
+    """Create a new ClubAPIKey; display the raw key once via session."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request, slug):
+        return render(request, "auctions/club_api_key_create.html", {"club": self.club})
+
+    def post(self, request, slug):
+        name = request.POST.get("name", "").strip()
+        rate_limit_raw = request.POST.get("rate_limit", "").strip()
+        if not name:
+            return render(
+                request,
+                "auctions/club_api_key_create.html",
+                {"club": self.club, "error": "Name is required."},
+            )
+        rate_limit = int(rate_limit_raw) if rate_limit_raw.isdigit() else None
+        raw_key, prefix, key_hash = ClubAPIKey.generate()
+        api_key = ClubAPIKey.objects.create(
+            club=self.club,
+            name=name,
+            prefix=prefix,
+            key_hash=key_hash,
+            rate_limit=rate_limit,
+            created_by=request.user,
+        )
+        ClubHistory.objects.create(
+            club=self.club,
+            user=request.user,
+            action=f"Created API key '{name}' ({prefix})",
+            applies_to="SETTINGS",
+        )
+        request.session[f"new_api_key_{api_key.pk}"] = raw_key
+        return redirect(reverse("club_api_key_detail", kwargs={"slug": self.club.slug, "pk": api_key.pk}))
+
+
+class ClubAPIKeyDetailView(LoginRequiredMixin, ClubViewMixin, TemplateView):
+    """Manage a single ClubAPIKey and its field mappings."""
+
+    template_name = "auctions/club_api_key_detail.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        api_key = get_object_or_404(ClubAPIKey, pk=kwargs["pk"], club=self.club)
+        session_key = f"new_api_key_{api_key.pk}"
+        new_raw_key = self.request.session.pop(session_key, None)
+        ctx["club"] = self.club
+        ctx["api_key"] = api_key
+        ctx["field_mappings"] = api_key.field_mappings.order_by("external_field")
+        ctx["new_raw_key"] = new_raw_key
+        ctx["available_fields"] = sorted(INGEST_ALLOWED_FIELDS)
+        return ctx
+
+
+class ClubAPIKeyRevokeView(LoginRequiredMixin, ClubViewMixin, View):
+    """POST-only: revoke (deactivate) a ClubAPIKey."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, slug, pk):
+        api_key = get_object_or_404(ClubAPIKey, pk=pk, club=self.club)
+        api_key.is_active = False
+        api_key.save(update_fields=["is_active"])
+        ClubHistory.objects.create(
+            club=self.club,
+            user=request.user,
+            action=f"Revoked API key '{api_key.name}' ({api_key.prefix})",
+            applies_to="SETTINGS",
+        )
+        messages.success(request, f"API key '{api_key.name}' has been revoked.")
+        return redirect(reverse("club_api_keys", kwargs={"slug": self.club.slug}))
+
+
+class ClubAPIKeyFieldMapCreateView(LoginRequiredMixin, ClubViewMixin, View):
+    """POST-only: add a field mapping to a ClubAPIKey."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, slug, pk):
+        api_key = get_object_or_404(ClubAPIKey, pk=pk, club=self.club)
+        external_field = request.POST.get("external_field", "").strip()
+        internal_field = request.POST.get("internal_field", "").strip()
+        if external_field and internal_field and internal_field in INGEST_ALLOWED_FIELDS:
+            ClubAPIKeyFieldMap.objects.get_or_create(
+                api_key=api_key,
+                external_field=external_field,
+                defaults={"internal_field": internal_field},
+            )
+        return redirect(reverse("club_api_key_detail", kwargs={"slug": self.club.slug, "pk": pk}))
+
+
+class ClubAPIKeyFieldMapDeleteView(LoginRequiredMixin, ClubViewMixin, View):
+    """POST-only: delete a field mapping from a ClubAPIKey."""
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request, slug, pk, map_pk):
+        api_key = get_object_or_404(ClubAPIKey, pk=pk, club=self.club)
+        ClubAPIKeyFieldMap.objects.filter(pk=map_pk, api_key=api_key).delete()
+        return redirect(reverse("club_api_key_detail", kwargs={"slug": self.club.slug, "pk": pk}))
 
 
 class ClubHistoryView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterView):

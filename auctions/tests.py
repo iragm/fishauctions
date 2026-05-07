@@ -31,6 +31,8 @@ from .models import (
     Category,
     ChatSubscription,
     Club,
+    ClubAPIKey,
+    ClubAPIKeyFieldMap,
     ClubHistory,
     ClubMember,
     ClubPermission,
@@ -14424,3 +14426,219 @@ class ClubBapRecalculateViewTests(TestCase):
         self.client.login(username="bap_recalc_user", password="testpass")
         response = self.client.post(self.url)
         self.assertRedirects(response, reverse("club_bap_lots", kwargs={"slug": self.club.slug}))
+
+
+class ClubAPIKeyModelTests(TestCase):
+    """Unit tests for ClubAPIKey.generate() and ClubAPIKey.verify()."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(
+            username="apikey_owner", password="testpass", email="apikey_owner@example.com"
+        )
+        self.club = Club.objects.create(name="API Key Club", owner=self.owner)
+
+    def _make_key(self):
+        raw_key, prefix, key_hash = ClubAPIKey.generate()
+        api_key = ClubAPIKey.objects.create(
+            club=self.club, name="Test Key", prefix=prefix, key_hash=key_hash, created_by=self.owner
+        )
+        return raw_key, api_key
+
+    def test_generate_prefix_starts_with_ck(self):
+        raw_key, prefix, key_hash = ClubAPIKey.generate()
+        self.assertTrue(prefix.startswith("ck_"))
+
+    def test_generate_raw_key_contains_prefix(self):
+        raw_key, prefix, key_hash = ClubAPIKey.generate()
+        self.assertTrue(raw_key.startswith(prefix + "."))
+
+    def test_verify_returns_key_for_valid_raw_key(self):
+        raw_key, api_key = self._make_key()
+        found = ClubAPIKey.verify(raw_key)
+        self.assertIsNotNone(found)
+        self.assertEqual(found.pk, api_key.pk)
+
+    def test_verify_returns_none_for_wrong_secret(self):
+        raw_key, api_key = self._make_key()
+        prefix = api_key.prefix
+        result = ClubAPIKey.verify(f"{prefix}.wrongsecretvalue")
+        self.assertIsNone(result)
+
+    def test_verify_returns_none_for_inactive_key(self):
+        raw_key, api_key = self._make_key()
+        api_key.is_active = False
+        api_key.save()
+        self.assertIsNone(ClubAPIKey.verify(raw_key))
+
+    def test_verify_returns_none_for_malformed_key(self):
+        self.assertIsNone(ClubAPIKey.verify("nodotseparator"))
+        self.assertIsNone(ClubAPIKey.verify(""))
+
+
+class ClubMemberIngestAPITests(TestCase):
+    """Integration tests for ClubMemberIngestAPIView."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(
+            username="ingest_owner", password="testpass", email="ingest_owner@example.com"
+        )
+        self.club = Club.objects.create(name="Ingest Club", owner=self.owner)
+        raw_key, prefix, key_hash = ClubAPIKey.generate()
+        self.api_key = ClubAPIKey.objects.create(
+            club=self.club, name="Test Integration", prefix=prefix, key_hash=key_hash, created_by=self.owner
+        )
+        self.raw_key = raw_key
+        self.url = reverse("api_club_member_ingest", kwargs={"slug": self.club.slug})
+
+    def _post(self, data, key=None):
+        headers = {}
+        if key is not False:
+            headers["HTTP_X_API_KEY"] = key or self.raw_key
+        return self.client.post(self.url, data, content_type="application/json", **headers)
+
+    def test_no_api_key_returns_401(self):
+        response = self._post({"email": "test@example.com"}, key=False)
+        self.assertEqual(response.status_code, 401)
+
+    def test_bad_api_key_returns_401(self):
+        response = self._post({"email": "test@example.com"}, key="ck_bad.wrong")
+        self.assertEqual(response.status_code, 401)
+
+    def test_valid_key_creates_member(self):
+        response = self._post({"email": "new@example.com", "first_name": "Alice"})
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["status"], "created")
+        self.assertTrue(ClubMember.objects.filter(club=self.club, email="new@example.com").exists())
+
+    def test_email_lowercased_on_creation(self):
+        self._post({"email": "UPPER@Example.COM"})
+        self.assertTrue(ClubMember.objects.filter(club=self.club, email="upper@example.com").exists())
+
+    def test_duplicate_email_returns_200(self):
+        self._post({"email": "dup@example.com"})
+        response = self._post({"email": "dup@example.com"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "duplicate")
+        self.assertEqual(ClubMember.objects.filter(club=self.club, email="dup@example.com").count(), 1)
+
+    def test_invalid_payload_returns_400(self):
+        response = self._post({})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["status"], "error")
+
+    def test_club_history_created_on_success(self):
+        before = ClubHistory.objects.filter(club=self.club).count()
+        self._post({"email": "hist@example.com"})
+        self.assertEqual(ClubHistory.objects.filter(club=self.club).count(), before + 1)
+
+    def test_club_history_created_on_failure(self):
+        before = ClubHistory.objects.filter(club=self.club).count()
+        self._post({})
+        self.assertEqual(ClubHistory.objects.filter(club=self.club).count(), before + 1)
+
+    def test_field_mapping_applied(self):
+        ClubAPIKeyFieldMap.objects.create(api_key=self.api_key, external_field="email_address", internal_field="email")
+        response = self._post({"email_address": "mapped@example.com"})
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(ClubMember.objects.filter(club=self.club, email="mapped@example.com").exists())
+
+    def test_last_used_at_updated(self):
+        self.assertIsNone(self.api_key.last_used_at)
+        self._post({"email": "lastusedat@example.com"})
+        self.api_key.refresh_from_db()
+        self.assertIsNotNone(self.api_key.last_used_at)
+
+    def test_member_source_is_api(self):
+        self._post({"email": "source@example.com"})
+        member = ClubMember.objects.get(club=self.club, email="source@example.com")
+        self.assertEqual(member.source, "api")
+
+
+class ClubAPIKeyUITests(TestCase):
+    """Permission and basic access tests for API key management UI views."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(
+            username="apiui_owner", password="testpass", email="apiui_owner@example.com"
+        )
+        self.club = Club.objects.create(name="API UI Club", owner=self.owner)
+        edit_perm, _ = ClubPermission.objects.get_or_create(
+            name="permission_edit_club", defaults={"description": "Edit club settings"}
+        )
+        edit_role, _ = ClubRole.objects.get_or_create(name="API UI Editor")
+        edit_role.permissions.add(edit_perm)
+        self.editor = User.objects.create_user(
+            username="apiui_editor", password="testpass", email="apiui_editor@example.com"
+        )
+        editor_member = ClubMember.objects.create(club=self.club, user=self.editor)
+        editor_member.roles.add(edit_role)
+        self.plain = User.objects.create_user(
+            username="apiui_plain", password="testpass", email="apiui_plain@example.com"
+        )
+        ClubMember.objects.create(club=self.club, user=self.plain)
+        self.list_url = reverse("club_api_keys", kwargs={"slug": self.club.slug})
+        self.create_url = reverse("club_api_key_create", kwargs={"slug": self.club.slug})
+
+    def test_anon_list_redirects_to_login(self):
+        response = self.client.get(self.list_url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("login", response["Location"])
+
+    def test_plain_member_list_gets_403(self):
+        self.client.login(username="apiui_plain", password="testpass")
+        response = self.client.get(self.list_url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_editor_can_access_list(self):
+        self.client.login(username="apiui_editor", password="testpass")
+        response = self.client.get(self.list_url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_editor_can_create_key(self):
+        self.client.login(username="apiui_editor", password="testpass")
+        response = self.client.post(self.create_url, {"name": "My Integration"})
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(ClubAPIKey.objects.filter(club=self.club, name="My Integration").exists())
+
+    def test_create_redirects_to_detail_with_raw_key_in_session(self):
+        self.client.login(username="apiui_editor", password="testpass")
+        self.client.post(self.create_url, {"name": "Session Key"})
+        api_key = ClubAPIKey.objects.get(club=self.club, name="Session Key")
+        session = self.client.session
+        self.assertIn(f"new_api_key_{api_key.pk}", session)
+
+    def test_revoke_deactivates_key(self):
+        self.client.login(username="apiui_editor", password="testpass")
+        raw_key, prefix, key_hash = ClubAPIKey.generate()
+        api_key = ClubAPIKey.objects.create(
+            club=self.club, name="Revoke Me", prefix=prefix, key_hash=key_hash, created_by=self.editor
+        )
+        revoke_url = reverse("club_api_key_revoke", kwargs={"slug": self.club.slug, "pk": api_key.pk})
+        self.client.post(revoke_url)
+        api_key.refresh_from_db()
+        self.assertFalse(api_key.is_active)
+
+    def test_add_mapping(self):
+        self.client.login(username="apiui_editor", password="testpass")
+        raw_key, prefix, key_hash = ClubAPIKey.generate()
+        api_key = ClubAPIKey.objects.create(
+            club=self.club, name="Map Me", prefix=prefix, key_hash=key_hash, created_by=self.editor
+        )
+        add_url = reverse("club_api_key_mapping_add", kwargs={"slug": self.club.slug, "pk": api_key.pk})
+        self.client.post(add_url, {"external_field": "email_address", "internal_field": "email"})
+        self.assertTrue(ClubAPIKeyFieldMap.objects.filter(api_key=api_key, external_field="email_address").exists())
+
+    def test_delete_mapping(self):
+        self.client.login(username="apiui_editor", password="testpass")
+        raw_key, prefix, key_hash = ClubAPIKey.generate()
+        api_key = ClubAPIKey.objects.create(
+            club=self.club, name="Del Map", prefix=prefix, key_hash=key_hash, created_by=self.editor
+        )
+        mapping = ClubAPIKeyFieldMap.objects.create(
+            api_key=api_key, external_field="fullname", internal_field="first_name"
+        )
+        del_url = reverse(
+            "club_api_key_mapping_delete", kwargs={"slug": self.club.slug, "pk": api_key.pk, "map_pk": mapping.pk}
+        )
+        self.client.post(del_url)
+        self.assertFalse(ClubAPIKeyFieldMap.objects.filter(pk=mapping.pk).exists())

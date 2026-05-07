@@ -19,6 +19,8 @@ from .models import (
     BlogPost,
     Category,
     Club,
+    ClubAPIKey,
+    ClubAPIKeyFieldMap,
     ClubDiscordRole,
     ClubHistory,
     ClubMember,
@@ -831,3 +833,16 @@ admin.site.register(ClubRole, ClubRoleAdmin)
 admin.site.register(ClubPermission, ClubPermissionAdmin)
 admin.site.register(ClubDiscordRole, ClubDiscordRoleAdmin)
 admin.site.register(ClubHistory, ClubHistoryAdmin)
+
+
+class ClubAPIKeyFieldMapInline(admin.TabularInline):
+    model = ClubAPIKeyFieldMap
+    extra = 0
+
+
+@admin.register(ClubAPIKey)
+class ClubAPIKeyAdmin(admin.ModelAdmin):
+    list_display = ["name", "club", "prefix", "is_active", "created_at", "last_used_at"]
+    list_filter = ["is_active", "club"]
+    readonly_fields = ["prefix", "key_hash", "created_at", "last_used_at"]
+    inlines = [ClubAPIKeyFieldMapInline]
