@@ -13121,10 +13121,11 @@ class LotBapPointsView(LoginRequiredMixin, View):
         lot.manually_approved = True
         lot.bap_auto_reason = ""
         lot.save(update_fields=["bap_points_awarded", "manually_approved", "bap_auto_reason"])
+        name = lot.auctiontos_seller.name if lot.auctiontos_seller else lot.user.first_name + " " + lot.user.last_name
         ClubHistory.objects.create(
             club=club,
             user=request.user,
-            action=f"Awarded {points} BAP point(s) for lot {lot.lot_name}",
+            action=f"Awarded {points} BAP point(s) to {name} for lot {lot.lot_name}",
             applies_to="BAP",
         )
         return HttpResponse(status=204)
