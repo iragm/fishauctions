@@ -11109,7 +11109,7 @@ class PayPalWebhookView(PayPalAPIMixin, View):
                     ]
                 },
             )
-            return HttpResponseBadRequest("missing verification headers or webhook_id")
+            return HttpResponseBadRequest("missing verification headers")
 
         # Build verification payload with webhook_id
         verify_payload = {
