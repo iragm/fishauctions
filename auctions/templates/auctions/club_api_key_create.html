@@ -19,14 +19,6 @@
     <input type="text" class="form-control" id="id_name" name="name" placeholder="e.g. WordPress, Google Forms" required maxlength="100">
     <div class="form-text">A label to identify this integration.</div>
   </div>
-  <div class="mb-3">
-    <label for="id_rate_limit" class="form-label fw-semibold">Rate limit <span class="text-muted fw-normal">(optional)</span></label>
-    <div class="input-group" style="max-width:200px">
-      <input type="number" class="form-control" id="id_rate_limit" name="rate_limit" min="1" placeholder="1000">
-      <span class="input-group-text">req/hour</span>
-    </div>
-    <div class="form-text">Leave blank to use the site default (1000/hour).</div>
-  </div>
-  <button type="submit" class="btn btn-success"><i class="bi bi-plus-lg"></i> Create key</button>
+<button type="submit" class="btn btn-success"><i class="bi bi-plus-lg"></i> Create key</button>
 </form>
 {% endblock %}

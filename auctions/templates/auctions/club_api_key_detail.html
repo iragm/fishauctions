@@ -7,23 +7,20 @@
 <div class="mb-3 d-flex flex-wrap gap-2 align-items-center">
   <a href="{% url 'club_api_keys' club.slug %}" class="btn btn-sm btn-secondary"><i class="bi bi-arrow-left"></i> Back to API keys</a>
   {% if api_key.is_active %}
-  <form method="post" action="{% url 'club_api_key_revoke' club.slug api_key.pk %}" class="d-inline" onsubmit="return confirm('Revoke this key? Requests using it will immediately fail.')">
-    {% csrf_token %}
-    <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-slash-circle"></i> Revoke key</button>
-  </form>
+  <a href="{% url 'club_api_key_revoke' club.slug api_key.pk %}" class="btn btn-sm btn-outline-danger"><i class="bi bi-slash-circle"></i> Revoke key</a>
   {% endif %}
 </div>
 
 {% if new_raw_key %}
-<div class="alert alert-warning">
+<div class="alert alert-warning text-dark">
   <strong><i class="bi bi-exclamation-triangle-fill"></i> Save this key now — it will not be shown again.</strong>
   <div class="mt-2 d-flex align-items-center gap-2 flex-wrap">
-    <code id="raw-key" class="fs-6 p-2 bg-light rounded border">{{ new_raw_key }}</code>
-    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="navigator.clipboard.writeText(document.getElementById('raw-key').textContent).then(()=>{this.textContent='Copied!';setTimeout(()=>{this.textContent='Copy'},1500)})">Copy</button>
+    <code id="raw-key" class="fs-6 p-2 bg-light rounded border text-dark">{{ new_raw_key }}</code>
+    <button type="button" class="btn btn-sm btn-outline-dark" onclick="navigator.clipboard.writeText(document.getElementById('raw-key').textContent).then(()=>{this.textContent='Copied!';setTimeout(()=>{this.textContent='Copy'},1500)})">Copy</button>
   </div>
-  <div class="mt-2 small text-muted">
-    Send this key in the <code>X-API-Key</code> header (or <code>Authorization: Api-Key &lt;key&gt;</code>).<br>
-    Endpoint: <code>POST /api/v1/clubs/{{ club.slug }}/members/ingest/</code>
+  <div class="mt-2 small">
+    Send this key in the <code class="text-dark bg-light rounded px-1">X-API-Key</code> header (or <code class="text-dark bg-light rounded px-1">Authorization: Api-Key &lt;key&gt;</code>).<br>
+    Endpoint: <code class="text-dark bg-light rounded px-1">POST /api/v1/clubs/{{ club.slug }}/members/ingest/</code>
   </div>
 </div>
 {% endif %}
@@ -35,13 +32,13 @@
       <tr><th class="text-muted">Status</th><td>{% if api_key.is_active %}<span class="badge bg-success">Active</span>{% else %}<span class="badge bg-secondary">Revoked</span>{% endif %}</td></tr>
       <tr><th class="text-muted">Created</th><td>{{ api_key.created_at|date:"N j, Y g:i a" }}</td></tr>
       <tr><th class="text-muted">Last used</th><td>{{ api_key.last_used_at|date:"N j, Y g:i a"|default:"Never" }}</td></tr>
-      <tr><th class="text-muted">Rate limit</th><td>{{ api_key.rate_limit|default:"Site default" }} req/hour</td></tr>
     </table>
   </div>
 </div>
 
 <h5>Field mappings</h5>
 <p class="text-muted small">Map incoming field names to ClubMember fields. Unmapped fields are passed through unchanged if they match an allowed field name.</p>
+<p class="text-muted small"><i class="bi bi-info-circle"></i> Mapping any field to <code>name</code> (or sending a field literally called <code>name</code>) will automatically split the value on the first space into <code>first_name</code> and <code>last_name</code>.</p>
 
 {% if field_mappings %}
 <table class="table table-sm mb-3" style="max-width:480px">
@@ -76,6 +73,7 @@
   <div>
     <label class="form-label small fw-semibold mb-1">Internal field</label>
     <select name="internal_field" class="form-select form-select-sm" style="width:160px">
+      <option value="name">name (auto-split)</option>
       {% for field in available_fields %}
       <option value="{{ field }}">{{ field }}</option>
       {% endfor %}

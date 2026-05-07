@@ -6,9 +6,23 @@ INGEST_ALLOWED_FIELDS = {"first_name", "last_name", "email", "phone_number", "ad
 
 
 def map_fields(data: dict, api_key) -> dict:
-    """Rename incoming keys using ClubAPIKeyFieldMap records for this api_key."""
+    """Rename incoming keys using ClubAPIKeyFieldMap records for this api_key.
+
+    Special case: if the result contains a 'name' key (either sent directly or
+    mapped to 'name'), it is split on the first space into first_name / last_name.
+    """
     mapping = {m.external_field: m.internal_field for m in api_key.field_mappings.all()}
-    return {mapping.get(k, k): v for k, v in data.items()}
+    result = {mapping.get(k, k): v for k, v in data.items()}
+
+    if "name" in result:
+        full_name = result.pop("name", "").strip()
+        parts = full_name.split(" ", 1)
+        if "first_name" not in result:
+            result["first_name"] = parts[0]
+        if "last_name" not in result and len(parts) > 1:
+            result["last_name"] = parts[1]
+
+    return result
 
 
 def create_club_member_from_api(validated_data: dict, club, api_key):

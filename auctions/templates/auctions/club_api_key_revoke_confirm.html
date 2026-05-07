@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Revoke API Key &mdash; {{ club.name }}{% endblock %}
+
+{% block content %}
+<h3><i class="bi bi-slash-circle text-danger"></i> Revoke API Key</h3>
+
+<div class="card border-danger mb-4" style="max-width:520px">
+  <div class="card-body">
+    <h5 class="card-title text-danger">This cannot be undone</h5>
+    <p class="mb-1">You are about to revoke the API key <strong>{{ api_key.name }}</strong> (<code>{{ api_key.prefix }}…</code>).</p>
+    <p class="mb-0 text-danger">Any external service currently using this key will immediately stop working. There is no way to restore a revoked key.</p>
+  </div>
+</div>
+
+<div class="d-flex gap-2">
+  <form method="post">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-danger"><i class="bi bi-slash-circle"></i> Yes, revoke this key</button>
+  </form>
+  <a href="{% url 'club_api_key_detail' club.slug api_key.pk %}" class="btn btn-secondary">Cancel</a>
+</div>
+{% endblock %}

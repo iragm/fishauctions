@@ -12247,11 +12247,15 @@ class ClubBapSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
 
     def get_success_url(self):
         messages.success(self.request, "BAP settings saved.")
-        return reverse("club_admin", kwargs={"slug": self.object.slug})
+        next_url = self.request.POST.get("next") or self.request.GET.get("next")
+        if next_url and url_has_allowed_host_and_scheme(next_url, allowed_hosts={self.request.get_host()}):
+            return next_url
+        return reverse("club_detail", kwargs={"slug": self.object.slug})
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["club"] = self.club
+        context["next_url"] = self.request.GET.get("next", "")
         return context
 
     def form_valid(self, form):
@@ -12435,13 +12439,17 @@ class ClubAPIKeyDetailView(LoginRequiredMixin, ClubViewMixin, TemplateView):
 
 
 class ClubAPIKeyRevokeView(LoginRequiredMixin, ClubViewMixin, View):
-    """POST-only: revoke (deactivate) a ClubAPIKey."""
+    """GET: confirmation page. POST: revoke (deactivate) a ClubAPIKey."""
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
         if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
             raise PermissionDenied
         return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request, slug, pk):
+        api_key = get_object_or_404(ClubAPIKey, pk=pk, club=self.club, is_active=True)
+        return render(request, "auctions/club_api_key_revoke_confirm.html", {"club": self.club, "api_key": api_key})
 
     def post(self, request, slug, pk):
         api_key = get_object_or_404(ClubAPIKey, pk=pk, club=self.club)
