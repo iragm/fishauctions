@@ -35,7 +35,6 @@ from .models import (
     ChatSubscription,
     Club,
     ClubMember,
-    ClubRole,
     InvoiceAdjustment,
     Lot,
     LotImage,
@@ -3470,14 +3469,7 @@ class ClubBapSettingsForm(forms.ModelForm):
 
 
 class ClubMemberAdminForm(forms.ModelForm):
-    """Form for club admins to edit a club member's details and roles."""
-
-    roles = forms.ModelMultipleChoiceField(
-        queryset=ClubRole.objects.all(),
-        widget=forms.CheckboxSelectMultiple,
-        required=False,
-        label="Roles",
-    )
+    """Form for club admins to edit a club member's details."""
 
     class Meta:
         model = ClubMember
@@ -3490,7 +3482,6 @@ class ClubMemberAdminForm(forms.ModelForm):
             "contact_status",
             "discord_role_auto_managed",
             "discord_role_override",
-            "roles",
         ]
         widgets = {
             "first_name": forms.TextInput(attrs={"placeholder": "First name"}),
@@ -3542,8 +3533,6 @@ class ClubMemberAdminForm(forms.ModelForm):
                 field.disabled = True
             self.helper.layout = Layout(
                 *base_fields,
-                *discord_fields,
-                "roles",
                 Div(
                     HTML('<button type="button" class="btn btn-secondary" onclick="closeModal()">Close</button>'),
                     css_class="modal-footer",
@@ -3553,7 +3542,6 @@ class ClubMemberAdminForm(forms.ModelForm):
             self.helper.layout = Layout(
                 *base_fields,
                 *discord_fields,
-                "roles",
                 Div(
                     HTML('<button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>'),
                     HTML(
@@ -3566,6 +3554,35 @@ class ClubMemberAdminForm(forms.ModelForm):
             self.helper.layout = Layout(
                 *base_fields,
                 *discord_fields,
-                "roles",
             )
             self.helper.add_input(Submit("submit", "Save", css_class="btn-primary"))
+
+
+class ClubMemberPermissionsForm(forms.ModelForm):
+    """Admin-only form to set permission bool fields on a ClubMember."""
+
+    class Meta:
+        model = ClubMember
+        fields = [
+            "permission_admin",
+            "permission_view",
+            "permission_export",
+            "permission_add_edit",
+            "permission_edit_club",
+            "permission_manage_auctions",
+            "permission_manage_bap",
+        ]
+
+    def __init__(self, *args, post_url=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.layout = Layout(
+            *self.Meta.fields,
+            Div(
+                HTML('<button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>'),
+                HTML(
+                    f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn btn-primary">Save</button>'
+                ),
+                css_class="modal-footer",
+            ),
+        )

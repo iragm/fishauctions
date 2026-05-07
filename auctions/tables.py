@@ -419,8 +419,7 @@ class ClubMemberHTMxTable(tables.Table):
     def render_name(self, value, record):
         name = record.display_name
         url = reverse("clubmember_admin", kwargs={"pk": record.pk})
-        can_edit = self.can_add_edit
-        if can_edit:
+        if self.can_add_edit:
             if record.possible_duplicate_id:
                 icon = format_html(
                     "<i class='text-warning bi bi-people-fill me-1' title='This member may be a duplicate'></i>"
@@ -444,44 +443,63 @@ class ClubMemberHTMxTable(tables.Table):
         return result
 
     def render_actions(self, value, record):
-        if not self.can_add_edit:
+        if not self.can_add_edit and not self.can_manage_permissions:
             return ""
         name = record.display_name
-        renew_url = reverse("club_member_renew_page", kwargs={"slug": record.club.slug, "pk": record.pk})
-        confirm_delete_url = reverse("club_member_confirm", kwargs={"pk": record.pk, "action": "delete"})
-        merge_url = reverse("club_member_merge", kwargs={"slug": record.club.slug, "pk": record.pk})
-        email_item = format_html("")
-        if record.email:
-            icon_class = "bi bi-envelope"
-            if record.email_address_status == "BAD":
-                icon_class = "bi bi-envelope-exclamation-fill text-danger"
-            elif record.email_address_status == "VALID":
-                icon_class = "bi bi-envelope-check-fill"
-            email_item = format_html(
-                '<li><a class="dropdown-item" href="mailto:{}"><i class="{} me-1"></i>Email</a></li>',
-                record.email,
-                icon_class,
+
+        permissions_item = format_html("")
+        if self.can_manage_permissions:
+            perms_url = reverse("clubmember_permissions", kwargs={"pk": record.pk})
+            permissions_item = format_html(
+                '<li><a class="dropdown-item" href="#"'
+                ' hx-get="{}" hx-target="#modals-here">'
+                '<i class="bi bi-shield-lock me-1"></i>Permissions</a></li>'
+                "<li><hr class='dropdown-divider'></li>",
+                perms_url,
             )
+
+        edit_items = format_html("")
+        if self.can_add_edit:
+            renew_url = reverse("club_member_renew_page", kwargs={"slug": record.club.slug, "pk": record.pk})
+            confirm_delete_url = reverse("club_member_confirm", kwargs={"pk": record.pk, "action": "delete"})
+            merge_url = reverse("club_member_merge", kwargs={"slug": record.club.slug, "pk": record.pk})
+            email_item = format_html("")
+            if record.email:
+                icon_class = "bi bi-envelope"
+                if record.email_address_status == "BAD":
+                    icon_class = "bi bi-envelope-exclamation-fill text-danger"
+                elif record.email_address_status == "VALID":
+                    icon_class = "bi bi-envelope-check-fill"
+                email_item = format_html(
+                    '<li><a class="dropdown-item" href="mailto:{}"><i class="{} me-1"></i>Email</a></li>',
+                    record.email,
+                    icon_class,
+                )
+            edit_items = format_html(
+                '<li><a class="dropdown-item" href="{}">'
+                '<i class="bi bi-calendar-check me-1"></i>Renew membership</a></li>'
+                '<li><a class="dropdown-item" href="{}">'
+                '<i class="bi bi-people me-1"></i>Merge with...</a></li>'
+                "{}"
+                '<li><hr class="dropdown-divider"></li>'
+                '<li><a class="dropdown-item text-danger" href="#"'
+                ' hx-get="{}" hx-target="#modals-here">'
+                '<i class="bi bi-person-dash me-1"></i>Remove member</a></li>',
+                renew_url,
+                merge_url,
+                email_item,
+                confirm_delete_url,
+            )
+
         return format_html(
             '<div class="dropdown">'
             '<button type="button" class="btn btn-sm btn-secondary dropdown-toggle"'
             ' data-bs-toggle="dropdown" aria-label="Actions for {}">Actions</button>'
-            '<ul class="dropdown-menu">'
-            '<li><a class="dropdown-item" href="{}">'
-            '<i class="bi bi-calendar-check me-1"></i>Renew membership</a></li>'
-            '<li><a class="dropdown-item" href="{}">'
-            '<i class="bi bi-people me-1"></i>Merge with...</a></li>'
-            "{}"
-            '<li><hr class="dropdown-divider"></li>'
-            '<li><a class="dropdown-item text-danger" href="#"'
-            ' hx-get="{}" hx-target="#modals-here">'
-            '<i class="bi bi-person-dash me-1"></i>Remove member</a></li>'
-            "</ul></div>",
+            "<ul class='dropdown-menu'>{}{}</ul>"
+            "</div>",
             name,
-            renew_url,
-            merge_url,
-            email_item,
-            confirm_delete_url,
+            permissions_item,
+            edit_items,
         )
 
     class Meta:
@@ -492,6 +510,7 @@ class ClubMemberHTMxTable(tables.Table):
     def __init__(self, *args, **kwargs):
         self.request = kwargs.pop("request", None)
         self.can_add_edit = kwargs.pop("can_add_edit", False)
+        self.can_manage_permissions = kwargs.pop("can_manage_permissions", False)
         super().__init__(*args, **kwargs)
 
 

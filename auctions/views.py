@@ -129,6 +129,7 @@ from .forms import (
     ClubBapSettingsForm,
     ClubEditForm,
     ClubMemberAdminForm,
+    ClubMemberPermissionsForm,
     ClubMemberSelfServiceForm,
     CreateAuctionForm,
     CreateEditAuctionTOS,
@@ -275,21 +276,19 @@ class AuctionViewMixin:
 def check_club_permission(user, club, permission_name):
     """Check if a user has a specific permission for a club.
 
-    Returns True if the user is a superuser, the club owner, or has a role with the required
-    permission. Note: 'permission_admin' is treated as a wildcard that grants all permissions —
-    any member with a role that includes 'permission_admin' can perform any action.
+    Returns True if the user is a superuser or has the named permission (or permission_admin,
+    which acts as a wildcard granting all permissions).
     """
     if not user.is_authenticated:
         return False
     if user.is_superuser:
         return True
-    if club.owner == user:
-        return True
     member = ClubMember.objects.filter(club=club, user=user, is_deleted=False).first()
     if not member:
         return False
-    # permission_admin is an explicit wildcard: having it grants all permissions
-    return member.roles.filter(permissions__name__in=[permission_name, "permission_admin"]).exists()
+    if member.permission_admin:
+        return True
+    return bool(getattr(member, permission_name, False))
 
 
 def _bap_leaderboard(club, field, current_member):
@@ -5806,8 +5805,8 @@ def _add_club_admins_as_auction_tos(auction, requesting_user):
         ClubMember.objects.filter(
             club=auction.club,
             is_deleted=False,
-            roles__permissions__name__in=["permission_manage_auctions", "permission_admin"],
         )
+        .filter(Q(permission_manage_auctions=True) | Q(permission_admin=True))
         .exclude(user=requesting_user)
         .distinct()
     )
@@ -6137,14 +6136,28 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                     self.auction.created_by.userdata.is_trusted = True
                     self.auction.created_by.userdata.save()
                     messages.success(request, f"{self.auction.created_by.username} is now trusted")
-                if str(request.GET.get("make_club_owner", "")).lower() in ("1", "true"):
-                    creator_club = getattr(self.auction.created_by.userdata, "club", None)
-                    if creator_club and not creator_club.owner:
-                        creator_club.owner = self.auction.created_by
-                        creator_club.save()
+                if str(request.GET.get("make_club_admin", "")).lower() in ("1", "true"):
+                    creator = self.auction.created_by
+                    creator_club = getattr(creator.userdata, "club", None)
+                    if (
+                        creator_club
+                        and creator_club.members.filter(user=creator, permission_admin=True).exists() is False
+                    ):
+                        member, _ = ClubMember.objects.get_or_create(
+                            club=creator_club,
+                            user=creator,
+                            defaults={
+                                "first_name": creator.first_name,
+                                "last_name": creator.last_name,
+                                "source": "manually_added",
+                            },
+                        )
+                        if not member.permission_admin:
+                            member.permission_admin = True
+                            member.save(update_fields=["permission_admin"])
                         messages.success(
                             request,
-                            f"{self.auction.created_by.username} is now the owner of {creator_club.name}",
+                            f"{creator.username} is now an admin of {creator_club.name}",
                         )
             if self.auction.created_by.pk == request.user.pk:
                 if str(request.GET.get("enable_online_payments", "")).lower() in ("1", "true"):
@@ -6219,11 +6232,14 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
         current_site = Site.objects.get_current()
         context["domain"] = current_site.domain
         context["google_maps_api_key"] = settings.LOCATION_FIELD["provider.google.api_key"]
-        # Show "make club owner" button to superusers when auction creator has a club with no owner
+        # Show "make club admin" button to superusers when auction creator has a club but no admin member
         if self.request.user.is_superuser and self.auction.created_by:
             creator_club = getattr(self.auction.created_by.userdata, "club", None)
-            if creator_club and not creator_club.owner:
-                context["can_make_club_owner"] = True
+            if (
+                creator_club
+                and not creator_club.members.filter(user=self.auction.created_by, permission_admin=True).exists()
+            ):
+                context["can_make_club_admin"] = True
                 context["creator_club"] = creator_club
         if self.auction.closed:
             context["ended"] = True
@@ -11555,13 +11571,20 @@ class ClubDetailView(ClubViewMixin, TemplateView):
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
         if not self.club.enable_club_page:
-            # Page is disabled — only users with any club role may view it; everyone else gets 404
+            # Page is disabled — only users with any club permission may view it; everyone else gets 404
             has_access = request.user.is_authenticated and (
                 request.user.is_superuser
-                or request.user == self.club.owner
-                or ClubMember.objects.filter(
-                    club=self.club, user=request.user, is_deleted=False, roles__isnull=False
-                ).exists()
+                or ClubMember.objects.filter(club=self.club, user=request.user, is_deleted=False)
+                .filter(
+                    Q(permission_admin=True)
+                    | Q(permission_view=True)
+                    | Q(permission_add_edit=True)
+                    | Q(permission_edit_club=True)
+                    | Q(permission_manage_auctions=True)
+                    | Q(permission_export=True)
+                    | Q(permission_manage_bap=True)
+                )
+                .exists()
             )
             if not has_access:
                 raise Http404
@@ -11695,6 +11718,7 @@ class ClubAdminView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterV
     def get_table_kwargs(self, **kwargs):
         kwargs = super().get_table_kwargs(**kwargs)
         kwargs["can_add_edit"] = self.user_has_club_permission("permission_add_edit")
+        kwargs["can_manage_permissions"] = self.user_has_club_permission("permission_admin")
         return kwargs
 
 
@@ -11950,6 +11974,47 @@ $("#id_first_name, #id_last_name, #id_email").on("blur", cmValidateField);
         return render(request, "auctions/generic_admin_form.html", self._build_context(request, member, form))
 
 
+class ClubMemberPermissionsView(LoginRequiredMixin, View):
+    """Admin-only HTMx dialog to set permission bool fields on a ClubMember."""
+
+    def _get_member(self, request, pk):
+        member = get_object_or_404(ClubMember, pk=pk, is_deleted=False)
+        if not check_club_permission(request.user, member.club, "permission_admin"):
+            raise PermissionDenied
+        return member
+
+    def get(self, request, pk):
+        member = self._get_member(request, pk)
+        post_url = reverse("clubmember_permissions", kwargs={"pk": pk})
+        form = ClubMemberPermissionsForm(instance=member, post_url=post_url)
+        return render(
+            request,
+            "auctions/generic_admin_form.html",
+            {"form": form, "title": f"Permissions — {member.display_name}"},
+        )
+
+    def post(self, request, pk):
+        member = self._get_member(request, pk)
+        post_url = reverse("clubmember_permissions", kwargs={"pk": pk})
+        form = ClubMemberPermissionsForm(request.POST, instance=member, post_url=post_url)
+        if form.is_valid():
+            form.save()
+            ClubHistory.objects.create(
+                club=member.club,
+                user=request.user,
+                action=f"Updated permissions for {member}",
+                applies_to="MEMBERS",
+            )
+            response = HttpResponse(status=204)
+            response["HX-Redirect"] = reverse("club_admin", kwargs={"slug": member.club.slug})
+            return response
+        return render(
+            request,
+            "auctions/generic_admin_form.html",
+            {"form": form, "title": f"Permissions — {member.display_name}"},
+        )
+
+
 class ClubMemberCreateView(APIView):
     """DRF-based HTMX view for creating a new club member"""
 
@@ -11986,7 +12051,6 @@ class ClubMemberCreateView(APIView):
             member.added_by = request.user
             member.source = "manually_added"
             member.save()
-            form.save_m2m()
             ClubHistory.objects.create(
                 club=club,
                 user=request.user,
@@ -12174,9 +12238,18 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
             target_val = getattr(target, field, None)
             if source_val is not None and not target_val:
                 setattr(target, field, source_val)
-        # Merge roles
-        for role in source.roles.all():
-            target.roles.add(role)
+        # Merge permissions — OR the bool fields so target gains any source had
+        for perm_field in [
+            "permission_admin",
+            "permission_view",
+            "permission_export",
+            "permission_add_edit",
+            "permission_edit_club",
+            "permission_manage_auctions",
+            "permission_manage_bap",
+        ]:
+            if getattr(source, perm_field, False):
+                setattr(target, perm_field, True)
         target.save()
         source.is_deleted = True
         source.save(update_fields=["is_deleted"])
@@ -13070,12 +13143,7 @@ class DiscordInteractionsView(View):
         # a club member with admin permissions (looked up by their Discord ID).
         if club.discord_server_id:
             caller_member = ClubMember.objects.filter(club=club, discord_id=caller_discord_id, is_deleted=False).first()
-            if (
-                not caller_member
-                or not caller_member.roles.filter(
-                    permissions__name__in=["permission_admin", "permission_edit_club"]
-                ).exists()
-            ):
+            if not caller_member or not (caller_member.permission_admin or caller_member.permission_edit_club):
                 return _discord_ephemeral("❌ You must be a club admin to reconnect this server.")
 
         # Reject if another club already owns this guild

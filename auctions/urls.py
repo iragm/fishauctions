@@ -589,6 +589,9 @@ urlpatterns = [
         name="club_member_export",
     ),
     path("api/clubmember/<int:pk>/", views.ClubMemberAdminView.as_view(), name="clubmember_admin"),
+    path(
+        "api/clubmember/<int:pk>/permissions/", views.ClubMemberPermissionsView.as_view(), name="clubmember_permissions"
+    ),
     path("api/clubmember/<int:pk>/renew/", views.ClubMemberRenewView.as_view(), name="club_member_renew"),
     path("api/clubmember/<int:pk>/delete/", views.ClubMemberDeleteView.as_view(), name="club_member_delete"),
     path(

@@ -24,8 +24,6 @@ from .models import (
     ClubDiscordRole,
     ClubHistory,
     ClubMember,
-    ClubPermission,
-    ClubRole,
     GeneralInterest,
     Invoice,
     InvoicePayment,
@@ -357,7 +355,6 @@ class ClubAdmin(admin.ModelAdmin):
         UserInline,
         ClubDiscordRoleInline,
     ]
-    readonly_fields = ("owner",)
     actions = [export_to_csv]
 
 
@@ -793,17 +790,6 @@ class ClubMemberAdmin(admin.ModelAdmin):
     actions = [export_to_csv]
 
 
-class ClubRoleAdmin(admin.ModelAdmin):
-    model = ClubRole
-    list_display = ("name",)
-    search_fields = ("name",)
-
-
-class ClubPermissionAdmin(admin.ModelAdmin):
-    model = ClubPermission
-    list_display = ("name", "description")
-
-
 class ClubDiscordRoleAdmin(admin.ModelAdmin):
     model = ClubDiscordRole
     list_display = (
@@ -829,8 +815,7 @@ class ClubHistoryAdmin(admin.ModelAdmin):
 
 
 admin.site.register(ClubMember, ClubMemberAdmin)
-admin.site.register(ClubRole, ClubRoleAdmin)
-admin.site.register(ClubPermission, ClubPermissionAdmin)
+
 admin.site.register(ClubDiscordRole, ClubDiscordRoleAdmin)
 admin.site.register(ClubHistory, ClubHistoryAdmin)
 

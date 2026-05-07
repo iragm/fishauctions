@@ -4,15 +4,14 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('auctions', '0249_alter_clubapikey_key_hash_max_length'),
+        ("auctions", "0249_alter_clubapikey_key_hash_max_length"),
     ]
 
     operations = [
         migrations.AlterField(
-            model_name='clubmember',
-            name='source',
-            field=models.CharField(default='manually_added', max_length=200),
+            model_name="clubmember",
+            name="source",
+            field=models.CharField(default="manually_added", max_length=200),
         ),
     ]

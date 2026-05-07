@@ -557,7 +557,6 @@ class Club(models.Model):
     location = models.CharField(max_length=500, blank=True, null=True)
     location.help_text = "Search Google maps with this address"
     location_coordinates = PlainLocationField(based_fields=["location"], blank=True, null=True, verbose_name="Map")
-    owner = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="owned_clubs")
     MEMBERSHIP_SYSTEM_CHOICES = (
         ("january_first", "January 1st renewal"),
         ("rolling", "Rolling annual membership"),
@@ -655,54 +654,6 @@ class ClubDiscordRole(models.Model):
         return f"{self.role_name}"
 
 
-class ClubPermission(models.Model):
-    """Permission definitions for club roles"""
-
-    PERMISSION_CHOICES = (
-        ("permission_admin", "Full admin access"),
-        ("permission_view", "View members"),
-        ("permission_export", "Export member data"),
-        ("permission_add_edit", "Add and edit members"),
-        ("permission_edit_club", "Edit club settings"),
-        ("permission_manage_auctions", "Manage auctions"),
-        ("permission_manage_bap", "Manage BAP points"),
-    )
-    name = models.CharField(max_length=50, choices=PERMISSION_CHOICES, unique=True)
-    description = models.CharField(max_length=200)
-
-    def __str__(self):
-        return self.get_name_display()
-
-
-class ClubRole(models.Model):
-    """Global roles that can be assigned to club members, shared across all clubs"""
-
-    name = models.CharField(max_length=100, unique=True)
-    permissions = models.ManyToManyField(ClubPermission, blank=True)
-
-    def __str__(self):
-        return self.name
-
-
-DEFAULT_CLUB_ROLES = [
-    {"name": "View club list", "permissions": ["permission_view"]},
-    {"name": "Update users", "permissions": ["permission_view", "permission_add_edit"]},
-    {"name": "Change club permissions", "permissions": ["permission_view", "permission_edit_club"]},
-    {"name": "Export", "permissions": ["permission_view", "permission_add_edit", "permission_export"]},
-    {"name": "Manage auctions", "permissions": ["permission_manage_auctions"]},
-    {"name": "Manage BAP", "permissions": ["permission_view", "permission_manage_bap"]},
-]
-
-
-def create_default_club_roles():
-    """Create the default global roles if they don't already exist."""
-    for role_def in DEFAULT_CLUB_ROLES:
-        role, created = ClubRole.objects.get_or_create(name=role_def["name"])
-        if created:
-            perms = ClubPermission.objects.filter(name__in=role_def["permissions"])
-            role.permissions.set(perms)
-
-
 class ContactRecord(models.Model):
     """Abstract base class for contact records (shared between AuctionTOS and ClubMember)"""
 
@@ -778,7 +729,13 @@ class ClubMember(ContactRecord):
     discord_roles = models.TextField(blank=True)
     is_deleted = models.BooleanField(default=False, db_index=True)
     source = models.CharField(max_length=200, default="manually_added")
-    roles = models.ManyToManyField(ClubRole, blank=True)
+    permission_admin = models.BooleanField(default=False, help_text="Full admin access — grants all other permissions.")
+    permission_view = models.BooleanField(default=False, help_text="View the member list.")
+    permission_export = models.BooleanField(default=False, help_text="Export member data to CSV.")
+    permission_add_edit = models.BooleanField(default=False, help_text="Add and edit members.")
+    permission_edit_club = models.BooleanField(default=False, help_text="Edit club settings.")
+    permission_manage_auctions = models.BooleanField(default=False, help_text="Manage auctions for this club.")
+    permission_manage_bap = models.BooleanField(default=False, help_text="Manage BAP/HAP points.")
     possible_duplicate = models.ForeignKey(
         "ClubMember",
         on_delete=models.SET_NULL,
@@ -787,6 +744,20 @@ class ClubMember(ContactRecord):
         related_name="duplicate_of",
         help_text="Another club member with the same last name; may be a duplicate",
     )
+
+    @property
+    def has_any_permission(self):
+        return any(
+            [
+                self.permission_admin,
+                self.permission_view,
+                self.permission_export,
+                self.permission_add_edit,
+                self.permission_edit_club,
+                self.permission_manage_auctions,
+                self.permission_manage_bap,
+            ]
+        )
 
     def __str__(self):
         name = f"{self.first_name} {self.last_name}".strip()
