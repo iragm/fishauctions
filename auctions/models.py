@@ -13,6 +13,7 @@ from asgiref.sync import async_to_sync
 from autoslug import AutoSlugField
 from bs4 import BeautifulSoup
 from django.conf import settings
+from django.contrib.auth.hashers import check_password, make_password
 from django.contrib.auth.models import User
 from django.contrib.sites.models import Site
 from django.core.exceptions import ValidationError
@@ -953,7 +954,7 @@ class ClubAPIKey(models.Model):
     club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="api_keys")
     name = models.CharField(max_length=100, help_text="Label for this integration, e.g. 'WordPress'")
     prefix = models.CharField(max_length=12, unique=True, db_index=True)
-    key_hash = models.CharField(max_length=64, db_index=True)  # sha256(secret)
+    key_hash = models.CharField(max_length=255, db_index=True)  # salted password hash of secret
     is_active = models.BooleanField(default=True)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -963,28 +964,26 @@ class ClubAPIKey(models.Model):
     @staticmethod
     def generate():
         """Return (raw_key, prefix, key_hash). Store prefix + key_hash; display raw_key once."""
-        import hashlib
         import secrets
 
         prefix = "ck_" + secrets.token_hex(4)
         secret = secrets.token_hex(16)
         raw_key = f"{prefix}.{secret}"
-        key_hash = hashlib.sha256(secret.encode()).hexdigest()
+        key_hash = make_password(secret)
         return raw_key, prefix, key_hash
 
     @staticmethod
     def verify(raw_key):
         """Return active ClubAPIKey matching raw_key, or None."""
-        import hashlib
-
         try:
             prefix, secret = raw_key.split(".", 1)
         except ValueError:
             return None
-        key_hash = hashlib.sha256(secret.encode()).hexdigest()
-        return (
-            ClubAPIKey.objects.filter(prefix=prefix, key_hash=key_hash, is_active=True).select_related("club").first()
-        )
+        candidates = ClubAPIKey.objects.filter(prefix=prefix, is_active=True).select_related("club")
+        for candidate in candidates:
+            if check_password(secret, candidate.key_hash):
+                return candidate
+        return None
 
     def __str__(self):
         return f"{self.name} ({self.prefix}…)"
