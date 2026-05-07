@@ -13,6 +13,9 @@ class APIKeyAuthentication(BaseAuthentication):
       - Authorization: Api-Key <key> header
     """
 
+    def authenticate_header(self, request):
+        return "Api-Key"
+
     def authenticate(self, request):
         raw_key = request.META.get("HTTP_X_API_KEY", "")
         if not raw_key:
