@@ -473,7 +473,8 @@ def sanitize_summernote_html(text):
 
     soup = BeautifulSoup(text, "html.parser")
 
-    for tag in soup.find_all(["img", "script"]):
+    # Block executable or externally embedded content that can bypass editor restrictions.
+    for tag in soup.find_all(["embed", "iframe", "img", "object", "script"]):
         tag.decompose()
 
     for tag in soup.find_all():
@@ -485,7 +486,9 @@ def sanitize_summernote_html(text):
             if normalized_attr in {"href", "src", "xlink:href"}:
                 values = attr_value if isinstance(attr_value, list) else [attr_value]
                 if any(
-                    isinstance(value, str) and re.match(r"^\s*(?:data|javascript):", value, flags=re.IGNORECASE)
+                    isinstance(value, str)
+                    # Block URI schemes commonly used for script execution or local file access.
+                    and re.match(r"^\s*(?:data|file|javascript|vbscript):", value, flags=re.IGNORECASE)
                     for value in values
                 ):
                     del tag[attr_name]
@@ -1448,7 +1451,7 @@ class Auction(models.Model):
         # if self.date_start.year < 2000:
         #    current_year = timezone.now().year
         #    self.date_start = self.date_start.replace(year=current_year)
-        self.summernote_description = remove_html_color_tags(self.summernote_description)
+        self.summernote_description = sanitize_summernote_html(self.summernote_description)
         super().save(*args, **kwargs)
 
     def find_user(self, name="", email="", exclude_pk=None):
@@ -4167,7 +4170,7 @@ class Lot(models.Model):
             and self.winning_price <= self.auction.force_donation_threshold
         ):
             self.donation = True
-        self.summernote_description = remove_html_color_tags(self.summernote_description)
+        self.summernote_description = sanitize_summernote_html(self.summernote_description)
         if not self.quantity:
             self.quantity = 1
         super().save(*args, **kwargs)

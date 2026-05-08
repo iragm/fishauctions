@@ -10265,6 +10265,12 @@ class ModelUtilityFunctionsTestCase(StandardTestCase):
 
         self.assertEqual(club.description, "<p>About us</p>")
 
+    def test_club_save_allows_empty_description(self):
+        """Club save should keep empty Summernote content empty."""
+        club = Club.objects.create(name="Empty Club", description="")
+
+        self.assertEqual(club.description, "")
+
     def test_add_price_info_donation_lot(self):
         """Test add_price_info for donation lots"""
         from auctions.models import add_price_info
@@ -10527,7 +10533,10 @@ class FormsUtilityTestCase(TestCase):
         """Test clean_summernote strips script and image tags."""
         from auctions.forms import clean_summernote
 
-        html = "<p>Allowed</p><img src='/bad.png'><script>alert(1)</script>"
+        html = (
+            "<p>Allowed</p><img src='/bad.png'><script>alert(1)</script>"
+            "<iframe src='https://example.com'></iframe><embed src='/test.swf'><object data='/test'></object>"
+        )
         result = clean_summernote(html)
 
         self.assertEqual(result, "<p>Allowed</p>")
@@ -10536,10 +10545,13 @@ class FormsUtilityTestCase(TestCase):
         """Test clean_summernote strips dangerous attributes from allowed tags."""
         from auctions.forms import clean_summernote
 
-        html = '<p onclick="alert(1)">Text</p><a href="javascript:alert(1)">Link</a>'
+        html = (
+            '<p onclick="alert(1)">Text</p><a href="javascript:alert(1)">Link</a>'
+            '<a href="vbscript:msgbox(1)">VB</a><a href="data:text/html;base64,PHNjcmlwdD4=">Data</a>'
+        )
         result = clean_summernote(html)
 
-        self.assertEqual(result, "<p>Text</p><a>Link</a>")
+        self.assertEqual(result, "<p>Text</p><a>Link</a><a>VB</a><a>Data</a>")
 
 
 class TemplateTagsTestCase(TestCase):
