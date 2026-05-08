@@ -54,7 +54,16 @@ python manage.py setup_celery_beat > /dev/null 2>&1 || true
 # Load demo data if in DEBUG mode and database is empty (idempotent - safe to run multiple times)
 python manage.py load_demo_data
 
-if [ "${DEBUG}" = "True" ]; then
+debug_mode=$(
+python << END
+from fishauctions._env import parse_bool_env
+import os
+
+print("true" if parse_bool_env(os.environ.get("DEBUG"), default=False) else "false")
+END
+) || exit $?
+
+if [ "$debug_mode" = "true" ]; then
     echo Starting fishauctions in development mode
     exec uvicorn fishauctions.asgi:application --host 0.0.0.0 --port 8000 --reload --reload-include '*.py' --reload-include '*.html' --reload-include '*.js'
 else
