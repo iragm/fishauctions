@@ -13209,7 +13209,7 @@ class LotBapPointsView(LoginRequiredMixin, View):
     """AJAX endpoint to update BAP points awarded for a lot. BAP admins only."""
 
     def post(self, request, pk):
-        lot = get_object_or_404(Lot, pk=pk, is_deleted=False)
+        lot = get_object_or_404(Lot, pk=pk, is_deleted=False, banned=False)
         club = lot.auction.club if lot.auction else None
         if not club or not check_club_permission(request.user, club, "permission_manage_bap"):
             return HttpResponse(status=403)
