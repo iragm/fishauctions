@@ -12409,7 +12409,7 @@ class ClubMemberIngestAPIView(APIView):
     def post(self, request, slug=None):
         api_key = request.api_key
         club = request.club
-        if slug and club.slug != slug:
+        if not slug or club.slug != slug:
             return Response({"error": "API key does not belong to this club."}, status=403)
         mapped = map_fields(dict(request.data), api_key)
         serializer = ClubMemberIngestSerializer(data=mapped)
@@ -13226,7 +13226,7 @@ class LotBapPointsView(LoginRequiredMixin, View):
         if lot.auctiontos_seller:
             name = lot.auctiontos_seller.name
         elif lot.user:
-            name = f"{lot.user.first_name} {lot.user.last_name}".strip() or str(lot.user)
+            name = f"{lot.user.first_name} {lot.user.last_name}".strip() or lot.user.username
         else:
             name = f"lot #{lot.pk}"
         ClubHistory.objects.create(
