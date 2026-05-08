@@ -200,6 +200,8 @@ def user_logged_in_callback(sender, user, request, **kwargs):
 
     from auctions.models import ClubMember
 
+    # Bulk update — no ClubHistory here because this is an automatic system action on login
+    # and there is no meaningful "who did this" actor to record.
     ClubMember.objects.filter(user__isnull=True, email=user.email, is_deleted=False).update(user=user)
 
 
@@ -218,6 +220,8 @@ def bounce_handler(sender, mail_obj, bounce_obj, raw_message, *args, **kwargs):
     from auctions.models import AuctionTOS, ClubMember
 
     AuctionTOS.objects.filter(email=email).update(email_address_status="BAD")
+    # Bulk update — no ClubHistory here because this is an automatic SES bounce notification;
+    # the "actor" is the email provider, not a club admin.
     ClubMember.objects.filter(email=email, is_deleted=False).update(email_address_status="BAD")
 
 

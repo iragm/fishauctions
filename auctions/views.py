@@ -6155,6 +6155,12 @@ class AuctionInfo(FormMixin, DetailView, AuctionViewMixin):
                         if not member.permission_admin:
                             member.permission_admin = True
                             member.save(update_fields=["permission_admin"])
+                        ClubHistory.objects.create(
+                            club=creator_club,
+                            user=request.user,
+                            action=f"Granted admin permissions to {creator.get_full_name() or creator.username} via auction admin panel",
+                            applies_to="MEMBERS",
+                        )
                         messages.success(
                             request,
                             f"{creator.username} is now an admin of {creator_club.name}",
@@ -12795,7 +12801,13 @@ class ClubMemberListCreateAPIView(ClubAPIViewMixin, generics.ListCreateAPIView):
         club = self.get_club()
         if not check_club_permission(self.request.user, club, "permission_add_edit"):
             self.permission_denied(self.request, message="You do not have permission to add members to this club.")
-        serializer.save(club=club, added_by=self.request.user)
+        member = serializer.save(club=club, added_by=self.request.user)
+        ClubHistory.objects.create(
+            club=club,
+            user=self.request.user,
+            action=f"Added member {member} via API",
+            applies_to="MEMBERS",
+        )
 
 
 class ClubMemberDetailAPIView(ClubAPIViewMixin, generics.RetrieveUpdateDestroyAPIView):
@@ -12805,7 +12817,13 @@ class ClubMemberDetailAPIView(ClubAPIViewMixin, generics.RetrieveUpdateDestroyAP
         club = self.get_club()
         if not check_club_permission(self.request.user, club, "permission_add_edit"):
             self.permission_denied(self.request, message="You do not have permission to edit members of this club.")
-        serializer.save()
+        member = serializer.save()
+        ClubHistory.objects.create(
+            club=club,
+            user=self.request.user,
+            action=f"Updated member {member} via API",
+            applies_to="MEMBERS",
+        )
 
     def perform_destroy(self, instance):
         club = self.get_club()
@@ -13103,6 +13121,12 @@ class DiscordInteractionsView(View):
                 role = existing_by_email.discord_role
                 if role and role.role_id:
                     assign_discord_role(guild_id, discord_id, role.role_id)
+                ClubHistory.objects.create(
+                    club=club,
+                    user=None,
+                    action=f"Discord account linked for {existing_by_email} (@{discord_username or discord_id})",
+                    applies_to="MEMBERS",
+                )
                 return _discord_ephemeral("✅ You're in! Access unlocked.")
 
         # Create a new club member
@@ -13119,6 +13143,12 @@ class DiscordInteractionsView(View):
         role = new_member.discord_role
         if role and role.role_id:
             assign_discord_role(guild_id, discord_id, role.role_id)
+        ClubHistory.objects.create(
+            club=club,
+            user=None,
+            action=f"New member added via Discord: {new_member} (@{discord_username or discord_id})",
+            applies_to="MEMBERS",
+        )
         return _discord_ephemeral("✅ You're in! Access unlocked.")
 
     def _handle_connect_command(self, data):
@@ -13150,6 +13180,14 @@ class DiscordInteractionsView(View):
 
         club.discord_server_id = guild_id
         club.save(update_fields=["discord_server_id"])
+
+        caller_username = user_data.get("username") or caller_discord_id
+        ClubHistory.objects.create(
+            club=club,
+            user=None,
+            action=f"Discord server connected by @{caller_username} (Discord ID {caller_discord_id})",
+            applies_to="SETTINGS",
+        )
 
         bot_token = getattr(settings, "DISCORD_BOT_TOKEN", "")
         _sync_discord_roles(club, bot_token) if bot_token else None
@@ -13196,6 +13234,13 @@ class DiscordInteractionsView(View):
 
         club.auction_channel_id = channel_id
         club.save(update_fields=["auction_channel_id"])
+        caller_username = user_data.get("username") or caller_discord_id
+        ClubHistory.objects.create(
+            club=club,
+            user=None,
+            action=f"Auction announcement channel set by @{caller_username} (Discord ID {caller_discord_id})",
+            applies_to="SETTINGS",
+        )
         return _discord_ephemeral("✅ Auction announcements will be posted in this channel.")
 
 
