@@ -195,10 +195,13 @@ class Command(BaseCommand):
         )
         current_site = Site.objects.get_current()
         for member in membership_reminder_qs:
+            fallback_reply_to = settings.DEFAULT_FROM_EMAIL
+            if settings.ADMINS:
+                fallback_reply_to = settings.ADMINS[0][1]
             mail.send(
                 member.email,
                 template="club_membership_expiring",
-                headers={"Reply-to": (member.club.contact_email or settings.ADMINS[0][1])},
+                headers={"Reply-to": (member.club.contact_email or fallback_reply_to)},
                 context={
                     "name": member.display_name,
                     "club": member.club,

@@ -2227,6 +2227,11 @@ class AuctionEditForm(forms.ModelForm):
                 "add_membership_fee_to_invoices_for_expired_members",
                 "Enable adding people from this auction to the club before enabling membership fees.",
             )
+        if (
+            cleaned_data.get("add_people_from_auction_to_club")
+            or cleaned_data.get("add_membership_fee_to_invoices_for_expired_members")
+        ) and not self.instance.club:
+            self.add_error("add_people_from_auction_to_club", "Associate this auction with a club first.")
         return cleaned_data
 
     def save(self, commit=True):
