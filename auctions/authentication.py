@@ -1,3 +1,4 @@
+from django.contrib.auth.models import AnonymousUser
 from rest_framework.authentication import BaseAuthentication
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework.throttling import SimpleRateThrottle
@@ -11,6 +12,9 @@ class APIKeyAuthentication(BaseAuthentication):
     Accepts the key via:
       - X-API-Key header
       - Authorization: Api-Key <key> header
+
+    Views that use this as their sole authenticator will accept ONLY API key
+    auth — no session, no token, no anonymous access.
     """
 
     def authenticate_header(self, request):
@@ -23,14 +27,17 @@ class APIKeyAuthentication(BaseAuthentication):
             if auth_header.startswith("Api-Key "):
                 raw_key = auth_header[8:].strip()
         if not raw_key:
-            return None  # allow other authenticators to try
+            msg = "API key required."
+            raise AuthenticationFailed(msg)
         api_key = ClubAPIKey.verify(raw_key)
         if not api_key:
             msg = "Invalid or inactive API key."
             raise AuthenticationFailed(msg)
         request.api_key = api_key
         request.club = api_key.club
-        return (None, api_key)  # no Django user; api_key is the auth credential
+        # Return AnonymousUser so request.user is never None; the real credential
+        # is the api_key stored on request.
+        return (AnonymousUser(), api_key)
 
 
 class ApiKeyThrottle(SimpleRateThrottle):

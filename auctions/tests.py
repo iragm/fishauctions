@@ -14434,6 +14434,14 @@ class ClubMemberIngestAPITests(TestCase):
         response = self._post({"email": "test@example.com"}, key="ck_bad.wrong")
         self.assertEqual(response.status_code, 401)
 
+    def test_wrong_slug_returns_403(self):
+        other_club = Club.objects.create(name="Other Club")
+        wrong_url = reverse("api_club_member_ingest", kwargs={"slug": other_club.slug})
+        response = self.client.post(
+            wrong_url, {"email": "test@example.com"}, content_type="application/json", HTTP_X_API_KEY=self.raw_key
+        )
+        self.assertEqual(response.status_code, 403)
+
     def test_valid_key_creates_member(self):
         response = self._post({"email": "new@example.com", "first_name": "Alice"})
         self.assertEqual(response.status_code, 201)
