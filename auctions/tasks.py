@@ -506,9 +506,9 @@ def recalculate_club_bap_points(self, club_pk):
     user_map = {m.user_id: m for m in members if m.user_id}
     email_map = {m.email.lower(): m for m in members if m.email}
 
-    lots = Lot.objects.filter(auction__club=club, bap_points_awarded__gt=0).select_related(
-        "auctiontos_seller__user", "species_category", "auction__club"
-    )
+    lots = Lot.objects.filter(
+        auction__club=club, bap_points_awarded__gt=0, is_deleted=False, banned=False
+    ).select_related("auctiontos_seller__user", "species_category", "auction__club")
 
     for lot in lots:
         seller_user = lot.user or (lot.auctiontos_seller.user if lot.auctiontos_seller else None)

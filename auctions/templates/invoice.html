@@ -94,11 +94,12 @@ document.addEventListener("DOMContentLoaded", function() {
 </script>
 {% if viewer_has_bap %}
 <script>
+var bapUrlTemplate = "{% url 'lot_bap_points' pk=0 %}";
 function saveBapPoints(el) {
     $.ajax({
         type: "POST",
         beforeSend: function(req) { req.setRequestHeader("X-CSRFTOKEN", "{{ csrf_token }}"); },
-        url: "/api/lot/" + el.dataset.lotPk + "/bap/",
+        url: bapUrlTemplate.replace("/0/", "/" + el.dataset.lotPk + "/"),
         data: { bap_points_awarded: el.value },
         success: function() { $(el).addClass("is-valid").removeClass("is-invalid"); },
         error: function() { $(el).addClass("is-invalid").removeClass("is-valid"); },

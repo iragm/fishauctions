@@ -12407,10 +12407,10 @@ class ClubMemberIngestAPIView(APIView):
     throttle_classes = [ApiKeyThrottle]
 
     def post(self, request, slug=None):
-        api_key = getattr(request, "api_key", None)
-        if not api_key:
-            return Response({"error": "Authentication required."}, status=401)
+        api_key = request.api_key
         club = request.club
+        if slug and club.slug != slug:
+            return Response({"error": "API key does not belong to this club."}, status=403)
         mapped = map_fields(dict(request.data), api_key)
         serializer = ClubMemberIngestSerializer(data=mapped)
         if not serializer.is_valid():
@@ -12465,21 +12465,18 @@ class ClubAPIKeyCreateView(LoginRequiredMixin, ClubViewMixin, View):
 
     def post(self, request, slug):
         name = request.POST.get("name", "").strip()
-        rate_limit_raw = request.POST.get("rate_limit", "").strip()
         if not name:
             return render(
                 request,
                 "auctions/club_api_key_create.html",
                 {"club": self.club, "error": "Name is required."},
             )
-        rate_limit = int(rate_limit_raw) if rate_limit_raw.isdigit() else None
         raw_key, prefix, key_hash = ClubAPIKey.generate()
         api_key = ClubAPIKey.objects.create(
             club=self.club,
             name=name,
             prefix=prefix,
             key_hash=key_hash,
-            rate_limit=rate_limit,
             created_by=request.user,
         )
         ClubHistory.objects.create(
@@ -13212,7 +13209,7 @@ class LotBapPointsView(LoginRequiredMixin, View):
     """AJAX endpoint to update BAP points awarded for a lot. BAP admins only."""
 
     def post(self, request, pk):
-        lot = get_object_or_404(Lot, pk=pk)
+        lot = get_object_or_404(Lot, pk=pk, is_deleted=False)
         club = lot.auction.club if lot.auction else None
         if not club or not check_club_permission(request.user, club, "permission_manage_bap"):
             return HttpResponse(status=403)
@@ -13226,7 +13223,12 @@ class LotBapPointsView(LoginRequiredMixin, View):
         lot.manually_approved = True
         lot.bap_auto_reason = ""
         lot.save(update_fields=["bap_points_awarded", "manually_approved", "bap_auto_reason"])
-        name = lot.auctiontos_seller.name if lot.auctiontos_seller else lot.user.first_name + " " + lot.user.last_name
+        if lot.auctiontos_seller:
+            name = lot.auctiontos_seller.name
+        elif lot.user:
+            name = f"{lot.user.first_name} {lot.user.last_name}".strip() or str(lot.user)
+        else:
+            name = f"lot #{lot.pk}"
         ClubHistory.objects.create(
             club=club,
             user=request.user,
