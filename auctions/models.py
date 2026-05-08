@@ -483,7 +483,9 @@ def sanitize_summernote_html(text):
             if normalized_attr.startswith("on"):
                 del tag[attr_name]
                 continue
+            # These are the URI-bearing attributes we allow in Summernote content.
             if normalized_attr in {"href", "src", "xlink:href"}:
+                # Some parsers represent multi-valued attributes as lists, so normalize both cases.
                 values = attr_value if isinstance(attr_value, list) else [attr_value]
                 if any(
                     isinstance(value, str)

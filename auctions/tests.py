@@ -10242,7 +10242,10 @@ class ModelUtilityFunctionsTestCase(StandardTestCase):
 
     def test_auction_save_removes_disallowed_summernote_content(self):
         """Auction Summernote HTML should strip images and scripts before saving."""
-        self.online_auction.summernote_description = '<p onclick="alert(1)">Rules</p><script>alert(1)</script><img src="/bad.png"><a href="javascript:alert(1)">Link</a>'
+        self.online_auction.summernote_description = (
+            '<p onclick="alert(1)" onmouseover="alert(1)">Rules</p>'
+            '<script>alert(1)</script><img src="/bad.png"><a href="javascript:alert(1)">Link</a>'
+        )
         self.online_auction.save()
         self.online_auction.refresh_from_db()
 
@@ -10546,12 +10549,13 @@ class FormsUtilityTestCase(TestCase):
         from auctions.forms import clean_summernote
 
         html = (
-            '<p onclick="alert(1)">Text</p><a href="javascript:alert(1)">Link</a>'
+            '<p onclick="alert(1)" onerror="alert(1)">Text</p><a href="javascript:alert(1)">Link</a>'
             '<a href="vbscript:msgbox(1)">VB</a><a href="data:text/html;base64,PHNjcmlwdD4=">Data</a>'
+            '<a href="https://example.com">Safe</a>'
         )
         result = clean_summernote(html)
 
-        self.assertEqual(result, "<p>Text</p><a>Link</a><a>VB</a><a>Data</a>")
+        self.assertEqual(result, '<p>Text</p><a>Link</a><a>VB</a><a>Data</a><a href="https://example.com">Safe</a>')
 
 
 class TemplateTagsTestCase(TestCase):
