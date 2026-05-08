@@ -228,6 +228,7 @@ function saveBapPoints(el) {
     </span>
   {% endif %}
 </div>
+{% include "auctions/partials/invoice_membership_renewal.html" %}
 {{ auction.invoice_payment_instructions | default:""}}<br>
 {% if print_label_link %}
   <div>{% if show_links %}
@@ -297,6 +298,12 @@ function saveBapPoints(el) {
   <tr>
     <td>Tax</td>
     <td>{{ invoice.currency_symbol }}{{invoice.tax|floatformat:2 }}</td>
+  </tr>
+  {% endif %}
+  {% if invoice.membership_fee_amount %}
+  <tr>
+    <td>{{ invoice.auction.club.name }} membership fee</td>
+    <td>{{ invoice.currency_symbol }}{{ invoice.membership_fee_amount|floatformat:2 }}</td>
   </tr>
   {% endif %}
   {% for adjustment in invoice.changed_adjustments %}

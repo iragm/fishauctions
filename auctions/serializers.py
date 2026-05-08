@@ -20,6 +20,8 @@ class ClubMemberSerializer(serializers.ModelSerializer):
             "bap_points",
             "hap_points",
             "membership_last_paid",
+            "uuid",
+            "membership_expiration_reminder_due",
             "createdon",
             "source",
             "is_deleted",

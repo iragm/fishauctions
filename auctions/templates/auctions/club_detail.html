@@ -67,6 +67,13 @@
         <p class="mb-0">BAP Points: {{ member.bap_points }} | HAP Points: {{ member.hap_points }}</p>
         {% endif %}
       {% endif %}
+      {% if show_membership_payment_button %}
+      <div class="mt-3">
+        <a class="btn btn-success btn-sm" href="{% url 'club_detail' club.slug %}?user={{ member.uuid }}">
+          <i class="bi bi-credit-card"></i> Payment
+        </a>
+      </div>
+      {% endif %}
     </div>
   </div>
 {% elif club.allow_joining %}

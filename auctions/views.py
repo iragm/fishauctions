@@ -291,6 +291,101 @@ def check_club_permission(user, club, permission_name):
     return bool(getattr(member, permission_name, False))
 
 
+def _invoice_membership_candidate(invoice):
+    if not invoice or not invoice.auction or not invoice.auction.club or not invoice.auctiontos_user:
+        return None
+    if not invoice.auction.add_people_from_auction_to_club:
+        return None
+    user = invoice.auctiontos_user.user
+    if not user:
+        return None
+    return ClubMember.objects.filter(club=invoice.auction.club, user=user, is_deleted=False).first()
+
+
+def _should_mark_invoice_renewal_needed(invoice):
+    if not invoice or not invoice.auction or not invoice.auction.club:
+        return False
+    auction = invoice.auction
+    club = auction.club
+    if not auction.add_people_from_auction_to_club:
+        return False
+    if not auction.add_membership_fee_to_invoices_for_expired_members:
+        return False
+    if not club.membership_annual_fee:
+        return False
+    member = _invoice_membership_candidate(invoice)
+    if not member:
+        return True
+    expiration_date = member.membership_expiration_date
+    if not expiration_date:
+        return True
+    return expiration_date <= timezone.now().date() + timedelta(days=14)
+
+
+def _ensure_invoice_renewal_state(invoice):
+    if not invoice or invoice.renewal_processed:
+        return
+    should_need = _should_mark_invoice_renewal_needed(invoice)
+    if invoice.renewal_needed != should_need:
+        invoice.renewal_needed = should_need
+        invoice.save(update_fields=["renewal_needed"])
+
+
+def _process_invoice_membership_renewal(invoice, acting_user=None, payment_method="Invoice"):
+    if not invoice or not invoice.auction or not invoice.auction.club:
+        return
+    if not invoice.renewal_needed or invoice.renewal_processed:
+        return
+    auction = invoice.auction
+    club = auction.club
+    user = invoice.auctiontos_user.user
+    if not user:
+        return
+    member, _ = ClubMember.objects.get_or_create(
+        club=club,
+        user=user,
+        defaults={
+            "first_name": invoice.auctiontos_user.name.split(" ")[0]
+            if invoice.auctiontos_user.name
+            else user.first_name,
+            "last_name": " ".join(invoice.auctiontos_user.name.split(" ")[1:])
+            if invoice.auctiontos_user.name
+            else user.last_name,
+            "email": invoice.auctiontos_user.email or user.email,
+            "source": "auction_invoice",
+        },
+    )
+    old_paid = member.membership_last_paid
+    today = timezone.now().date()
+    if club.membership_system == "rolling" and old_paid:
+        current_expiration = old_paid + timedelta(days=365)
+        if current_expiration > today:
+            member.membership_last_paid = old_paid + timedelta(days=365)
+        else:
+            member.membership_last_paid = today
+    else:
+        member.membership_last_paid = today
+    member.save(update_fields=["membership_last_paid", "membership_expiration_reminder_due"])
+    InvoicePayment.objects.create(
+        invoice=None,
+        club_member=member,
+        payment_target="CLUB_MEMBER",
+        amount=Decimal(club.membership_annual_fee or 0),
+        amount_available_to_refund=Decimal("0.00"),
+        currency=invoice.currency,
+        payment_method=payment_method,
+        memo=f"Renewal from invoice #{invoice.pk}",
+    )
+    invoice.renewal_processed = True
+    invoice.save(update_fields=["renewal_processed"])
+    ClubHistory.objects.create(
+        club=club,
+        user=acting_user,
+        action=f"Renewed membership for {member.display_name} from invoice #{invoice.pk}",
+        applies_to="MEMBERSHIP",
+    )
+
+
 def _bap_leaderboard(club, field, current_member):
     """Return a leaderboard list for display on the club detail page.
 
@@ -1429,6 +1524,10 @@ class InvoicePaid(APIView):
             invoice.invoice_notification_due = None
             cancel_invoice_notification(invoice.pk)
         invoice.save()
+        if new_status == "PAID":
+            _process_invoice_membership_renewal(
+                invoice, acting_user=request.user if request.user.is_authenticated else None
+            )
         user = request.user if request.user.is_authenticated else None
         auction.create_history(
             applies_to="INVOICES",
@@ -1449,6 +1548,29 @@ class APIPostView(APIView):
 
     def post(self, request, *args, **kwargs):
         raise NotImplementedError()
+
+
+class InvoiceRenewalNeededToggleView(APIView):
+    authentication_classes = [TokenAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        invoice = get_object_or_404(Invoice, pk=pk)
+        if not invoice.auction or not invoice.auction.permission_check(request.user):
+            raise PermissionDenied()
+        if invoice.renewal_processed:
+            return HttpResponseBadRequest("Renewal already processed for this invoice.")
+        renewal_needed = str(request.POST.get("renewal_needed", "")).lower() in ("1", "true", "on", "yes")
+        invoice.renewal_needed = renewal_needed
+        invoice.save(update_fields=["renewal_needed"])
+        invoice.recalculate()
+        return HttpResponse(
+            render_to_string(
+                "auctions/partials/invoice_membership_renewal.html",
+                {"invoice": invoice, "is_admin": True, "csrf_token": get_token(request)},
+                request=request,
+            )
+        )
 
 
 class UpdateLotPushNotificationsView(APIPostView):
@@ -5971,6 +6093,8 @@ class AuctionCreateView(CreateView, LoginRequiredMixin):
                 "use_seller_dash_lot_numbering",
                 "enable_online_payments",
                 "enable_square_payments",
+                "add_people_from_auction_to_club",
+                "add_membership_fee_to_invoices_for_expired_members",
                 "alternative_split_label",
                 "google_drive_link",
                 "only_whole_dollar_bids",
@@ -6862,6 +6986,7 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
 
     def get_context_data(self, **kwargs):
         invoice = self.get_object()
+        _ensure_invoice_renewal_state(invoice)
         context = {}
         context["debug"] = settings.DEBUG
         context["using_no_login_link"] = self.using_no_login_link
@@ -7465,6 +7590,8 @@ class InvoiceBulkUpdateStatus(LoginRequiredMixin, TemplateView, FormMixin, Aucti
             invoice.invoice_notification_due = run_at
             invoice.recalculate()
             invoice.save()
+            if self.new_invoice_status == "PAID":
+                _process_invoice_membership_renewal(invoice, acting_user=request.user)
             # Schedule or cancel notification for each invoice
             if run_at:
                 schedule_invoice_notification(invoice.pk, run_at)
@@ -7993,6 +8120,7 @@ class PayPalAPIMixin:
         if invoice.net_after_payments >= 0 and invoice.status in ("DRAFT", "UNPAID"):
             invoice.status = "PAID"
             invoice.save()
+            _process_invoice_membership_renewal(invoice, payment_method="PayPal")
             invoice.auction.create_history(
                 applies_to="INVOICES",
                 action=f"Invoice {invoice.auctiontos_user.name} automatically marked PAID after PayPal payment",
@@ -11500,6 +11628,7 @@ class SquareWebhookView(SquareAPIMixin, View):
                         if invoice.net_after_payments >= 0:
                             invoice.status = "PAID"
                             invoice.save()
+                            _process_invoice_membership_renewal(invoice, payment_method="Square")
 
                             # Send websocket notification for payment completion
                             channel_layer = channels.layers.get_channel_layer()
@@ -11595,6 +11724,7 @@ class QuickCheckoutHTMX(AuctionViewMixin, PayPalAPIMixin, SquareAPIMixin, Templa
             if context["tos"]:
                 invoice = context["tos"].invoice
                 context["invoice"] = invoice
+                _ensure_invoice_renewal_state(invoice)
             if invoice:
                 # Generate PayPal QR code if available
                 if invoice.show_paypal_button and not invoice.reason_for_payment_not_available:
@@ -11647,6 +11777,9 @@ class ClubDetailView(ClubViewMixin, TemplateView):
         member = None
         if self.request.user.is_authenticated:
             member = ClubMember.objects.filter(club=self.club, user=self.request.user, is_deleted=False).first()
+        requested_member_uuid = self.request.GET.get("user", "")
+        if requested_member_uuid:
+            member = ClubMember.objects.filter(club=self.club, uuid=requested_member_uuid, is_deleted=False).first()
         context["member"] = member
         if member:
             context["update_form"] = ClubMemberSelfServiceForm(instance=member)
@@ -11690,6 +11823,13 @@ class ClubDetailView(ClubViewMixin, TemplateView):
             "permission_manage_auctions"
         )
         context["can_manage_auctions"] = can_manage_auctions
+        context["show_membership_payment_button"] = bool(
+            self.club.enable_club_page
+            and self.club.allow_integrated_payments
+            and self.club.membership_annual_fee
+            and self.club.payment_user
+            and member
+        )
         if can_manage_auctions:
             context["club_auctions"] = Auction.objects.filter(club=self.club, is_deleted=False).order_by("date_start")
         else:

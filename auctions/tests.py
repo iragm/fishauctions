@@ -37,6 +37,7 @@ from .models import (
     ClubMember,
     Invoice,
     InvoiceAdjustment,
+    InvoicePayment,
     Lot,
     LotHistory,
     LotImage,
@@ -5064,6 +5065,74 @@ class InvoiceStatusButtonTests(StandardTestCase):
         url = f"/api/payinvoice/{uuid.uuid4()}/PAID"
         response = self.client.post(url)
         assert response.status_code == 404
+
+
+class ClubMembershipRenewalFlowTests(StandardTestCase):
+    def setUp(self):
+        super().setUp()
+        self.club = Club.objects.create(
+            name="Renewal Club",
+            membership_system="rolling",
+            membership_annual_fee=Decimal("25.00"),
+            enable_club_page=True,
+            allow_integrated_payments=True,
+            send_membership_expiration_reminders=True,
+        )
+        self.online_auction.club = self.club
+        self.online_auction.add_people_from_auction_to_club = True
+        self.online_auction.add_membership_fee_to_invoices_for_expired_members = True
+        self.online_auction.save()
+        self.member = ClubMember.objects.create(
+            club=self.club,
+            user=self.online_tos.user,
+            first_name="Renew",
+            last_name="Me",
+            email=self.online_tos.email,
+            membership_last_paid=timezone.now().date() - datetime.timedelta(days=370),
+        )
+        self.invoice.refresh_from_db()
+
+    def test_membership_reminder_due_updates_when_membership_changes(self):
+        self.member.membership_last_paid = timezone.now().date()
+        self.member.save()
+        self.member.refresh_from_db()
+        self.assertIsNotNone(self.member.membership_expiration_reminder_due)
+
+    def test_invoice_membership_fee_applies_when_renewal_needed(self):
+        self.invoice.renewal_needed = True
+        self.invoice.save(update_fields=["renewal_needed"])
+        self.assertEqual(self.invoice.membership_fee_amount, Decimal("25.00"))
+
+    def test_invoice_renewal_toggle_requires_admin(self):
+        self.client.login(username=self.user_with_no_lots.username, password="testpassword")
+        response = self.client.post(
+            reverse("invoice_renewal_toggle", kwargs={"pk": self.invoice.pk}),
+            {"renewal_needed": "1"},
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_invoice_renewal_toggle_updates(self):
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.post(
+            reverse("invoice_renewal_toggle", kwargs={"pk": self.invoice.pk}),
+            {"renewal_needed": "1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.invoice.refresh_from_db()
+        self.assertTrue(self.invoice.renewal_needed)
+
+    def test_marking_invoice_paid_processes_membership_renewal(self):
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        self.invoice.renewal_needed = True
+        self.invoice.status = "UNPAID"
+        self.invoice.save(update_fields=["renewal_needed", "status"])
+        response = self.client.post(f"/api/payinvoice/{self.invoice.pk}/PAID")
+        self.assertEqual(response.status_code, 200)
+        self.invoice.refresh_from_db()
+        self.member.refresh_from_db()
+        self.assertTrue(self.invoice.renewal_processed)
+        self.assertGreaterEqual(self.member.membership_last_paid, timezone.now().date())
+        self.assertTrue(InvoicePayment.objects.filter(club_member=self.member, payment_target="CLUB_MEMBER").exists())
 
 
 class QuickCheckoutHTMXTests(StandardTestCase):

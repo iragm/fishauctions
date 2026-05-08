@@ -1,0 +1,29 @@
+{% if invoice.auction and invoice.auction.club and invoice.auction.add_people_from_auction_to_club %}
+<div id="invoice-membership-renewal" class="alert alert-secondary py-2">
+  <div class="form-check">
+    <input
+      class="form-check-input"
+      type="checkbox"
+      id="renewal_needed_checkbox_{{ invoice.pk }}"
+      name="renewal_needed"
+      value="1"
+      {% if invoice.renewal_needed %}checked{% endif %}
+      {% if invoice.renewal_processed or not is_admin %}disabled{% endif %}
+      {% if is_admin and not invoice.renewal_processed %}
+      hx-post="{% url 'invoice_renewal_toggle' pk=invoice.pk %}"
+      hx-target="#invoice-membership-renewal"
+      hx-swap="outerHTML"
+      hx-trigger="change"
+      {% endif %}
+    >
+    <label class="form-check-label" for="renewal_needed_checkbox_{{ invoice.pk }}">
+      Apply {{ invoice.auction.club.name }} membership fee
+      {% if invoice.auction.club.membership_annual_fee %}(${{ invoice.auction.club.membership_annual_fee|floatformat:2 }}){% endif %}
+    </label>
+  </div>
+  <small class="text-muted">Membership status: {{ invoice.membership_status_for_invoice }}</small>
+  {% if invoice.renewal_processed %}
+  <div><small class="text-danger">Renewal already processed when this invoice was marked paid. Manual adjustment or refund is required.</small></div>
+  {% endif %}
+</div>
+{% endif %}

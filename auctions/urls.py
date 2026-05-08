@@ -504,6 +504,11 @@ urlpatterns = [
         views.MarkInvoicesPaid.as_view(),
         name="auction_invoices_paid",
     ),
+    path(
+        "api/invoices/<int:pk>/renewal-toggle/",
+        views.InvoiceRenewalNeededToggleView.as_view(),
+        name="invoice_renewal_toggle",
+    ),
     path("api/lots/<int:pk>/refund", views.LotRefundDialog.as_view(), name="lot_refund"),
     path(
         "api/lots/<slug:slug>/sell-to-highest-bidder",

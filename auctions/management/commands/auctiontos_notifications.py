@@ -10,6 +10,7 @@ from auctions.models import (
     Auction,
     AuctionCampaign,
     AuctionTOS,
+    ClubMember,
     Lot,
 )
 
@@ -180,3 +181,32 @@ class Command(BaseCommand):
                         "reply_to_email": campaign.auction.created_by.email,
                     },
                 )
+
+        membership_reminder_qs = (
+            ClubMember.objects.filter(
+                is_deleted=False,
+                club__send_membership_expiration_reminders=True,
+                membership_last_paid__isnull=False,
+                membership_expiration_reminder_due__lte=timezone.now(),
+                email__isnull=False,
+            )
+            .exclude(email="")
+            .exclude(contact_status="do_not_contact")
+        )
+        current_site = Site.objects.get_current()
+        for member in membership_reminder_qs:
+            mail.send(
+                member.email,
+                template="club_membership_expiring",
+                headers={"Reply-to": (member.club.contact_email or settings.ADMINS[0][1])},
+                context={
+                    "name": member.display_name,
+                    "club": member.club,
+                    "domain": current_site.domain,
+                    "navbar_brand": settings.NAVBAR_BRAND,
+                    "renew_link": f"https://{current_site.domain}/clubs/{member.club.slug}/?user={member.uuid}",
+                    "member": member,
+                },
+            )
+            member.membership_expiration_reminder_due = None
+            member.save(update_fields=["membership_expiration_reminder_due"])

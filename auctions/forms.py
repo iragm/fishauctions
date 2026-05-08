@@ -16,6 +16,7 @@ from dal import autocomplete
 from django import forms
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.db.models import Q
 from django.forms import (
     HiddenInput,
 )
@@ -1850,6 +1851,8 @@ class AuctionEditForm(forms.ModelForm):
             "max_lots_per_user",
             "allow_additional_lots_as_donation",
             "email_users_when_invoices_ready",
+            "add_people_from_auction_to_club",
+            "add_membership_fee_to_invoices_for_expired_members",
             "pre_register_lot_discount_percent",
             "only_approved_sellers",
             "only_approved_bidders",
@@ -2119,6 +2122,14 @@ class AuctionEditForm(forms.ModelForm):
                     css_class="col-md-3",
                 ),
                 Div(
+                    "add_people_from_auction_to_club",
+                    css_class="col-md-3",
+                ),
+                Div(
+                    "add_membership_fee_to_invoices_for_expired_members",
+                    css_class="col-md-3",
+                ),
+                Div(
                     "enable_online_payments",
                     css_class="col-md-3",
                 ),
@@ -2209,6 +2220,13 @@ class AuctionEditForm(forms.ModelForm):
                     cleaned_data["minimum_bid"] = round_to_whole_dollar(minimum_bid)
                 else:
                     self.add_error("minimum_bid", "This auction only allows whole dollar amounts.")
+        if cleaned_data.get("add_membership_fee_to_invoices_for_expired_members") and not cleaned_data.get(
+            "add_people_from_auction_to_club"
+        ):
+            self.add_error(
+                "add_membership_fee_to_invoices_for_expired_members",
+                "Enable adding people from this auction to the club before enabling membership fees.",
+            )
         return cleaned_data
 
     def save(self, commit=True):
@@ -3385,6 +3403,8 @@ class ClubEditForm(forms.ModelForm):
             "facebook_page",
             "membership_system",
             "membership_annual_fee",
+            "payment_user",
+            "send_membership_expiration_reminders",
             "allow_joining",
             "allow_integrated_payments",
             "description",
@@ -3399,6 +3419,7 @@ class ClubEditForm(forms.ModelForm):
                 "Rolling: memberships expire one year from the payment date."
             ),
             "membership_annual_fee": "Leave blank if free.",
+            "payment_user": "Membership payments are sent to this user's payment account.",
             "allow_joining": "Let members self-join via the public club page.",
             "allow_integrated_payments": "Accept membership dues directly through the site.",
         }
@@ -3419,6 +3440,8 @@ class ClubEditForm(forms.ModelForm):
             "facebook_page",
             "membership_system",
             "membership_annual_fee",
+            "payment_user",
+            "send_membership_expiration_reminders",
             "allow_joining",
             "allow_integrated_payments",
             "description",
@@ -3430,6 +3453,28 @@ class ClubEditForm(forms.ModelForm):
             ),
         )
         self.helper.add_input(Submit("submit", "Save settings", css_class="btn-primary"))
+        club = self.instance
+        if club and club.pk:
+            admin_user_ids = (
+                club.members.filter(is_deleted=False)
+                .filter(Q(permission_admin=True) | Q(permission_edit_club=True) | Q(permission_manage_auctions=True))
+                .exclude(user__isnull=True)
+                .values_list("user_id", flat=True)
+            )
+            paypal_user_ids = set(
+                PayPalSeller.objects.filter(user_id__in=admin_user_ids).values_list("user_id", flat=True)
+            )
+            square_user_ids = set(
+                SquareSeller.objects.filter(user_id__in=admin_user_ids).values_list("user_id", flat=True)
+            )
+            eligible_ids = paypal_user_ids | square_user_ids
+            if settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET:
+                eligible_ids.update(
+                    User.objects.filter(is_superuser=True, id__in=admin_user_ids).values_list("id", flat=True)
+                )
+            self.fields["payment_user"].queryset = User.objects.filter(id__in=eligible_ids).order_by("username")
+        else:
+            self.fields["payment_user"].queryset = User.objects.none()
 
 
 class ClubBapSettingsForm(forms.ModelForm):

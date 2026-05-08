@@ -563,6 +563,18 @@ class Club(models.Model):
     )
     membership_system = models.CharField(max_length=20, choices=MEMBERSHIP_SYSTEM_CHOICES, default="january_first")
     membership_annual_fee = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    payment_user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="club_payment_destinations",
+        help_text="Club dues are sent to this user's connected payment account.",
+    )
+    send_membership_expiration_reminders = models.BooleanField(
+        default=False,
+        help_text="Send reminder emails before membership expiration.",
+    )
     discord_server_id = models.CharField(max_length=100, blank=True, null=True)
     auction_channel_id = models.CharField(
         max_length=100,
@@ -722,6 +734,8 @@ class ClubMember(ContactRecord):
     hap_points_ytd = models.PositiveIntegerField(default=0, help_text="HAP points earned this calendar year.")
     culture_points_ytd = models.PositiveIntegerField(default=0, help_text="Culture points earned this calendar year.")
     membership_last_paid = models.DateField(null=True, blank=True)
+    uuid = models.UUIDField(default=uuid_module.uuid4, unique=True, editable=False, db_index=True)
+    membership_expiration_reminder_due = models.DateTimeField(null=True, blank=True)
     createdon = models.DateTimeField(auto_now_add=True, verbose_name="date joined")
     added_by = models.ForeignKey(
         User, on_delete=models.SET_NULL, null=True, blank=True, related_name="added_club_members"
@@ -860,10 +874,34 @@ class ClubMember(ContactRecord):
         """Name for display — always non-empty."""
         return str(self)
 
+    @property
+    def membership_expiration_date(self):
+        if not self.membership_last_paid:
+            return None
+        if self.club.membership_system == "january_first":
+            return datetime.date(self.membership_last_paid.year + 1, 1, 1)
+        return self.membership_last_paid + datetime.timedelta(days=365)
+
+    def calculate_membership_expiration_reminder_due(self):
+        if not self.membership_last_paid or not self.club.send_membership_expiration_reminders:
+            return None
+        expiration_date = self.membership_expiration_date
+        if not expiration_date:
+            return None
+        reminder_date = expiration_date - datetime.timedelta(days=1)
+        return timezone.make_aware(datetime.datetime.combine(reminder_date, datetime.time(hour=12)))
+
     class Meta:
         ordering = ["last_name", "first_name"]
 
     def save(self, *args, **kwargs):
+        previous_membership_last_paid = None
+        if self.pk:
+            previous_membership_last_paid = (
+                ClubMember.objects.filter(pk=self.pk).values_list("membership_last_paid", flat=True).first()
+            )
+        if self.membership_last_paid != previous_membership_last_paid:
+            self.membership_expiration_reminder_due = self.calculate_membership_expiration_reminder_due()
         if self.is_deleted:
             # When soft-deleting, clear all duplicate links involving this member
             if self.possible_duplicate_id:
@@ -1067,6 +1105,14 @@ class Auction(models.Model):
     invoiced = models.BooleanField(default=False)
     created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     club = models.ForeignKey("Club", null=True, blank=True, on_delete=models.SET_NULL, related_name="auctions")
+    add_people_from_auction_to_club = models.BooleanField(
+        default=False,
+        help_text="Add auction participants to the associated club.",
+    )
+    add_membership_fee_to_invoices_for_expired_members = models.BooleanField(
+        default=False,
+        help_text="Automatically include club membership renewal fees when needed.",
+    )
     location = models.CharField(max_length=300, null=True, blank=True)
     location.help_text = "State or region of this auction"
     summernote_description = models.TextField(verbose_name="Rules", default="", blank=True)
@@ -5640,6 +5686,8 @@ class Invoice(models.Model):
     calculated_total.help_text = "This field is set automatically, you shouldn't need to manually change it"
     memo = models.CharField(max_length=500, blank=True, null=True, default="")
     memo.help_text = "Only other auction admins can see this"
+    renewal_needed = models.BooleanField(default=False)
+    renewal_processed = models.BooleanField(default=False)
 
     @property
     def currency(self):
@@ -5812,6 +5860,36 @@ class Invoice(models.Model):
     def changed_adjustments(self):
         return self.adjustments.exclude(amount=0)
 
+    @property
+    def membership_fee_amount(self):
+        club = self.auction.club if self.auction else None
+        if not (club and self.renewal_needed and club.membership_annual_fee):
+            return Decimal("0.00")
+        return Decimal(club.membership_annual_fee)
+
+    @property
+    def membership_status_for_invoice(self):
+        if not self.auction or not self.auction.club:
+            return "No club"
+        if not self.auctiontos_user.user:
+            return "No linked user"
+        member = ClubMember.objects.filter(
+            club=self.auction.club, user=self.auctiontos_user.user, is_deleted=False
+        ).first()
+        if not member:
+            return "Not a member"
+        if not member.membership_last_paid:
+            return "Never paid"
+        expiration_date = member.membership_expiration_date
+        if not expiration_date:
+            return "Unknown"
+        days_until_expiration = (expiration_date - timezone.now().date()).days
+        if days_until_expiration < 0:
+            return f"Expired {abs(days_until_expiration)} day(s) ago"
+        if days_until_expiration <= 14:
+            return f"Expires in {days_until_expiration} day(s)"
+        return "Active"
+
     def recalculate(self):
         """Store the current net in the calculated_total field.
 
@@ -5872,6 +5950,7 @@ class Invoice(models.Model):
         subtotal += Decimal(self.first_bid_payout)
         subtotal += Decimal(self.flat_value_adjustments)
         subtotal += Decimal(subtotal * self.percent_value_adjustments / 100)
+        subtotal -= Decimal(self.membership_fee_amount)
         subtotal -= Decimal(self.tax)
         if not subtotal:
             subtotal = 0
@@ -6259,8 +6338,16 @@ class InvoicePayment(models.Model):
         ("FAILED", "Failed"),
         ("REFUNDED", "Refunded"),
     )
+    PAYMENT_TARGET_CHOICES = (
+        ("INVOICE", "Invoice"),
+        ("CLUB_MEMBER", "Club member"),
+    )
 
-    invoice = models.ForeignKey("Invoice", related_name="payments", on_delete=models.CASCADE)
+    invoice = models.ForeignKey("Invoice", related_name="payments", on_delete=models.CASCADE, null=True, blank=True)
+    club_member = models.ForeignKey(
+        "ClubMember", related_name="payments", on_delete=models.CASCADE, null=True, blank=True
+    )
+    payment_target = models.CharField(max_length=20, choices=PAYMENT_TARGET_CHOICES, default="INVOICE")
     amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0.00"))
     amount_available_to_refund = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0.00"))
     currency = models.CharField(max_length=10, default="USD")
