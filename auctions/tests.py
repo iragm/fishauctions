@@ -10245,11 +10245,15 @@ class ModelUtilityFunctionsTestCase(StandardTestCase):
         self.online_auction.summernote_description = (
             '<p onclick="alert(1)" onmouseover="alert(1)">Rules</p>'
             '<script>alert(1)</script><img src="/bad.png"><a href="javascript:alert(1)">Link</a>'
+            '<a href="https://example.com">Safe</a>'
         )
         self.online_auction.save()
         self.online_auction.refresh_from_db()
 
-        self.assertEqual(self.online_auction.summernote_description, "<p>Rules</p><a>Link</a>")
+        self.assertEqual(
+            self.online_auction.summernote_description,
+            '<p>Rules</p><a>Link</a><a href="https://example.com">Safe</a>',
+        )
 
     def test_lot_save_removes_disallowed_summernote_content(self):
         """Lot Summernote HTML should strip images and scripts before saving."""

@@ -468,8 +468,10 @@ def guess_category(text):
 
 def sanitize_summernote_html(text):
     """Remove disallowed Summernote content while preserving supported formatting."""
-    if not text:
-        return text
+    if text is None:
+        return None
+    if text == "":
+        return ""
 
     soup = BeautifulSoup(text, "html.parser")
 
@@ -489,7 +491,7 @@ def sanitize_summernote_html(text):
                 values = attr_value if isinstance(attr_value, list) else [attr_value]
                 if any(
                     isinstance(value, str)
-                    # Block URI schemes commonly used for script execution or local file access.
+                    # Block URI schemes commonly used for script execution or local file access in user HTML.
                     and re.match(r"^\s*(?:data|file|javascript|vbscript):", value, flags=re.IGNORECASE)
                     for value in values
                 ):
@@ -520,7 +522,7 @@ def sanitize_summernote_html(text):
 
 
 def remove_html_color_tags(text):
-    """Backward-compatible wrapper for Summernote HTML sanitization."""
+    """Backward-compatible wrapper; prefer sanitize_summernote_html for new code."""
     return sanitize_summernote_html(text)
 
 
