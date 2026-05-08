@@ -1923,6 +1923,12 @@ class AuctionEditForm(forms.ModelForm):
             # Hide the field if seller hasn't linked their Square account
             if not self.instance.created_by.userdata.square_enabled:
                 self.fields["enable_square_payments"].widget = forms.HiddenInput()
+
+        if not self.instance.club:
+            self.fields["add_people_from_auction_to_club"].widget = forms.HiddenInput()
+            self.fields["add_membership_fee_to_invoices_for_expired_members"].widget = forms.HiddenInput()
+        elif not self.instance.club.membership_annual_fee:
+            self.fields["add_membership_fee_to_invoices_for_expired_members"].widget = forms.HiddenInput()
         # self.fields['notes'].help_text = "Foo"
         if self.instance.is_online:
             self.fields[
@@ -3406,6 +3412,7 @@ class ClubEditForm(forms.ModelForm):
             "name",
             "homepage",
             "facebook_page",
+            "contact_email",
             "membership_system",
             "membership_annual_fee",
             "payment_user",
@@ -3443,6 +3450,7 @@ class ClubEditForm(forms.ModelForm):
             "name",
             "homepage",
             "facebook_page",
+            "contact_email",
             "membership_system",
             "membership_annual_fee",
             "payment_user",

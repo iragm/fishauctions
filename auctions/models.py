@@ -545,7 +545,13 @@ class Club(models.Model):
     abbreviation = models.CharField(max_length=255, blank=True, null=True, db_index=True)
     homepage = models.CharField(max_length=255, blank=True, null=True)
     facebook_page = models.CharField(max_length=255, blank=True, null=True)
-    contact_email = models.CharField(max_length=255, blank=True, null=True)
+    contact_email = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        verbose_name="Membership email address",
+        help_text="Replies to membership inquires will be sent to this email",
+    )
     date_contacted = models.DateTimeField(blank=True, null=True)
     date_contacted_for_in_person_auctions = models.DateTimeField(blank=True, null=True)
     notes = models.CharField(max_length=300, blank=True, null=True)
@@ -883,7 +889,11 @@ class ClubMember(ContactRecord):
         return self.membership_last_paid + datetime.timedelta(days=365)
 
     def calculate_membership_expiration_reminder_due(self):
-        if not self.membership_last_paid or not self.club.send_membership_expiration_reminders:
+        if (
+            not self.membership_last_paid
+            or not self.club.send_membership_expiration_reminders
+            or not self.club.membership_annual_fee
+        ):
             return None
         expiration_date = self.membership_expiration_date
         if not expiration_date:

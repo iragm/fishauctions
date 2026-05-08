@@ -18,7 +18,7 @@ def create_email_template(apps, schema_editor):
                 "Hello {{ name }},<br><br>"
                 "Your membership with <b>{{ club.name }}</b> is expiring soon.<br><br>"
                 "This club uses {{ navbar_brand }} to manage club memberships.<br>"
-                "You can renew it here: <a href='{{ renew_link }}'>{{ renew_link }}</a><br>"
+                "<a href='{{ renew_link }}'>Click here to renew your membership</a><br>"
             ),
         },
     )

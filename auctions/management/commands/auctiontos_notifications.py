@@ -186,6 +186,7 @@ class Command(BaseCommand):
             ClubMember.objects.filter(
                 is_deleted=False,
                 club__send_membership_expiration_reminders=True,
+                club__membership_annual_fee__gt=0,
                 membership_last_paid__isnull=False,
                 membership_expiration_reminder_due__lte=timezone.now(),
                 email__isnull=False,

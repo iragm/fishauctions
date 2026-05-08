@@ -4378,6 +4378,29 @@ class PayPalFormFieldVisibilityTests(StandardTestCase):
         # Field should NOT be hidden for superuser (site-wide PayPal fallback)
         assert not isinstance(form.fields["enable_online_payments"].widget, forms.HiddenInput)
 
+    def test_membership_fields_hidden_without_club(self):
+        self.online_auction.club = None
+        self.online_auction.save()
+        form = AuctionEditForm(
+            instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
+        )
+        self.assertIsInstance(form.fields["add_people_from_auction_to_club"].widget, forms.HiddenInput)
+        self.assertIsInstance(
+            form.fields["add_membership_fee_to_invoices_for_expired_members"].widget, forms.HiddenInput
+        )
+
+    def test_membership_fee_field_hidden_for_free_club(self):
+        free_club = Club.objects.create(name="Free Club", membership_annual_fee=None)
+        self.online_auction.club = free_club
+        self.online_auction.save()
+        form = AuctionEditForm(
+            instance=self.online_auction, user=self.online_auction.created_by, cloned_from=None, user_timezone="UTC"
+        )
+        self.assertNotIsInstance(form.fields["add_people_from_auction_to_club"].widget, forms.HiddenInput)
+        self.assertIsInstance(
+            form.fields["add_membership_fee_to_invoices_for_expired_members"].widget, forms.HiddenInput
+        )
+
 
 class LotListViewTests(StandardTestCase):
     """Test lot list view with different user types"""
@@ -5098,6 +5121,14 @@ class ClubMembershipRenewalFlowTests(StandardTestCase):
         self.member.refresh_from_db()
         self.assertIsNotNone(self.member.membership_expiration_reminder_due)
 
+    def test_membership_reminder_due_not_set_for_free_membership(self):
+        self.club.membership_annual_fee = None
+        self.club.save(update_fields=["membership_annual_fee"])
+        self.member.membership_last_paid = timezone.now().date()
+        self.member.save()
+        self.member.refresh_from_db()
+        self.assertIsNone(self.member.membership_expiration_reminder_due)
+
     def test_invoice_membership_fee_applies_when_renewal_needed(self):
         self.invoice.renewal_needed = True
         self.invoice.save(update_fields=["renewal_needed"])
@@ -5133,6 +5164,14 @@ class ClubMembershipRenewalFlowTests(StandardTestCase):
         self.assertTrue(self.invoice.renewal_processed)
         self.assertGreaterEqual(self.member.membership_last_paid, timezone.now().date())
         self.assertTrue(InvoicePayment.objects.filter(club_member=self.member, payment_target="CLUB_MEMBER").exists())
+
+    def test_invoice_membership_block_hidden_for_free_membership(self):
+        self.club.membership_annual_fee = None
+        self.club.save(update_fields=["membership_annual_fee"])
+        self.client.login(username=self.admin_user.username, password="testpassword")
+        response = self.client.get(reverse("invoice_by_pk", kwargs={"pk": self.invoice.pk}))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Apply Renewal Club membership fee")
 
 
 class QuickCheckoutHTMXTests(StandardTestCase):
@@ -13985,6 +14024,15 @@ class ClubViewTests(TestCase):
         url = reverse("club_edit", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
+
+    def test_club_edit_shows_membership_email_field_and_js_toggle(self):
+        self.client.login(username="club_owner2", password="testpass")
+        url = reverse("club_edit", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Membership email address")
+        self.assertContains(response, "Replies to membership inquires will be sent to this email")
+        self.assertContains(response, "id_send_membership_expiration_reminders")
 
     def test_club_history_owner_can_access(self):
         """Club owner with admin permission can view history"""

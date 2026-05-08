@@ -1,4 +1,4 @@
-{% if invoice.auction and invoice.auction.club and invoice.auction.add_people_from_auction_to_club %}
+{% if invoice.auction and invoice.auction.club and invoice.auction.add_people_from_auction_to_club and invoice.auction.club.membership_annual_fee %}
 <div id="invoice-membership-renewal" class="alert alert-secondary py-2">
   <div class="form-check">
     <input
