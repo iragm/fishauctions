@@ -13155,19 +13155,13 @@ class DiscordInteractionsView(View):
         club.save(update_fields=["discord_server_id"])
 
         bot_token = getattr(settings, "DISCORD_BOT_TOKEN", "")
-        roles_synced = _sync_discord_roles(club, bot_token) if bot_token else None
-        roles_note = (
-            f"{roles_synced} role(s) synced." if roles_synced is not None else "Role sync failed — check bot token."
-        )
+        _sync_discord_roles(club, bot_token) if bot_token else None
 
         return JsonResponse(
             {
                 "type": _DISCORD_TYPE_CHANNEL_MESSAGE,
                 "data": {
-                    "content": (
-                        f"Welcome to **{club.name}**! Click the button below to register and get "
-                        f"access to the server. ({roles_note})"
-                    ),
+                    "content": (f"Welcome to the **{club.name}**! Click the button below to register."),
                     "components": [
                         {
                             "type": _DISCORD_COMPONENT_ACTION_ROW,
