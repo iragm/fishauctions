@@ -36,4 +36,14 @@ class Command(BaseCommand):
         if resp.status_code in (200, 201):
             self.stdout.write(self.style.SUCCESS("Successfully registered /connect command."))
         else:
-            self.stderr.write(f"Failed to register command: {resp.status_code} {resp.text}")
+            self.stderr.write(f"Failed to register /connect: {resp.status_code} {resp.text}")
+
+        auctions_here_payload = {
+            "name": "auctions_here",
+            "description": "Set this channel to receive auction announcements for this club",
+        }
+        resp2 = requests.post(url, headers=headers, json=auctions_here_payload, timeout=10)
+        if resp2.status_code in (200, 201):
+            self.stdout.write(self.style.SUCCESS("Successfully registered /auctions_here command."))
+        else:
+            self.stderr.write(f"Failed to register /auctions_here: {resp2.status_code} {resp2.text}")

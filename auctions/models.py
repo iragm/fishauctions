@@ -564,6 +564,12 @@ class Club(models.Model):
     membership_system = models.CharField(max_length=20, choices=MEMBERSHIP_SYSTEM_CHOICES, default="january_first")
     membership_annual_fee = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     discord_server_id = models.CharField(max_length=100, blank=True, null=True)
+    auction_channel_id = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="Discord channel ID for auction announcements. Set via /auctions_here.",
+    )
     uuid = models.UUIDField(default=uuid_module.uuid4, unique=True, editable=False, db_index=True)
     slug = AutoSlugField(populate_from="name", unique=True, always_update=True)
     allow_joining = models.BooleanField(default=False)
@@ -1056,6 +1062,8 @@ class Auction(models.Model):
     date_online_bidding_starts = models.DateTimeField("Online bidding opens", blank=True, null=True)
     date_online_bidding_ends = models.DateTimeField("Online bidding ends", blank=True, null=True)
     watch_warning_email_sent = models.BooleanField(default=False)
+    first_discord_sent = models.BooleanField(default=False)
+    second_discord_sent = models.BooleanField(default=False)
     invoiced = models.BooleanField(default=False)
     created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     club = models.ForeignKey("Club", null=True, blank=True, on_delete=models.SET_NULL, related_name="auctions")

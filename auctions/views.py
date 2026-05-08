@@ -13038,7 +13038,12 @@ class DiscordInteractionsView(View):
 
         # Type 2 – Application command (slash command)
         if interaction_type == _DISCORD_TYPE_APPLICATION_COMMAND:
-            return self._handle_connect_command(data)
+            command_name = data.get("data", {}).get("name", "")
+            if command_name == "connect":
+                return self._handle_connect_command(data)
+            if command_name == "auctions_here":
+                return self._handle_auctions_here_command(data)
+            return _discord_ephemeral("❌ Unknown command.")
 
         # Type 5 – Modal submit
         if interaction_type == _DISCORD_TYPE_MODAL_SUBMIT:
@@ -13120,10 +13125,6 @@ class DiscordInteractionsView(View):
         return _discord_ephemeral("✅ You're in! Access unlocked.")
 
     def _handle_connect_command(self, data):
-        command_name = data.get("data", {}).get("name", "")
-        if command_name != "connect":
-            return _discord_ephemeral("❌ Unknown command.")
-
         guild_id = data.get("guild_id", "")
         member_data = data.get("member") or {}
         user_data = member_data.get("user") or data.get("user") or {}
@@ -13183,6 +13184,28 @@ class DiscordInteractionsView(View):
                 },
             }
         )
+
+    def _handle_auctions_here_command(self, data):
+        guild_id = data.get("guild_id", "")
+        channel_id = data.get("channel_id", "")
+        member_data = data.get("member") or {}
+        user_data = member_data.get("user") or data.get("user") or {}
+        caller_discord_id = user_data.get("id", "")
+
+        if not guild_id or not channel_id:
+            return _discord_ephemeral("❌ Missing guild or channel ID.")
+
+        club = Club.objects.filter(discord_server_id=guild_id).first()
+        if not club:
+            return _discord_ephemeral("❌ This server is not connected to a club. Run /connect first.")
+
+        caller = ClubMember.objects.filter(club=club, discord_id=caller_discord_id, is_deleted=False).first()
+        if not caller or not (caller.permission_admin or caller.permission_manage_auctions):
+            return _discord_ephemeral("❌ You must be a club admin or auction manager to run this command.")
+
+        club.auction_channel_id = channel_id
+        club.save(update_fields=["auction_channel_id"])
+        return _discord_ephemeral("✅ Auction announcements will be posted in this channel.")
 
 
 class LotBapPointsView(LoginRequiredMixin, View):
