@@ -37,7 +37,7 @@ PARTNER_MERCHANT_ID=YOUR_MERCHANT_ID
 
 # PayPal API Credentials (must be from a PayPal business account)
 PAYPAL_CLIENT_ID=your_client_id
-PAYPAL_CLIENT_SECRET=your_client_secret
+PAYPAL_SECRET=your_client_secret
 
 # Webhook (required for full platform partner approval)
 PAYPAL_WEBHOOK_ID=your_webhook_id
