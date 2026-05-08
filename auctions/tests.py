@@ -13222,6 +13222,255 @@ class AdminUserSignupsJSONTests(TestCase):
         self.assertNotEqual(response.status_code, 200)
 
 
+class PayPalWebhookViewTests(TestCase):
+    """Tests for PayPalWebhookView webhook signature verification"""
+
+    def setUp(self):
+        self.url = reverse("paypal-webhook")
+        self.webhook_event = {
+            "id": "WH-ABC123",
+            "event_type": "PAYMENT.CAPTURE.COMPLETED",
+            "resource": {"id": "CAPTURE123", "status": "COMPLETED"},
+        }
+        self.valid_headers = {
+            "HTTP_PAYPAL_TRANSMISSION_ID": "trans-id-123",
+            "HTTP_PAYPAL_TRANSMISSION_TIME": "2024-01-01T00:00:00Z",
+            "HTTP_PAYPAL_CERT_URL": "https://api.paypal.com/v1/notifications/certs/cert123",
+            "HTTP_PAYPAL_AUTH_ALGO": "SHA256withRSA",
+            "HTTP_PAYPAL_TRANSMISSION_SIG": "sig-abc123",
+        }
+
+    def _post_webhook(self, data=None, extra_headers=None):
+        headers = dict(self.valid_headers)
+        if extra_headers is not None:
+            headers.update(extra_headers)
+        body = json.dumps(data if data is not None else self.webhook_event)
+        return self.client.post(self.url, data=body, content_type="application/json", **headers)
+
+    def test_missing_webhook_id_config_returns_400(self):
+        """Webhook is rejected when PAYPAL_WEBHOOK_ID is not configured"""
+        with override_settings(PAYPAL_WEBHOOK_ID=""):
+            response = self._post_webhook()
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"webhook not configured", response.content)
+
+    def test_missing_webhook_id_config_no_attr_returns_400(self):
+        """Webhook is rejected when PAYPAL_WEBHOOK_ID attribute is absent from settings"""
+        with self.settings():
+            # Remove attribute if present
+            from django.conf import settings as djsettings
+
+            had_attr = hasattr(djsettings, "PAYPAL_WEBHOOK_ID")
+            if had_attr:
+                original = djsettings.PAYPAL_WEBHOOK_ID
+                del djsettings.PAYPAL_WEBHOOK_ID
+            try:
+                response = self._post_webhook()
+            finally:
+                if had_attr:
+                    djsettings.PAYPAL_WEBHOOK_ID = original
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"webhook not configured", response.content)
+
+    def test_missing_transmission_headers_returns_400(self):
+        """Webhook is rejected when PayPal transmission headers are absent"""
+        with override_settings(PAYPAL_WEBHOOK_ID="WH-TESTID"):
+            response = self.client.post(
+                self.url,
+                data=json.dumps(self.webhook_event),
+                content_type="application/json",
+                # No transmission headers
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"missing verification headers", response.content)
+
+    def test_partial_transmission_headers_returns_400(self):
+        """Webhook is rejected when only some PayPal transmission headers are present"""
+        with override_settings(PAYPAL_WEBHOOK_ID="WH-TESTID"):
+            response = self.client.post(
+                self.url,
+                data=json.dumps(self.webhook_event),
+                content_type="application/json",
+                HTTP_PAYPAL_TRANSMISSION_ID="trans-id-123",
+                # Missing other required headers
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"missing verification headers", response.content)
+
+    def test_invalid_json_body_returns_400(self):
+        """Webhook is rejected when body is not valid JSON"""
+        with override_settings(PAYPAL_WEBHOOK_ID="WH-TESTID"):
+            response = self.client.post(
+                self.url,
+                data="not-valid-json{{{",
+                content_type="application/json",
+                **self.valid_headers,
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"invalid json", response.content)
+
+    @patch("auctions.views.requests.post")
+    def test_access_token_failure_returns_500(self, mock_post):
+        """Webhook returns 500 when access token request fails"""
+        import requests as req
+
+        mock_post.side_effect = req.HTTPError("token error")
+        with override_settings(
+            PAYPAL_WEBHOOK_ID="WH-TESTID",
+            PAYPAL_API_BASE="https://api-m.sandbox.paypal.com",
+            PAYPAL_CLIENT_ID="test-client-id",
+            PAYPAL_SECRET="test-secret",
+        ):
+            response = self._post_webhook()
+        self.assertEqual(response.status_code, 500)
+
+    @patch("auctions.views.requests.post")
+    def test_verification_failure_returns_400(self, mock_post):
+        """Webhook returns 400 when PayPal verification returns non-SUCCESS status"""
+        from unittest.mock import MagicMock
+
+        # First call: access token
+        token_mock = MagicMock()
+        token_mock.json.return_value = {"access_token": "test-token"}
+        token_mock.raise_for_status.return_value = None
+
+        # Second call: verify-webhook-signature returning FAILURE
+        verify_mock = MagicMock()
+        verify_mock.status_code = 200
+        verify_mock.raise_for_status.return_value = None
+        verify_mock.json.return_value = {"verification_status": "FAILURE"}
+
+        mock_post.side_effect = [token_mock, verify_mock]
+
+        with override_settings(
+            PAYPAL_WEBHOOK_ID="WH-TESTID",
+            PAYPAL_API_BASE="https://api-m.sandbox.paypal.com",
+            PAYPAL_CLIENT_ID="test-client-id",
+            PAYPAL_SECRET="test-secret",
+        ):
+            response = self._post_webhook()
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"webhook verification failed", response.content)
+
+    @patch("auctions.views.requests.post")
+    def test_verify_endpoint_non_2xx_returns_500(self, mock_post):
+        """Webhook returns 500 when PayPal verify-webhook-signature returns non-2xx"""
+        from unittest.mock import MagicMock
+
+        import requests as req
+
+        # First call: access token succeeds
+        token_mock = MagicMock()
+        token_mock.json.return_value = {"access_token": "test-token"}
+        token_mock.raise_for_status.return_value = None
+
+        # Second call: verify endpoint returns 503
+        verify_mock = MagicMock()
+        verify_mock.status_code = 503
+        verify_mock.headers = {"Paypal-Debug-Id": "debug-abc"}
+        verify_mock.text = "Service Unavailable"
+        verify_mock.raise_for_status.side_effect = req.HTTPError("503 error")
+
+        mock_post.side_effect = [token_mock, verify_mock]
+
+        with override_settings(
+            PAYPAL_WEBHOOK_ID="WH-TESTID",
+            PAYPAL_API_BASE="https://api-m.sandbox.paypal.com",
+            PAYPAL_CLIENT_ID="test-client-id",
+            PAYPAL_SECRET="test-secret",
+        ):
+            response = self._post_webhook()
+        self.assertEqual(response.status_code, 500)
+
+    @patch("auctions.views.requests.post")
+    def test_verify_endpoint_non_json_returns_500(self, mock_post):
+        """Webhook returns 500 when PayPal verify-webhook-signature returns non-JSON"""
+        from unittest.mock import MagicMock
+
+        # First call: access token succeeds
+        token_mock = MagicMock()
+        token_mock.json.return_value = {"access_token": "test-token"}
+        token_mock.raise_for_status.return_value = None
+
+        # Second call: verify endpoint returns non-JSON
+        verify_mock = MagicMock()
+        verify_mock.status_code = 200
+        verify_mock.headers = {"Paypal-Debug-Id": "debug-abc"}
+        verify_mock.text = "not-json"
+        verify_mock.raise_for_status.return_value = None
+        verify_mock.json.side_effect = ValueError("No JSON")
+
+        mock_post.side_effect = [token_mock, verify_mock]
+
+        with override_settings(
+            PAYPAL_WEBHOOK_ID="WH-TESTID",
+            PAYPAL_API_BASE="https://api-m.sandbox.paypal.com",
+            PAYPAL_CLIENT_ID="test-client-id",
+            PAYPAL_SECRET="test-secret",
+        ):
+            response = self._post_webhook()
+        self.assertEqual(response.status_code, 500)
+
+    @patch("auctions.views.requests.post")
+    def test_successful_verification_returns_200(self, mock_post):
+        """Webhook returns 200 when PayPal verification succeeds for unhandled event type"""
+        from unittest.mock import MagicMock
+
+        # First call: access token
+        token_mock = MagicMock()
+        token_mock.json.return_value = {"access_token": "test-token"}
+        token_mock.raise_for_status.return_value = None
+
+        # Second call: verify-webhook-signature returning SUCCESS
+        verify_mock = MagicMock()
+        verify_mock.status_code = 200
+        verify_mock.raise_for_status.return_value = None
+        verify_mock.json.return_value = {"verification_status": "SUCCESS"}
+
+        mock_post.side_effect = [token_mock, verify_mock]
+
+        with override_settings(
+            PAYPAL_WEBHOOK_ID="WH-TESTID",
+            PAYPAL_API_BASE="https://api-m.sandbox.paypal.com",
+            PAYPAL_CLIENT_ID="test-client-id",
+            PAYPAL_SECRET="test-secret",
+        ):
+            response = self._post_webhook(data={"id": "WH-XYZ", "event_type": "SOME.UNKNOWN.EVENT", "resource": {}})
+        self.assertEqual(response.status_code, 200)
+
+    @patch("auctions.views.requests.post")
+    def test_verify_request_includes_webhook_id_and_timeout(self, mock_post):
+        """Verify that webhook_id is sent in verification payload and timeout is set"""
+        from unittest.mock import MagicMock
+
+        # First call: access token
+        token_mock = MagicMock()
+        token_mock.json.return_value = {"access_token": "test-token"}
+        token_mock.raise_for_status.return_value = None
+
+        # Second call: verify-webhook-signature
+        verify_mock = MagicMock()
+        verify_mock.status_code = 200
+        verify_mock.raise_for_status.return_value = None
+        verify_mock.json.return_value = {"verification_status": "SUCCESS"}
+
+        mock_post.side_effect = [token_mock, verify_mock]
+
+        with override_settings(
+            PAYPAL_WEBHOOK_ID="WH-TESTID-123",
+            PAYPAL_API_BASE="https://api-m.sandbox.paypal.com",
+            PAYPAL_CLIENT_ID="test-client-id",
+            PAYPAL_SECRET="test-secret",
+        ):
+            self._post_webhook()
+
+        # Check the second call (verify endpoint) was made with the right payload
+        verify_call = mock_post.call_args_list[1]
+        self.assertIn("timeout", verify_call.kwargs)
+        sent_payload = verify_call.kwargs.get("json") or verify_call[1].get("json")
+        self.assertEqual(sent_payload["webhook_id"], "WH-TESTID-123")
+
+
 class PayPalCSVExportTests(StandardTestCase):
     """Test the PayPal CSV export name splitting and truncation behavior"""
 

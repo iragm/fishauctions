@@ -11108,6 +11108,7 @@ class PayPalWebhookView(PayPalAPIMixin, View):
                         "PayPal-Transmission-Sig",
                     ]
                 },
+                webhook_id,
             )
             return HttpResponseBadRequest("missing verification headers")
 
@@ -11137,8 +11138,30 @@ class PayPalWebhookView(PayPalAPIMixin, View):
                 "Content-Type": "application/json",
             },
             json=verify_payload,
+            timeout=10,
         )
-        verify_data = verify_resp.json()
+        try:
+            verify_resp.raise_for_status()
+        except requests.HTTPError as exc:
+            logger.error(
+                "PayPal verify-webhook-signature returned non-2xx: status=%s debug_id=%s body=%s exc=%s",
+                verify_resp.status_code,
+                verify_resp.headers.get("Paypal-Debug-Id"),
+                verify_resp.text[:500],
+                exc,
+            )
+            return HttpResponse(status=500)
+        try:
+            verify_data = verify_resp.json()
+        except ValueError as exc:
+            logger.error(
+                "PayPal verify-webhook-signature returned non-JSON: status=%s debug_id=%s body=%s exc=%s",
+                verify_resp.status_code,
+                verify_resp.headers.get("Paypal-Debug-Id"),
+                verify_resp.text[:500],
+                exc,
+            )
+            return HttpResponse(status=500)
         verification_status = verify_data.get("verification_status")
         if verification_status != "SUCCESS":
             logger.warning(
