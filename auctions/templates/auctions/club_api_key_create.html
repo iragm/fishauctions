@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Create API Key &mdash; {{ club.name }}{% endblock %}
+
+{% block content %}
+<h3><i class="bi bi-key"></i> {{ club.name }} &mdash; Create API Key</h3>
+
+<div class="mb-3">
+  <a href="{% url 'club_api_keys' club.slug %}" class="btn btn-sm btn-secondary"><i class="bi bi-arrow-left"></i> Back to API keys</a>
+</div>
+
+{% if error %}
+<div class="alert alert-danger">{{ error }}</div>
+{% endif %}
+
+<form method="post" style="max-width:480px">
+  {% csrf_token %}
+  <div class="mb-3">
+    <label for="id_name" class="form-label fw-semibold">Name <span class="text-danger">*</span></label>
+    <input type="text" class="form-control" id="id_name" name="name" placeholder="e.g. WordPress, Google Forms" required maxlength="100">
+    <div class="form-text">A label to identify this integration.</div>
+  </div>
+<button type="submit" class="btn btn-success"><i class="bi bi-plus-lg"></i> Create key</button>
+</form>
+{% endblock %}

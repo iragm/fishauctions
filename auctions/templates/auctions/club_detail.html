@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% load crispy_forms_tags %}
+{% load crispy_forms_tags bap_filters %}
 {% block title %}{{ club.name }}{% endblock %}
 
 {% block content %}
@@ -19,8 +19,29 @@
   {% if can_access_admin %}
   <a href="{% url 'club_admin' club.slug %}" class="btn btn-sm btn-primary"><i class="bi bi-gear"></i> Manage membership</a>
   {% endif %}
-  {% if can_edit_settings %}
-  <a href="{% url 'club_edit' club.slug %}" class="btn btn-sm btn-primary"><i class="bi bi-sliders"></i> Settings</a>
+  {% if can_manage_bap and club.enable_breeder_award_program %}
+  <a href="{% url 'club_bap_lots' club.slug %}" class="btn btn-sm btn-primary"><i class="bi bi-award"></i> BAP Admin</a>
+  {% endif %}
+  {% if can_edit_settings or can_manage_bap or can_access_admin %}
+  <div class="dropdown">
+    <button class="btn btn-sm btn-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+      <i class="bi bi-sliders"></i> Setup
+    </button>
+    <ul class="dropdown-menu">
+      {% if can_edit_settings %}
+      <li><a class="dropdown-item" href="{% url 'club_edit' club.slug %}"><i class="bi bi-gear"></i> Club Setup</a></li>
+      <li><a class="dropdown-item" href="{% url 'club_discord_config' club.slug %}"><i class="bi bi-discord"></i> Discord Setup</a></li>
+      <li><a class="dropdown-item" href="{% url 'club_api_keys' club.slug %}"><i class="bi bi-key"></i> API Keys</a></li>
+      {% endif %}
+      {% if can_manage_bap %}
+      <li><a class="dropdown-item" href="{% url 'club_bap_settings' club.slug %}"><i class="bi bi-award"></i> BAP Setup</a></li>
+      {% endif %}
+      {% if can_access_admin %}
+      {% if can_edit_settings or can_manage_bap %}<li><hr class="dropdown-divider"></li>{% endif %}
+      <li><a class="dropdown-item" href="{% url 'club_history' club.slug %}"><i class="bi bi-clock-history"></i> History</a></li>
+      {% endif %}
+    </ul>
+  </div>
   {% endif %}
 </div>
 
@@ -32,9 +53,19 @@
   <div class="card mb-3">
     <div class="card-body">
       <h5 class="card-title">Your membership</h5>
-      <p>Member since: {{ member.createdon|date:"N j, Y" }}</p>
-      {% if member.bap_points or member.hap_points %}
-      <p>BAP Points: {{ member.bap_points }} | HAP Points: {{ member.hap_points }}</p>
+      <p class="mb-1">Member since: {{ member.createdon|date:"N j, Y" }}</p>
+      {% if club.enable_breeder_award_program %}
+        {% if member.bap_points or member.hap_points or member.culture_points %}
+        <p class="mb-0">
+          BAP: {{ member.bap_points }} pts
+          {% if club.separate_hap %} &nbsp;|&nbsp; HAP: {{ member.hap_points }} pts{% endif %}
+          {% if club.separate_cap %} &nbsp;|&nbsp; Culture: {{ member.culture_points }} pts{% endif %}
+        </p>
+        {% endif %}
+      {% else %}
+        {% if member.bap_points or member.hap_points %}
+        <p class="mb-0">BAP Points: {{ member.bap_points }} | HAP Points: {{ member.hap_points }}</p>
+        {% endif %}
       {% endif %}
     </div>
   </div>
@@ -47,6 +78,100 @@
   <p class="text-muted">This club is not currently accepting new members through this site.</p>
 {% endif %}
 
+{% if show_bap_tabs %}
+{# ── Tabbed layout when BAP is enabled ─────────────────────────────── #}
+<ul class="nav nav-tabs mb-3" id="clubTabs" role="tablist">
+  <li class="nav-item" role="presentation">
+    <button class="nav-link active" id="auctions-tab-btn" data-bs-toggle="tab" data-bs-target="#auctions-tab" type="button" role="tab">Auctions</button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" id="bap-tab-btn" data-bs-toggle="tab" data-bs-target="#bap-tab" type="button" role="tab">BAP</button>
+  </li>
+  {% if club.separate_hap %}
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" id="hap-tab-btn" data-bs-toggle="tab" data-bs-target="#hap-tab" type="button" role="tab">HAP</button>
+  </li>
+  {% endif %}
+  {% if club.separate_cap %}
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" id="culture-tab-btn" data-bs-toggle="tab" data-bs-target="#culture-tab" type="button" role="tab">Culture</button>
+  </li>
+  {% endif %}
+</ul>
+
+<div class="tab-content" id="clubTabContent">
+
+  {# Auctions tab #}
+  <div class="tab-pane fade show active" id="auctions-tab" role="tabpanel">
+    {% if club_auctions %}
+    <ul class="list-group">
+      {% for auction in club_auctions %}
+      <li class="list-group-item d-flex justify-content-between align-items-center">
+        <span>
+          <a href="{{ auction.get_absolute_url }}">{{ auction.title }}</a>
+          <span class="text-muted ms-2">{{ auction.date_start|date:"N j, Y" }}</span>
+        </span>
+        {% if can_manage_auctions and not auction.promote_this_auction %}
+        <span class="badge bg-secondary rounded-pill ms-2">Not promoted</span>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="text-muted">No auctions yet.</p>
+    {% endif %}
+  </div>
+
+  {# BAP leaderboard tab #}
+  <div class="tab-pane fade" id="bap-tab" role="tabpanel">
+    <div class="form-check form-switch mb-3 mt-2">
+      <input class="form-check-input" type="checkbox" id="ytd-toggle" checked>
+      <label class="form-check-label" for="ytd-toggle">Year to date only</label>
+    </div>
+    <div id="bap-ytd">
+      {% include "partials/bap_leaderboard.html" with entries=bap_leaderboard_ytd points_attr="bap_points_ytd" %}
+    </div>
+    <div id="bap-alltime" style="display:none">
+      {% include "partials/bap_leaderboard.html" with entries=bap_leaderboard points_attr="bap_points" %}
+    </div>
+  </div>
+
+  {% if club.separate_hap %}
+  {# HAP leaderboard tab #}
+  <div class="tab-pane fade" id="hap-tab" role="tabpanel">
+    <div class="form-check form-switch mb-3 mt-2">
+      <input class="form-check-input" type="checkbox" id="ytd-toggle-hap" checked>
+      <label class="form-check-label" for="ytd-toggle-hap">Year to date only</label>
+    </div>
+    <div id="hap-ytd">
+      {% include "partials/bap_leaderboard.html" with entries=hap_leaderboard_ytd points_attr="hap_points_ytd" %}
+    </div>
+    <div id="hap-alltime" style="display:none">
+      {% include "partials/bap_leaderboard.html" with entries=hap_leaderboard points_attr="hap_points" %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if club.separate_cap %}
+  {# Culture leaderboard tab #}
+  <div class="tab-pane fade" id="culture-tab" role="tabpanel">
+    <div class="form-check form-switch mb-3 mt-2">
+      <input class="form-check-input" type="checkbox" id="ytd-toggle-culture" checked>
+      <label class="form-check-label" for="ytd-toggle-culture">Year to date only</label>
+    </div>
+    <div id="culture-ytd">
+      {% include "partials/bap_leaderboard.html" with entries=culture_leaderboard_ytd points_attr="culture_points_ytd" %}
+    </div>
+    <div id="culture-alltime" style="display:none">
+      {% include "partials/bap_leaderboard.html" with entries=culture_leaderboard points_attr="culture_points" %}
+    </div>
+  </div>
+  {% endif %}
+
+</div>{# /tab-content #}
+
+{% else %}
+{# ── Flat layout when BAP is not enabled ───────────────────────────── #}
 {% if has_points %}
 <h4 class="mt-4">Leaderboard</h4>
 <div class="row">
@@ -89,6 +214,28 @@
   {% endfor %}
 </ul>
 {% endif %}
+{% endif %}{# /show_bap_tabs #}
 
 <div id="modals-here"></div>
+
+{% endblock %}
+
+{% block extra_js %}
+{% if show_bap_tabs %}
+<script>
+(function () {
+  function wireToggle(toggleId, ytdId, alltimeId) {
+    const toggle = document.getElementById(toggleId);
+    if (!toggle) return;
+    toggle.addEventListener('change', function () {
+      document.getElementById(ytdId).style.display = this.checked ? '' : 'none';
+      document.getElementById(alltimeId).style.display = this.checked ? 'none' : '';
+    });
+  }
+  wireToggle('ytd-toggle', 'bap-ytd', 'bap-alltime');
+  wireToggle('ytd-toggle-hap', 'hap-ytd', 'hap-alltime');
+  wireToggle('ytd-toggle-culture', 'culture-ytd', 'culture-alltime');
+})();
+</script>
+{% endif %}
 {% endblock %}

@@ -19,11 +19,11 @@ from .models import (
     BlogPost,
     Category,
     Club,
+    ClubAPIKey,
+    ClubAPIKeyFieldMap,
     ClubDiscordRole,
     ClubHistory,
     ClubMember,
-    ClubPermission,
-    ClubRole,
     GeneralInterest,
     Invoice,
     InvoicePayment,
@@ -355,7 +355,6 @@ class ClubAdmin(admin.ModelAdmin):
         UserInline,
         ClubDiscordRoleInline,
     ]
-    readonly_fields = ("owner",)
     actions = [export_to_csv]
 
 
@@ -667,7 +666,7 @@ class ChatAdmin(admin.ModelAdmin):
 class CategoryAdmin(admin.ModelAdmin):
     model = Category
     menu_label = "Categories"
-    list_display = ("name",)
+    list_display = ("name", "bap_points")
     # list_filter = ()
     search_fields = ("name",)
 
@@ -791,17 +790,6 @@ class ClubMemberAdmin(admin.ModelAdmin):
     actions = [export_to_csv]
 
 
-class ClubRoleAdmin(admin.ModelAdmin):
-    model = ClubRole
-    list_display = ("name",)
-    search_fields = ("name",)
-
-
-class ClubPermissionAdmin(admin.ModelAdmin):
-    model = ClubPermission
-    list_display = ("name", "description")
-
-
 class ClubDiscordRoleAdmin(admin.ModelAdmin):
     model = ClubDiscordRole
     list_display = (
@@ -827,7 +815,19 @@ class ClubHistoryAdmin(admin.ModelAdmin):
 
 
 admin.site.register(ClubMember, ClubMemberAdmin)
-admin.site.register(ClubRole, ClubRoleAdmin)
-admin.site.register(ClubPermission, ClubPermissionAdmin)
+
 admin.site.register(ClubDiscordRole, ClubDiscordRoleAdmin)
 admin.site.register(ClubHistory, ClubHistoryAdmin)
+
+
+class ClubAPIKeyFieldMapInline(admin.TabularInline):
+    model = ClubAPIKeyFieldMap
+    extra = 0
+
+
+@admin.register(ClubAPIKey)
+class ClubAPIKeyAdmin(admin.ModelAdmin):
+    list_display = ["name", "club", "prefix", "is_active", "created_at", "last_used_at"]
+    list_filter = ["is_active", "club"]
+    readonly_fields = ["prefix", "key_hash", "created_at", "last_used_at"]
+    inlines = [ClubAPIKeyFieldMapInline]

@@ -11,7 +11,7 @@ from bootstrap_datepicker_plus.widgets import (
 )  # https://github.com/monim67/django-bootstrap-datepicker-plus/issues/66
 from crispy_forms.bootstrap import Div, Field, PrependedAppendedText
 from crispy_forms.helper import FormHelper
-from crispy_forms.layout import HTML, Layout, Submit
+from crispy_forms.layout import HTML, Fieldset, Layout, Submit
 from dal import autocomplete
 from django import forms
 from django.conf import settings
@@ -35,7 +35,6 @@ from .models import (
     ChatSubscription,
     Club,
     ClubMember,
-    ClubRole,
     InvoiceAdjustment,
     Lot,
     LotImage,
@@ -3390,6 +3389,8 @@ class ClubEditForm(forms.ModelForm):
             "allow_integrated_payments",
             "description",
             "enable_club_page",
+            "location",
+            "location_coordinates",
         ]
         help_texts = {
             "name": "Changing this will change the URL for your club's page.",
@@ -3405,24 +3406,70 @@ class ClubEditForm(forms.ModelForm):
             "homepage": forms.URLInput(attrs={"placeholder": "https://www.yourclub.org"}),
             "facebook_page": forms.URLInput(attrs={"placeholder": "https://www.facebook.com/groups/yourclub"}),
             "description": SummernoteWidget(attrs={"summernote": {"width": "100%", "height": "300px"}}),
+            "location": forms.TextInput(attrs={"placeholder": "Search for your club's location"}),
         }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "post"
+        self.helper.layout = Layout(
+            "name",
+            "homepage",
+            "facebook_page",
+            "membership_system",
+            "membership_annual_fee",
+            "allow_joining",
+            "allow_integrated_payments",
+            "description",
+            "enable_club_page",
+            Fieldset(
+                "Location",
+                "location",
+                "location_coordinates",
+            ),
+        )
         self.helper.add_input(Submit("submit", "Save settings", css_class="btn-primary"))
 
 
-class ClubMemberAdminForm(forms.ModelForm):
-    """Form for club admins to edit a club member's details and roles."""
+class ClubBapSettingsForm(forms.ModelForm):
+    """Form for BAP admins to configure Breeder Award Program settings for a club."""
 
-    roles = forms.ModelMultipleChoiceField(
-        queryset=ClubRole.objects.all(),
-        widget=forms.CheckboxSelectMultiple,
-        required=False,
-        label="Roles",
-    )
+    class Meta:
+        model = Club
+        fields = [
+            "enable_breeder_award_program",
+            "auto_add_points",
+            "points_per_lot",
+            "min_quantity",
+            "days_between_same_name_lots",
+            "only_active_members_can_participate",
+            "separate_hap",
+            "separate_cap",
+        ]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.layout = Layout(
+            "enable_breeder_award_program",
+            Fieldset(
+                "Point rules",
+                "auto_add_points",
+                "points_per_lot",
+                "min_quantity",
+                "days_between_same_name_lots",
+                "only_active_members_can_participate",
+                "separate_hap",
+                "separate_cap",
+            ),
+        )
+        self.helper.add_input(Submit("submit", "Save BAP settings", css_class="btn-primary"))
+
+
+class ClubMemberAdminForm(forms.ModelForm):
+    """Form for club admins to edit a club member's details."""
 
     class Meta:
         model = ClubMember
@@ -3433,11 +3480,8 @@ class ClubMemberAdminForm(forms.ModelForm):
             "phone_number",
             "address",
             "contact_status",
-            "bap_points",
-            "hap_points",
             "discord_role_auto_managed",
             "discord_role_override",
-            "roles",
         ]
         widgets = {
             "first_name": forms.TextInput(attrs={"placeholder": "First name"}),
@@ -3452,8 +3496,6 @@ class ClubMemberAdminForm(forms.ModelForm):
                 "No non-essential emails: only transactional messages. "
                 "Do not contact: no emails at all."
             ),
-            "bap_points": "Breeders Award Program points accumulated by this member.",
-            "hap_points": "Horticultural Award Program points accumulated by this member.",
         }
 
     def __init__(self, *args, post_url=None, read_only=False, club=None, **kwargs):
@@ -3484,8 +3526,6 @@ class ClubMemberAdminForm(forms.ModelForm):
             "phone_number",
             "address",
             "contact_status",
-            "bap_points",
-            "hap_points",
         ]
 
         if read_only:
@@ -3493,8 +3533,6 @@ class ClubMemberAdminForm(forms.ModelForm):
                 field.disabled = True
             self.helper.layout = Layout(
                 *base_fields,
-                *discord_fields,
-                "roles",
                 Div(
                     HTML('<button type="button" class="btn btn-secondary" onclick="closeModal()">Close</button>'),
                     css_class="modal-footer",
@@ -3504,7 +3542,6 @@ class ClubMemberAdminForm(forms.ModelForm):
             self.helper.layout = Layout(
                 *base_fields,
                 *discord_fields,
-                "roles",
                 Div(
                     HTML('<button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>'),
                     HTML(
@@ -3517,6 +3554,35 @@ class ClubMemberAdminForm(forms.ModelForm):
             self.helper.layout = Layout(
                 *base_fields,
                 *discord_fields,
-                "roles",
             )
             self.helper.add_input(Submit("submit", "Save", css_class="btn-primary"))
+
+
+class ClubMemberPermissionsForm(forms.ModelForm):
+    """Admin-only form to set permission bool fields on a ClubMember."""
+
+    class Meta:
+        model = ClubMember
+        fields = [
+            "permission_admin",
+            "permission_view",
+            "permission_export",
+            "permission_add_edit",
+            "permission_edit_club",
+            "permission_manage_auctions",
+            "permission_manage_bap",
+        ]
+
+    def __init__(self, *args, post_url=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.layout = Layout(
+            *self.Meta.fields,
+            Div(
+                HTML('<button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>'),
+                HTML(
+                    f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn btn-primary">Save</button>'
+                ),
+                css_class="modal-footer",
+            ),
+        )

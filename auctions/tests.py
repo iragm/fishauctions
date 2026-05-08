@@ -31,10 +31,10 @@ from .models import (
     Category,
     ChatSubscription,
     Club,
+    ClubAPIKey,
+    ClubAPIKeyFieldMap,
     ClubHistory,
     ClubMember,
-    ClubPermission,
-    ClubRole,
     Invoice,
     InvoiceAdjustment,
     Lot,
@@ -13309,7 +13309,7 @@ class PayPalCSVExportTests(StandardTestCase):
 
 
 class ClubModelTests(TestCase):
-    """Tests for Club, ClubMember, ClubRole, ClubPermission, ClubHistory models"""
+    """Tests for Club, ClubMember, ClubHistory models"""
 
     def setUp(self):
         self.owner = User.objects.create_user(username="club_owner", password="testpass", email="owner@example.com")
@@ -13318,7 +13318,6 @@ class ClubModelTests(TestCase):
         )
         self.club = Club.objects.create(
             name="Test Fish Club",
-            owner=self.owner,
             allow_joining=True,
         )
 
@@ -13388,19 +13387,27 @@ class ClubModelTests(TestCase):
         )
         self.assertIn("System", str(history))
 
-    def test_club_permission_str(self):
-        perm = ClubPermission.objects.get_or_create(
-            name="permission_admin",
-            defaults={"description": "Full admin access"},
-        )[0]
-        self.assertEqual(str(perm), "Full admin access")
+    def test_club_member_permission_defaults(self):
+        """All permission fields should default to False"""
+        member = ClubMember.objects.create(club=self.club, first_name="Test")
+        for field in [
+            "permission_admin",
+            "permission_view",
+            "permission_export",
+            "permission_add_edit",
+            "permission_edit_club",
+            "permission_manage_auctions",
+            "permission_manage_bap",
+        ]:
+            self.assertFalse(getattr(member, field), f"{field} should default to False")
 
-    def test_club_role_with_permissions(self):
-        perm = ClubPermission.objects.get_or_create(name="permission_view", defaults={"description": "View members"})[0]
-        role = ClubRole.objects.get_or_create(name="Viewer")[0]
-        role.permissions.add(perm)
-        self.assertEqual(role.permissions.count(), 1)
-        self.assertIn(perm, role.permissions.all())
+    def test_has_any_permission_false_by_default(self):
+        member = ClubMember.objects.create(club=self.club, first_name="Test")
+        self.assertFalse(member.has_any_permission)
+
+    def test_has_any_permission_true_when_one_set(self):
+        member = ClubMember.objects.create(club=self.club, first_name="Test", permission_view=True)
+        self.assertTrue(member.has_any_permission)
 
     def test_club_member_with_user(self):
         member = ClubMember.objects.create(
@@ -13423,22 +13430,15 @@ class ClubViewTests(TestCase):
         self.other_user = User.objects.create_user(username="other2", password="testpass", email="other2@example.com")
         self.club = Club.objects.create(
             name="View Test Club",
-            owner=self.owner,
             allow_joining=True,
         )
-        # Give owner the admin permission via a role
-        perm_admin = ClubPermission.objects.get_or_create(
-            name="permission_admin", defaults={"description": "Full admin"}
-        )[0]
-        self.admin_role = ClubRole.objects.get_or_create(name="Admin")[0]
-        self.admin_role.permissions.add(perm_admin)
         self.owner_member = ClubMember.objects.create(
             club=self.club,
             user=self.owner,
             first_name="Owner",
             last_name="User",
+            permission_admin=True,
         )
-        self.owner_member.roles.add(self.admin_role)
 
     def test_club_detail_requires_login(self):
         """Anonymous user gets 404 when enable_club_page=False (default)"""
@@ -13484,11 +13484,7 @@ class ClubViewTests(TestCase):
         self.assertIn(response.status_code, [403, 302])
 
     def test_club_edit_owner_can_access(self):
-        """Club owner with edit_club permission can access edit page"""
-        perm_edit = ClubPermission.objects.get_or_create(
-            name="permission_edit_club", defaults={"description": "Edit club settings"}
-        )[0]
-        self.admin_role.permissions.add(perm_edit)
+        """Club admin member can access edit page (permission_admin grants permission_edit_club)"""
         self.client.login(username="club_owner2", password="testpass")
         url = reverse("club_edit", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
@@ -13576,14 +13572,9 @@ class ClubViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
 
     def test_club_admin_regular_member_gets_403(self):
-        """Regular member (no admin role) cannot access club admin"""
-        perm_view = ClubPermission.objects.get_or_create(name="permission_view", defaults={"description": "View"})[0]
-        # Create a non-admin role
-        viewer_role = ClubRole.objects.get_or_create(name="Viewer")[0]
-        viewer_role.permissions.add(perm_view)
+        """View-only member cannot access club edit"""
         regular_user = User.objects.create_user(username="regular_member", password="testpass", email="reg@example.com")
-        regular_member = ClubMember.objects.create(club=self.club, user=regular_user, first_name="Regular")
-        regular_member.roles.add(viewer_role)
+        ClubMember.objects.create(club=self.club, user=regular_user, first_name="Regular", permission_view=True)
         self.client.login(username="regular_member", password="testpass")
         url = reverse("club_edit", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
@@ -13611,9 +13602,7 @@ class ClubMemberUpdateTests(TestCase):
         self.other_user = User.objects.create_user(
             username="cu_other", password="testpass", email="cu_other@example.com"
         )
-        self.club = Club.objects.create(
-            name="Update Test Club", owner=self.owner, allow_joining=True, enable_club_page=True
-        )
+        self.club = Club.objects.create(name="Update Test Club", allow_joining=True, enable_club_page=True)
         self.member = ClubMember.objects.create(
             club=self.club, user=self.member_user, first_name="Jane", last_name="Doe", email="cu_member@example.com"
         )
@@ -13639,14 +13628,9 @@ class ClubMemberUpdateTests(TestCase):
 
     def test_csv_import_adds_members(self):
         """CSV import creates new club members"""
-
-        perm_add_edit = ClubPermission.objects.get_or_create(
-            name="permission_add_edit", defaults={"description": "Add/edit"}
-        )[0]
-        role = ClubRole.objects.get_or_create(name="Importer")[0]
-        role.permissions.add(perm_add_edit)
-        owner_member = ClubMember.objects.get_or_create(club=self.club, user=self.owner)[0]
-        owner_member.roles.add(role)
+        owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
+        owner_member.permission_add_edit = True
+        owner_member.save()
         self.client.login(username="cu_owner", password="testpass")
         csv_content = "email,first name,last name\nnewmember@example.com,New,Member\n"
         csv_file = SimpleUploadedFile("members.csv", csv_content.encode("utf-8"), content_type="text/csv")
@@ -13657,13 +13641,9 @@ class ClubMemberUpdateTests(TestCase):
 
     def test_csv_import_skips_rows_without_email(self):
         """CSV import skips rows with no email"""
-        perm_add_edit = ClubPermission.objects.get_or_create(
-            name="permission_add_edit", defaults={"description": "Add/edit"}
-        )[0]
-        role = ClubRole.objects.get_or_create(name="Importer2")[0]
-        role.permissions.add(perm_add_edit)
-        owner_member = ClubMember.objects.get_or_create(club=self.club, user=self.owner)[0]
-        owner_member.roles.add(role)
+        owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
+        owner_member.permission_add_edit = True
+        owner_member.save()
         self.client.login(username="cu_owner", password="testpass")
         csv_content = "email,first name\n,NoEmail\n"
         csv_file = SimpleUploadedFile("members.csv", csv_content.encode("utf-8"), content_type="text/csv")
@@ -13690,13 +13670,9 @@ class ClubMemberUpdateTests(TestCase):
 
     def test_csv_export_all_returns_csv(self):
         """Owner can export all members as CSV"""
-        perm_export = ClubPermission.objects.get_or_create(
-            name="permission_export", defaults={"description": "Export"}
-        )[0]
-        role = ClubRole.objects.get_or_create(name="Exporter")[0]
-        role.permissions.add(perm_export)
-        owner_member = ClubMember.objects.get_or_create(club=self.club, user=self.owner)[0]
-        owner_member.roles.add(role)
+        owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
+        owner_member.permission_export = True
+        owner_member.save()
         self.client.login(username="cu_owner", password="testpass")
         url = reverse("club_member_export", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
@@ -13708,13 +13684,9 @@ class ClubMemberUpdateTests(TestCase):
 
     def test_csv_export_respects_filter(self):
         """Export with query filter only returns matching members"""
-        perm_export = ClubPermission.objects.get_or_create(
-            name="permission_export", defaults={"description": "Export"}
-        )[0]
-        role = ClubRole.objects.get_or_create(name="Exporter2")[0]
-        role.permissions.add(perm_export)
-        owner_member = ClubMember.objects.get_or_create(club=self.club, user=self.owner)[0]
-        owner_member.roles.add(role)
+        owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
+        owner_member.permission_export = True
+        owner_member.save()
         ClubMember.objects.create(club=self.club, first_name="Bob", last_name="Smith", email="bob@example.com")
         self.client.login(username="cu_owner", password="testpass")
         url = reverse("club_member_export", kwargs={"slug": self.club.slug})
@@ -13733,13 +13705,9 @@ class ClubMemberUpdateTests(TestCase):
 
     def test_renew_membership_sets_today(self):
         """Admin can renew membership and it sets membership_last_paid to today"""
-        perm_add_edit = ClubPermission.objects.get_or_create(
-            name="permission_add_edit", defaults={"description": "Add/edit"}
-        )[0]
-        role = ClubRole.objects.get_or_create(name="Renewer")[0]
-        role.permissions.add(perm_add_edit)
-        owner_member = ClubMember.objects.get_or_create(club=self.club, user=self.owner)[0]
-        owner_member.roles.add(role)
+        owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
+        owner_member.permission_add_edit = True
+        owner_member.save()
         self.client.login(username="cu_owner", password="testpass")
         url = reverse("club_member_renew", kwargs={"pk": self.member.pk})
         response = self.client.post(url)
@@ -13758,13 +13726,9 @@ class ClubMemberUpdateTests(TestCase):
 
     def test_delete_member_soft_deletes(self):
         """Admin can soft-delete a club member"""
-        perm_add_edit = ClubPermission.objects.get_or_create(
-            name="permission_add_edit", defaults={"description": "Add/edit"}
-        )[0]
-        role = ClubRole.objects.get_or_create(name="Deleter")[0]
-        role.permissions.add(perm_add_edit)
-        owner_member = ClubMember.objects.get_or_create(club=self.club, user=self.owner)[0]
-        owner_member.roles.add(role)
+        owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
+        owner_member.permission_add_edit = True
+        owner_member.save()
         self.client.login(username="cu_owner", password="testpass")
         url = reverse("club_member_delete", kwargs={"pk": self.member.pk})
         response = self.client.post(url)
@@ -13781,7 +13745,6 @@ class ClubAPITests(TestCase):
         self.owner = User.objects.create_user(username="api_owner", password="testpass", email="api@example.com")
         self.club = Club.objects.create(
             name="API Test Club",
-            owner=self.owner,
             allow_joining=True,
         )
 
@@ -13792,10 +13755,11 @@ class ClubAPITests(TestCase):
         self.assertEqual(response.status_code, 401)
 
     def test_api_club_members_list(self):
-        """Authenticated user can list club members via API"""
+        """Authenticated user with permission_view can list club members via API"""
         from rest_framework.authtoken.models import Token  # noqa: PLC0415
 
         token = Token.objects.create(user=self.owner)
+        ClubMember.objects.create(club=self.club, user=self.owner, permission_view=True)
         ClubMember.objects.create(club=self.club, first_name="Test", last_name="Member", email="tm@example.com")
         url = reverse("api_club_members", kwargs={"slug": self.club.slug})
         response = self.client.get(url, HTTP_AUTHORIZATION=f"Token {token.key}")
@@ -13874,29 +13838,19 @@ class ClubAuctionIntegrationTests(TestCase):
         self.owner = User.objects.create_user(username="ca_owner", password="testpass", email="ca_owner@example.com")
         self.club = Club.objects.create(
             name="Auction Test Club",
-            owner=self.owner,
             enable_club_page=True,
         )
-        # Set up admin permission and role
-        self.perm_admin = ClubPermission.objects.get_or_create(
-            name="permission_admin", defaults={"description": "Full admin"}
-        )[0]
-        self.admin_role = ClubRole.objects.get_or_create(name="Admin")[0]
-        self.admin_role.permissions.add(self.perm_admin)
-        # Set up manage_auctions permission and role
-        self.perm_manage = ClubPermission.objects.get_or_create(
-            name="permission_manage_auctions", defaults={"description": "Manage auctions"}
-        )[0]
-        self.manage_role = ClubRole.objects.get_or_create(name="Manage auctions")[0]
-        self.manage_role.permissions.add(self.perm_manage)
         # Set club on owner's userdata
         self.owner.userdata.club = self.club
         self.owner.userdata.save()
-        # Make owner a club member with admin role
+        # Make owner a club member with admin permission
         self.owner_member = ClubMember.objects.create(
-            club=self.club, user=self.owner, first_name="Owner", last_name="User"
+            club=self.club,
+            user=self.owner,
+            first_name="Owner",
+            last_name="User",
+            permission_admin=True,
         )
-        self.owner_member.roles.add(self.admin_role)
 
     def _create_auction_via_view(self, user):
         """Helper to create an auction via the create auction view."""
@@ -13975,7 +13929,7 @@ class ClubAuctionIntegrationTests(TestCase):
         self.assertEqual(len(list(response.context["club_auctions"])), 0)
 
     def test_role_assignment_fills_club_on_existing_auctions(self):
-        """When a member gains admin/manage_auctions role, existing auctions get club filled in"""
+        """When a member gains manage_auctions permission, existing auctions get club filled in"""
         user2 = User.objects.create_user(username="role_assign", password="testpass", email="role_assign@example.com")
         # User must have the same club in preferences for the signal to associate
         user2.userdata.club = self.club
@@ -13989,15 +13943,16 @@ class ClubAuctionIntegrationTests(TestCase):
             club=None,
         )
         self.assertIsNone(auction.club)
-        # Create club member and assign role with manage_auctions permission
-        member = ClubMember.objects.create(club=self.club, user=user2, first_name="Role", last_name="Assign")
-        member.roles.add(self.manage_role)
+        # Create club member and assign manage_auctions permission
+        ClubMember.objects.create(
+            club=self.club, user=user2, first_name="Role", last_name="Assign", permission_manage_auctions=True
+        )
         # Auction should now have club set
         auction.refresh_from_db()
         self.assertEqual(auction.club, self.club)
 
     def test_role_assignment_creates_history_notes(self):
-        """Auction history note is created when club is set via role assignment"""
+        """Auction history note is created when club is set via permission assignment"""
         user2 = User.objects.create_user(username="role_hist", password="testpass", email="role_hist@example.com")
         # User must have the same club in preferences for the signal to associate
         user2.userdata.club = self.club
@@ -14009,22 +13964,15 @@ class ClubAuctionIntegrationTests(TestCase):
             created_by=user2,
             club=None,
         )
-        member = ClubMember.objects.create(club=self.club, user=user2, first_name="Role", last_name="Hist")
-        member.roles.add(self.manage_role)
+        ClubMember.objects.create(
+            club=self.club, user=user2, first_name="Role", last_name="Hist", permission_manage_auctions=True
+        )
         history = AuctionHistory.objects.filter(auction=auction, applies_to="RULES")
         self.assertTrue(history.exists())
         self.assertTrue(any("Automatically associated with club" in h.action for h in history))
 
-    def test_manage_auctions_permission_exists(self):
-        """permission_manage_auctions ClubPermission exists"""
-        self.assertTrue(ClubPermission.objects.filter(name="permission_manage_auctions").exists())
-
-    def test_manage_auctions_role_exists(self):
-        """'Manage auctions' ClubRole exists"""
-        self.assertTrue(ClubRole.objects.filter(name="Manage auctions").exists())
-
     def test_role_assignment_no_effect_without_club_in_preferences(self):
-        """Role assignment does NOT fill club if user's preferences club differs"""
+        """Permission assignment does NOT fill club if user's preferences club differs"""
         user3 = User.objects.create_user(username="role_nopref", password="testpass", email="role_nopref@example.com")
         # user3 has no club in preferences (default is None)
         auction = Auction.objects.create(
@@ -14034,8 +13982,9 @@ class ClubAuctionIntegrationTests(TestCase):
             created_by=user3,
             club=None,
         )
-        member = ClubMember.objects.create(club=self.club, user=user3, first_name="No", last_name="Pref")
-        member.roles.add(self.manage_role)
+        ClubMember.objects.create(
+            club=self.club, user=user3, first_name="No", last_name="Pref", permission_manage_auctions=True
+        )
         auction.refresh_from_db()
         # club should remain None since user's preferences don't point to this club
         self.assertIsNone(auction.club)
@@ -14044,21 +13993,21 @@ class ClubAuctionIntegrationTests(TestCase):
         """Club abbreviation is auto-filled from initials when blank"""
         from .models import Club as ClubModel  # noqa: PLC0415
 
-        club = ClubModel.objects.create(name="Greater Pacific Fish Society", owner=self.owner)
+        club = ClubModel.objects.create(name="Greater Pacific Fish Society")
         self.assertEqual(club.abbreviation, "GPFS")
 
     def test_club_abbreviation_not_overwritten_if_set(self):
         """Existing club abbreviation is not overwritten on save"""
         from .models import Club as ClubModel  # noqa: PLC0415
 
-        club = ClubModel.objects.create(name="Greater Pacific Fish Society", owner=self.owner, abbreviation="CUSTOM")
+        club = ClubModel.objects.create(name="Greater Pacific Fish Society", abbreviation="CUSTOM")
         self.assertEqual(club.abbreviation, "CUSTOM")
 
     def test_club_abbreviation_persisted_with_update_fields(self):
         """Auto-filled abbreviation is saved even when update_fields is specified"""
         from .models import Club as ClubModel  # noqa: PLC0415
 
-        club = ClubModel.objects.create(name="Pacific Fish Club", owner=self.owner)
+        club = ClubModel.objects.create(name="Pacific Fish Club")
         # Clear abbreviation and resave with update_fields
         ClubModel.objects.filter(pk=club.pk).update(abbreviation="")
         club.refresh_from_db()
@@ -14068,14 +14017,10 @@ class ClubAuctionIntegrationTests(TestCase):
         self.assertEqual(club.abbreviation, "PFC")
 
     def test_club_detail_accessible_with_manage_auctions_role_when_page_disabled(self):
-        """Users with manage_auctions role can view club page even when enable_club_page=False"""
+        """Users with manage_auctions permission can view club page even when enable_club_page=False"""
         club_no_page = Club.objects.create(name="Private Club", enable_club_page=False)
         user_manage = User.objects.create_user(username="manage_user", password="testpass", email="manage@example.com")
-        member = ClubMember.objects.create(club=club_no_page, user=user_manage)
-        manage_perm = ClubPermission.objects.get(name="permission_manage_auctions")
-        role = ClubRole.objects.get(name="Manage auctions")
-        role.permissions.add(manage_perm)
-        member.roles.add(role)
+        ClubMember.objects.create(club=club_no_page, user=user_manage, permission_manage_auctions=True)
         self.client.login(username="manage_user", password="testpass")
         url = reverse("club_detail", kwargs={"slug": club_no_page.slug})
         response = self.client.get(url)
@@ -14090,12 +14035,16 @@ class ClubAuctionIntegrationTests(TestCase):
 
     def test_club_admins_added_as_tos_on_pickup_location_create(self):
         """When first pickup location is created for a club auction, club admin members get AuctionTOS"""
-        # Create a second user with manage_auctions role
+        # Create a second user with manage_auctions permission
         user2 = User.objects.create_user(username="admin2_tos", password="testpass", email="admin2_tos@example.com")
-        member2 = ClubMember.objects.create(
-            club=self.club, user=user2, first_name="Admin", last_name="Two", email="admin2_tos@example.com"
+        ClubMember.objects.create(
+            club=self.club,
+            user=user2,
+            first_name="Admin",
+            last_name="Two",
+            email="admin2_tos@example.com",
+            permission_manage_auctions=True,
         )
-        member2.roles.add(self.manage_role)
         # Create auction already associated with club (no location yet)
         auction = Auction.objects.create(
             title="Location Hook Auction",
@@ -14116,3 +14065,711 @@ class ClubAuctionIntegrationTests(TestCase):
         )
         self.assertEqual(response.status_code, 302)
         self.assertTrue(AuctionTOS.objects.filter(auction=auction, user=user2).exists())
+
+
+class ClubBapSettingsViewTests(TestCase):
+    """Permission and basic access tests for ClubBapSettingsView."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="bap_owner", password="testpass", email="bap_owner@example.com")
+        self.club = Club.objects.create(name="BAP Test Club", enable_breeder_award_program=True)
+        self.bap_user = User.objects.create_user(username="bap_user", password="testpass", email="bap_user@example.com")
+        self.bap_member = ClubMember.objects.create(club=self.club, user=self.bap_user, permission_manage_bap=True)
+        self.plain_user = User.objects.create_user(
+            username="plain_user", password="testpass", email="plain@example.com"
+        )
+        ClubMember.objects.create(club=self.club, user=self.plain_user)
+        self.url = reverse("club_bap_settings", kwargs={"slug": self.club.slug})
+
+    def test_anon_redirected_to_login(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("login", response["Location"])
+
+    def test_member_without_bap_permission_gets_403(self):
+        self.client.login(username="plain_user", password="testpass")
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_bap_admin_can_access(self):
+        self.client.login(username="bap_user", password="testpass")
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_bap_admin_can_save_settings(self):
+        self.client.login(username="bap_user", password="testpass")
+        response = self.client.post(
+            self.url,
+            {
+                "enable_breeder_award_program": True,
+                "auto_add_points": True,
+                "points_per_lot": 0,
+                "min_quantity": 3,
+                "days_between_same_name_lots": 0,
+                "only_active_members_can_participate": False,
+                "separate_hap": False,
+                "separate_cap": False,
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.club.refresh_from_db()
+        self.assertEqual(self.club.min_quantity, 3)
+
+    def test_form_save_creates_bap_history(self):
+        self.client.login(username="bap_user", password="testpass")
+        self.client.post(
+            self.url,
+            {
+                "enable_breeder_award_program": True,
+                "auto_add_points": True,
+                "points_per_lot": 0,
+                "min_quantity": 5,
+                "days_between_same_name_lots": 0,
+                "only_active_members_can_participate": False,
+                "separate_hap": False,
+                "separate_cap": False,
+            },
+        )
+        history = ClubHistory.objects.filter(club=self.club, applies_to="BAP").first()
+        self.assertIsNotNone(history)
+        self.assertEqual(history.user, self.bap_user)
+
+    def test_club_admin_without_bap_role_gets_403(self):
+        """permission_edit_club alone does not grant access to BAP settings."""
+        settings_user = User.objects.create_user(
+            username="settings_user", password="testpass", email="settings@example.com"
+        )
+        ClubMember.objects.create(club=self.club, user=settings_user, permission_edit_club=True)
+        self.client.login(username="settings_user", password="testpass")
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 403)
+
+
+class LotBapEligibilityTests(TestCase):
+    """Tests for unsold_lot_no_bap_reason and auto_award_bap_points."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="bap_seller", password="testpass", email="seller@example.com")
+        self.club = Club.objects.create(
+            name="BAP Eligibility Club",
+            enable_breeder_award_program=True,
+            auto_add_points=True,
+            min_quantity=1,
+        )
+        self.category = Category.objects.create(name="Livebearers", bap_points=5)
+        self.auction = Auction.objects.create(
+            title="BAP Auction",
+            created_by=self.user,
+            club=self.club,
+            date_start=timezone.now() - datetime.timedelta(days=3),
+            date_end=timezone.now() - datetime.timedelta(days=1),
+        )
+        self.member = ClubMember.objects.create(club=self.club, user=self.user)
+        self.location = PickupLocation.objects.create(
+            name="Test Location",
+            auction=self.auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=7),
+        )
+        self.tos = AuctionTOS.objects.create(user=self.user, auction=self.auction, pickup_location=self.location)
+
+    def _make_lot(self, **kwargs):
+        defaults = {
+            "lot_name": "Fancy Guppies",
+            "auction": self.auction,
+            "auctiontos_seller": self.tos,
+            "quantity": 5,
+            "i_bred_this_fish": True,
+            "species_category": self.category,
+            "active": False,
+            "winning_price": 10,
+            "auctiontos_winner": self.tos,
+        }
+        defaults.update(kwargs)
+        return Lot.objects.create(**defaults)
+
+    def test_not_eligible_when_bap_disabled(self):
+        self.club.enable_breeder_award_program = False
+        self.club.save()
+        lot = self._make_lot()
+        self.assertEqual(lot.unsold_lot_no_bap_reason, "not_eligible")
+
+    def test_not_eligible_when_no_auction(self):
+        lot = self._make_lot(auction=None, auctiontos_seller=None)
+        self.assertEqual(lot.unsold_lot_no_bap_reason, "not_eligible")
+
+    def test_not_bred_returned_when_not_bred(self):
+        lot = self._make_lot(i_bred_this_fish=False)
+        self.assertEqual(lot.unsold_lot_no_bap_reason, "not_bred")
+
+    def test_low_quantity_returned(self):
+        self.club.min_quantity = 10
+        self.club.save()
+        lot = self._make_lot(quantity=3)
+        self.assertEqual(lot.unsold_lot_no_bap_reason, "low_quantity")
+
+    def test_category_not_eligible_when_bap_points_zero(self):
+        zero_cat = Category.objects.create(name="Ineligible", bap_points=0)
+        lot = self._make_lot(species_category=zero_cat)
+        self.assertEqual(lot.unsold_lot_no_bap_reason, "category_not_eligible")
+
+    def test_not_club_member_when_user_not_member(self):
+        outsider = User.objects.create_user(username="outsider", password="tp", email="out@example.com")
+        outsider_tos = AuctionTOS.objects.create(user=outsider, auction=self.auction, pickup_location=self.location)
+        lot = self._make_lot(auctiontos_seller=outsider_tos)
+        self.assertEqual(lot.unsold_lot_no_bap_reason, "not_club_member")
+
+    def test_eligible_returns_none(self):
+        lot = self._make_lot()
+        self.assertIsNone(lot.unsold_lot_no_bap_reason)
+
+    def test_sold_lot_no_bap_reason_not_sold(self):
+        lot = self._make_lot(winning_price=None, auctiontos_winner=None)
+        self.assertEqual(lot.sold_lot_no_bap_reason, "not_sold")
+
+    def test_auto_award_bap_points_awards_category_points(self):
+        lot = self._make_lot()
+        lot.auto_award_bap_points()
+        lot.refresh_from_db()
+        self.assertEqual(lot.bap_points_awarded, self.category.bap_points)
+        self.assertEqual(lot.bap_auto_reason, "")
+
+    def test_auto_award_bap_points_skipped_when_bap_disabled(self):
+        self.club.enable_breeder_award_program = False
+        self.club.save()
+        lot = self._make_lot()
+        lot.auto_award_bap_points()
+        lot.refresh_from_db()
+        self.assertEqual(lot.bap_points_awarded, 0)
+        self.assertEqual(lot.bap_auto_reason, "not_eligible")
+
+    def test_auto_award_uses_club_points_per_lot_when_set(self):
+        self.club.points_per_lot = 12
+        self.club.save()
+        lot = self._make_lot()
+        lot.auto_award_bap_points()
+        lot.refresh_from_db()
+        self.assertEqual(lot.bap_points_awarded, 12)
+
+
+class ClubBapLotsViewTests(TestCase):
+    """Permission and basic access tests for ClubBapLotsView."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(
+            username="bap_lots_owner", password="testpass", email="bap_lots_owner@example.com"
+        )
+        self.club = Club.objects.create(name="BAP Lots Club", enable_breeder_award_program=True)
+        self.bap_user = User.objects.create_user(
+            username="bap_lots_user", password="testpass", email="bap_lots_user@example.com"
+        )
+        self.bap_member = ClubMember.objects.create(club=self.club, user=self.bap_user, permission_manage_bap=True)
+        self.plain_user = User.objects.create_user(
+            username="bap_lots_plain", password="testpass", email="bap_lots_plain@example.com"
+        )
+        ClubMember.objects.create(club=self.club, user=self.plain_user)
+        self.url = reverse("club_bap_lots", kwargs={"slug": self.club.slug})
+
+    def test_anon_redirected_to_login(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("login", response["Location"])
+
+    def test_plain_member_gets_403(self):
+        self.client.login(username="bap_lots_plain", password="testpass")
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_bap_admin_can_access(self):
+        self.client.login(username="bap_lots_user", password="testpass")
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_bap_disabled_returns_404(self):
+        self.club.enable_breeder_award_program = False
+        self.club.save()
+        self.client.login(username="bap_lots_user", password="testpass")
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 404)
+
+    def test_query_pending_filter(self):
+        """Pending filter shows only sold lots without manually_approved=True."""
+        self.client.login(username="bap_lots_user", password="testpass")
+        response = self.client.get(self.url, {"query": "pending"})
+        self.assertEqual(response.status_code, 200)
+
+    def test_query_approved_filter(self):
+        self.client.login(username="bap_lots_user", password="testpass")
+        response = self.client.get(self.url, {"query": "approved"})
+        self.assertEqual(response.status_code, 200)
+
+    def test_default_shows_pending_without_query(self):
+        """No query param should still return 200 (defaults to pending filter)."""
+        self.client.login(username="bap_lots_user", password="testpass")
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+
+
+class ClubBapRecalculateViewTests(TestCase):
+    """Tests for ClubBapRecalculateView (POST-only, triggers Celery task scheduling)."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(
+            username="bap_recalc_owner", password="testpass", email="bap_recalc_owner@example.com"
+        )
+        self.club = Club.objects.create(name="BAP Recalc Club", enable_breeder_award_program=True)
+        self.bap_user = User.objects.create_user(
+            username="bap_recalc_user", password="testpass", email="bap_recalc_user@example.com"
+        )
+        self.bap_member = ClubMember.objects.create(club=self.club, user=self.bap_user, permission_manage_bap=True)
+        self.plain_user = User.objects.create_user(
+            username="bap_recalc_plain", password="testpass", email="bap_recalc_plain@example.com"
+        )
+        ClubMember.objects.create(club=self.club, user=self.plain_user)
+        self.url = reverse("club_bap_recalculate", kwargs={"slug": self.club.slug})
+
+    def test_anon_redirected_to_login(self):
+        response = self.client.post(self.url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("login", response["Location"])
+
+    def test_plain_member_gets_403(self):
+        self.client.login(username="bap_recalc_plain", password="testpass")
+        response = self.client.post(self.url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_bap_disabled_returns_404(self):
+        self.club.enable_breeder_award_program = False
+        self.club.save()
+        self.client.login(username="bap_recalc_user", password="testpass")
+        response = self.client.post(self.url)
+        self.assertEqual(response.status_code, 404)
+
+    @patch("auctions.tasks.schedule_bap_recalculation")
+    def test_bap_admin_can_trigger_recalculate(self, mock_schedule):
+        self.client.login(username="bap_recalc_user", password="testpass")
+        response = self.client.post(self.url)
+        self.assertEqual(response.status_code, 302)
+        mock_schedule.assert_called_once_with(self.club.pk)
+
+    @patch("auctions.tasks.schedule_bap_recalculation")
+    def test_redirects_to_bap_lots_after_recalculate(self, mock_schedule):
+        self.client.login(username="bap_recalc_user", password="testpass")
+        response = self.client.post(self.url)
+        self.assertRedirects(response, reverse("club_bap_lots", kwargs={"slug": self.club.slug}))
+
+
+class ClubAPIKeyModelTests(TestCase):
+    """Unit tests for ClubAPIKey.generate() and ClubAPIKey.verify()."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(
+            username="apikey_owner", password="testpass", email="apikey_owner@example.com"
+        )
+        self.club = Club.objects.create(name="API Key Club")
+
+    def _make_key(self):
+        raw_key, prefix, key_hash = ClubAPIKey.generate()
+        api_key = ClubAPIKey.objects.create(
+            club=self.club, name="Test Key", prefix=prefix, key_hash=key_hash, created_by=self.owner
+        )
+        return raw_key, api_key
+
+    def test_generate_prefix_starts_with_ck(self):
+        raw_key, prefix, key_hash = ClubAPIKey.generate()
+        self.assertTrue(prefix.startswith("ck_"))
+
+    def test_generate_raw_key_contains_prefix(self):
+        raw_key, prefix, key_hash = ClubAPIKey.generate()
+        self.assertTrue(raw_key.startswith(prefix + "."))
+
+    def test_verify_returns_key_for_valid_raw_key(self):
+        raw_key, api_key = self._make_key()
+        found = ClubAPIKey.verify(raw_key)
+        self.assertIsNotNone(found)
+        self.assertEqual(found.pk, api_key.pk)
+
+    def test_verify_returns_none_for_wrong_secret(self):
+        raw_key, api_key = self._make_key()
+        prefix = api_key.prefix
+        result = ClubAPIKey.verify(f"{prefix}.wrongsecretvalue")
+        self.assertIsNone(result)
+
+    def test_verify_returns_none_for_inactive_key(self):
+        raw_key, api_key = self._make_key()
+        api_key.is_active = False
+        api_key.save()
+        self.assertIsNone(ClubAPIKey.verify(raw_key))
+
+    def test_verify_returns_none_for_malformed_key(self):
+        self.assertIsNone(ClubAPIKey.verify("nodotseparator"))
+        self.assertIsNone(ClubAPIKey.verify(""))
+
+
+class ClubMemberIngestAPITests(TestCase):
+    """Integration tests for ClubMemberIngestAPIView."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(
+            username="ingest_owner", password="testpass", email="ingest_owner@example.com"
+        )
+        self.club = Club.objects.create(name="Ingest Club")
+        raw_key, prefix, key_hash = ClubAPIKey.generate()
+        self.api_key = ClubAPIKey.objects.create(
+            club=self.club, name="Test Integration", prefix=prefix, key_hash=key_hash, created_by=self.owner
+        )
+        self.raw_key = raw_key
+        self.url = reverse("api_club_member_ingest", kwargs={"slug": self.club.slug})
+
+    def _post(self, data, key=None):
+        headers = {}
+        if key is not False:
+            headers["HTTP_X_API_KEY"] = key or self.raw_key
+        return self.client.post(self.url, data, content_type="application/json", **headers)
+
+    def test_no_api_key_returns_401(self):
+        response = self._post({"email": "test@example.com"}, key=False)
+        self.assertEqual(response.status_code, 401)
+
+    def test_bad_api_key_returns_401(self):
+        response = self._post({"email": "test@example.com"}, key="ck_bad.wrong")
+        self.assertEqual(response.status_code, 401)
+
+    def test_wrong_slug_returns_403(self):
+        other_club = Club.objects.create(name="Other Club")
+        wrong_url = reverse("api_club_member_ingest", kwargs={"slug": other_club.slug})
+        response = self.client.post(
+            wrong_url, {"email": "test@example.com"}, content_type="application/json", HTTP_X_API_KEY=self.raw_key
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_valid_key_creates_member(self):
+        response = self._post({"email": "new@example.com", "first_name": "Alice"})
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["status"], "created")
+        self.assertTrue(ClubMember.objects.filter(club=self.club, email="new@example.com").exists())
+
+    def test_email_lowercased_on_creation(self):
+        self._post({"email": "UPPER@Example.COM"})
+        self.assertTrue(ClubMember.objects.filter(club=self.club, email="upper@example.com").exists())
+
+    def test_duplicate_email_returns_200(self):
+        self._post({"email": "dup@example.com"})
+        response = self._post({"email": "dup@example.com"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "duplicate")
+        self.assertEqual(ClubMember.objects.filter(club=self.club, email="dup@example.com").count(), 1)
+
+    def test_invalid_payload_returns_400(self):
+        response = self._post({})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["status"], "error")
+
+    def test_club_history_created_on_success(self):
+        before = ClubHistory.objects.filter(club=self.club).count()
+        self._post({"email": "hist@example.com"})
+        self.assertEqual(ClubHistory.objects.filter(club=self.club).count(), before + 1)
+
+    def test_club_history_created_on_failure(self):
+        before = ClubHistory.objects.filter(club=self.club).count()
+        self._post({})
+        self.assertEqual(ClubHistory.objects.filter(club=self.club).count(), before + 1)
+
+    def test_field_mapping_applied(self):
+        ClubAPIKeyFieldMap.objects.create(api_key=self.api_key, external_field="email_address", internal_field="email")
+        response = self._post({"email_address": "mapped@example.com"})
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(ClubMember.objects.filter(club=self.club, email="mapped@example.com").exists())
+
+    def test_last_used_at_updated(self):
+        self.assertIsNone(self.api_key.last_used_at)
+        self._post({"email": "lastusedat@example.com"})
+        self.api_key.refresh_from_db()
+        self.assertIsNotNone(self.api_key.last_used_at)
+
+    def test_member_source_is_api_key_name(self):
+        self._post({"email": "source@example.com"})
+        member = ClubMember.objects.get(club=self.club, email="source@example.com")
+        self.assertEqual(member.source, self.api_key.name)
+
+
+class ClubAPIKeyUITests(TestCase):
+    """Permission and basic access tests for API key management UI views."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(
+            username="apiui_owner", password="testpass", email="apiui_owner@example.com"
+        )
+        self.club = Club.objects.create(name="API UI Club")
+        self.editor = User.objects.create_user(
+            username="apiui_editor", password="testpass", email="apiui_editor@example.com"
+        )
+        ClubMember.objects.create(club=self.club, user=self.editor, permission_edit_club=True)
+        self.plain = User.objects.create_user(
+            username="apiui_plain", password="testpass", email="apiui_plain@example.com"
+        )
+        ClubMember.objects.create(club=self.club, user=self.plain)
+        self.list_url = reverse("club_api_keys", kwargs={"slug": self.club.slug})
+        self.create_url = reverse("club_api_key_create", kwargs={"slug": self.club.slug})
+
+    def test_anon_list_redirects_to_login(self):
+        response = self.client.get(self.list_url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("login", response["Location"])
+
+    def test_plain_member_list_gets_403(self):
+        self.client.login(username="apiui_plain", password="testpass")
+        response = self.client.get(self.list_url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_editor_can_access_list(self):
+        self.client.login(username="apiui_editor", password="testpass")
+        response = self.client.get(self.list_url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_editor_can_create_key(self):
+        self.client.login(username="apiui_editor", password="testpass")
+        response = self.client.post(self.create_url, {"name": "My Integration"})
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(ClubAPIKey.objects.filter(club=self.club, name="My Integration").exists())
+
+    def test_create_redirects_to_detail_with_raw_key_in_session(self):
+        self.client.login(username="apiui_editor", password="testpass")
+        self.client.post(self.create_url, {"name": "Session Key"})
+        api_key = ClubAPIKey.objects.get(club=self.club, name="Session Key")
+        session = self.client.session
+        self.assertIn(f"new_api_key_{api_key.pk}", session)
+
+    def test_revoke_deactivates_key(self):
+        self.client.login(username="apiui_editor", password="testpass")
+        raw_key, prefix, key_hash = ClubAPIKey.generate()
+        api_key = ClubAPIKey.objects.create(
+            club=self.club, name="Revoke Me", prefix=prefix, key_hash=key_hash, created_by=self.editor
+        )
+        revoke_url = reverse("club_api_key_revoke", kwargs={"slug": self.club.slug, "pk": api_key.pk})
+        self.client.post(revoke_url)
+        api_key.refresh_from_db()
+        self.assertFalse(api_key.is_active)
+
+    def test_add_mapping(self):
+        self.client.login(username="apiui_editor", password="testpass")
+        raw_key, prefix, key_hash = ClubAPIKey.generate()
+        api_key = ClubAPIKey.objects.create(
+            club=self.club, name="Map Me", prefix=prefix, key_hash=key_hash, created_by=self.editor
+        )
+        add_url = reverse("club_api_key_mapping_add", kwargs={"slug": self.club.slug, "pk": api_key.pk})
+        self.client.post(add_url, {"external_field": "email_address", "internal_field": "email"})
+        self.assertTrue(ClubAPIKeyFieldMap.objects.filter(api_key=api_key, external_field="email_address").exists())
+
+    def test_delete_mapping(self):
+        self.client.login(username="apiui_editor", password="testpass")
+        raw_key, prefix, key_hash = ClubAPIKey.generate()
+        api_key = ClubAPIKey.objects.create(
+            club=self.club, name="Del Map", prefix=prefix, key_hash=key_hash, created_by=self.editor
+        )
+        mapping = ClubAPIKeyFieldMap.objects.create(
+            api_key=api_key, external_field="fullname", internal_field="first_name"
+        )
+        del_url = reverse(
+            "club_api_key_mapping_delete", kwargs={"slug": self.club.slug, "pk": api_key.pk, "map_pk": mapping.pk}
+        )
+        self.client.post(del_url)
+        self.assertFalse(ClubAPIKeyFieldMap.objects.filter(pk=mapping.pk).exists())
+
+
+class ClubPermissionWildcardTests(TestCase):
+    """Tests for check_club_permission — admin wildcard and individual bool checks."""
+
+    def setUp(self):
+        from .views import check_club_permission
+
+        self.check = check_club_permission
+        self.club = Club.objects.create(name="Perm Wildcard Club")
+        self.user = User.objects.create_user(username="perm_user", password="testpass", email="perm@example.com")
+
+    def _make_member(self, **kwargs):
+        ClubMember.objects.filter(club=self.club, user=self.user).delete()
+        return ClubMember.objects.create(club=self.club, user=self.user, **kwargs)
+
+    def test_admin_passes_all_permissions(self):
+        self._make_member(permission_admin=True)
+        for perm in [
+            "permission_admin",
+            "permission_view",
+            "permission_export",
+            "permission_add_edit",
+            "permission_edit_club",
+            "permission_manage_auctions",
+            "permission_manage_bap",
+        ]:
+            self.assertTrue(self.check(self.user, self.club, perm), f"admin should pass {perm}")
+
+    def test_no_permissions_fails_all(self):
+        self._make_member()
+        for perm in [
+            "permission_admin",
+            "permission_view",
+            "permission_export",
+            "permission_add_edit",
+            "permission_edit_club",
+            "permission_manage_auctions",
+            "permission_manage_bap",
+        ]:
+            self.assertFalse(self.check(self.user, self.club, perm), f"no-perm should fail {perm}")
+
+    def test_individual_bool_passes_only_its_own_check(self):
+        all_perms = [
+            "permission_admin",
+            "permission_view",
+            "permission_export",
+            "permission_add_edit",
+            "permission_edit_club",
+            "permission_manage_auctions",
+            "permission_manage_bap",
+        ]
+        for target_perm in all_perms:
+            self._make_member(**{target_perm: True})
+            for perm in all_perms:
+                if perm == "permission_admin":
+                    # permission_admin grants wildcard — skip for non-admin fields
+                    continue
+                if target_perm == "permission_admin":
+                    # admin wildcard — all should pass
+                    self.assertTrue(self.check(self.user, self.club, perm))
+                elif perm == target_perm:
+                    self.assertTrue(self.check(self.user, self.club, perm), f"{target_perm} set; {perm} should pass")
+                else:
+                    self.assertFalse(self.check(self.user, self.club, perm), f"{target_perm} set; {perm} should fail")
+
+    def test_unauthenticated_user_fails_all(self):
+        from django.contrib.auth.models import AnonymousUser
+
+        anon = AnonymousUser()
+        self.assertFalse(self.check(anon, self.club, "permission_view"))
+
+    def test_superuser_passes_all(self):
+        su = User.objects.create_superuser("superuser_perm", "su@example.com", "testpass")
+        for perm in [
+            "permission_admin",
+            "permission_view",
+            "permission_export",
+            "permission_add_edit",
+            "permission_edit_club",
+            "permission_manage_auctions",
+            "permission_manage_bap",
+        ]:
+            self.assertTrue(self.check(su, self.club, perm))
+
+    def test_non_member_fails_all(self):
+        other = User.objects.create_user(username="non_member", password="testpass", email="nm@example.com")
+        for perm in ["permission_view", "permission_admin", "permission_export"]:
+            self.assertFalse(self.check(other, self.club, perm))
+
+
+class ClubPermissionsDialogTests(TestCase):
+    """Tests for ClubMemberPermissionsView — admin-only HTMx dialog."""
+
+    def setUp(self):
+        self.club = Club.objects.create(name="Perms Dialog Club")
+        self.admin_user = User.objects.create_user(
+            username="perms_admin", password="testpass", email="perms_admin@example.com"
+        )
+        self.admin_member = ClubMember.objects.create(club=self.club, user=self.admin_user, permission_admin=True)
+        self.target_user = User.objects.create_user(
+            username="perms_target", password="testpass", email="perms_target@example.com"
+        )
+        self.target_member = ClubMember.objects.create(club=self.club, user=self.target_user)
+        self.plain_user = User.objects.create_user(
+            username="perms_plain", password="testpass", email="perms_plain@example.com"
+        )
+        ClubMember.objects.create(club=self.club, user=self.plain_user, permission_view=True)
+        self.url = reverse("clubmember_permissions", kwargs={"pk": self.target_member.pk})
+
+    def test_admin_can_open_dialog(self):
+        self.client.login(username="perms_admin", password="testpass")
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_non_admin_gets_403_on_get(self):
+        self.client.login(username="perms_plain", password="testpass")
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_non_admin_gets_403_on_post(self):
+        self.client.login(username="perms_plain", password="testpass")
+        response = self.client.post(self.url, {"permission_add_edit": True})
+        self.assertEqual(response.status_code, 403)
+
+    def test_anon_redirected_to_login(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("login", response["Location"])
+
+    def test_admin_post_grants_permission(self):
+        self.client.login(username="perms_admin", password="testpass")
+        self.client.post(self.url, {"permission_add_edit": "on"})
+        self.target_member.refresh_from_db()
+        self.assertTrue(self.target_member.permission_add_edit)
+
+    def test_admin_post_revokes_permission(self):
+        self.target_member.permission_add_edit = True
+        self.target_member.save()
+        self.client.login(username="perms_admin", password="testpass")
+        # Posting without the checkbox = False
+        self.client.post(self.url, {})
+        self.target_member.refresh_from_db()
+        self.assertFalse(self.target_member.permission_add_edit)
+
+    def test_admin_post_creates_club_history(self):
+        self.client.login(username="perms_admin", password="testpass")
+        before = ClubHistory.objects.filter(club=self.club).count()
+        self.client.post(self.url, {"permission_view": "on"})
+        self.assertGreater(ClubHistory.objects.filter(club=self.club).count(), before)
+
+
+class ClubViewOnlyAccessTests(TestCase):
+    """Tests verifying view-only members can see the member list but not mutate anything."""
+
+    def setUp(self):
+        self.club = Club.objects.create(name="View Only Club")
+        self.viewer_user = User.objects.create_user(
+            username="viewer_user", password="testpass", email="viewer@example.com"
+        )
+        self.viewer_member = ClubMember.objects.create(club=self.club, user=self.viewer_user, permission_view=True)
+        self.target_user = User.objects.create_user(
+            username="view_target", password="testpass", email="view_target@example.com"
+        )
+        self.target_member = ClubMember.objects.create(
+            club=self.club, user=self.target_user, first_name="Target", last_name="Person"
+        )
+
+    def test_viewer_can_access_club_admin(self):
+        self.client.login(username="viewer_user", password="testpass")
+        response = self.client.get(reverse("club_admin", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+
+    def test_viewer_cannot_export_csv(self):
+        self.client.login(username="viewer_user", password="testpass")
+        response = self.client.get(reverse("club_member_export", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_viewer_cannot_access_bap_settings(self):
+        self.client.login(username="viewer_user", password="testpass")
+        response = self.client.get(reverse("club_bap_settings", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_viewer_cannot_edit_club(self):
+        self.client.login(username="viewer_user", password="testpass")
+        response = self.client.get(reverse("club_edit", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 403)
+
+    def test_viewer_cannot_post_to_clubmember_admin(self):
+        self.client.login(username="viewer_user", password="testpass")
+        url = reverse("clubmember_admin", kwargs={"pk": self.target_member.pk})
+        response = self.client.post(url, {"first_name": "Hacked"})
+        self.assertEqual(response.status_code, 403)
+
+    def test_viewer_cannot_access_permissions_dialog(self):
+        self.client.login(username="viewer_user", password="testpass")
+        url = reverse("clubmember_permissions", kwargs={"pk": self.target_member.pk})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 403)

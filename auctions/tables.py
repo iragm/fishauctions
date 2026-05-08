@@ -419,8 +419,7 @@ class ClubMemberHTMxTable(tables.Table):
     def render_name(self, value, record):
         name = record.display_name
         url = reverse("clubmember_admin", kwargs={"pk": record.pk})
-        can_edit = self.can_add_edit
-        if can_edit:
+        if self.can_add_edit:
             if record.possible_duplicate_id:
                 icon = format_html(
                     "<i class='text-warning bi bi-people-fill me-1' title='This member may be a duplicate'></i>"
@@ -444,44 +443,63 @@ class ClubMemberHTMxTable(tables.Table):
         return result
 
     def render_actions(self, value, record):
-        if not self.can_add_edit:
+        if not self.can_add_edit and not self.can_manage_permissions:
             return ""
         name = record.display_name
-        renew_url = reverse("club_member_renew_page", kwargs={"slug": record.club.slug, "pk": record.pk})
-        confirm_delete_url = reverse("club_member_confirm", kwargs={"pk": record.pk, "action": "delete"})
-        merge_url = reverse("club_member_merge", kwargs={"slug": record.club.slug, "pk": record.pk})
-        email_item = format_html("")
-        if record.email:
-            icon_class = "bi bi-envelope"
-            if record.email_address_status == "BAD":
-                icon_class = "bi bi-envelope-exclamation-fill text-danger"
-            elif record.email_address_status == "VALID":
-                icon_class = "bi bi-envelope-check-fill"
-            email_item = format_html(
-                '<li><a class="dropdown-item" href="mailto:{}"><i class="{} me-1"></i>Email</a></li>',
-                record.email,
-                icon_class,
+
+        permissions_item = format_html("")
+        if self.can_manage_permissions:
+            perms_url = reverse("clubmember_permissions", kwargs={"pk": record.pk})
+            permissions_item = format_html(
+                '<li><a class="dropdown-item" href="#"'
+                ' hx-get="{}" hx-target="#modals-here">'
+                '<i class="bi bi-shield-lock me-1"></i>Permissions</a></li>'
+                "<li><hr class='dropdown-divider'></li>",
+                perms_url,
             )
+
+        edit_items = format_html("")
+        if self.can_add_edit:
+            renew_url = reverse("club_member_renew_page", kwargs={"slug": record.club.slug, "pk": record.pk})
+            confirm_delete_url = reverse("club_member_confirm", kwargs={"pk": record.pk, "action": "delete"})
+            merge_url = reverse("club_member_merge", kwargs={"slug": record.club.slug, "pk": record.pk})
+            email_item = format_html("")
+            if record.email:
+                icon_class = "bi bi-envelope"
+                if record.email_address_status == "BAD":
+                    icon_class = "bi bi-envelope-exclamation-fill text-danger"
+                elif record.email_address_status == "VALID":
+                    icon_class = "bi bi-envelope-check-fill"
+                email_item = format_html(
+                    '<li><a class="dropdown-item" href="mailto:{}"><i class="{} me-1"></i>Email</a></li>',
+                    record.email,
+                    icon_class,
+                )
+            edit_items = format_html(
+                '<li><a class="dropdown-item" href="{}">'
+                '<i class="bi bi-calendar-check me-1"></i>Renew membership</a></li>'
+                '<li><a class="dropdown-item" href="{}">'
+                '<i class="bi bi-people me-1"></i>Merge with...</a></li>'
+                "{}"
+                '<li><hr class="dropdown-divider"></li>'
+                '<li><a class="dropdown-item text-danger" href="#"'
+                ' hx-get="{}" hx-target="#modals-here">'
+                '<i class="bi bi-person-dash me-1"></i>Remove member</a></li>',
+                renew_url,
+                merge_url,
+                email_item,
+                confirm_delete_url,
+            )
+
         return format_html(
             '<div class="dropdown">'
             '<button type="button" class="btn btn-sm btn-secondary dropdown-toggle"'
             ' data-bs-toggle="dropdown" aria-label="Actions for {}">Actions</button>'
-            '<ul class="dropdown-menu">'
-            '<li><a class="dropdown-item" href="{}">'
-            '<i class="bi bi-calendar-check me-1"></i>Renew membership</a></li>'
-            '<li><a class="dropdown-item" href="{}">'
-            '<i class="bi bi-people me-1"></i>Merge with...</a></li>'
-            "{}"
-            '<li><hr class="dropdown-divider"></li>'
-            '<li><a class="dropdown-item text-danger" href="#"'
-            ' hx-get="{}" hx-target="#modals-here">'
-            '<i class="bi bi-person-dash me-1"></i>Remove member</a></li>'
-            "</ul></div>",
+            "<ul class='dropdown-menu'>{}{}</ul>"
+            "</div>",
             name,
-            renew_url,
-            merge_url,
-            email_item,
-            confirm_delete_url,
+            permissions_item,
+            edit_items,
         )
 
     class Meta:
@@ -492,6 +510,7 @@ class ClubMemberHTMxTable(tables.Table):
     def __init__(self, *args, **kwargs):
         self.request = kwargs.pop("request", None)
         self.can_add_edit = kwargs.pop("can_add_edit", False)
+        self.can_manage_permissions = kwargs.pop("can_manage_permissions", False)
         super().__init__(*args, **kwargs)
 
 
@@ -522,6 +541,69 @@ class ClubHistoryHTMxTable(tables.Table):
         model = ClubHistory
         template_name = "tables/bootstrap_htmx.html"
         fields = ()
+
+    def __init__(self, *args, **kwargs):
+        self.club = kwargs.pop("club", None)
+        super().__init__(*args, **kwargs)
+
+
+class ClubBapLotHTMxTable(tables.Table):
+    hide_string = "d-md-table-cell d-none"
+
+    lot_name = tables.Column(verbose_name="Lot", orderable=True)
+    seller = tables.Column(accessor="auctiontos_seller", verbose_name="Seller", orderable=False)
+    auction = tables.Column(accessor="auction", verbose_name="Auction", orderable=False)
+    date_end = tables.Column(
+        verbose_name="Ended", orderable=True, attrs={"th": {"class": hide_string}, "cell": {"class": hide_string}}
+    )
+    bap_points_awarded = tables.Column(verbose_name="Points", orderable=True)
+    status = tables.Column(accessor="pk", verbose_name="Status", orderable=False)
+
+    def render_lot_name(self, value, record):
+        url = record.lot_link
+        return format_html('<a href="{}" target="_blank">{}</a>', url, value)
+
+    def render_seller(self, value, record):
+        if value:
+            return str(value)
+        return "—"
+
+    def render_auction(self, value, record):
+        if value:
+            return format_html('<a href="{}" target="_blank">{}</a>', value.get_absolute_url(), str(value))
+        return "—"
+
+    def render_date_end(self, value, record):
+        if value:
+            return value.strftime("%b %-d, %Y")
+        return "—"
+
+    def render_bap_points_awarded(self, value, record):
+        url = reverse("lot_bap_points", kwargs={"pk": record.pk})
+        return format_html(
+            '<input type="text" value="{}" placeholder="{}" class="form-control form-control-sm d-inline-block"'
+            ' style="width:70px;" data-lot-pk="{}" data-url="{}" onchange="saveBapPoints(this)">',
+            value or "",
+            record.bap_placeholder,
+            record.pk,
+            url,
+        )
+
+    def render_status(self, value, record):
+        if record.bap_points_awarded:
+            return mark_safe('<span class="badge bg-success">Approved</span>')
+        if record.manually_approved:
+            return mark_safe('<span class="badge bg-secondary">Manually set</span>')
+        reason = record.sold_lot_no_bap_reason
+        if reason:
+            label = dict(record.BAP_REASON_CHOICES).get(reason, reason)
+            return format_html('<span class="badge bg-warning text-dark">{}</span>', label)
+        return mark_safe('<span class="badge bg-primary">Pending</span>')
+
+    class Meta:
+        model = Lot
+        template_name = "tables/bootstrap_htmx.html"
+        fields = ("lot_name", "seller", "auction", "date_end", "bap_points_awarded", "status")
 
     def __init__(self, *args, **kwargs):
         self.club = kwargs.pop("club", None)

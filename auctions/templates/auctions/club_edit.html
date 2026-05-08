@@ -2,6 +2,14 @@
 {% load crispy_forms_tags %}
 {% block title %}Edit {{ club.name }}{% endblock %}
 
+{% block extra_js %}
+<script type="text/javascript">
+    $(document).ready(function() {
+        document.getElementById('id_location_coordinates').style.display = "none";
+    });
+</script>
+{% endblock %}
+
 {% block content %}
 {{ form.media }}
 <h3><i class="bi bi-gear"></i> Edit {{ club.name }}</h3>

@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}API Keys &mdash; {{ club.name }}{% endblock %}
+
+{% block content %}
+<h3><i class="bi bi-key"></i> {{ club.name }} &mdash; API Keys</h3>
+
+<div class="mb-3 d-flex flex-wrap gap-2 align-items-center">
+  <a href="{% url 'club_detail' club.slug %}" class="btn btn-sm btn-secondary"><i class="bi bi-house"></i> Club page</a>
+  <a href="{% url 'club_api_key_create' club.slug %}" class="btn btn-sm btn-success"><i class="bi bi-plus-lg"></i> Create new key</a>
+</div>
+
+<p class="text-muted small">API keys allow external services (e.g. WordPress, Google Forms) to create club members without a user account. Each key is scoped to this club only.</p>
+
+{% if api_keys %}
+<table class="table table-sm">
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>Prefix</th>
+      <th>Status</th>
+      <th>Created</th>
+      <th>Last used</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for key in api_keys %}
+    <tr>
+      <td>{{ key.name }}</td>
+      <td><code>{{ key.prefix }}…</code></td>
+      <td>
+        {% if key.is_active %}
+        <span class="badge bg-success">Active</span>
+        {% else %}
+        <span class="badge bg-secondary">Revoked</span>
+        {% endif %}
+      </td>
+      <td>{{ key.created_at|date:"N j, Y" }}</td>
+      <td>{{ key.last_used_at|date:"N j, Y g:i a"|default:"Never" }}</td>
+      <td class="text-end">
+        <a href="{% url 'club_api_key_detail' club.slug key.pk %}" class="btn btn-sm btn-primary">Manage</a>
+        {% if key.is_active %}
+        <a href="{% url 'club_api_key_revoke' club.slug key.pk %}" class="btn btn-sm btn-outline-danger">Revoke</a>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="text-muted">No API keys yet. <a href="{% url 'club_api_key_create' club.slug %}">Create one</a> to allow external integrations.</p>
+{% endif %}
+
+<div id="modals-here"></div>
+{% endblock %}

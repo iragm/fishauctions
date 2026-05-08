@@ -13,6 +13,7 @@ from asgiref.sync import async_to_sync
 from autoslug import AutoSlugField
 from bs4 import BeautifulSoup
 from django.conf import settings
+from django.contrib.auth.hashers import check_password, make_password
 from django.contrib.auth.models import User
 from django.contrib.sites.models import Site
 from django.core.exceptions import ValidationError
@@ -556,7 +557,6 @@ class Club(models.Model):
     location = models.CharField(max_length=500, blank=True, null=True)
     location.help_text = "Search Google maps with this address"
     location_coordinates = PlainLocationField(based_fields=["location"], blank=True, null=True, verbose_name="Map")
-    owner = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="owned_clubs")
     MEMBERSHIP_SYSTEM_CHOICES = (
         ("january_first", "January 1st renewal"),
         ("rolling", "Rolling annual membership"),
@@ -564,6 +564,12 @@ class Club(models.Model):
     membership_system = models.CharField(max_length=20, choices=MEMBERSHIP_SYSTEM_CHOICES, default="january_first")
     membership_annual_fee = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     discord_server_id = models.CharField(max_length=100, blank=True, null=True)
+    auction_channel_id = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="Discord channel ID for auction announcements. Set via /auctions_here.",
+    )
     uuid = models.UUIDField(default=uuid_module.uuid4, unique=True, editable=False, db_index=True)
     slug = AutoSlugField(populate_from="name", unique=True, always_update=True)
     allow_joining = models.BooleanField(default=False)
@@ -574,6 +580,42 @@ class Club(models.Model):
         verbose_name="Enable public club page",
         help_text="When enabled, this club will appear on the club map and have a public detail page.",
     )
+    enable_breeder_award_program = models.BooleanField(
+        default=False,
+        help_text="Track when users breed fish and show a leaderboard of top breeders.",
+    )
+    days_between_same_name_lots = models.IntegerField(
+        default=0,
+        help_text="Minimum days between awarding BAP points for lots with the same name. Leave at 0 to allow points every time.",
+    )
+    points_per_lot = models.IntegerField(
+        default=0,
+        help_text="Fixed BAP points per eligible lot. Leave at 0 to use pre-assigned per-category points based on difficulty.",
+    )
+    separate_hap = models.BooleanField(
+        default=False,
+        help_text="Track HAP (Horticultural Award Program) points separately from BAP.",
+        verbose_name="Separate Horticultural Award Program (HAP)",
+    )
+    separate_cap = models.BooleanField(
+        default=False,
+        help_text="Track CAP (Culture Award Program) points separately from BAP.",
+        verbose_name="Separate Live Food Culture Award Program (CAP)",
+    )
+    auto_add_points = models.BooleanField(
+        default=True,
+        help_text="Automatically award BAP points when a lot sells. Uncheck to require admin approval before awarding points.",
+    )
+    only_active_members_can_participate = models.BooleanField(
+        default=False,
+        help_text="Only club members with an active (paid) membership can earn BAP points.",
+    )
+    min_quantity = models.IntegerField(
+        default=5,
+        help_text="Minimum quantity in a lot to be eligible for BAP points.",
+    )
+    last_bap_recalculation = models.DateTimeField(null=True, blank=True)
+    next_bap_recalculation = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["name"]
@@ -616,52 +658,6 @@ class ClubDiscordRole(models.Model):
 
     def __str__(self):
         return f"{self.role_name}"
-
-
-class ClubPermission(models.Model):
-    """Permission definitions for club roles"""
-
-    PERMISSION_CHOICES = (
-        ("permission_admin", "Full admin access"),
-        ("permission_view", "View members"),
-        ("permission_export", "Export member data"),
-        ("permission_add_edit", "Add and edit members"),
-        ("permission_edit_club", "Edit club settings"),
-        ("permission_manage_auctions", "Manage auctions"),
-    )
-    name = models.CharField(max_length=50, choices=PERMISSION_CHOICES, unique=True)
-    description = models.CharField(max_length=200)
-
-    def __str__(self):
-        return self.get_name_display()
-
-
-class ClubRole(models.Model):
-    """Global roles that can be assigned to club members, shared across all clubs"""
-
-    name = models.CharField(max_length=100, unique=True)
-    permissions = models.ManyToManyField(ClubPermission, blank=True)
-
-    def __str__(self):
-        return self.name
-
-
-DEFAULT_CLUB_ROLES = [
-    {"name": "View club list", "permissions": ["permission_view"]},
-    {"name": "Update users", "permissions": ["permission_view", "permission_add_edit"]},
-    {"name": "Change club permissions", "permissions": ["permission_view", "permission_edit_club"]},
-    {"name": "Export", "permissions": ["permission_view", "permission_add_edit", "permission_export"]},
-    {"name": "Manage auctions", "permissions": ["permission_manage_auctions"]},
-]
-
-
-def create_default_club_roles():
-    """Create the default global roles if they don't already exist."""
-    for role_def in DEFAULT_CLUB_ROLES:
-        role, created = ClubRole.objects.get_or_create(name=role_def["name"])
-        if created:
-            perms = ClubPermission.objects.filter(name__in=role_def["permissions"])
-            role.permissions.set(perms)
 
 
 class ContactRecord(models.Model):
@@ -721,6 +717,10 @@ class ClubMember(ContactRecord):
     )
     bap_points = models.PositiveIntegerField(default=0)
     hap_points = models.PositiveIntegerField(default=0)
+    culture_points = models.PositiveIntegerField(default=0, help_text="Culture Award Program points.")
+    bap_points_ytd = models.PositiveIntegerField(default=0, help_text="BAP points earned this calendar year.")
+    hap_points_ytd = models.PositiveIntegerField(default=0, help_text="HAP points earned this calendar year.")
+    culture_points_ytd = models.PositiveIntegerField(default=0, help_text="Culture points earned this calendar year.")
     membership_last_paid = models.DateField(null=True, blank=True)
     createdon = models.DateTimeField(auto_now_add=True, verbose_name="date joined")
     added_by = models.ForeignKey(
@@ -734,13 +734,14 @@ class ClubMember(ContactRecord):
     contact_status = models.CharField(max_length=20, choices=CONTACT_STATUS_CHOICES, default="contact")
     discord_roles = models.TextField(blank=True)
     is_deleted = models.BooleanField(default=False, db_index=True)
-    SOURCE_CHOICES = (
-        ("joined", "Joined via website"),
-        ("discord", "Added from Discord"),
-        ("manually_added", "Manually added"),
-    )
-    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default="manually_added")
-    roles = models.ManyToManyField(ClubRole, blank=True)
+    source = models.CharField(max_length=200, default="manually_added")
+    permission_admin = models.BooleanField(default=False, help_text="Full admin access — grants all other permissions.")
+    permission_view = models.BooleanField(default=False, help_text="View the member list.")
+    permission_export = models.BooleanField(default=False, help_text="Export member data to CSV.")
+    permission_add_edit = models.BooleanField(default=False, help_text="Add and edit members.")
+    permission_edit_club = models.BooleanField(default=False, help_text="Edit club settings.")
+    permission_manage_auctions = models.BooleanField(default=False, help_text="Manage auctions for this club.")
+    permission_manage_bap = models.BooleanField(default=False, help_text="Manage BAP/HAP points.")
     possible_duplicate = models.ForeignKey(
         "ClubMember",
         on_delete=models.SET_NULL,
@@ -749,6 +750,20 @@ class ClubMember(ContactRecord):
         related_name="duplicate_of",
         help_text="Another club member with the same last name; may be a duplicate",
     )
+
+    @property
+    def has_any_permission(self):
+        return any(
+            [
+                self.permission_admin,
+                self.permission_view,
+                self.permission_export,
+                self.permission_add_edit,
+                self.permission_edit_club,
+                self.permission_manage_auctions,
+                self.permission_manage_bap,
+            ]
+        )
 
     def __str__(self):
         name = f"{self.first_name} {self.last_name}".strip()
@@ -820,6 +835,26 @@ class ClubMember(ContactRecord):
 
         return None
 
+    def maybe_assign_discord_role(self):
+        """Compute the correct Discord role and assign it via the API if auto-managed and credentials are set."""
+        import requests as _requests
+        from django.conf import settings as _settings
+
+        role = self.discord_role
+        if not role or not self.discord_id or not self.club.discord_server_id:
+            return
+        bot_token = getattr(_settings, "DISCORD_BOT_TOKEN", "")
+        if not bot_token:
+            return
+        url = (
+            f"https://discord.com/api/v10/guilds/{self.club.discord_server_id}"
+            f"/members/{self.discord_id}/roles/{role.role_id}"
+        )
+        try:
+            _requests.put(url, headers={"Authorization": f"Bot {bot_token}"}, timeout=10)
+        except Exception:
+            pass
+
     @property
     def display_name(self):
         """Name for display — always non-empty."""
@@ -868,6 +903,7 @@ class ClubHistory(models.Model):
             ("MEMBERS", "Members"),
             ("MEMBERSHIP", "Membership"),
             ("SETTINGS", "Settings"),
+            ("BAP", "BAP"),
         ),
         blank=True,
         null=True,
@@ -883,11 +919,70 @@ class ClubHistory(models.Model):
         verbose_name_plural = "Club history"
 
 
+class ClubAPIKey(models.Model):
+    """API key scoped to a single Club, used by external services to ingest ClubMember records."""
+
+    club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="api_keys")
+    name = models.CharField(max_length=100, help_text="Label for this integration, e.g. 'WordPress'")
+    prefix = models.CharField(max_length=12, unique=True, db_index=True)
+    key_hash = models.CharField(max_length=255, db_index=True)  # salted password hash of secret
+    is_active = models.BooleanField(default=True)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    rate_limit = models.IntegerField(null=True, blank=True, help_text="Max requests per hour. Blank = site default.")
+
+    @staticmethod
+    def generate():
+        """Return (raw_key, prefix, key_hash). Store prefix + key_hash; display raw_key once."""
+        import secrets
+
+        prefix = "ck_" + secrets.token_hex(4)
+        secret = secrets.token_hex(16)
+        raw_key = f"{prefix}.{secret}"
+        key_hash = make_password(secret)
+        return raw_key, prefix, key_hash
+
+    @staticmethod
+    def verify(raw_key):
+        """Return active ClubAPIKey matching raw_key, or None."""
+        try:
+            prefix, secret = raw_key.split(".", 1)
+        except ValueError:
+            return None
+        candidates = ClubAPIKey.objects.filter(prefix=prefix, is_active=True).select_related("club")
+        for candidate in candidates:
+            if check_password(secret, candidate.key_hash):
+                return candidate
+        return None
+
+    def __str__(self):
+        return f"{self.name} ({self.prefix}…)"
+
+
+class ClubAPIKeyFieldMap(models.Model):
+    """Maps an external field name to a ClubMember field for a given ClubAPIKey."""
+
+    api_key = models.ForeignKey(ClubAPIKey, on_delete=models.CASCADE, related_name="field_mappings")
+    external_field = models.CharField(max_length=100)
+    internal_field = models.CharField(max_length=100)
+
+    class Meta:
+        unique_together = [("api_key", "external_field")]
+
+    def __str__(self):
+        return f"{self.external_field} → {self.internal_field}"
+
+
 class Category(models.Model):
     """Picklist of species.  Used for product, lot, and interest"""
 
     name = models.CharField(max_length=255)
     name_on_label = models.CharField(max_length=255, default="")
+    bap_points = models.PositiveIntegerField(
+        default=5,
+        help_text="BAP points awarded for a sold lot in this category. Set to 0 to make this category ineligible.",
+    )
 
     def __str__(self):
         return str(self.name)
@@ -967,6 +1062,8 @@ class Auction(models.Model):
     date_online_bidding_starts = models.DateTimeField("Online bidding opens", blank=True, null=True)
     date_online_bidding_ends = models.DateTimeField("Online bidding ends", blank=True, null=True)
     watch_warning_email_sent = models.BooleanField(default=False)
+    first_discord_sent = models.BooleanField(default=False)
+    second_discord_sent = models.BooleanField(default=False)
     invoiced = models.BooleanField(default=False)
     created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     club = models.ForeignKey("Club", null=True, blank=True, on_delete=models.SET_NULL, related_name="auctions")
@@ -3947,6 +4044,19 @@ class Lot(models.Model):
     )
     image_url = models.URLField(blank=True, null=True)
     image_url.help_text = "If filled out, an image will be added to this lot using this URL when saving"
+    bap_points_awarded = models.IntegerField(default=0)
+    BAP_REASON_CHOICES = (
+        ("not_eligible", "Not eligible"),
+        ("not_long_enough", "Not long enough since last submission"),
+        ("category_not_eligible", "Category not eligible (BAP points = 0)"),
+        ("not_club_member", "Not a club member"),
+        ("not_bred", "Didn't breed this fish"),
+        ("not_active_member", "Not an active club member"),
+        ("not_sold", "Not sold"),
+        ("low_quantity", "Quantity below club minimum"),
+    )
+    bap_auto_reason = models.CharField(max_length=30, choices=BAP_REASON_CHOICES, blank=True, default="")
+    manually_approved = models.BooleanField(default=False)
 
     def save(self, *args, **kwargs):
         from django.db import transaction
@@ -4713,6 +4823,91 @@ class Lot(models.Model):
             if self.winning_price:
                 return True
         return False
+
+    @property
+    def bap_placeholder(self):
+        """Label for the points field: Culture, HAP, or BAP depending on club settings and category."""
+        if self.auction and self.auction.club:
+            club = self.auction.club
+            if club.separate_cap and self.species_category and self.species_category.name == "Live food cultures":
+                return "Culture"
+            if club.separate_hap and self.species_category and self.species_category.name == "Aquatic plants":
+                return "HAP"
+        return "BAP"
+
+    @property
+    def unsold_lot_no_bap_reason(self):
+        """Return a BAP_REASON_CHOICES key if this lot is ineligible for BAP points, or None if eligible.
+        Ignores whether the lot has sold — use sold_lot_no_bap_reason for that check."""
+        if not self.auction or not self.auction.club:
+            return "not_eligible"
+        club = self.auction.club
+        if not club.enable_breeder_award_program:
+            return "not_eligible"
+        if not self.i_bred_this_fish:
+            return "not_bred"
+        if self.quantity < club.min_quantity:
+            return "low_quantity"
+        if not self.species_category or self.species_category.bap_points == 0:
+            return "category_not_eligible"
+        seller_user = self.user or (self.auctiontos_seller.user if self.auctiontos_seller else None)
+        if not seller_user:
+            return "not_club_member"
+        member = ClubMember.objects.filter(club=club, user=seller_user, is_deleted=False).first()
+        if not member:
+            return "not_club_member"
+        if club.only_active_members_can_participate:
+            today = timezone.now().date()
+            if not member.membership_last_paid:
+                return "not_active_member"
+            if club.membership_system == "january_first":
+                valid = member.membership_last_paid >= datetime.date(today.year, 1, 1)
+            else:
+                valid = member.membership_last_paid >= today - datetime.timedelta(days=365)
+            if not valid:
+                return "not_active_member"
+        if club.days_between_same_name_lots > 0:
+            cutoff = timezone.now() - datetime.timedelta(days=club.days_between_same_name_lots)
+            prior = (
+                Lot.objects.filter(
+                    auction__club=club,
+                    user=seller_user,
+                    lot_name=self.lot_name,
+                    bap_points_awarded__gt=0,
+                    date_end__gte=cutoff,
+                )
+                .exclude(pk=self.pk)
+                .exists()
+            )
+            if prior:
+                return "not_long_enough"
+        return None
+
+    @property
+    def sold_lot_no_bap_reason(self):
+        """Return a BAP_REASON_CHOICES key if ineligible for awarded points, or None if eligible."""
+        if not self.sold:
+            return "not_sold"
+        return self.unsold_lot_no_bap_reason
+
+    def auto_award_bap_points(self):
+        """Set bap_points_awarded and bap_auto_reason based on club rules. Call after auction ends."""
+        if self.auction and self.auction.club and not self.bap_points_awarded and not self.manually_approved:
+            reason = self.sold_lot_no_bap_reason
+            if reason:
+                self.bap_auto_reason = reason
+                self.bap_points_awarded = 0
+                self.save(update_fields=["bap_auto_reason", "bap_points_awarded"])
+                return
+            club = self.auction.club
+            if club.auto_add_points:
+                if club.points_per_lot > 0:
+                    points = club.points_per_lot
+                else:
+                    points = self.species_category.bap_points if self.species_category else 5
+                self.bap_points_awarded = points
+            self.bap_auto_reason = ""
+            self.save(update_fields=["bap_auto_reason", "bap_points_awarded"])
 
     @property
     def pre_registered(self):

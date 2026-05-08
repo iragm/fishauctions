@@ -1086,3 +1086,68 @@ class ClubHistoryFilter(django_filters.FilterSet):
 
     def club_history_search(self, queryset, name, value):
         return self.generic(queryset, value)
+
+
+class ClubBapLotFilter(django_filters.FilterSet):
+    """Filter for the BAP lot review table (club admin, permission_manage_bap only).
+
+    Single query input; keywords "pending" / "approved" control status; remaining text
+    searches lot name and seller. No keyword = all sold lots. Default: "pending".
+    """
+
+    query = django_filters.CharFilter(
+        method="filter_query",
+        label="",
+        widget=TextInput(
+            attrs={
+                "placeholder": "Filter by lot name or seller...",
+                "hx-get": "",
+                "hx-target": "div.table-container",
+                "hx-trigger": "keyup changed delay:300ms",
+                "hx-swap": "outerHTML",
+            }
+        ),
+    )
+
+    class Meta:
+        model = Lot
+        fields = []
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_method = "get"
+        self.helper.form_id = "filter-form"
+        if not self.data.get("query"):
+            self.form.initial["query"] = "pending"
+
+    def filter_queryset(self, queryset):
+        # When no query submitted apply the pending default without going through CharField
+        if not self.data.get("query"):
+            return self._apply_query(queryset, "pending")
+        return super().filter_queryset(queryset)
+
+    def filter_query(self, queryset, name, value):
+        return self._apply_query(queryset, value)
+
+    def _apply_query(self, queryset, value):
+        tokens = value.lower().split()
+        status_keywords = {"pending", "approved"}
+        status = next((t for t in tokens if t in status_keywords), None)
+        search_tokens = [t for t in tokens if t not in status_keywords]
+        search = " ".join(search_tokens)
+
+        if status == "pending":
+            queryset = queryset.filter(active=False, auctiontos_winner__isnull=False, manually_approved=False)
+        elif status == "approved":
+            queryset = queryset.filter(bap_points_awarded__gt=0)
+        else:
+            queryset = queryset.filter(active=False, auctiontos_winner__isnull=False)
+
+        if search:
+            queryset = queryset.filter(
+                Q(lot_name__icontains=search)
+                | Q(auctiontos_seller__name__icontains=search)
+                | Q(auctiontos_seller__email__icontains=search)
+            )
+        return queryset

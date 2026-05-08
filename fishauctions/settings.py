@@ -764,3 +764,9 @@ FIELD_ENCRYPTION_KEY = _encryption_key
 DISCORD_PUBLIC_KEY = os.environ.get("DISCORD_PUBLIC_KEY", "")
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
 DISCORD_BOT_CLIENT_ID = os.environ.get("DISCORD_BOT_CLIENT_ID", "")
+
+REST_FRAMEWORK = {
+    "DEFAULT_THROTTLE_RATES": {
+        "api_key_default": "1000/hour",
+    }
+}

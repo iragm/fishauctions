@@ -47,6 +47,7 @@ urlpatterns = [
     path("api/get_category/", views.CategoryFinder.as_view(), name="guess_category"),
     path("api/get_auction_info/", views.AuctionFinder.as_view(), name="get_auction_info"),
     path("api/lot/<int:pk>/", views.LotAdmin.as_view(), name="auctionlotadmin"),
+    path("api/lot/<int:pk>/bap/", views.LotBapPointsView.as_view(), name="lot_bap_points"),
     path(
         "api/auctions/<slug:slug>/custom-dropdown-options/",
         views.AuctionDropdownOptionsAPI.as_view(),
@@ -560,7 +561,27 @@ urlpatterns = [
     path("clubs/<slug:slug>/", views.ClubDetailView.as_view(), name="club_detail"),
     path("clubs/<slug:slug>/admin/", views.ClubAdminView.as_view(), name="club_admin"),
     path("clubs/<slug:slug>/edit/", views.ClubEditView.as_view(), name="club_edit"),
+    path("clubs/<slug:slug>/bap-settings/", views.ClubBapSettingsView.as_view(), name="club_bap_settings"),
+    path("clubs/<slug:slug>/bap/", views.ClubBapLotsView.as_view(), name="club_bap_lots"),
+    path("clubs/<slug:slug>/bap/recalculate/", views.ClubBapRecalculateView.as_view(), name="club_bap_recalculate"),
     path("clubs/<slug:slug>/admin/history/", views.ClubHistoryView.as_view(), name="club_history"),
+    # API key management (login-required UI)
+    path("clubs/<slug:slug>/api-keys/", views.ClubAPIKeyListView.as_view(), name="club_api_keys"),
+    path("clubs/<slug:slug>/api-keys/create/", views.ClubAPIKeyCreateView.as_view(), name="club_api_key_create"),
+    path("clubs/<slug:slug>/api-keys/<int:pk>/", views.ClubAPIKeyDetailView.as_view(), name="club_api_key_detail"),
+    path(
+        "clubs/<slug:slug>/api-keys/<int:pk>/revoke/", views.ClubAPIKeyRevokeView.as_view(), name="club_api_key_revoke"
+    ),
+    path(
+        "clubs/<slug:slug>/api-keys/<int:pk>/mappings/add/",
+        views.ClubAPIKeyFieldMapCreateView.as_view(),
+        name="club_api_key_mapping_add",
+    ),
+    path(
+        "clubs/<slug:slug>/api-keys/<int:pk>/mappings/<int:map_pk>/delete/",
+        views.ClubAPIKeyFieldMapDeleteView.as_view(),
+        name="club_api_key_mapping_delete",
+    ),
     path("clubs/<slug:slug>/admin/import/", views.ClubMemberCSVImportView.as_view(), name="club_member_import"),
     path(
         "clubs/<slug:slug>/admin/export/",
@@ -568,6 +589,9 @@ urlpatterns = [
         name="club_member_export",
     ),
     path("api/clubmember/<int:pk>/", views.ClubMemberAdminView.as_view(), name="clubmember_admin"),
+    path(
+        "api/clubmember/<int:pk>/permissions/", views.ClubMemberPermissionsView.as_view(), name="clubmember_permissions"
+    ),
     path("api/clubmember/<int:pk>/renew/", views.ClubMemberRenewView.as_view(), name="club_member_renew"),
     path("api/clubmember/<int:pk>/delete/", views.ClubMemberDeleteView.as_view(), name="club_member_delete"),
     path(
@@ -584,6 +608,11 @@ urlpatterns = [
         name="club_member_renew_page",
     ),
     # REST API v1
+    path(
+        "api/v1/clubs/<slug:slug>/members/ingest/",
+        views.ClubMemberIngestAPIView.as_view(),
+        name="api_club_member_ingest",
+    ),
     path("api/v1/clubs/<slug:slug>/members/", views.ClubMemberListCreateAPIView.as_view(), name="api_club_members"),
     path(
         "api/v1/clubs/<slug:slug>/members/<int:pk>/",
