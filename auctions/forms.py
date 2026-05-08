@@ -44,6 +44,7 @@ from .models import (
     UserBan,
     UserData,
     UserLabelPrefs,
+    sanitize_summernote_html,
 )
 from .validators import validate_username_no_at_symbol
 
@@ -92,6 +93,7 @@ def validate_image_url(url):
 
 def clean_summernote(html, max_length=16383):
     """Helper function to shorten summernote fields, which can contain thousands of formatting characters"""
+    html = sanitize_summernote_html(html)
     if len(html) > max_length:
         html = re.sub(r"(?!<br\s*/?>)<.*?>", "", html)[:max_length]
     return html

@@ -466,12 +466,29 @@ def guess_category(text):
     return None
 
 
-def remove_html_color_tags(text):
-    """Remove only color-related styles from HTML, preserving all other attributes"""
+def sanitize_summernote_html(text):
+    """Remove disallowed Summernote content while preserving supported formatting."""
     if not text:
         return text
 
     soup = BeautifulSoup(text, "html.parser")
+
+    for tag in soup.find_all(["img", "script"]):
+        tag.decompose()
+
+    for tag in soup.find_all():
+        for attr_name, attr_value in list(tag.attrs.items()):
+            normalized_attr = attr_name.lower()
+            if normalized_attr.startswith("on"):
+                del tag[attr_name]
+                continue
+            if normalized_attr in {"href", "src", "xlink:href"}:
+                values = attr_value if isinstance(attr_value, list) else [attr_value]
+                if any(
+                    isinstance(value, str) and re.match(r"^\s*(?:data|javascript):", value, flags=re.IGNORECASE)
+                    for value in values
+                ):
+                    del tag[attr_name]
 
     # Remove 'color' attribute from <font> tags
     for tag in soup.find_all("font"):
@@ -495,6 +512,11 @@ def remove_html_color_tags(text):
             del tag["style"]
 
     return str(soup)
+
+
+def remove_html_color_tags(text):
+    """Backward-compatible wrapper for Summernote HTML sanitization."""
+    return sanitize_summernote_html(text)
 
 
 class BlogPost(models.Model):
@@ -632,6 +654,7 @@ class Club(models.Model):
             update_fields = kwargs.get("update_fields")
             if update_fields is not None and "abbreviation" not in update_fields:
                 kwargs["update_fields"] = list(update_fields) + ["abbreviation"]
+        self.description = sanitize_summernote_html(self.description)
         super().save(*args, **kwargs)
 
 
