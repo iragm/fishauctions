@@ -14223,7 +14223,7 @@ class ParseBoolEnvTests(TestCase):
 
     def test_entrypoint_uses_shared_bool_parser_for_debug(self) -> None:
         entrypoint = Path(__file__).resolve().parent.parent / "entrypoint.sh"
-        entrypoint_text = entrypoint.read_text()
+        entrypoint_text = entrypoint.read_text(encoding="utf-8")
 
         self.assertIn("parse_bool_env", entrypoint_text)
         self.assertNotIn('[ "${DEBUG}" = "True" ]', entrypoint_text)
