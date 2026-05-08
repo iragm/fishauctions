@@ -13058,6 +13058,10 @@ class DiscordInteractionsView(View):
                 return self._handle_connect_command(data)
             if command_name == "auctions_here":
                 return self._handle_auctions_here_command(data)
+            if command_name == "membership":
+                return self._handle_membership_command(data)
+            if command_name == "bap":
+                return self._handle_bap_command(data)
             return _discord_ephemeral("❌ Unknown command.")
 
         # Type 5 – Modal submit
@@ -13242,6 +13246,95 @@ class DiscordInteractionsView(View):
             applies_to="SETTINGS",
         )
         return _discord_ephemeral("✅ Auction announcements will be posted in this channel.")
+
+    def _handle_membership_command(self, data):
+        guild_id = data.get("guild_id", "")
+        member_data = data.get("member") or {}
+        user_data = member_data.get("user") or data.get("user") or {}
+        discord_id = user_data.get("id", "")
+
+        if not guild_id or not discord_id:
+            return _discord_ephemeral("❌ Unable to process this request.")
+
+        club = Club.objects.filter(discord_server_id=guild_id).first()
+        if not club:
+            return _discord_ephemeral("❌ This server is not connected to a club.")
+
+        member = ClubMember.objects.filter(club=club, discord_id=discord_id, is_deleted=False).first()
+        if not member:
+            return _discord_ephemeral("❌ You're not registered in this club. Use the Join button to register.")
+
+        lines = [f"**{club.name}** — Your membership"]
+        lines.append(f"Member since: {member.createdon.strftime('%B %d, %Y')}")
+
+        if not member.membership_last_paid:
+            lines.append("Status: No paid membership on record")
+        else:
+            today = timezone.now().date()
+            if club.membership_system == "january_first":
+                current_year_start = today.replace(month=1, day=1)
+                if member.membership_last_paid >= current_year_start:
+                    expiry = today.replace(year=today.year + 1, month=1, day=1)
+                    expiry_ts = int(datetime.combine(expiry, datetime.min.time(), date_tz.utc).timestamp())
+                    lines.append(f"Status: ✅ Active — expires <t:{expiry_ts}:D>")
+                else:
+                    lines.append("Status: ❌ Expired — please renew your membership")
+            elif club.membership_system == "rolling":
+                expiry = member.membership_last_paid + timedelta(days=365)
+                expiry_ts = int(datetime.combine(expiry, datetime.min.time(), date_tz.utc).timestamp())
+                if expiry >= today:
+                    lines.append(f"Status: ✅ Active — expires <t:{expiry_ts}:D>")
+                else:
+                    lines.append(f"Status: ❌ Expired <t:{expiry_ts}:D> — please renew your membership")
+            else:
+                paid_ts = int(
+                    datetime.combine(member.membership_last_paid, datetime.min.time(), date_tz.utc).timestamp()
+                )
+                lines.append(f"Last paid: <t:{paid_ts}:D>")
+
+        return _discord_ephemeral("\n".join(lines))
+
+    def _handle_bap_command(self, data):
+        guild_id = data.get("guild_id", "")
+        member_data = data.get("member") or {}
+        user_data = member_data.get("user") or data.get("user") or {}
+        discord_id = user_data.get("id", "")
+
+        if not guild_id or not discord_id:
+            return _discord_ephemeral("❌ Unable to process this request.")
+
+        club = Club.objects.filter(discord_server_id=guild_id).first()
+        if not club:
+            return _discord_ephemeral("❌ This server is not connected to a club.")
+
+        if not club.enable_breeder_award_program:
+            return _discord_ephemeral("❌ This club does not use the Breeder Award Program.")
+
+        member = ClubMember.objects.filter(club=club, discord_id=discord_id, is_deleted=False).first()
+        if not member:
+            return _discord_ephemeral("❌ You're not registered in this club. Use the Join button to register.")
+
+        lines = [f"**{club.name}** — Your points"]
+
+        bap_rank = ClubMember.objects.filter(club=club, bap_points__gt=member.bap_points, is_deleted=False).count() + 1
+        lines.append(f"BAP: {member.bap_points} pts (#{bap_rank}) — {member.bap_points_ytd} pts this year")
+
+        if club.separate_hap:
+            hap_rank = (
+                ClubMember.objects.filter(club=club, hap_points__gt=member.hap_points, is_deleted=False).count() + 1
+            )
+            lines.append(f"HAP: {member.hap_points} pts (#{hap_rank}) — {member.hap_points_ytd} pts this year")
+
+        if club.separate_cap:
+            cap_rank = (
+                ClubMember.objects.filter(club=club, culture_points__gt=member.culture_points, is_deleted=False).count()
+                + 1
+            )
+            lines.append(
+                f"Culture: {member.culture_points} pts (#{cap_rank}) — {member.culture_points_ytd} pts this year"
+            )
+
+        return _discord_ephemeral("\n".join(lines))
 
 
 class LotBapPointsView(LoginRequiredMixin, View):

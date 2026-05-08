@@ -47,3 +47,23 @@ class Command(BaseCommand):
             self.stdout.write(self.style.SUCCESS("Successfully registered /auctions_here command."))
         else:
             self.stderr.write(f"Failed to register /auctions_here: {resp2.status_code} {resp2.text}")
+
+        membership_payload = {
+            "name": "membership",
+            "description": "Check your membership status and expiration date",
+        }
+        resp3 = requests.post(url, headers=headers, json=membership_payload, timeout=10)
+        if resp3.status_code in (200, 201):
+            self.stdout.write(self.style.SUCCESS("Successfully registered /membership command."))
+        else:
+            self.stderr.write(f"Failed to register /membership: {resp3.status_code} {resp3.text}")
+
+        bap_payload = {
+            "name": "bap",
+            "description": "Check your Breeder Award Program points and ranking",
+        }
+        resp4 = requests.post(url, headers=headers, json=bap_payload, timeout=10)
+        if resp4.status_code in (200, 201):
+            self.stdout.write(self.style.SUCCESS("Successfully registered /bap command."))
+        else:
+            self.stderr.write(f"Failed to register /bap: {resp4.status_code} {resp4.text}")
