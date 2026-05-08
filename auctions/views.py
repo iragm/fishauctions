@@ -7678,6 +7678,7 @@ class PayPalAPIMixin:
             auth=(settings.PAYPAL_CLIENT_ID, settings.PAYPAL_SECRET),
             headers={"Accept": "application/json", "Accept-Language": "en_US"},
             data={"grant_type": "client_credentials"},
+            timeout=10,
         )
         token_resp.raise_for_status()
         return token_resp.json()["access_token"]
@@ -7714,32 +7715,28 @@ class PayPalAPIMixin:
         headers = self._build_paypal_headers(merchant_id=merchant_id, include_bn_code=include_bn_code)
         self.paypal_debug = ""
         try:
-            resp = requests.request(method, url, headers=headers, json=json, params=params)
+            resp = requests.request(method, url, headers=headers, json=json, params=params, timeout=10)
             resp.raise_for_status()
             self.paypal_debug = resp.headers.get("Paypal-Debug-Id")
             return resp.json()
         except requests.HTTPError:
+            debug_id = resp.headers.get("Paypal-Debug-Id", "")
+            self.paypal_debug = debug_id
             safe_headers = dict(headers or {})
             if "Authorization" in safe_headers:
                 safe_headers["Authorization"] = "Bearer ****"
-            log_kwargs = {
-                "method": method,
-                "url": url,
-                "status": resp.status_code,
-                "Paypal-Debug-Id": self.paypal_debug,
-                "req_headers": safe_headers,
-                "req_params": params,
-                "req_json": json,
-                "resp_headers": dict(resp.headers),
-                "resp_text": resp.text,
-            }
-            msg = (
-                """PayPal API call failed: %(method)s %(url)s status=%(status)s debug_id=%(debug_id)s
-                         req_headers=%(req_headers)s req_params=%(req_params)s req_json=%(req_json)s
-                         resp_headers=%(resp_headers)s resp_text=%(resp_text)s""",
-                log_kwargs,
+            logger.error(
+                "PayPal API call failed: %s %s status=%s debug_id=%s req_headers=%s req_params=%s req_json=%s resp_text=%s",
+                method,
+                url,
+                resp.status_code,
+                debug_id,
+                safe_headers,
+                params,
+                json,
+                resp.text[:1000],
             )
-            logger.error(msg)
+            msg = f"PayPal API call failed: {method} {url} status={resp.status_code} debug_id={debug_id}"
             raise Exception(msg)
 
     def post_to_paypal(self, endpoint, payload, include_bn_code=True):
@@ -7866,15 +7863,22 @@ class PayPalAPIMixin:
         return approval_url
 
     def handle_order(self, order_id):
-        """Find an invoice associated with a given order ID, and create a payment for it.  Returns error string and invoice object"""
+        """Capture a PayPal order and process it. Returns (error_str, invoice)."""
         order_data = self.post_to_paypal(f"v2/checkout/orders/{order_id}/capture", {})
         if order_data.get("status") != "COMPLETED":
             return (
                 "PayPal payment has not yet been completed, please ask the auction administrator to manually confirm payment.",
                 None,
             )
+        return self._process_captured_order(order_data)
 
-        # Extract identifiers
+    def _process_captured_order(self, order_data):
+        """Process an already-captured PayPal order. Returns (error_str, invoice).
+
+        Accepts both PayPal API response data and webhook event resource data so
+        that CHECKOUT.ORDER.COMPLETED webhook events can be handled without making
+        a redundant capture API call.
+        """
         purchase_unit = order_data.get("purchase_units", [{}])[0]
         invoice_id = purchase_unit.get("reference_id")
 
@@ -11293,21 +11297,21 @@ class PayPalWebhookView(PayPalAPIMixin, View):
                 seller = PayPalSeller.objects.filter(paypal_merchant_id=merchant_id_in_paypal).first()
             if seller:
                 seller.delete()
-                logger.info("Revoked selling for", seller.pk)
+                logger.info("Revoked selling for merchant_id=%s", merchant_id_in_paypal)
             else:
                 logger.info("Partner-consent revoked for unknown merchant %s", merchant_id_in_paypal)
 
-        elif event_type in ("CHECKOUT.ORDER.COMPLETED"):
-            """Actually mark the invoice paid and save payment"""
-            capture_id = resource.get("purchase_units", [{}])[0].get("payments", {}).get("captures", [{}])[0].get("id")
-            if capture_id:
-                error, _ = self.handle_order(capture_id)
+        elif event_type == "CHECKOUT.ORDER.COMPLETED":
+            # Order is already captured - process the order data from the webhook resource
+            # without making a redundant capture API call
+            if resource.get("status") == "COMPLETED":
+                error, _ = self._process_captured_order(resource)
                 if error:
-                    logger.error("Error handling completed order for capture_id=%s: %s", capture_id, error)
+                    logger.error("Error handling completed order webhook: %s", error)
                 else:
-                    logger.info("Payment capture completed: capture_id=%s", capture_id)
+                    logger.info("Payment processed via CHECKOUT.ORDER.COMPLETED webhook")
 
-        elif event_type in ("CHECKOUT.CAPTURE.COMPLETED"):
+        elif event_type == "CHECKOUT.CAPTURE.COMPLETED":
             """This one doesn't save the invoice"""
             try:
                 order_id = resource.get("supplementary_data", {}).get("related_ids", {}).get("order_id")

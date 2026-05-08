@@ -13471,6 +13471,184 @@ class PayPalWebhookViewTests(TestCase):
         self.assertEqual(sent_payload["webhook_id"], "WH-TESTID-123")
 
 
+class PayPalWebhookEventHandlerTests(StandardTestCase):
+    """Tests for PayPalWebhookView event processing after successful signature verification"""
+
+    PAYPAL_SETTINGS = {
+        "PAYPAL_WEBHOOK_ID": "WH-TESTID",
+        "PAYPAL_API_BASE": "https://api-m.sandbox.paypal.com",
+        "PAYPAL_CLIENT_ID": "test-client-id",
+        "PAYPAL_SECRET": "test-secret",
+    }
+
+    def setUp(self):
+        super().setUp()
+        self.url = reverse("paypal-webhook")
+        self.valid_headers = {
+            "HTTP_PAYPAL_TRANSMISSION_ID": "trans-id-123",
+            "HTTP_PAYPAL_TRANSMISSION_TIME": "2024-01-01T00:00:00Z",
+            "HTTP_PAYPAL_CERT_URL": "https://api.paypal.com/v1/notifications/certs/cert123",
+            "HTTP_PAYPAL_AUTH_ALGO": "SHA256withRSA",
+            "HTTP_PAYPAL_TRANSMISSION_SIG": "sig-abc123",
+        }
+        self.paypal_seller = PayPalSeller.objects.create(
+            user=self.user,
+            paypal_merchant_id="MERCHANT-ID-123",
+            payer_email="seller@example.com",
+        )
+        self.invoiceB.status = "UNPAID"
+        self.invoiceB.save()
+
+    def _post_verified_webhook(self, event_data):
+        """Post a webhook event with mocked signature verification always passing"""
+        from unittest.mock import MagicMock
+
+        token_mock = MagicMock()
+        token_mock.json.return_value = {"access_token": "test-token"}
+        token_mock.raise_for_status.return_value = None
+
+        verify_mock = MagicMock()
+        verify_mock.status_code = 200
+        verify_mock.raise_for_status.return_value = None
+        verify_mock.json.return_value = {"verification_status": "SUCCESS"}
+
+        with patch("auctions.views.requests.post", side_effect=[token_mock, verify_mock]):
+            with override_settings(**self.PAYPAL_SETTINGS):
+                return self.client.post(
+                    self.url,
+                    data=json.dumps(event_data),
+                    content_type="application/json",
+                    **self.valid_headers,
+                )
+
+    def test_onboarding_completed_creates_paypal_seller(self):
+        """MERCHANT.ONBOARDING.COMPLETED webhook creates/updates PayPalSeller via tracking_id"""
+        tracking_id = str(self.admin_user.userdata.unsubscribe_link)
+        new_merchant_id = "NEW-MERCHANT-456"
+        event = {
+            "id": "WH-ONBOARDING-123",
+            "event_type": "MERCHANT.ONBOARDING.COMPLETED",
+            "resource": {
+                "tracking_id": tracking_id,
+                "merchant_id": new_merchant_id,
+                "payerEmail": "newemail@example.com",
+            },
+        }
+        response = self._post_verified_webhook(event)
+        self.assertEqual(response.status_code, 200)
+        seller = PayPalSeller.objects.filter(user=self.admin_user).first()
+        self.assertIsNotNone(seller)
+        self.assertEqual(seller.paypal_merchant_id, new_merchant_id)
+        self.assertEqual(seller.payer_email, "newemail@example.com")
+
+    def test_onboarding_completed_unknown_user_returns_200(self):
+        """MERCHANT.ONBOARDING.COMPLETED with unknown tracking_id logs and returns 200"""
+        event = {
+            "id": "WH-ONBOARDING-UNKNOWN",
+            "event_type": "MERCHANT.ONBOARDING.COMPLETED",
+            "resource": {
+                "tracking_id": "unknown-tracking-id",
+                "merchant_id": "UNKNOWN-MERCHANT",
+            },
+        }
+        response = self._post_verified_webhook(event)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(PayPalSeller.objects.filter(paypal_merchant_id="UNKNOWN-MERCHANT").exists())
+
+    def test_consent_revoked_deletes_seller(self):
+        """MERCHANT.PARTNER-CONSENT.REVOKED deletes the matching PayPalSeller"""
+        event = {
+            "id": "WH-REVOKED-123",
+            "event_type": "MERCHANT.PARTNER-CONSENT.REVOKED",
+            "resource": {"merchant_id": "MERCHANT-ID-123"},
+        }
+        response = self._post_verified_webhook(event)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(PayPalSeller.objects.filter(paypal_merchant_id="MERCHANT-ID-123").exists())
+
+    def test_consent_revoked_unknown_merchant_returns_200(self):
+        """MERCHANT.PARTNER-CONSENT.REVOKED with unknown merchant returns 200 without error"""
+        event = {
+            "id": "WH-REVOKED-UNKNOWN",
+            "event_type": "MERCHANT.PARTNER-CONSENT.REVOKED",
+            "resource": {"merchant_id": "NONEXISTENT-MERCHANT"},
+        }
+        response = self._post_verified_webhook(event)
+        self.assertEqual(response.status_code, 200)
+
+    def test_checkout_order_completed_records_payment(self):
+        """CHECKOUT.ORDER.COMPLETED webhook creates an InvoicePayment record"""
+        from decimal import Decimal
+
+        from auctions.models import InvoicePayment
+
+        invoice = self.invoiceB
+        capture_id = "CAPTURE-WEBHOOK-789"
+        order_id = "ORDER-WEBHOOK-456"
+        event = {
+            "id": "WH-ORDER-COMPLETED",
+            "event_type": "CHECKOUT.ORDER.COMPLETED",
+            "resource": {
+                "id": order_id,
+                "status": "COMPLETED",
+                "purchase_units": [
+                    {
+                        "reference_id": str(invoice.pk),
+                        "amount": {"currency_code": "USD", "value": "37.50"},
+                        "payments": {
+                            "captures": [
+                                {
+                                    "id": capture_id,
+                                    "status": "COMPLETED",
+                                    "amount": {"currency_code": "USD", "value": "37.50"},
+                                }
+                            ]
+                        },
+                    }
+                ],
+                "payer": {
+                    "name": {"given_name": "Jane", "surname": "Buyer"},
+                    "email_address": "jane@example.com",
+                },
+            },
+        }
+        response = self._post_verified_webhook(event)
+        self.assertEqual(response.status_code, 200)
+        payment = InvoicePayment.objects.filter(external_id=capture_id).first()
+        self.assertIsNotNone(payment)
+        self.assertEqual(payment.invoice, invoice)
+        self.assertEqual(payment.payment_method, "PayPal")
+        self.assertEqual(payment.amount, Decimal("37.50"))
+
+    def test_checkout_order_completed_non_completed_status_is_ignored(self):
+        """CHECKOUT.ORDER.COMPLETED with non-COMPLETED status does not create a payment"""
+        from auctions.models import InvoicePayment
+
+        invoice = self.invoiceB
+        event = {
+            "id": "WH-ORDER-PENDING",
+            "event_type": "CHECKOUT.ORDER.COMPLETED",
+            "resource": {
+                "id": "ORDER-PENDING",
+                "status": "PENDING",
+                "purchase_units": [{"reference_id": str(invoice.pk)}],
+            },
+        }
+        response = self._post_verified_webhook(event)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(InvoicePayment.objects.filter(invoice=invoice).exists())
+
+    def test_unhandled_event_type_returns_200(self):
+        """Unhandled event types return 200 and are logged without error"""
+        event = {
+            "id": "WH-UNKNOWN",
+            "event_type": "SOME.UNKNOWN.EVENT.TYPE",
+            "resource": {"id": "res-123"},
+        }
+        response = self._post_verified_webhook(event)
+        self.assertEqual(response.status_code, 200)
+
+
 class PayPalCSVExportTests(StandardTestCase):
     """Test the PayPal CSV export name splitting and truncation behavior"""
 
