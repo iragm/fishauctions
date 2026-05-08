@@ -13226,7 +13226,7 @@ class LotBapPointsView(LoginRequiredMixin, View):
         if lot.auctiontos_seller:
             name = lot.auctiontos_seller.name
         elif lot.user:
-            name = f"{lot.user.first_name} {lot.user.last_name}".strip() or lot.user.username
+            name = f"{lot.user.first_name} {lot.user.last_name}".strip() or lot.user.username or f"user #{lot.user.pk}"
         else:
             name = f"lot #{lot.pk}"
         ClubHistory.objects.create(
