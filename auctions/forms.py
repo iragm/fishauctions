@@ -94,6 +94,8 @@ def validate_image_url(url):
 def clean_summernote(html, max_length=16383):
     """Helper function to shorten summernote fields, which can contain thousands of formatting characters"""
     html = sanitize_summernote_html(html)
+    if html is None:
+        return ""
     if len(html) > max_length:
         html = re.sub(r"(?!<br\s*/?>)<.*?>", "", html)[:max_length]
     return html

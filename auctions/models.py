@@ -491,8 +491,13 @@ def sanitize_summernote_html(text):
                 values = attr_value if isinstance(attr_value, list) else [attr_value]
                 if any(
                     isinstance(value, str)
-                    # Block URI schemes commonly used for script execution or local file access in user HTML.
-                    and re.match(r"^\s*(?:data|file|javascript|vbscript):", value, flags=re.IGNORECASE)
+                    # Block URI schemes commonly used for script execution or local file access in user HTML,
+                    # even when attackers split the scheme name with ASCII whitespace/control characters.
+                    and re.match(
+                        r"^(?:data|file|javascript|vbscript):",
+                        re.sub(r"[\x00-\x20\x7f]+", "", value),
+                        flags=re.IGNORECASE,
+                    )
                     for value in values
                 ):
                     del tag[attr_name]
@@ -522,7 +527,7 @@ def sanitize_summernote_html(text):
 
 
 def remove_html_color_tags(text):
-    """Backward-compatible wrapper; prefer sanitize_summernote_html for new code."""
+    """Compatibility wrapper for legacy callers that now performs full Summernote sanitization."""
     return sanitize_summernote_html(text)
 
 

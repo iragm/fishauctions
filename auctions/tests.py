@@ -10269,6 +10269,7 @@ class ModelUtilityFunctionsTestCase(StandardTestCase):
             name="Sanitized Club",
             description='<p>About us</p><img src="/logo.png"><script>alert(1)</script>',
         )
+        club.refresh_from_db()
 
         self.assertEqual(club.description, "<p>About us</p>")
 
@@ -10536,6 +10537,14 @@ class FormsUtilityTestCase(TestCase):
         result = clean_summernote(long_html, max_length=50)
         self.assertLessEqual(len(result), 50)
 
+    def test_clean_summernote_none_returns_empty_string(self):
+        """Test clean_summernote safely normalizes None values."""
+        from auctions.forms import clean_summernote
+
+        result = clean_summernote(None)
+
+        self.assertEqual(result, "")
+
     def test_clean_summernote_removes_disallowed_tags(self):
         """Test clean_summernote strips script and image tags."""
         from auctions.forms import clean_summernote
@@ -10555,11 +10564,15 @@ class FormsUtilityTestCase(TestCase):
         html = (
             '<p onclick="alert(1)" onerror="alert(1)">Text</p><a href="javascript:alert(1)">Link</a>'
             '<a href="vbscript:msgbox(1)">VB</a><a href="data:text/html;base64,PHNjcmlwdD4=">Data</a>'
+            '<a href="java\nscript:alert(1)">Obfuscated</a>'
             '<a href="https://example.com">Safe</a>'
         )
         result = clean_summernote(html)
 
-        self.assertEqual(result, '<p>Text</p><a>Link</a><a>VB</a><a>Data</a><a href="https://example.com">Safe</a>')
+        self.assertEqual(
+            result,
+            '<p>Text</p><a>Link</a><a>VB</a><a>Data</a><a>Obfuscated</a><a href="https://example.com">Safe</a>',
+        )
 
 
 class TemplateTagsTestCase(TestCase):
