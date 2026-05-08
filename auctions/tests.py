@@ -6,6 +6,7 @@ import hmac
 import io
 import json
 from decimal import Decimal
+from pathlib import Path
 from unittest.mock import patch
 
 from django import forms
@@ -14219,6 +14220,13 @@ class ParseBoolEnvTests(TestCase):
         # A typo in the env value must fail loudly, not silently default.
         with self.assertRaises(ValueError):
             parse_bool_env("maybe", default=False)
+
+    def test_entrypoint_uses_shared_bool_parser_for_debug(self) -> None:
+        entrypoint = Path(__file__).resolve().parent.parent / "entrypoint.sh"
+        entrypoint_text = entrypoint.read_text()
+
+        self.assertIn("parse_bool_env", entrypoint_text)
+        self.assertNotIn('[ "${DEBUG}" = "True" ]', entrypoint_text)
 
 
 class RequireSecureProdSecretsTests(TestCase):
