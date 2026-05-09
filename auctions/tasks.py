@@ -435,7 +435,13 @@ BAP_RECALCULATION_INTERVAL_DAYS = 30
 
 
 def bootstrap_bap_recalculation_tasks(run_at=None):
-    """Ensure each already-initialized BAP club has an enabled recalculation task."""
+    """Ensure each already-initialized BAP club has an enabled recalculation task.
+
+    Args:
+        run_at: Datetime to use for startup bootstrap. If None, uses the current
+            time. Clubs with a saved next_bap_recalculation in the past are
+            rescheduled to run at this time immediately.
+    """
 
     from django.utils import timezone
 
