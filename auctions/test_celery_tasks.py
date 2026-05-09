@@ -189,6 +189,62 @@ class CeleryTasksTestCase(TestCase):
         self.assertTrue(task.enabled)
         self.assertTrue(task.one_off)
 
+    def test_schedule_bap_recalculation_preserves_shared_clocked_schedule(self):
+        """Rescheduling one club should not delete a shared schedule used by another club."""
+        from django_celery_beat.models import ClockedSchedule, PeriodicTask
+
+        run_at = timezone.now()
+        shared_schedule = ClockedSchedule.objects.create(clocked_time=run_at)
+        club_one_task_name = f"{tasks.BAP_RECALCULATION_TASK_PREFIX}1"
+        club_two_task_name = f"{tasks.BAP_RECALCULATION_TASK_PREFIX}2"
+
+        PeriodicTask.objects.create(
+            name=club_one_task_name,
+            task="auctions.tasks.recalculate_club_bap_points",
+            clocked=shared_schedule,
+            one_off=True,
+            enabled=True,
+            kwargs='{"club_pk": 1}',
+        )
+        other_task = PeriodicTask.objects.create(
+            name=club_two_task_name,
+            task="auctions.tasks.recalculate_club_bap_points",
+            clocked=shared_schedule,
+            one_off=True,
+            enabled=True,
+            kwargs='{"club_pk": 2}',
+        )
+
+        tasks.schedule_bap_recalculation(1, run_at=run_at + datetime.timedelta(days=1))
+
+        other_task.refresh_from_db()
+        self.assertEqual(other_task.clocked_id, shared_schedule.id)
+        self.assertTrue(ClockedSchedule.objects.filter(id=shared_schedule.id).exists())
+
+    def test_schedule_bap_recalculation_reuses_existing_clocked_schedule_for_same_time(self):
+        """Rescheduling a club at the same time should keep using the existing schedule row."""
+        from django_celery_beat.models import ClockedSchedule, PeriodicTask
+
+        run_at = timezone.now()
+        schedule = ClockedSchedule.objects.create(clocked_time=run_at)
+        task_name = f"{tasks.BAP_RECALCULATION_TASK_PREFIX}1"
+
+        PeriodicTask.objects.create(
+            name=task_name,
+            task="auctions.tasks.recalculate_club_bap_points",
+            clocked=schedule,
+            one_off=True,
+            enabled=False,
+            kwargs='{"club_pk": 1}',
+        )
+
+        tasks.schedule_bap_recalculation(1, run_at=run_at)
+
+        self.assertEqual(ClockedSchedule.objects.filter(id=schedule.id).count(), 1)
+        task = PeriodicTask.objects.get(name=task_name)
+        self.assertEqual(task.clocked_id, schedule.id)
+        self.assertTrue(task.enabled)
+
     @patch("auctions.tasks.schedule_bap_recalculation")
     def test_bootstrap_bap_recalculation_tasks_schedules_enabled_clubs(self, mock_schedule):
         """BAP-enabled clubs should get a scheduled task on worker startup bootstrap."""

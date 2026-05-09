@@ -479,10 +479,8 @@ def schedule_bap_recalculation(club_pk, run_at=None):
     with transaction.atomic():
         schedule, _ = ClockedSchedule.objects.get_or_create(clocked_time=run_at)
         old_tasks = PeriodicTask.objects.filter(name=task_name)
-        old_schedule_ids = [t.clocked_id for t in old_tasks if t.clocked_id]
+        old_schedule_ids = [t.clocked_id for t in old_tasks if t.clocked_id and t.clocked_id != schedule.id]
         old_tasks.delete()
-        if old_schedule_ids:
-            ClockedSchedule.objects.filter(id__in=old_schedule_ids).delete()
         task = PeriodicTask.objects.create(
             name=task_name,
             task="auctions.tasks.recalculate_club_bap_points",
@@ -491,6 +489,14 @@ def schedule_bap_recalculation(club_pk, run_at=None):
             enabled=True,
             kwargs=json.dumps({"club_pk": club_pk}),
         )
+        if old_schedule_ids:
+            orphaned_schedule_ids = [
+                schedule_id
+                for schedule_id in old_schedule_ids
+                if not PeriodicTask.objects.filter(clocked_id=schedule_id).exists()
+            ]
+            if orphaned_schedule_ids:
+                ClockedSchedule.objects.filter(id__in=orphaned_schedule_ids).delete()
 
     logger.info("Scheduled BAP recalculation for club %s (task id=%s) at %s", club_pk, task.id, run_at)
 
