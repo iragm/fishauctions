@@ -10574,8 +10574,8 @@ class FormsUtilityTestCase(TestCase):
             '<p>Text</p><a>Link</a><a>VB</a><a>Data</a><a>Obfuscated</a><a href="https://example.com">Safe</a>',
         )
 
-    def test_summernote_widget_render_keeps_upload_url_available(self):
-        """Summernote widget rendering should not fail when attachment UI is hidden."""
+    def test_summernote_widget_includes_upload_url_in_rendered_html(self):
+        """Summernote widget should include upload URL and drag-drop disabling in rendered HTML."""
         from django.urls import reverse
         from django_summernote.widgets import SummernoteWidget
 
@@ -10583,6 +10583,7 @@ class FormsUtilityTestCase(TestCase):
         html = SummernoteWidget().render("description", "", attrs={"id": "id_description"})
 
         self.assertIn(upload_url, html)
+        self.assertIn('"disableDragAndDrop": true', html)
 
 
 class TemplateTagsTestCase(TestCase):
