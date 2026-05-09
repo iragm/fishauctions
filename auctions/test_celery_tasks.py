@@ -240,7 +240,7 @@ class CeleryTasksTestCase(TestCase):
 
         tasks.schedule_bap_recalculation(1, run_at=run_at)
 
-        self.assertEqual(ClockedSchedule.objects.filter(id=schedule.id).count(), 1)
+        self.assertTrue(ClockedSchedule.objects.filter(id=schedule.id).exists())
         task = PeriodicTask.objects.get(name=task_name)
         self.assertEqual(task.clocked_id, schedule.id)
         self.assertTrue(task.enabled)

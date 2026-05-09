@@ -491,11 +491,7 @@ def schedule_bap_recalculation(club_pk, run_at=None):
         )
         if old_schedule_ids:
             active_schedule_ids = set(PeriodicTask.objects.filter(clocked_id__in=old_schedule_ids).values_list("clocked_id", flat=True))
-            orphaned_schedule_ids = [
-                schedule_id
-                for schedule_id in old_schedule_ids
-                if schedule_id not in active_schedule_ids
-            ]
+            orphaned_schedule_ids = set(old_schedule_ids) - active_schedule_ids
             if orphaned_schedule_ids:
                 ClockedSchedule.objects.filter(id__in=orphaned_schedule_ids).delete()
 
