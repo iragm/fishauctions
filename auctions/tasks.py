@@ -434,6 +434,27 @@ BAP_RECALCULATION_TASK_PREFIX = "bap_recalculate_club_"
 BAP_RECALCULATION_INTERVAL_DAYS = 30
 
 
+def bootstrap_bap_recalculation_tasks(run_at=None):
+    """Ensure each already-initialized BAP club has an enabled recalculation task."""
+
+    from django.utils import timezone
+
+    from auctions.models import Club
+
+    if run_at is None:
+        run_at = timezone.now()
+
+    clubs = Club.objects.filter(enable_breeder_award_program=True, next_bap_recalculation__isnull=False).only(
+        "pk", "next_bap_recalculation"
+    )
+
+    for club in clubs:
+        club_run_at = club.next_bap_recalculation
+        if club_run_at < run_at:
+            club_run_at = run_at
+        schedule_bap_recalculation(club.pk, run_at=club_run_at)
+
+
 def schedule_bap_recalculation(club_pk, run_at=None):
     """Schedule a one-off BAP points recalculation task for a specific club.
 
