@@ -10574,6 +10574,16 @@ class FormsUtilityTestCase(TestCase):
             '<p>Text</p><a>Link</a><a>VB</a><a>Data</a><a>Obfuscated</a><a href="https://example.com">Safe</a>',
         )
 
+    def test_summernote_widget_render_keeps_upload_url_available(self):
+        """Summernote widget rendering should not fail when attachment UI is hidden."""
+        from django.urls import reverse
+        from django_summernote.widgets import SummernoteWidget
+
+        upload_url = reverse("django_summernote-upload_attachment")
+        html = SummernoteWidget().render("description", "", attrs={"id": "id_description"})
+
+        self.assertIn(upload_url, html)
+
 
 class TemplateTagsTestCase(TestCase):
     """Test cases for template tags"""
