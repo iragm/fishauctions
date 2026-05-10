@@ -21,6 +21,22 @@ jobs:
       - run: ./.github/scripts/prepare-ci.sh
       - run: docker compose build
 
+      - name: Start database first and wait for health
+        run: |
+          docker compose up -d db
+          for i in {1..80}; do
+            STATUS=$(docker inspect --format='{{.State.Health.Status}}' db 2>/dev/null || echo "not_found")
+            if [ "$STATUS" = "healthy" ]; then
+              echo "Database is healthy!"
+              exit 0
+            fi
+            echo "Database status: $STATUS (attempt $i/80)"
+            sleep 3
+          done
+          echo "ERROR: Database failed to become healthy"
+          docker compose logs db || true
+          exit 1
+
       - name: Run Django tests in parallel
         # Override entrypoint.sh — it ignores its args and unconditionally
         # exec's uvicorn/gunicorn, which would never run the test command.
