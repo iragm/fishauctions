@@ -466,35 +466,76 @@ def guess_category(text):
     return None
 
 
-def remove_html_color_tags(text):
-    """Remove only color-related styles from HTML, preserving all other attributes"""
-    if not text:
-        return text
+def sanitize_summernote_html(text):
+    """Remove disallowed Summernote content while preserving supported formatting."""
+    if text is None:
+        return None
+    if text == "":
+        return ""
 
     soup = BeautifulSoup(text, "html.parser")
+
+    # Block executable, externally embedded, or page-hijacking content.
+    # <style>/<link> enable CSS injection; <base> hijacks relative URLs; <meta> can redirect;
+    # <form> enables phishing overlays (Summernote never generates forms).
+    for tag in soup.find_all(["base", "embed", "form", "iframe", "img", "link", "meta", "object", "script", "style"]):
+        tag.decompose()
+
+    for tag in soup.find_all():
+        for attr_name, attr_value in list(tag.attrs.items()):
+            normalized_attr = attr_name.lower()
+            if normalized_attr.startswith("on"):
+                del tag[attr_name]
+                continue
+            # These are the URI-bearing attributes we allow in Summernote content.
+            if normalized_attr in {"href", "src", "xlink:href"}:
+                # Some parsers represent multi-valued attributes as lists, so normalize both cases.
+                values = attr_value if isinstance(attr_value, list) else [attr_value]
+                if any(
+                    isinstance(value, str)
+                    # Block URI schemes commonly used for script execution or local file access in user HTML,
+                    # even when attackers split the scheme name with ASCII whitespace/control characters.
+                    and re.match(
+                        r"^(?:data|file|javascript|vbscript):",
+                        re.sub(r"[\x00-\x20\x7f]+", "", value),
+                        flags=re.IGNORECASE,
+                    )
+                    for value in values
+                ):
+                    del tag[attr_name]
 
     # Remove 'color' attribute from <font> tags
     for tag in soup.find_all("font"):
         if tag.has_attr("color"):
             del tag["color"]
 
-    # Clean color and background-color from style attributes in <span> and others
+    # Clean style attributes: remove color/background-color (unwanted formatting) and any
+    # property containing url() which could load external resources.
     for tag in soup.find_all(style=True):
-        # Split and filter styles
         styles = tag["style"].split(";")
         cleaned_styles = []
         for style in styles:
             if not style.strip():
                 continue
-            name, *_ = style.split(":", 1)
-            if name.strip().lower() not in {"color", "background-color"}:
-                cleaned_styles.append(style)
+            name, *value_parts = style.split(":", 1)
+            prop = name.strip().lower()
+            value = value_parts[0] if value_parts else ""
+            if prop in {"color", "background-color"}:
+                continue
+            if "url(" in value.lower():
+                continue
+            cleaned_styles.append(style)
         if cleaned_styles:
             tag["style"] = ";".join(cleaned_styles)
         else:
             del tag["style"]
 
     return str(soup)
+
+
+def remove_html_color_tags(text):
+    """Compatibility wrapper for legacy callers that now performs full Summernote sanitization."""
+    return sanitize_summernote_html(text)
 
 
 class BlogPost(models.Model):
@@ -632,6 +673,7 @@ class Club(models.Model):
             update_fields = kwargs.get("update_fields")
             if update_fields is not None and "abbreviation" not in update_fields:
                 kwargs["update_fields"] = list(update_fields) + ["abbreviation"]
+        self.description = sanitize_summernote_html(self.description)
         super().save(*args, **kwargs)
 
 
@@ -1425,7 +1467,7 @@ class Auction(models.Model):
         # if self.date_start.year < 2000:
         #    current_year = timezone.now().year
         #    self.date_start = self.date_start.replace(year=current_year)
-        self.summernote_description = remove_html_color_tags(self.summernote_description)
+        self.summernote_description = sanitize_summernote_html(self.summernote_description)
         super().save(*args, **kwargs)
 
     def find_user(self, name="", email="", exclude_pk=None):
@@ -4144,7 +4186,7 @@ class Lot(models.Model):
             and self.winning_price <= self.auction.force_donation_threshold
         ):
             self.donation = True
-        self.summernote_description = remove_html_color_tags(self.summernote_description)
+        self.summernote_description = sanitize_summernote_html(self.summernote_description)
         if not self.quantity:
             self.quantity = 1
         super().save(*args, **kwargs)
