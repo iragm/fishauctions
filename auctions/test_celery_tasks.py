@@ -13,7 +13,7 @@ from django.utils import timezone
 from django_celery_beat.models import PeriodicTask
 
 from auctions import tasks
-from auctions.models import Auction, AuctionHistory, AuctionTOS, Invoice, PickupLocation
+from auctions.models import Auction, AuctionHistory, AuctionTOS, Club, Invoice, PickupLocation
 
 
 class CeleryTasksTestCase(TestCase):
@@ -188,6 +188,107 @@ class CeleryTasksTestCase(TestCase):
         task = PeriodicTask.objects.get(name=tasks.AUCTION_STATS_TASK_NAME)
         self.assertTrue(task.enabled)
         self.assertTrue(task.one_off)
+
+    def test_schedule_bap_recalculation_preserves_shared_clocked_schedule(self):
+        """Rescheduling one club should not delete a shared schedule used by another club."""
+        from django_celery_beat.models import ClockedSchedule, PeriodicTask
+
+        run_at = timezone.now()
+        shared_schedule = ClockedSchedule.objects.create(clocked_time=run_at)
+        club_one_task_name = f"{tasks.BAP_RECALCULATION_TASK_PREFIX}1"
+        club_two_task_name = f"{tasks.BAP_RECALCULATION_TASK_PREFIX}2"
+
+        PeriodicTask.objects.create(
+            name=club_one_task_name,
+            task="auctions.tasks.recalculate_club_bap_points",
+            clocked=shared_schedule,
+            one_off=True,
+            enabled=True,
+            kwargs='{"club_pk": 1}',
+        )
+        other_task = PeriodicTask.objects.create(
+            name=club_two_task_name,
+            task="auctions.tasks.recalculate_club_bap_points",
+            clocked=shared_schedule,
+            one_off=True,
+            enabled=True,
+            kwargs='{"club_pk": 2}',
+        )
+
+        tasks.schedule_bap_recalculation(1, run_at=run_at + datetime.timedelta(days=1))
+
+        other_task.refresh_from_db()
+        self.assertEqual(other_task.clocked_id, shared_schedule.id)
+        self.assertTrue(ClockedSchedule.objects.filter(id=shared_schedule.id).exists())
+
+    def test_schedule_bap_recalculation_reuses_existing_clocked_schedule_for_same_time(self):
+        """Rescheduling a club at the same time should keep using the existing schedule row."""
+        from django_celery_beat.models import ClockedSchedule, PeriodicTask
+
+        run_at = timezone.now()
+        schedule = ClockedSchedule.objects.create(clocked_time=run_at)
+        task_name = f"{tasks.BAP_RECALCULATION_TASK_PREFIX}1"
+
+        PeriodicTask.objects.create(
+            name=task_name,
+            task="auctions.tasks.recalculate_club_bap_points",
+            clocked=schedule,
+            one_off=True,
+            enabled=False,
+            kwargs='{"club_pk": 1}',
+        )
+
+        tasks.schedule_bap_recalculation(1, run_at=run_at)
+
+        self.assertTrue(ClockedSchedule.objects.filter(id=schedule.id).exists())
+        task = PeriodicTask.objects.get(name=task_name)
+        self.assertEqual(task.clocked_id, schedule.id)
+        self.assertTrue(task.enabled)
+
+    @patch("auctions.tasks.schedule_bap_recalculation")
+    def test_bootstrap_bap_recalculation_tasks_schedules_enabled_clubs(self, mock_schedule):
+        """BAP-enabled clubs should get a scheduled task on worker startup bootstrap."""
+        now = timezone.now()
+        Club.objects.create(name="Bootstrap Club", enable_breeder_award_program=True)
+        future_run = now + datetime.timedelta(days=7)
+        club_with_future_run = Club.objects.create(
+            name="Bootstrap Future Club",
+            enable_breeder_award_program=True,
+            next_bap_recalculation=future_run,
+        )
+        Club.objects.create(name="Non-BAP Club", enable_breeder_award_program=False)
+
+        tasks.bootstrap_bap_recalculation_tasks(run_at=now)
+
+        mock_schedule.assert_any_call(club_with_future_run.pk, run_at=future_run)
+        self.assertEqual(mock_schedule.call_count, 1)
+
+    @patch("auctions.tasks.schedule_bap_recalculation")
+    def test_bootstrap_bap_recalculation_tasks_runs_overdue_clubs_immediately(self, mock_schedule):
+        """Past-due BAP clubs should be rescheduled to run immediately on startup."""
+        now = timezone.now()
+        overdue_run = now - datetime.timedelta(days=1)
+        club = Club.objects.create(
+            name="Bootstrap Overdue Club",
+            enable_breeder_award_program=True,
+            next_bap_recalculation=overdue_run,
+        )
+
+        tasks.bootstrap_bap_recalculation_tasks(run_at=now)
+
+        mock_schedule.assert_called_once_with(club.pk, run_at=now)
+
+    @patch("auctions.tasks.bootstrap_bap_recalculation_tasks")
+    def test_worker_ready_starts_bap_bootstrap(self, mock_bootstrap):
+        """The worker_ready hook should bootstrap BAP self-scheduling tasks."""
+        from fishauctions.celery import WORKER_READY_TASK_DELAY_SECONDS, start_bap_recalculation_tasks
+
+        now = timezone.now()
+
+        with patch("django.utils.timezone.now", return_value=now):
+            start_bap_recalculation_tasks(sender=None)
+
+        mock_bootstrap.assert_called_once_with(now + datetime.timedelta(seconds=WORKER_READY_TASK_DELAY_SECONDS))
 
 
 class SendInvoiceNotificationTaskTestCase(TestCase):
