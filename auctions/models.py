@@ -475,8 +475,10 @@ def sanitize_summernote_html(text):
 
     soup = BeautifulSoup(text, "html.parser")
 
-    # Block executable or externally embedded content that can bypass editor restrictions.
-    for tag in soup.find_all(["embed", "iframe", "img", "object", "script"]):
+    # Block executable, externally embedded, or page-hijacking content.
+    # <style>/<link> enable CSS injection; <base> hijacks relative URLs; <meta> can redirect;
+    # <form> enables phishing overlays (Summernote never generates forms).
+    for tag in soup.find_all(["base", "embed", "form", "iframe", "img", "link", "meta", "object", "script", "style"]):
         tag.decompose()
 
     for tag in soup.find_all():
@@ -507,17 +509,22 @@ def sanitize_summernote_html(text):
         if tag.has_attr("color"):
             del tag["color"]
 
-    # Clean color and background-color from style attributes in <span> and others
+    # Clean style attributes: remove color/background-color (unwanted formatting) and any
+    # property containing url() which could load external resources.
     for tag in soup.find_all(style=True):
-        # Split and filter styles
         styles = tag["style"].split(";")
         cleaned_styles = []
         for style in styles:
             if not style.strip():
                 continue
-            name, *_ = style.split(":", 1)
-            if name.strip().lower() not in {"color", "background-color"}:
-                cleaned_styles.append(style)
+            name, *value_parts = style.split(":", 1)
+            prop = name.strip().lower()
+            value = value_parts[0] if value_parts else ""
+            if prop in {"color", "background-color"}:
+                continue
+            if "url(" in value.lower():
+                continue
+            cleaned_styles.append(style)
         if cleaned_styles:
             tag["style"] = ";".join(cleaned_styles)
         else:
