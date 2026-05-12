@@ -12008,7 +12008,6 @@ class ClubMemberAdminView(APIView):
         """Close the modal and reload the page to reflect changes."""
         return HttpResponse("<script>location.reload();</script>", status=200)
 
-
     def _get_member_and_check_permission(self, request, pk):
         try:
             member = ClubMember.objects.get(pk=pk)
@@ -12200,7 +12199,7 @@ class ClubMemberPermissionsView(LoginRequiredMixin, View):
         return render(
             request,
             "auctions/generic_admin_form.html",
-            {"form": form, "modal_title": f"Roles — {member.display_name}"},
+            {"form": form, "modal_title": f"Permissions — {member.display_name}"},
         )
 
     def post(self, request, pk):
@@ -12219,7 +12218,7 @@ class ClubMemberPermissionsView(LoginRequiredMixin, View):
         return render(
             request,
             "auctions/generic_admin_form.html",
-            {"form": form, "modal_title": f"Roles — {member.display_name}"},
+            {"form": form, "modal_title": f"Permissions — {member.display_name}"},
         )
 
 
@@ -12546,9 +12545,10 @@ class ClubMembershipSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
                 .exclude(user__isnull=True)
                 .values_list("user_id", flat=True)
             )
-            context["show_payment_banner"] = not PayPalSeller.objects.filter(
-                user_id__in=admin_user_ids
-            ).exists() and not SquareSeller.objects.filter(user_id__in=admin_user_ids).exists()
+            context["show_payment_banner"] = (
+                not PayPalSeller.objects.filter(user_id__in=admin_user_ids).exists()
+                and not SquareSeller.objects.filter(user_id__in=admin_user_ids).exists()
+            )
         else:
             context["show_payment_banner"] = False
         return context

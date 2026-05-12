@@ -579,7 +579,7 @@ class Club(models.Model):
     )
     send_membership_expiration_reminders = models.BooleanField(
         default=False,
-        help_text="Send reminder emails before membership expiration.",
+        help_text="Reminders include a link to pay directly on this site, users don't need to have an account to renew their membership.",
     )
     discord_server_id = models.CharField(max_length=100, blank=True, null=True)
     auction_channel_id = models.CharField(
@@ -760,11 +760,17 @@ class ClubMember(ContactRecord):
     discord_roles = models.TextField(blank=True)
     is_deleted = models.BooleanField(default=False, db_index=True)
     source = models.CharField(max_length=200, default="manually_added")
-    permission_admin = models.BooleanField(default=False, help_text="Full admin access — grants all other permissions.")
-    permission_view = models.BooleanField(default=False, help_text="View the member list.")
+    permission_admin = models.BooleanField(
+        default=False, help_text="Full admin access — grants all other permissions.  Use only if absolutely necessary."
+    )
+    permission_view = models.BooleanField(
+        default=False, help_text="View the member list.  Other permissions implicitly grant this."
+    )
     permission_export = models.BooleanField(default=False, help_text="Export member data to CSV.")
     permission_add_edit = models.BooleanField(default=False, help_text="Add and edit members.")
-    permission_edit_club = models.BooleanField(default=False, help_text="Edit club settings.")
+    permission_edit_club = models.BooleanField(
+        default=False, help_text="Change club setup, Discord, and API keys.  Nearly as dangerous as admin."
+    )
     permission_manage_auctions = models.BooleanField(default=False, help_text="Manage auctions for this club.")
     permission_manage_bap = models.BooleanField(default=False, help_text="Manage BAP/HAP points.")
     possible_duplicate = models.ForeignKey(

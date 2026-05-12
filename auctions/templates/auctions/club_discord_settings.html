@@ -38,15 +38,18 @@
   <div class="card-body">
     <p class="text-muted small">
       Once you've added the bot to your server and given it a role above the ones it manages,
-      go to the channel where you want the join button to appear and paste this slash command:
+      type <code>/connect</code> and press enter, then, when prompted for a club_uuid, paste this connection code:
     </p>
     <div class="input-group mb-2">
-      <input type="text" class="form-control font-monospace" id="joinCommand" value="/connect club_id:{{ club_uuid }}" readonly>
+      <input type="text" class="form-control font-monospace" id="joinCommand" value="{{ club_uuid }}" readonly>
       <button class="btn btn-outline-secondary" type="button"
               onclick="navigator.clipboard.writeText(document.getElementById('joinCommand').value)">
         <i class="bi bi-clipboard"></i> Copy
       </button>
     </div>
+    <p class="text-muted small mt-2">
+      To have announcements about upcoming auctions in a channel, you can use the slash command <code>/auctions_here</code>. This only works <strong>after</strong> you have connected your Discord server to a club.
+    </p>
   </div>
 </div>
 

@@ -3660,12 +3660,12 @@ class ClubMemberPermissionsForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         labels = {
             "permission_admin": "Club admin — can do everything",
-            "permission_view": "View members — can see the member list",
+            "permission_view": "View members — can see the member list, but not edit",
             "permission_export": "Export data — can download member exports",
-            "permission_add_edit": "Add/edit members — can add and edit member records",
-            "permission_edit_club": "Edit club settings — can change club setup and integrations",
-            "permission_manage_auctions": "Manage auctions — can create and manage club auctions",
-            "permission_manage_bap": "Manage BAP — can review and approve BAP lot submissions",
+            "permission_add_edit": "Manage membership — add, delete, and edit member records, renew memberships",
+            "permission_edit_club": "Edit club settings",
+            "permission_manage_auctions": "Manage auctions",
+            "permission_manage_bap": "Award points — can manually add breeder award points to members' accounts and edit BAP settings",
         }
         for field_name, label in labels.items():
             self.fields[field_name].label = label
