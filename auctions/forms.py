@@ -3628,7 +3628,7 @@ class ClubMemberAdminForm(forms.ModelForm):
                 Div(
                     HTML('<button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>'),
                     HTML(
-                        f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn btn-primary">Save</button>'
+                        f'<button hx-post="{post_url}" hx-target="#modals-here" hx-include="closest form" type="button" class="btn btn-primary ms-2">Save</button>'
                     ),
                     css_class="modal-footer",
                 ),

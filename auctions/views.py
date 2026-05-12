@@ -12005,10 +12005,9 @@ class ClubMemberAdminView(APIView):
 
     @staticmethod
     def _redirect_to_club_admin(club):
-        """Return an HTMX full-page redirect response to the club admin page."""
-        response = HttpResponse(status=200)
-        response["HX-Redirect"] = reverse("club_admin", kwargs={"slug": club.slug})
-        return response
+        """Close the modal and reload the page to reflect changes."""
+        return HttpResponse("<script>location.reload();</script>", status=200)
+
 
     def _get_member_and_check_permission(self, request, pk):
         try:
