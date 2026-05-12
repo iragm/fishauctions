@@ -451,9 +451,10 @@ class ClubMemberHTMxTable(tables.Table):
         if self.can_manage_permissions:
             perms_url = reverse("clubmember_permissions", kwargs={"pk": record.pk})
             permissions_item = format_html(
-                '<li><a class="dropdown-item" href="#"'
-                ' hx-get="{}" hx-target="#modals-here">'
-                '<i class="bi bi-shield-lock me-1"></i>Permissions</a></li>'
+                '<li><a class="dropdown-item" href="javascript:void(0)"'
+                ' hx-get="{}" hx-target="#modals-here"'
+                ' _="on htmx:afterOnLoad wait 10ms then add .show to #modal then add .show to #modal-backdrop">'
+                '<i class="bi bi-shield-lock me-1"></i>Roles</a></li>'
                 "<li><hr class='dropdown-divider'></li>",
                 perms_url,
             )

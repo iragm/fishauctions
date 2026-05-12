@@ -3412,28 +3412,18 @@ class ClubEditForm(forms.ModelForm):
             "name",
             "homepage",
             "facebook_page",
-            "contact_email",
-            "membership_system",
-            "membership_annual_fee",
-            "payment_user",
-            "send_membership_expiration_reminders",
-            "allow_joining",
-            "allow_integrated_payments",
-            "description",
             "enable_club_page",
+            "allow_joining",
+            "enable_breeder_award_program",
+            "enable_membership",
+            "description",
             "location",
             "location_coordinates",
         ]
         help_texts = {
             "name": "Changing this will change the URL for your club's page.",
-            "membership_system": (
-                "January 1st: all memberships expire on Jan 1 each year. "
-                "Rolling: memberships expire one year from the payment date."
-            ),
-            "membership_annual_fee": "Leave blank if free.",
-            "payment_user": "Membership payments are sent to this user's payment account.",
             "allow_joining": "Let members self-join via the public club page.",
-            "allow_integrated_payments": "Accept membership dues directly through the site.",
+            "enable_breeder_award_program": "Track when users breed fish and show a leaderboard of top breeders.",
         }
         widgets = {
             "homepage": forms.URLInput(attrs={"placeholder": "https://www.yourclub.org"}),
@@ -3450,15 +3440,14 @@ class ClubEditForm(forms.ModelForm):
             "name",
             "homepage",
             "facebook_page",
-            "contact_email",
-            "membership_system",
-            "membership_annual_fee",
-            "payment_user",
-            "send_membership_expiration_reminders",
-            "allow_joining",
-            "allow_integrated_payments",
+            Div(
+                Div("enable_club_page", css_class="col-3"),
+                Div("allow_joining", css_class="col-3"),
+                Div("enable_breeder_award_program", css_class="col-3"),
+                Div("enable_membership", css_class="col-3"),
+                css_class="row",
+            ),
             "description",
-            "enable_club_page",
             Fieldset(
                 "Location",
                 "location",
@@ -3466,6 +3455,44 @@ class ClubEditForm(forms.ModelForm):
             ),
         )
         self.helper.add_input(Submit("submit", "Save settings", css_class="btn-primary"))
+
+
+class ClubMembershipSettingsForm(forms.ModelForm):
+    """Form for club admins to configure membership and payment settings."""
+
+    class Meta:
+        model = Club
+        fields = [
+            "contact_email",
+            "membership_system",
+            "membership_annual_fee",
+            "payment_user",
+            "send_membership_expiration_reminders",
+            "allow_integrated_payments",
+        ]
+        help_texts = {
+            "membership_system": (
+                "January 1st: all memberships expire on Jan 1 each year. "
+                "Rolling: memberships expire one year from the payment date."
+            ),
+            "membership_annual_fee": "Leave blank if free.",
+            "payment_user": "Membership payments are sent to this user's payment account.",
+            "allow_integrated_payments": "Accept membership dues directly through the site.",
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.layout = Layout(
+            "membership_system",
+            "membership_annual_fee",
+            "payment_user",
+            "allow_integrated_payments",
+            "send_membership_expiration_reminders",
+            "contact_email",
+        )
+        self.helper.add_input(Submit("submit", "Save membership settings", css_class="btn-primary"))
         club = self.instance
         if club and club.pk:
             admin_user_ids = (
@@ -3496,7 +3523,6 @@ class ClubBapSettingsForm(forms.ModelForm):
     class Meta:
         model = Club
         fields = [
-            "enable_breeder_award_program",
             "auto_add_points",
             "points_per_lot",
             "min_quantity",
@@ -3511,7 +3537,6 @@ class ClubBapSettingsForm(forms.ModelForm):
         self.helper = FormHelper()
         self.helper.form_method = "post"
         self.helper.layout = Layout(
-            "enable_breeder_award_program",
             Fieldset(
                 "Point rules",
                 "auto_add_points",
@@ -3633,13 +3658,26 @@ class ClubMemberPermissionsForm(forms.ModelForm):
 
     def __init__(self, *args, post_url=None, **kwargs):
         super().__init__(*args, **kwargs)
+        labels = {
+            "permission_admin": "Club admin — can do everything",
+            "permission_view": "View members — can see the member list",
+            "permission_export": "Export data — can download member exports",
+            "permission_add_edit": "Add/edit members — can add and edit member records",
+            "permission_edit_club": "Edit club settings — can change club setup and integrations",
+            "permission_manage_auctions": "Manage auctions — can create and manage club auctions",
+            "permission_manage_bap": "Manage BAP — can review and approve BAP lot submissions",
+        }
+        for field_name, label in labels.items():
+            self.fields[field_name].label = label
         self.helper = FormHelper()
+        self.helper.form_method = "post"
+        self.helper.form_tag = True
         self.helper.layout = Layout(
             *self.Meta.fields,
             Div(
                 HTML('<button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>'),
                 HTML(
-                    f'<button hx-post="{post_url}" hx-target="#modals-here" type="submit" class="btn btn-primary">Save</button>'
+                    f'<button hx-post="{post_url}" hx-target="#modals-here" hx-include="closest form" type="button" class="btn btn-primary ms-2">Save</button>'
                 ),
                 css_class="modal-footer",
             ),

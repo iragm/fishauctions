@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}Membership Settings &mdash; {{ club.name }}{% endblock %}
+
+{% block extra_js %}
+<script type="text/javascript">
+$(document).ready(function() {
+    function togglePaymentFields() {
+        const integrated = document.getElementById('id_allow_integrated_payments');
+        const paymentUser = document.getElementById('div_id_payment_user');
+        const reminders = document.getElementById('div_id_send_membership_expiration_reminders');
+        const contactEmail = document.getElementById('div_id_contact_email');
+        if (!integrated) return;
+        const show = integrated.checked;
+        if (paymentUser) paymentUser.style.display = show ? '' : 'none';
+        toggleContactEmail();
+    }
+
+    function toggleContactEmail() {
+        const remindersToggle = document.getElementById('id_send_membership_expiration_reminders');
+        const contactEmailField = document.getElementById('div_id_contact_email');
+        if (!remindersToggle || !contactEmailField) return;
+        contactEmailField.style.display = remindersToggle.checked ? '' : 'none';
+    }
+
+    togglePaymentFields();
+    $('#id_allow_integrated_payments').on('change', togglePaymentFields);
+    $('#id_send_membership_expiration_reminders').on('change', toggleContactEmail);
+});
+</script>
+{% endblock %}
+
+{% block content %}
+{{ form.media }}
+{% include "club_ribbon.html" %}
+
+{% if show_payment_banner %}
+<div class="mt-3 mb-3 p-2 bg-primary text-white rounded bg-gradient bg-opacity-50">
+  <h5>Enable integrated payments</h5>
+  <small>
+    <ul>
+      <li>Members will see a button to pay dues directly on the site</li>
+      <li>Payments are recorded automatically when members pay</li>
+      <li>Funds go directly to your connected account</li>
+    </ul>
+    No extra fees from us — normal PayPal or Square fees apply.
+  </small>
+  <div>
+    <a href="{% url 'paypal_connect' %}" class="btn btn-info btn-sm mt-2"><i class="bi bi-paypal"></i> Connect PayPal</a>
+    <a href="{% url 'square_connect' %}" class="btn btn-info btn-sm mt-2"><i class="bi bi-credit-card"></i> Connect Square</a>
+  </div>
+</div>
+{% endif %}
+
+{% crispy form %}
+
+<div id="modals-here"></div>
+{% endblock %}

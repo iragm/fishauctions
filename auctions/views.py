@@ -129,6 +129,7 @@ from .forms import (
     ClubBapSettingsForm,
     ClubEditForm,
     ClubMemberAdminForm,
+    ClubMembershipSettingsForm,
     ClubMemberPermissionsForm,
     ClubMemberSelfServiceForm,
     CreateAuctionForm,
@@ -408,6 +409,7 @@ class ClubViewMixin:
 
     allow_non_admins = False
     club = None
+    active_tab = None
 
     def get_club(self, slug):
         if not self.club and slug:
@@ -422,6 +424,22 @@ class ClubViewMixin:
     def user_has_club_permission(self, permission_name):
         """Check if the current user has a specific permission for self.club"""
         return check_club_permission(self.request.user, self.club, permission_name)
+
+    @property
+    def can_edit_settings(self):
+        return self.user_has_club_permission("permission_edit_club")
+
+    @property
+    def can_manage_bap(self):
+        return self.user_has_club_permission("permission_manage_bap")
+
+    @property
+    def can_access_admin(self):
+        return self.user_has_club_permission("permission_admin") or self.user_has_club_permission("permission_view")
+
+    @property
+    def can_add_edit(self):
+        return self.user_has_club_permission("permission_add_edit")
 
 
 class AdminOnlyViewMixin:
@@ -11746,6 +11764,7 @@ class QuickCheckoutHTMX(AuctionViewMixin, PayPalAPIMixin, SquareAPIMixin, Templa
 class ClubDetailView(ClubViewMixin, TemplateView):
     """User self-service page for a club"""
 
+    active_tab = "home"
     template_name = "auctions/club_detail.html"
     allow_non_admins = True
 
@@ -11879,6 +11898,7 @@ class ClubDetailView(ClubViewMixin, TemplateView):
 class ClubAdminView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterView):
     """Admin panel for a club"""
 
+    active_tab = "members"
     model = ClubMember
     table_class = ClubMemberHTMxTable
     filterset_class = ClubMemberFilter
@@ -12181,7 +12201,7 @@ class ClubMemberPermissionsView(LoginRequiredMixin, View):
         return render(
             request,
             "auctions/generic_admin_form.html",
-            {"form": form, "title": f"Permissions — {member.display_name}"},
+            {"form": form, "modal_title": f"Roles — {member.display_name}"},
         )
 
     def post(self, request, pk):
@@ -12193,16 +12213,14 @@ class ClubMemberPermissionsView(LoginRequiredMixin, View):
             ClubHistory.objects.create(
                 club=member.club,
                 user=request.user,
-                action=f"Updated permissions for {member}",
+                action=f"Updated roles for {member}",
                 applies_to="MEMBERS",
             )
-            response = HttpResponse(status=204)
-            response["HX-Redirect"] = reverse("club_admin", kwargs={"slug": member.club.slug})
-            return response
+            return ClubMemberAdminView._redirect_to_club_admin(member.club)
         return render(
             request,
             "auctions/generic_admin_form.html",
-            {"form": form, "title": f"Permissions — {member.display_name}"},
+            {"form": form, "modal_title": f"Roles — {member.display_name}"},
         )
 
 
@@ -12457,6 +12475,7 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
 class ClubEditView(LoginRequiredMixin, ClubViewMixin, UpdateView):
     """Edit club info"""
 
+    active_tab = "edit"
     template_name = "auctions/club_edit.html"
     form_class = ClubEditForm
 
@@ -12494,9 +12513,62 @@ class ClubEditView(LoginRequiredMixin, ClubViewMixin, UpdateView):
         return result
 
 
+class ClubMembershipSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
+    """Edit membership and payment settings for a club."""
+
+    active_tab = "membership"
+    template_name = "auctions/club_membership_settings.html"
+    form_class = ClubMembershipSettingsForm
+
+    def get_object(self):
+        return self.club
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
+            raise PermissionDenied()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_success_url(self):
+        messages.success(self.request, "Membership settings saved.")
+        next_url = self.request.POST.get("next") or self.request.GET.get("next")
+        if next_url and url_has_allowed_host_and_scheme(next_url, allowed_hosts={self.request.get_host()}):
+            return next_url
+        return reverse("club_detail", kwargs={"slug": self.object.slug})
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["club"] = self.club
+        club = self.club
+        if club.enable_membership and club.allow_integrated_payments:
+            admin_user_ids = (
+                club.members.filter(is_deleted=False)
+                .filter(Q(permission_admin=True) | Q(permission_edit_club=True))
+                .exclude(user__isnull=True)
+                .values_list("user_id", flat=True)
+            )
+            context["show_payment_banner"] = not PayPalSeller.objects.filter(
+                user_id__in=admin_user_ids
+            ).exists() and not SquareSeller.objects.filter(user_id__in=admin_user_ids).exists()
+        else:
+            context["show_payment_banner"] = False
+        return context
+
+    def form_valid(self, form):
+        result = super().form_valid(form)
+        ClubHistory.objects.create(
+            club=self.club,
+            user=self.request.user,
+            action="Updated membership settings",
+            applies_to="SETTINGS",
+        )
+        return result
+
+
 class ClubBapSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
     """Edit BAP (Breeder Award Program) settings for a club. Requires permission_manage_bap."""
 
+    active_tab = "bap_settings"
     template_name = "auctions/club_bap_settings.html"
     form_class = ClubBapSettingsForm
 
@@ -12536,6 +12608,7 @@ class ClubBapSettingsView(LoginRequiredMixin, ClubViewMixin, UpdateView):
 class ClubBapLotsView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterView):
     """HTMx table of lots from this club's auctions for BAP admins to review and approve."""
 
+    active_tab = "bap"
     model = Lot
     table_class = ClubBapLotHTMxTable
     filterset_class = ClubBapLotFilter
@@ -12627,6 +12700,7 @@ class ClubMemberIngestAPIView(APIView):
 class ClubAPIKeyListView(LoginRequiredMixin, ClubViewMixin, TemplateView):
     """List all API keys for a club (requires permission_edit_club)."""
 
+    active_tab = "api_keys"
     template_name = "auctions/club_api_keys.html"
 
     def dispatch(self, request, *args, **kwargs):
@@ -12772,6 +12846,7 @@ class ClubAPIKeyFieldMapDeleteView(LoginRequiredMixin, ClubViewMixin, View):
 class ClubHistoryView(LoginRequiredMixin, ClubViewMixin, SingleTableMixin, FilterView):
     """History log for a club"""
 
+    active_tab = "history"
     model = ClubHistory
     table_class = ClubHistoryHTMxTable
     filterset_class = ClubHistoryFilter
@@ -13353,8 +13428,8 @@ class DiscordInteractionsView(View):
 
         try:
             club = Club.objects.get(uuid=club_uuid)
-        except (Club.DoesNotExist, ValueError):
-            return _discord_ephemeral("❌ No club found with that UUID.")
+        except (Club.DoesNotExist, ValueError, ValidationError):
+            return _discord_ephemeral("❌ This isn't a valid club connection code.")
 
         # If the club is already connected to a Discord server, require the caller to be
         # a club member with admin permissions (looked up by their Discord ID).
@@ -13558,6 +13633,8 @@ class LotBapPointsView(LoginRequiredMixin, View):
 class ClubDiscordConfigView(LoginRequiredMixin, ClubViewMixin, View):
     """Full-page Discord settings for a club."""
 
+    active_tab = "discord"
+
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
         if request.user.is_authenticated and not self.user_has_club_permission("permission_edit_club"):
@@ -13576,13 +13653,13 @@ class ClubDiscordConfigView(LoginRequiredMixin, ClubViewMixin, View):
             if client_id
             else ""
         )
-        # Build the UUID-based join command that club admins paste into Discord
         club_uuid = str(self.club.uuid)
         return {
             "club": self.club,
             "roles": roles,
             "oauth_url": oauth_url,
             "club_uuid": club_uuid,
+            "view": self,
         }
 
 

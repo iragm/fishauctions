@@ -602,6 +602,11 @@ class Club(models.Model):
         default=False,
         help_text="Track when users breed fish and show a leaderboard of top breeders.",
     )
+    enable_membership = models.BooleanField(
+        default=False,
+        verbose_name="Enable membership",
+        help_text="Enable membership tracking, dues collection, and expiration reminders.",
+    )
     days_between_same_name_lots = models.IntegerField(
         default=0,
         help_text="Minimum days between awarding BAP points for lots with the same name. Leave at 0 to allow points every time.",

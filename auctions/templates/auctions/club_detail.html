@@ -3,12 +3,13 @@
 {% block title %}{{ club.name }}{% endblock %}
 
 {% block content %}
-<h3>{{ club.name }}</h3>
+{% include "club_ribbon.html" %}
 
 {% if club.description %}
 <div class="mb-3">{{ club.description|safe }}</div>
 {% endif %}
 
+{% if club.homepage or club.facebook_page %}
 <div class="mb-3 d-flex flex-wrap gap-2 align-items-center">
   {% if club.homepage %}
   <a href="{% if club.homepage|slice:':4' != 'http' %}https://{% endif %}{{ club.homepage }}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-primary"><i class="bi bi-house"></i> Website</a>
@@ -16,34 +17,8 @@
   {% if club.facebook_page %}
   <a href="{% if club.facebook_page|slice:':4' != 'http' %}https://{% endif %}{{ club.facebook_page }}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-primary"><i class="bi bi-facebook"></i> Facebook</a>
   {% endif %}
-  {% if can_access_admin %}
-  <a href="{% url 'club_admin' club.slug %}" class="btn btn-sm btn-primary"><i class="bi bi-gear"></i> Manage membership</a>
-  {% endif %}
-  {% if can_manage_bap and club.enable_breeder_award_program %}
-  <a href="{% url 'club_bap_lots' club.slug %}" class="btn btn-sm btn-primary"><i class="bi bi-award"></i> BAP Admin</a>
-  {% endif %}
-  {% if can_edit_settings or can_manage_bap or can_access_admin %}
-  <div class="dropdown">
-    <button class="btn btn-sm btn-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
-      <i class="bi bi-sliders"></i> Setup
-    </button>
-    <ul class="dropdown-menu">
-      {% if can_edit_settings %}
-      <li><a class="dropdown-item" href="{% url 'club_edit' club.slug %}"><i class="bi bi-gear"></i> Club Setup</a></li>
-      <li><a class="dropdown-item" href="{% url 'club_discord_config' club.slug %}"><i class="bi bi-discord"></i> Discord Setup</a></li>
-      <li><a class="dropdown-item" href="{% url 'club_api_keys' club.slug %}"><i class="bi bi-key"></i> API Keys</a></li>
-      {% endif %}
-      {% if can_manage_bap %}
-      <li><a class="dropdown-item" href="{% url 'club_bap_settings' club.slug %}"><i class="bi bi-award"></i> BAP Setup</a></li>
-      {% endif %}
-      {% if can_access_admin %}
-      {% if can_edit_settings or can_manage_bap %}<li><hr class="dropdown-divider"></li>{% endif %}
-      <li><a class="dropdown-item" href="{% url 'club_history' club.slug %}"><i class="bi bi-clock-history"></i> History</a></li>
-      {% endif %}
-    </ul>
-  </div>
-  {% endif %}
 </div>
+{% endif %}
 
 {% if not club.enable_club_page and can_access_admin %}
 <p class="text-muted small"><i class="bi bi-eye-slash"></i> This page is only visible to admins. <a href="{% url 'club_edit' club.slug %}">Enable it in settings</a> to make it public.</p>

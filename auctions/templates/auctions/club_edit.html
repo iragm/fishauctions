@@ -6,25 +6,13 @@
 <script type="text/javascript">
     $(document).ready(function() {
         document.getElementById('id_location_coordinates').style.display = "none";
-
-        function toggleMembershipEmailField() {
-            const remindersToggle = document.getElementById('id_send_membership_expiration_reminders');
-            const membershipEmailField = document.getElementById('div_id_contact_email');
-            if (!remindersToggle || !membershipEmailField) {
-                return;
-            }
-            membershipEmailField.style.display = remindersToggle.checked ? '' : 'none';
-        }
-
-        toggleMembershipEmailField();
-        $('#id_send_membership_expiration_reminders').on('change', toggleMembershipEmailField);
     });
 </script>
 {% endblock %}
 
 {% block content %}
 {{ form.media }}
-<h3><i class="bi bi-gear"></i> Edit {{ club.name }}</h3>
+{% include "club_ribbon.html" %}
 
 {% crispy form %}
 
