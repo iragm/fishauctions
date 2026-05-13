@@ -14689,6 +14689,80 @@ class ClubBapSettingsViewTests(TestCase):
         self.assertEqual(response.status_code, 403)
 
 
+class ClubSettingsViewTests(TestCase):
+    def setUp(self):
+        self.editor = User.objects.create_user(
+            username="club_settings_editor", password="testpass", email="club_settings_editor@example.com"
+        )
+        self.plain = User.objects.create_user(
+            username="club_settings_plain", password="testpass", email="club_settings_plain@example.com"
+        )
+        self.club = Club.objects.create(name="Settings Club", enable_membership=True)
+        ClubMember.objects.create(club=self.club, user=self.editor, permission_edit_club=True)
+        ClubMember.objects.create(club=self.club, user=self.plain)
+        self.edit_url = reverse("club_edit", kwargs={"slug": self.club.slug})
+        self.membership_url = reverse("club_membership_settings", kwargs={"slug": self.club.slug})
+
+    def test_edit_view_rejects_external_next_redirect(self):
+        self.client.login(username="club_settings_editor", password="testpass")
+        response = self.client.post(
+            f"{self.edit_url}?next=https://evil.example.com",
+            {
+                "name": "Updated Settings Club",
+                "homepage": "https://example.com",
+                "facebook_page": "https://facebook.com/settingsclub",
+                "enable_club_page": "on",
+                "allow_joining": "on",
+                "enable_breeder_award_program": "on",
+                "enable_membership": "on",
+                "description": "Updated description",
+                "location": "Somewhere",
+                "location_coordinates": "",
+            },
+        )
+        self.assertRedirects(response, reverse("club_detail", kwargs={"slug": "updated-settings-club"}))
+        self.club.refresh_from_db()
+        self.assertEqual(self.club.name, "Updated Settings Club")
+        self.assertTrue(ClubHistory.objects.filter(club=self.club, action="Updated club settings").exists())
+
+    def test_membership_settings_save_updates_fields_and_creates_history(self):
+        self.client.login(username="club_settings_editor", password="testpass")
+        response = self.client.post(
+            self.membership_url,
+            {
+                "contact_email": "membership@example.com",
+                "membership_system": "rolling",
+                "membership_annual_fee": "20.00",
+                "payment_user": "",
+                "send_membership_expiration_reminders": "on",
+                "allow_integrated_payments": "on",
+            },
+        )
+        self.assertRedirects(response, reverse("club_detail", kwargs={"slug": self.club.slug}))
+        self.club.refresh_from_db()
+        self.assertEqual(self.club.contact_email, "membership@example.com")
+        self.assertEqual(self.club.membership_system, "rolling")
+        self.assertEqual(self.club.membership_annual_fee, Decimal("20.00"))
+        self.assertTrue(self.club.send_membership_expiration_reminders)
+        self.assertTrue(self.club.allow_integrated_payments)
+        self.assertTrue(ClubHistory.objects.filter(club=self.club, action="Updated membership settings").exists())
+
+    def test_membership_settings_shows_payment_banner_without_connected_accounts(self):
+        self.club.allow_integrated_payments = True
+        self.club.save(update_fields=["allow_integrated_payments"])
+        self.client.login(username="club_settings_editor", password="testpass")
+        response = self.client.get(self.membership_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Enable integrated payments")
+        self.assertContains(response, "Connect PayPal")
+        self.assertContains(response, "Connect Square")
+
+    def test_plain_member_cannot_access_membership_settings(self):
+        self.client.login(username="club_settings_plain", password="testpass")
+        response = self.client.get(self.membership_url)
+        self.assertEqual(response.status_code, 403)
+
+
 class LotBapEligibilityTests(TestCase):
     """Tests for unsold_lot_no_bap_reason and auto_award_bap_points."""
 
@@ -15070,6 +15144,22 @@ class ClubAPIKeyUITests(TestCase):
         response = self.client.get(self.list_url)
         self.assertEqual(response.status_code, 200)
 
+    def test_editor_can_access_detail_and_raw_key_is_one_time(self):
+        self.client.login(username="apiui_editor", password="testpass")
+        raw_key, prefix, key_hash = ClubAPIKey.generate()
+        api_key = ClubAPIKey.objects.create(
+            club=self.club, name="Detail Key", prefix=prefix, key_hash=key_hash, created_by=self.editor
+        )
+        session = self.client.session
+        session[f"new_api_key_{api_key.pk}"] = raw_key
+        session.save()
+        detail_url = reverse("club_api_key_detail", kwargs={"slug": self.club.slug, "pk": api_key.pk})
+        response = self.client.get(detail_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, raw_key)
+        response = self.client.get(detail_url)
+        self.assertNotContains(response, raw_key)
+
     def test_editor_can_create_key(self):
         self.client.login(username="apiui_editor", password="testpass")
         response = self.client.post(self.create_url, {"name": "My Integration"})
@@ -15118,6 +15208,26 @@ class ClubAPIKeyUITests(TestCase):
         )
         self.client.post(del_url)
         self.assertFalse(ClubAPIKeyFieldMap.objects.filter(pk=mapping.pk).exists())
+
+    def test_invalid_mapping_is_ignored(self):
+        self.client.login(username="apiui_editor", password="testpass")
+        _, prefix, key_hash = ClubAPIKey.generate()
+        api_key = ClubAPIKey.objects.create(
+            club=self.club, name="Ignore Bad Mapping", prefix=prefix, key_hash=key_hash, created_by=self.editor
+        )
+        add_url = reverse("club_api_key_mapping_add", kwargs={"slug": self.club.slug, "pk": api_key.pk})
+        self.client.post(add_url, {"external_field": "mystery", "internal_field": "not_a_field"})
+        self.assertFalse(ClubAPIKeyFieldMap.objects.filter(api_key=api_key, external_field="mystery").exists())
+
+    def test_plain_member_cannot_access_detail(self):
+        self.client.login(username="apiui_plain", password="testpass")
+        _, prefix, key_hash = ClubAPIKey.generate()
+        api_key = ClubAPIKey.objects.create(
+            club=self.club, name="Blocked Detail", prefix=prefix, key_hash=key_hash, created_by=self.editor
+        )
+        detail_url = reverse("club_api_key_detail", kwargs={"slug": self.club.slug, "pk": api_key.pk})
+        response = self.client.get(detail_url)
+        self.assertEqual(response.status_code, 403)
 
 
 class ClubPermissionWildcardTests(TestCase):
@@ -15268,6 +15378,137 @@ class ClubPermissionsDialogTests(TestCase):
         before = ClubHistory.objects.filter(club=self.club).count()
         self.client.post(self.url, {"permission_view": "on"})
         self.assertGreater(ClubHistory.objects.filter(club=self.club).count(), before)
+
+
+class ClubMemberManagementViewTests(TestCase):
+    def setUp(self):
+        self.club = Club.objects.create(name="Managed Club", enable_membership=True)
+        self.editor_user = User.objects.create_user(
+            username="club_editor", password="testpass", email="club_editor@example.com"
+        )
+        self.viewer_user = User.objects.create_user(
+            username="club_viewer", password="testpass", email="club_viewer@example.com"
+        )
+        self.source_user = User.objects.create_user(
+            username="club_source", password="testpass", email="club_source@example.com"
+        )
+        self.target_user = User.objects.create_user(
+            username="club_target", password="testpass", email="club_target@example.com"
+        )
+        ClubMember.objects.create(club=self.club, user=self.editor_user, permission_add_edit=True, permission_view=True)
+        ClubMember.objects.create(club=self.club, user=self.viewer_user, permission_view=True)
+        self.source_member = ClubMember.objects.create(
+            club=self.club,
+            user=self.source_user,
+            first_name="Source",
+            last_name="Member",
+            email="source@example.com",
+            phone_number="555-1111",
+            membership_last_paid=timezone.now().date(),
+            permission_manage_bap=True,
+        )
+        self.target_member = ClubMember.objects.create(
+            club=self.club,
+            user=self.target_user,
+            first_name="Target",
+            last_name="Member",
+            email="",
+        )
+        self.create_url = reverse("clubmember_create", kwargs={"slug": self.club.slug})
+        self.validation_url = reverse("clubmember_validation", kwargs={"slug": self.club.slug})
+
+    def test_editor_can_create_member_and_history(self):
+        self.client.login(username="club_editor", password="testpass")
+        response = self.client.post(
+            self.create_url,
+            {
+                "first_name": "New",
+                "last_name": "Member",
+                "email": "newmember@example.com",
+                "phone_number": "",
+                "address": "",
+                "contact_status": "contact",
+                "discord_role_auto_managed": "on",
+                "discord_role_override": "",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        created = ClubMember.objects.get(club=self.club, email="newmember@example.com")
+        self.assertEqual(created.source, "manually_added")
+        self.assertEqual(created.added_by, self.editor_user)
+        self.assertIn("location.reload", response.content.decode("utf-8"))
+        self.assertTrue(ClubHistory.objects.filter(club=self.club, action__contains="Added member New Member").exists())
+
+    def test_viewer_cannot_create_member(self):
+        self.client.login(username="club_viewer", password="testpass")
+        response = self.client.get(self.create_url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_member_validation_reports_duplicate_name_and_email(self):
+        self.client.login(username="club_editor", password="testpass")
+        response = self.client.post(
+            self.validation_url,
+            {"first_name": "Source", "last_name": "Member", "email": "source@example.com"},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["name_tooltip"], "Source Member is already in this club")
+        self.assertEqual(payload["email_tooltip"], "Email is already in this club")
+
+    def test_renew_endpoint_updates_membership_and_history(self):
+        self.source_member.membership_last_paid = None
+        self.source_member.save(update_fields=["membership_last_paid"])
+        self.client.login(username="club_editor", password="testpass")
+        response = self.client.post(reverse("club_member_renew", kwargs={"pk": self.source_member.pk}))
+        self.assertEqual(response.status_code, 204)
+        self.source_member.refresh_from_db()
+        self.assertEqual(self.source_member.membership_last_paid, timezone.now().date())
+        self.assertTrue(
+            ClubHistory.objects.filter(club=self.club, action__contains="Renewed membership for Source Member").exists()
+        )
+
+    def test_renew_page_updates_requested_paid_date(self):
+        self.client.login(username="club_editor", password="testpass")
+        renew_page_url = reverse("club_member_renew_page", kwargs={"slug": self.club.slug, "pk": self.source_member.pk})
+        response = self.client.post(renew_page_url, {"membership_last_paid": "2024-01-15"})
+        self.assertRedirects(response, reverse("club_admin", kwargs={"slug": self.club.slug}))
+        self.source_member.refresh_from_db()
+        self.assertEqual(self.source_member.membership_last_paid.isoformat(), "2024-01-15")
+
+    def test_delete_endpoint_soft_deletes_member_and_logs_history(self):
+        self.client.login(username="club_editor", password="testpass")
+        response = self.client.post(reverse("club_member_delete", kwargs={"pk": self.source_member.pk}))
+        self.assertEqual(response.status_code, 204)
+        self.source_member.refresh_from_db()
+        self.assertTrue(self.source_member.is_deleted)
+        self.assertTrue(
+            ClubHistory.objects.filter(club=self.club, action__contains="Removed member Source Member").exists()
+        )
+
+    def test_confirm_delete_view_renders_modal(self):
+        self.client.login(username="club_editor", password="testpass")
+        response = self.client.get(
+            reverse("club_member_confirm", kwargs={"pk": self.source_member.pk, "action": "delete"})
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Remove member")
+        self.assertContains(response, "Remove Source Member from this club?")
+
+    def test_merge_view_combines_fields_permissions_and_soft_deletes_source(self):
+        self.client.login(username="club_editor", password="testpass")
+        response = self.client.post(
+            reverse("club_member_merge", kwargs={"slug": self.club.slug, "pk": self.source_member.pk}),
+            {"target": self.target_member.pk},
+        )
+        self.assertRedirects(response, reverse("club_admin", kwargs={"slug": self.club.slug}))
+        self.source_member.refresh_from_db()
+        self.target_member.refresh_from_db()
+        self.assertTrue(self.source_member.is_deleted)
+        self.assertEqual(self.target_member.email, "source@example.com")
+        self.assertEqual(self.target_member.phone_number, "555-1111")
+        self.assertTrue(self.target_member.permission_manage_bap)
+        self.assertEqual(self.target_member.membership_last_paid, timezone.now().date())
+        self.assertTrue(ClubHistory.objects.filter(club=self.club, action__contains="Merged member").exists())
 
 
 class ClubViewOnlyAccessTests(TestCase):

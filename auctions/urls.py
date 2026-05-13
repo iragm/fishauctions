@@ -566,7 +566,11 @@ urlpatterns = [
     path("clubs/<slug:slug>/", views.ClubDetailView.as_view(), name="club_detail"),
     path("clubs/<slug:slug>/admin/", views.ClubAdminView.as_view(), name="club_admin"),
     path("clubs/<slug:slug>/edit/", views.ClubEditView.as_view(), name="club_edit"),
-    path("clubs/<slug:slug>/membership-settings/", views.ClubMembershipSettingsView.as_view(), name="club_membership_settings"),
+    path(
+        "clubs/<slug:slug>/membership-settings/",
+        views.ClubMembershipSettingsView.as_view(),
+        name="club_membership_settings",
+    ),
     path("clubs/<slug:slug>/bap-settings/", views.ClubBapSettingsView.as_view(), name="club_bap_settings"),
     path("clubs/<slug:slug>/bap/", views.ClubBapLotsView.as_view(), name="club_bap_lots"),
     path("clubs/<slug:slug>/bap/recalculate/", views.ClubBapRecalculateView.as_view(), name="club_bap_recalculate"),
