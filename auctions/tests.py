@@ -12759,7 +12759,7 @@ class AuctionTOSMergeViewTests(StandardTestCase):
             },
         )
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "will be deleted")
+        self.assertContains(response, "This will delete")
         self.assertContains(response, "Kept User")
 
         response = self.client.post(
@@ -14331,7 +14331,7 @@ class ClubMemberUpdateTests(TestCase):
 
         response = self.client.post(url, {"target": self.member.pk})
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "will be deleted")
+        self.assertContains(response, "This will delete")
         self.assertContains(response, "Jane Doe")
 
         response = self.client.post(
