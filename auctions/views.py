@@ -7033,7 +7033,7 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
             context["show_links"] = True
         context["location"] = invoice.location
         context["print_label_link"] = None
-        if invoice.auction.is_online:
+        if invoice.auction and invoice.auctiontos_user and invoice.auction.is_online:
             context["print_label_link"] = reverse(
                 "print_labels_by_bidder_number",
                 kwargs={
@@ -7041,7 +7041,7 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
                     "bidder_number": invoice.auctiontos_user.bidder_number,
                 },
             )
-        context["is_auction_admin"] = self.is_auction_admin
+        context["is_auction_admin"] = self.auction and self.is_auction_admin
         context["website_focus"] = settings.WEBSITE_FOCUS
         club = invoice.auction.club if invoice.auction else None
         context["viewer_has_bap"] = club is not None and check_club_permission(
@@ -7067,11 +7067,12 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
                 adjustment.save()
             if adjustments:
                 messages.success(self.request, "Invoice adjusted")
-                self.auction.create_history(
-                    applies_to="INVOICES",
-                    action=f"Adjusted invoice for {self.get_object().auctiontos_user.name}",
-                    user=request.user,
-                )
+                if self.auction:
+                    self.auction.create_history(
+                        applies_to="INVOICES",
+                        action=f"Adjusted invoice for {self.get_object().auctiontos_user.name if self.get_object().auctiontos_user else self.get_object()}",
+                        user=request.user,
+                    )
             for form in adjustment_formset.deleted_forms:
                 if form.instance.pk:
                     form.instance.delete()
@@ -7082,7 +7083,7 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
         return self.render_to_response(context)
 
     def get(self, request, *args, **kwargs):
-        if self.get_object().unsold_lot_warning and self.is_auction_admin:
+        if self.get_object().unsold_lot_warning and self.auction and self.is_auction_admin:
             messages.info(
                 self.request,
                 "This user still has unsold lots, make sure to sell all non-donation lots before marking this ready or paid.",

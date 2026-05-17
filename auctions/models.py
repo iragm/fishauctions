@@ -1176,7 +1176,9 @@ class Auction(models.Model):
     bump_cost = models.PositiveIntegerField(blank=True, default=1, validators=[MinValueValidator(1)])
     bump_cost.help_text = "The amount a user will be charged each time they move a lot to the top of the list"
     use_categories = models.BooleanField(default=True, verbose_name="Use category field")
-    use_categories.help_text = "Not shown on the bulk add lots form.  Check to use categories like Cichlids, Livebearers, etc."
+    use_categories.help_text = (
+        "Not shown on the bulk add lots form.  Check to use categories like Cichlids, Livebearers, etc."
+    )
     is_deleted = models.BooleanField(default=False)
     ONLINE_BIDDING_OPTIONS = (
         ("allow", "Allow buy now and bidding"),
@@ -6187,14 +6189,20 @@ class Invoice(models.Model):
     @property
     def location(self):
         """Pickup location selected by the user"""
-        return self.auctiontos_user.pickup_location
+        if self.auctiontos_user:
+            return self.auctiontos_user.pickup_location
+        return None
 
     @property
     def contact_email(self):
         if self.location:
             if self.location.pickup_location_contact_email:
                 return self.location.pickup_location_contact_email
-        return self.auction.created_by.email
+        if self.auction:
+            return self.auction.created_by.email
+        if self.club and self.club.payment_user:
+            return self.club.payment_user.email
+        return None
 
     @property
     def has_refunds(self):
