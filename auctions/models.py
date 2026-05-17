@@ -3526,6 +3526,8 @@ class AuctionTOS(models.Model):
             if saved_tos and saved_tos.email != self.email:
                 self.email_address_status = "UNKNOWN"
                 if not self.manually_added:
+                    # Clear the linked account so future auto-matching during auction joins can link this record
+                    # to the correct user for the updated email address.
                     self.user = None
         # if this is a known address, update the status
         if self.email and self.email_address_status == "UNKNOWN":

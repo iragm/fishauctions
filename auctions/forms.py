@@ -73,7 +73,7 @@ def apply_price_input_constraints(fields, field_names, only_whole_dollar_bids):
 def add_bootstrap_classes(form):
     """Apply Bootstrap-friendly classes to visible form widgets."""
     for field in form.fields.values():
-        if isinstance(field.widget, forms.CheckboxInput):
+        if isinstance(field.widget, (forms.CheckboxInput, forms.CheckboxSelectMultiple, forms.RadioSelect)):
             css_class = "form-check-input"
         elif isinstance(field.widget, (forms.Select, forms.SelectMultiple)):
             css_class = "form-select"

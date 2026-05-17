@@ -12729,6 +12729,7 @@ class AuctionTOSMergeViewTests(StandardTestCase):
     def setUp(self):
         super().setUp()
         self.client.login(username="admin_user", password="testpassword")
+        # Use update() here so the kept record starts linked to a user before the merge flow edits its email.
         AuctionTOS.objects.filter(pk=self.online_tos.pk).update(
             name="Kept User",
             email="kept@example.com",
