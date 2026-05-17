@@ -5657,34 +5657,28 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
     }
 
 
-    function showTooltip(element, message) {
-        var el = element;
+    function setFieldNote(fieldId, message) {
+        var field = document.getElementById(fieldId);
+        if (!field) return;
 
-        // Destroy existing tooltip (if any)
-        if (el._tooltipInstance) {
-            el._tooltipInstance.dispose();
+        var noteId = fieldId + "_note";
+        var note = document.getElementById(noteId);
+        if (note) {
+            note.remove();
         }
 
-        // Set tooltip attributes
-        el.setAttribute("data-bs-toggle", "tooltip");
-        el.setAttribute("data-bs-placement", "right");
-        el.setAttribute("title", message);
-
-        // Initialize and show Bootstrap tooltip
-        el._tooltipInstance = new bootstrap.Tooltip(el);
-        el._tooltipInstance.show();
-    }
-
-    function hideTooltip(element) {
-        if (element._tooltipInstance) {
-            element._tooltipInstance.dispose();
-            element._tooltipInstance = null;
+        if (!message) {
+            return;
         }
+
+        note = document.createElement("div");
+        note.id = noteId;
+        note.className = "text-warning small mt-1";
+        note.textContent = message;
+        field.parentNode.appendChild(note);
     }
 
     function validateField() {
-        var nameInput = document.getElementById("id_name");
-
         var data = {
             pk: pk,
             name: $("#id_name").val(),
@@ -5696,15 +5690,16 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
             url: validation_url,
             type: "POST",
             data: data,
-            headers: { "X-CSRFToken": csrf_token },
+                headers: { "X-CSRFToken": csrf_token },
             success: function (response) {
                 if (response.name_tooltip) {
-                    showTooltip(nameInput, response.name_tooltip);
+                    setFieldNote("id_name", response.name_tooltip);
                     showAutocomplete(response, true)
                 } else if (response.id_email) {
+                    setFieldNote("id_name", "");
                     showAutocomplete(response)
                 } else {
-                    hideTooltip(nameInput);
+                    setFieldNote("id_name", "");
                     showAutocomplete(response, true)
                 }
                 if (response.email_tooltip) {
@@ -11931,24 +11926,21 @@ function cmShowAutocomplete(response, remove) {{
     link.focus();
 }}
 
-function cmShowTooltip(element, message) {{
-    if (element._tooltipInstance) element._tooltipInstance.dispose();
-    element.setAttribute("data-bs-toggle", "tooltip");
-    element.setAttribute("data-bs-placement", "right");
-    element.setAttribute("title", message);
-    element._tooltipInstance = new bootstrap.Tooltip(element);
-    element._tooltipInstance.show();
-}}
-
-function cmHideTooltip(element) {{
-    if (element._tooltipInstance) {{
-        element._tooltipInstance.dispose();
-        element._tooltipInstance = null;
-    }}
+function cmSetFieldNote(fieldId, message) {{
+    var field = document.getElementById(fieldId);
+    if (!field) return;
+    var noteId = fieldId + "_note";
+    var note = document.getElementById(noteId);
+    if (note) note.remove();
+    if (!message) return;
+    note = document.createElement("div");
+    note.id = noteId;
+    note.className = "text-warning small mt-1";
+    note.textContent = message;
+    field.parentNode.appendChild(note);
 }}
 
 function cmValidateField() {{
-    var firstNameInput = document.getElementById("id_first_name");
     var data = {{
         pk: member_pk,
         first_name: $("#id_first_name").val(),
@@ -11962,13 +11954,13 @@ function cmValidateField() {{
         headers: {{ "X-CSRFToken": clubmember_csrf_token }},
         success: function(response) {{
             if (response.name_tooltip) {{
-                cmShowTooltip(firstNameInput, response.name_tooltip);
+                cmSetFieldNote("id_first_name", response.name_tooltip);
                 cmShowAutocomplete(response, true);
             }} else if (response.id_email) {{
                 cmShowAutocomplete(response);
-                cmHideTooltip(firstNameInput);
+                cmSetFieldNote("id_first_name", "");
             }} else {{
-                cmHideTooltip(firstNameInput);
+                cmSetFieldNote("id_first_name", "");
                 cmShowAutocomplete(response, true);
             }}
             cmSetFieldInvalid("id_email", response.email_tooltip, !!response.email_tooltip);

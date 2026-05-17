@@ -12724,6 +12724,23 @@ class MergeAuctionTOSTests(StandardTestCase):
         # Response should not be a redirect
         self.assertNotEqual(response.status_code, 302)
 
+    def test_duplicate_name_validation_returns_warning_message(self):
+        """Duplicate-name validation should warn when the name is already in this auction"""
+        self.client.login(username="admin_user", password="testpassword")
+        url = reverse("auctiontos_validation", kwargs={"slug": self.online_auction.slug})
+        response = self.client.post(url, {"name": self.online_tos.name})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["name_tooltip"], f"{self.online_tos.name} is already in this auction")
+
+    def test_add_user_modal_uses_inline_name_note_for_duplicates(self):
+        """The add-user modal should render JS that shows duplicate-name warnings inline"""
+        self.client.login(username="admin_user", password="testpassword")
+        url = reverse("auctiontosadmin", kwargs={"pk": self.online_auction.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "function setFieldNote(fieldId, message)")
+        self.assertContains(response, 'setFieldNote("id_name", response.name_tooltip);')
+
 
 class LotImageManagementTests(StandardTestCase):
     """Tests for the image management features added in the image management update"""
@@ -14250,6 +14267,29 @@ class ClubMemberUpdateTests(TestCase):
         self.assertEqual(response.status_code, 204)
         self.member.refresh_from_db()
         self.assertTrue(self.member.is_deleted)
+
+    def test_club_member_duplicate_name_validation_returns_warning_message(self):
+        """Duplicate-name validation should warn when the member is already in this club"""
+        owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
+        owner_member.permission_add_edit = True
+        owner_member.save()
+        self.client.login(username="cu_owner", password="testpass")
+        url = reverse("clubmember_validation", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"first_name": self.member.first_name, "last_name": self.member.last_name})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["name_tooltip"], f"{self.member} is already in this club")
+
+    def test_club_member_create_modal_uses_inline_name_note_for_duplicates(self):
+        """The club-member modal should render JS that shows duplicate-name warnings inline"""
+        owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
+        owner_member.permission_add_edit = True
+        owner_member.save()
+        self.client.login(username="cu_owner", password="testpass")
+        url = reverse("clubmember_create", kwargs={"slug": self.club.slug})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "function cmSetFieldNote(fieldId, message)")
+        self.assertContains(response, 'cmSetFieldNote("id_first_name", response.name_tooltip);')
 
 
 class ClubAPITests(TestCase):
