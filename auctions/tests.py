@@ -12727,7 +12727,7 @@ class MergeAuctionTOSTests(StandardTestCase):
     def test_duplicate_name_validation_returns_warning_message(self):
         """Duplicate-name validation should warn when the name is already in this auction"""
         self.client.login(username="admin_user", password="testpassword")
-        self.online_tos.name = "Truly Unique Duplicate User"
+        self.online_tos.name = "Duplicate Test User"
         self.online_tos.bidder_number = "123"
         self.online_tos.save()
         url = reverse("auctiontos_validation", kwargs={"slug": self.online_auction.slug})
