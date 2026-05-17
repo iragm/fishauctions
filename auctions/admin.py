@@ -629,7 +629,7 @@ class InvoiceAdmin(admin.ModelAdmin):
         "auction",
         "status",
     )
-    search_fields = ("auctiontos_user__name",)
+    search_fields = ("auctiontos_user__name", "buyer__first_name", "buyer__last_name", "club__name")
     readonly_fields = ()  # overridden by get_readonly_fields
     inlines = [
         SoldLotInline,

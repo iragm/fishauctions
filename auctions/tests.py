@@ -15665,6 +15665,11 @@ class ClubMembershipInvoiceTests(TestCase):
         invoice.status = "UNPAID"
         invoice.save()  # Should not raise
 
+    def test_invoice_str_does_not_crash_without_auctiontos_user(self):
+        invoice = self._make_club_invoice()
+        result = str(invoice)
+        self.assertIn("Pay Club", result)
+
     # -- _process_invoice_membership_renewal with club invoice -----------------
 
     def test_process_renewal_updates_membership_last_paid(self):

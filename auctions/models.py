@@ -1176,7 +1176,7 @@ class Auction(models.Model):
     bump_cost = models.PositiveIntegerField(blank=True, default=1, validators=[MinValueValidator(1)])
     bump_cost.help_text = "The amount a user will be charged each time they move a lot to the top of the list"
     use_categories = models.BooleanField(default=True, verbose_name="Use category field")
-    use_categories.help_text = "Not shown on the bulk add lots form.  Check to use categories like Cichlids, Livebearers, etc.  This option is required if you want to promote your auction on the main auctions list."
+    use_categories.help_text = "Not shown on the bulk add lots form.  Check to use categories like Cichlids, Livebearers, etc."
     is_deleted = models.BooleanField(default=False)
     ONLINE_BIDDING_OPTIONS = (
         ("allow", "Allow buy now and bidding"),
@@ -6274,7 +6274,11 @@ class Invoice(models.Model):
         return self.auction
 
     def __str__(self):
-        return f"{self.auctiontos_user.name}'s invoice for {self.auctiontos_user.auction}"
+        if self.auctiontos_user:
+            return f"{self.auctiontos_user.name}'s invoice for {self.auctiontos_user.auction}"
+        if self.club and self.buyer:
+            return f"{self.buyer.get_full_name() or self.buyer.username}'s membership invoice for {self.club.name}"
+        return f"Invoice #{self.pk}"
 
     def get_absolute_url(self):
         return reverse("invoice_by_pk", kwargs={"pk": self.pk})
