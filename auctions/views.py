@@ -8419,7 +8419,11 @@ class CreatePayPalOrderView(PayPalAPIMixin, View):
 
     def post(self, request, *args, **kwargs):
         """Create the order"""
-        approval_url = self.create_order(self.invoice)
+        try:
+            approval_url = self.create_order(self.invoice)
+        except Exception:
+            messages.error(request, "Payment provider rejected the order. Please try again or contact the organizer.")
+            return self._invoice_error_redirect(self.invoice)
         if not approval_url:
             messages.error(request, "Payment provider rejected the order. Please try again or contact the organizer.")
             return self._invoice_error_redirect(self.invoice)

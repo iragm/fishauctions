@@ -5800,8 +5800,9 @@ class Invoice(models.Model):
 
             has_paypal = (
                 payment_user.is_superuser
-                or payment_user.userdata.paypal_enabled
-                or PayPalSeller.objects.filter(user=payment_user).exists()
+                or PayPalSeller.objects.filter(user=payment_user, paypal_merchant_id__isnull=False)
+                .exclude(paypal_merchant_id="")
+                .exists()
             )
             return has_paypal
         if not self.auction:
@@ -6276,7 +6277,11 @@ class Invoice(models.Model):
 
     @property
     def invoice_summary(self):
-        return f"{self.auctiontos_user.name} {self.invoice_summary_short}"
+        if self.auctiontos_user:
+            return f"{self.auctiontos_user.name} {self.invoice_summary_short}"
+        if self.buyer:
+            return f"{self.buyer.get_full_name() or self.buyer.username} {self.invoice_summary_short}"
+        return self.invoice_summary_short
 
     @property
     def label(self):

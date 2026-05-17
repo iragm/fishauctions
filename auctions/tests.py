@@ -14027,7 +14027,7 @@ class ClubViewTests(TestCase):
 
     def test_club_edit_shows_membership_email_field_and_js_toggle(self):
         self.client.login(username="club_owner2", password="testpass")
-        url = reverse("club_edit", kwargs={"slug": self.club.slug})
+        url = reverse("club_membership_settings", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Membership email address")
@@ -15241,8 +15241,18 @@ class ClubPermissionWildcardTests(TestCase):
         self.user = User.objects.create_user(username="perm_user", password="testpass", email="perm@example.com")
 
     def _make_member(self, **kwargs):
-        ClubMember.objects.filter(club=self.club, user=self.user).delete()
-        return ClubMember.objects.create(club=self.club, user=self.user, **kwargs)
+        defaults = {
+            "permission_admin": False,
+            "permission_view": False,
+            "permission_export": False,
+            "permission_add_edit": False,
+            "permission_edit_club": False,
+            "permission_manage_auctions": False,
+            "permission_manage_bap": False,
+        }
+        defaults.update(kwargs)
+        member, _ = ClubMember.objects.update_or_create(club=self.club, user=self.user, defaults=defaults)
+        return member
 
     def test_admin_passes_all_permissions(self):
         self._make_member(permission_admin=True)
