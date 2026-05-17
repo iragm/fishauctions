@@ -3343,6 +3343,8 @@ class AuctionTOS(models.Model):
 
         result += f"<span class='dropdown-item'><a href={sold_lots_url}><i class='bi bi-calendar me-1'></i>View {self.lots_qs.count()} lots sold</a></span>"
         delete_url = reverse("auctiontosdelete", kwargs={"pk": self.pk})
+        merge_url = f"{delete_url}?action=merge"
+        result += f"<span class='dropdown-item'><a href={merge_url}><i class='bi bi-people me-1'></i>Merge with...</a></span>"
         result += f"<span class='dropdown-item'><a href={delete_url}><i class='bi bi-person-fill-x me-1'></i>Delete</a></span>"
         problems_url = reverse(
             "auction_no_show",
@@ -3517,10 +3519,12 @@ class AuctionTOS(models.Model):
         # if you changed the email of this tos, reset the email status
         if not self.name:
             self.name = "Unknown"
-        if self.email and self.pk:
+        if self.pk:
             saved_tos = AuctionTOS.objects.filter(pk=self.pk).first()
-            if saved_tos and saved_tos.email and saved_tos.email != self.email:
+            if saved_tos and saved_tos.email != self.email:
                 self.email_address_status = "UNKNOWN"
+                if not self.manually_added:
+                    self.user = None
         # if this is a known address, update the status
         if self.email and self.email_address_status == "UNKNOWN":
             existing_instance = (
@@ -3652,7 +3656,7 @@ class AuctionTOS(models.Model):
         verbose_name = "User in auction"
         verbose_name_plural = "Users in auction"
 
-    def merge_duplicate(self, duplicate, reason="same email", user=None):
+    def merge_duplicate(self, duplicate, reason="same email", user=None, preserve_missing_fields=True):
         """Merge a duplicate AuctionTOS into self (self should be the older/canonical record).
         Moves all won lots, sold lots, invoice adjustments, and payments from duplicate onto self's invoice,
         preserves any non-empty fields from duplicate that are missing on self,
@@ -3667,16 +3671,17 @@ class AuctionTOS(models.Model):
             raise ValueError(msg)
         # Preserve non-empty fields from duplicate onto self where self has no value.
         # Explicit None/"" check rather than `not self_val` to avoid unexpected falsy matches.
-        fields_to_preserve = ["user", "name", "email", "memo", "address", "phone_number", "bidder_number"]
-        updates = {}
-        for field in fields_to_preserve:
-            self_val = getattr(self, field, None)
-            dup_val = getattr(duplicate, field, None)
-            if (self_val is None or self_val == "") and dup_val:
-                updates[field] = dup_val
-                setattr(self, field, dup_val)
-        if updates:
-            AuctionTOS.objects.filter(pk=self.pk).update(**updates)
+        if preserve_missing_fields:
+            fields_to_preserve = ["user", "name", "email", "memo", "address", "phone_number", "bidder_number"]
+            updates = {}
+            for field in fields_to_preserve:
+                self_val = getattr(self, field, None)
+                dup_val = getattr(duplicate, field, None)
+                if (self_val is None or self_val == "") and dup_val:
+                    updates[field] = dup_val
+                    setattr(self, field, dup_val)
+            if updates:
+                AuctionTOS.objects.filter(pk=self.pk).update(**updates)
         # Move won lots to self
         Lot.objects.filter(auctiontos_winner=duplicate).update(auctiontos_winner=self)
         # Move sold lots to self
