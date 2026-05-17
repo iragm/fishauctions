@@ -769,7 +769,8 @@ class ClubMember(ContactRecord):
     permission_export = models.BooleanField(default=False, help_text="Export member data to CSV.")
     permission_add_edit = models.BooleanField(default=False, help_text="Add and edit members.")
     permission_edit_club = models.BooleanField(
-        default=False, help_text="Change club setup, Discord, and API keys.  Nearly as dangerous as admin."
+        default=False,
+        help_text="Change club setup, Discord, API keys, payment settings, and membership settings.  Nearly as dangerous as admin.",
     )
     permission_manage_auctions = models.BooleanField(default=False, help_text="Manage auctions for this club.")
     permission_manage_bap = models.BooleanField(default=False, help_text="Manage BAP/HAP points.")

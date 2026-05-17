@@ -3663,7 +3663,7 @@ class ClubMemberPermissionsForm(forms.ModelForm):
             "permission_view": "View members — can see the member list, but not edit",
             "permission_export": "Export data — can download member exports",
             "permission_add_edit": "Manage membership — add, delete, and edit member records, renew memberships",
-            "permission_edit_club": "Edit club settings",
+            "permission_edit_club": "Edit club settings — club setup, Discord, API keys, payment settings, and membership settings",
             "permission_manage_auctions": "Manage auctions",
             "permission_manage_bap": "Award points — can manually add breeder award points to members' accounts and edit BAP settings",
         }
