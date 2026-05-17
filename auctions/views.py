@@ -260,7 +260,7 @@ class AuctionViewMixin:
         Returns False on no permission or True if the user has permission to access the auction"""
         if not self.auction:
             msg = "you must set self.auction (typically in dispatch) for self.is_auction_admin to be available"
-            raise Exception(msg)
+            raise requests.HTTPError(msg) from None
         result = self.auction.permission_check(self.request.user)
         if not result:
             if self.allow_non_admins:
@@ -8421,7 +8421,7 @@ class CreatePayPalOrderView(PayPalAPIMixin, View):
         """Create the order"""
         try:
             approval_url = self.create_order(self.invoice)
-        except Exception:
+        except requests.RequestException:
             messages.error(request, "Payment provider rejected the order. Please try again or contact the organizer.")
             return self._invoice_error_redirect(self.invoice)
         if not approval_url:
