@@ -70,6 +70,19 @@ def apply_price_input_constraints(fields, field_names, only_whole_dollar_bids):
         fields[field_name].widget.attrs["step"] = step
 
 
+def add_bootstrap_classes(form):
+    """Apply Bootstrap-friendly classes to visible form widgets."""
+    for field in form.fields.values():
+        if isinstance(field.widget, forms.CheckboxInput):
+            css_class = "form-check-input"
+        elif isinstance(field.widget, (forms.Select, forms.SelectMultiple)):
+            css_class = "form-select"
+        else:
+            css_class = "form-control"
+        existing_class = field.widget.attrs.get("class", "")
+        field.widget.attrs["class"] = f"{existing_class} {css_class}".strip()
+
+
 def validate_image_url(url):
     """Validate that `url` uses http/https and points to a file with an image extension.
 
@@ -734,6 +747,54 @@ class DeleteAuctionTOS(forms.Form):
                 if AuctionTOS.objects.get(pk=merge_with) == self.auctiontos:
                     self.add_error("merge_with", "You can't select the user you're about to delete")
         return cleaned_data
+
+
+class AuctionTOSMergeTargetForm(forms.Form):
+    target = forms.CharField(
+        widget=autocomplete.Select2(
+            url="auctiontos-autocomplete",
+            forward=["auction", "exclude_auctiontos"],
+            attrs={
+                "data-html": True,
+                "data-container-css-class": "",
+            },
+        )
+    )
+    auction = forms.CharField(label="Auction", max_length=100)
+    exclude_auctiontos = forms.IntegerField(required=False)
+
+    def __init__(self, auctiontos, auction, *args, **kwargs):
+        self.auction = auction
+        self.auctiontos = auctiontos
+        super().__init__(*args, **kwargs)
+        self.fields["target"].label = f"Keep this user and merge {self.auctiontos.name} into them"
+        self.fields["auction"].widget = HiddenInput()
+        self.fields["auction"].initial = self.auction.pk
+        self.fields["exclude_auctiontos"].widget = HiddenInput()
+        self.fields["exclude_auctiontos"].initial = self.auctiontos.pk
+
+    def clean_target(self):
+        target_pk = self.cleaned_data["target"]
+        try:
+            target = AuctionTOS.objects.get(pk=target_pk, auction=self.auction)
+        except AuctionTOS.DoesNotExist as exc:
+            msg = "Select a user from this auction to keep"
+            raise forms.ValidationError(msg) from exc
+        if target == self.auctiontos:
+            msg = "You can't select the user you're about to delete"
+            raise forms.ValidationError(msg)
+        return target
+
+
+class AuctionTOSMergeReviewForm(forms.ModelForm):
+    class Meta:
+        model = AuctionTOS
+        fields = ["name", "email", "phone_number", "address", "pickup_location"]
+
+    def __init__(self, *args, auction, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["pickup_location"].queryset = auction.location_qs
+        add_bootstrap_classes(self)
 
 
 class EditLot(forms.ModelForm):
@@ -3590,3 +3651,25 @@ class ClubMemberPermissionsForm(forms.ModelForm):
                 css_class="modal-footer",
             ),
         )
+
+
+class ClubMemberMergeTargetForm(forms.Form):
+    target = forms.ModelChoiceField(queryset=ClubMember.objects.none(), empty_label="— Select a member —")
+
+    def __init__(self, club, source, *args, **kwargs):
+        self.club = club
+        self.source = source
+        super().__init__(*args, **kwargs)
+        self.fields["target"].queryset = ClubMember.objects.filter(club=club, is_deleted=False).exclude(pk=source.pk)
+        self.fields["target"].label = f"Keep this member and merge {self.source} into them"
+        add_bootstrap_classes(self)
+
+
+class ClubMemberMergeReviewForm(forms.ModelForm):
+    class Meta:
+        model = ClubMember
+        fields = ["first_name", "last_name", "email", "phone_number", "address"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        add_bootstrap_classes(self)
