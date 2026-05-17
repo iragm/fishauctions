@@ -5690,7 +5690,7 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
             url: validation_url,
             type: "POST",
             data: data,
-                headers: { "X-CSRFToken": csrf_token },
+            headers: { "X-CSRFToken": csrf_token },
             success: function (response) {
                 if (response.name_tooltip) {
                     setFieldNote("id_name", response.name_tooltip);
