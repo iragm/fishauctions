@@ -12727,17 +12727,16 @@ class MergeAuctionTOSTests(StandardTestCase):
     def test_duplicate_name_validation_returns_warning_message(self):
         """Duplicate-name validation should warn when the name is already in this auction"""
         self.client.login(username="admin_user", password="testpassword")
-        AuctionTOS.objects.filter(pk=self.online_tos.pk).update(name="Truly Unique Duplicate User", bidder_number="123")
-        self.online_tos.refresh_from_db()
+        self.online_tos.name = "Truly Unique Duplicate User"
+        self.online_tos.bidder_number = "123"
+        self.online_tos.save()
         url = reverse("auctiontos_validation", kwargs={"slug": self.online_auction.slug})
-        response = self.client.post(url, {"name": "Truly Unique Duplicate User"})
+        response = self.client.post(url, {"name": self.online_tos.name})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
             response.json()["name_tooltip"],
-            (
-                "There's already a user in this auction named Truly Unique Duplicate User "
-                f"(bidder number: {self.online_tos.bidder_number})"
-            ),
+            f"There's already a user in this auction named {self.online_tos.name} "
+            f"(bidder number: {self.online_tos.bidder_number})",
         )
 
     def test_duplicate_name_autofill_searches_clubs_with_manage_membership_permission(self):
