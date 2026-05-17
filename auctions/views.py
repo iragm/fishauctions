@@ -1573,10 +1573,12 @@ class AuctionTOSValidation(AuctionViewMixin, APIPostView):
         if name:
             existing_tos_in_this_auction = AuctionTOSFilter.generic(self, base_qs, name, match_names_only=True).first()
             if existing_tos_in_this_auction:
-                bidder_number = existing_tos_in_this_auction.bidder_number or UNASSIGNED_BIDDER_NUMBER_LABEL
+                existing_bidder_number = (
+                    existing_tos_in_this_auction.bidder_number or UNASSIGNED_BIDDER_NUMBER_LABEL
+                )
                 result["name_tooltip"] = (
                     f"There's already a user in this auction named {existing_tos_in_this_auction.name} "
-                    f"(bidder number: {bidder_number})"
+                    f"(bidder number: {existing_bidder_number})"
                 )
             else:
                 logger.info("no user found in older auctions with name %s", name)
