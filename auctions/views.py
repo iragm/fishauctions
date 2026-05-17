@@ -292,18 +292,20 @@ def check_club_permission(user, club, permission_name):
 
 
 def auctions_available_for_contact_autofill(user, extra_created_by=None):
-    """Return auctions whose participant history can be used to auto-fill contact details."""
+    """Return auctions whose participant history can be used to auto-fill contact details.
+
+    extra_created_by lets callers include auctions created by another user, even if the
+    authenticated user would not otherwise have that auction in their own access scope.
+    """
     if not user.is_authenticated:
         return Auction.objects.none()
 
-    club_ids = ClubMember.objects.filter(user=user, is_deleted=False).filter(
-        Q(permission_admin=True) | Q(permission_add_edit=True) | Q(permission_manage_auctions=True)
+    club_ids = (
+        ClubMember.objects.filter(user=user, is_deleted=False)
+        .filter(Q(permission_admin=True) | Q(permission_add_edit=True) | Q(permission_manage_auctions=True))
+        .values_list("club_id", flat=True)
     )
-    filters = (
-        Q(created_by=user)
-        | Q(auctiontos__is_admin=True, auctiontos__user=user)
-        | Q(club_id__in=club_ids.values("club_id"))
-    )
+    filters = Q(created_by=user) | Q(auctiontos__is_admin=True, auctiontos__user=user) | Q(club_id__in=club_ids)
     if extra_created_by:
         filters |= Q(created_by=extra_created_by)
     return Auction.objects.filter(filters).distinct()
