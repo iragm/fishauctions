@@ -12773,7 +12773,7 @@ class MergeAuctionTOSTests(StandardTestCase):
         response = self.client.post(url, {"name": "Club Managed User"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["id_email"], "club-managed@example.com")
-        self.assertEqual(response.json()["id_bidder_number"], "777")
+        self.assertEqual(response.json()["id_bidder_number"], "")
 
     def test_add_user_modal_uses_inline_name_note_for_duplicates(self):
         """The add-user modal should render JS that shows duplicate-name warnings inline"""
@@ -14363,6 +14363,29 @@ class ClubMemberUpdateTests(TestCase):
         self.assertEqual(response.json()["id_phone_number"], "555-0100")
         self.assertEqual(response.json()["id_address"], "123 Fish St")
 
+    def test_club_member_autofill_uses_managed_club_members_without_auction_history(self):
+        """Club member autofill should use manageable club members even without auction history"""
+        owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
+        owner_member.permission_add_edit = True
+        owner_member.save()
+        other_club = Club.objects.create(name="Member Autofill Club")
+        ClubMember.objects.create(club=other_club, user=self.owner, permission_manage_auctions=True)
+        ClubMember.objects.create(
+            club=other_club,
+            first_name="Managed",
+            last_name="Member",
+            email="managed-member@example.com",
+            phone_number="555-0111",
+            address="456 Club Rd",
+        )
+        self.client.force_login(self.owner)
+        url = reverse("clubmember_validation", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"first_name": "Managed", "last_name": "Member"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["id_email"], "managed-member@example.com")
+        self.assertEqual(response.json()["id_phone_number"], "555-0111")
+        self.assertEqual(response.json()["id_address"], "456 Club Rd")
+
     def test_club_member_create_modal_uses_inline_name_note_for_duplicates(self):
         """The club-member modal should render JS that shows duplicate-name warnings inline"""
         owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
@@ -14372,6 +14395,7 @@ class ClubMemberUpdateTests(TestCase):
         url = reverse("clubmember_create", kwargs={"slug": self.club.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "function cmHasAutocompleteData(response)")
         self.assertContains(response, "function cmSetFieldNote(fieldId, message)")
         self.assertContains(response, 'cmSetFieldNote("id_first_name", response.name_tooltip);')
 

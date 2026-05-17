@@ -292,6 +292,18 @@ def check_club_permission(user, club, permission_name):
     return bool(getattr(member, permission_name, False))
 
 
+def club_ids_available_for_contact_autofill(user):
+    """Return club IDs whose member and auction contact data may be used for autofill."""
+    if not user.is_authenticated:
+        return ClubMember.objects.none().values_list("club_id", flat=True)
+
+    return (
+        ClubMember.objects.filter(user=user, is_deleted=False)
+        .filter(Q(permission_admin=True) | Q(permission_add_edit=True) | Q(permission_manage_auctions=True))
+        .values_list("club_id", flat=True)
+    )
+
+
 def auctions_available_for_contact_autofill(user, extra_created_by=None):
     """Return auctions whose participant history can be used to auto-fill contact details.
 
@@ -301,11 +313,7 @@ def auctions_available_for_contact_autofill(user, extra_created_by=None):
     if not user.is_authenticated:
         return Auction.objects.none()
 
-    club_ids = (
-        ClubMember.objects.filter(user=user, is_deleted=False)
-        .filter(Q(permission_admin=True) | Q(permission_add_edit=True) | Q(permission_manage_auctions=True))
-        .values_list("club_id", flat=True)
-    )
+    club_ids = club_ids_available_for_contact_autofill(user)
     filters = Q(created_by=user) | Q(auctiontos__is_admin=True, auctiontos__user=user) | Q(club_id__in=club_ids)
     if extra_created_by:
         filters |= Q(created_by=extra_created_by)
@@ -1554,9 +1562,6 @@ class AuctionTOSValidation(AuctionViewMixin, APIPostView):
             qs = AuctionTOS.objects.filter(auction__in=old_auctions, email__isnull=False).order_by("-createdon")
             old_tos = AuctionTOSFilter.generic(self, qs, name, match_names_only=True).first()
             if old_tos:
-                bidder_number_used_in_this_auction = base_qs.filter(bidder_number=old_tos.bidder_number).first()
-                if not bidder_number_used_in_this_auction:
-                    result["id_bidder_number"] = old_tos.bidder_number
                 result["id_name"] = old_tos.name
                 result["id_email"] = old_tos.email
                 result["id_address"] = old_tos.address
@@ -5648,8 +5653,8 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
         feedback = document.createElement("div");
         feedback.id = "id_name_feedback";
         feedback.className = "valid-feedback d-block cursor-pointer";
-        feedback.innerHTML = "<button role='button' class='btn btn-sm btn-info' id='autocompleteTosForm'>Click to use " + \
-            response.id_email + "</button>";
+        var buttonText = response.id_email ? "Click to use " + response.id_email : "Click to fill in details";
+        feedback.innerHTML = "<button role='button' class='btn btn-sm btn-info' id='autocompleteTosForm'>" + buttonText + "</button>";
         var autocomplete = response;
         document.getElementById('id_name').parentNode.appendChild(feedback);
 
@@ -5677,6 +5682,10 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
             link.focus();
         //}, 40);
 
+    }
+
+    function hasAutocompleteData(response) {
+        return !!(response.id_email || response.id_address || response.id_phone_number || response.id_memo);
     }
 
 
@@ -5718,7 +5727,7 @@ class AuctionTOSAdmin(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewMi
                 if (response.name_tooltip) {
                     setFieldNote("id_name", response.name_tooltip);
                     showAutocomplete(response, true)
-                } else if (response.id_email) {
+                } else if (hasAutocompleteData(response)) {
                     setFieldNote("id_name", "");
                     showAutocomplete(response)
                 } else {
@@ -11824,20 +11833,35 @@ class ClubMemberValidation(ClubViewMixin, APIPostView):
         base_qs = ClubMember.objects.filter(club=self.club, is_deleted=False)
         if pk:
             base_qs = base_qs.exclude(pk=pk)
-        # Auto-fill from AuctionTOS records when name typed without email
+        # Auto-fill from manageable club members or auction histories when name typed without email.
         if (first_name or last_name) and not email and not pk:
-            old_auctions = auctions_available_for_contact_autofill(request.user)
-            tos_qs = AuctionTOS.objects.filter(auction__in=old_auctions, email__isnull=False).order_by("-createdon")
             full_name = f"{first_name} {last_name}".strip()
-            old_tos = AuctionTOSFilter.generic(None, tos_qs, full_name, match_names_only=True).first()
-            if old_tos:
-                # Split the single AuctionTOS name field into first/last
-                parts = old_tos.name.strip().split(" ", 1)
-                result["id_first_name"] = parts[0]
-                result["id_last_name"] = parts[1] if len(parts) > 1 else ""
-                result["id_email"] = old_tos.email
-                result["id_phone_number"] = old_tos.phone_number or ""
-                result["id_address"] = old_tos.address or ""
+            member_match = (
+                ClubMember.objects.filter(
+                    club_id__in=club_ids_available_for_contact_autofill(request.user), is_deleted=False
+                )
+                .filter(first_name__iexact=first_name, last_name__iexact=last_name)
+                .order_by("-createdon")
+                .first()
+            )
+            if member_match:
+                result["id_first_name"] = member_match.first_name
+                result["id_last_name"] = member_match.last_name
+                result["id_email"] = member_match.email or ""
+                result["id_phone_number"] = member_match.phone_number or ""
+                result["id_address"] = member_match.address or ""
+            else:
+                old_auctions = auctions_available_for_contact_autofill(request.user)
+                tos_qs = AuctionTOS.objects.filter(auction__in=old_auctions, email__isnull=False).order_by("-createdon")
+                old_tos = AuctionTOSFilter.generic(None, tos_qs, full_name, match_names_only=True).first()
+                if old_tos:
+                    # Split the single AuctionTOS name field into first/last
+                    parts = old_tos.name.strip().split(" ", 1)
+                    result["id_first_name"] = parts[0]
+                    result["id_last_name"] = parts[1] if len(parts) > 1 else ""
+                    result["id_email"] = old_tos.email
+                    result["id_phone_number"] = old_tos.phone_number or ""
+                    result["id_address"] = old_tos.address or ""
         # Duplicate name check within this club
         if first_name or last_name:
             dup = base_qs.filter(first_name=first_name, last_name=last_name).first()
@@ -11926,7 +11950,7 @@ function cmShowAutocomplete(response, remove) {{
     btn.role = "button";
     btn.className = "btn btn-sm btn-info";
     btn.id = "autocompleteMemberForm";
-    btn.textContent = "Click to fill in " + response.id_email;
+    btn.textContent = response.id_email ? "Click to fill in " + response.id_email : "Click to fill in details";
     feedback.appendChild(btn);
     var autocomplete = response;
     document.getElementById('id_first_name').parentNode.appendChild(feedback);
@@ -11943,6 +11967,10 @@ function cmShowAutocomplete(response, remove) {{
         }}
     }});
     link.focus();
+}}
+
+function cmHasAutocompleteData(response) {{
+    return !!(response.id_email || response.id_phone_number || response.id_address || response.id_last_name);
 }}
 
 function cmSetFieldNote(fieldId, message) {{
@@ -11975,7 +12003,7 @@ function cmValidateField() {{
             if (response.name_tooltip) {{
                 cmSetFieldNote("id_first_name", response.name_tooltip);
                 cmShowAutocomplete(response, true);
-            }} else if (response.id_email) {{
+            }} else if (cmHasAutocompleteData(response)) {{
                 cmShowAutocomplete(response);
                 cmSetFieldNote("id_first_name", "");
             }} else {{
