@@ -767,7 +767,7 @@ class AuctionTOSMergeTargetForm(forms.Form):
         self.auction = auction
         self.auctiontos = auctiontos
         super().__init__(*args, **kwargs)
-        self.fields["target"].label = f"Keep this user and merge {self.auctiontos.name} into them"
+        self.fields["target"].label = f"Merge {self.auctiontos.name} with"
         self.fields["auction"].widget = HiddenInput()
         self.fields["auction"].initial = self.auction.pk
         self.fields["exclude_auctiontos"].widget = HiddenInput()
@@ -3661,7 +3661,7 @@ class ClubMemberMergeTargetForm(forms.Form):
         self.source = source
         super().__init__(*args, **kwargs)
         self.fields["target"].queryset = ClubMember.objects.filter(club=club, is_deleted=False).exclude(pk=source.pk)
-        self.fields["target"].label = f"Keep this member and merge {self.source} into them"
+        self.fields["target"].label = f"Merge {self.source} with"
         add_bootstrap_classes(self)
 
 

@@ -5554,7 +5554,6 @@ class AuctionTOSDelete(LoginRequiredMixin, TemplateView, FormMixin, AuctionViewM
                     f"{self._merge_label(self.auctiontos)} will be deleted.",
                     f"{self._merge_label(target)} will be kept.",
                     "Won lots, sold lots, invoice adjustments, and payments will move to the kept user.",
-                    "If the kept user is not manually added and you change their email, their linked account will be cleared.",
                 ],
                 "target_field_name": "target",
                 "cancel_url": self._merge_success_url(),
