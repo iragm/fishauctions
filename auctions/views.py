@@ -7821,6 +7821,10 @@ class LotRefundDialog(LoginRequiredMixin, DetailView, FormMixin, AuctionViewMixi
         return context
 
 
+class PayPalRequestError(Exception):
+    """Raised when a PayPal API request fails in a recoverable way for the caller."""
+
+
 class PayPalAPIMixin:
     """PayPal API methods for platform partner integration.
 
@@ -7897,7 +7901,7 @@ class PayPalAPIMixin:
                 resp.text[:1000],
             )
             msg = f"PayPal API call failed: {method} {url} status={resp.status_code} debug_id={debug_id}"
-            raise Exception(msg)
+            raise PayPalRequestError(msg)
 
     def post_to_paypal(self, endpoint, payload, include_bn_code=True):
         """POST JSON to a PayPal API endpoint and return parsed JSON."""
@@ -8421,7 +8425,7 @@ class CreatePayPalOrderView(PayPalAPIMixin, View):
         """Create the order"""
         try:
             approval_url = self.create_order(self.invoice)
-        except requests.RequestException:
+        except (requests.RequestException, PayPalRequestError):
             messages.error(request, "Payment provider rejected the order. Please try again or contact the organizer.")
             return self._invoice_error_redirect(self.invoice)
         if not approval_url:
