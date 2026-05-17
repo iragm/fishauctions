@@ -122,6 +122,8 @@ from .forms import (
     AuctionEditForm,
     AuctionJoin,
     AuctionNoShowForm,
+    AuctionTOSMergeReviewForm,
+    AuctionTOSMergeTargetForm,
     BulkSellLotsToOnlineHighBidder,
     ChangeInvoiceStatusForm,
     ChangeUsernameForm,
@@ -137,8 +139,6 @@ from .forms import (
     CreateEditAuctionTOS,
     CreateImageForm,
     CreateLotForm,
-    AuctionTOSMergeReviewForm,
-    AuctionTOSMergeTargetForm,
     DeleteAuctionTOS,
     EditLot,
     InvoiceAdjustmentForm,
@@ -12476,7 +12476,9 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
                     )
                 messages.success(request, f"Merged {source} into {target}.")
                 return redirect(reverse("club_admin", kwargs={"slug": self.club.slug}))
-            return render(request, "auctions/contact_merge.html", self._build_review_context(request, source, target, review_form))
+            return render(
+                request, "auctions/contact_merge.html", self._build_review_context(request, source, target, review_form)
+            )
         selection_form = ClubMemberMergeTargetForm(self.club, source, request.POST or None)
         if request.method == "POST" and selection_form.is_valid():
             target = selection_form.cleaned_data["target"]
@@ -12484,7 +12486,9 @@ class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):
                 instance=target,
                 initial=self._build_review_initial(source, target),
             )
-            return render(request, "auctions/contact_merge.html", self._build_review_context(request, source, target, review_form))
+            return render(
+                request, "auctions/contact_merge.html", self._build_review_context(request, source, target, review_form)
+            )
         context = {
             "step": "select",
             "page_title": f"Merge member — {source}",

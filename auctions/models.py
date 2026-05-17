@@ -3344,7 +3344,9 @@ class AuctionTOS(models.Model):
         result += f"<span class='dropdown-item'><a href={sold_lots_url}><i class='bi bi-calendar me-1'></i>View {self.lots_qs.count()} lots sold</a></span>"
         delete_url = reverse("auctiontosdelete", kwargs={"pk": self.pk})
         merge_url = f"{delete_url}?action=merge"
-        result += f"<span class='dropdown-item'><a href={merge_url}><i class='bi bi-people me-1'></i>Merge with...</a></span>"
+        result += (
+            f"<span class='dropdown-item'><a href={merge_url}><i class='bi bi-people me-1'></i>Merge with...</a></span>"
+        )
         result += f"<span class='dropdown-item'><a href={delete_url}><i class='bi bi-person-fill-x me-1'></i>Delete</a></span>"
         problems_url = reverse(
             "auction_no_show",
