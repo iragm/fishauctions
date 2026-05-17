@@ -333,19 +333,16 @@ def _ensure_invoice_renewal_state(invoice):
 
 
 def _process_invoice_membership_renewal(invoice, acting_user=None, payment_method="Invoice"):
-    if not invoice or not invoice.auction or not invoice.auction.club:
+    if not invoice or not invoice.renewal_needed or invoice.renewal_processed:
         return
-    if not invoice.renewal_needed or invoice.renewal_processed:
+    club = invoice.club or (invoice.auction.club if invoice.auction else None)
+    if not club:
         return
-    auction = invoice.auction
-    club = auction.club
-    user = invoice.auctiontos_user.user
+    user = invoice.buyer or (invoice.auctiontos_user.user if invoice.auctiontos_user else None)
     if not user:
         return
-    member, _ = ClubMember.objects.get_or_create(
-        club=club,
-        user=user,
-        defaults={
+    if invoice.auctiontos_user:
+        member_defaults = {
             "first_name": invoice.auctiontos_user.name.split(" ")[0]
             if invoice.auctiontos_user.name
             else user.first_name,
@@ -354,7 +351,18 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
             else user.last_name,
             "email": invoice.auctiontos_user.email or user.email,
             "source": "auction_invoice",
-        },
+        }
+    else:
+        member_defaults = {
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "email": user.email,
+            "source": "membership_payment",
+        }
+    member, _ = ClubMember.objects.get_or_create(
+        club=club,
+        user=user,
+        defaults=member_defaults,
     )
     old_paid = member.membership_last_paid
     today = timezone.now().date()
@@ -6977,14 +6985,19 @@ class InvoiceView(DetailView, FormMixin, AuctionViewMixin):
                 return redirect(auction.get_absolute_url())
             raise Http404
         mark_invoice_viewed_by_user = False
-        self.auction = invoice.auctiontos_user.auction
-        if self.is_auction_admin:
+        self.auction = invoice.auction or (invoice.auctiontos_user.auction if invoice.auctiontos_user else None)
+        if self.auction and self.is_auction_admin:
             auth = True
             self.is_admin = True
-        if self.auction.invoice_payment_instructions and invoice.status == "UNPAID":
+        if self.auction and self.auction.invoice_payment_instructions and invoice.status == "UNPAID":
             messages.info(request, self.auction.invoice_payment_instructions)
         if request.user.is_authenticated:
-            if invoice.auctiontos_user.email == request.user.email or invoice.auctiontos_user.user == request.user:
+            if invoice.club and invoice.buyer == request.user:
+                mark_invoice_viewed_by_user = True
+                auth = True
+            elif invoice.auctiontos_user and (
+                invoice.auctiontos_user.email == request.user.email or invoice.auctiontos_user.user == request.user
+            ):
                 mark_invoice_viewed_by_user = True
                 auth = True
         if not auth:
@@ -7106,8 +7119,9 @@ class InvoiceNoLoginView(InvoiceView):
         invoice = self.get_object()
         invoice.opened = True
         invoice.save()
-        invoice.auctiontos_user.email_address_status = "VALID"
-        invoice.auctiontos_user.save()
+        if invoice.auctiontos_user:
+            invoice.auctiontos_user.email_address_status = "VALID"
+            invoice.auctiontos_user.save()
         return super().dispatch(request, *args, **kwargs)
 
 
@@ -7895,7 +7909,7 @@ class PayPalAPIMixin:
     def create_order(self, invoice):
         """Pass an invoice object and create an order for it.
         Returns an approval URL or None if the request failed"""
-        currency = invoice.auction.created_by.userdata.currency
+        currency = invoice.currency
 
         items = []
         for lot in invoice.bought_lots_queryset:
@@ -7946,8 +7960,14 @@ class PayPalAPIMixin:
         if discount_value > 0:
             breakdown["discount"] = {"currency_code": currency, "value": f"{discount_value:.2f}"}
 
+        if invoice.club:
+            description = f"Club membership fee for {invoice.club.name}"[:127]
+        elif invoice.auctiontos_user and invoice.auction:
+            description = f"Bidder {invoice.auctiontos_user.bidder_number} in {invoice.auction.title}"[:127]
+        else:
+            description = "Membership fee"[:127]
         purchase_unit = {
-            "description": f"Bidder {invoice.auctiontos_user.bidder_number} in {invoice.auction.title}"[:127],
+            "description": description,
             "reference_id": str(invoice.pk),
             "amount": {
                 "currency_code": currency,
@@ -7958,9 +7978,23 @@ class PayPalAPIMixin:
         }
         if invoice.soft_descriptor:
             purchase_unit["soft_descriptor"] = invoice.soft_descriptor[:22]
-        if invoice.auction.paypal_information and invoice.auction.paypal_information != "admin":
+        if invoice.club:
+            from auctions.models import PayPalSeller
+
+            club_seller = PayPalSeller.objects.filter(user=invoice.club.payment_user).first()
+            if club_seller and club_seller.paypal_merchant_id:
+                paypal_merchant_id = club_seller.paypal_merchant_id
+            elif invoice.club.payment_user and invoice.club.payment_user.is_superuser:
+                paypal_merchant_id = "admin"
+            else:
+                paypal_merchant_id = None
+        elif invoice.auction:
+            paypal_merchant_id = invoice.auction.paypal_information
+        else:
+            paypal_merchant_id = None
+        if paypal_merchant_id and paypal_merchant_id != "admin":
             # if this is not set, payment will go to the platform account whose keys are in the .env
-            purchase_unit["payee"] = {"merchant_id": invoice.auction.paypal_information}
+            purchase_unit["payee"] = {"merchant_id": paypal_merchant_id}
             if settings.PAYPAL_PLATFORM_FEE and settings.PAYPAL_PLATFORM_FEE > 0:
                 amt_value = Decimal(purchase_unit["amount"]["value"])
                 fee_amount = (amt_value * settings.PAYPAL_PLATFORM_FEE / Decimal(100)).quantize(Decimal(0.01))
@@ -8088,28 +8122,28 @@ class PayPalAPIMixin:
             if parts:
                 payer_address = ", ".join(parts)
 
-        if payer_email and not invoice.auctiontos_user.email:
-            invoice.auctiontos_user.email = payer_email
-            invoice.auctiontos_user.save()
-            invoice.auction.create_history(
-                applies_to="USERS",
-                action=f"Added email {payer_email} to user {invoice.auctiontos_user.name} from PayPal payment",
-                user=None,
-            )
-        if payer_address and payer_address != invoice.auctiontos_user.address:
-            # always overwrite the address with the one from PayPal
-            invoice.auction.create_history(
-                applies_to="USERS",
-                action=f"Updated address for user {invoice.auctiontos_user.name} from PayPal payment.  Old address {invoice.auctiontos_user.address}",
-                user=None,
-            )
-            invoice.auctiontos_user.address = payer_address[:500]
-            invoice.auctiontos_user.save()
-
-            # also save the address site-wide
-            if invoice.auctiontos_user.user and not invoice.auctiontos_user.user.userdata.address:
-                invoice.auctiontos_user.user.userdata.address = payer_address[:500]
-                invoice.auctiontos_user.user.userdata.save()
+        if invoice.auctiontos_user:
+            if payer_email and not invoice.auctiontos_user.email:
+                invoice.auctiontos_user.email = payer_email
+                invoice.auctiontos_user.save()
+                if invoice.auction:
+                    invoice.auction.create_history(
+                        applies_to="USERS",
+                        action=f"Added email {payer_email} to user {invoice.auctiontos_user.name} from PayPal payment",
+                        user=None,
+                    )
+            if payer_address and payer_address != invoice.auctiontos_user.address:
+                if invoice.auction:
+                    invoice.auction.create_history(
+                        applies_to="USERS",
+                        action=f"Updated address for user {invoice.auctiontos_user.name} from PayPal payment.  Old address {invoice.auctiontos_user.address}",
+                        user=None,
+                    )
+                invoice.auctiontos_user.address = payer_address[:500]
+                invoice.auctiontos_user.save()
+                if invoice.auctiontos_user.user and not invoice.auctiontos_user.user.userdata.address:
+                    invoice.auctiontos_user.user.userdata.address = payer_address[:500]
+                    invoice.auctiontos_user.user.userdata.save()
 
         amt = Decimal(str(amount_value)) if amount_value else Decimal("0.00")
         if not amt:
@@ -8131,7 +8165,7 @@ class PayPalAPIMixin:
             },
         )
         invoice.recalculate()
-        if created:
+        if created and invoice.auctiontos_user and invoice.auction:
             action = f"Payment received via PayPal for {invoice.auctiontos_user.name} ${payment.amount} ({payment.external_id})"
             invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
         # If the total owed is zero or less and invoice is DRAFT/UNPAID, mark PAID
@@ -8139,17 +8173,19 @@ class PayPalAPIMixin:
             invoice.status = "PAID"
             invoice.save()
             _process_invoice_membership_renewal(invoice, payment_method="PayPal")
-            invoice.auction.create_history(
-                applies_to="INVOICES",
-                action=f"Invoice {invoice.auctiontos_user.name} automatically marked PAID after PayPal payment",
-            )
+            if invoice.auction and invoice.auctiontos_user:
+                invoice.auction.create_history(
+                    applies_to="INVOICES",
+                    action=f"Invoice {invoice.auctiontos_user.name} automatically marked PAID after PayPal payment",
+                )
             # I have given some thought to putting this in a model property instead
             # Putting it here only sends the message when an invoice is paid via PayPal
             channel_layer = channels.layers.get_channel_layer()
-            async_to_sync(channel_layer.group_send)(
-                f"auctions_{invoice.auction.pk}",
-                {"type": "invoice_paid", "pk": invoice.pk},
-            )
+            if invoice.auction:
+                async_to_sync(channel_layer.group_send)(
+                    f"auctions_{invoice.auction.pk}",
+                    {"type": "invoice_paid", "pk": invoice.pk},
+                )
 
         return None, invoice
 
@@ -8365,24 +8401,27 @@ class PayPalCallbackView(LoginRequiredMixin, PayPalAPIMixin, View):
 class CreatePayPalOrderView(PayPalAPIMixin, View):
     """Create a PayPal order for an invoice and redirect to PayPal checkout"""
 
+    def _invoice_error_redirect(self, invoice):
+        if invoice.club:
+            return redirect(reverse("club_membership_pay", kwargs={"slug": invoice.club.slug}))
+        return redirect(reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link}))
+
     def dispatch(self, request, *args, **kwargs):
         self.invoice = get_object_or_404(Invoice, no_login_link=kwargs.pop("uuid"))
         error = self.invoice.reason_for_payment_not_available
         if not self.invoice.show_payment_button:
-            error = "PayPal payments are not possible in this auction"
+            error = "PayPal payments are not available"
         if error:
             messages.error(request, error)
-            return redirect(reverse("invoice_no_login", kwargs={"uuid": self.invoice.no_login_link}))
+            return self._invoice_error_redirect(self.invoice)
         return super().dispatch(request, *args, **kwargs)
 
     def post(self, request, *args, **kwargs):
         """Create the order"""
         approval_url = self.create_order(self.invoice)
         if not approval_url:
-            messages.error(
-                request, "Payment provider rejected the order. Contact the auction administrator to confirm payment."
-            )
-            return redirect(self.invoice.get_absolute_url())
+            messages.error(request, "Payment provider rejected the order. Please try again or contact the organizer.")
+            return self._invoice_error_redirect(self.invoice)
         return redirect(approval_url)
 
 
@@ -8396,6 +8435,8 @@ class PayPalSuccessView(PayPalAPIMixin, View):
             messages.error(request, error)
         else:
             messages.success(request, "Payment completed successfully. Thank you!")
+        if invoice and invoice.club:
+            return redirect(reverse("club_detail", kwargs={"slug": invoice.club.slug}))
         if invoice:
             return redirect(reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link}))
         return redirect(reverse("home"))
@@ -8437,9 +8478,14 @@ class SquareAPIMixin:
         """
         from auctions.models import SquareSeller
 
-        seller = SquareSeller.objects.filter(user=invoice.auction.created_by).first()
+        seller_user = (
+            invoice.club.payment_user if invoice.club else (invoice.auction.created_by if invoice.auction else None)
+        )
+        if not seller_user:
+            return None, "No seller account configured"
+        seller = SquareSeller.objects.filter(user=seller_user).first()
         if not seller:
-            logger.error("No SquareSeller for user %s", invoice.auction.created_by.pk)
+            logger.error("No SquareSeller for user %s", seller_user.pk)
             return None, "Seller has not connected their Square account"
 
         return seller.create_payment_link(invoice, self.request)
@@ -8593,11 +8639,16 @@ class SquareCallbackView(LoginRequiredMixin, View):
 class CreateSquarePaymentLinkView(SquareAPIMixin, View):
     """Create a Square payment link for an invoice"""
 
+    def _invoice_error_redirect(self, invoice):
+        if invoice.club:
+            return redirect(reverse("club_membership_pay", kwargs={"slug": invoice.club.slug}))
+        return redirect(reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link}))
+
     def dispatch(self, request, *args, **kwargs):
         self.invoice = get_object_or_404(Invoice, no_login_link=kwargs.pop("uuid"))
         if not self.invoice.show_square_button:
             messages.error(request, "Square payments are not available for this invoice")
-            return redirect(reverse("invoice_no_login", kwargs={"uuid": self.invoice.no_login_link}))
+            return self._invoice_error_redirect(self.invoice)
         return super().dispatch(request, *args, **kwargs)
 
     def post(self, request, *args, **kwargs):
@@ -8607,7 +8658,7 @@ class CreateSquarePaymentLinkView(SquareAPIMixin, View):
             messages.error(
                 request, error_message or "Failed to create Square payment link. Please try again or contact support."
             )
-            return redirect(self.invoice.get_absolute_url())
+            return self._invoice_error_redirect(self.invoice)
 
         # Add processing message and redirect to invoice to show status
         messages.info(
@@ -11641,8 +11692,9 @@ class SquareWebhookView(SquareAPIMixin, View):
                             if receipt_number and not payment_record.receipt_number:
                                 payment_record.receipt_number = receipt_number
                             payment_record.save()
-                        action = f"Payment via Square for bidder {invoice.auctiontos_user.bidder_number} in the amount of {amount_value} {currency}"
-                        invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
+                        if invoice.auctiontos_user and invoice.auction:
+                            action = f"Payment via Square for bidder {invoice.auctiontos_user.bidder_number} in the amount of {amount_value} {currency}"
+                            invoice.auction.create_history(applies_to="INVOICES", action=action, user=None)
                         if invoice.net_after_payments >= 0:
                             invoice.status = "PAID"
                             invoice.save()
@@ -11650,7 +11702,6 @@ class SquareWebhookView(SquareAPIMixin, View):
 
                             # Send websocket notification for payment completion
                             channel_layer = channels.layers.get_channel_layer()
-                            # Send to invoice-specific group for invoice detail pages
                             async_to_sync(channel_layer.group_send)(
                                 f"invoice_{invoice.pk}",
                                 {
@@ -11658,14 +11709,14 @@ class SquareWebhookView(SquareAPIMixin, View):
                                     "message": "paid",
                                 },
                             )
-                            # Send to auction group for quick checkout page
-                            async_to_sync(channel_layer.group_send)(
-                                f"auctions_{invoice.auction.pk}",
-                                {
-                                    "type": "invoice_paid",
-                                    "pk": invoice.pk,
-                                },
-                            )
+                            if invoice.auction:
+                                async_to_sync(channel_layer.group_send)(
+                                    f"auctions_{invoice.auction.pk}",
+                                    {
+                                        "type": "invoice_paid",
+                                        "pk": invoice.pk,
+                                    },
+                                )
                         logger.info("Square payment completed for invoice %s", invoice.pk)
                     else:
                         logger.warning("Square webhook: Invoice not found for reference_id: %s", reference_id)
@@ -12393,6 +12444,50 @@ class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
         )
         messages.success(request, f"Membership renewed for {member}.")
         return redirect(reverse("club_admin", kwargs={"slug": self.club.slug}))
+
+
+class ClubMembershipPaymentView(LoginRequiredMixin, ClubViewMixin, TemplateView):
+    """Self-service membership payment page for club members.
+
+    Creates a pending club membership Invoice and shows PayPal/Square payment buttons.
+    """
+
+    template_name = "auctions/club_membership_payment.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        self.get_club(kwargs.get("slug", ""))
+        if not (
+            self.club.enable_club_page
+            and self.club.allow_integrated_payments
+            and self.club.membership_annual_fee
+            and self.club.payment_user
+        ):
+            raise Http404
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        member = ClubMember.objects.filter(club=self.club, user=self.request.user, is_deleted=False).first()
+        invoice, _ = Invoice.objects.get_or_create(
+            club=self.club,
+            buyer=self.request.user,
+            renewal_processed=False,
+            defaults={
+                "status": "UNPAID",
+                "renewal_needed": True,
+            },
+        )
+        if invoice.status == "PAID":
+            invoice = Invoice.objects.create(
+                club=self.club,
+                buyer=self.request.user,
+                status="UNPAID",
+                renewal_needed=True,
+            )
+        context["club"] = self.club
+        context["member"] = member
+        context["invoice"] = invoice
+        return context
 
 
 class ClubMemberMergeView(LoginRequiredMixin, ClubViewMixin, View):

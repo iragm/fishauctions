@@ -44,7 +44,7 @@
       {% endif %}
       {% if show_membership_payment_button %}
       <div class="mt-3">
-        <a class="btn btn-success btn-sm" href="{% url 'club_detail' club.slug %}?user={{ member.uuid }}">
+        <a class="btn btn-success btn-sm" href="{% url 'club_membership_pay' club.slug %}">
           <i class="bi bi-credit-card"></i> Payment
         </a>
       </div>

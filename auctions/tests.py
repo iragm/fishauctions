@@ -15558,3 +15558,196 @@ class ClubViewOnlyAccessTests(TestCase):
         url = reverse("clubmember_permissions", kwargs={"pk": self.target_member.pk})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 403)
+
+
+@override_settings(PAYPAL_CLIENT_ID="test_client_id", PAYPAL_SECRET="test_secret")
+class ClubMembershipInvoiceTests(TestCase):
+    """Tests for club-only membership invoices (no auction, no auctiontos_user).
+
+    Covers Invoice model properties, _process_invoice_membership_renewal,
+    ClubMembershipPaymentView, and error-redirect behaviour in the PayPal/Square views.
+    """
+
+    def setUp(self):
+        self.client = Client()
+        self.payment_user = User.objects.create_user(
+            username="club_payer", password="testpass", email="payer@example.com"
+        )
+        self.payment_user.userdata.is_trusted = True
+        self.payment_user.userdata.paypal_enabled = True
+        self.payment_user.userdata.save()
+
+        self.member_user = User.objects.create_user(
+            username="club_member_u", password="testpass", email="member@example.com"
+        )
+
+        self.club = Club.objects.create(
+            name="Pay Club",
+            enable_club_page=True,
+            allow_integrated_payments=True,
+            membership_annual_fee=Decimal("30.00"),
+            membership_system="rolling",
+            payment_user=self.payment_user,
+        )
+        self.club_member = ClubMember.objects.create(
+            club=self.club,
+            user=self.member_user,
+            first_name="Alice",
+            last_name="Smith",
+            email="member@example.com",
+        )
+
+    def _make_club_invoice(self, status="UNPAID"):
+        return Invoice.objects.create(
+            club=self.club,
+            buyer=self.member_user,
+            status=status,
+            renewal_needed=True,
+        )
+
+    # -- model property tests --------------------------------------------------
+
+    def test_currency_uses_payment_user_currency(self):
+        invoice = self._make_club_invoice()
+        self.assertEqual(invoice.currency, self.payment_user.userdata.currency)
+
+    def test_membership_fee_amount_from_club(self):
+        invoice = self._make_club_invoice()
+        self.assertEqual(invoice.membership_fee_amount, Decimal("30.00"))
+
+    def test_net_is_negative_membership_fee(self):
+        invoice = self._make_club_invoice()
+        self.assertEqual(invoice.net, Decimal("-30.00"))
+
+    def test_net_after_payments_is_negative_before_payment(self):
+        invoice = self._make_club_invoice()
+        self.assertLess(invoice.net_after_payments, Decimal(0))
+
+    def test_show_paypal_button_true_for_trusted_paypal_user(self):
+        invoice = self._make_club_invoice()
+        PayPalSeller.objects.create(user=self.payment_user, paypal_merchant_id="merchant_abc")
+        self.assertTrue(invoice.show_paypal_button)
+
+    def test_show_paypal_button_false_for_untrusted_payment_user(self):
+        self.payment_user.userdata.is_trusted = False
+        self.payment_user.userdata.save()
+        invoice = self._make_club_invoice()
+        self.assertFalse(invoice.show_paypal_button)
+
+    def test_show_paypal_button_true_for_superuser_payment_user(self):
+        self.payment_user.is_superuser = True
+        self.payment_user.save()
+        invoice = self._make_club_invoice()
+        self.assertTrue(invoice.show_paypal_button)
+
+    def test_show_paypal_button_false_when_already_paid(self):
+        invoice = self._make_club_invoice(status="PAID")
+        PayPalSeller.objects.create(user=self.payment_user, paypal_merchant_id="merchant_abc")
+        self.assertFalse(invoice.show_paypal_button)
+
+    def test_show_payment_button_true_when_paypal_available(self):
+        PayPalSeller.objects.create(user=self.payment_user, paypal_merchant_id="merchant_abc")
+        invoice = self._make_club_invoice()
+        self.assertTrue(invoice.show_payment_button)
+
+    def test_show_payment_button_false_without_payment_credentials(self):
+        invoice = self._make_club_invoice()
+        self.assertFalse(invoice.show_paypal_button)
+        self.assertFalse(invoice.show_square_button)
+        self.assertFalse(invoice.show_payment_button)
+
+    def test_reason_for_payment_not_available_returns_none_for_club_invoice(self):
+        invoice = self._make_club_invoice()
+        self.assertIsNone(invoice.reason_for_payment_not_available)
+
+    def test_invoice_save_does_not_crash_without_auctiontos_user(self):
+        invoice = self._make_club_invoice()
+        invoice.status = "UNPAID"
+        invoice.save()  # Should not raise
+
+    # -- _process_invoice_membership_renewal with club invoice -----------------
+
+    def test_process_renewal_updates_membership_last_paid(self):
+        from auctions.views import _process_invoice_membership_renewal
+
+        invoice = self._make_club_invoice()
+        _process_invoice_membership_renewal(invoice, payment_method="PayPal")
+        self.club_member.refresh_from_db()
+        self.assertIsNotNone(self.club_member.membership_last_paid)
+        self.assertGreaterEqual(self.club_member.membership_last_paid, timezone.now().date())
+
+    def test_process_renewal_creates_invoice_payment_record(self):
+        from auctions.views import _process_invoice_membership_renewal
+
+        invoice = self._make_club_invoice()
+        _process_invoice_membership_renewal(invoice, payment_method="Square")
+        self.assertTrue(
+            InvoicePayment.objects.filter(club_member=self.club_member, payment_target="CLUB_MEMBER").exists()
+        )
+
+    def test_process_renewal_marks_invoice_renewal_processed(self):
+        from auctions.views import _process_invoice_membership_renewal
+
+        invoice = self._make_club_invoice()
+        _process_invoice_membership_renewal(invoice, payment_method="PayPal")
+        invoice.refresh_from_db()
+        self.assertTrue(invoice.renewal_processed)
+
+    def test_process_renewal_skipped_when_already_processed(self):
+        from auctions.views import _process_invoice_membership_renewal
+
+        invoice = self._make_club_invoice()
+        invoice.renewal_processed = True
+        invoice.save(update_fields=["renewal_processed"])
+        _process_invoice_membership_renewal(invoice, payment_method="PayPal")
+        self.assertIsNone(self.club_member.membership_last_paid)
+
+    # -- ClubMembershipPaymentView ---------------------------------------------
+
+    def test_payment_view_404_when_not_configured(self):
+        self.club.allow_integrated_payments = False
+        self.club.save()
+        self.client.login(username="club_member_u", password="testpass")
+        response = self.client.get(reverse("club_membership_pay", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 404)
+
+    def test_payment_view_requires_login(self):
+        response = self.client.get(reverse("club_membership_pay", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 302)
+
+    def test_payment_view_accessible_for_member(self):
+        self.client.login(username="club_member_u", password="testpass")
+        response = self.client.get(reverse("club_membership_pay", kwargs={"slug": self.club.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "30")
+
+    def test_payment_view_creates_unpaid_invoice(self):
+        self.client.login(username="club_member_u", password="testpass")
+        self.client.get(reverse("club_membership_pay", kwargs={"slug": self.club.slug}))
+        self.assertTrue(
+            Invoice.objects.filter(
+                club=self.club, buyer=self.member_user, status="UNPAID", renewal_needed=True
+            ).exists()
+        )
+
+    # -- CreatePayPalOrderView redirects for club invoices ---------------------
+
+    def test_paypal_order_view_redirects_to_club_pay_on_error(self):
+        """When PayPal is not configured, the view should redirect to club_membership_pay, not invoice_no_login."""
+        invoice = self._make_club_invoice()
+        self.client.login(username="club_member_u", password="testpass")
+        url = reverse("create_paypal_order", kwargs={"uuid": invoice.no_login_link})
+        response = self.client.post(url)
+        self.assertRedirects(
+            response,
+            reverse("club_membership_pay", kwargs={"slug": self.club.slug}),
+            fetch_redirect_response=False,
+        )
+
+    def test_invoice_no_login_view_accessible_for_club_invoice(self):
+        """Visiting a club invoice via no-login link should not crash (no auctiontos_user, no auction)."""
+        invoice = self._make_club_invoice()
+        self.client.login(username="club_member_u", password="testpass")
+        url = reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)

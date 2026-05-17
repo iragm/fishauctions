@@ -5679,7 +5679,15 @@ class Invoice(models.Model):
     """
 
     auction = models.ForeignKey(Auction, blank=True, null=True, on_delete=models.SET_NULL)
-    auctiontos_user = models.ForeignKey(AuctionTOS, blank=True, on_delete=models.CASCADE, related_name="auctiontos")
+    auctiontos_user = models.ForeignKey(
+        AuctionTOS, blank=True, null=True, on_delete=models.CASCADE, related_name="auctiontos"
+    )
+    club = models.ForeignKey(
+        "Club", blank=True, null=True, on_delete=models.SET_NULL, related_name="membership_invoices"
+    )
+    buyer = models.ForeignKey(
+        settings.AUTH_USER_MODEL, blank=True, null=True, on_delete=models.SET_NULL, related_name="membership_invoices"
+    )
     date = models.DateTimeField(auto_now_add=True, blank=True)
     status = models.CharField(
         max_length=20,
@@ -5712,9 +5720,11 @@ class Invoice(models.Model):
 
     @property
     def currency(self):
-        """Get the currency for this invoice based on the auction creator"""
+        """Get the currency for this invoice based on the auction creator or club payment user"""
         if self.auction and self.auction.created_by:
             return self.auction.created_by.userdata.currency
+        if self.club and self.club.payment_user:
+            return self.club.payment_user.userdata.currency
         return "USD"
 
     @property
@@ -5738,8 +5748,9 @@ class Invoice(models.Model):
             return False
         if self.net_after_payments >= 0:
             return False
+        if self.club:
+            return self.show_paypal_button or self.show_square_button
         if not self.auction:
-            # change this if we ever allow direct person to person payments
             return False
 
         # Check if auction allows any payment method
@@ -5772,22 +5783,35 @@ class Invoice(models.Model):
         """True if we can show specifically the PayPal button"""
         if not (settings.PAYPAL_CLIENT_ID and settings.PAYPAL_SECRET):
             return False
-        if self.auction and not self.auction.enable_online_payments:
-            return False
-        if self.auction and not self.auction.created_by.userdata.is_trusted:
-            return False
         if self.status == "PAID":
             return False
         if self.net_after_payments >= 0:
             return False
+        if self.club:
+            if not self.club.payment_user:
+                return False
+            payment_user = self.club.payment_user
+            if not payment_user.userdata.is_trusted:
+                return False
+            from auctions.models import PayPalSeller
+
+            has_paypal = (
+                payment_user.is_superuser
+                or payment_user.userdata.paypal_enabled
+                or PayPalSeller.objects.filter(user=payment_user).exists()
+            )
+            return has_paypal
+        if not self.auction:
+            return False
+        if not self.auction.enable_online_payments:
+            return False
+        if not self.auction.created_by.userdata.is_trusted:
+            return False
         if (
-            self.auction
-            and not self.auction.created_by.is_superuser
+            not self.auction.created_by.is_superuser
             and not self.auction.created_by.userdata.paypal_enabled
             and not self.auction.paypal_information
         ):
-            return False
-        if not self.auction:
             return False
         return True
 
@@ -5795,23 +5819,31 @@ class Invoice(models.Model):
     def show_square_button(self):
         """True if we can show specifically the Square button
         Square requires OAuth - seller must have linked their account"""
-        # Check OAuth is configured
         if not (getattr(settings, "SQUARE_APPLICATION_ID", None) and getattr(settings, "SQUARE_CLIENT_SECRET", None)):
-            return False
-        if self.auction and not self.auction.enable_square_payments:
-            return False
-        if self.auction and not self.auction.created_by.userdata.is_trusted:
             return False
         if self.status == "PAID":
             return False
         if self.net_after_payments >= 0:
             return False
-        # Square requires OAuth - check if seller has linked their account
-        if self.auction and not self.auction.created_by.userdata.square_enabled:
-            return False
-        if self.auction and not self.auction.square_information:
-            return False
+        if self.club:
+            if not self.club.payment_user:
+                return False
+            payment_user = self.club.payment_user
+            if not payment_user.userdata.is_trusted:
+                return False
+            from auctions.models import SquareSeller
+
+            seller = SquareSeller.objects.filter(user=payment_user).first()
+            return bool(seller and seller.square_merchant_id)
         if not self.auction:
+            return False
+        if not self.auction.enable_square_payments:
+            return False
+        if not self.auction.created_by.userdata.is_trusted:
+            return False
+        if not self.auction.created_by.userdata.square_enabled:
+            return False
+        if not self.auction.square_information:
             return False
         return True
         if self.auction and not self.auction.created_by.userdata.is_trusted:
@@ -5836,7 +5868,8 @@ class Invoice(models.Model):
         """Always use this after invoice.show_payment_button
         This assumes that the button will show up, but be grayed out
          We will return a string reason to the user"""
-
+        if not self.auction:
+            return None
         if self.auction.is_online and not self.auction.closed and self.status == "DRAFT":
             timedelta = self.dynamic_end - timezone.now()
             seconds = timedelta.total_seconds()
@@ -5883,7 +5916,7 @@ class Invoice(models.Model):
 
     @property
     def membership_fee_amount(self):
-        club = self.auction.club if self.auction else None
+        club = self.club or (self.auction.club if self.auction else None)
         if not (club and self.renewal_needed and club.membership_annual_fee):
             return Decimal("0.00")
         return Decimal(club.membership_annual_fee)
@@ -5954,7 +5987,7 @@ class Invoice(models.Model):
             )
         )
         total_final = totals["total_final"] or Decimal(0.00)
-        rate = Decimal(self.auction.tax or 0) / Decimal(100)
+        rate = Decimal(self.auction.tax or 0 if self.auction else 0) / Decimal(100)
         tax_amount = total_final * rate
         return tax_amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
@@ -5993,7 +6026,7 @@ class Invoice(models.Model):
     @property
     def rounded_net(self):
         """Always round in the customer's favor (against the club) to make sure that the club doesn't need to deal with change, only whole dollar amounts"""
-        if not self.auction.invoice_rounding:
+        if not self.auction or not self.auction.invoice_rounding:
             return self.net
         rounded = round(self.net)
         if self.user_should_be_paid:
@@ -6275,11 +6308,14 @@ class Invoice(models.Model):
         return Decimal(total)
 
     def save(self, *args, **kwargs):
-        if not self.auction:
+        if not self.auction and self.auctiontos_user:
             self.auction = self.auctiontos_user.auction
         super().save(*args, **kwargs)
         # Ensure there is only one invoice per AuctionTOS.
         # Keep the oldest; move payments and adjustments from any duplicates into it, then delete them.
+        # Club-only invoices (no auctiontos_user) skip this deduplication.
+        if not self.auctiontos_user:
+            return
         oldest = Invoice.objects.filter(auctiontos_user=self.auctiontos_user).order_by("date").first()
         if oldest and oldest.pk != self.pk:
             # self is a newer duplicate — migrate its data to the older invoice and delete the duplicate row
@@ -7326,10 +7362,18 @@ class SquareSeller(models.Model):
         try:
             from django.urls import reverse
 
-            payment_note = f"Bidder {invoice.auctiontos_user.bidder_number} in {invoice.auction.title}"[:500]
+            if invoice.club:
+                payment_note = f"Club membership fee for {invoice.club.name}"[:500]
+            elif invoice.auctiontos_user and invoice.auction:
+                payment_note = f"Bidder {invoice.auctiontos_user.bidder_number} in {invoice.auction.title}"[:500]
+            else:
+                payment_note = "Membership fee"[:500]
 
             # Get and validate buyer email
-            buyer_email = getattr(getattr(invoice, "auctiontos_user", None), "email", None)
+            if invoice.club and invoice.buyer:
+                buyer_email = invoice.buyer.email
+            else:
+                buyer_email = getattr(getattr(invoice, "auctiontos_user", None), "email", None)
 
             # Validate email domain - Square blocks certain domains like example.com
             if buyer_email:
@@ -7370,12 +7414,16 @@ class SquareSeller(models.Model):
                         "address_line_1": invoice.auctiontos_user.address[:500],
                     }
 
+            if invoice.club:
+                redirect_url = request.build_absolute_uri(reverse("club_detail", kwargs={"slug": invoice.club.slug}))
+            else:
+                redirect_url = request.build_absolute_uri(
+                    reverse("square_payment_success", kwargs={"uuid": invoice.no_login_link})
+                )
             link_resp = client.checkout.payment_links.create(
                 idempotency_key=str(uuid_module.uuid4()),
                 checkout_options={
-                    "redirect_url": request.build_absolute_uri(
-                        reverse("square_payment_success", kwargs={"uuid": invoice.no_login_link})
-                    ),
+                    "redirect_url": redirect_url,
                     "ask_for_shipping_address": ask_for_shipping_address,
                 },
                 pre_populated_data=pre_populated_data or {},

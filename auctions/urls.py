@@ -564,6 +564,7 @@ urlpatterns = [
     re_path(r"^square/webhook/$", views.SquareWebhookView.as_view(), name="square_webhook"),
     # Club management URLs
     path("clubs/<slug:slug>/", views.ClubDetailView.as_view(), name="club_detail"),
+    path("clubs/<slug:slug>/pay/", views.ClubMembershipPaymentView.as_view(), name="club_membership_pay"),
     path("clubs/<slug:slug>/admin/", views.ClubAdminView.as_view(), name="club_admin"),
     path("clubs/<slug:slug>/edit/", views.ClubEditView.as_view(), name="club_edit"),
     path(
