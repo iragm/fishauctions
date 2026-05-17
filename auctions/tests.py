@@ -12727,10 +12727,54 @@ class MergeAuctionTOSTests(StandardTestCase):
     def test_duplicate_name_validation_returns_warning_message(self):
         """Duplicate-name validation should warn when the name is already in this auction"""
         self.client.login(username="admin_user", password="testpassword")
+        AuctionTOS.objects.filter(pk=self.online_tos.pk).update(name="Truly Unique Duplicate User", bidder_number="123")
+        self.online_tos.refresh_from_db()
         url = reverse("auctiontos_validation", kwargs={"slug": self.online_auction.slug})
-        response = self.client.post(url, {"name": self.online_tos.name})
+        response = self.client.post(url, {"name": "Truly Unique Duplicate User"})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["name_tooltip"], f"{self.online_tos.name} is already in this auction")
+        self.assertEqual(
+            response.json()["name_tooltip"],
+            (
+                "There's already a user in this auction named Truly Unique Duplicate User "
+                f"(bidder number: {self.online_tos.bidder_number})"
+            ),
+        )
+
+    def test_duplicate_name_autofill_searches_clubs_with_manage_membership_permission(self):
+        """AuctionTOS autofill should search auctions from clubs where the user can manage members"""
+        self.client.login(username="admin_user", password="testpassword")
+        club = Club.objects.create(name="Autofill Club")
+        ClubMember.objects.create(club=club, user=self.admin_user, permission_add_edit=True)
+        club_auction = Auction.objects.create(
+            created_by=self.user,
+            club=club,
+            title="Club Managed Auction",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=2),
+            date_start=timezone.now() - datetime.timedelta(days=2),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=25,
+        )
+        club_location = PickupLocation.objects.create(
+            name="club location",
+            auction=club_auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+        AuctionTOS.objects.create(
+            auction=club_auction,
+            pickup_location=club_location,
+            manually_added=True,
+            name="Club Managed User",
+            email="club-managed@example.com",
+            bidder_number="777",
+        )
+        url = reverse("auctiontos_validation", kwargs={"slug": self.online_auction.slug})
+        response = self.client.post(url, {"name": "Club Managed User"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["id_email"], "club-managed@example.com")
+        self.assertEqual(response.json()["id_bidder_number"], "777")
 
     def test_add_user_modal_uses_inline_name_note_for_duplicates(self):
         """The add-user modal should render JS that shows duplicate-name warnings inline"""
@@ -14278,6 +14322,47 @@ class ClubMemberUpdateTests(TestCase):
         response = self.client.post(url, {"first_name": self.member.first_name, "last_name": self.member.last_name})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["name_tooltip"], f"{self.member} is already in this club")
+
+    def test_club_member_autofill_searches_clubs_with_manage_auctions_permission(self):
+        """Club member autofill should search auctions from clubs the user can manage auctions for"""
+        owner_member, _ = ClubMember.objects.get_or_create(club=self.club, user=self.owner)
+        owner_member.permission_add_edit = True
+        owner_member.save()
+        other_club = Club.objects.create(name="Other Autofill Club")
+        ClubMember.objects.create(club=other_club, user=self.owner, permission_manage_auctions=True)
+        club_auction = Auction.objects.create(
+            created_by=self.other_user,
+            club=other_club,
+            title="Other Club Auction",
+            is_online=True,
+            date_end=timezone.now() + datetime.timedelta(days=2),
+            date_start=timezone.now() - datetime.timedelta(days=2),
+            winning_bid_percent_to_club=25,
+            lot_entry_fee=2,
+            unsold_lot_fee=10,
+            tax=25,
+        )
+        club_location = PickupLocation.objects.create(
+            name="other club location",
+            auction=club_auction,
+            pickup_time=timezone.now() + datetime.timedelta(days=3),
+        )
+        AuctionTOS.objects.create(
+            auction=club_auction,
+            pickup_location=club_location,
+            manually_added=True,
+            name="Searchable Member",
+            email="searchable@example.com",
+            phone_number="555-0100",
+            address="123 Fish St",
+        )
+        self.client.force_login(self.owner)
+        url = reverse("clubmember_validation", kwargs={"slug": self.club.slug})
+        response = self.client.post(url, {"first_name": "Searchable", "last_name": "Member"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["id_email"], "searchable@example.com")
+        self.assertEqual(response.json()["id_phone_number"], "555-0100")
+        self.assertEqual(response.json()["id_address"], "123 Fish St")
 
     def test_club_member_create_modal_uses_inline_name_note_for_duplicates(self):
         """The club-member modal should render JS that shows duplicate-name warnings inline"""

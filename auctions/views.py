@@ -291,6 +291,24 @@ def check_club_permission(user, club, permission_name):
     return bool(getattr(member, permission_name, False))
 
 
+def auctions_available_for_contact_autofill(user, extra_created_by=None):
+    """Return auctions whose participant history can be used to auto-fill contact details."""
+    if not user.is_authenticated:
+        return Auction.objects.none()
+
+    club_ids = ClubMember.objects.filter(user=user, is_deleted=False).filter(
+        Q(permission_admin=True) | Q(permission_add_edit=True) | Q(permission_manage_auctions=True)
+    )
+    filters = (
+        Q(created_by=user)
+        | Q(auctiontos__is_admin=True, auctiontos__user=user)
+        | Q(club_id__in=club_ids.values("club_id"))
+    )
+    if extra_created_by:
+        filters |= Q(created_by=extra_created_by)
+    return Auction.objects.filter(filters).distinct()
+
+
 def _bap_leaderboard(club, field, current_member):
     """Return a leaderboard list for display on the club detail page.
 
@@ -1527,10 +1545,8 @@ class AuctionTOSValidation(AuctionViewMixin, APIPostView):
         if pk:
             base_qs = base_qs.exclude(pk=pk)
         if name and not email and not pk:
-            old_auctions = Auction.objects.filter(
-                Q(created_by=self.auction.created_by)
-                | Q(created_by=self.request.user)
-                | Q(auctiontos__is_admin=True, auctiontos__user=self.request.user)
+            old_auctions = auctions_available_for_contact_autofill(
+                self.request.user, extra_created_by=self.auction.created_by
             )
             qs = AuctionTOS.objects.filter(auction__in=old_auctions, email__isnull=False).order_by("-createdon")
             old_tos = AuctionTOSFilter.generic(self, qs, name, match_names_only=True).first()
@@ -1549,7 +1565,11 @@ class AuctionTOSValidation(AuctionViewMixin, APIPostView):
         if name:
             existing_tos_in_this_auction = AuctionTOSFilter.generic(self, base_qs, name, match_names_only=True).first()
             if existing_tos_in_this_auction:
-                result["name_tooltip"] = f"{existing_tos_in_this_auction.name} is already in this auction"
+                bidder_number = existing_tos_in_this_auction.bidder_number or "not assigned"
+                result["name_tooltip"] = (
+                    f"There's already a user in this auction named {existing_tos_in_this_auction.name} "
+                    f"(bidder number: {bidder_number})"
+                )
             else:
                 logger.info("no user found in older auctions with name %s", name)
         if email:
@@ -11803,11 +11823,7 @@ class ClubMemberValidation(ClubViewMixin, APIPostView):
             base_qs = base_qs.exclude(pk=pk)
         # Auto-fill from AuctionTOS records when name typed without email
         if (first_name or last_name) and not email and not pk:
-            # Look through AuctionTOS from auctions the requesting user created or is admin in,
-            # exactly like AuctionTOSValidation's auto-fill behaviour.
-            old_auctions = Auction.objects.filter(
-                Q(created_by=request.user) | Q(auctiontos__is_admin=True, auctiontos__user=request.user)
-            )
+            old_auctions = auctions_available_for_contact_autofill(request.user)
             tos_qs = AuctionTOS.objects.filter(auction__in=old_auctions, email__isnull=False).order_by("-createdon")
             full_name = f"{first_name} {last_name}".strip()
             old_tos = AuctionTOSFilter.generic(None, tos_qs, full_name, match_names_only=True).first()
