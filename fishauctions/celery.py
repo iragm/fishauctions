@@ -83,6 +83,11 @@ app.conf.beat_schedule = {
         "task": "auctions.tasks.cleanup_old_invoice_notification_tasks",
         "schedule": 86400.0,  # Run every 24 hours
     },
+    # Update Discord roles for members whose membership has expired or been renewed - every 24 hours
+    "update_expired_membership_discord_roles": {
+        "task": "auctions.tasks.update_expired_membership_discord_roles",
+        "schedule": 86400.0,  # Run every 24 hours
+    },
     # Note: update_auction_stats is NOT in beat_schedule as it's self-scheduling.
     # It starts on worker_ready and schedules itself based on when the next
     # auction's stats are due for update.

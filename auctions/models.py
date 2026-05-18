@@ -738,6 +738,14 @@ class ClubMember(ContactRecord):
         verbose_name="Discord role (manual override)",
         help_text="Only used when automatic role management is disabled.",
     )
+    last_discord_role_assigned = models.ForeignKey(
+        "ClubDiscordRole",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        help_text="Last role auto-assigned via the Discord API; used to detect when the role needs to change.",
+    )
     bap_points = models.PositiveIntegerField(default=0)
     hap_points = models.PositiveIntegerField(default=0)
     culture_points = models.PositiveIntegerField(default=0, help_text="Culture Award Program points.")
@@ -868,24 +876,43 @@ class ClubMember(ContactRecord):
         return None
 
     def maybe_assign_discord_role(self):
-        """Compute the correct Discord role and assign it via the API if auto-managed and credentials are set."""
+        """Compute the correct Discord role, remove any stale club roles, then assign the new one.
+
+        Ensures a member holds at most one auto-managed Discord role at a time.
+        Updates last_discord_role_assigned after a successful reassignment.
+        """
         import requests as _requests
         from django.conf import settings as _settings
 
-        role = self.discord_role
-        if not role or not self.discord_id or not self.club.discord_server_id:
+        if not self.discord_id or not self.club.discord_server_id:
             return
         bot_token = getattr(_settings, "DISCORD_BOT_TOKEN", "")
         if not bot_token:
             return
-        url = (
-            f"https://discord.com/api/v10/guilds/{self.club.discord_server_id}"
-            f"/members/{self.discord_id}/roles/{role.role_id}"
-        )
-        try:
-            _requests.put(url, headers={"Authorization": f"Bot {bot_token}"}, timeout=10)
-        except Exception:
-            pass
+
+        role = self.discord_role
+        guild_id = self.club.discord_server_id
+        user_id = self.discord_id
+        headers = {"Authorization": f"Bot {bot_token}"}
+        base_url = f"https://discord.com/api/v10/guilds/{guild_id}/members/{user_id}/roles"
+
+        # Remove all club-managed roles that are not the target
+        for club_role in self.club.discord_roles.all():
+            if role is None or club_role.pk != role.pk:
+                try:
+                    _requests.delete(f"{base_url}/{club_role.role_id}", headers=headers, timeout=10)
+                except Exception:
+                    pass
+
+        # Assign the target role (if any)
+        if role:
+            try:
+                _requests.put(f"{base_url}/{role.role_id}", headers=headers, timeout=10)
+            except Exception:
+                pass
+
+        # Track what was last assigned so the daily task can skip unchanged members
+        ClubMember.objects.filter(pk=self.pk).update(last_discord_role_assigned=role)
 
     @property
     def display_name(self):

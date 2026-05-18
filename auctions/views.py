@@ -12242,11 +12242,7 @@ $("#id_first_name, #id_last_name, #id_email").on("blur", cmValidateField);
             )
             messages.success(request, f"{saved} updated.")
             # Reassign Discord role whenever the record is saved from the admin UI
-            if saved.discord_id and saved.club.discord_server_id:
-                role = saved.discord_role
-                if role and role.role_id:
-                    if not assign_discord_role(saved.club.discord_server_id, saved.discord_id, role.role_id):
-                        messages.warning(request, f"{saved} updated but Discord role assignment failed.")
+            saved.maybe_assign_discord_role()
             return self._redirect_to_club_admin(member.club)
         return render(request, "auctions/generic_admin_form.html", self._build_context(request, member, form))
 
@@ -13493,9 +13489,7 @@ class DiscordInteractionsView(View):
                     existing_by_email.discord_username = discord_username
                     update_fields.append("discord_username")
                 existing_by_email.save(update_fields=update_fields)
-                role = existing_by_email.discord_role
-                if role and role.role_id:
-                    assign_discord_role(guild_id, discord_id, role.role_id)
+                existing_by_email.maybe_assign_discord_role()
                 ClubHistory.objects.create(
                     club=club,
                     user=None,
@@ -13515,9 +13509,7 @@ class DiscordInteractionsView(View):
             source="discord",
         )
         new_member.save()
-        role = new_member.discord_role
-        if role and role.role_id:
-            assign_discord_role(guild_id, discord_id, role.role_id)
+        new_member.maybe_assign_discord_role()
         ClubHistory.objects.create(
             club=club,
             user=None,

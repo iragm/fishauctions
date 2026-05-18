@@ -222,6 +222,33 @@ def cleanup_old_invoice_notification_tasks(self):
 
 
 @shared_task(bind=True, ignore_result=True)
+def update_expired_membership_discord_roles(self):
+    """
+    Re-evaluate and update Discord roles for all members whose auto-managed role
+    no longer matches what was last assigned (e.g. after membership expiration or renewal).
+
+    Runs daily. Only members whose computed role differs from last_discord_role_assigned
+    will trigger Discord API calls.
+    """
+    from auctions.models import ClubMember
+
+    members = (
+        ClubMember.objects.filter(
+            discord_id__isnull=False,
+            discord_role_auto_managed=True,
+            is_deleted=False,
+            club__discord_server_id__isnull=False,
+        )
+        .select_related("club", "last_discord_role_assigned")
+        .prefetch_related("club__discord_roles")
+    )
+
+    for member in members:
+        if member.discord_role != member.last_discord_role_assigned:
+            member.maybe_assign_discord_role()
+
+
+@shared_task(bind=True, ignore_result=True)
 def auction_emails(self):
     """
     Send auction-related drip marketing emails.
