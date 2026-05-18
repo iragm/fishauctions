@@ -4241,8 +4241,123 @@ class AuctionEditViewTests(StandardTestCase):
         response = self.client.get(self.online_auction.get_edit_url())
         assert response.status_code == 200
 
+    def test_auction_edit_preserves_use_categories(self):
+        """Saving AuctionEditForm should not reset use_categories to False"""
+        self.online_auction.use_categories = True
+        self.online_auction.save()
+        self.client.login(username=self.user.username, password="testpassword")
+        form_data = {
+            "summernote_description": self.online_auction.summernote_description or "",
+            "lot_entry_fee": str(self.online_auction.lot_entry_fee or "0"),
+            "unsold_lot_fee": str(self.online_auction.unsold_lot_fee or "0"),
+            "winning_bid_percent_to_club": str(self.online_auction.winning_bid_percent_to_club or "0"),
+            "winning_bid_percent_to_club_for_club_members": str(
+                self.online_auction.winning_bid_percent_to_club_for_club_members or "0"
+            ),
+            "lot_entry_fee_for_club_members": str(self.online_auction.lot_entry_fee_for_club_members or "0"),
+            "pre_register_lot_discount_percent": str(self.online_auction.pre_register_lot_discount_percent or "0"),
+            "alternative_split_label": self.online_auction.alternative_split_label or "",
+            "tax": str(self.online_auction.tax or "0"),
+            "online_bidding": self.online_auction.online_bidding,
+            "date_start": self.online_auction.date_start.strftime("%Y-%m-%d %H:%M:%S"),
+            "date_end": self.online_auction.date_end.strftime("%Y-%m-%d %H:%M:%S"),
+            "invoice_rounding": str(self.online_auction.invoice_rounding),
+            "only_whole_dollar_bids": "",
+            "minimum_bid": str(self.online_auction.minimum_bid),
+            # use_categories intentionally omitted — it should not be touched by AuctionEditForm
+        }
+        response = self.client.post(self.online_auction.get_edit_url(), data=form_data, follow=False)
+        self.assertEqual(
+            response.status_code,
+            302,
+            f"Form was not saved: {response.context['form'].errors if response.context else ''}",
+        )
+        self.online_auction.refresh_from_db()
+        self.assertTrue(
+            self.online_auction.use_categories,
+            "use_categories was reset to False by AuctionEditForm even though it was not included in the form",
+        )
+
+    def test_auction_edit_preserves_sealed_bid(self):
+        """Saving AuctionEditForm should not reset sealed_bid to False"""
+        self.online_auction.sealed_bid = True
+        self.online_auction.save()
+        self.client.login(username=self.user.username, password="testpassword")
+        form_data = {
+            "summernote_description": self.online_auction.summernote_description or "",
+            "lot_entry_fee": str(self.online_auction.lot_entry_fee or "0"),
+            "unsold_lot_fee": str(self.online_auction.unsold_lot_fee or "0"),
+            "winning_bid_percent_to_club": str(self.online_auction.winning_bid_percent_to_club or "0"),
+            "winning_bid_percent_to_club_for_club_members": str(
+                self.online_auction.winning_bid_percent_to_club_for_club_members or "0"
+            ),
+            "lot_entry_fee_for_club_members": str(self.online_auction.lot_entry_fee_for_club_members or "0"),
+            "pre_register_lot_discount_percent": str(self.online_auction.pre_register_lot_discount_percent or "0"),
+            "alternative_split_label": self.online_auction.alternative_split_label or "",
+            "tax": str(self.online_auction.tax or "0"),
+            "online_bidding": self.online_auction.online_bidding,
+            "date_start": self.online_auction.date_start.strftime("%Y-%m-%d %H:%M:%S"),
+            "date_end": self.online_auction.date_end.strftime("%Y-%m-%d %H:%M:%S"),
+            "invoice_rounding": str(self.online_auction.invoice_rounding),
+            "only_whole_dollar_bids": "",
+            "minimum_bid": str(self.online_auction.minimum_bid),
+            # sealed_bid intentionally omitted — it should not be touched by AuctionEditForm
+        }
+        response = self.client.post(self.online_auction.get_edit_url(), data=form_data, follow=False)
+        self.assertEqual(
+            response.status_code,
+            302,
+            f"Form was not saved: {response.context['form'].errors if response.context else ''}",
+        )
+        self.online_auction.refresh_from_db()
+        self.assertTrue(
+            self.online_auction.sealed_bid,
+            "sealed_bid was reset to False by AuctionEditForm even though it was not included in the form",
+        )
+
+    def test_auction_edit_preserves_advanced_lot_adding(self):
+        """Saving AuctionEditForm should not reset advanced_lot_adding to False"""
+        self.in_person_auction.advanced_lot_adding = True
+        self.in_person_auction.save()
+        self.client.login(username=self.user.username, password="testpassword")
+        form_data = {
+            "summernote_description": self.in_person_auction.summernote_description or "",
+            "lot_entry_fee": str(self.in_person_auction.lot_entry_fee or "0"),
+            "unsold_lot_fee": str(self.in_person_auction.unsold_lot_fee or "0"),
+            "winning_bid_percent_to_club": str(self.in_person_auction.winning_bid_percent_to_club or "0"),
+            "winning_bid_percent_to_club_for_club_members": str(
+                self.in_person_auction.winning_bid_percent_to_club_for_club_members or "0"
+            ),
+            "lot_entry_fee_for_club_members": str(self.in_person_auction.lot_entry_fee_for_club_members or "0"),
+            "pre_register_lot_discount_percent": str(self.in_person_auction.pre_register_lot_discount_percent or "0"),
+            "alternative_split_label": self.in_person_auction.alternative_split_label or "",
+            "tax": str(self.in_person_auction.tax or "0"),
+            "online_bidding": self.in_person_auction.online_bidding,
+            "date_start": self.in_person_auction.date_start.strftime("%Y-%m-%d %H:%M:%S"),
+            # date_end is omitted intentionally: for offline auctions the form sets date_end to HiddenInput
+            # and the field is nullable, so it is not required in POST data.
+            "invoice_rounding": str(self.in_person_auction.invoice_rounding),
+            "only_whole_dollar_bids": "",
+            "minimum_bid": str(self.in_person_auction.minimum_bid),
+            "use_seller_dash_lot_numbering": self.in_person_auction.use_seller_dash_lot_numbering,
+            # advanced_lot_adding intentionally omitted — it should not be touched by AuctionEditForm
+        }
+        response = self.client.post(self.in_person_auction.get_edit_url(), data=form_data, follow=False)
+        self.assertEqual(
+            response.status_code,
+            302,
+            f"Form was not saved: {response.context['form'].errors if response.context else ''}",
+        )
+        self.in_person_auction.refresh_from_db()
+        self.assertTrue(
+            self.in_person_auction.advanced_lot_adding,
+            "advanced_lot_adding was reset to False by AuctionEditForm even though it was not included in the form",
+        )
+
 
 class AuctionCustomFieldsViewTests(StandardTestCase):
+    """Test auction edit custom field behavior"""
+
     def _custom_fields_data(self, use_custom_dropdown=False):
         data = {
             "custom_field_1": self.online_auction.custom_field_1,
