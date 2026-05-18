@@ -11902,12 +11902,20 @@ class ClubDetailView(ClubViewMixin, TemplateView):
             "permission_manage_auctions"
         )
         context["can_manage_auctions"] = can_manage_auctions
+        membership_expiration_date = member.membership_expiration_date if member else None
+        context["membership_expiration_date"] = membership_expiration_date
+        renewal_soon = False
+        if membership_expiration_date:
+            renewal_soon = membership_expiration_date <= timezone.now().date() + timedelta(days=30)
+        elif member and self.club.membership_annual_fee and not member.membership_last_paid:
+            renewal_soon = True
         context["show_membership_payment_button"] = bool(
             self.club.enable_club_page
             and self.club.allow_integrated_payments
             and self.club.membership_annual_fee
             and self.club.payment_user
             and member
+            and renewal_soon
         )
         if can_manage_auctions:
             context["club_auctions"] = Auction.objects.filter(club=self.club, is_deleted=False).order_by("date_start")

@@ -29,6 +29,9 @@
     <div class="card-body">
       <h5 class="card-title">Your membership</h5>
       <p class="mb-1">Member since: {{ member.createdon|date:"N j, Y" }}</p>
+      {% if club.membership_annual_fee and membership_expiration_date %}
+      <p class="mb-1">Membership expires: {{ membership_expiration_date|date:"N j, Y" }}</p>
+      {% endif %}
       {% if club.enable_breeder_award_program %}
         {% if member.bap_points or member.hap_points or member.culture_points %}
         <p class="mb-0">
@@ -45,7 +48,7 @@
       {% if show_membership_payment_button %}
       <div class="mt-3">
         <a class="btn btn-success btn-sm" href="{% url 'club_membership_pay' club.slug %}">
-          <i class="bi bi-credit-card"></i> Payment
+          <i class="bi bi-credit-card"></i> Renew Membership
         </a>
       </div>
       {% endif %}
