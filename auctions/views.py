@@ -428,6 +428,8 @@ def auctions_available_for_contact_autofill(user, extra_created_by=None):
     if extra_created_by:
         filters |= Q(created_by=extra_created_by)
     return Auction.objects.filter(filters).distinct()
+
+
 def _bap_leaderboard(club, field, current_member):
     """Return a leaderboard list for display on the club detail page.
 
