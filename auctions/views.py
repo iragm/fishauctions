@@ -374,19 +374,24 @@ def _process_invoice_membership_renewal(invoice, acting_user=None, payment_metho
     member = ClubMember.objects.filter(club=club, user=user, is_deleted=False).first()
     if not member:
         member = ClubMember.objects.create(club=club, user=user, **member_defaults)
-    old_paid = member.membership_last_paid
     today = timezone.now().date()
-    if club.membership_system == "rolling" and old_paid:
-        current_expiration = old_paid + timedelta(days=365)
-        if current_expiration > today:
-            member.membership_last_paid = old_paid + timedelta(days=365)
-        else:
-            member.membership_last_paid = today
+    current_exp = member.membership_expiration_date
+    base = max(current_exp, today) if current_exp else today
+    if club.membership_system == "january_first":
+        member.membership_expiration_date = date_type(base.year + 1, 1, 1)
     else:
-        member.membership_last_paid = today
+        member.membership_expiration_date = date_type(base.year + 1, 12, 31)
+    member.membership_last_paid = today
     if member.email:
         member.email_address_status = "VALID"
-    member.save(update_fields=["membership_last_paid", "membership_expiration_reminder_due", "email_address_status"])
+    member.save(
+        update_fields=[
+            "membership_last_paid",
+            "membership_expiration_date",
+            "membership_expiration_reminder_due",
+            "email_address_status",
+        ]
+    )
     InvoicePayment.objects.create(
         invoice=None,
         club_member=member,
@@ -7283,6 +7288,8 @@ class InvoiceNoLoginView(InvoiceView):
         if invoice.auctiontos_user:
             invoice.auctiontos_user.email_address_status = "VALID"
             invoice.auctiontos_user.save()
+        if invoice.club and not invoice.auction:
+            return redirect(reverse("club_detail", kwargs={"slug": invoice.club.slug}))
         return super().dispatch(request, *args, **kwargs)
 
 
@@ -8190,7 +8197,9 @@ class PayPalAPIMixin:
                 "brand_name": settings.NAVBAR_BRAND,
                 "return_url": self.request.build_absolute_uri(reverse("paypal_success")),
                 "cancel_url": self.request.build_absolute_uri(
-                    reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link})
+                    reverse("club_detail", kwargs={"slug": invoice.club.slug})
+                    if invoice.club and not invoice.auction
+                    else reverse("invoice_no_login", kwargs={"uuid": invoice.no_login_link})
                 ),
             },
         }
@@ -12517,7 +12526,7 @@ class ClubMemberCreateView(APIView):
 
 
 class ClubMemberRenewView(APIView):
-    """Renew a club member's membership by setting membership_last_paid to today."""
+    """Renew a club member's membership, extending the current expiration by one year."""
 
     authentication_classes = [TokenAuthentication, SessionAuthentication]
     permission_classes = [IsAuthenticated]
@@ -12532,11 +12541,13 @@ class ClubMemberRenewView(APIView):
         return member
 
     def _new_expiration(self, member, today):
-        """Preview what expiration date will result from renewing today."""
+        """Compute the new expiration: extend current expiration by one year (rolling → end of year)."""
         club = member.club
+        current_exp = member.membership_expiration_date
+        base = max(current_exp, today) if current_exp else today
         if club.membership_system == "january_first":
-            return date_type(today.year + 1, 1, 1)
-        return today + timedelta(days=365)
+            return date_type(base.year + 1, 1, 1)
+        return date_type(base.year + 1, 12, 31)
 
     def get(self, request, pk):
         member = self._get_member(pk, request)
@@ -12550,8 +12561,12 @@ class ClubMemberRenewView(APIView):
 
     def post(self, request, pk):
         member = self._get_member(pk, request)
-        member.membership_last_paid = timezone.now().date()
-        member.save(update_fields=["membership_last_paid", "membership_expiration_reminder_due"])
+        today = timezone.now().date()
+        member.membership_expiration_date = self._new_expiration(member, today)
+        member.membership_last_paid = today
+        member.save(
+            update_fields=["membership_last_paid", "membership_expiration_date", "membership_expiration_reminder_due"]
+        )
         ClubHistory.objects.create(
             club=member.club,
             user=request.user,
@@ -12613,7 +12628,7 @@ class ClubMemberConfirmView(APIView):
 
 
 class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
-    """Set a club member's membership_last_paid date directly (advanced / manual override)."""
+    """Set a club member's expiration date directly (manual override)."""
 
     def dispatch(self, request, *args, **kwargs):
         self.get_club(kwargs.get("slug", ""))
@@ -12629,26 +12644,27 @@ class ClubMemberRenewPageView(LoginRequiredMixin, ClubViewMixin, View):
         context = {
             "club": self.club,
             "member": member,
-            "default_date": member.membership_last_paid or timezone.now().date(),
+            "default_date": member.membership_expiration_date or timezone.now().date(),
         }
         return render(request, "auctions/club_member_renew_page.html", context)
 
     def post(self, request, slug, pk):
         member = self._get_member(pk)
-        paid_date_str = request.POST.get("membership_last_paid", "")
+        date_str = request.POST.get("membership_expiration_date", "")
         try:
-            paid_date = datetime.strptime(paid_date_str, "%Y-%m-%d").replace(tzinfo=date_tz.utc).date()
+            expiration_date = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=date_tz.utc).date()
         except (ValueError, TypeError):
-            paid_date = timezone.now().date()
-        member.membership_last_paid = paid_date
-        member.save(update_fields=["membership_last_paid", "membership_expiration_reminder_due"])
+            messages.error(request, "Invalid date.")
+            return redirect(request.path)
+        member.membership_expiration_date = expiration_date
+        member.save(update_fields=["membership_expiration_date", "membership_expiration_reminder_due"])
         ClubHistory.objects.create(
             club=self.club,
             user=request.user,
-            action=f"Renewed membership for {member} (paid {paid_date})",
+            action=f"Set membership expiration for {member} to {expiration_date}",
             applies_to="MEMBERSHIP",
         )
-        messages.success(request, f"Membership renewed for {member}.")
+        messages.success(request, f"Expiration date set for {member}.")
         return redirect(reverse("club_admin", kwargs={"slug": self.club.slug}))
 
 
@@ -13873,30 +13889,16 @@ class DiscordInteractionsView(View):
         lines = [f"**{club.name}** — Your membership"]
         lines.append(f"Member since: {member.createdon.strftime('%B %d, %Y')}")
 
-        if not member.membership_last_paid:
+        expiry = member.membership_expiration_date
+        if not expiry:
             lines.append("Status: No paid membership on record")
         else:
             today = timezone.now().date()
-            if club.membership_system == "january_first":
-                current_year_start = today.replace(month=1, day=1)
-                if member.membership_last_paid >= current_year_start:
-                    expiry = today.replace(year=today.year + 1, month=1, day=1)
-                    expiry_ts = int(datetime.combine(expiry, datetime.min.time(), date_tz.utc).timestamp())
-                    lines.append(f"Status: ✅ Active — expires <t:{expiry_ts}:D>")
-                else:
-                    lines.append("Status: ❌ Expired — please renew your membership")
-            elif club.membership_system == "rolling":
-                expiry = member.membership_last_paid + timedelta(days=365)
-                expiry_ts = int(datetime.combine(expiry, datetime.min.time(), date_tz.utc).timestamp())
-                if expiry >= today:
-                    lines.append(f"Status: ✅ Active — expires <t:{expiry_ts}:D>")
-                else:
-                    lines.append(f"Status: ❌ Expired <t:{expiry_ts}:D> — please renew your membership")
+            expiry_ts = int(datetime.combine(expiry, datetime.min.time(), date_tz.utc).timestamp())
+            if expiry >= today:
+                lines.append(f"Status: ✅ Active — expires <t:{expiry_ts}:D>")
             else:
-                paid_ts = int(
-                    datetime.combine(member.membership_last_paid, datetime.min.time(), date_tz.utc).timestamp()
-                )
-                lines.append(f"Last paid: <t:{paid_ts}:D>")
+                lines.append(f"Status: ❌ Expired <t:{expiry_ts}:D> — please renew your membership")
 
         if club.enable_club_page:
             current_site = Site.objects.get_current()

@@ -614,7 +614,7 @@ urlpatterns = [
     path("api/clubmember-validation/<slug:slug>/", views.ClubMemberValidation.as_view(), name="clubmember_validation"),
     path("clubs/<slug:slug>/admin/merge/<int:pk>/", views.ClubMemberMergeView.as_view(), name="club_member_merge"),
     path(
-        "clubs/<slug:slug>/admin/member/<int:pk>/renew/",
+        "clubs/<slug:slug>/admin/member/<int:pk>/set-expiration/",
         views.ClubMemberRenewPageView.as_view(),
         name="club_member_renew_page",
     ),

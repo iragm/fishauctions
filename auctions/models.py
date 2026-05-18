@@ -795,6 +795,7 @@ class ClubMember(ContactRecord):
     hap_points_ytd = models.PositiveIntegerField(default=0, help_text="HAP points earned this calendar year.")
     culture_points_ytd = models.PositiveIntegerField(default=0, help_text="Culture points earned this calendar year.")
     membership_last_paid = models.DateField(null=True, blank=True)
+    membership_expiration_date = models.DateField(null=True, blank=True)
     uuid = models.UUIDField(default=uuid_module.uuid4, unique=True, editable=False, db_index=True)
     membership_expiration_reminder_due = models.DateTimeField(null=True, blank=True)
     createdon = models.DateTimeField(auto_now_add=True, verbose_name="date joined")
@@ -880,14 +881,17 @@ class ClubMember(ContactRecord):
             return None
 
         # Determine membership status
-        membership_valid = False
-        if self.membership_last_paid:
+        today = timezone.now().date()
+        if self.membership_expiration_date:
+            membership_valid = self.membership_expiration_date >= today
+        elif self.membership_last_paid:
             club = self.club
-            today = timezone.now().date()
             if club.membership_system == "january_first":
                 membership_valid = self.membership_last_paid >= datetime.date(today.year, 1, 1)
-            else:  # rolling
+            else:
                 membership_valid = self.membership_last_paid >= today - datetime.timedelta(days=365)
+        else:
+            membership_valid = False
 
         if not membership_valid:
             unpaid_role = next((r for r in roles_qs if r.is_unpaid_role), None)
@@ -968,20 +972,8 @@ class ClubMember(ContactRecord):
 
         return reverse("club_detail", kwargs={"slug": self.club.slug}) + f"?user={self.uuid}"
 
-    @property
-    def membership_expiration_date(self):
-        if not self.membership_last_paid:
-            return None
-        if self.club.membership_system == "january_first":
-            return datetime.date(self.membership_last_paid.year + 1, 1, 1)
-        return self.membership_last_paid + datetime.timedelta(days=365)
-
     def calculate_membership_expiration_reminder_due(self):
-        if (
-            not self.membership_last_paid
-            or not self.club.send_membership_expiration_reminders
-            or not self.club.membership_annual_fee
-        ):
+        if not self.club.send_membership_expiration_reminders or not self.club.membership_annual_fee:
             return None
         expiration_date = self.membership_expiration_date
         if not expiration_date:
@@ -994,19 +986,27 @@ class ClubMember(ContactRecord):
 
     def save(self, *args, **kwargs):
         previous_membership_last_paid = None
+        previous_expiration_date = None
         previous_email = None
         previous_reminder_due = None
         if self.pk:
             prev = (
                 ClubMember.objects.filter(pk=self.pk)
-                .values("membership_last_paid", "email", "membership_expiration_reminder_due")
+                .values(
+                    "membership_last_paid", "membership_expiration_date", "email", "membership_expiration_reminder_due"
+                )
                 .first()
             )
             if prev:
                 previous_membership_last_paid = prev["membership_last_paid"]
+                previous_expiration_date = prev["membership_expiration_date"]
                 previous_email = prev["email"]
                 previous_reminder_due = prev["membership_expiration_reminder_due"]
-        if self.membership_last_paid != previous_membership_last_paid:
+        expiration_changed = (
+            self.membership_last_paid != previous_membership_last_paid
+            or self.membership_expiration_date != previous_expiration_date
+        )
+        if expiration_changed:
             new_reminder = self.calculate_membership_expiration_reminder_due()
             if new_reminder is not None:
                 # If the recalculated reminder would fire sooner than the previous one
@@ -5043,12 +5043,15 @@ class Lot(models.Model):
             return "not_club_member"
         if club.only_active_members_can_participate:
             today = timezone.now().date()
-            if not member.membership_last_paid:
-                return "not_active_member"
-            if club.membership_system == "january_first":
-                valid = member.membership_last_paid >= datetime.date(today.year, 1, 1)
+            if member.membership_expiration_date:
+                valid = member.membership_expiration_date >= today
+            elif member.membership_last_paid:
+                if club.membership_system == "january_first":
+                    valid = member.membership_last_paid >= datetime.date(today.year, 1, 1)
+                else:
+                    valid = member.membership_last_paid >= today - datetime.timedelta(days=365)
             else:
-                valid = member.membership_last_paid >= today - datetime.timedelta(days=365)
+                valid = False
             if not valid:
                 return "not_active_member"
         if club.days_between_same_name_lots > 0:

@@ -8,26 +8,22 @@
 <div class="card mb-4" style="max-width: 480px;">
   <div class="card-body">
     <h5 class="card-title">{{ member }}</h5>
-    {% if member.membership_last_paid %}
-    <p class="text-muted small mb-1">Last paid: {{ member.membership_last_paid|date:"N j, Y" }}</p>
+    {% if member.membership_expiration_date %}
+    <p class="text-muted small mb-1">Last paid: {{ member.membership_last_paid|date:"N j, Y"|default:"—" }}</p>
     <p class="text-muted small mb-3">Current expiration: {{ member.membership_expiration_date|date:"N j, Y" }}</p>
     {% else %}
-    <p class="text-muted small mb-3">No payment on record.</p>
+    <p class="text-muted small mb-3">No expiration date on record.</p>
     {% endif %}
 
     <form method="post">
       {% csrf_token %}
       <div class="mb-3">
-        <label for="membership_last_paid" class="form-label">Date of payment</label>
-        <input type="date" class="form-control" id="membership_last_paid" name="membership_last_paid"
+        <label for="membership_expiration_date" class="form-label">Expiration date</label>
+        <input type="date" class="form-control" id="membership_expiration_date" name="membership_expiration_date"
           value="{{ default_date|date:'Y-m-d' }}" required>
         <div class="form-text">
-          {% if club.membership_system == "rolling" %}
-          Rolling annual membership: expiration is set to exactly one year after this date.
-          {% else %}
-          January 1st renewal: expiration is set to January 1st of the year following this payment date.
-          {% endif %}
-          This field directly sets the payment date on record — use <em>Renew</em> from the member list for a one-click renewal to today.
+          Set the date this member's membership expires. This directly overrides any calculated expiration.
+          Use <em>Renew</em> from the member list for a one-click extension based on the club's renewal rules.
         </div>
       </div>
       <div class="d-flex gap-2">
