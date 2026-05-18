@@ -49,15 +49,15 @@ bleach==6.3.0
     # via
     #   -r requirements.in
     #   django-summernote
-boto3==1.43.6
+boto3==1.43.9
     # via django-ses
-botocore==1.43.6
+botocore==1.43.9
     # via
     #   boto3
     #   s3transfer
 brotli==1.2.0
     # via fonttools
-cbor2==6.0.1
+cbor2==6.1.1
     # via autobahn
 celery==5.6.3
     # via
@@ -88,7 +88,7 @@ charset-normalizer==3.4.7
     # via
     #   reportlab
     #   requests
-click==8.3.3
+click==8.4.0
     # via
     #   celery
     #   click-didyoumean
@@ -186,7 +186,7 @@ django-htmx==1.27.0
     # via -r requirements.in
 django-location-field==2.7.3
     # via -r requirements.in
-django-markdownfield==0.20.0
+django-markdownfield==0.20.2
     # via -r requirements.in
 django-post-office==3.11.2
     # via -r requirements.in
@@ -210,7 +210,7 @@ djangorestframework==3.17.1
     # via -r requirements.in
 easy-thumbnails==2.10.1
     # via -r requirements.in
-fonttools[woff]==4.62.1
+fonttools[woff]==4.63.0
     # via weasyprint
 frozenlist==1.8.0
     # via
@@ -237,7 +237,7 @@ hyperlink==21.0.0
     #   -r requirements.in
     #   autobahn
     #   twisted
-idna==3.14
+idna==3.15
     # via
     #   -r requirements.in
     #   anyio
@@ -266,7 +266,7 @@ markdown-it-py==4.2.0
     # via
     #   django-markdownfield
     #   mdit-py-plugins
-mdit-py-plugins==0.6.0
+mdit-py-plugins==0.6.1
     # via django-markdownfield
 mdurl==0.1.2
     # via markdown-it-py
@@ -382,9 +382,9 @@ redis==7.4.0
     # via
     #   -r requirements.in
     #   channels-redis
-reportlab==4.5.0
+reportlab==4.5.1
     # via -r requirements.in
-requests==2.33.1
+requests==2.34.2
     # via
     #   -r requirements.in
     #   django-ses
@@ -423,7 +423,7 @@ tinycss2==1.5.1
     #   weasyprint
 tinyhtml5==2.1.0
     # via weasyprint
-twisted[tls]==25.5.0
+twisted[tls]==26.4.0
     # via
     #   -r requirements.in
     #   daphne
@@ -470,7 +470,7 @@ urllib3==2.7.0
     #   requests
 user-agents==2.2.0
     # via -r requirements.in
-uvicorn[standard]==0.46.0
+uvicorn[standard]==0.47.0
     # via -r requirements.in
 uvloop==0.22.1
     # via uvicorn
@@ -479,7 +479,7 @@ vine==5.1.0
     #   amqp
     #   celery
     #   kombu
-watchfiles==1.1.1
+watchfiles==1.2.0
     # via uvicorn
 wcwidth==0.7.0
     # via prompt-toolkit
